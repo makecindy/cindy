@@ -5,10 +5,14 @@
  * 交给对方电脑上真正运行的 Agent；同步读取的状态(用量、是否在跑、计划模式等)读本地镜像，
  * 镜像由对方事件流里的状态行更新；权限确认、问题与计划审阅由本机的交互回调回答。
  * 本机用户在确认卡上允许的文件 / 命令操作同时登记到执行器的权限上限里。
+ *
+ * 连接池让出名额后(controller/connectionPool.ts)句柄照常是活的：缓存的状态照常读；要对方 Agent 干活的
+ * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
+import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
-import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest } from '@cindy/device-link';
+import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
   AgentEvent,
   AgentKind,
@@ -42,6 +46,7 @@ export interface RemoteStartedInfo {
   shadowDir: string;
   /** Agent 主机上的虚拟镜像根。 */
   mirrorRoot?: string;
+  previousMirrorRoots?: string[];
   extraDirs?: string[];
   writableDirs?: string[];
   virtualWorkspace?: boolean;
@@ -66,6 +71,7 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
     shadowDir: str(value.shadowDir) ?? '',
     virtualWorkspace: value.virtualWorkspace === true,
     ...(str(value.mirrorRoot) ? { mirrorRoot: str(value.mirrorRoot) } : {}),
+    previousMirrorRoots: Array.isArray(value.previousMirrorRoots) ? value.previousMirrorRoots.filter((item): item is string => typeof item === 'string') : [],
     extraDirs: Array.isArray(value.extraDirs) ? value.extraDirs.filter((item): item is string => typeof item === 'string') : [],
     writableDirs: Array.isArray(value.writableDirs) ? value.writableDirs.filter((item): item is string => typeof item === 'string') : [],
     methods: Array.isArray(value.methods) ? value.methods.filter((m): m is string => typeof m === 'string') : [],
@@ -173,11 +179,39 @@ export function approvalActionsFor(
   return actions;
 }
 
+/**
+ * 句柄与对方电脑之间的连接。连接池让出名额后 `live()` 为 null，`ensure()` 连回同一个会话。
+ */
+export interface RemoteAgentLink {
+  /** 连着的连接；正在连回时等它连上；已让出名额(或正在让)时为 null。 */
+  live(): Promise<RemoteAgentRunClient | null>;
+  /** 要对方 Agent 干活：已让出名额就连回来。 */
+  ensure(): Promise<RemoteAgentRunClient>;
+  /** 一次要对方参与的调用开始(期间不让出名额)；返回结束回调。 */
+  begin(): () => void;
+  /** 结束对方的 Agent；已让出名额时什么也不做。 */
+  close(mode: 'close' | 'detach', reason: RemoteAgentTeardownReason): Promise<void>;
+}
+
+/** 固定的一条连接(不进连接池)。 */
+export function fixedRemoteAgentLink(client: RemoteAgentRunClient): RemoteAgentLink {
+  return {
+    live: async () => client,
+    ensure: async () => client,
+    begin: () => () => undefined,
+    close: (mode, reason) => client.close(mode, reason),
+  };
+}
+
 export interface RemoteHandleDeps {
-  client: RemoteAgentRunClient;
+  /** 缺省时用 `client` 作为固定连接。 */
+  link?: RemoteAgentLink;
+  client?: RemoteAgentRunClient;
   started: RemoteStartedInfo;
   workspace: ExecutorWorkspace;
   recordApproval(action: ExecutorAction): void;
+  /** 用户停止或关闭时立即收起本机确认，不等远端 RPC 返回。 */
+  cancelPendingConfirmations?(): void;
   onInvalidResumeSession?: (expectedSdkSessionId: string) => Promise<boolean>;
   /** 读本机图片(随消息带给对方)。 */
   readImage?: (path: string) => Promise<Buffer>;
@@ -187,13 +221,21 @@ export interface RemoteHandleDeps {
   /** 权限档 / 附加目录等变化时同步给执行器。 */
   onPermissionMode?: (mode: string) => void;
   onPlanMode?: (enabled: boolean) => void;
-  onExtraDirs?: (dirs: string[]) => void;
+  onExtraDirs?: (dirs: string[], libraryRoot?: string | null) => void;
   /** 可写目录变化时同步给执行器(在对方确认成功后调用，保持两边一致)。 */
   onWritableDirs?: (dirs: string[]) => void;
   /** 本机 MCP 身份引用的 vendorOptions 同步更新。 */
   onVendorOptions?: (patch: Record<string, unknown>) => void;
+  /** 模型 / 推理强度 / 快速模式 / 思考开关变化(连回对方时按最新值打开)。 */
+  onModel?: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => void;
+  onEffort?: (effort: Effort) => void;
+  onFastMode?: (enabled: boolean | 'ultrafast') => void;
+  onThinkingEnabled?: (enabled: boolean) => void;
+  /** 改用 Cindy 自动审查兜底(对方进程里的状态，连回来时要再告诉一次)。 */
+  onAutoReviewFallback?: () => void;
   /** 句柄关闭后释放本机资源(执行器、MCP 身份等)。 */
   dispose(): Promise<void>;
+  log?: { warn(message: string, meta?: Record<string, unknown>): void };
   /** 供应商组(分享的人)：这次发送要不要告诉对方开始新的一轮(用户亲自接手过)。 */
   takeGroupNewRound?(): boolean;
 }
@@ -211,36 +253,106 @@ export interface RemoteAgentHandleController {
    * 本机自己发起的确认(不是 Agent 发来的)：走与 Agent 确认同一个确认卡通道，桌面、手机远控与 IM 都能
    * 处理。只有本机提供了凭证授权建议的确认卡能返回会话级允许；交互还没接上或任务已结束时按拒绝处理。
    */
-  confirm(request: LocalConfirmation): Promise<ExecutorConfirmation>;
+  confirm(request: LocalConfirmation, signal?: AbortSignal): Promise<ExecutorConfirmation>;
+  /** 当前的状态镜像(只读)。 */
+  readState(): Readonly<Record<string, unknown>>;
+  /**
+   * 没有放不下的事：没有在跑的回合、没在准备回合、对方进程里没有后台任务、没有待唤醒的续跑。
+   * (本机执行器里的后台命令留在本机，不算。)
+   */
+  isQuiet(): boolean;
+  /** 连回了对方(新的 Agent 进程，同一个会话)：合入它的状态，用量先保留上一次的读数。 */
+  onReconnected(started: RemoteStartedInfo): void;
+  /** 连回时没能接上原来的会话、对方开了新会话：告诉用户之前的上下文没接上。 */
+  notifyResumeLost(): void;
 }
 
 export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHandleController {
-  const { client, started } = deps;
+  const { started } = deps;
+  const link = deps.link ?? fixedRemoteAgentLink(deps.client!);
   const queue = new EventQueue();
   const projection = new RemoteEventProjection(deps.workspace);
   let state: Record<string, unknown> = { ...started.state };
   let resolver: InteractionResolver | null = null;
   let disposed = false;
+  let disposal: Promise<void> | null = null;
   const sendCallbacks = new Map<string, {
     onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
     onInteractionStateChange?: (state: 'waiting' | 'resolved' | 'cancelled') => void;
   }>();
   const readImage = deps.readImage ?? ((file: string) => fsp.readFile(file));
   const supported = new Set(started.methods);
+  /** 连回后的新进程还没报过有内容的用量：先保留上一次的读数，界面不清零。 */
+  let carriedUsage: unknown;
+  /** 回到某条消息后、下一轮跑完前(Claude Code 要到下一次发送才在对方截断)：不能让出名额。 */
+  let rewindPending = false;
+  // The provider terminal owns this turn's failure, including its quota reset.
+  // A later transport teardown must close the handle without replacing that error.
+  let terminalErrorDelivered = false;
 
-  const dispose = async () => {
-    if (disposed) return;
+  const dispose = (): Promise<void> => {
+    if (disposal) return disposal;
     disposed = true;
     for (const projected of projection.flush()) queue.push(projected);
     queue.end();
-    await deps.dispose().catch(() => undefined);
+    // onClosed can start cleanup before close/detach reaches it. Every caller
+    // must await the same result, including a failure, before releasing the owner.
+    disposal = Promise.resolve().then(() => deps.dispose());
+    return disposal;
   };
 
-  const call = (method: RemoteAgentMethod, ...args: unknown[]) => client.call(method, args);
+  const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
+    deps.cancelPendingConfirmations?.();
+    const reason = opts?.reason ?? 'navigation';
+    if (reason === 'account-boundary') {
+      // The Agent uses the other computer's credentials. A failed notification
+      // is not evidence of a surviving local Pi process (#6921). Release local
+      // resources independently, even while the remote request is still pending.
+      const [remote, local] = await Promise.allSettled([
+        Promise.resolve().then(() => link.close(mode, reason)),
+        dispose(),
+      ]);
+      if (remote.status === 'rejected') {
+        deps.log?.warn('remote agent: account-boundary close notification failed', {
+          error: String(remote.reason),
+        });
+      }
+      if (local.status === 'rejected') throw local.reason;
+      return;
+    }
+    try {
+      await link.close(mode, reason);
+    } finally {
+      await dispose();
+    }
+  };
+
+  /** 要对方 Agent 参与的调用：已让出名额就先连回来。 */
+  const call = async (method: RemoteAgentMethod, ...args: unknown[]) => {
+    const end = link.begin();
+    try {
+      return await (await link.ensure()).call(method, args);
+    } finally {
+      end();
+    }
+  };
+  /**
+   * 只改设置的调用：连着就交给对方；已让出名额时只记在本机(连回来时随打开带上)，返回 false。
+   */
+  const callIfLive = async (method: RemoteAgentMethod, ...args: unknown[]): Promise<boolean> => {
+    const end = link.begin();
+    try {
+      const live = await link.live();
+      if (!live) return false;
+      await live.call(method, args);
+      return true;
+    } finally {
+      end();
+    }
+  };
 
   async function sendLike(method: 'send' | 'steer', message: UserMessage, opts?: SendOptions): Promise<void> {
     const encoded = await encodeSendOptions(opts, readImage);
-    if (method === 'send' && deps.takeGroupNewRound?.()) encoded.wire.groupNewRound = true;
     const wireMessage = await encodeUserMessage(message, readImage);
     const projectMessage = (wire: typeof wireMessage) => {
       if (typeof wire.content === 'string') wire.content = deps.workspace.mapTextForAgent(wire.content);
@@ -250,8 +362,6 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
-    projectMessage(wireMessage);
-    if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
     const callId = deps.newId();
     if (encoded.onTranscriptUserEntry || encoded.onInteractionStateChange) {
       sendCallbacks.set(callId, {
@@ -262,7 +372,23 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         sendCallbacks.delete(sendCallbacks.keys().next().value as string);
       }
     }
+    const client = await link.ensure();
+    // 连回成功后才取供应商组的「新一轮」标记：连不回时消息没发出，标记要留给重试。
+    if (method === 'send' && deps.takeGroupNewRound?.()) encoded.wire.groupNewRound = true;
+    // 连回之后才转换路径：让出期间改过的目录要等连回补发后才有虚拟路径。
+    projectMessage(wireMessage);
+    if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
+    if (method === 'send') terminalErrorDelivered = false;
     await client.callWithId(callId, method, [wireMessage, encoded.wire]);
+  }
+
+  async function sendLikeTracked(method: 'send' | 'steer', message: UserMessage, opts?: SendOptions): Promise<void> {
+    const end = link.begin();
+    try {
+      await sendLike(method, message, opts);
+    } finally {
+      end();
+    }
   }
 
   const optional = <K extends keyof AgentSessionHandle>(method: RemoteAgentMethod, fn: AgentSessionHandle[K]) =>
@@ -295,25 +421,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return Array.isArray(state.disabledSkillPaths) ? state.disabledSkillPaths as string[] : undefined;
     },
 
-    send: (message, opts) => sendLike('send', message, opts),
-    steer: (message, opts) => sendLike('steer', message, opts),
+    send: (message, opts) => sendLikeTracked('send', message, opts),
+    steer: (message, opts) => sendLikeTracked('steer', message, opts),
+    // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
-      await call('abort');
+      deps.cancelPendingConfirmations?.();
+      await callIfLive('abort');
     },
-    close: async (opts?: AgentSessionTeardownOptions) => {
-      try {
-        await client.close('close', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
-    },
-    detach: async (opts?: AgentSessionTeardownOptions) => {
-      try {
-        await client.close('detach', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
-    },
+    close: (opts?: AgentSessionTeardownOptions) => teardown('close', opts),
+    detach: (opts?: AgentSessionTeardownOptions) => teardown('detach', opts),
     events: () => queue,
     getUsageSnapshot: () => (state.usage && typeof state.usage === 'object'
       ? state.usage as UsageSnapshot
@@ -326,43 +442,57 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     getCurrentTurnId: () => (typeof state.currentTurnId === 'string' ? state.currentTurnId : null),
     getPlanMode: () => (typeof state.planMode === 'boolean' ? state.planMode : null),
     getExecutionPlanMode: () => (typeof state.executionPlanMode === 'boolean' ? state.executionPlanMode : null),
-    getFastMode: () => state.fastMode === true,
+    getFastMode: () => state.fastMode === 'ultrafast' ? 'ultrafast' : state.fastMode === true,
     getEffort: () => (typeof state.effort === 'string' ? state.effort as Effort : null),
     listBackgroundTasks: () => (Array.isArray(state.backgroundTasks) ? state.backgroundTasks as BackgroundTaskSnapshot[] : []),
     countPendingWakeContinuations: () => (typeof state.pendingWake === 'number' ? state.pendingWake : 0),
     ...optional('requestGracefulStop', async () => {
-      await call('requestGracefulStop');
+      await callIfLive('requestGracefulStop');
     }),
     ...optional('setModel', async (model: string, opts?: { providerId?: string | null; effort?: Effort }) => {
-      await call('setModel', model, opts);
+      if (!await callIfLive('setModel', model, opts)) {
+        state = { ...state, model, ...(opts?.effort ? { effort: opts.effort } : {}) };
+      }
+      deps.onModel?.(model, opts);
     }),
-    ...optional('requiresModelSwitchRebuild', async (model: string, opts?: { providerId?: string | null }) =>
-      (await call('requiresModelSwitchRebuild', model, opts)) === true),
+    // 已让出名额时下一次连回本来就是带新模型的冷启动接回，不用另外重建。
+    ...optional('requiresModelSwitchRebuild', async (model: string, opts?: { providerId?: string | null }) => {
+      const end = link.begin();
+      try {
+        const live = await link.live();
+        return live ? (await live.call('requiresModelSwitchRebuild', [model, opts])) === true : false;
+      } finally {
+        end();
+      }
+    }),
     ...optional('previewModelSwitch', (async (model: string, opts?: { providerId?: string | null }) =>
       call('previewModelSwitch', model, opts)) as AgentSessionHandle['previewModelSwitch']),
     ...optional('setPermissionMode', async (mode: string) => {
-      await call('setPermissionMode', mode);
+      await callIfLive('setPermissionMode', mode);
       deps.onPermissionMode?.(mode);
     }),
     ...optional('setEffort', async (effort: Effort) => {
-      await call('setEffort', effort);
+      if (!await callIfLive('setEffort', effort)) state = { ...state, effort };
+      deps.onEffort?.(effort);
     }),
-    ...optional('setFastMode', async (enabled: boolean) => {
-      await call('setFastMode', enabled);
+    ...optional('setFastMode', async (enabled: boolean | 'ultrafast') => {
+      if (!await callIfLive('setFastMode', enabled)) state = { ...state, fastMode: enabled };
+      deps.onFastMode?.(enabled);
     }),
     ...optional('setPlanMode', async (enabled: boolean) => {
-      await call('setPlanMode', enabled);
+      if (!await callIfLive('setPlanMode', enabled)) state = { ...state, planMode: enabled };
       deps.onPlanMode?.(enabled);
     }),
     ...optional('setThinkingEnabled', async (enabled: boolean) => {
-      await call('setThinkingEnabled', enabled);
+      await callIfLive('setThinkingEnabled', enabled);
+      deps.onThinkingEnabled?.(enabled);
     }),
     ...optional('setExtraDirs', async (dirs: string[], libraryRoot?: string | null) => {
-      deps.onExtraDirs?.(dirs);
-      await call('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
+      deps.onExtraDirs?.(dirs, libraryRoot);
+      await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
     }),
     ...optional('setWritableDirs', async (dirs: string[]) => {
-      await call('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
+      await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
       // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
       // 撤掉的不再被本机上限当可信根；失败时两边都保持原状。
       deps.onWritableDirs?.(dirs);
@@ -370,10 +500,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     // 本机 MCP 身份(协同等工具)必须立即看到改动；对方不支持时也照样更新本机这一份。
     setVendorOptions: async (patch: Record<string, unknown>) => {
       deps.onVendorOptions?.(patch ?? {});
-      if (supported.has('setVendorOptions')) await call('setVendorOptions', JSON.parse(JSON.stringify(patch ?? {})));
+      if (supported.has('setVendorOptions')) await callIfLive('setVendorOptions', JSON.parse(JSON.stringify(patch ?? {})));
     },
+    // 已让出名额时对方进程里没有后台任务(有后台任务时不会让)。
     ...optional('stopBackgroundTask', async (taskId: string) => {
-      await call('stopBackgroundTask', taskId);
+      await callIfLive('stopBackgroundTask', taskId);
     }),
     ...optional('resumeBackgroundTask', async (taskId: string, message: string, childId?: string) => {
       await call('resumeBackgroundTask', taskId, message, childId);
@@ -384,12 +515,16 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     ...optional('getCodexContextWindowInfo', (async () =>
       call('getCodexContextWindowInfo')) as AgentSessionHandle['getCodexContextWindowInfo']),
     ...optional('useCindyAutoReviewFallback', async () => {
-      await call('useCindyAutoReviewFallback');
+      await callIfLive('useCindyAutoReviewFallback');
+      deps.onAutoReviewFallback?.();
     }),
     ...optional('previewRewindFiles', (async (userUuid: string) =>
       call('previewRewindFiles', userUuid)) as AgentSessionHandle['previewRewindFiles']),
-    ...optional('commitRewindFiles', (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) =>
-      call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null)) as AgentSessionHandle['commitRewindFiles']),
+    ...optional('commitRewindFiles', (async (userUuid: string, priorAssistantUuid: string, opts?: unknown) => {
+      const result = await call('commitRewindFiles', userUuid, priorAssistantUuid, opts ?? null);
+      rewindPending = true;
+      return result;
+    }) as AgentSessionHandle['commitRewindFiles']),
   };
 
   async function answerInteraction(request: InteractionRequest): Promise<RemoteAgentReply> {
@@ -421,11 +556,47 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     handle,
     onEvent(event) {
       if (!event || typeof event !== 'object' || typeof (event as AgentEvent).type !== 'string') return;
-      const typed = event as AgentEvent;
+      let typed = event as AgentEvent;
+      if (isTerminalAgentErrorEvent(typed) && typed.turnScope !== 'background') terminalErrorDelivered = true;
+      if (typed.type === 'image' && typed.source === 'codex'
+        && (typed.data as { kind?: unknown } | null)?.kind === 'generation') {
+        typed = { ...typed, data: { ...(typed.data as object), pathOrigin: 'remote-agent' } };
+      }
+      if (typed.type === 'done') rewindPending = false;
       for (const projected of projection.project(deps.mapEvent ? deps.mapEvent(typed) : typed)) queue.push(projected);
     },
     onState(next) {
       state = { ...state, ...next };
+      if (carriedUsage !== undefined) {
+        // 新进程开始干活或报了有内容的用量后，以它为准。
+        if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
+        else state = { ...state, usage: carriedUsage };
+      }
+    },
+    readState: () => state,
+    isQuiet: () => !rewindPending
+      && state.turnRunning !== true
+      && state.preparing !== true
+      && !(Array.isArray(state.backgroundTasks) && state.backgroundTasks.length > 0)
+      && !(typeof state.pendingWake === 'number' && state.pendingWake > 0),
+    onReconnected(next) {
+      const previousUsage = state.usage;
+      state = { ...state, ...next.state };
+      if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
+        carriedUsage = previousUsage;
+        state = { ...state, usage: previousUsage };
+      }
+    },
+    notifyResumeLost() {
+      if (disposed) return;
+      queue.push({
+        type: 'error',
+        data: {
+          message: '[REMOTE_AGENT_RESUME_LOST] The earlier conversation on the other computer could not be resumed, so the agent continues without it.',
+          isTerminal: false,
+        },
+        source: started.agentKind,
+      });
     },
     onRequest(request) {
       if (request.type === 'interaction') {
@@ -452,10 +623,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       }
       return null;
     },
-    async confirm(request) {
-      if (!resolver || disposed) return false;
-      const decision = await resolver({ ...request, kind: 'permission', requestId: deps.newId() });
-      if (disposed || decision.kind !== 'permission' || decision.behavior !== 'allow') return false;
+    async confirm(request, signal) {
+      if (!resolver || disposed || signal?.aborted) return false;
+      const decision = await resolver({ ...request, kind: 'permission', requestId: deps.newId() }, signal);
+      if (disposed || signal?.aborted || decision.kind !== 'permission' || decision.behavior !== 'allow') return false;
       // 只能从本机生成的凭证确认卡建立授权；对方的 interaction 回包不经过这里。
       if (request.metadata?.hostOwnedConfirmation === 'shared_provider_credential'
         && isProviderShareCredentialSessionApproval(request.suggestions)
@@ -465,7 +636,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     onClosed(reason, message) {
       for (const projected of projection.flush()) queue.push(projected);
       // 'superseded'：同一任务被重新打开、旧实例让位给新实例，不是错误，静默收起。
-      if (reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
+      if (!terminalErrorDelivered && reason !== 'closed' && reason !== 'detached' && reason !== 'ended' && reason !== 'superseded') {
         queue.push({
           type: 'error',
           data: {
@@ -478,9 +649,18 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
           source: started.agentKind,
         });
       }
-      void dispose();
+      void dispose().catch((error) => {
+        deps.log?.warn('remote agent: local resource cleanup failed', { error: String(error) });
+      });
     },
   };
+}
+
+/** 用量读数是不是空的(新进程还没跑过回合)。 */
+function isEmptyUsage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return true;
+  const usage = value as Partial<UsageSnapshot>;
+  return !usage.tokenUsage && !usage.contextTokens;
 }
 
 /** 对方错误还原成本机能识别的错误(保留类名，供 Maker 判断登录失效等)。 */

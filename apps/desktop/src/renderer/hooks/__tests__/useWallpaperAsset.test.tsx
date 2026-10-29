@@ -42,6 +42,24 @@ afterEach(() => {
 });
 
 describe('on-demand wallpaper assets', () => {
+  // Regression: A -> B -> A used to discard A's ready original and briefly
+  // expose its thumbnail and loading feedback again, even with a warm cache.
+  it('returns an already decoded original immediately when switching back', async () => {
+    image.mockImplementation(async (id: string) => `cindy-media://client-wallpaper/${id}.webp`);
+    const { result, rerender } = renderHook(
+      ({ id }: { id: WallpaperId }) => useWallpaperAsset(id, 'image', true),
+      { initialProps: { id: 'night-launch' as WallpaperId } },
+    );
+    await waitFor(() => expect(result.current.url).toContain('night-launch.webp'));
+    rerender({ id: 'dune-dawn' });
+    await waitFor(() => expect(result.current.url).toContain('dune-dawn.webp'));
+    rerender({ id: 'night-launch' });
+    expect(result.current.url).toBe('cindy-media://client-wallpaper/night-launch.webp');
+    expect(result.current.loading).toBe(false);
+    expect(image).toHaveBeenCalledTimes(2);
+    expect(decode).toHaveBeenCalledTimes(2);
+  });
+
   it('tracks only the selected asset bytes, accepts retry resets and unsubscribes after completion', async () => {
     let finish!: (url: string) => void;
     image.mockReturnValueOnce(
@@ -93,12 +111,12 @@ describe('on-demand wallpaper assets', () => {
       { initialProps: { id: 'none' as WallpaperId, enabled: false } },
     );
     rerender({ id: 'custom', enabled: true });
-    rerender({ id: 'wheatfield-watch', enabled: false });
+    rerender({ id: 'dune-dawn', enabled: false });
     expect(image).not.toHaveBeenCalled();
     expect(video).not.toHaveBeenCalled();
-    rerender({ id: 'wheatfield-watch', enabled: true });
+    rerender({ id: 'dune-dawn', enabled: true });
     await waitFor(() => expect(decode).toHaveBeenCalledOnce());
-    expect(image).toHaveBeenCalledWith('wheatfield-watch');
+    expect(image).toHaveBeenCalledWith('dune-dawn');
     expect(video).not.toHaveBeenCalled();
     rerender({ id: 'cindy-window', enabled: true });
     await waitFor(() => expect(video).toHaveBeenCalledOnce());

@@ -474,6 +474,7 @@ async function dispatchRequest(input: {
   timeoutMs: number;
   maxResponseBytes: number;
   operation: 'submit' | 'poll';
+  recordBilling?(response: Response): Promise<void>;
 }): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
@@ -528,7 +529,15 @@ async function dispatchRequest(input: {
       status: response.status,
       durationMs: Date.now() - startedAt,
     });
-    const buffer = await readBoundedResponse(response, input.maxResponseBytes);
+    const [body, billing] = await Promise.allSettled([
+      readBoundedResponse(response, input.maxResponseBytes).finally(() => clearTimeout(timeout)),
+      input.recordBilling?.(response),
+    ]);
+    if (body.status === 'rejected') throw body.reason;
+    if (billing.status === 'rejected') {
+      log.warn('media billing failed', { error: mediaErrorForLog(billing.reason) });
+    }
+    const buffer = body.value;
     // A successful paid response belongs to the original invocation even if
     // its connection changed in flight. Save it before guarding later reads.
     if (input.operation === 'poll') input.connection.assertCurrent?.();
@@ -1377,6 +1386,7 @@ async function submitInvocation(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
   context?: MediaDownloadContext,
+  sessionId?: string,
 ): Promise<Record<string, unknown>> {
   const scope = currentAuthScope(context);
   assertAuthScope(scope, invocation.owner);
@@ -1470,45 +1480,113 @@ async function submitInvocation(
     }
     throw error;
   }
-  const claimed = await transitionMediaInvocation(
-    {
-      id: invocation.id,
-      owner: invocation.owner,
-      from: 'prepared',
-      to: 'submitting',
-    },
-    db,
-  );
-  if (!claimed) {
-    const current = await getMediaInvocation(invocation.id, invocation.owner, db);
-    assertAuthScope(scope, invocation.owner);
-    return failure(
-      'INVOCATION_ALREADY_USED',
-      `该 invocation 当前状态为 ${current?.state ?? 'unknown'}；付费提交不可重复执行`,
-    );
-  }
-  // claim 之后再过一次认证代次闸；通过后到 outboundFetch 发起之间没有异步让出点，
-  // 因而不会拿切换后账号的 endpoint / key 提交旧账号的付费请求。
-  assertAuthScope(scope, invocation.owner);
+  const recordBilling = invocation.guide.connection.providerId === 'xd'
+    ? await import('../usage/gatewayMediaBilling.js').then(({ prepareGatewayMediaBilling }) =>
+        prepareGatewayMediaBilling({ model: invocation.modelId, sessionId, db }),
+      )
+    : undefined;
   try {
-    const response = await dispatchRequest({
-      invocationId: invocation.id,
-      providerId: invocation.guide.connection.providerId,
-      modelId: invocation.modelId,
-      capability: invocation.capability,
-      connection,
-      method: invocation.guide.request.method,
-      path: invocation.guide.request.path,
-      headers: invocation.guide.request.headers,
-      body: requestBody,
-      bodyEncoding: invocation.guide.request.bodyEncoding,
-      multipartFiles: invocation.guide.request.multipartFiles,
-      timeoutMs: invocation.guide.request.timeoutMs,
-      maxResponseBytes: invocation.guide.request.maxResponseBytes,
-      operation: 'submit',
-    });
-    if (invocation.guide.response.mode === 'sync') {
-      const responseJson = JSON.stringify(response);
+    assertAuthScope(scope, invocation.owner);
+    const claimed = await transitionMediaInvocation(
+      {
+        id: invocation.id,
+        owner: invocation.owner,
+        from: 'prepared',
+        to: 'submitting',
+      },
+      db,
+    );
+    if (!claimed) {
+      const current = await getMediaInvocation(invocation.id, invocation.owner, db);
+      assertAuthScope(scope, invocation.owner);
+      return failure(
+        'INVOCATION_ALREADY_USED',
+        `该 invocation 当前状态为 ${current?.state ?? 'unknown'}；付费提交不可重复执行`,
+      );
+    }
+    // claim 之后再过一次认证代次闸；通过后到 outboundFetch 发起之间没有异步让出点，
+    // 因而不会拿切换后账号的 endpoint / key 提交旧账号的付费请求。
+    assertAuthScope(scope, invocation.owner);
+    try {
+      const response = await dispatchRequest({
+        invocationId: invocation.id,
+        providerId: invocation.guide.connection.providerId,
+        modelId: invocation.modelId,
+        capability: invocation.capability,
+        connection,
+        method: invocation.guide.request.method,
+        path: invocation.guide.request.path,
+        headers: invocation.guide.request.headers,
+        body: requestBody,
+        bodyEncoding: invocation.guide.request.bodyEncoding,
+        multipartFiles: invocation.guide.request.multipartFiles,
+        timeoutMs: invocation.guide.request.timeoutMs,
+        maxResponseBytes: invocation.guide.request.maxResponseBytes,
+        operation: 'submit',
+        recordBilling,
+      });
+      if (invocation.guide.response.mode === 'sync') {
+        const responseJson = JSON.stringify(response);
+        let persisted = false;
+        try {
+          persisted = await transitionMediaInvocation(
+            {
+              id: invocation.id,
+              owner: invocation.owner,
+              from: 'submitting',
+              to: 'pending',
+              responseJson,
+            },
+            db,
+          );
+        } catch (error) {
+          log.warn('persist sync media response failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await transitionMediaInvocation(
+            {
+              id: invocation.id,
+              owner: invocation.owner,
+              from: 'submitting',
+              to: 'unknown',
+            },
+            db,
+          ).catch(() => false);
+          return submissionOutcomeUnknown(
+            '上游结果已生成，但本地未能保存结果；不要自动重提',
+          );
+        }
+        if (!persisted) {
+          return submissionOutcomeUnknown(
+            '上游结果已生成，但本地未能保存结果；不要自动重提',
+          );
+        }
+        connection.assertCurrent?.();
+        assertAuthScope(scope, invocation.owner);
+        return materializeSyncInvocation(
+          { ...invocation, state: 'pending', responseJson },
+          response,
+          scope,
+          db,
+        );
+      }
+      const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      );
+      if (!taskId) {
+        await transitionMediaInvocation(
+          {
+            id: invocation.id,
+            owner: invocation.owner,
+            from: 'submitting',
+            to: 'unknown',
+          },
+          db,
+        );
+        return submissionOutcomeUnknown(
+          '上游响应没有任务 id，无法确认任务状态；不要自动重提',
+        );
+      }
       let persisted = false;
       try {
         persisted = await transitionMediaInvocation(
@@ -1517,12 +1595,12 @@ async function submitInvocation(
             owner: invocation.owner,
             from: 'submitting',
             to: 'pending',
-            responseJson,
+            taskId,
           },
           db,
         );
       } catch (error) {
-        log.warn('persist sync media response failed', {
+        log.warn('persist async media task id failed', {
           error: error instanceof Error ? error.message : String(error),
         });
         await transitionMediaInvocation(
@@ -1535,110 +1613,53 @@ async function submitInvocation(
           db,
         ).catch(() => false);
         return submissionOutcomeUnknown(
-          '上游结果已生成，但本地未能保存结果；不要自动重提',
+          '上游任务已创建，但本地未能保存任务 id；不要自动重提',
         );
       }
       if (!persisted) {
         return submissionOutcomeUnknown(
-          '上游结果已生成，但本地未能保存结果；不要自动重提',
+          '上游任务已创建，但本地未能保存任务 id；不要自动重提',
         );
       }
       connection.assertCurrent?.();
       assertAuthScope(scope, invocation.owner);
-      return materializeSyncInvocation(
-        { ...invocation, state: 'pending', responseJson },
-        response,
-        scope,
-        db,
-      );
-    }
-    const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
-      (value): value is string => typeof value === 'string' && value.length > 0,
-    );
-    if (!taskId) {
-      await transitionMediaInvocation(
-        {
-          id: invocation.id,
-          owner: invocation.owner,
-          from: 'submitting',
-          to: 'unknown',
-        },
-        db,
-      );
-      return submissionOutcomeUnknown(
-        '上游响应没有任务 id，无法确认任务状态；不要自动重提',
-      );
-    }
-    let persisted = false;
-    try {
-      persisted = await transitionMediaInvocation(
-        {
-          id: invocation.id,
-          owner: invocation.owner,
-          from: 'submitting',
-          to: 'pending',
-          taskId,
-        },
-        db,
-      );
+      return {
+        ok: true,
+        status: 'pending',
+        invocation_id: invocation.id,
+        recommended_poll_after_ms: invocation.guide.response.poll.recommendedIntervalMs,
+      };
     } catch (error) {
-      log.warn('persist async media task id failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await transitionMediaInvocation(
+      const expected = error instanceof MediaInvocationError ? error : null;
+      // 本地组装失败、提交前模型停用或连接变化：请求从未出站、无费用，把 invocation 放回 prepared，
+      // 让同一 invocation_id 可以直接再次 request；其余失败仍进入 failed / unknown。
+      // 已保存结果为 pending 时，submitting 条件更新不匹配，不回退已付费任务。
+      const notSubmitted = expected?.code === 'REQUEST_BUILD_FAILED' || expected?.code === 'MODEL_NOT_AVAILABLE' || expected?.code === 'CONNECTION_CHANGED';
+      const restored = await transitionMediaInvocation(
         {
           id: invocation.id,
           owner: invocation.owner,
           from: 'submitting',
-          to: 'unknown',
+          to: notSubmitted ? 'prepared' : expected?.outcomeUnknown ? 'unknown' : 'failed',
         },
         db,
       ).catch(() => false);
-      return submissionOutcomeUnknown(
-        '上游任务已创建，但本地未能保存任务 id；不要自动重提',
-      );
-    }
-    if (!persisted) {
-      return submissionOutcomeUnknown(
-        '上游任务已创建，但本地未能保存任务 id；不要自动重提',
-      );
-    }
-    connection.assertCurrent?.();
-    assertAuthScope(scope, invocation.owner);
-    return {
-      ok: true,
-      status: 'pending',
-      invocation_id: invocation.id,
-      recommended_poll_after_ms: invocation.guide.response.poll.recommendedIntervalMs,
-    };
-  } catch (error) {
-    const expected = error instanceof MediaInvocationError ? error : null;
-    // 本地组装失败、提交前模型停用或连接变化：请求从未出站、无费用，把 invocation 放回 prepared，
-    // 让同一 invocation_id 可以直接再次 request；其余失败仍进入 failed / unknown。
-    // 已保存结果为 pending 时，submitting 条件更新不匹配，不回退已付费任务。
-    const notSubmitted = expected?.code === 'REQUEST_BUILD_FAILED' || expected?.code === 'MODEL_NOT_AVAILABLE' || expected?.code === 'CONNECTION_CHANGED';
-    const restored = await transitionMediaInvocation(
-      {
-        id: invocation.id,
-        owner: invocation.owner,
-        from: 'submitting',
-        to: notSubmitted ? 'prepared' : expected?.outcomeUnknown ? 'unknown' : 'failed',
-      },
-      db,
-    ).catch(() => false);
-    if (expected) {
-      if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
-      if (notSubmitted && restored) {
-        return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
-          outcomeKnown: true,
-        });
+      if (expected) {
+        if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
+        if (notSubmitted && restored) {
+          return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
+            outcomeKnown: true,
+          });
+        }
+        return failure(expected.code, expected.message, false, { outcomeKnown: true });
       }
-      return failure(expected.code, expected.message, false, { outcomeKnown: true });
+      log.warn('media submission failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return failure('INTERNAL', '媒体任务提交失败');
     }
-    log.warn('media submission failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return failure('INTERNAL', '媒体任务提交失败');
+  } finally {
+    recordBilling?.finish();
   }
 }
 
@@ -1854,6 +1875,8 @@ async function pollInvocation(
 export async function callCindyMedia(
   request: CindyMediaToolRequest,
   context?: MediaDownloadContext,
+  /** Trusted Host context; never supplied through the model's tool arguments. */
+  sessionId?: string,
 ): Promise<Record<string, unknown>> {
   try {
     if (request.action === 'resolve_local_path') {
@@ -1956,7 +1979,7 @@ export async function callCindyMedia(
     activeInvocations.add(operationKey);
     try {
       return await (request.action === 'request'
-        ? submitInvocation(invocation, request.body, context)
+        ? submitInvocation(invocation, request.body, context, sessionId)
         : pollInvocation(invocation, context));
     } finally {
       activeInvocations.delete(operationKey);

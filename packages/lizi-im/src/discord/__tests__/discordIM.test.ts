@@ -61,6 +61,46 @@ function fakeGateway(): { factory: (ev: DiscordGatewayEvents) => DiscordGateway;
 }
 
 describe('DiscordIM teammate instance', () => {
+  it('manual reconnect uses the saved token and cancels the pending automatic retry', async () => {
+    vi.useFakeTimers();
+    const { host, secrets, handlers } = makeHost();
+    secrets.set('discord-bot-token', 'saved-token');
+    const gateway = fakeGateway();
+    gateway.connect.mockRejectedValueOnce(new Error('offline'));
+    const im = new DiscordIM(host, { gatewayFactory: gateway.factory });
+    im.registerIpc();
+    try {
+      await im.init();
+      await handlers.get('discordBot:reconnect')!();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(gateway.connect).toHaveBeenCalledTimes(2);
+      expect(gateway.connect).toHaveBeenLastCalledWith('saved-token');
+      expect(secrets.get('discord-bot-token')).toBe('saved-token');
+      expect(im.getStatus().kind).toBe('connected');
+    } finally { await im.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['recover', 'dispose', 'invalid-token'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    const { host, secrets } = makeHost();
+    secrets.set('discord-bot-token', 'saved-token');
+    const gateway = fakeGateway();
+    gateway.connect.mockRejectedValueOnce(Object.assign(new Error('network down'), {
+      code: outcome === 'invalid-token' ? 'TokenInvalid' : 'ECONNRESET',
+    }));
+    const im = new DiscordIM(host, { gatewayFactory: gateway.factory });
+    try {
+      await im.init();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(gateway.connect).toHaveBeenCalledTimes(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('reads and writes credentials under its prefix, skips settings IPC and broadcasts', async () => {
     const { host, secrets, handlers, broadcasts } = makeHost();
     const gateway = fakeGateway();

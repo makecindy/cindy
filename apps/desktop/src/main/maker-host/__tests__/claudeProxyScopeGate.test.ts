@@ -124,9 +124,9 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {
+  it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -136,21 +136,21 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('claude-haiku 分类器请求(gateway-spawn 带 x-api-key)→ passthrough 走默认网关', () => {
+  it('claude-haiku 分类器请求(gateway-spawn 带 x-api-key)→ passthrough 走默认网关', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
     expect(decision).toBeNull();
   });
 
-  it('claude-haiku 分类器请求(provider-oauth spawn 带占位 x-api-key)→ 换网关 key,不 passthrough (#831)', () => {
+  it('claude-haiku 分类器请求(provider-oauth spawn 带占位 x-api-key)→ 换网关 key,不 passthrough (#831)', async () => {
     // codex→cc 切换后的 openai/xai 来源会话:cc 子进程 env 里是占位 key,分类器请求带着它
     // 落到 ② 段。占位 key 不是可用凭证,按「无凭证」处理换网关 key;此前被误判成
     // gateway-spawn passthrough → 网关确定性 401 → 首次权限请求即 auto→ask 降级。
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
     );
@@ -159,10 +159,10 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('占位 x-api-key 且无网关 key → 维持 passthrough(与改动前行为一致,上游 401)', () => {
+  it('占位 x-api-key 且无网关 key → 维持 passthrough(与改动前行为一致,上游 401)', async () => {
     gatewayKey = null;
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
     );
@@ -204,9 +204,9 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('网关 key 在时的 claude-* 默认路由不受影响:照常换网关 key', () => {
+  it('网关 key 在时的 claude-* 默认路由不受影响:照常换网关 key', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -215,19 +215,19 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('显式选了供应商的会话,② 段回落不写入计费路由观察表(registry 只记默认路由会话)', () => {
+  it('显式选了供应商的会话,② 段回落不写入计费路由观察表(registry 只记默认路由会话)', async () => {
     const transform = createModelRoutingTransform();
-    transform(
+    await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-grok')).toBeNull();
   });
 
-  it('未选供应商的会话行为不变:② 段照常记录默认路由(no-break)', () => {
+  it('未选供应商的会话行为不变:② 段照常记录默认路由(no-break)', async () => {
     clearSessionProvider('sess-grok');
     const transform = createModelRoutingTransform();
-    transform(
+    await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -755,10 +755,10 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     ['openai', '/codex/responses'],
     ['xai', '/v1/responses'],
     ['xai', '/v1/chat/completions'],
-  ] as const)('routes native %s PI requests to a local raw forwarder at %s', (providerId, url) => {
+  ] as const)('routes native %s PI requests to a local raw forwarder at %s', async (providerId, url) => {
     setSessionProvider('sess-pi', providerId);
     registerPiProxySession('sess-pi', 'session-secret', () => providerId);
-    const decision = createModelRoutingTransform()(
+    const decision = await createModelRoutingTransform()(
       undefined,
       ctxWith({
           'x-cindy-pi-session-id': 'sess-pi',
@@ -780,7 +780,7 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       { scope: 'subagent-route' },
     );
 
-    const allowed = createModelRoutingTransform()(
+    const allowed = await createModelRoutingTransform()(
       undefined,
       ctxWith({
         'x-cindy-pi-session-id': 'sess-pi',
@@ -812,10 +812,10 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
   it.each([
     ['openai', '/codex/responses'],
     ['xai', '/v1/responses'],
-  ] as const)('trusts the host-resolved implicit %s PI source when persistence is empty', (providerId, url) => {
+  ] as const)('trusts the host-resolved implicit %s PI source when persistence is empty', async (providerId, url) => {
     clearSessionProvider('sess-pi');
     registerPiProxySession('sess-pi', 'session-secret', () => providerId);
-    const decision = createModelRoutingTransform()(
+    const decision = await createModelRoutingTransform()(
       undefined,
       ctxWith({
         'x-cindy-pi-session-id': 'sess-pi',

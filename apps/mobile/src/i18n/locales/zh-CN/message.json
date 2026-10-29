@@ -9,6 +9,9 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本机应用「{{name}}」发送",
+    "sourceLocalAppId": "应用 ID：{{id}}",
+    "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "moreActions": "更多消息操作",
     "reply": "回复",
     "newMessagesToBottom": "有新消息，跳到底部",
@@ -68,6 +71,7 @@
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
+    "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -102,6 +106,7 @@
     "subagentSummary": "Subagent 小结",
     "agentSwitchLabel": "已从 {{from}} 切换到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，查看交接内容",
+    "sessionFallbackPill": "已用摘要接续",
     "sessionResumedPill": "已续接原任务",
     "handoffContentDesc": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
     "handoffContentDescEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文（不计入对话记录，仅在此展示）",
@@ -170,7 +175,9 @@
     "diffEditCount": "{{n}} 处编辑",
     "groupSentNamed": "从群聊「{{name}}」发送",
     "groupSent": "从群聊发送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "选择文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -181,6 +188,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "原图暂不可用",
+    "retryOriginal": "重试原图",
+    "loadingOriginal": "正在加载原图…",
     "sourceMissing": "源图片已不在这台电脑上，请重新导入原文件。",
     "deviceOffline": "电脑尚未连接，请恢复连接后重试。",
     "cancelAnnotation": "取消标注",
@@ -228,6 +238,10 @@
     "cancel": "取消",
     "edit": "编辑",
     "steer": "插话",
+    "steerQueued": "暂未送达，消息仍保留在队列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延后一位",
+    "cancelSend": "取消发送",
     "collapseQueued": "收起排队消息",
     "expandRemainingQueued": "展开剩余 {{n}} 条排队消息",
     "collapse": "收起",
@@ -236,7 +250,15 @@
     "sendingMessage": "发送中的消息：{{text}}",
     "uploadingAttachments": "附件上传中 {{uploaded}}/{{total}}",
     "delete": "删除",
-    "retry": "重试"
+    "retry": "重试",
+    "notSent": "未发送",
+    "imagesNotUploaded_one": "{{count}} 张图片没传上去",
+    "imagesNotUploaded_other": "{{count}} 张图片没传上去",
+    "waitingForComputer": "等电脑连上后发送",
+    "waitingForNetwork": "等网络恢复后发送",
+    "queued": "排队中",
+    "retryImage": "重新上传这张图片",
+    "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -290,6 +312,7 @@
     "agentSwitchLocation": "Agent 改到 {{device}} 运行",
     "agentSwitchLocationThisComputer": "Agent 改回这台电脑运行",
     "agentSwitchLocationOtherComputer": "Agent 改到另一台电脑运行",
+    "agentSwitchLocationQuotaRebalance": "这个账号的配额更该先用",
     "learnStarted": "技能学习已启动",
     "learnStartedBody": "蒸馏在电脑端后台进行，完成后请到电脑端查看并评审技能草案。",
     "learnFailed": "技能学习未能启动",
@@ -390,5 +413,15 @@
     "memory": "已记住：{{title}}",
     "skillCreated": "已建立技能：{{title}}",
     "skillUpdated": "已更新技能：{{title}}"
+  },
+  "richAnswer": {
+    "send": "发送消息",
+    "sending": "正在发送…",
+    "sent": "已提交",
+    "sendFailed": "消息未提交，已保留填写内容",
+    "playVideo": "播放视频",
+    "openVideoSource": "打开原视频",
+    "calculationUnavailable": "此项暂时无法计算。",
+    "incomplete": "部分内容未能显示。"
   }
 }

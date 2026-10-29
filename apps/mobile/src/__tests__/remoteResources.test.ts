@@ -23,6 +23,15 @@ const targets = [
 ];
 
 describe('remote resource discovery', () => {
+  // plugin-security-and-authoring §1.1: preserve Host capability declarations so mobile never guesses support.
+  // Existing discovery tests omitted collection actions. Minimal regression: one plugins management action (unit).
+  it('retains bounded collection capability actions from the Host manifest', async () => {
+    const invoke = vi.fn(async () => ({ protocolVersion: 1, collections: [{
+      id: 'plugins', resourceKind: 'plugin', title: 'Plugins', actions: [{ id: 'management:snapshot', label: 'Manage' }],
+    }] })) as RemoteInvoke;
+    const manifest = await loadRemoteResourceManifest(invoke, targets[0]);
+    expect(manifest?.collections[0].actions).toEqual([{ id: 'management:snapshot', label: 'Manage' }]);
+  });
   it('omits desktop routines from live discovery and offline fallback while keeping other collections', async () => {
     const collections = [
       { id: 'routines', title: '例行任务', resourceKind: 'routine', placement: 'home-scope', targets },

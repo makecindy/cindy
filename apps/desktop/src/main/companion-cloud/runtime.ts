@@ -16,8 +16,9 @@ import type {
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import type { CompanionHomeRegistry } from './homes.js';
+import type { CompanionArrivalNotice } from './capabilities.js';
 import { materializeCompanion, rebuildPending, type CompanionHistoryAttachment, type CompanionMaterializeHost, type CompanionMaterializeResult, type CompanionRoomDownload } from './materialize.js';
-import { createCompanionMirror, type CompanionMediaUpload, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
+import { createCompanionMirror, type CompanionMediaUpload, type CompanionMirrorAttachment, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
 import { readAllRoomMessages, transcriptPageOf } from './room.js';
 import { isCindyCompanion, mergeCompanionsInto, readProfileSnapshot } from './merge.js';
 import { importCloudHistory } from './materialize.js';
@@ -30,6 +31,8 @@ export interface CompanionCloudHost {
   homes: CompanionHomeRegistry;
   openState: (endpoint: string, humanActorId: string, current: () => boolean) => CompanionCloudState;
   readValues: (botId: string) => Promise<CompanionPreferenceValue[]>;
+  /** The files a companion reply refers to that go to the room with it (replyArtifacts.ts). */
+  replyAttachments?: (botId: string, sessionId: string, row: CompanionMirrorRow, text: string) => Promise<CompanionMirrorAttachment[]>;
   /** The companion's main task; null when it has none yet. Throws when it cannot be told (conflicting links). */
   canonicalSession: (botId: string) => Promise<string | null>;
   rowsAfter: (sessionId: string, cursor: CompanionMirrorCursor, limit: number) => Promise<CompanionMirrorRow[]>;
@@ -101,6 +104,9 @@ export interface CompanionCloudRuntime {
   mergeCindyHere: (keepBotId: string, fromBotIds: string[]) => Promise<CompanionMergeResult>;
   /** Before a merge on another computer: send everything of a companion homed here to the server. */
   flushHere: (botId: string) => Promise<CompanionCloudActionResult>;
+  /** What the last move to this computer could not keep of the companion's setup, until dismissed. */
+  arrivalNotices: (botId: string) => CompanionArrivalNotice[];
+  dismissArrivalNotices: (botId: string) => void;
   /** One of the files in the companion's room, brought to this computer. */
   attachment: (botId: string, mediaId: string) => Promise<CompanionHistoryAttachment>;
   /** The companion was deleted on its home (this computer): retire its cloud actor (retried until it succeeds). */
@@ -170,6 +176,8 @@ export function startCompanionCloud(input: {
   humanActorId: string;
   selfDeviceId?: string;
   current: () => boolean;
+  /** Durable Chat Server display projection; takeover and runtime reconstruction still read authoritative history. */
+  transcript?: (roomId: string, actorId: string, refresh: boolean) => Promise<CompanionTranscriptMessage[]>;
   /** Active local companions whose home is this computer (and not demoted). */
   bots: () => CompanionCloudBot[];
   /** A local companion the owner paused: not synced or moved, and a merge asks to resume it first. */
@@ -180,6 +188,8 @@ export function startCompanionCloud(input: {
   refresh?: () => Promise<void>;
   /** Publish the registry snapshot after a local home change. */
   publish?: () => void;
+  /** The set of hidden local copies changed (a copy was demoted or taken over): what depends on it re-reads. */
+  onShadowChanged?: () => void;
   /** Publish the companions' actor name and avatar now (they sync outside the preferences). */
   syncProfile?: (botId: string) => Promise<void>;
   /** Room files (chatServerMedia): the mirror uploads the owner's attachments; readers download them. */
@@ -200,7 +210,8 @@ export function startCompanionCloud(input: {
   });
   const mirror = createCompanionMirror({ api: input.api, state, humanActorId: () => input.humanActorId,
     canonicalSession: input.host.canonicalSession, rowsAfter: input.host.rowsAfter, latestRows: input.host.latestRows,
-    ...(input.media ? { uploadMedia: input.media.upload } : {}), ...(input.log ? { log: input.log } : {}) });
+    ...(input.media ? { uploadMedia: input.media.upload } : {}),
+    ...(input.host.replyAttachments ? { replyAttachments: input.host.replyAttachments } : {}), ...(input.log ? { log: input.log } : {}) });
   let disposed = false;
   const live = () => !disposed && input.current();
   const aborts = new AbortController();
@@ -218,7 +229,13 @@ export function startCompanionCloud(input: {
   const pick = (only: Set<string> | null) => input.bots()
     .filter(bot => (!only || only.has(bot.botId)) && installOwner(bot.botId) === 'mine');
   const actorOf = (botId: string) => (input.actors?.() ?? []).find(a => a.kind === 'bot' && !a.disabled && (a.externalId === botId || a.id === botId));
-  const publish = () => { if (live()) input.publish?.(); };
+  let shadowKey = '';
+  const publish = () => {
+    if (!live()) return;
+    input.publish?.();
+    const key = [...state.demotedBotIds(), ...[...installs].flatMap(([botId, value]) => value.owner === 'other' ? [botId] : [])].sort().join('|');
+    if (key !== shadowKey) { shadowKey = key; input.onShadowChanged?.(); }
+  };
 
   function loop(run: (only: Set<string> | null) => Promise<void>, intervalMs: number, debounceMs: number) {
     let busy: Promise<void> | undefined;
@@ -713,7 +730,10 @@ export function startCompanionCloud(input: {
       const targets = await input.host.homeLink!.targets(home);
       return { homeDeviceId: home, homeName, mode: 'remote',
         targets: targets.filter(target => target.deviceId !== home).map(target => target.deviceId === self
-          ? { ...target, name: target.name || here.name, isSelf: true } : { ...target, isSelf: false }) };
+          ? { ...target, name: target.name || here.name, isSelf: true } : { ...target, isSelf: false }),
+        // The home only lists computers that allow its control, so this one is missing for that reason.
+        ...(selfDevice?.remoteControlEnabled === false && !targets.some(target => target.deviceId === self)
+          ? { thisComputer: 'REMOTE_CONTROL_OFF' as const } : {}) };
     },
 
     async switchHome(botId, targetDeviceId, options) {
@@ -745,9 +765,11 @@ export function startCompanionCloud(input: {
       if (!actor) throw new Error('COMPANION_NOT_FOUND');
       const roomId = await mirror.ensureRoom(actor.externalId, actor.id, actor.name);
       // The room orders by arrival (older history may be uploaded later): read it whole, show it
-      // by message time. The first page re-reads; older pages reuse that read.
+      // by message time. The durable reader validates its cached scan against room
+      // changes; the legacy reader reuses a recent scan for older pages.
       const cached = transcripts.get(roomId);
-      const messages = before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
+      const messages = input.transcript ? await input.transcript(roomId, actor.id, !before)
+        : before && cached && Date.now() - cached.at < TRANSCRIPT_CACHE_MS ? cached.messages
         : await readAllRoomMessages(input.api, roomId, actor.id);
       transcripts.set(roomId, { at: Date.now(), messages });
       return transcriptPageOf(messages, before ? Number(before) : undefined);
@@ -762,7 +784,7 @@ export function startCompanionCloud(input: {
         const profile = await profileOf(actor.id).catch(() => null);
         if (isCindyCompanion(actor.externalId, profile)) copies.push({ botId: actor.externalId, name: actor.name, homeDeviceId: actor.homeDeviceId ?? null });
       }
-      return copies.length > 1 ? copies : [];
+      return copies;
     },
 
     async mergeCindy(keepBotId, fromBotIds) {
@@ -797,6 +819,13 @@ export function startCompanionCloud(input: {
     async flushHere(botId) {
       if (!input.selfDeviceId || !live()) return { ok: false, code: 'NOT_ENABLED' };
       return flushOwn(botId);
+    },
+
+    arrivalNotices: botId => state.bot(botId)?.arrivalNotices ?? [],
+    dismissArrivalNotices(botId) {
+      const entry = state.bot(botId);
+      if (!entry?.arrivalNotices) return;
+      state.update(botId, entry.actorId, next => { delete next.arrivalNotices; });
     },
 
     async attachment(botId, mediaId) {

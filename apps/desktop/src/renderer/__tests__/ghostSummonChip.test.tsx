@@ -14,16 +14,24 @@
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 import '@/i18n';
 import i18n from '@/i18n';
 import { GhostFulfillmentContext, GhostSummonCard } from '@/components/chat/GhostSummonCard';
 import { expandCollapsedMessages, stripMessageSources } from '@/lib/shareConversationImage';
-import type { GhostDirectiveDisplay } from '@/cindy-brain/ghostCommand';
+import {
+  commandDirectiveSegments,
+  mentionDirectiveSegments,
+  type GhostDirectiveDisplay,
+} from '@/cindy-brain/ghostCommand';
 import type { HostCapabilityDirectiveDisplay } from '@/cindy-brain/hostCapabilityInvocation';
 import type { InstalledGhost } from '../../shared/ghost';
 import { collectGhostCallsByUserTurn } from '@/components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { UserMessage } from '@/components/chat/UserMessage';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+import { Tooltip } from '@/components/ui/tooltip';
 
 const { installedGhostsMock } = vi.hoisted(() => ({
   installedGhostsMock: vi.fn(() => [] as InstalledGhost[]),
@@ -86,7 +94,356 @@ afterEach(() => {
   delete (window as { matchMedia?: unknown }).matchMedia;
 });
 
+const ROOT_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGOwbvpGEmIY1TCqYfhqAACHB7MQtEO1oAAAAABJRU5ErkJggg==';
+const ORG_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGOYbPyKJMQwqmFUw/DVAABSy7AQ0SGg2gAAAABJRU5ErkJggg==';
+
 describe('GhostSummonCard(chip 形态)', () => {
+  // PR #6392 P2 reviews: existing coverage starts with a prebuilt directive and
+  // misses persisted directives through UserMessage's pill/chip decision.
+  // Unit tier: one user message plus root/org ghost_call messages are parsed and
+  // projected by production code; only the installed-list hook is replaced.
+  describe('legacy directive fulfillment compatibility', () => {
+    const legacyCommand = {
+      kind: 'command',
+      command: 'draw',
+      name: 'Saved Helper',
+      ghostId: 'helper',
+      raw: '',
+    } as const;
+    const legacyMention = {
+      kind: 'mention',
+      ghosts: [{ name: 'Saved Helper', ghostId: 'helper' }],
+      raw: '',
+    } satisfies GhostDirectiveDisplay;
+    const rootCall = { ghost_id: 'helper', namespace: null };
+    const orgCall = { ghost_id: 'helper', namespace: 'acme' };
+    const mixedMention = {
+      kind: 'mention',
+      ghosts: [
+        { name: 'Saved Helper', ghostId: 'helper' },
+        { name: 'Saved Organization', ghostId: '_ns__acme__helper' },
+      ],
+      raw: '',
+    } satisfies GhostDirectiveDisplay;
+
+    it.each<{
+      label: string;
+      directive: GhostDirectiveDisplay;
+      body: string;
+      calls: Record<string, unknown>[];
+      called: boolean;
+      icon: string | null;
+      names?: string;
+    }>([
+      {
+        label: 'old unqualified command / explicit root call',
+        directive: legacyCommand,
+        body: '$draw help',
+        calls: [rootCall],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old unqualified command / encoded root call',
+        directive: legacyCommand,
+        body: '$draw help',
+        calls: [{ ghost_id: '_root__helper' }],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old unqualified command / bare call',
+        directive: legacyCommand,
+        body: '$draw help',
+        calls: [{ ghost_id: 'helper' }],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old unqualified command / organization only',
+        directive: legacyCommand,
+        body: '$draw help',
+        calls: [orgCall],
+        called: false,
+        icon: null,
+      },
+      {
+        label: 'old command with root suffix',
+        directive: legacyCommand,
+        body: '$draw/@root help',
+        calls: [rootCall],
+        called: true,
+        icon: ROOT_ICON,
+      },
+      {
+        label: 'old command with organization suffix / root only',
+        directive: legacyCommand,
+        body: '$draw/acme help',
+        calls: [rootCall],
+        called: false,
+        icon: ORG_ICON,
+      },
+      {
+        label: 'old command with organization suffix / organization',
+        directive: legacyCommand,
+        body: '$draw/acme help',
+        calls: [orgCall],
+        called: true,
+        icon: ORG_ICON,
+      },
+      {
+        label: 'explicit null command',
+        directive: { ...legacyCommand, namespace: null },
+        body: '$draw help',
+        calls: [rootCall],
+        called: true,
+        icon: ROOT_ICON,
+      },
+      {
+        label: 'explicit organization command / root only',
+        directive: { ...legacyCommand, namespace: 'acme' },
+        body: '$draw help',
+        calls: [rootCall],
+        called: false,
+        icon: ORG_ICON,
+      },
+      {
+        label: 'explicit organization command / organization',
+        directive: { ...legacyCommand, namespace: 'acme' },
+        body: '$draw help',
+        calls: [orgCall],
+        called: true,
+        icon: ORG_ICON,
+      },
+      {
+        label: 'old mention / explicit root call',
+        directive: legacyMention,
+        body: 'help',
+        calls: [rootCall],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old mention / encoded root call',
+        directive: legacyMention,
+        body: 'help',
+        calls: [{ ghost_id: '_root__helper' }],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old mention / bare call',
+        directive: legacyMention,
+        body: 'help',
+        calls: [{ ghost_id: 'helper' }],
+        called: true,
+        icon: null,
+      },
+      {
+        label: 'old mention / organization only',
+        directive: legacyMention,
+        body: 'help',
+        calls: [orgCall],
+        called: false,
+        icon: null,
+      },
+      {
+        label: 'mixed mentions / organization only',
+        directive: mixedMention,
+        body: 'help',
+        calls: [orgCall],
+        called: true,
+        icon: ORG_ICON,
+        names: 'Saved Organization',
+      },
+      {
+        label: 'mixed mentions / both instances',
+        directive: mixedMention,
+        body: 'help',
+        calls: [rootCall, orgCall],
+        called: true,
+        icon: null,
+        names: 'Saved Helper、Saved Organization',
+      },
+    ])(
+      '$label preserves status separately from installed identity',
+      async ({ directive, body, calls, called, icon, names }) => {
+        stubMatchMedia(true);
+        installedGhostsMock.mockReturnValue([
+          {
+            manifest: { id: 'helper', name: 'Installed Root', version: '1' },
+            dir: '/tmp/_ns/_root/helper',
+            instanceKey: '_root__helper',
+            namespace: null,
+            iconDataUrl: ROOT_ICON,
+          },
+          {
+            manifest: {
+              id: 'helper',
+              name: 'Installed Organization',
+              version: '2',
+            },
+            dir: '/tmp/_ns/acme/helper',
+            instanceKey: '_ns__acme__helper',
+            namespace: 'acme',
+            iconDataUrl: ORG_ICON,
+          },
+        ] as InstalledGhost[]);
+        const raw = (
+          directive.kind === 'command'
+            ? commandDirectiveSegments(directive)
+            : mentionDirectiveSegments(directive.ghosts)
+        )
+          .map((segment) => segment.text)
+          .join('');
+        const content = body + '\n\n' + raw;
+        const messages = [
+          { clientId: 'm1', role: 'user', content },
+          ...calls.map((input, index) => ({
+            clientId: 'call-' + index,
+            role: 'tool_use',
+            toolName: 'mcp__cindy__ghost_call',
+            toolInput: { ...input, tool: 'run' },
+          })),
+        ] as ChatMessage[];
+        let container!: HTMLElement;
+        await act(async () => {
+          const view = render(
+            <GhostFulfillmentContext.Provider
+              value={collectGhostCallsByUserTurn(messages)}
+            >
+              <ConfirmDialogProvider>
+                <MemoryRouter>
+                  <Tooltip.Provider>
+                    <UserMessage
+                      workingDir="/synthetic/issue-6386"
+                      content={content}
+                      messageClientId="m1"
+                      isLastUserMessage
+                      sessionRunning={false}
+                    />
+                  </Tooltip.Provider>
+                </MemoryRouter>
+              </ConfirmDialogProvider>
+            </GhostFulfillmentContext.Provider>,
+          );
+          container = view.container;
+        });
+        if (directive.kind === 'mention' && !called) {
+          expect(screen.getByText(/提及插件/)).toBeTruthy();
+          expect(screen.queryByText('已调用')).toBeNull();
+        } else {
+          expect(screen.getByText(called ? '已调用' : '已完成')).toBeTruthy();
+          expect(screen.queryByText(called ? '已完成' : '已调用')).toBeNull();
+          expect(screen.getByText(names ?? 'Saved Helper')).toBeTruthy();
+          expect(screen.queryByText(/提及插件/)).toBeNull();
+        }
+        expect(
+          [...container.querySelectorAll('img')].map((img) =>
+            img.getAttribute('src'),
+          ),
+        ).toEqual(icon ? [icon] : []);
+        expect(screen.queryByText('Installed Root')).toBeNull();
+        expect(screen.queryByText('Installed Organization')).toBeNull();
+      },
+    );
+  });
+
+  // #6386: existing tests covered org calls and ambiguous bare history, but not
+  // explicit root messages through the production projection into this chip.
+  // Unit tier: only the installed-list hook is replaced; no runtime/credentials.
+  it.each([
+    {
+      label: 'explicit root',
+      input: { ghost_id: 'helper', namespace: null },
+      name: 'Root',
+      icon: ROOT_ICON,
+    },
+    { label: 'encoded root', input: { ghost_id: '_root__helper' }, name: 'Root', icon: ROOT_ICON },
+    {
+      label: 'explicit organization',
+      input: { ghost_id: 'helper', namespace: 'acme' },
+      name: 'Organization',
+      icon: ORG_ICON,
+    },
+    {
+      label: 'legacy unqualified history',
+      input: { ghost_id: 'helper' },
+      name: 'helper',
+      icon: null,
+    },
+  ])(
+    'keeps $label name and icon together while running, settled and reloaded',
+    ({ input, name, icon }) => {
+      stubMatchMedia(true);
+      installedGhostsMock.mockReturnValue([
+        {
+          manifest: { id: 'helper', name: 'Root', version: '1' },
+          dir: '/tmp/_ns/_root/helper',
+          instanceKey: '_root__helper',
+          namespace: null,
+          iconDataUrl: ROOT_ICON,
+        },
+        {
+          manifest: { id: 'helper', name: 'Organization', version: '2' },
+          dir: '/tmp/_ns/acme/helper',
+          instanceKey: '_ns__acme__helper',
+          namespace: 'acme',
+          iconDataUrl: ORG_ICON,
+        },
+      ] as InstalledGhost[]);
+      const messages = [
+        { clientId: 'm1', role: 'user', content: 'help' },
+        {
+          clientId: 'call',
+          role: 'tool_use',
+          toolUseId: 'call-1',
+          toolName: 'mcp__cindy__ghost_call',
+          toolInput: { ...input, tool: 'run' },
+        },
+      ] as ChatMessage[];
+      const chip = (history: ChatMessage[], running: boolean) => {
+        const fulfilled = collectGhostCallsByUserTurn(history);
+        return (
+          <GhostFulfillmentContext.Provider value={fulfilled}>
+            <GhostSummonCard
+              directive={{ kind: 'semantic', ghostIds: [...(fulfilled.get('m1') ?? [])] }}
+              messageClientId="m1"
+              running={running}
+            />
+          </GhostFulfillmentContext.Provider>
+        );
+      };
+      const assertIdentity = (container: HTMLElement) => {
+        expect(screen.getByText(name)).toBeTruthy();
+        const images = [...container.querySelectorAll('img')].map((img) => img.getAttribute('src'));
+        expect(images).toEqual(icon ? [icon] : []);
+        for (const other of ['Root', 'Organization'].filter((value) => value !== name)) {
+          expect(screen.queryByText(other)).toBeNull();
+        }
+      };
+      const view = render(chip(messages, true));
+      assertIdentity(view.container);
+      expect(screen.getByText('调用中…')).toBeTruthy();
+      const settled = [
+        ...messages,
+        {
+          clientId: 'result',
+          role: 'tool_result',
+          toolUseId: 'call-1',
+          content: 'ok',
+        } as ChatMessage,
+      ];
+      view.rerender(chip(settled, false));
+      assertIdentity(view.container);
+      expect(screen.getByText('已调用')).toBeTruthy();
+      view.unmount();
+      const reloaded = render(chip(JSON.parse(JSON.stringify(settled)) as ChatMessage[], false));
+      assertIdentity(reloaded.container);
+      expect(screen.getByText('已调用')).toBeTruthy();
+    },
+  );
+
   it('does not attach a newly installed root version to an ambiguous historical bare id', () => {
     installedGhostsMock.mockReturnValue([
       { manifest: { id: 'helper', name: 'New Root', version: '99' },
@@ -98,6 +455,57 @@ describe('GhostSummonCard(chip 形态)', () => {
     expect(screen.queryByText('v99')).toBeNull();
     expect(container.querySelector('img[src="data:image/png;base64,AAAA"]')).toBeNull();
   });
+
+  it.each([undefined, '@root'])(
+    'keeps an explicit root command fulfilled with namespace token %s',
+    (commandNamespace) => {
+      installedGhostsMock.mockReturnValue([
+        {
+          manifest: { id: 'helper', name: 'Root', version: '1' },
+          dir: '/tmp/_ns/_root/helper',
+          instanceKey: '_root__helper',
+          namespace: null,
+          iconDataUrl: ROOT_ICON,
+        },
+        {
+          manifest: { id: 'helper', name: 'Organization', version: '2' },
+          dir: '/tmp/_ns/acme/helper',
+          namespace: 'acme',
+          iconDataUrl: ORG_ICON,
+        },
+      ] as InstalledGhost[]);
+      const directive = {
+        kind: 'command',
+        command: 'draw',
+        name: 'Root',
+        ghostId: 'helper',
+        namespace: null,
+        raw: '',
+      } as const;
+      const messages = [
+        { clientId: 'm1', role: 'user', content: 'draw' },
+        {
+          clientId: 'call',
+          role: 'tool_use',
+          toolName: 'mcp__cindy__ghost_call',
+          toolInput: { ghost_id: 'helper', namespace: null, tool: 'run' },
+        },
+      ] as ChatMessage[];
+      const { container } = render(
+        <GhostFulfillmentContext.Provider value={collectGhostCallsByUserTurn(messages)}>
+          <GhostSummonCard
+            directive={directive}
+            commandNamespace={commandNamespace}
+            messageClientId="m1"
+          />
+        </GhostFulfillmentContext.Provider>,
+      );
+      expect(screen.getByText('已调用')).toBeTruthy();
+      expect(container.querySelector('img')?.getAttribute('src')).toBe(ROOT_ICON);
+      fireEvent.click(screen.getByRole('button', { expanded: false }));
+      expect(screen.getByText('v1')).toBeTruthy();
+    },
+  );
 
   it('renders an organization semantic call instead of its same-id root neighbor', () => {
     installedGhostsMock.mockReturnValue([

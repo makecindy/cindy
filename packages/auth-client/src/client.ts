@@ -57,6 +57,8 @@ export interface AuthClientOptions {
   locale?: string;
   fetch: AuthFetch;
   timeoutMs?: number;
+  /** Original failure before UI mapping; JSON syntax errors omit body excerpts. Adapters redact logs. */
+  onRequestError?: (path: string, status: number, error: unknown) => void;
 }
 
 /** Structured auth-server failure preserved across platform adapters. */
@@ -534,6 +536,7 @@ export class CindyAuthClient {
           ...(timeoutMs > 0 || external ? { signal: controller.signal } : {}),
         });
       } catch (error) {
+        this.logRequestError(path, 0, error);
         throw this.describeTransportFailure(error, external);
       }
 
@@ -543,6 +546,7 @@ export class CindyAuthClient {
       try {
         data = await response.json();
       } catch (error) {
+        this.logRequestError(path, response.status, error);
         // body 读取同样可能因取消/超时中断,此时按传输失败归类而不是"响应非法 JSON"
         if (error instanceof Error && error.name === "AbortError") {
           throw this.describeTransportFailure(error, external);
@@ -580,6 +584,7 @@ export class CindyAuthClient {
       }
       const parsed = schema.safeParse(data);
       if (!parsed.success) {
+        this.logRequestError(path, response.status, parsed.error);
         throw new AuthApiError(
           "INVALID_RESPONSE",
           response.status,
@@ -590,6 +595,18 @@ export class CindyAuthClient {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       external?.removeEventListener("abort", forwardAbort);
+    }
+  }
+
+  private logRequestError(path: string, status: number, error: unknown): void {
+    try {
+      // JSON SyntaxError messages/stacks can include the response body.
+      const detail = error && typeof error === "object" && "name" in error && error.name === "SyntaxError"
+        ? "SyntaxError"
+        : error;
+      this.options.onRequestError?.(path, status, detail);
+    } catch {
+      // A logging failure cannot affect auth, retries or rotated credentials.
     }
   }
 

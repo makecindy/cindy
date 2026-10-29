@@ -429,6 +429,10 @@ describe('mobile Orca collaboration mutations', () => {
     // 来源 A 仍可路由 → 原样;A 断开、B 仍提供同名模型 → 清掉来源交给被控端默认路由。
     expect(narrowOrcaWorkerProvider(chosen, [provider('a'), provider('b')])).toBe(chosen);
     expect(narrowOrcaWorkerProvider(chosen, [provider('a', false), provider('b')]).model?.providerId).toBeNull();
+    // 完整手动路线恢复后不可因旧来源断开而换凭证；原用例只覆盖旧版无位置的偏好。
+    // unit：同模型另有可用来源时，创建边界仍收到用户原选来源并明确拒绝。
+    const explicit = { ...chosen, modelSelectionExplicit: true };
+    expect(narrowOrcaWorkerProvider(explicit, [provider('a', false), provider('b')])).toBe(explicit);
     // 目录未就绪时不猜。
     expect(narrowOrcaWorkerProvider(chosen, null)).toBe(chosen);
   });

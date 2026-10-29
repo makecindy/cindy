@@ -44,6 +44,11 @@ for (const [id, entry] of Object.entries(manifest)) {
     [entry.image, ".webp", "image/webp"],
   ]) {
     if (!asset) continue;
+    // Read-only CDN checks verify against the manifest alone; clean checkouts lack originals.
+    if (checkCdn) {
+      if (entry.delivery === "cdn") assets.push({ id, ...asset, ext, mime });
+      continue;
+    }
     let file = path.resolve(source, id + ext);
     // Accept both the prepared hash-named upload folder and the old external HD input layout.
     if (directory) {

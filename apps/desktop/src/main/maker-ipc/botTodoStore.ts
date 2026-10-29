@@ -66,6 +66,7 @@ export function createBotTodoStore(
   file: string,
   legacy: () => Promise<Record<string, LegacyWorkbenchJudgment>>,
   assertCurrent = () => {},
+  ownerAuthored = () => true,
 ): BotTodoStore {
   const fingerprint = (j: LegacyWorkbenchJudgment) =>
     createHash('sha256').update(JSON.stringify(j)).digest('hex');
@@ -345,9 +346,17 @@ export function createBotTodoStore(
       },
     );
   }
+  // Classify inside the locked mutation. Automatic discovery cannot manufacture an
+  // owner assignment or reclassify existing records, including legacy records.
+  const attributedPatch = (state: TodoState, patch: TodoPatch): TodoPatch => {
+    if (ownerAuthored()) return patch;
+    const key = patch.key === undefined ? undefined : normalizeTodoKey(patch.key);
+    const existing = state.items.find(item => patch.id ? item.id === patch.id : item.key === key);
+    return { ...patch, origin: existing?.origin ?? 'discovered' };
+  };
   return {
     read,
-    patch: (patch: TodoPatch) => mutate((s) => applyTodoPatch(s, patch, 'todo:' + randomUUID())),
+    patch: (patch: TodoPatch) => mutate((s) => applyTodoPatch(s, attributedPatch(s, patch), 'todo:' + randomUUID())),
     importItems: (items: TeammateTodo[], remove: string[]) =>
       mutate((s) => {
         const replaced = new Set([...items.map((item) => item.id), ...remove]);
@@ -394,7 +403,7 @@ export function createBotTodoStore(
         const suppressed = (!!existing && !todoVisible(existing)) || existing?.status === 'done';
         const saved =
           params.patch && !suppressed
-            ? applyTodoPatch(s, params.patch, 'todo:' + randomUUID())
+            ? applyTodoPatch(s, attributedPatch(s, params.patch), 'todo:' + randomUUID())
             : null;
         s.cursors[params.source] = params.sequence;
         // The monotonic cursor already proves older receipts; retain only the latest per stream.

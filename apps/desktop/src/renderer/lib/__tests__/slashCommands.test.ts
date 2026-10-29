@@ -18,6 +18,7 @@ import {
   rewriteAgentSkillInvocationForDispatch,
   rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
+  rewriteBuiltInSkillDraftForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -65,6 +66,53 @@ describe('loadAllCommands Learn fallback', () => {
     stubCommandLists({ success: true, skills: [learnSkill] });
 
     await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// Unit: the creator's click-time name is not its final invocation identity.
+// Resolve through the production IPC catalog after engine/task-computer changes.
+describe('routed built-in draft dispatch', () => {
+  const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+  it('resolves a Pi draft to the official Claude alias on the final task computer', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    const invoke = vi.fn(async (_device, channel) => channel === 'maker:list-agent-skills'
+      ? { success: true, skills: [
+          skill({ name: 'cindy-plugin-creator' }),
+          skill({ name: 'cindy:cindy-plugin-creator', runtimeCommandName: 'cindy:cindy-plugin-creator', builtIn: true }),
+        ] }
+      : { success: true, commands: [] });
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code',
+      deviceId: 'task-computer', workingDir: '/project',
+    })).resolves.toBe('/cindy:cindy-plugin-creator Make a plugin');
+    expect(invoke).toHaveBeenCalledWith('task-computer', 'maker:list-agent-skills', ['claude-code', { workingDir: '/project', forceReload: true }]);
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refuses a missing built-in and an SSH draft instead of sending a user Skill', async () => {
+    stubCommandLists({ success: true, skills: [skill({ name: 'cindy-plugin-creator' })] });
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'pi' as const };
+    await expect(rewriteBuiltInSkillDraftForSend(request)).resolves.toBeNull();
+    vi.mocked(window.electronAPI.maker.listAgentSkills).mockClear();
+    await expect(rewriteBuiltInSkillDraftForSend({ ...request, remoteHostId: 'ssh-host' })).resolves.toBeNull();
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refreshes a handed-off identity when project skills change after preflight', async () => {
+    const catalog = { success: true, skills: [skill({ name: intent.name, builtIn: true })] };
+    stubCommandLists(catalog);
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code' as const, workingDir: '/project' };
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe(request.message);
+    catalog.skills = [skill({ name: intent.name }), skill({ name: `cindy:${intent.name}`, builtIn: true })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe('/cindy:cindy-plugin-creator Make a plugin');
+    catalog.skills = [skill({ name: intent.name })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBeNull();
+  });
+  it('respects an explicitly edited command instead of restoring the routed Skill', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/custom My changed request', intent, agentKind: 'pi',
+    })).resolves.toBe('/custom My changed request');
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
   });
 });
 

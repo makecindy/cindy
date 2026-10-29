@@ -114,7 +114,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = root.current;
     if (!element || !visible) return;
     let disposed = false;
@@ -127,8 +127,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       if (!disposed) {
         setLoading(false);
         setError(mcpAppFailureKey(error));
-        frame?.remove();
         setMode('inline');
+        dispose();
       }
     };
     const controller = new McpAppController(
@@ -182,7 +182,6 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       })
       .catch((error) => {
         fail(error);
-        void controller.close().catch(() => {});
       });
     const update = () => {
       void controller.context(hostContext(localeRef.current, element)).catch(() => {});
@@ -194,7 +193,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     });
     const sizeObserver = new ResizeObserver(update);
     sizeObserver.observe(element);
-    return () => {
+    function dispose() {
+      if (disposed) return;
       disposed = true;
       controllerRef.current = undefined;
       // Notify before hiding the frame; close() retains the View until the
@@ -202,24 +202,33 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       controller.prepareNativeClose();
       themeObserver.disconnect();
       sizeObserver.disconnect();
-      // Atomic move preserves the Chromium frame during its bounded teardown handshake.
+      // Layout cleanup runs before React removes the ancestor message tree.
+      // Keep a live frame connected for the bounded teardown, including on failure.
       if (frame) {
         frame.style.cssText =
           'position:fixed;width:1px;height:1px;visibility:hidden;pointer-events:none';
         const body = document.body as HTMLElement & {
           moveBefore?: (node: Node, child: Node | null) => void;
         };
-        if (body.moveBefore) body.moveBefore(frame, null);
-        else controller.prepareNativeClose();
+        if (frame.isConnected && body.isConnected && frame.ownerDocument === body.ownerDocument) {
+          try {
+            body.moveBefore?.(frame, null);
+          } catch {
+            // A rejected atomic move must not prevent close/listener cleanup.
+            // Never reinsert a disconnected frame: that would reload the App.
+          }
+        }
       }
       void controller
         .close()
         .catch(() => {})
         .finally(() => {
           frame?.remove();
+          frame = undefined;
           window.removeEventListener('message', receive);
         });
-    };
+    }
+    return dispose;
   }, [sessionId, clientId, attempt, appTitle, visible, deviceId]);
 
   useEffect(() => {
@@ -262,7 +271,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     >
       <div className="flex min-h-9 items-center justify-between gap-3 px-3 text-13 text-[var(--text-secondary)]">
         <span>{title ? t('mcpApps.cardTitle', { title }) : appTitle}</span>
-        {loading && visible && <Spinner size="sm" />}
+        {loading && visible && <Spinner size={16} />}
         {mode === 'fullscreen' && (
           <Button
             data-exit-fullscreen

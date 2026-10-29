@@ -132,13 +132,16 @@ export function MessageSourcePluginBadge({
   const navigationMode = useSessionNavigationMode();
   const remote = Boolean(getStickySessionDeviceId(hostSessionId));
   const isApp = plugin.pluginId.startsWith('mcp-app:');
-  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !isApp;
+  const isLocalApp = plugin.pluginId.startsWith('local-app:');
+  const interactive = navigationMode !== 'sidebar-embedded' && !remote && !isApp && !isLocalApp;
   return (
     <MessageSourceLabelShell
       kind="plugin"
       icon={<Puzzle size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />}
       label={
-        isApp
+        isLocalApp
+          ? t('localAgent.messageSource', { name: plugin.name ?? plugin.pluginId.slice(10) })
+          : isApp
           ? t('mcpApps.messageSource', { name: plugin.name ?? plugin.pluginId.slice(8) })
           : plugin.name
             ? t('chat.userMessage.pluginSentNamed', { name: plugin.name })

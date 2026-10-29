@@ -130,7 +130,7 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
   /> : null}{(!preview || paintedPreview !== preview) && loading ? <View key="loading" style={StyleSheet.absoluteFill} pointerEvents="none">{loading}</View> : null}</View></View>;
 }
 
-export function HtmlFileReader({ html, testID }: { html: string; testID?: string }) {
+export function HtmlFileReader({ html, testID, javaScriptEnabled = true }: { html: string; testID?: string; javaScriptEnabled?: boolean }) {
   // CSP 注入放在**渲染载体这一层**,而不是取件那一层:任何进到这个 WebView 的
   // HTML 都必须带策略,不管它有没有同目录资源(见 htmlPreviewCsp 的说明)。
   const guardedHtml = useMemo(() => withHtmlPreviewCsp(html), [html]);
@@ -152,6 +152,7 @@ export function HtmlFileReader({ html, testID }: { html: string; testID?: string
   return (
     <View style={styles.fill} testID={testID}>
       <WebView
+        javaScriptEnabled={javaScriptEnabled}
         onShouldStartLoadWithRequest={interceptNavigation}
         // 首份文档加载完就上闩:此后 about:blank 这类替换文档的导航不再放行。
         onLoadEnd={() => { documentSettledRef.current = true; }}

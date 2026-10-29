@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, StartSessionOptions } from '../../base-agent.js';
 import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -206,10 +206,13 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    fastMode?: boolean;
+    fastModePolicy?: StartSessionOptions['fastModePolicy'];
     model?: string;
     effort?: Effort;
     availableModels?: ModelDescriptor[];
     resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
+    resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
@@ -243,6 +246,7 @@ async function startRewindableSession(
     ),
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     resolveModelContextLimit: options.resolveModelContextLimit,
+    resolveModelCompactionPct: options.resolveModelCompactionPct,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
@@ -252,6 +256,8 @@ async function startRewindableSession(
     ...(options.effort ? { effort: options.effort } : {}),
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.fastMode !== undefined ? { fastMode: options.fastMode } : {}),
+    ...(options.fastModePolicy ? { fastModePolicy: options.fastModePolicy } : {}),
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
@@ -277,6 +283,28 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('keeps the explicit standard override when a suppressed task restarts after relaxation', async () => {
+    const policy = { isAllowed: () => true, isRequestAllowed: () => false, subscribe: () => () => {} };
+    const { handle } = await startRewindableSession({ fastMode: false, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('starts with explicit standard settings, clamps stale Fast enables and never re-enables on relaxation', async () => {
+    let allowed = false;
+    const policy = { isAllowed: () => allowed, subscribe: () => () => {} };
+    const { handle, firstQuery } = await startRewindableSession({ fastMode: true, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      await handle.setFastMode?.(true);
+      expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: false });
+      expect(handle.getFastMode?.()).toBe(false);
+      allowed = true;
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
   it('does not relabel an in-flight result with a newly saved budget', async () => {
     let budget = 1_000;
     const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });
@@ -303,6 +331,42 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       budget = 140_000;
       expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
       budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('uses the model compaction policy in the native environment and preserves the legacy fallback', async () => {
+    for (const pct of [75, null]) {
+      sdkMock.query.mockClear();
+      const { handle } = await startRewindableSession({
+        autoCompactThresholdPct: 85,
+        resolveModelCompactionPct: () => pct,
+      });
+      try {
+        expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe(String(pct ?? 85));
+      } finally { await handle.close(); }
+    }
+  });
+
+  // PR #7460 P1: equal windows do not imply equal native percentage overrides.
+  // Unit: the production rebuild predicate must cover local/SSH and sub-100K scaling;
+  // existing budget tests changed only the window, so missed this same-window switch.
+  it.each([
+    [undefined, 80_000], ['ssh-test', 80_000],
+    [undefined, 200_000], ['ssh-test', 200_000],
+  ] as const)('rebuilds same-window model switches when native compaction differs (%s, %s)', async (remoteHostId, window) => {
+    let pct = 50;
+    const { handle } = await startRewindableSession({
+      remoteHostId,
+      autoCompactThresholdPct: 90,
+      resolveModelContextLimit: () => window,
+      resolveModelCompactionPct: (_provider, model) => model === 'claude-sonnet-5' ? 90 : pct,
+    });
+    try {
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-sonnet-5')).toBe(true);
+      // An in-place preference edit needs the same refresh, even without a model change.
+      pct = 90;
       expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
     } finally { await handle.close(); }
   });

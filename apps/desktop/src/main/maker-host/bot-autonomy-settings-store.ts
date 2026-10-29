@@ -2,7 +2,7 @@
  * 「自动跟进所有任务」（总调度伙伴）账号级设置。
  *
  * 配置层级：常规设置（伙伴设置页开关），账号内唯一。按 configuration-and-overrides：
- * - 默认值不落盘：未自定义时由宿主派生（在用的 Cindy 助理 `cindy-default`，否则没有总调度）；
+ * - 默认值不落盘：未自定义时关闭，显式选择过的用户保留原选择；
  * - 只存 override：`schedulerBotId` 为字符串 = 交给该伙伴，为 null = 主人关掉了总调度；
  * - 恢复默认 = 删除 override 文件，重新跟随派生默认。
  *
@@ -50,7 +50,7 @@ function currentStore(rootPath?: string) {
   if (!store) {
     store = createOverrideSettingsFile<BotAutonomySettings>({
       filePath: () => settingsFilePath(ownerRoot),
-      // 静态占位：未自定义时的有效值由调用方按伙伴列表派生，这里的 null 不代表「关掉」。
+      // 默认关闭；null override 另表示用户明确拒绝过，不再展示首次邀请。
       defaults: { schedulerBotId: null },
       normalize,
       log,
@@ -72,7 +72,7 @@ export interface BotAutonomySettingsOverride {
 
 /**
  * 文件存在却读不出（坏 JSON、超限、根不是对象、无权限）。只在通用层报「未自定义」时复查：
- * 通用层对坏文件回落默认值，而这里的默认是「交给 Cindy 助理」——主人关掉过总调度时会被悄悄打开。
+ * 坏文件视为已经做过选择，避免重复邀请；有效跟进者仍失败关闭。
  */
 function existingFileUnreadable(file: string): boolean {
   let size: number;
@@ -101,7 +101,7 @@ export function readBotAutonomySettingsOverride(options?: { rootPath?: string })
   const customized = state.customizedKeys.includes('schedulerBotId');
   if (!customized) {
     const file = settingsFilePath(ownerRootFor(options?.rootPath));
-    // 失败关闭：override 文件在但读不出 → 当作主人关掉了总调度，不回落到默认的 Cindy 助理。
+    // 失败关闭：override 文件在但读不出 → 当作主人关掉了总调度，也不展示首次邀请。
     // 文件不存在才是「未自定义」。主人「恢复默认」会删掉坏文件。
     if (existingFileUnreadable(file)) {
       if (warnedUnreadableFile !== file) {

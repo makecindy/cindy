@@ -1,4 +1,10 @@
+import { richAnswerText, splitRichAnswer } from '@cindy/maker-shared/rich-answer';
+import { markdownTextPreview, streamingMarkdownPreviewText } from '../../shared/markdownPreviewText.js';
+
 export const AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH = 280;
+// Bound repeated Main-process projection even when Markdown hides the source.
+// Final replies still normalize their full original text independently.
+const ACTIVITY_SOURCE_MAX_LENGTH = 4_096;
 
 type ActivityTextStreamMode = 'pending' | 'plain' | 'structured' | 'structured-extracted';
 
@@ -7,10 +13,12 @@ export interface ActivityTextStreamState {
   rawChunks: string[];
   rawPreview: string;
   rawPreviewHasPendingWhitespace: boolean;
+  rawPreviewHasPendingNewline: boolean;
+  rawPreviewPendingLink: boolean;
   jsonClosingStack: Array<'}' | ']'>;
   jsonInString: boolean;
   jsonEscapePending: boolean;
-  structuredDisplayText: string;
+  displayText: string;
 }
 
 /** Deterministic work counters used by the performance regression test. */
@@ -27,10 +35,12 @@ export function createActivityTextStreamState(): ActivityTextStreamState {
     rawChunks: [],
     rawPreview: '',
     rawPreviewHasPendingWhitespace: false,
+    rawPreviewHasPendingNewline: false,
+    rawPreviewPendingLink: false,
     jsonClosingStack: [],
     jsonInString: false,
     jsonEscapePending: false,
-    structuredDisplayText: '',
+    displayText: '',
   };
 }
 
@@ -49,15 +59,20 @@ export function appendActivityTextStream(
   chunk: string,
   metrics?: ActivityTextStreamMetrics,
 ): string {
+  const previousPreview = state.rawPreview;
+  const previousNewline = state.rawPreviewHasPendingNewline;
   appendRawPreview(state, chunk, metrics);
+  const destinationOnly = state.rawPreviewPendingLink && !/[\s\\()[\]<>`"']/.test(chunk);
+  const previewChanged = (state.rawPreview !== previousPreview || state.rawPreviewHasPendingNewline !== previousNewline)
+    && !destinationOnly;
 
   if (state.mode === 'plain') {
-    return rawPreviewText(state);
+    return rawPreviewText(state, previewChanged);
   }
 
   if (state.mode === 'structured-extracted') {
     if (firstNonWhitespaceIndex(chunk, metrics) < 0) {
-      return state.structuredDisplayText;
+      return state.displayText;
     }
     switchToPlain(state);
     return rawPreviewText(state);
@@ -66,27 +81,27 @@ export function appendActivityTextStream(
   if (state.mode === 'pending') {
     appendRetainedRawChunk(state, chunk);
     const firstContentIndex = firstNonWhitespaceIndex(chunk, metrics);
-    if (firstContentIndex < 0) return rawPreviewText(state);
+    if (firstContentIndex < 0) return rawPreviewText(state, previewChanged);
 
     const firstContent = chunk[firstContentIndex];
     if (firstContent !== '{' && firstContent !== '[') {
       switchToPlain(state);
-      return rawPreviewText(state);
+      return rawPreviewText(state, previewChanged);
     }
 
     state.mode = 'structured';
     state.jsonClosingStack.push(firstContent === '{' ? '}' : ']');
     if (!scanStructuredChunk(state, chunk, firstContentIndex + 1, metrics)) {
-      return rawPreviewText(state);
+      return rawPreviewText(state, previewChanged);
     }
   } else {
     appendRetainedRawChunk(state, chunk);
     if (!scanStructuredChunk(state, chunk, 0, metrics)) {
-      return rawPreviewText(state);
+      return rawPreviewText(state, previewChanged);
     }
   }
 
-  if (state.jsonClosingStack.length > 0) return rawPreviewText(state);
+  if (state.jsonClosingStack.length > 0) return rawPreviewText(state, previewChanged);
 
   const rawText = state.rawChunks.join('');
   if (metrics) metrics.jsonParseCodeUnits += rawText.length;
@@ -96,9 +111,9 @@ export function appendActivityTextStream(
     if (extracted) {
       state.mode = 'structured-extracted';
       if (metrics) metrics.normalizationCodeUnits += extracted.length;
-      state.structuredDisplayText = normalizePlainActivityText(extracted);
+      state.displayText = normalizePlainActivityText(richAnswerText(extracted));
       releaseStructuredParserState(state);
-      return state.structuredDisplayText;
+      return state.displayText;
     }
   } catch {
     // Once the outer object/array has closed, a parse failure cannot be repaired
@@ -106,7 +121,7 @@ export function appendActivityTextStream(
   }
 
   switchToPlain(state);
-  return rawPreviewText(state);
+  return rawPreviewText(state, previewChanged);
 }
 
 function appendRetainedRawChunk(state: ActivityTextStreamState, chunk: string): void {
@@ -127,7 +142,26 @@ function appendRetainedRawChunk(state: ActivityTextStreamState, chunk: string): 
 }
 
 export function normalizeActivityText(text: string): string {
-  return normalizePlainActivityText(extractActivityDisplayText(text));
+  return normalizePlainActivityText(richAnswerText(extractActivityDisplayText(text)));
+}
+
+/** New hosts send display text; only unmarked legacy summaries need recovery. */
+export function normalizeRemoteActivityText(text: string, summaryFormat?: 'plain-text'): string {
+  if (summaryFormat === 'plain-text') return boundActivityText(text);
+  // Old hosts flattened both the opening newline and any prose/fence boundary.
+  // Check a reconstructed opening with the shared parser so quoted code remains code.
+  const collapsedRich = /(^|\s)(`{3,}|~{3,})cindy-ui[ \t]+\{\s*"(?:version|seq|op)"\s*:/g;
+  for (const match of text.matchAll(collapsedRich)) {
+    const start = match.index! + match[1].length;
+    const prefix = text.slice(0, start);
+    const boundary = prefix && !prefix.endsWith('\n') ? '\n' : '';
+    const key = prefix.length + boundary.length;
+    const candidate = prefix + boundary + match[2] + 'cindy-ui\n';
+    if (splitRichAnswer(candidate).some(part => part.kind === 'rich' && part.key === key)) {
+      return normalizeActivityText(prefix);
+    }
+  }
+  return normalizeActivityText(text);
 }
 
 function appendRawPreview(
@@ -135,24 +169,31 @@ function appendRawPreview(
   chunk: string,
   metrics?: ActivityTextStreamMetrics,
 ): void {
-  if (state.rawPreview.length >= AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH) return;
+  if (state.displayText.length >= AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH && !state.rawPreviewPendingLink) return;
+  if (state.rawPreview.length >= ACTIVITY_SOURCE_MAX_LENGTH) return;
 
   for (let index = 0; index < chunk.length; index += 1) {
     if (metrics) metrics.normalizationCodeUnits += 1;
     const codeUnit = chunk[index] ?? '';
     if (/\s/.test(codeUnit)) {
-      if (state.rawPreview) state.rawPreviewHasPendingWhitespace = true;
+      if (state.rawPreview) {
+        state.rawPreviewHasPendingWhitespace = true;
+        if (codeUnit === '\n' || codeUnit === '\r') state.rawPreviewHasPendingNewline = true;
+      }
       continue;
     }
 
     if (state.rawPreviewHasPendingWhitespace) {
-      state.rawPreview += ' ';
+      // Keep fence/operation boundaries until rich content has been projected to text.
+      // Visible text and protocol source have separate budgets.
+      state.rawPreview += state.rawPreviewHasPendingNewline ? '\n' : ' ';
       state.rawPreviewHasPendingWhitespace = false;
-      if (state.rawPreview.length >= AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH) return;
+      state.rawPreviewHasPendingNewline = false;
+      if (state.rawPreview.length >= ACTIVITY_SOURCE_MAX_LENGTH) return;
     }
 
     state.rawPreview += codeUnit;
-    if (state.rawPreview.length >= AGENT_ISLAND_ACTIVITY_TEXT_MAX_LENGTH) return;
+    if (state.rawPreview.length >= ACTIVITY_SOURCE_MAX_LENGTH) return;
   }
 }
 
@@ -218,7 +259,6 @@ function scanStructuredChunk(
 
 function switchToPlain(state: ActivityTextStreamState): void {
   state.mode = 'plain';
-  state.structuredDisplayText = '';
   releaseStructuredParserState(state);
 }
 
@@ -229,11 +269,44 @@ function releaseStructuredParserState(state: ActivityTextStreamState): void {
   state.jsonEscapePending = false;
 }
 
-function rawPreviewText(state: ActivityTextStreamState): string {
-  return state.rawPreview.trim();
+function rawPreviewText(state: ActivityTextStreamState, changed = true): string {
+  if (!changed) return state.displayText;
+  // A fence header may itself arrive in several deltas. Do not leave that
+  // temporary header as the last visible activity when the rich block is empty.
+  // A standalone newline commits an operation even before another non-space
+  // character flushes the accumulator's pending whitespace.
+  let source = state.rawPreview + (state.rawPreviewHasPendingNewline ? '\n' : '');
+  const tail = source.match(/(^|\n)(`+|~+)([^\n]*)$/);
+  if (tail && 'cindy-ui'.startsWith(tail[3].trim())) {
+    const start = tail.index! + tail[1].length;
+    const opening = tail[2][0].repeat(Math.max(3, tail[2].length)) + 'cindy-ui\n';
+    // Let the shared fence parser distinguish a new opening from an ordinary
+    // closing fence or an example nested inside a larger code fence.
+    const candidate = source.slice(0, start) + opening;
+    // A bare fence after prose is ambiguous (it may close an inline example).
+    // Wait for a language prefix before hiding it; an answer-start fence is safe.
+    if ((tail[3].trim() || start === 0)
+      && splitRichAnswer(candidate).some(part => part.kind === 'rich' && part.key === start)) {
+      source = source.slice(0, start);
+    }
+  }
+  const readable = richAnswerText(source);
+  const projection = /[*_`~<>!#|&\n\r]|\](?:\(|\[)|^\s*(?:[-+] |\d+[.)] )/.test(readable)
+    ? streamingMarkdownPreviewText(readable)
+    : { text: readable, pendingLink: false };
+  state.rawPreviewPendingLink = projection.pendingLink;
+  state.displayText = boundActivityText(projection.text);
+  return state.displayText;
 }
 
 function normalizePlainActivityText(text: string): string {
+  // Keep the hot path for plain bounded streaming prefixes cheap; formatted
+  // answers use the same projection as notifications and the session list.
+  const plain = /[*_`~<>!#|&\n\r]|\](?:\(|\[)|^\s*(?:[-+] |\d+[.)] )/.test(text) ? markdownTextPreview(text) : text;
+  return boundActivityText(plain);
+}
+
+function boundActivityText(text: string): string {
   return text
     .split('\n')
     .map((line) => line.trim())

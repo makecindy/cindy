@@ -86,6 +86,39 @@ describe('readBotDelegationCompletionBody(已移除) —— 完成回执不再�
 });
 
 describe('mapServerMessages — Bot collaboration', () => {
+  // Unit regression: a host refresh must remove stale cached attribution, not
+  // merge it into an ordinary user message. Existing cases only add origins.
+  it('replaces cached sender identity with the authoritative user message source', () => {
+    const [cached] = makerChatStore.__mapServerMessagesForTest([row({
+      clientId: 'user-source-refresh',
+      role: 'user',
+      content: 'Continue with this change',
+      agentMeta: {
+        origin: {
+          kind: 'session', senderSessionId: 'partner-session',
+          senderBotId: 'bot-cindy', senderBotName: 'Cindy',
+        },
+        sourcePlugin: { pluginId: 'plugin-1', name: 'Plugin' },
+        sourceDevice: { deviceId: 'phone-1', platform: 'mobile' },
+      },
+    })]);
+    const [authoritative] = makerChatStore.__mapServerMessagesForTest([row({
+      clientId: cached.clientId,
+      role: 'user',
+      content: 'Continue with this change',
+      agentMeta: null,
+    })]);
+    const [refreshed] = makerChatStore.__mergeMessagesForTest([authoritative], [cached]);
+    expect(refreshed.automationOrigin).toBeUndefined();
+    expect(refreshed.sourcePlugin).toBeUndefined();
+    expect(refreshed.sourceDevice).toBeUndefined();
+    expect(refreshed.content).toBe(authoritative.content);
+
+    // A genuine partner message still gains its host-stamped label on refresh.
+    const [partner] = makerChatStore.__mergeMessagesForTest([cached], [refreshed]);
+    expect(partner.automationOrigin).toEqual(cached.automationOrigin);
+  });
+
   it('derives a private-conversation entrance without putting its preview in the timeline', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({

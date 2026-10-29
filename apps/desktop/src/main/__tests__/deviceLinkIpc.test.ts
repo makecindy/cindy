@@ -996,6 +996,15 @@ describe('device-link controller handlers', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  // #6530: preserve the source-access classification at the actual send boundary.
+  it('keeps attachment access guidance and does not dispatch a partial message', async () => {
+    const invoke = vi.fn();
+    const error = createIpcError('DEVICE_LINK_MEDIA_ACCESS_DENIED', 'Cannot read the source attachment.');
+    const deps = makeDeps({ invoke, rewriteOutboundMedia: vi.fn().mockRejectedValue(error) });
+    await expect(handleInvoke(deps, 'dev-2', 'maker:send', ['s', {}])).rejects.toBe(error);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('invoke:出方向改写成功 → 改写后的 args 才发给 invoke', async () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
     const rewritten = ['s', { type: 'user', content: [{ type: 'image', path: 'cindy-oss-attach://m/xxx' }] }];

@@ -25,6 +25,12 @@
     "fastTag": "빠름"
   },
   "options": {
+    "speed": {
+      "label": "속도",
+      "standard": "표준",
+      "fast": "빠름",
+      "ultrafast": "초고속"
+    },
     "fastMode": "빠른 모드",
     "fastModeAccessibility": "빠른 모드 {{model}}",
     "reasoningEffort": "추론 강도",

@@ -49,9 +49,9 @@ const push = (callId: string, over: Partial<Parameters<typeof ingestCardPush>[0]
 
 describe('ghostCardStore', () => {
   it('preserves the logical identity of an in-place plugin on its live card', () => {
-    ingestCardPush(push('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper' }));
+    ingestCardPush(push('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper', sessionId: 'session-a' }));
     expect(getGhostCardSnapshot().liveCards[0]).toMatchObject({
-      ghostId: 'helper', logicalGhostId: '_ns__acme__helper',
+      ghostId: 'helper', logicalGhostId: '_ns__acme__helper', sessionId: 'session-a',
     });
   });
 

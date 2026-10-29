@@ -5,7 +5,7 @@
  * - 资源同步 import (零网络/零 IO)，i18n.init 同步完成 → React 首屏不闪。
  * - 默认 namespace 为 'common'；体积较小、边界清晰的功能文案可独立拆分。
  * - fallbackLng：缺 key 时不显示 key 本身,直接回退英文。
- * - 不接 LanguageDetector backend，用户偏好全部在 useLocale 里走 localStorage。
+ * - 不接 LanguageDetector backend，初始化与 useLocale 共用现有语言偏好。
  *   'system' 的实际语言由 main 侧读取 OS 首选语言后传入 renderer。
  */
 
@@ -25,6 +25,7 @@ import koCommon from './locales/ko/common.json';
 import koAiRename from './locales/ko/aiRename.json';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../shared/ghost';
 import { DEFAULT_LOCALE } from '../../shared/locale';
+import { getEffectiveLocale } from '../lib/localePreference';
 
 export {
   DEFAULT_LOCALE,
@@ -93,7 +94,8 @@ const resources = {
 // 不 await 也安全：所有 t() 调用之前 init 已经完成 (本文件 import 即 init)。
 void i18n.use(initReactI18next).init({
   resources,
-  lng: DEFAULT_LOCALE,
+  // 翻译资源热更新会重新执行本模块，不能把用户已选语言重置为默认英文。
+  lng: getEffectiveLocale(),
   // 缺 key 回退英文。
   fallbackLng: { default: [DEFAULT_LOCALE] },
   defaultNS: 'common',

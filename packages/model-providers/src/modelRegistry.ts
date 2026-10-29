@@ -1,3 +1,4 @@
+import { projectRegistryV5 } from './modelInterfaceContract.js';
 import {
   registryEntryDefaults,
   findBaseModel,
@@ -135,6 +136,12 @@ export function compareModelRegistryRevisions(
   if (incomingRevision > currentRevision) return "newer";
 
   const canonicalUpdatedAt = new Date(incomingRevision).toISOString();
+  // Same revision, negotiated projection upgrade. Compare the exact old contract,
+  // never waive a conflict within one schema or downgrade an accepted V6 snapshot.
+  if (incoming.schemaVersion === 6 && current.schemaVersion === 5 &&
+      modelRegistryCanonicalJson({ ...projectRegistryV5(incoming), updatedAt: canonicalUpdatedAt }) === modelRegistryCanonicalJson({ ...current, updatedAt: canonicalUpdatedAt })) return 'newer';
+  if (incoming.schemaVersion === 5 && current.schemaVersion === 6 &&
+      modelRegistryCanonicalJson({ ...incoming, updatedAt: canonicalUpdatedAt }) === modelRegistryCanonicalJson({ ...projectRegistryV5(current), updatedAt: canonicalUpdatedAt })) return 'older';
   const incomingDigest = modelRegistryCanonicalJson({
     ...incoming,
     updatedAt: canonicalUpdatedAt,

@@ -1,3 +1,6 @@
+import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
+import { MAKER_INVOKE } from '../../../maker-ipc/channels';
+import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../sessionOpening';
 /**
  * sessionsUpdate.test.ts — `local-db:sessions:update` handler 集成接线。
@@ -20,8 +23,15 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import type { InvokeResultPayload } from '@cindy/device-link';
 
 import { messages, recentWorkdirs, sessions } from '../../schema';
+import { tx as runDbTransaction } from '../../worker/opHandlers/tx';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
+import { isWorktreeMoveBlockedError } from '../../../../shared/worktreeMoveGuardError';
+import {
+  isSessionContextWindowBudgetCustomized,
+  readSessionContextWindowBudget,
+  writeSessionContextWindowBudget,
+} from '../../../maker-host/session-context-budget-store.js';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -172,8 +182,14 @@ vi.mock('../../../turn-change-set/store.js', () => ({
 vi.mock('../../../cindy-brain/index.js', () => ({
   notifyGhostSessionEvent: vi.fn(),
 }));
+// 偏好文件不可读时 store 会拒绝写（保留坏文件给人工修）：个别用例需要让它抛错。
+vi.mock('../../../maker-host/session-context-budget-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../maker-host/session-context-budget-store.js')>();
+  return { ...actual, writeSessionContextWindowBudget: vi.fn(actual.writeSessionContextWindowBudget) };
+});
 
 import {
+  applyAgentSwitchToSessionRow,
   broadcastSessionPatched,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
@@ -182,10 +198,13 @@ import {
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
+  setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
   updateSessionInDb,
   touchUserSendInDb,
+  touchSessionActivityInDb,
 } from '../sessions';
+import { markSessionTurnEnded, drainSessionActiveTurnWrites, beginSessionTurnEndedSuppression } from '../../sessionActiveTurn';
 import {
   clearAllSessionAttention,
   getAttentionCount,
@@ -196,11 +215,14 @@ import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 import { createRemoteSessionsStatusSetter } from '../../../mcp-integrations/sessionStatusRemote.js';
 import * as sessionQueries from '../../sessionQueries';
+import { setSessionRuntimeProjector } from '../../mapper';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
   // 与 schema.ts 的 sessions/messages 全列对齐(selectSessionWithCount select 全列)。
   sqlite.exec(`
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
     CREATE TABLE task_tags (
       id TEXT PRIMARY KEY NOT NULL,
       name TEXT NOT NULL,
@@ -220,6 +242,7 @@ function createDb(): void {
       title TEXT NOT NULL DEFAULT 'New CCS',
       working_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
@@ -236,10 +259,12 @@ function createDb(): void {
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,
@@ -370,11 +395,13 @@ beforeEach(() => {
   setSessionRouteLockImplementation(h.routeLock);
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionWorktreeRecycle(h.requestRecycle);
+  setSessionWorktreeBindingLookup(null);
   registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
   setSessionRuntimeCleanup(null);
+  setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
   setSessionRouteLockImplementation(null);
   const dir = h.userDataDir;
@@ -385,6 +412,26 @@ afterEach(async () => {
 });
 
 describe('local-db:sessions:update handler wiring', () => {
+  // Terminal lifecycle through both real public handlers: an ordinary fork survives,
+  // but a hidden side chat must not remain running after its parent becomes unreachable (unit).
+  it.each([invokeUpdate, invokePatchMeta])('deletes dependent side chats without deleting ordinary forks (%#)', async update => {
+    // Unit, #6529: use the real terminal transaction so post-commit cleanup and
+    // broadcasts cannot depend on writing a deleted child a second time.
+    h.sqlite!.exec(`CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT,
+      revision INTEGER, kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision))`);
+    Object.assign(h.client!, { tx: async (name: string, args: unknown) => runDbTransaction(h.sqlite!, { name, args }) });
+    h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local', source = 'side-chat' WHERE id = 'codex-local'").run();
+    h.sqlite!.prepare("UPDATE sessions SET parent_session_id = 'cc-local' WHERE id = 'pi-local'").run();
+    await update('cc-local', { status: 'deleted' });
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'deleted' });
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('pi-local')).toEqual({ status: 'active' });
+    expect(h.runtimeCleanup).toHaveBeenCalledWith('codex-local');
+    expect(h.runtimeCleanup).not.toHaveBeenCalledWith('pi-local');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local', patch: { status: 'deleted' },
+    });
+  });
   it.each([invokeUpdate, invokePatchMeta])(
     'clears only the deleted task from event-backed app attention (%#)',
     async (update) => {
@@ -764,15 +811,46 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
   });
 
-  it('restores an archived task for send through the normal locked status writer and broadcast', async () => {
+  it.each([false, true])('restores and broadcasts without reacquiring a held direct-send lease (held: %s)', async routeLockHeld => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
-    await restoreArchivedSessionForSend('codex-local');
+    // A lease is already held outside ALS by direct send. Any re-entry would
+    // deadlock; the ordinary composer still acquires this route lock once.
+    h.routeLock.mockClear();
+    await restoreArchivedSessionForSend('codex-local', { routeLockHeld });
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
-    expect(h.routeLock).toHaveBeenCalledWith('codex-local', expect.any(Function));
+    expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
       sessionId: 'codex-local', patch: { status: 'active' },
     }));
   });
+
+  // PR #6403 P1: entry-time abort tests missed cancellation during DB awaits.
+  // Run the production restore/writer against SQLite, interrupting its read
+  // continuations or the issued write. DB tier; no timers or copied handler.
+  it.each(['initial-read', 'lifecycle-read', 'issued-write'] as const)(
+    'honors the restore commit boundary when cancelled at %s', async stage => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+      const controller = new AbortController();
+      const prepare = h.sqlite!.prepare.bind(h.sqlite!);
+      const interrupted = vi.spyOn(h.sqlite!, 'prepare').mockImplementation(sql => {
+        const selected = stage === 'initial-read' ? sql.startsWith('select "status", "source"')
+          : stage === 'lifecycle-read' ? sql.startsWith('select "source" from "sessions"')
+          : sql.startsWith('update "sessions"');
+        if (selected) queueMicrotask(() => controller.abort());
+        return prepare(sql);
+      });
+      try {
+        const restoring = restoreArchivedSessionForSend('codex-local', { routeLockHeld: true, signal: controller.signal });
+        if (stage === 'issued-write') await restoring;
+        else await expect(restoring).rejects.toThrow('Session send aborted');
+        expect(controller.signal.aborted).toBe(true);
+        expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local'))
+          .toEqual({ status: stage === 'issued-write' ? 'active' : 'archived' });
+        if (stage === 'issued-write') expect(h.tapWindowBroadcast).toHaveBeenCalled();
+        else expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+      } finally { interrupted.mockRestore(); }
+    },
+  );
 
   it.each(['deleted', 'bot', 'worker', 'remote-worker'] as const)('does not restore %s tasks through ordinary send', async kind => {
     h.sqlite!.prepare('UPDATE sessions SET status = ?, source = ?, orca_role = ?, orca_remote_lead = ? WHERE id = ?')
@@ -824,6 +902,102 @@ describe('local-db:sessions:update handler wiring', () => {
       effort: 'high',
       fast_mode: 0,
     });
+  });
+
+  it('rejects an out-of-range task context window budget instead of silently clearing it', async () => {
+    // 与隧道入口同口径：<1000 会被 normalize 变成 null（等于静默清掉用户预算），
+    // 超大值会被静默夹到上限；调用方却收到成功回包。宁可显式拒绝。
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 999 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000.5 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+  });
+
+  it('persists null and an in-range task context window budget', async () => {
+    // 任务窗口预算不是会话列（没有 context_window_budget 列），而是 main 侧偏好文件里的
+    // 条目：这里读写它自己的 store（路径由 electron 的 userData mock 指到临时目录）。
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('cc-local')).toBe(300_000);
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(true);
+
+    await invokeUpdate('cc-local', { contextWindowBudget: null });
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+    expect(isSessionContextWindowBudgetCustomized('cc-local')).toBe(false);
+  });
+
+  it('keeps the row update when the budget store refuses to write', async () => {
+    // 偏好文件不可读时 store 拒绝写（保留坏文件给人工修）。行更新与广播都已提交，
+    // 预算失败不能带走同一个 patch 里的其它字段，也不能让 IPC 抛错盖掉已生效的改名
+    // （GLM-5.3 独立审查，2026-10-24）。
+    vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+      throw new Error('session context budget settings file is unreadable');
+    });
+    await expect(invokeUpdate('cc-local', {
+      contextWindowBudget: 300_000,
+      title: 'renamed-despite-budget-failure',
+    })).resolves.toBeDefined();
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+  });
+
+  it('fails a budget-only update when the budget store refuses to write', async () => {
+    // 纯预算请求只有这一个意图：吞掉错误就是「看着成功、实际还是旧窗口」，
+    // 用户想靠缩小窗口省钱时会被骗（Greptile P1，2026-10-24）。
+    vi.mocked(writeSessionContextWindowBudget).mockImplementationOnce(() => {
+      throw new Error('session context budget settings file is unreadable');
+    });
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000 })).rejects.toThrow(
+      /unreadable/,
+    );
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+  });
+
+  it('does not mirror a remote budget into the next account after an owner change', async () => {
+    // 远程镜像落库（persistSessionFields）同样是 await 之后才写偏好文件：保存期间切账号，
+    // 这条过期更新不得把预算写进新账号的文件（Greptile P1，2026-10-24）。
+    h.captureOwnerScope = true;
+    h.ownerCurrent = false;
+    await persistSessionFields('pi-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('pi-local')).toBeNull();
+  });
+
+  it('does not write the context window budget into the next account after an owner change', async () => {
+    // 偏好文件按「当前」账号的 userData 解析，而 DB 更新是 await 出来的：保存期间切账号
+    // 时，过期请求不得把原任务的预算写进新账号的文件（Greptile P1，2026-10-24）。
+    h.captureOwnerScope = true;
+    h.ownerCurrent = false;
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    expect(readSessionContextWindowBudget('cc-local')).toBeNull();
+  });
+
+  it.each(['model', 'harness'])('projects the saved owner choice during an automatic %s switch', async (kind) => {
+    const baseline = JSON.stringify({ scopeId: 'run', agentKind: 'pi', model: 'owner-model',
+      providerId: 'owner-provider', effort: 'high', fastMode: true });
+    h.sqlite!.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?').run(baseline, 'pi-local');
+    const project = vi.fn((row: { scheduledModelBaseline?: string | null }) =>
+      row.scheduledModelBaseline ? { model: 'owner-model' } : {});
+    setSessionRuntimeProjector(project);
+    try {
+      if (kind === 'harness') {
+        await applyAgentSwitchToSessionRow('pi-local', {
+          agentKind: 'codex', model: 'automatic-model', providerId: null,
+        });
+      } else {
+        await persistSessionFields('pi-local', { model: 'automatic-model' });
+      }
+      expect(project).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'automatic-model', scheduledModelBaseline: baseline,
+      }));
+      expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+        sessionId: 'pi-local', patch: expect.objectContaining({ model: 'owner-model' }),
+      }));
+    } finally {
+      setSessionRuntimeProjector(null);
+    }
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
@@ -897,6 +1071,56 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'cc-local' }),
     );
+  });
+
+  it('advances the bounded-list clock monotonically on handoffs without changing the last human send', async () => {
+    const before = h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local');
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000);
+    await touchSessionActivityInDb('codex-local', 1_786_500_040_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at FROM sessions WHERE id = ?').get('codex-local')).toEqual(before);
+    expect(h.sqlite!.prepare('SELECT last_activity_at, updated_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000, updated_at: 1_786_500_050_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: {
+        lastActivityAt: new Date(1_786_500_050_000).toISOString(),
+        updatedAt: new Date(1_786_500_050_000).toISOString(),
+      },
+    }));
+    await invokeUpdate('codex-local', { title: 'Renamed', status: 'archived' });
+    markSessionTurnEnded('codex-local');
+    await drainSessionActiveTurnWrites('codex-local');
+    const releaseSuppression = beginSessionTurnEndedSuppression();
+    try {
+      await touchSessionActivityInDb('codex-local', 1_786_500_070_000);
+    } finally {
+      releaseSuppression();
+    }
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_050_000 });
+  });
+
+  it('writes human send and activity together without rewinding a newer handoff', async () => {
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000);
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.sqlite!.prepare('SELECT user_send_at, last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ user_send_at: 1_786_500_050_000, last_activity_at: 1_786_500_060_000 });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', expect.objectContaining({
+      patch: expect.objectContaining({ lastActivityAt: new Date(1_786_500_060_000).toISOString() }),
+    }));
+    h.tapWindowBroadcast.mockClear();
+    await touchUserSendInDb('codex-local', 1_786_500_050_000);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not advance a terminal handoff while the goal is active', async () => {
+    h.sqlite!.exec("CREATE TABLE session_goals (session_id TEXT PRIMARY KEY, status TEXT); INSERT INTO session_goals VALUES ('codex-local', 'active')");
+    await touchSessionActivityInDb('codex-local', 1_786_500_050_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: null });
+    h.sqlite!.prepare("UPDATE session_goals SET status = 'paused'").run();
+    await touchSessionActivityInDb('codex-local', 1_786_500_060_000, true);
+    expect(h.sqlite!.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ last_activity_at: 1_786_500_060_000 });
   });
 
   it.each([
@@ -1113,6 +1337,19 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.closeSharedTask).toHaveBeenCalledWith('codex-local', h.client);
   });
 
+  // Real status writer + SQLite: completion guards run inside resource locks and
+  // again after recycle preparation, before any lifecycle write (integration).
+  it('rejects a superseded completed card after worktree preparation without archiving it', async () => {
+    let current = true;
+    h.requestRecycle.mockImplementationOnce(async () => { current = false; });
+    await expect(patchSessionMetaInDb('codex-local', { status: 'archived' }, {
+      beforeWrite: () => { if (!current) throw new Error('card changed'); },
+    })).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    expect(h.prepareSharedTaskClosure).not.toHaveBeenCalled();
+  });
+
   it('does not commit a terminal status when the shared-task journal cannot be prepared', async () => {
     h.prepareSharedTaskClosure.mockRejectedValueOnce(new Error('disk failed'));
 
@@ -1309,6 +1546,19 @@ describe('local-db:sessions:update handler wiring', () => {
       h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
     ).toEqual({ working_dir: '/old/dir' });
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  // #6399, unit: a mutable authorization check must precede runtime close, not
+  // just the final DB write; previous coverage only revoked after that close.
+  it.each(['codex-local', 'pi-local'])('does not close %s when the pre-mutation check rejects', async (id) => {
+    await expect(updateSessionInDb(id, { workingDir: '/new/dir' }, undefined, {
+      assertCurrent: () => undefined,
+      beforeUpdate: async () => undefined,
+      beforeWrite: async () => { throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); },
+    })).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.closeIdleSessionForMove).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(id))
+      .toEqual({ working_dir: '/old/dir' });
   });
 
   it('retains transcript relocation and returned resume identity for a guarded MCP move', async () => {
@@ -1537,6 +1787,148 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
   });
+
+  it('refuses to move a task whose working directory is a managed worktree', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    await expect(invokeUpdate('cc-local', { workingDir: '/new/dir' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+
+    // 拒绝发生在任何写库/关 runtime 之前:归属分裂的“半移动”不会落盘。
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir });
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('still allows moving a worktree session back to a dialogue', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    // 「移到对话」的 patch 不带 workingDir:归属根本不参与判定,只改 workspaceKind,
+    // 目录仍停在 worktree 里(与 renderer 预检、与 Main 的 beforeMove 门控同口径)。
+    await invokeUpdate('cc-local', { workspaceKind: 'dialogue' });
+
+    expect(
+      h.sqlite!.prepare('SELECT working_dir, workspace_kind FROM sessions WHERE id = ?').get('cc-local'),
+    ).toEqual({ working_dir: worktreeDir, workspace_kind: 'dialogue' });
+  });
+
+  it('allows moving between subdirectories of the same managed worktree', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    const from = path.join(worktreeDir, 'src');
+    const to = path.join(worktreeDir, 'tests');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(from, 'cc-local');
+
+    // 归属根相同（都是 steady-goodall）:不是跨 worktree 移动,与注释里的「子目录归到根」一致。
+    await invokeUpdate('cc-local', { workingDir: to });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: to.replace(/\\/g, '/') });
+  });
+
+  it('refuses clearing the working directory of a worktree session', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    // 显式清空同样是改归属:不能因为「不是字符串」就放过。
+    await expect(invokeUpdate('cc-local', { workingDir: null }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    await expect(invokeUpdate('cc-local', { workingDir: '  ' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir });
+
+    // 普通会话不受影响;未传该键的 update(如移到对话)也照旧。
+    await invokeUpdate('codex-local', { workingDir: null });
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ working_dir: null });
+  });
+
+  it('refuses further moves for a session still bound to a worktree after an earlier half-move', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    // 旧版允许过的半移动存量行:cwd 已经落在普通项目,worktree 绑定还在旧 worktree。
+    // 只看 cwd 会漏掉这类行,归属必须问 worktreeStore(组合层注入)。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run('/other/project', worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup((sessionId) => (sessionId === 'cc-local' ? worktreeDir : null));
+
+    await expect(invokeUpdate('cc-local', { workingDir: '/another/project' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/other/project' });
+
+    // 移回它自己的 worktree 是修复而不是跨根,应当放行。
+    await invokeUpdate('cc-local', { workingDir: worktreeDir });
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
+
+  it('allows moving a session whose worktree was already recycled', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'recycled-name');
+    // 回收后 store 里没有绑定(注入查询返回 null),但 cwd 与快照仍留着历史 worktree 路径:
+    // 归属以 store 为准,这类会话不能被永久拦死。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run(worktreeDir, worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup(() => null);
+
+    await invokeUpdate('cc-local', { workingDir: '/another/project' });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/another/project' });
+  });
+
+  it('does not treat a recycled worktree snapshot as a live binding', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'recycled-name');
+    // 回收后 worktreeStore 删条目但保留 DB 快照(徽标以 store 为准):这类行不应被拦住。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run('/other/project', worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup(() => null);
+
+    await invokeUpdate('cc-local', { workingDir: '/another/project' });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/another/project' });
+  });
+
+  it('refuses the same move through the shared entry point used by the MCP tools', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'codex-local');
+
+    // MCP 的 move_sessions 等非 IPC 调用方直接走 updateSessionInDb:守卫必须同样生效,
+    // 且让调用方看到「需要 handoff」而不是笼统的移动失败。
+    const rejected = await updateSessionInDb('codex-local', { workingDir: '/new/dir' })
+      .then(() => null, (err: unknown) => err);
+    expect(rejected).toBeInstanceOf(Error);
+    expect(rejected).toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect((rejected as Error).message).toMatch(/worktree handoff is required/i);
+    // renderer 按共享契约识别这次拒绝(同一常量,两侧不手写漂移)。
+    expect(isWorktreeMoveBlockedError(rejected)).toBe(true);
+
+    expect(h.closeIdleSessionForMove).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ working_dir: worktreeDir });
+  });
+
+  it('allows binding a task to the worktree created for it', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+
+    await invokeUpdate('cc-local', { workingDir: worktreeDir });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
+
+  it('allows a no-op move that stays inside the same worktree root', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    await invokeUpdate('cc-local', { workingDir: worktreeDir.replace(/\\/g, '/') });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
 });
 
 async function invokeSetPinnedCardSummaries(event: unknown, enabled: unknown): Promise<unknown> {
@@ -1582,4 +1974,133 @@ it('does not create a renderer task when common model admission fails', async ()
   setSessionOpeningModelAdmission(async () => { throw new Error('model unavailable'); });
   await expect(invokeCreate({ id: 'rejected-open', title: 'Rejected task' })).rejects.toThrow('model unavailable');
   expect(h.sqlite!.prepare('SELECT id FROM sessions WHERE id = ?').get('rejected-open')).toBeUndefined();
+});
+
+// DB tier, T08b/F6: real IPC and route lock; only bootstrap IO is deferred.
+// Previous tests began after creation, missing the terminal/create lock inversion.
+describe('terminal intent during session creation', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+  function creationFixture() {
+    const holds = new Map<string, ReturnType<typeof deferred>>();
+    const entered: string[] = [];
+    const broadcast = vi.fn();
+    registerMakerSessionCreateHandler({ handle: (name: string, handler: (...args: unknown[]) => unknown) => h.handlers.set(name, handler) } as never, {
+      creationOwner: () => h.client!, withSessionLock: withSendToSessionLock,
+      bootstrapSession: async opts => {
+        const hold = deferred(); holds.set(opts.id!, hold); entered.push(opts.id!);
+        await hold.promise;
+        return { session: { id: opts.id!, agentKind: 'codex', workDir: opts.workingDir, capabilities: {} },
+          didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      },
+      markOrcaRoleIfNeeded: async () => {}, markKnownNonOrcaIfApplicable() {},
+      sendWorkerReadyMessage: vi.fn(), broadcastSessionCreated: broadcast,
+      logCreateSession() {}, warnStderr() {},
+    });
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    return { holds, entered, broadcast,
+      start: (id = 'codex-local') => Promise.resolve(h.handlers.get(MAKER_INVOKE.CREATE_SESSION)!({}, {
+        id, agentKind: 'codex', model: 'm', workspaceKind: 'dialogue', workingDir: '/fixture',
+      })) };
+  }
+  it.each([['update', 'archived'], ['update', 'deleted'], ['patch-meta', 'archived'], ['patch-meta', 'deleted']] as const)('%s commits %s and rejects creation before held ensure finishes', async (surface, status) => {
+    const f = creationFixture(); let failure: unknown;
+    const opening = f.start().catch(error => { failure = error; });
+    await vi.waitFor(() => expect(f.entered).toEqual(['codex-local']), { interval: 1 });
+    const oldHold = f.holds.get('codex-local')!;
+    const terminal = surface === 'update' ? invokeUpdate('codex-local', { status }) : invokePatchMeta('codex-local', { status });
+    try {
+      await vi.waitFor(() => expect(String(failure)).toContain('REMOTE_AGENT_EXPIRED'), { interval: 1, timeout: 100 });
+      await terminal;
+      expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').get('codex-local')).toEqual({ status });
+      expect(h.runtimeCleanup).toHaveBeenCalledExactlyOnceWith('codex-local');
+      expect(f.broadcast).not.toHaveBeenCalled();
+    } finally { oldHold.resolve(); await Promise.all([opening, terminal]); }
+    expect(f.broadcast).not.toHaveBeenCalled();
+  });
+  it('does not cancel for nonterminal or invalid updates', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start().then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    try {
+      await invokeUpdate('codex-local', { title: 'still active' });
+      await expect(invokeUpdate('codex-local', { status: 'archived', notificationsMuted: 'yes' })).rejects.toThrow();
+      await expect(invokeUpdate('codex-local', { status: 'deleted', contextWindowBudget: -1 })).rejects.toThrow();
+      expect(state).toBe('pending');
+    } finally { f.holds.get('codex-local')!.resolve(); await opening; }
+    expect(state).toBe('resolved');
+  });
+  it('rejects stale-owner and protected Bot terminal intent without cancellation', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start('codex-local').then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    const bot = f.start('bot-local');
+    await vi.waitFor(() => expect(f.entered).toHaveLength(2), { interval: 1 });
+    try {
+      await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow('PRECONDITION_FAILED');
+      h.captureOwnerScope = true; h.ownerCurrent = false;
+      await expect(invokeUpdate('codex-local', { status: 'deleted' })).rejects.toThrow('Session owner changed');
+      expect(state).toBe('pending');
+    } finally {
+      h.ownerCurrent = true; f.holds.get('bot-local')!.resolve(); f.holds.get('codex-local')!.resolve();
+      await Promise.all([opening, bot]);
+    }
+    expect(state).toBe('resolved');
+  });
+  it('does not cancel the prior owner when another account has the same UUID', async () => {
+    const f = creationFixture(); let state = 'pending';
+    const opening = f.start().then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    const original = h.client!;
+    h.client = { drizzle: h.db! };
+    let queued!: () => void;
+    const locked = new Promise<void>(resolve => { queued = resolve; });
+    setSessionRouteLockImplementation((id, task) => { queued(); return withSendToSessionLock(id, task); });
+    const terminal = invokeUpdate('codex-local', { status: 'deleted' });
+    try {
+      await locked;
+      expect(state).toBe('pending');
+    } finally {
+      h.client = original; f.holds.get('codex-local')!.resolve();
+      await opening; await terminal;
+    }
+    expect(state).toBe('resolved');
+  });
+  it('late old ensure cannot publish or cancel a newer same-ID creation or sibling', async () => {
+    const f = creationFixture();
+    const old = f.start().catch(error => error);
+    const sibling = f.start('cc-local');
+    await vi.waitFor(() => expect(f.entered).toHaveLength(2), { interval: 1 });
+    const oldHold = f.holds.get('codex-local')!;
+    let archived = false;
+    const terminal = invokeUpdate('codex-local', { status: 'archived' }).then(() => { archived = true; });
+    try {
+      await vi.waitFor(() => expect(archived).toBe(true), { interval: 1, timeout: 100 });
+      expect(String(await old)).toContain('REMOTE_AGENT_EXPIRED');
+      const fresh = f.start();
+      await vi.waitFor(() => expect(f.entered).toHaveLength(3), { interval: 1 });
+      oldHold.resolve(); await Promise.resolve(); await Promise.resolve();
+      expect(f.broadcast).not.toHaveBeenCalled();
+      f.holds.get('codex-local')!.resolve(); f.holds.get('cc-local')!.resolve();
+      await Promise.all([fresh, sibling]);
+      expect(f.broadcast.mock.calls.map(call => call[0]).sort()).toEqual(['cc-local', 'codex-local']);
+    } finally { oldHold.resolve(); for (const hold of f.holds.values()) hold.resolve(); await Promise.all([old, sibling, terminal]); }
+  });
+  it('patch-meta checks authorization before cancelling a held creation', async () => {
+    const f = creationFixture(); let failure: unknown, denied: unknown;
+    const opening = f.start().catch(error => { failure = error; });
+    await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 1 });
+    const terminal = patchSessionMetaInDb('codex-local', { status: 'deleted' }, {
+      beforeWrite: () => { throw new Error('not authorized'); },
+    }).catch(error => { denied = error; });
+    try {
+      await vi.waitFor(() => expect(String(denied)).toContain('not authorized'), { interval: 1, timeout: 100 });
+      expect(failure).toBeUndefined();
+      expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    } finally { f.holds.get('codex-local')!.resolve(); await Promise.all([opening, terminal]); }
+    expect(failure).toBeUndefined();
+  });
+
 });

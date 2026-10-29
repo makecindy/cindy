@@ -1,6 +1,6 @@
 import {
   nextHistoryCacheReceipt, type HistoryCacheReceipt,
-  readHistoryWorkDetails, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
+  readHistoryWorkDetails, readContinuousHistoryPage, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
   type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkSummary,
 } from './historyView.js';
 
@@ -38,6 +38,18 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
   details(summary: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<T>>;
   /** Full replacement of this view's intent; empty releases detail streaming. */
   expanded(summaries: readonly HistoryWorkSummary[]): Promise<void>;
+  /** Local diagnostics only: counts and lifecycle, never message bodies. */
+  diagnostic?(event: HistoryViewDiagnostic): void;
+}
+
+export interface HistoryViewDiagnostic {
+  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset';
+  previousItemCount: number;
+  itemCount: number;
+  messageCount: number;
+  detailMessageCount: number;
+  ready: boolean;
+  stale: boolean;
 }
 
 /**
@@ -59,7 +71,10 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   private pagePromise: Promise<void> | null = null;
   private pageOlder = false;
   private pageGeneration = 0;
+  private intentVersion = 0;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private latestReadStartedAtMs = 0;
+  private latestReadOkStartedAtMs = 0;
 
   constructor(
     private readonly transport: HistoryViewTransport<T>,
@@ -84,12 +99,36 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   getSnapshot = (): HistoryViewSnapshot<T> => this.state;
   /** Pagination feedback only; background validation must not disturb the reading viewport. */
   isLoadingOlder = (): boolean => this.state.loading && this.pageOlder;
+  /**
+   * Wall-clock start of the most recent latest-page read (0 before the first). A caller
+   * holding the time a change notice arrived can tell whether a read already covers it,
+   * instead of forcing one more page read per notice.
+   */
+  latestReadStartedAt = (): number => this.latestReadStartedAtMs;
+  /**
+   * Start time of the most recent latest-page read that completed and was applied (0 before
+   * the first). A failed or superseded read never advances it, so "covered by a read" can
+   * be certified without trusting an error-cleared snapshot.
+   */
+  latestReadOkStartedAt = (): number => this.latestReadOkStartedAtMs;
+  /** True while a latest-page read is in flight; older-page reads do not count. */
+  isReadingLatest = (): boolean => this.pagePromise !== null && !this.pageOlder;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  private publish(patch: Partial<HistoryViewSnapshot<T>>): void {
+  private publish(patch: Partial<HistoryViewSnapshot<T>>, source?: HistoryViewDiagnostic['source']): void {
+    const previousItemCount = this.state.items.length;
     this.state = { ...this.state, ...patch };
+    if (source && this.transport.diagnostic) {
+      try {
+        this.transport.diagnostic({ source, previousItemCount, itemCount: this.state.items.length,
+          messageCount: historyViewLeaves(this.state.items).reduce((count, item) =>
+            count + (item.type === 'messages' ? item.messages.length : 0), 0),
+          detailMessageCount: [...this.state.details.values()].reduce((count, detail) => count + detail.messages.length, 0),
+          ready: this.state.ready, stale: this.state.stale === true });
+      } catch { /* Diagnostics must not interrupt cache restoration or remote reads. */ }
+    }
     for (const listener of this.listeners) listener();
   }
 
@@ -99,7 +138,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const generation = this.cacheGeneration;
     const cached = await read().catch(() => null);
     if (!cached || this.state.ready || isHistoryViewUnavailable(this.state.error) || generation !== this.cacheGeneration) return;
-    this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true });
+    this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
   }
 
   refresh(older = false, fresh = false): Promise<void> {
@@ -164,12 +203,17 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const generation = this.generation;
     const before = older ? this.state.nextCursor ?? undefined : undefined;
     const readReceipt = nextHistoryCacheReceipt();
+    const readStartedAt = Date.now();
+    if (!older) this.latestReadStartedAtMs = readStartedAt;
     this.publish({ loading: true, error: null });
     try {
       const page = await this.transport.page(before);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       if (!this.active || generation !== this.generation) return;
-      const retained = older ? page : retainHistoryViewPrefix(page, this.state);
+      const continuous = older ? page : await readContinuousHistoryPage(page, this.state,
+        (cursor) => this.transport.page(cursor), () => this.active && generation === this.generation);
+      if (!continuous) return;
+      const retained = older ? continuous : retainHistoryViewPrefix(continuous, this.state);
       let items = retained.items;
       if (older) {
         const keys = new Set(items.map((item) => item.key));
@@ -186,7 +230,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
         && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
       this.publish({ items: stableItems, ready: true, loading: false,
         ...(older ? {} : { stale: false, readReceipt }),
-        hasMore: retained.hasMore, nextCursor: retained.nextCursor });
+        hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
+      if (!older) this.latestReadOkStartedAtMs = readStartedAt;
       for (const summary of historyWorkSummaries(items)) {
         if (this.state.expanded.has(summary.key)) void this.loadDetails(summary);
       }
@@ -202,7 +247,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           if (this.refreshTimer) clearTimeout(this.refreshTimer);
           this.refreshTimer = null;
           this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
-            nextCursor: null, hasMore: false, loading: false, error });
+            nextCursor: null, hasMore: false, loading: false, error }, 'fallback');
         } else this.publish({ loading: false, error });
       }
     }
@@ -223,14 +268,18 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     if (!this.networkAvailable) return;
     // Serialize replacement intents: a late expand ACK can never win over collapse.
     const generation = this.generation;
+    const version = ++this.intentVersion;
     this.intentQueue.tail = this.intentQueue.tail.catch(() => undefined).then(async () => {
-      if (generation !== this.generation || !this.networkAvailable) return;
+      // Each replacement carries the latest state. Skip superseded *unsent*
+      // requests, but still resend after page reads/reconnects. Keep this token
+      // controller-local: a replacement Host must not cancel the old Host's release.
+      if (version !== this.intentVersion || generation !== this.generation || !this.networkAvailable) return;
       // Empty replacement intents must release old interest even before a reset view is ready.
       const summaries = this.active ? historyWorkSummaries(this.state.items).filter((item) => this.state.expanded.has(item.key)) : [];
       await this.transport.expanded(summaries);
     }).catch(() => {
       // Detail interest is advisory; a transient ACK failure must not poison a successful page.
-      if (this.active && generation === this.generation) this.invalidate();
+      if (this.active && version === this.intentVersion && generation === this.generation) this.invalidate();
     });
   }
 
@@ -263,7 +312,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
         : collected.length ? collected : (existing?.messages ?? []);
       details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });
-      this.publish({ details });
+      this.publish({ details }, settled ? 'details' : undefined);
     };
     update({});
     token.promise = (async () => {
@@ -364,7 +413,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.cacheGeneration++;
     this.detailRuns.clear();
     this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
-      nextCursor: null, hasMore: false, loading: false, error: null, stale: false, readReceipt: undefined });
+      nextCursor: null, hasMore: false, loading: false, error: null, stale: false, readReceipt: undefined }, 'reset');
     this.sendIntent();
     if (this.active) void this.refresh();
   }

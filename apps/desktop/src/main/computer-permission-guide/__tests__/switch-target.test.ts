@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   callToolMock,
+  listToolsMock,
   clientCloseMock,
   clientConnectMock,
   clientCtorMock,
@@ -9,6 +10,7 @@ const {
   transportCtorMock,
 } = vi.hoisted(() => ({
   callToolMock: vi.fn(),
+  listToolsMock: vi.fn(),
   clientCloseMock: vi.fn(),
   clientConnectMock: vi.fn(),
   clientCtorMock: vi.fn(),
@@ -42,6 +44,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     clientCtorMock(...args);
     return {
       callTool: callToolMock,
+      listTools: listToolsMock,
       close: clientCloseMock,
       connect: clientConnectMock,
     };
@@ -102,6 +105,10 @@ beforeEach(async () => {
   existsSyncMock.mockReturnValue(true);
   clientConnectMock.mockResolvedValue(undefined);
   clientCloseMock.mockResolvedValue(undefined);
+  listToolsMock.mockResolvedValue({ tools: [{ name: 'get_window_state', inputSchema: {
+    properties: { pid: {}, window_id: {}, include_screenshot: {}, tree_format: {}, query: {}, max_elements: {}, max_depth: {}, session: {} },
+    additionalProperties: false,
+  } }] });
   mockSuccessfulLocate();
 });
 
@@ -110,6 +117,23 @@ afterAll(() => {
 });
 
 describe('persistent switch locator connection', () => {
+  // CUA 0.35+ no longer returns elements by default. Verify the actual locator
+  // requests frames for the switch, while old schemas do not receive tree_format.
+  it.each([true, false])('locates switches using the advertised observation format (modern=%s)', async (modern) => {
+    listToolsMock.mockResolvedValue({ tools: [{ name: 'get_window_state', inputSchema: {
+      properties: { pid: {}, window_id: {}, include_screenshot: {}, ...(modern ? { tree_format: {} } : {}), query: {}, max_elements: {}, max_depth: {}, session: {} },
+      additionalProperties: false,
+    } }] });
+    callToolMock.mockImplementation(async ({ name, arguments: args }) => name === 'list_windows' ? windowsResult
+      : modern && args.tree_format !== 'elements' ? { structuredContent: { tree_markdown: 'CuaDriver', element_count: 2 } } : stateResult);
+    await expect(locateComputerUseSwitchTarget()).resolves.toMatchObject({ status: 'found' });
+    await expect(locateComputerUseSwitchTarget()).resolves.toMatchObject({ status: 'found' });
+    expect(listToolsMock).toHaveBeenCalledTimes(1);
+    const args = callToolMock.mock.calls.find(([request]) => request.name === 'get_window_state')?.[0].arguments;
+    if (modern) expect(args).toHaveProperty('tree_format', 'elements');
+    else expect(args).not.toHaveProperty('tree_format');
+  });
+
   it('does not connect during isolated module import and connects on first locate', async () => {
     vi.resetModules();
 

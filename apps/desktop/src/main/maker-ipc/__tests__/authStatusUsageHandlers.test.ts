@@ -1463,6 +1463,16 @@ describe('maker usage IPC handlers', () => {
     expect(readModelPricing).not.toHaveBeenCalled();
   });
 
+  it('routes account-bound automatic settings and rejects unknown fields', async () => {
+    const harness = new IpcHarness();
+    const setCodexResetAutoUse = vi.fn().mockResolvedValue({ saved: true });
+    registerMakerUsageHandlers(harness, makeUsageDeps({ setCodexResetAutoUse }));
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, { minimumDays: 7 }, 'account-key', 'openai')).resolves.toEqual({ saved: true });
+    expect(setCodexResetAutoUse).toHaveBeenCalledWith({ minimumDays: 7 }, 'account-key', 'openai');
+    await expect(harness.invoke(MAKER_INVOKE.USAGE_CODEX_RESET_AUTO_USE, { creditId: 'unexpected' }, 'account-key')).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(setCodexResetAutoUse).toHaveBeenCalledOnce();
+  });
+
   it('reads Codex reset credits and consumes only a UUID offer key', async () => {
     const harness = new IpcHarness();
     const snapshot = {

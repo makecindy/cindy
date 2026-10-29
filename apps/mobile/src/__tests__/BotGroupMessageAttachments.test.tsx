@@ -5,6 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 import { openBrowserAsync } from 'expo-web-browser';
 
+// The shared renderer imports site-video; replace only its native surface.
+vi.mock('@/platform/gestureHandler', () => {
+  const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
+  return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
+});
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
 const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) => void; onError: () => void; onDisplay: () => void; transition: number }>());
@@ -26,6 +35,7 @@ vi.mock('react-native', async () => {
   };
 });
 vi.mock('lucide-react-native', () => ({
+  Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Users: () => null, Star: () => null,
   Image: () => null, ImageOff: () => null, Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
@@ -68,6 +78,18 @@ vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+vi.mock('@/session/BotGroupTextAttachmentPreview', async () => {
+  const React = await import('react');
+  return {
+    ...await vi.importActual<object>('@/session/BotGroupTextAttachmentPreview'),
+    BotGroupTextAttachmentPreview: ({ attachmentId, fileName, kind }: { attachmentId: string; fileName: string; kind: string }) =>
+      React.createElement('div', {
+        'data-testid': 'groupChat.server.textAttachmentPreview',
+        'data-attachment-id': attachmentId,
+        'data-kind': kind,
+      }, fileName),
+  };
+});
 vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
@@ -223,10 +245,12 @@ describe('group attachments the computer has not fetched yet', () => {
         pending('gone', 'gone.md', 'unavailable'), ready('photo', 'photo.png')],
     })));
     const chips = [...host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')];
-    expect(chips).toHaveLength(4);
+    expect(chips).toHaveLength(3);
     expect(chips[0]!.parentElement).toBe(chips[1]!.parentElement);
-    expect(chips[1]!.parentElement).not.toBe(chips[3]!.parentElement);
-    expect(resolveServerMedia).not.toHaveBeenCalled();
+    expect(chips[1]!.parentElement).not.toBe(chips[2]!.parentElement);
+    expect(resolveServerMedia.mock.calls.map(([id]) => id)).toEqual(['first', 'second', 'photo']);
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('https://example.invalid/signed/photo');
+    resolveServerMedia.mockClear();
     expect(resolveMedia).not.toHaveBeenCalled();
     await act(async () => chips[1]!.click());
     await act(async () => chips[0]!.click());
@@ -234,10 +258,39 @@ describe('group attachments the computer has not fetched yet', () => {
     expect(vi.mocked(openBrowserAsync).mock.calls.map(([url]) => url)).toEqual([
       'https://example.invalid/signed/second', 'https://example.invalid/signed/first',
     ]);
-    await act(async () => chips[3]!.click());
+    await act(async () => host!.querySelector<HTMLElement>('[data-testid="message.mediaPreviewButton"]')!.click());
     expect(resolveServerMedia).toHaveBeenLastCalledWith('photo');
     expect(host.querySelector('[data-testid="lightbox"]')?.getAttribute('data-url')).toBe('https://example.invalid/signed/photo');
     expect(openBrowserAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens HTML, Markdown and JSON server files in the in-app preview instead of the browser', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const names: Record<string, string> = { html: 'report.html', markdown: 'notes.md', json: 'summary.json' };
+    const resolveServerMedia = vi.fn(async (id: string) => ({
+      ...ready(id, names[id]!),
+      url: 'https://example.invalid/signed/' + id,
+    }));
+    await act(async () => root!.render(createElement(BotGroupMessageAttachments, {
+      messageId: 'text-files', align: 'left', onResolveRemoteMedia: resolveMedia, resolveServerMedia,
+      attachments: Object.entries(names).map(([id, name]) => ready(id, name)),
+    })));
+
+    for (const [index, [id, name, kind]] of [
+      ['html', names.html, 'html'],
+      ['markdown', names.markdown, 'markdown'],
+      ['json', names.json, 'json'],
+    ].entries()) {
+      const chip = host.querySelectorAll<HTMLElement>('[data-testid^="message.filePreviewButton"]')[index]!;
+      await act(async () => chip.click());
+      const preview = host.querySelector('[data-testid="groupChat.server.textAttachmentPreview"]');
+      expect(preview?.textContent).toBe(name);
+      expect(preview?.getAttribute('data-attachment-id')).toBe(id);
+      expect(preview?.getAttribute('data-kind')).toBe(kind);
+    }
+    expect(openBrowserAsync).not.toHaveBeenCalled();
   });
 
   it('keeps the sent order: neighbours of one kind share a strip, each pending one stands alone', () => {

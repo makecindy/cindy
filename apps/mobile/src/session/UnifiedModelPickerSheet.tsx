@@ -69,6 +69,10 @@ function createFavoriteUid(): string {
 }
 
 export interface UnifiedMobilePickerOptions {
+  /** Request-owned edits, including favorites, never change persisted preferences. */
+  preferenceScope?: 'request';
+  /** Editing a selected row can update a draft without submitting the selection. */
+  onConfigure?: UnifiedMobilePickerOptions['onSelect'];
   currentSelection?: Pick<
     ModelPickerSheetProps,
     | "agentKind"
@@ -187,7 +191,7 @@ export function UnifiedModelPickerSheet(
     p.visible,
     p.providers,
   );
-  const prefs = useMobileModelPreferences(p.unified.scope, p.visible);
+  const prefs = useMobileModelPreferences(p.unified.scope, p.visible, p.unified.preferenceScope === 'request');
   useDraftModelMemoryVersion();
   useSessionModelMirrorVersion();
   const [query, setQuery] = useState("");
@@ -575,7 +579,8 @@ export function UnifiedModelPickerSheet(
           ? { ...selection, providerId: directory.sourceId ?? "" }
           : undefined,
         pinned: p.existingSessionRoute ? p.agentKind : undefined,
-        fastCapable,
+        // Remote catalog capabilities are independent of the host installation.
+        fastCapable: () => true,
       });
     const details = describe(entry, config, catalog.providers);
     return {
@@ -591,7 +596,7 @@ export function UnifiedModelPickerSheet(
       },
       remoteDevice: { deviceId: catalog.deviceId, name: catalog.name },
       selected,
-      disabled: !caps[config.agent],
+      disabled: !entry.capabilities[config.agent],
       // 「收藏」一节没有带电脑名的分段标题,电脑名写进说明行,和本机同名模型的收藏区分开。
       subtitle: favorite
         ? [catalog.name, details].filter(Boolean).join(" · ")
@@ -786,7 +791,7 @@ export function UnifiedModelPickerSheet(
     row &&
     resolveMobileModelConfig(row.entry, {
       pinned: p.existingSessionRoute ? p.agentKind : undefined,
-      fastCapable,
+      fastCapable: row.remoteDevice ? () => true : fastCapable,
     });
   const resetAgents = row
     ? [...new Set([row.config.agent, recommendedConfig!.agent])]
@@ -892,7 +897,7 @@ export function UnifiedModelPickerSheet(
       void transact(async (isCurrent) => {
         if (
           row.selected &&
-          !(await p.unified.onSelect(
+          !(await (p.unified.onConfigure ?? p.unified.onSelect)(
             ...(boundRoute(row, config) ?? [config, { deviceId: remoteDevice.deviceId }]),
           ))
         )
@@ -917,7 +922,8 @@ export function UnifiedModelPickerSheet(
     // 被控电脑自己的组那一项(任务归它、此刻在组里别的电脑上运行)里的行同样留在那台。
     const apply = (next: MobileModelConfiguration) => {
       const routed = boundRoute(row, next);
-      return routed ? p.unified.onSelect(...routed) : p.unified.onSelect(next);
+      const configure = p.unified.onConfigure ?? p.unified.onSelect;
+      return routed ? configure(...routed) : configure(next);
     };
     void transact(async (isCurrent) => {
       const previousConfig =
@@ -1069,7 +1075,7 @@ export function UnifiedModelPickerSheet(
       title={
         favoriteEdit
           ? t("models.unified.editFavorite")
-          : (row?.entry.displayName ?? t("models.picker.title"))
+          : (row?.entry.displayName ?? p.title ?? t("models.picker.title"))
       }
       testID={p.testID ?? "modelSheet"}
       query={query}
@@ -1148,7 +1154,7 @@ export function UnifiedModelPickerSheet(
                 ALL_AGENTS.includes(agent),
               ),
               fastCapable:
-                !!cap?.supportsFastMode && fastCapable(row.config.agent),
+                !!cap?.supportsFastMode && (!!row.remoteDevice || fastCapable(row.config.agent)),
               onChange: change,
               context: [
                 rowProviderName(row),
@@ -1185,7 +1191,7 @@ export function UnifiedModelPickerSheet(
                         original: { ...originFavorite },
                         config: resolveMobileModelConfig(row.entry, {
                           favorite: originFavorite,
-                          fastCapable,
+                          fastCapable: row.remoteDevice ? () => true : fastCapable,
                         }),
                       });
                       setNotice(null);

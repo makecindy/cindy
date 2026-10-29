@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
+import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import type { ProviderGroupConfig } from '../../../../shared/providerGroup';
 import type { ProviderOwnUsageView, ProviderShareOwnerState, ProviderUsageHistoryView } from '../../../../shared/providerShare';
 import { __testing as localGroupsTesting } from '../../provider-group/useLocalProviderGroups';
+import { ProviderShareVisibilitySection } from '../ProviderShareVisibilitySection';
 import { ProviderShareManagePage } from '../ProviderShareManagePage';
+import { SubscriptionFastSetting } from '../SubscriptionFastSetting';
 import {
   getProviderSharePendingRequests,
   getProviderSharePendingReshares,
@@ -165,6 +169,9 @@ const usageHistory = (): ProviderUsageHistoryView => ({
 
 /** 「用量」块里第 index 行(按人表)的文字。 */
 const usageRowText = (index: number) => screen.getAllByTestId('provider-usage-row')[index]!.textContent ?? '';
+const pickUsageBreakdown = (dimension: 'party' | 'computer' | 'model') =>
+  fireEvent.click(within(screen.getByRole('tablist', { name: 'providerGroup.usage.title' }))
+    .getByRole('tab', { name: `providerGroup.usage.stack.${dimension}` }));
 
 /** 这台电脑上 xd 的供应商组：本机、Studio、一台分享来的电脑。 */
 const xdGroup: ProviderGroupConfig = {
@@ -189,8 +196,11 @@ beforeEach(() => {
   remoteCatalog.loading = false;
   remoteCatalog.error = null;
   confirmSpy.mockClear();
+  vi.mocked(toast.success).mockClear();
   command.mockReset();
   command.mockImplementation(async (cmd: { action: string }) => {
+    if (cmd.action === 'get-model-access') return { version: 1, models: null, providerModels: null, availableModels: [] };
+    if (cmd.action === 'get-visibility') return { quota: false, usage: false };
     if (cmd.action === 'owned') return owned();
     if (cmd.action === 'own-usage') return ownUsage();
     if (cmd.action === 'usage-history') return usageHistory();
@@ -219,7 +229,7 @@ beforeEach(() => {
             if (action === 'owned') return owned();
             if (action === 'own-usage') return ownUsage();
             if (action === 'usage-history') return usageHistory();
-            if (action === 'get-run-limits') return command(cmd.request?.command);
+            if (action === 'get-run-limits' || action === 'get-visibility') return command(cmd.request?.command);
             if (action === 'approve' || action === 'reject') return { ok: true };
           }
           return { providerId: cmd.providerId, config: null, members: [] };
@@ -231,6 +241,46 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+// Review R12: real setting + management IPC adapter, using this page's host
+// fixture. Prior page cases do not interleave a catalog push with save failure.
+// Unit tier: defer the IPC, refresh allowFast, then reject; the warning must
+// survive value refresh while identity/owner/unmount boundaries still discard it.
+describe('SubscriptionFastSetting save feedback', () => {
+  const subscription = (id = 'openai', allowFast = true) => ({
+    id, subscriptionFastPolicy: { allowFast },
+  } as ProviderView);
+
+  it('keeps the native failure warning after the committed catalog value arrives', async () => {
+    vi.mocked(toast.error).mockClear();
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('switch'));
+    expect(command).toHaveBeenCalledWith({ action: 'set-fast-policy', providerId: 'openai', allowFast: false });
+    view.rerender(<SubscriptionFastSetting provider={subscription('openai', false)} />);
+    await act(async () => { reject(new Error('native busy')); });
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(vi.mocked(toast.error)).toHaveBeenCalledExactlyOnceWith('subscriptionFastPolicy.saveFailed');
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each(['provider', 'device', 'owner', 'unmount'])('discards a late failure across the %s boundary', async boundary => {
+    vi.mocked(toast.error).mockClear();
+    setDataOwnerGeneration('fast-owner-a');
+    let reject!: (error: Error) => void;
+    command.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<SubscriptionFastSetting provider={subscription()} />);
+    fireEvent.click(screen.getByRole('switch'));
+    if (boundary === 'provider') view.rerender(<SubscriptionFastSetting provider={subscription('anthropic')} />);
+    if (boundary === 'device') view.rerender(<SubscriptionFastSetting provider={subscription()} deviceId="other-computer" />);
+    if (boundary === 'owner') setDataOwnerGeneration('fast-owner-b');
+    if (boundary === 'unmount') view.unmount();
+    await act(async () => { reject(new Error('old native busy')); });
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+});
 
 /** 「你自己」一行先出来；分享的人等分享读到后才有。 */
 async function findMemberRow(memberId = 'mem-1'): Promise<HTMLElement> {
@@ -262,6 +312,110 @@ function renderPage(
 }
 
 describe('ProviderShareManagePage', () => {
+  // Verify the person's row opens a grant for that member, rather than editing the provider-wide policy.
+  it('opens and saves the selected person’s model grant from their row menu', async () => {
+    const respond = command.getMockImplementation()!;
+    const models = { version: 1, models: null, providerModels: null,
+      availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] };
+    command.mockImplementation(async (cmd) => {
+      if (cmd.action === 'get-model-access' || cmd.action === 'set-model-access') return models;
+      return respond(cmd);
+    });
+    renderPage();
+    fireEvent.click(within(await findMemberRow()).getByRole('button', { name: 'providerShare.modelAccess.memberTitle' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'Large' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'set-model-access', providerId: 'xd', memberId: 'mem-1', models: ['small'],
+    }));
+  });
+
+  /* 测试价值：2026-10-19 用户备注；生产页面的新增入口、保存/清空、原用户名与筛选同步显示。
+   * 现有测试只有暂停/删除。最小输入：一个成员，分别在本机和 studio 管理。tier: unit。
+   * 单文件实测 17.21 秒，其中导入 7.16 秒、30 用例 8.61 秒；复用既有页面与完整用量图表 fixture，
+   * 未拆成第二套页面 fixture 或删除原断言。备注新增 4 个用例的执行合计 2.25 秒。
+   */
+  it.each([undefined, 'studio'])('sets and clears a member note through the managed computer (%s)', async (deviceId) => {
+    const snapshot = owned();
+    const staleSnapshot = owned();
+    let holdNextRead = false;
+    let finishOldRead!: (value: ProviderShareOwnerState) => void;
+    const oldRead = new Promise<ProviderShareOwnerState>((resolve) => { finishOldRead = resolve; });
+    let ownedChanged: () => void = () => undefined;
+    window.electronAPI.providerShare.onOwnedChanged = (listener) => { ownedChanged = listener; return () => undefined; };
+    const defaultCommand = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd) => {
+      if (cmd.action === 'owned') {
+        if (holdNextRead) { holdNextRead = false; return oldRead; }
+        return snapshot;
+      }
+      if (cmd.action === 'set-member-note') {
+        snapshot.shares[0]!.members[0]!.note = cmd.note || null;
+        return { ok: true };
+      }
+      return defaultCommand(cmd);
+    });
+    const remoteCommand = vi.spyOn(window.electronAPI.providerGroup, 'command');
+    if (deviceId) remoteCommand.mockImplementation(async (cmd) => {
+      if (cmd.action === 'remote-manage' && cmd.request.action === 'manage-share') return command(cmd.request.command);
+      return { providerId: 'xd', config: null, members: [] };
+    });
+    renderPage('on', { deviceId });
+    fireEvent.click(within(await findMemberRow()).getByText('providerShare.manage.memberNote.add'));
+    const input = await screen.findByLabelText('providerShare.manage.memberNote.label');
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: ' Alice ' } });
+    // 模拟保存前已经发出但迟迟没返回的轮询；保存后仍必须重新读，旧回包不能还原用户名。
+    holdNextRead = true;
+    ownedChanged();
+    fireEvent.click(screen.getByText('providerShare.manage.memberNote.save'));
+    await waitFor(() => expect(within(screen.getAllByTestId('provider-usage-row')[1]!).getByRole('button', { name: 'Alice' })).toBeTruthy());
+    await act(async () => { finishOldRead(staleSnapshot); });
+    const row = await findMemberRow();
+    expect(row.textContent).toContain('providerShare.manage.memberNote.username:{"name":"Lizi"}');
+    const noteCommand = { action: 'set-member-note', memberId: 'mem-1', note: 'Alice' };
+    if (deviceId) expect(remoteCommand).toHaveBeenCalledWith({
+      action: 'remote-manage', deviceId, request: { action: 'manage-share', command: noteCommand },
+    });
+    else expect(command).toHaveBeenCalledWith(noteCommand);
+    fireEvent.click(within(row).getByRole('button', { name: 'Alice' }));
+    expect(screen.getByRole('combobox', { name: 'providerGroup.usage.filter.partyAria' }).textContent).toContain('Alice');
+    fireEvent.click(within(row).getByText('providerShare.manage.memberNote.edit'));
+    const editInput = await screen.findByLabelText('providerShare.manage.memberNote.label');
+    expect((editInput as HTMLInputElement).value).toBe('Alice');
+    fireEvent.change(editInput, { target: { value: '   ' } });
+    fireEvent.click(screen.getByText('providerShare.manage.memberNote.save'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect((await findMemberRow()).textContent).not.toContain('providerShare.manage.memberNote.username');
+    expect(screen.getByRole('combobox', { name: 'providerGroup.usage.filter.partyAria' }).textContent).toContain('Lizi');
+  });
+
+  // 保存失败不能关闭草稿或假装已改名；旧电脑明确提示更新，不退到控制端保存。
+  it.each([undefined, 'studio'])('keeps the note draft when saving fails (%s)', async (deviceId) => {
+    const defaultCommand = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd) => {
+      if (cmd.action === 'set-member-note') throw new Error(deviceId ? '[UNSUPPORTED_CAPABILITY] Unknown command' : 'disk unavailable');
+      return defaultCommand(cmd);
+    });
+    if (deviceId) vi.spyOn(window.electronAPI.providerGroup, 'command').mockImplementation(async (cmd) => {
+      if (cmd.action === 'remote-manage' && cmd.request.action === 'manage-share') return command(cmd.request.command);
+      return { providerId: 'xd', config: null, members: [] };
+    });
+    renderPage('on', { deviceId });
+    fireEvent.click(within(await findMemberRow()).getByText('providerShare.manage.memberNote.add'));
+    const input = await screen.findByLabelText('providerShare.manage.memberNote.label');
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    fireEvent.click(screen.getByText('providerShare.manage.memberNote.save'));
+    expect((await screen.findByRole('alert')).textContent).toContain(deviceId ? 'providerGroup.management.unsupported' : 'providerShare.manage.memberNote.saveFailed');
+    expect((input as HTMLInputElement).value).toBe('Alice');
+    expect((await findMemberRow()).textContent).not.toContain('Alice');
+    fireEvent.click(screen.getByText('settings.providers.button.cancel'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toContain('members.moreAria'));
+    expect(command.mock.calls.filter(([cmd]) => cmd.action === 'set-member-note')).toHaveLength(1);
+  });
+
   it('lists pending requests and members for this provider only, and publishes pending requests', async () => {
     renderPage();
     await findMemberRow();
@@ -381,6 +535,35 @@ describe('ProviderShareManagePage', () => {
   });
 
   // 2026-10-17 用户确认原型：与设置 → 用量同一套，默认合计，可以只看一个人或一台电脑。
+  // 测试价值：经真实管理页验证 2026-10-19 用户要求的单卡切换与移出电脑隐藏；原覆盖同时渲染三张表，
+  // 没有「当前组只有本机、历史仍有另一台」输入。最小失败输入为 xdGroup + 一条已移出电脑的用量，tier: unit。
+  // 本机整文件实测 19.23s（收集 8.02s、27 项执行 9.63s）；新增回归 395ms。复用原有管理页 fixture，避免另开同入口的小文件。
+  it('switches one breakdown card between people, current computers and models without losing historical totals', async () => {
+    localGroups = { xd: { ...xdGroup, members: [xdGroup.members[0]!] } };
+    renderPage();
+    await waitFor(() => expect(usageRowText(0)).toContain('52.0k'));
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1);
+    expect(screen.queryByTestId('provider-usage-computer')).toBeNull();
+    expect(screen.queryByTestId('provider-usage-model')).toBeNull();
+
+    const summary = screen.getByTestId('provider-usage-summary').textContent;
+    pickUsageBreakdown('computer');
+    expect(screen.queryByTestId('provider-usage-row')).toBeNull();
+    expect(screen.getAllByTestId('provider-usage-computer').map((row) => row.getAttribute('data-computer-key')))
+      .toEqual(['local', '']);
+    expect(screen.queryByText('providerGroup.usage.removedMember')).toBeNull();
+    // 已移出电脑的历史用量归进更早的记录，合计与模型明细继续保留。
+    expect(screen.getAllByTestId('provider-usage-computer')[1]!.textContent).toContain('1.5M');
+    pickUsageBreakdown('model');
+    expect(screen.queryByTestId('provider-usage-computer')).toBeNull();
+    expect(screen.getAllByTestId('provider-usage-model').map((row) => row.textContent))
+      .toEqual(expect.arrayContaining([expect.stringContaining('Opus 5.5')]));
+    expect(screen.getByTestId('provider-usage-summary').textContent).toBe(summary);
+    pickUsageBreakdown('party');
+    expect(usageRowText(0)).toContain('52.0k');
+    expect(usageRowText(1)).toContain('1.5M');
+  });
+
   it('splits usage by computer in the group and narrows everything to one person when their row is picked', async () => {
     localGroups = { xd: xdGroup };
     const history = usageHistory();
@@ -404,6 +587,10 @@ describe('ProviderShareManagePage', () => {
       .toEqual(['self', 'member:mem-1', 'relay:studio']));
     expect(usageRowText(2)).toContain('providerGroup.usage.relayName:{"device":"Studio"}');
 
+    // 单卡默认按人，点选的人在切到按电脑后继续生效。
+    fireEvent.click(screen.getByRole('button', { name: 'Lizi' }));
+    expect(screen.getByRole('button', { name: 'Lizi' }).getAttribute('aria-pressed')).toBe('true');
+    pickUsageBreakdown('computer');
     const computers = () => screen.getAllByTestId('provider-usage-computer');
     expect(computers().map((row) => row.getAttribute('data-computer-key'))).toEqual([
       'local',
@@ -418,16 +605,14 @@ describe('ProviderShareManagePage', () => {
     expect(computers()[2]!.textContent).toContain('providerGroup.member.shareComputerUnknown');
     expect(computers()[2]!.textContent).not.toContain('%');
     expect(computers()[3]!.textContent).toContain('providerGroup.usage.unattributed');
-    expect(computers()[0]!.textContent).toContain('%');
-
-    // 点 Lizi：整块只看他，按电脑表跟着变(他没在本机上用过)。
-    fireEvent.click(screen.getByRole('button', { name: 'Lizi' }));
-    expect(screen.getByRole('button', { name: 'Lizi' }).getAttribute('aria-pressed')).toBe('true');
+    // 只看 Lizi 时，本机没有用量。
     expect(computers()[0]!.textContent).not.toContain('%');
     expect(computers()[1]!.textContent).toContain('%');
     // 再点一次回到所有人。
+    pickUsageBreakdown('party');
     fireEvent.click(screen.getByRole('button', { name: 'Lizi' }));
     expect(screen.getByRole('button', { name: 'Lizi' }).getAttribute('aria-pressed')).toBe('false');
+    pickUsageBreakdown('computer');
     expect(computers()[0]!.textContent).toContain('%');
   });
 
@@ -461,6 +646,8 @@ describe('ProviderShareManagePage', () => {
     });
 
     renderPage();
+    await findMemberRow();
+    pickUsageBreakdown('computer');
     await waitFor(() => expect(screen.getAllByTestId('provider-usage-computer').map((row) => row.getAttribute('data-computer-key')))
       .toEqual(['local', 'device:studio', 'share-host:kai-pc']));
     // 两个账号合成一台：2k + 1k + 3k + 1k。
@@ -481,6 +668,9 @@ describe('ProviderShareManagePage', () => {
 
   it('shows a provider without a group as a group of just this computer', async () => {
     renderPage();
+    await findMemberRow();
+    expect(screen.queryByRole('tab', { name: 'providerGroup.usage.stack.computer' })).toBeNull();
+    pickUsageBreakdown('model');
     await waitFor(() => expect(screen.getAllByTestId('provider-usage-model').length).toBeGreaterThan(0));
     expect(screen.getByTestId('provider-usage-summary')).toBeTruthy();
     // 只有一台：没有组内电脑的筛选与「按电脑」。
@@ -549,10 +739,22 @@ describe('ProviderShareManagePage', () => {
   });
 
   // 转分享(provider-sharing.md §4.3)：成员想经自己的供应商组把这里的供应商转给别人用，主人逐人处理。
-  it.each([undefined, 'studio'])('handles reshare decisions on the provider’s computer (%s)', async (deviceId) => {
+  /* PR #6445 discussion_r4313147989：待处理转分享投影曾丢失成员备注。
+   * 生产入口：真实管理页面；观察申请说明、用量提示与同意后的 toast。
+   * 原覆盖只传没有备注的成员。最小输入：Lizi 的备注为 Alice，并有一个 pending 请求。
+   * tier: unit；扩展既有本机/跨电脑转分享 fixture，保留无备注回退验证。
+   * 单文件实测 10.64 秒：导入 4.87 秒、31 个用例 4.88 秒；复用既有完整页面 fixture，未新增测试文件。
+   */
+  it.each([
+    { deviceId: undefined, note: undefined },
+    { deviceId: undefined, note: 'Alice' },
+    { deviceId: 'studio', note: 'Alice' },
+  ])('handles reshare decisions on the provider’s computer ($deviceId, $note)', async ({ deviceId, note }) => {
+    const ownerName = note ?? 'Lizi';
     command.mockImplementation(async (cmd: { action: string }) => {
       if (cmd.action === 'owned') {
         const state = owned();
+        state.shares[0]!.members[0]!.note = note;
         state.shares[0]!.members[0]!.reshares = [
           { id: 'rs-pending', name: 'Carol', avatarUrl: null, state: 'pending', requestedAt: Date.now() - 1_000, decidedAt: null },
           { id: 'rs-approved', name: 'Dave', avatarUrl: null, state: 'approved', requestedAt: Date.now() - 9_000, decidedAt: Date.now() - 5_000 },
@@ -590,10 +792,14 @@ describe('ProviderShareManagePage', () => {
     renderPage('on', { deviceId });
     const pending = await screen.findByTestId('provider-share-reshare-row');
     expect(pending.textContent).toContain('Carol');
-    expect(pending.textContent).toContain('providerShare.manage.reshare.applying:{"owner":"Lizi"}');
+    expect(pending.textContent).toContain(`providerShare.manage.reshare.applying:${JSON.stringify({ owner: ownerName })}`);
+    expect(pending.textContent).toContain(`providerShare.manage.reshare.usageHint:${JSON.stringify({ name: 'Carol', owner: ownerName })}`);
     expect(getProviderSharePendingReshares().map((item) => item.reshare.id)).toEqual(deviceId ? [] : ['rs-pending']);
     fireEvent.click(within(pending).getByRole('button', { name: 'providerShare.manage.reshare.approve' }));
     await expectDecision('rs-pending', 'approve');
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
+      `providerShare.manage.reshare.toastApproved:${JSON.stringify({ name: 'Carol', owner: ownerName, provider: 'Cindy AI' })}`,
+    ));
 
     // 处理过的人列在这个成员那一行下方：已同意的可撤回，拒绝的可改为同意。
     await findMemberRow();
@@ -708,5 +914,34 @@ describe('ProviderShareManagePage', () => {
       expect((screen.getByRole('button', { name: 'providerShare.approve.approve' }) as HTMLButtonElement).disabled).toBe(false),
     );
     expect(screen.getByTestId('provider-share-claude-email-callout')).toBeTruthy();
+  });
+});
+
+/* 可见性保存要到供应商所在电脑；旧读不能覆盖刚写成功的开关。tier: unit。 */
+describe('share visibility switches', () => {
+  it('saves through remote management without changing the control computer', async () => {
+    const remote = vi.spyOn(window.electronAPI.providerGroup, 'command').mockImplementation(async (raw) => {
+      if (raw.action !== 'remote-manage' || raw.request.action !== 'manage-share') throw new Error('unexpected route');
+      return raw.request.command.action === 'set-visibility' ? { quota: true, usage: false } : { quota: false, usage: false };
+    });
+    await act(async () => { render(<ProviderShareVisibilitySection providerId="xd" deviceId="studio" />); });
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' })); });
+    expect(remote).toHaveBeenCalledWith({ action: 'remote-manage', deviceId: 'studio', request: { action: 'manage-share', command: { action: 'set-visibility', providerId: 'xd', visibility: { quota: true } } } });
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'set-visibility' }));
+    expect(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' }).getAttribute('aria-checked')).toBe('true');
+  });
+  it('keeps the saved value when an older poll completes afterwards', async () => {
+    vi.useFakeTimers();
+    try {
+      command.mockResolvedValue({ quota: false, usage: false });
+      await act(async () => { render(<ProviderShareVisibilitySection providerId="xd" />); });
+      let finish!: (value: { quota: boolean; usage: boolean }) => void;
+      command.mockImplementation(async (cmd) => cmd.action === 'get-visibility'
+        ? new Promise((resolve) => { finish = resolve; }) : { quota: true, usage: false });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      await act(async () => { fireEvent.click(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' })); });
+      await act(async () => { finish({ quota: false, usage: false }); });
+      expect(screen.getByRole('switch', { name: 'providerShare.insights.allowQuota' }).getAttribute('aria-checked')).toBe('true');
+    } finally { vi.useRealTimers(); }
   });
 });

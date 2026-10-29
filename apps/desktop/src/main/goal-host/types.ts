@@ -195,10 +195,12 @@ export interface GoalControllerDeps {
    * 的 Stop 边界，以便 vendor abort、输入队列和迟到终态事件一起收口。
    */
   stopActiveGoalTurn(sessionId: string): void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED);goal=null 表示已清除。 */
   emitStatus(update: GoalStatusUpdate): void;
+  onGoalStopped?: (sessionId: string, atMs: number) => void;
+  onGoalUserDispatched?: (sessionId: string, atMs: number) => void;
   /**
    * 读当前"系统默认 + 用户 override"合并后的护栏默认(来自 goal-settings-store)。
    * 新建 goal 时读取最新值(规则 20)。

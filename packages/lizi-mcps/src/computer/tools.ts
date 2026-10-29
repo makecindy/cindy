@@ -21,7 +21,7 @@ const SNAPSHOT_ID_ARG = z
   );
 
 const ELEMENT_TOKEN_ARG = z.string().min(1).optional().describe(
-  'Opaque element_token from the latest get_window_state. Prefer this over element_index; never invent or reuse it after another observation.',
+  'element_token from the latest get_window_state: `<data.snapshot_id>:<row>` for a tree_markdown row [row], or elements[].element_token when listed. Never invent or reuse it after another observation.',
 );
 
 const POSTCONDITION = z
@@ -82,6 +82,13 @@ export const POSTCHECK_ACTION_TOOLS = new Set<ComputerMcpToolName>([
   "scroll",
 ]);
 
+/** Keep an action's follow-up read in the same bounded window scope. */
+export const WINDOW_READ_SCOPE = {
+  query: z.string().optional(),
+  max_elements: z.number().int().positive().max(2000).optional().describe('Maximum AX nodes to walk (host default 200). Keep this and query/max_depth stable across rereads; increase only when truncated.'),
+  max_depth: z.number().int().positive().optional().describe('Maximum AX tree depth (host default 15).'),
+};
+
 const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'status',
@@ -121,7 +128,7 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   },
   {
     name: 'list_apps',
-    description: 'List installed and running desktop applications.',
+    description: 'List installed and running desktop applications. Takes no filters; do not pass running_only. Reuse a known pid from list_windows rather than guessing an app bundle ID.',
     readOnly: true,
     inputShape: {},
   },
@@ -141,18 +148,16 @@ const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'get_window_state',
     description:
-      'Inspect one exact window before acting. Prefer elements[].element_token for actions, or pass snapshot_id with element_index. include_screenshot:false returns only the accessibility tree; request an image when visual grounding is needed. query, max_elements and max_depth bound the observation. Omit screenshot_out_file for a host-managed temporary image.',
+      'Inspect one exact window before acting. A tree_markdown row [N] is element_index N: act on it with the top-level snapshot_id plus element_index, or with its element_token. include_screenshot:false returns only the accessibility tree; request an image when visual grounding is needed. query, max_elements and max_depth bound the observation. Omit screenshot_out_file for a host-managed temporary image.',
     readOnly: true,
     inputShape: {
       pid: z.number().int().positive(),
       window_id: z.number().int().nonnegative(),
       capture_mode: z.enum(['som', 'vision', 'ax']).optional(),
       include_screenshot: z.boolean().optional(),
-      query: z.string().optional(),
+      ...WINDOW_READ_SCOPE,
       screenshot_out_file: z.string().optional(),
       session: z.string().optional(),
-      max_elements: z.number().int().positive().max(2000).optional().describe("Maximum number of accessibility tree elements to return (up to 2000; host default 200). Narrow with query for larger windows."),
-      max_depth: z.number().int().positive().optional().describe("Maximum depth of the accessibility tree to traverse. Use to limit tree depth for complex windows."),
     },
   },
   {
@@ -403,6 +408,12 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] =
             ? {
                 postcondition: POSTCONDITION.optional().describe(
                   "Optional expected final state, using verify_state predicates. Cindy checks it once after delivery (requires an exact window). Without it, unknown delivery gets one fresh observation but is never declared successful. Actions are never replayed automatically.",
+                ),
+                observe: z.object({
+                  ...WINDOW_READ_SCOPE,
+                  include_screenshot: z.boolean().optional(),
+                }).strict().optional().describe(
+                  'Read the same window once after delivery, returning observation with a fresh usable snapshot. Use {} for text; include_screenshot:true for visual evidence. Omitted query/max_elements/max_depth inherit the last explicit read. Mutually exclusive with postcondition. Does not replay actions or prove the goal succeeded.',
                 ),
               }
             : {}),

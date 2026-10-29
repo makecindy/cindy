@@ -23,9 +23,12 @@ import { createLogger } from '../../logger';
 import { getDbClient } from '../../localDb/client/current';
 import { archiveBotChannelLanes } from '../../localDb/ipc/bots';
 import { botProfiles } from '../../localDb/schema';
+import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
+import { isIpcError } from '../../../shared/ipc-errors';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
+import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
   type BotImChannel,
@@ -51,7 +54,7 @@ import {
   updateBotImConnectionRecord,
 } from './botImConnectionStore';
 import { companionConnectionRouteKeyPrefix } from './imBotBindingRoute';
-import { listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
+import { archiveBotImConnectionLane, listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
 import type { ImOrchestrator } from './orchestrator';
 
 const log = createLogger('im:bot-connections');
@@ -73,6 +76,8 @@ export interface BotImSettingsIdentity {
 }
 
 export interface BotImConnectionRuntimeDeps {
+  /** Drain the shared WeChat transport and cancel queued work before clearing its owner. */
+  removeWechatCompanionBinding(update: () => void, isCurrent: () => boolean): Promise<void>;
   /** 为一条记录装配传输层 + 编排器(不 init)。渠道尚未支持时抛错。 */
   create(record: BotImConnectionRecord): BotImTransportInstance;
   /** 设置页那份个人 bot 当前用的平台身份(用于拒绝同一个 bot 两处同时用)。 */
@@ -204,8 +209,9 @@ function toView(record: BotImConnectionRecord): BotImConnectionView {
   return { ...record, status: statusOf(transport), identity: identityOf(transport) };
 }
 
-export function buildBotImConnectionListPayload(): BotImConnectionListPayload {
-  return { connections: listBotImConnections().map(toView) };
+export function buildBotImConnectionListPayload(botId?: string): BotImConnectionListPayload {
+  const records = botId === undefined ? listBotImConnections() : listBotImConnectionsForBot(botId);
+  return { connections: records.map(toView) };
 }
 
 function broadcastChanged(): void {
@@ -273,6 +279,30 @@ export async function stopBotImConnections(): Promise<void> {
 
 export function getBotImConnectionOrchestrator(id: string): ImOrchestrator | undefined {
   return instances.get(id)?.transport.orchestrator;
+}
+
+/**
+ * 某位伙伴当前在线的飞书连接(伙伴主任务出站用)。
+ *
+ * 伙伴主任务(role='canonical')与桌面共用、不带专线的 `feishuChatId`, 所以非飞书入站轮次
+ * (后台任务回执 / 心跳 / scheduler)拿不到逐轮作用域。这些轮次必须仍走伙伴自己的连接,
+ * 不能回落到设置页那份可能已被清空的个人 bot —— 否则 `getOwnerOpenId()` 为 null 时
+ * `send_message_to_user` / `send_file_to_user` 会误报 NO_CHAT_CONTEXT。
+ */
+export function getBotFeishuTransport(botId: string, ownerOpenId?: string): FeishuIM | null {
+  for (const record of listBotImConnectionsForBot(botId)) {
+    if (record.channel !== 'feishu') continue;
+    const live = instances.get(record.id);
+    if (live?.transport.kind !== 'feishu' || live.record.botId !== botId) continue;
+    const im = live.transport.im;
+    const owner = im.getOwnerOpenId();
+    if (im.getStatus().kind !== 'connected' || !owner) continue;
+    // open_id belongs to this app. Never send a previously resolved recipient
+    // through a different owner's connection after a disconnect/reconfiguration.
+    if (ownerOpenId && owner !== ownerOpenId) continue;
+    return im;
+  }
+  return null;
 }
 
 async function readBotProfileStatus(botId: string): Promise<string | null> {
@@ -625,8 +655,36 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
   return { ...buildBotImConnectionListPayload(), archivedSessionIds };
 }
 
+/** Keep profile validation and deferred WeChat persistence in one lifecycle operation. */
+export async function setWechatCompanionBinding(
+  botId: string | null,
+  apply: (commit: () => void) => Promise<void>,
+): Promise<void> {
+  const run = async () => {
+    if (botId) {
+      if (await readBotProfileStatus(botId) !== 'active') throw new Error('BOT_INACTIVE');
+      const current = readWechatChannelSettings().companionBotId;
+      if (current && current !== botId) throw new Error('WECHAT_COMPANION_IN_USE');
+    }
+    await apply(() => { writeWechatCompanionBinding(botId); });
+  };
+  // Match deletion lock order: profile first, then the WeChat transport lifecycle.
+  await withBotProfileLocks(botId ? [botId] : [], run);
+}
+
 /** 伙伴被删除 / 归档时带走它的全部连接。 */
 export async function removeBotImConnectionsForBot(botId: string): Promise<void> {
+  // WeChat shares the personal transport: remove only the teammate assignment,
+  // even when there are no dedicated connections. Keep its authorization intact.
+  if (readWechatChannelSettings().companionBotId === botId) {
+    await requireDeps().removeWechatCompanionBinding(() => {
+      if (readWechatChannelSettings().companionBotId !== botId) return;
+      const settings = writeWechatCompanionBinding(null);
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('wechatBot:channel-settings-changed', settings);
+      }
+    }, () => readWechatChannelSettings().companionBotId === botId);
+  }
   for (const record of listBotImConnectionsForBot(botId)) {
     try {
       await removeBotImConnection(record.id);
@@ -678,6 +736,12 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
   return { botId, channel: 'discord', token, ownerUserId };
 }
 
+/** 隐藏任务小节(本机设置页与远程桌面的设置页共用): 群名沿用「群聊」小节同一份已知群。 */
+const laneOptions = () => ({ knownGroups: (record: BotImConnectionRecord) => requireDeps().listKnownGroups(record) });
+export const listBotImConnectionLanesForSettings = (id: string) => listBotImConnectionLanes(id, laneOptions());
+export const resetBotImConnectionLaneForSettings = (id: string, sessionId: string) =>
+  resetBotImConnectionLane(id, sessionId, laneOptions());
+
 export function registerBotImConnectionIpc(): void {
   if (ipcRegistered) return;
   ipcRegistered = true;
@@ -712,12 +776,11 @@ export function registerBotImConnectionIpc(): void {
     return setBotImConnectionGroupMode(p.id, p.chatId, mode);
   });
   // 隐藏任务小节: 群名沿用「群聊」小节同一份已知群(deps.listKnownGroups)。
-  const laneOptions = { knownGroups: (record: BotImConnectionRecord) => requireDeps().listKnownGroups(record) };
   ipcMain.handle('botImConnection:list-lanes', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const id = (payload as { id?: unknown } | null)?.id;
     if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
-    return listBotImConnectionLanes(id, laneOptions);
+    return listBotImConnectionLanesForSettings(id);
   });
   ipcMain.handle('botImConnection:reset-lane', (e, payload) => {
     assertTrustedAppRendererEvent(e);
@@ -726,7 +789,23 @@ export function registerBotImConnectionIpc(): void {
     if (typeof p.sessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(p.sessionId)) {
       throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
     }
-    return resetBotImConnectionLane(p.id, p.sessionId, laneOptions);
+    return resetBotImConnectionLaneForSettings(p.id, p.sessionId);
+  });
+  ipcMain.handle('botImConnection:archive-lane', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; sessionId?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    if (typeof p.sessionId !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(p.sessionId)) {
+      throwIpcError('INVALID_PARAMS', 'sessionId is invalid');
+    }
+    return archiveBotImConnectionLane(p.id, p.sessionId, laneOptions()).catch((error: unknown) => {
+      if (isIpcError(error)) throw error;
+      if (error instanceof Error && (error.message === 'ARCHIVE_CAPACITY_REACHED' || error.message === 'OWNER_CHANGED')) {
+        throwIpcError('PRECONDITION_FAILED', error.message);
+      }
+      // Storage errors can include owner-specific absolute paths; keep them in main.
+      throwIpcError('INTERNAL', 'LANE_ARCHIVE_FAILED');
+    });
   });
 }
 

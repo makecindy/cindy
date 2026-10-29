@@ -19,6 +19,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from "@/session/homeDisplaySettings";
@@ -70,33 +71,18 @@ function checkable(
 
 export const HOME_SCOPE_COLLECTION_PREFIX = "scope.collection:";
 
-export function openHomeRemoteCollection({
-  collection,
-  teammateCollectionId,
-  embedded,
-  dismissKeyboard,
-  setMode,
-  push,
-  onModeChange,
-}: {
-  collection: RemoteHomeCollection;
-  teammateCollectionId: string;
-  embedded: boolean;
-  dismissKeyboard(): void;
-  setMode(mode: "teammates"): void | Promise<void>;
-  push(href: string | { pathname: string; params: Record<string, string> }): void;
-  onModeChange?: (mode: "teammates") => void;
-}) {
-  if (collection.id === teammateCollectionId) {
-    dismissKeyboard();
-    if (embedded) {
-      void setMode("teammates");
-      push("/devices");
-    } else {
-      onModeChange?.("teammates");
-    }
-    return;
-  }
+/**
+ * Collections the home scope menus offer. Teammates are the section at the top of the home, as on
+ * desktop, so their collection is never a scope to switch to.
+ */
+export function homeScopeCollections<T extends { id: string }>(collections: readonly T[], teammateCollectionId: string): T[] {
+  return collections.filter((collection) => collection.id !== teammateCollectionId);
+}
+
+export function openHomeRemoteCollection(
+  collection: RemoteHomeCollection,
+  push: (href: { pathname: string; params: Record<string, string> }) => void,
+) {
   push({
     pathname: "/resources/[collectionId]",
     params: {
@@ -159,6 +145,7 @@ export interface HomeDisplayMenuState {
   projectOrder: HomeProjectOrder;
   statusFilter: HomeStatusFilter;
   projectFilter: HomeProjectFilter;
+  teammateFilter?: HomeTeammateFilter;
   vendorFilter: HomeVendorFilter;
   lastActivityFilter: HomeLastActivityFilter;
   viewMode: HomeListViewMode;
@@ -225,6 +212,7 @@ export function buildHomeDisplayPullDownActions(input: {
   state: HomeDisplayMenuState;
   /** 项目筛选的候选:完整项目集,不受最近活跃等筛选收窄。 */
   projects: readonly HomeDisplayMenuProject[];
+  teammates?: readonly { key: string; title: string; subtitle?: string }[];
   dialogueCount: number;
   t: Translate;
 }): NativePullDownAction[] {
@@ -235,6 +223,7 @@ export function buildHomeDisplayPullDownActions(input: {
   ].filter(Boolean).join(t(`${MENU}.summarySeparator`)) || t(`${MENU}.summaryNone`);
   const filterCount = activeContentFilterCount({
     projects: state.projectFilter,
+    teammates: state.teammateFilter,
     vendor: state.vendorFilter,
     lastActivity: state.lastActivityFilter,
   });
@@ -293,6 +282,18 @@ export function buildHomeDisplayPullDownActions(input: {
         ]),
         section("filter.projects.list", projectRows),
       ]),
+      submenu("filter.teammates", t(`${MENU}.filterTeammatesHeading`),
+        !state.teammateFilter || state.teammateFilter === "all" ? t(`${MENU}.filterAnySource`)
+          : state.teammateFilter === "none" ? t(`${MENU}.filterHideAllTeammates`)
+          : t(`${MENU}.filterSelectedTeammates`, { count: state.teammateFilter.length }), "person.2", [
+        checkable("filter.teammates.all", t(`${MENU}.filterAnySource`), !state.teammateFilter || state.teammateFilter === "all"),
+        checkable("filter.teammates.none", t(`${MENU}.filterHideAllTeammates`), state.teammateFilter === "none"),
+        ...(input.teammates ?? []).map(teammate => ({
+          ...checkable(`filter.teammate:${teammate.key}`, teammate.title,
+            Array.isArray(state.teammateFilter) && state.teammateFilter.includes(teammate.key), true),
+          ...(teammate.subtitle ? { subtitle: teammate.subtitle } : {}),
+        })),
+      ]),
       submenu("filter.vendor", t(`${MENU}.filterVendorHeading`), t(`${MENU}.filterVendor.${state.vendorFilter}`), "cpu",
         HOME_VENDOR_FILTERS.map((vendor) =>
           checkable(`filter.vendor.${vendor}`, t(`${MENU}.filterVendor.${vendor}`), state.vendorFilter === vendor))),
@@ -313,9 +314,14 @@ export function buildHomeDisplayPullDownActions(input: {
   return [
     section("organize", organize),
     section("narrow", [
-      submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
-        STATUS_OPTIONS.map((status) =>
-          checkable(`status.${status}`, t(`${MENU}.status.${status}`), state.statusFilter === status))),
+      {
+        ...submenu("status", t(`${MENU}.statusHeading`), t(`${MENU}.status.${state.statusFilter}`), "checklist",
+          STATUS_OPTIONS.map((status) => ({
+            ...checkable(`status.${status}`, t(`${MENU}.status.${status}`), state.statusFilter === status),
+            filterReminder: state.statusFilter === "archived" && status === "archived",
+          }))),
+        filterReminder: state.statusFilter === "archived",
+      },
       filter,
     ]),
     section("appearance", [
@@ -337,7 +343,13 @@ export function homeDisplayActionPatch(
 ): HomeDisplayPatch | null {
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
-  if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", vendorFilter: "all" };
+  if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };
+  if (id === "filter.teammates.none") return { teammateFilter: "none" };
+  if (id === "filter.teammates.all") return { teammateFilter: "all" };
+  if (id.startsWith("filter.teammate:")) {
+    const key = id.slice("filter.teammate:".length);
+    return key ? { teammateFilter: toggleProjectFilter(state.teammateFilter === "none" ? "all" : state.teammateFilter ?? "all", key) } : null;
+  }
   if (id === "filter.projects.all") return { projectFilter: "all" };
   if (id.startsWith(PROJECT_FILTER_PREFIX)) {
     const key = id.slice(PROJECT_FILTER_PREFIX.length);

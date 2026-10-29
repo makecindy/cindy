@@ -198,6 +198,8 @@ export interface RoutableMaker {
   // —— 完整对等:会话级功能(fork / rewind / context-usage / extra-dirs / close / orca)——
   // 本地分支返回完整 maker 天然带这些;远程分支在 remoteMakerApi 里逐一隧道映射。
   fork: FullMaker['fork'];
+  createSideChat: FullMaker['createSideChat'];
+  listSideChats: FullMaker['listSideChats'];
   forkStripEncrypted: FullMaker['forkStripEncrypted'];
   rewindPreview: FullMaker['rewindPreview'];
   rewindCommit: FullMaker['rewindCommit'];
@@ -230,6 +232,7 @@ export interface RoutableMaker {
     | 'updateContent'
     | 'clearError'
     | 'cancelUsageLimitWait'
+    | 'retryImageDelivery'
     | 'retryLastError'
     | 'clearSession'
     | 'persistTurnErrorDeferred'
@@ -309,6 +312,8 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     ) as FullMaker['getPendingInteractions'],
     deleteMessage: t('maker:message:delete') as FullMaker['deleteMessage'],
     fork: t('maker:fork') as FullMaker['fork'],
+    createSideChat: t('maker:side-chat:v1') as FullMaker['createSideChat'],
+    listSideChats: t('maker:side-chat:list:v1') as FullMaker['listSideChats'],
     forkStripEncrypted: t('maker:fork-strip-encrypted') as FullMaker['forkStripEncrypted'],
     rewindPreview: t('maker:rewind:preview') as FullMaker['rewindPreview'],
     rewindCommit: t('maker:rewind:commit') as FullMaker['rewindCommit'],
@@ -345,6 +350,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       updateContent: t('maker:input:update-content') as FullMaker['input']['updateContent'],
       clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
       cancelUsageLimitWait: t('maker:input:cancel-usage-limit-wait') as FullMaker['input']['cancelUsageLimitWait'],
+      retryImageDelivery: t('maker:images:retry') as FullMaker['input']['retryImageDelivery'],
       retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
       clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
       // device-link:auth error 重试失败/放弃时在被控端落库,经隧道路由到被控端 main。
@@ -367,10 +373,12 @@ export function agentCapabilitiesForDevice(
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;
+  supportsOrcaWorkerUpdate?: boolean;
 }> {
   return invokeRemote(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<{
     supportsOrcaWorkerPermissionMode?: boolean;
     supportsDeferredOrcaUiAssignment?: boolean;
+    supportsOrcaWorkerUpdate?: boolean;
   }>;
 }
 
@@ -382,6 +390,16 @@ export function agentCapabilitiesForDevice(
 export function makerApiFor(sessionId: string): RoutableMaker {
   const deviceId = getSessionDeviceId(sessionId);
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
+/**
+ * 输入框开始打字时请任务所在电脑提前启动 Agent。尽力而为：旧被控端没有该 channel、
+ * 断线或拒绝都只意味着下一次发送照常冷启动，调用方不需要处理结果。
+ */
+export function prewarmSessionFor(sessionId: string, createOpts: unknown): Promise<unknown> {
+  const deviceId = getSessionDeviceId(sessionId);
+  if (deviceId) return invokeRemote(deviceId, 'maker:session:prewarm', [sessionId, createOpts]);
+  return window.electronAPI.maker.prewarmSession?.(sessionId, createOpts) ?? Promise.resolve(undefined);
 }
 
 /**
@@ -984,6 +1002,8 @@ export interface RoutableOrcaWorkflows {
   switchFocus: FullOrca['switchFocus'];
   idleWorker: FullOrca['idleWorker'];
   archiveWorker: FullOrca['archiveWorker'];
+  /** 修改 worker 的展示角色名与 team 内唯一标识。 */
+  updateWorker: FullOrca['updateWorker'];
   endTeam: FullOrca['endTeam'];
   getCollaborationSettings: FullOrca['getCollaborationSettings'];
   listExecutionDevices: FullOrca['listExecutionDevices'];
@@ -1028,6 +1048,12 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
       invokeRemote(deviceId, 'maker:worker:archive', [
         { leadSessionId, workerId },
       ])) as FullOrca['archiveWorker'],
+    updateWorker: ((input: {
+      leadSessionId: string;
+      workerId: string;
+      role?: string;
+      label?: string;
+    }) => invokeRemote(deviceId, 'maker:worker:update', [input])) as FullOrca['updateWorker'],
     endTeam: t('maker:team:end') as FullOrca['endTeam'],
     getCollaborationSettings: t(
       'maker:collaboration-settings:get',

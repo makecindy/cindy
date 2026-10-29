@@ -69,7 +69,7 @@ import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
-import { podInstallBounded } from './sim-pod-install.mjs';
+import { podInstallBounded, inspectIOSBuildTools, COCOAPODS_SETUP_HINT } from './sim-pod-install.mjs';
 import { computeSimulatorNativeFingerprint, inspectSimulatorNativeIdentity } from './lib/sim-native-identity.mjs';
 import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
@@ -78,14 +78,14 @@ import {
   probeMetroOwnership,
 } from './sim-metro.mjs';
 
-import { readSimEnvironment } from './lib/sim-environment.mjs';
-import { extractSimWhoamiUdidArgs, bootedSimulatorLinesForTarget, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity } from './lib/sim-whoami.mjs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const iosDir = join(mobileDir, 'ios');
 const buildDir = join(iosDir, 'build');
-const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
@@ -150,11 +150,31 @@ if (process.platform === 'win32') {
   process.exit(process.exitCode ?? 0);
 }
 
-// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。
+// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。默认先找 Cindy 模拟器,
+// 没有再找系统模拟器;CINDY_MOBILE_SIMULATOR 可固定其一。
+let deviceSet = null;
 if (!buildOnly) {
-  const booted = capture('xcrun', ['simctl', 'list', 'devices', 'booted']);
-  if (bootedSimulatorLinesForTarget(booted.split('\n'), simulatorUdid).length !== 1) {
+  let selected;
+  try {
+    selected = selectBootedSimulator(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices', 'booted'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
+    process.exit(1);
+  }
+  if (selected.targetBooted.length !== 1) {
     console.error('✗ 需要唯一的已启动模拟器；多设备时传 --udid，指定设备必须已启动。');
+    process.exit(1);
+  }
+  deviceSet = selected.deviceSet;
+  console.log(`==> 目标模拟器(${deviceSet.name}):${selected.targetBooted[0].trim()}`);
+} else if (simulatorUdid) {
+  // 仅构建不要求设备已启动,但 xcodebuild 的精确目标只对系统目录有效:先确认 UDID 属于哪个目录。
+  try {
+    deviceSet = findSimulatorDeviceSet(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
     process.exit(1);
   }
 }
@@ -171,7 +191,8 @@ async function ensureMetroOwnershipBeforeLaunch(packageName) {
   });
   if (verdict.healthy) return true;
   console.error(`Native package installed (${packageName}); launch blocked: ${verdict.code}.`);
-  console.error(`Run pnpm mobile:sim:start -- --region=${region}, then mobile:sim:whoami with the same region.`);
+  const mock = readSimEnvironment(mobileDir, buildEnv).uiMock ? ' --mock' : '';
+  console.error(`Run pnpm mobile:sim:start -- --region=${region}${mock}, then mobile:sim:whoami with the same options.`);
   process.exitCode = 1;
   return false;
 }
@@ -240,7 +261,10 @@ async function rebuildAndroidSimulator() {
 
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
 const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+console.log('› 解析目标 App 身份…');
 const expectedBundleId = resolveMobileSimulatorBundleId(region);
+console.log(`==> Worktree: ${worktreeRoot}; region=${region}; bundleId=${expectedBundleId}; arch=${simArch}`);
+console.log('› 计算原生兼容指纹（最长 120s）…');
 let expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
 
 function assertNativeIdentity(appPath) {
@@ -254,7 +278,7 @@ function assertNativeIdentity(appPath) {
 // 覆盖掉——否则逃生舱跑完一次,坏条目还在,下次普通 rebuild 又命中它。
 let fingerprintHash = null;
 try {
-  console.log('› 计算 native fingerprint(产物缓存键)…');
+  console.log('› 计算 native fingerprint(产物缓存键，最长 120s)…');
   fingerprintHash = computeFingerprintReport(mobileDir, {
     platforms: ['ios'],
     run: runFingerprintWithCurrentEnv,
@@ -265,17 +289,28 @@ try {
 const cacheDir = fingerprintHash ? join(appCacheRoot, `ios-${simArch}-${fingerprintHash}`) : null;
 
 let app = null;
+let cache = { code: forceBuild ? 'cache-bypassed' : 'cache-fingerprint-unavailable', app: null };
 if (cacheDir && !forceBuild) {
-  const cached = readAppCacheEntry(cacheDir, simArch);
-  if (cached && inspectSimulatorNativeIdentity({ appPath: cached, expectedFingerprint: expectedNativeFingerprint }).healthy) {
+  cache = readAppCacheEntry(cacheDir, simArch);
+  if (cache.app) {
     console.log(`✓ fingerprint 命中产物缓存(${fingerprintHash.slice(0, 12)}…),跳过 prebuild / pod / xcodebuild。`);
     console.log('  (改了原生层但怀疑缓存不对时,用 --force-build 强制重编。)');
     utimesSync(cacheDir, new Date(), new Date());
-    app = cached;
+    app = cache.app;
   }
 }
+console.log(`SIM_CACHE=${JSON.stringify({ ...cache, directory: cacheDir, root: appCacheRoot, fingerprint: fingerprintHash })}`);
 
 if (!app) {
+  console.log(`› 缓存不可复用（${cache.code}），检查 iOS 构建工具链…`);
+  const preflight = inspectIOSBuildTools({ env: devProcessEnv });
+  console.log(`SIM_BUILD_PREFLIGHT=${JSON.stringify(preflight)}`);
+  if (!preflight.healthy) {
+    console.error(`✗ IOS_BUILD_TOOLS_UNAVAILABLE: ${preflight.checks.filter((check) => !check.healthy).map((check) => `${check.tool}=${check.code}`).join(', ')}；尚未执行 prebuild / pod install / xcodebuild。`);
+    if (preflight.checks.some((check) => check.tool === 'pod' && !check.healthy)) console.error(COCOAPODS_SETUP_HINT);
+    console.error('先按 docs/dev-rules/environment-setup.md 修复上述工具，再用相同 region / UDID / --mock 参数重试；不要改用其他 App 身份。');
+    process.exit(1);
+  }
   // 总是先 prebuild,再 xcodebuild。本脚本是 native 变更的验证路径 —— 若只在 ios/ 缺失时
   // prebuild,那么"改了 app.json / Expo plugins / Pods 但 ios/ 已存在"时会构建到 stale 的
   // native 工程还报成功。prebuild 不带 --clean 是增量的,无 native 改动时很快。
@@ -303,10 +338,12 @@ if (!app) {
   }
   const scheme = workspace.replace(/\.xcworkspace$/, '');
 
-  const simulatorDestination = simulatorUdid
+  // xcodebuild 只认得系统设备目录;其它设备目录(如 Cindy 模拟器)用通用目标编译,再按目录安装。
+  const exactDestination = simulatorUdid && !deviceSet?.path;
+  const simulatorDestination = exactDestination
     ? `platform=iOS Simulator,id=${simulatorUdid}`
     : 'generic/platform=iOS Simulator';
-  console.log(`› 编译 ${scheme}(${simulatorUdid ? 'exact' : 'generic'} iOS Simulator destination)…`);
+  console.log(`› 编译 ${scheme}(${exactDestination ? 'exact' : 'generic'} iOS Simulator destination)…`);
   run('xcodebuild', [
     '-workspace', join(iosDir, workspace),
     '-scheme', scheme,
@@ -348,18 +385,18 @@ if (clean) {
   // uninstall 容错:app 未安装时 simctl 返回非零会让 execFileSync 抛错、后续 install 不执行
   // (首次干净安装就是这个场景)。卸载失败基本只意味着"本来就没装",忽略即可。
   try {
-    run('xcrun', ['simctl', 'uninstall', simulatorUdid ?? 'booted', bundleId]);
+    run('xcrun', simctlArgs(deviceSet, ['uninstall', simulatorUdid ?? 'booted', bundleId]));
   } catch {
     console.log('  (没有可卸载的旧包,跳过)');
   }
 }
 console.log('› 安装到 booted 模拟器…');
-run('xcrun', ['simctl', 'install', simulatorUdid ?? 'booted', app]);
-assertNativeIdentity(capture('xcrun', ['simctl', 'get_app_container', simulatorUdid ?? 'booted', bundleId, 'app']).trim());
+run('xcrun', simctlArgs(deviceSet, ['install', simulatorUdid ?? 'booted', app]));
+assertNativeIdentity(capture('xcrun', simctlArgs(deviceSet, ['get_app_container', simulatorUdid ?? 'booted', bundleId, 'app'])).trim());
 
 if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1);
 console.log('› 启动…');
-run('xcrun', ['simctl', 'launch', simulatorUdid ?? 'booted', bundleId]);
+run('xcrun', simctlArgs(deviceSet, ['launch', simulatorUdid ?? 'booted', bundleId]));
 console.log(`\n✓ 完成。${bundleId} 已安装并发送启动请求；尚未验证页面显示。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
 
 /**
@@ -375,31 +412,37 @@ function runFingerprintWithCurrentEnv({ binPath, projectDir, platform }) {
     encoding: 'utf8',
     // 输出含全部 sources(>1MB),必须调大 maxBuffer(与 ci-fingerprint 同款)。
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: 'SIGKILL',
   });
   if (result.status !== 0) {
-    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.error?.code ?? `exit ${result.status}`}`);
   }
   return parseFingerprintCliOutput(result.stdout);
 }
 
 /** 读产物缓存条目;结构不完整(半份缓存)时视为未命中。 */
 function readAppCacheEntry(dir, expectedArch) {
+  const miss = (code) => ({ code, app: null });
+  if (!existsSync(join(dir, 'meta.json'))) return miss('cache-entry-missing');
   try {
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
-    if (typeof meta.scheme !== 'string' || !meta.scheme) return null;
+    if (typeof meta.scheme !== 'string' || !meta.scheme) return miss('cache-metadata-invalid');
     const cachedApp = join(dir, `${meta.scheme}.app`);
-    if (!existsSync(cachedApp)) return null;
-    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return null;
+    if (!existsSync(cachedApp)) return miss('cache-app-missing');
+    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return miss('cache-bundle-mismatch');
     const architectures = readAppArchitectures(cachedApp);
     if (!architectures.includes(expectedArch)) {
       console.warn(
         `  缓存产物架构不匹配(实际=${architectures.join(',') || '未知'},当前 Simulator 需要=${expectedArch}),忽略并重新构建。`,
       );
-      return null;
+      return miss('cache-architecture-mismatch');
     }
-    return cachedApp;
+    const native = inspectSimulatorNativeIdentity({ appPath: cachedApp, expectedFingerprint: expectedNativeFingerprint });
+    if (!native.healthy) return miss(`cache-${native.code}`);
+    return { code: 'cache-hit', app: cachedApp };
   } catch {
-    return null;
+    return miss('cache-read-failed');
   }
 }
 

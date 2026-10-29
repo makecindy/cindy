@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   emitRefresh: vi.fn(),
   reportSessionNavigation: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -51,6 +52,7 @@ vi.mock('@/features/cc-agent/embeddedSessionNavigation', () => ({
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn() }),
 }));
+vi.mock('@/lib/toast', () => ({ toast: { error: mocks.toastError } }));
 
 import { useForkAtMessage } from '../useForkAtMessage';
 
@@ -84,5 +86,15 @@ describe('useForkAtMessage introduction dialog', () => {
     expect(mocks.emitRefresh).toHaveBeenCalledTimes(1);
     expect(mocks.reportSessionNavigation).toHaveBeenCalledWith('new-session', 'new-session');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new-session');
+  });
+  it('explains an outdated provider host without navigating to an empty task', async () => {
+    mocks.confirm.mockResolvedValue(true);
+    mocks.forkAtMessage.mockRejectedValue(new Error('[REMOTE_AGENT_PEER_TOO_OLD] update the host'));
+    const { result } = renderHook(() => useForkAtMessage({ sessionId: 'shared-task', messageClientId: 'reply' }));
+    await act(async () => {
+      await expect(result.current()).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    });
+    expect(mocks.toastError).toHaveBeenCalledWith('chat.remoteError.REMOTE_AGENT_PEER_TOO_OLD');
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 });

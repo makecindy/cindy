@@ -17,7 +17,7 @@
  * DOM 里排在 drag 区之前的浮层／兄弟节点，其 no-drag 会被后来的 drag 盖回
  * （ContentHeader.tsx「浮层 no-drag 不被计入」、FileTabsBar.tsx 的实机结论
  * 即此情形）。排在 drag 区之后的浮层（如 App.tsx 路由之后的 FindInPageBar、
- * portal 到 body 的 GhostPanelBubbleLayer）自身标 no-drag 可以挖洞。
+ * portal 到 body 的查找条）自身标 no-drag 可以挖洞。
  * 交互元素漏标 no-drag 会变成"点了就拖窗口"；
  * 反之 drag 条叠在交互元素上同样会吞掉点击 —— InvisibleWindowDragStrip
  * 只能用在顶部确实无交互元素的页面。

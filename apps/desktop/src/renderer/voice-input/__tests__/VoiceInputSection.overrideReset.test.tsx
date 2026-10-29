@@ -90,8 +90,6 @@ it('keeps custom ASR URL validation inline and associated through repeated edits
 });
 
 const cases = [
-  { field: 'composerLongPressEnabled', override: 'composerLongPressEnabledOverride',
-    label: 'settings.voiceInput.composerLongPress.ariaLabel' },
   { field: 'dictionarySyncEnabled', override: 'dictionarySyncEnabledOverride',
     label: 'settings.voiceInput.refinement.dictionary.deviceSync.ariaLabel' },
 ] as const;
@@ -103,7 +101,8 @@ const cases = [
  * clicked this component, so removing its controls or disconnecting their props escaped coverage.
  * Minimal input: one explicit override opposite to its default (including false for dictionary sync).
  * Unit/jsdom: a separate file is needed because recordingGate is a node-only source guard; no
- * VoiceInputSection component harness exists to extend. Both controls share this single fixture.
+ * VoiceInputSection component harness exists to extend. The 2026-10-24 product decision hides
+ * long-press dictation even with an explicit override; dictionary sync keeps its restore control.
  * Measured alone: 3.25s wall / 2.19s Vitest (1.11s collect, 550ms jsdom, 281ms tests).
  */
 describe('VoiceInputSection restore defaults', () => {
@@ -130,9 +129,8 @@ describe('VoiceInputSection restore defaults', () => {
     expect(row().queryByText('settings.defaults.customizedBadge')).toBeNull();
     expect(toast.success).toHaveBeenCalledExactlyOnceWith('settings.defaults.restored');
 
-    const other = cases.find(candidate => candidate.field !== field)!;
-    const otherToggle = screen.getByRole('switch', { name: other.label });
-    expect(otherToggle.getAttribute('aria-checked')).toBe(String(!defaults[other.field]));
-    expect(within(otherToggle.parentElement!.parentElement!).getByRole('button', { name: restoreLabel })).toBeTruthy();
+    // Long-press dictation is now a hidden override, even when explicitly configured.
+    expect(screen.queryByRole('switch', { name: 'settings.voiceInput.composerLongPress.ariaLabel' })).toBeNull();
+    expect(settings.composerLongPressEnabledOverride).toBe(false);
   });
 });

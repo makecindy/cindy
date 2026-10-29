@@ -338,6 +338,136 @@ describe('resolveNewMakerDefaultTuple', () => {
       .toMatchObject({ providerId: 'xd', model: 'auto' });
   });
 
+  describe('服务端标记的 Cindy Auto（模型组 Auto）', () => {
+    function pool(
+      id: string,
+      models: CatalogModel[],
+      source: ProviderView['source'] = 'organization',
+    ) {
+      return { ...provider({ id, access: 'managed', models: { pi: models } }), source };
+    }
+    const groupAuto = (newSessionDefault?: CatalogModel['newSessionDefault']) =>
+      model('auto/group-1', 'high', newSessionDefault);
+
+    it('目标是平台模型：跟随 Cindy AI 下被标记的组 Auto，不再用预设 auto', () => {
+      const gateway = provider({
+        id: 'xd',
+        access: 'managed',
+        models: { pi: [model('auto'), groupAuto(['pi'])] },
+      });
+      expect(resolve([gateway])).toEqual({
+        vendor: 'pi',
+        providerId: 'xd',
+        model: 'auto/group-1',
+        effort: 'high',
+      });
+    });
+
+    it('目标是号池模型：Auto 在企业号池供应商下，用号池来源', () => {
+      const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [model('auto')] } });
+      const byok = pool('org-pool', [model('pool-model'), groupAuto(['pi'])]);
+      for (const sources of [
+        [gateway, byok],
+        [byok, gateway],
+      ]) {
+        expect(resolve(sources)).toEqual({
+          vendor: 'pi',
+          providerId: 'org-pool',
+          model: 'auto/group-1',
+          effort: 'high',
+        });
+      }
+      // 没有订阅也要把默认切到 Pi，这条规则不能因为模型换了来源而失效。
+      expect(resolve([byok])).toMatchObject({ vendor: 'pi', providerId: 'org-pool' });
+    });
+
+    it('Cindy AI 与号池短暂各标一个默认时以 Cindy AI 为准，与来源列表顺序无关', () => {
+      const gateway = provider({
+        id: 'xd',
+        access: 'managed',
+        models: { pi: [model('auto', 'high', ['pi'])] },
+      });
+      const byok = pool('org-pool', [groupAuto(['pi'])]);
+      for (const sources of [
+        [gateway, byok],
+        [byok, gateway],
+      ]) {
+        expect(resolve(sources)).toMatchObject({ providerId: 'xd', model: 'auto' });
+      }
+    });
+
+    it('旧服务端没有标记时回退预设 auto；号池里没被标记的模型不当默认', () => {
+      const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [model('auto')] } });
+      const byok = pool('org-pool', [model('pool-model'), groupAuto()]);
+      expect(resolve([byok, gateway])).toMatchObject({ providerId: 'xd', model: 'auto' });
+      expect(resolve([byok])).toBeNull();
+    });
+
+    it('只认 Auto 系列的标记：个人目录里被标记的 GLM 不取代 Auto', () => {
+      const gateway = provider({
+        id: 'xd',
+        access: 'managed',
+        models: { pi: [model('z-ai/glm-5.3-flash', 'high', ['pi']), model('auto')] },
+      });
+      expect(resolve([gateway])).toMatchObject({ providerId: 'xd', model: 'auto' });
+    });
+
+    it('被隐藏、不是 Pi 标记或用户自己接的供应商里的 Auto 不算', () => {
+      const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [model('auto')] } });
+      const hidden = pool('org-pool', [{ ...groupAuto(['pi']), defaultEnabled: false }]);
+      const codexMarked = pool('org-pool', [groupAuto(['codex'])]);
+      const userOwned = pool('custom-litellm', [groupAuto(['pi'])], 'user');
+      for (const candidate of [hidden, codexMarked, userOwned]) {
+        expect(resolve([candidate, gateway])).toMatchObject({ providerId: 'xd', model: 'auto' });
+      }
+    });
+
+    it('订阅等内置非 Cindy AI 来源里被标记的 auto/... 不当组 Auto', () => {
+      const gateway = provider({ id: 'xd', access: 'managed', models: { pi: [model('auto')] } });
+      // 订阅来源（内置、非 Cindy AI）里恰好有个被标记的 auto/...：不参与 Auto 规则。
+      const openai = provider({
+        id: 'openai',
+        access: 'subscription',
+        models: { pi: [groupAuto(['pi'])] },
+      });
+      expect(resolve([openai, gateway], new Set(['pi']))).toMatchObject({
+        providerId: 'xd',
+        model: 'auto',
+      });
+      expect(resolve([openai], new Set(['pi']))).toBeNull();
+    });
+
+    it('Auto 从两份目录都消失：不编造默认，交给后续规则或既有空态', () => {
+      const gateway = provider({
+        id: 'xd',
+        access: 'managed',
+        models: { pi: [model('z-ai/glm-5.3-flash', 'high', ['pi'])] },
+      });
+      const byok = pool('org-pool', [model('pool-model')]);
+      expect(resolve([gateway, byok])).toBeNull();
+      const xai = provider({
+        id: 'xai',
+        access: 'subscription',
+        models: { pi: [model('grok-4.6')] },
+      });
+      expect(resolve([gateway, byok, xai])).toMatchObject({ providerId: 'xai', model: 'grok-4.6' });
+    });
+
+    it('个人订阅仍然优先', () => {
+      const openai = provider({
+        id: 'openai',
+        access: 'subscription',
+        models: { codex: [model('gpt-6.1-sol')] },
+      });
+      const byok = pool('org-pool', [groupAuto(['pi'])]);
+      expect(resolve([byok, openai])).toMatchObject({ providerId: 'openai', vendor: 'codex' });
+      expect(resolve([byok, openai], new Set(['pi']))).toMatchObject({
+        providerId: 'org-pool',
+        model: 'auto/group-1',
+      });
+    });
+  });
+
   it('recognizes earlier automatic tuples without declaring them current defaults', () => {
     for (const modelId of ['gpt-6-sol', 'chatgpt/gpt-6-sol']) {
       expect(isKnownProductDefaultTupleIdentity({ vendor: 'codex', providerId: 'openai', model: modelId })).toBe(true);

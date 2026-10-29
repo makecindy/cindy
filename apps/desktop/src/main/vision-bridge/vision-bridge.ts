@@ -158,18 +158,35 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
     cache.set(key, { value, order: order++ });
   }
 
+  /**
+   * 每个 model 最近一次记录的判定结果。isTargetModel 在每轮请求都会被调用（日志实测
+   * ~4k/天，几乎全是重复的 disabled），只在某 model 的判定结果变化时才写 debug 日志。
+   */
+  const lastTargetDecisionByModel = new Map<string, string>();
+  const TARGET_DECISION_LOG_LIMIT = 128;
+  function logTargetDecision(model: string, decision: string, ctx: Record<string, unknown>): void {
+    if (lastTargetDecisionByModel.get(model) === decision) return;
+    lastTargetDecisionByModel.delete(model);
+    if (lastTargetDecisionByModel.size >= TARGET_DECISION_LOG_LIMIT) {
+      const oldest = lastTargetDecisionByModel.keys().next().value;
+      if (oldest !== undefined) lastTargetDecisionByModel.delete(oldest);
+    }
+    lastTargetDecisionByModel.set(model, decision);
+    logger?.debug?.(`vision bridge: target check -> ${decision}`, { model, ...ctx });
+  }
+
   /** 判定某 model 是否启用视觉桥（总开关 + 目标模型命中）。层 B 与层 A 共用。 */
   function isTargetModel(model: string, sessionId?: string): boolean {
     const settings = readVisionBridgeSettings();
     if (!settings.enabled) {
-      logger?.debug?.('vision bridge: target check -> disabled', { model });
+      logTargetDecision(model, 'disabled', {});
       return false;
     }
     // 显式命中：运行时 model 可能带 [1m]/codex//bare 变体，targetModels 存的是 catalog id；
     // 两边都归一化后再比对，避免勾选命中失败（如 deepseek/deepseek-v4-flash vs ...[1m]）。
     const normalizedModel = normalizeVisionModelId(model);
     if (settings.targetModels.some((id) => normalizeVisionModelId(id) === normalizedModel)) {
-      logger?.debug?.('vision bridge: target check -> explicit hit', { model, normalizedModel, targetModels: settings.targetModels });
+      logTargetDecision(model, 'explicit hit', { normalizedModel, targetModels: settings.targetModels });
       return true;
     }
     // 默认合并：用户未显式自定义 targetModels 时，已知无视觉模型（deepseek 等）默认
@@ -181,10 +198,10 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
       (entry?.modalities ? entry.modalities.input.includes('image') : undefined);
     const knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
     if (!customized && knownNoVision) {
-      logger?.debug?.('vision bridge: target check -> default no-vision hit', { model, normalizedModel });
+      logTargetDecision(model, 'default no-vision hit', { normalizedModel });
       return true;
     }
-    logger?.debug?.('vision bridge: target check -> miss', { model, normalizedModel, customized, knownNoVision });
+    logTargetDecision(model, 'miss', { normalizedModel, customized, knownNoVision });
     return false;
   }
 
@@ -505,6 +522,7 @@ export function createVisionBridge(deps: VisionBridgeDeps): {
       disposed = true;
       cache.clear();
       inFlight.clear();
+      lastTargetDecisionByModel.clear();
     },
   };
 }

@@ -1,4 +1,7 @@
-import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
+import type {
+  BrowserControlResult,
+  BrowserControlRuntime,
+} from '@cindy/browser-control-runtime';
 import type { AgentKind } from '@cindy/maker-core';
 
 import type { Recipe, SiteGuide } from './browser/recipe-loader.js';
@@ -103,6 +106,8 @@ export interface FeishuBotSendMessageResult {
 export interface FeishuBotHostSession {
   sessionId?: string;
   sessionInstanceId?: string;
+  /** Trusted host session metadata; preserves an explicit Feishu reply target. */
+  vendorOptions?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -203,7 +208,7 @@ export interface FeishuBotMcpHostDeps {
    * Returns null when no owner has been bound yet — user must DM the bot once
    * first (same precondition as scheduler feishu-completion notifications).
    */
-  getOwnerOpenId(session?: FeishuBotHostSession): string | null;
+  getOwnerOpenId(session?: FeishuBotHostSession): string | null | Promise<string | null>;
   logger?: LiziMcpLogger;
 }
 
@@ -275,6 +280,7 @@ export interface SlackToolBridgeLike {
  * (大结果落盘的钳制根)。
  */
 export interface SlackHookMcpDeps {
+  compressInlineImage?: CompressInlineImageFn;
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
   getSessionContext?: () => LiziMcpSessionContext;
   getBridge(): SlackToolBridgeLike | null;
@@ -322,6 +328,11 @@ export interface SchedulerMcpDeps {
    * (同 MemoryMcpDeps.searchSessions 模式)。
    */
   hookScript?: SchedulerHookScriptService;
+  /**
+   * 本机定时任务可选的 Agent 运行位置与各处的模型(与协同 Worker 的 list_available_models
+   * 同一份 host 实现)。agentDeviceId:null = 本机。缺省 = schedule_list_models 不注册。
+   */
+  listModels?: import('./xdt-helper/list_available_models.js').ListAvailableModelsDeps['listAvailableModels'];
   logger?: LiziMcpLogger;
 }
 
@@ -333,6 +344,8 @@ export interface SchedulerHookScriptService {
    * meta.workDir 为准。未注入时回落 schedule.workingDir 旧行为。
    */
   resolveSessionWorkDir?(sessionId: string): Promise<string | undefined>;
+  /** Bound task's current Agent location; remote-only routes cannot generate local hook scripts. */
+  isSessionAgentOnOtherDevice?(sessionId: string): Promise<boolean>;
   /**
    * 把受支持的单脚本相对命令固化为绝对路径。任意 shell 命令保持原样；相对脚本
    * 缺少原 cwd 或文件不存在时必须报错，避免改绑后以 fail-open 静默绕过 hook。
@@ -629,15 +642,40 @@ export type ControlResult<T extends object = object, E extends string = never> =
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 
+export interface ResolvedBrowserScreenshot {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg';
+}
+
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
+  /** Local structural observations only; no URLs, scripts, selectors or input values. */
+  experienceStore?: import('./browser/experience.js').BrowserExperienceStore;
   getRuntime(): BrowserControlRuntime;
+  /** Resolve the actual host profile before validation, discovery and execution. */
+  resolveProfile?(profile?: string): string;
+  /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
+  getBackendScope?(): { lifecycle: object; backend: object };
+  /**
+   * Resolve a successful screenshot runtime result into verified image bytes.
+   * The host owns file-system access so this package never receives a generic
+   * arbitrary-path reader; inline-only hosts may validate and decode in memory.
+   */
+  resolveScreenshot?(
+    result: BrowserControlResult,
+  ): Promise<ResolvedBrowserScreenshot>;
+  /** Shrink the LLM-facing copy to the shared stream-safe byte budget. */
+  compressInlineImage?: CompressInlineImageFn;
   /** Switch the host-wide, persisted automation target; returns the actual mode. */
   setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */
   supportsSemanticQueries?(): boolean;
+  /** Trusted host-only credential IO; never exposed as a tool or page input. */
+  recipeSecrets?: { read(key: string): string | null; write(key: string, value: string): boolean };
+  /** Creates invocation-local file access using the host's existing upload policy. */
+  recipeFiles?: (sessionId?: string) => Promise<{ read(file: string): Buffer; open(file: string): number }>;
   /**
    * 代输入: true while the target tab still shows a page where the owner just
    * typed a secret. Page-state reads (evaluate, requests, response bodies,

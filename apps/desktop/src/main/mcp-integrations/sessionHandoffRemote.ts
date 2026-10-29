@@ -1,8 +1,11 @@
+import type { CapturedAgentRequest } from '../maker-ipc/forwardedRequest.js';
+import type { ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import {
   DeviceLinkError,
   DL_SESSION_HANDOFF_CHANNEL,
   type InvokeResultPayload,
 } from '@cindy/device-link';
+import { issueRemoteTaskActionReceipt, releaseRemoteTaskActionReceipt } from '../maker-ipc/remoteTaskActionReceipt.js';
 
 /**
  * send_to_session 的跨电脑发送端：把消息交给目标电脑，由它用本机 send_to_session 的
@@ -18,6 +21,8 @@ export interface RemoteSessionHandoffRequest {
   sessionId: string;
   message: string;
   sender: { sessionId: string; title?: string };
+  requestSource?: ForwardedRequestSource;
+  taskActionReceipt?: string;
 }
 
 export type RemoteSessionHandoffResult =
@@ -115,6 +120,7 @@ function transportFailure(
 }
 
 export function createRemoteSessionHandoff(deps: {
+  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   captureAccess(): () => void;
   invoke(
     deviceId: string,
@@ -139,30 +145,58 @@ export function createRemoteSessionHandoff(deps: {
     // 同一份账号记录覆盖整次调用：读来源之前记录，发送前与收到回执后各核对一次。
     let assertCurrent: () => void;
     let sender: RemoteSessionHandoffRequest['sender'];
+    let captured: CapturedAgentRequest | undefined;
     try {
       assertCurrent = deps.captureAccess();
       sender = await request.sender();
+      captured = await deps.captureRequest?.(sender.sessionId, request.message);
       assertCurrent();
     } catch {
       return notSent();
     }
     let response: InvokeResultPayload;
+    let taskActionReceipt: string | undefined;
+    const releaseReceipt = () => {
+      if (taskActionReceipt) releaseRemoteTaskActionReceipt(taskActionReceipt);
+    };
+    const finishTransportFailure = (code: string, message: string, responseReceived = false) => {
+      // The remote DB can overload while reading a receipt after its write.
+      const actual = code === 'IPC_ERROR' ? encodedIpcCode(message) : code;
+      const result = transportFailure(responseReceived && actual === 'BACKPRESSURE' ? 'UNKNOWN' : code, message);
+      if (result.errorCode !== 'DELIVERY_UNKNOWN') releaseReceipt();
+      return result;
+    };
     try {
+      // Old Hosts cannot recheck queued authority. Probe before sending any content.
+      const support = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL,
+        [{ action: 'task-action-capability', sessionId: target.sessionId }], { preSend: assertCurrent });
+      if (!support.ok || (support.result as { taskActionVersion?: unknown } | null)?.taskActionVersion !== 1)
+        return { ok: false, errorCode: 'REMOTE_UNSUPPORTED', message: 'The other computer must support task-action authorization before a message can be sent.' };
+      assertCurrent();
+      taskActionReceipt = issueRemoteTaskActionReceipt({ ...target, senderSessionId: sender.sessionId, message: captured?.message ?? request.message }, assertCurrent);
       const wire: RemoteSessionHandoffRequest = {
         sessionId: target.sessionId,
-        message: request.message,
+        message: captured?.message ?? request.message,
+        ...(captured?.autoReviewUserText.request?.userText != null
+          ? { requestSource: captured.autoReviewUserText.request } : {}),
         sender,
+        taskActionReceipt,
       };
       response = await deps.invoke(target.deviceId, DL_SESSION_HANDOFF_CHANNEL, [wire], {
         preSend: assertCurrent,
       });
+      // Queued/unknown deliveries retain their receipt; completed or proven-unsent
+      // attempts release it so offline retries cannot exhaust the live receipt cap.
+      if (response.ok && (response.result as { ok?: boolean; wakeKind?: string } | null)?.ok === true
+        && ['resumed', 'already-active'].includes((response.result as { wakeKind: string }).wakeKind)) releaseReceipt();
     } catch (error) {
       // inFlight = 请求帧已发出、只是回执丢了：对端可能已执行，不能报「没有发出」。
       if (error instanceof DeviceLinkError) {
-        return transportFailure(error.inFlight ? 'UNKNOWN' : error.code, error.message);
+        if (error.inFlight === false) releaseReceipt();
+        return finishTransportFailure(error.inFlight ? 'UNKNOWN' : error.code, error.message);
       }
       // 发送前的本机拒绝（另一实例持有连接、本机关闭了对该设备的控制等）以 [CODE] 前缀抛出。
-      return transportFailure('IPC_ERROR', error instanceof Error ? error.message : '');
+      return finishTransportFailure('IPC_ERROR', error instanceof Error ? error.message : '');
     }
     try {
       assertCurrent();
@@ -170,7 +204,7 @@ export function createRemoteSessionHandoff(deps: {
       // 请求已发出、账号随后切换：回执属于上一个账号，不读取也不返回其中的任务信息。
       return transportFailure('UNKNOWN', '');
     }
-    if (!response.ok) return transportFailure(response.error.code, response.error.message);
+    if (!response.ok) return finishTransportFailure(response.error.code, response.error.message, true);
     const result = response.result as Record<string, unknown> | null;
     if (!result || typeof result !== 'object' || Array.isArray(result))
       return transportFailure('UNKNOWN', '');
@@ -179,6 +213,7 @@ export function createRemoteSessionHandoff(deps: {
       if (typeof result.errorCode !== 'string' || !TARGET_REJECTIONS.has(result.errorCode)) {
         return transportFailure('UNKNOWN', '');
       }
+      releaseReceipt();
       return {
         ok: false,
         errorCode: result.errorCode as RemoteSessionHandoffErrorCode,

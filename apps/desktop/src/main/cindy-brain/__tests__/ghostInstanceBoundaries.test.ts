@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostCardActionDispatcher } from '../cardActionDispatch.js';
 import { GhostPreviewGate } from '../previewGate.js';
+import { prepareMailAttachmentUpload } from '../mailAttachmentUpload.js';
 import { ghostInstallApprovalToken, ghostWebviewEntryPaths, type InstalledGhost } from '../../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, installedGhostLogicalIdentity, installedGhostPhysicalKeys, installedGhostStoragePart,
   parsePluginStoragePart, pluginStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
@@ -16,6 +17,10 @@ const load = createGhostProductionCallbacks<{
   'getGhostCardActionDispatcher', 'resolveMobilePluginMedia', 'setGhostEnabledForUser'],
   initialize: 'let cardActionDispatcherSingleton = null;' });
 
+const loadUsageBinding = createGhostProductionCallbacks<{
+  bindPluginUsage: (ghost: InstalledGhost) => Promise<void>;
+}>({ functions: ['bindPluginUsage'] });
+
 function harness() {
   const root: InstalledGhost = { manifest: { schemaVersion: 3, id: 'helper', name: 'Root', version: '1.0.0',
     kind: 'chip', entry: 'main.js', panel: { html: 'panel.html' }, settingsHtml: 'settings.html', card: {} },
@@ -28,15 +33,18 @@ function harness() {
   const send = vi.fn(() => true);
   const setEnabled = vi.fn(async () => ({}));
   const stop = vi.fn();
+  const cancelModelPicker = vi.fn();
   const ghostCanRead = vi.fn(async () => true);
   const preview = new GhostPreviewGate({ ghostCanRead,
     getBlobInfo: async () => ({ mimeType: 'image/png', ext: '.png' }),
     blobUrl: (hash, ext) => 'cindy-media://blobs/' + hash + ext });
   const api = load({ availableGhosts: () => ghosts, findInstalledGhostByInstanceId, resolveInstalledGhost,
     installedGhostPhysicalKeys,
+    modelPickerSingleton: { cancel: cancelModelPicker },
     requireGhostAvailableForActiveSession: vi.fn(), getGhostManager: () => ({ setEnabled,
       findInstalledInstance: (key: string) => ghosts.find((ghost) => installedGhostStoragePart(ghost) === key) }),
     beginGhostMutation: () => vi.fn(), captureGhostMutationOwner: vi.fn(),
+    pluginDeviceSync: { beginMutation: vi.fn(() => vi.fn()) },
     getGhostNodeRuntimeBroker: () => ({ stop }), getGhostSubscriptionGateway: () => ({ dropGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
     getGhostLibrarySlot: () => ({ disposeGhost: vi.fn() }),
@@ -53,12 +61,15 @@ function harness() {
     sendToGhostLogic: send, getGhostAgentSlot: () => ({ issueUserActionToken: () => null, clearGhost: vi.fn() }),
     getGhostSessionActivityTracker: () => ({ begin: vi.fn() }), ghostOwnerScope: undefined,
     ghostInstallApprovalToken, log: { info: vi.fn(), warn: vi.fn() },
-    getGhostPreviewGate: () => preview,
+    getGhostPreviewGate: () => preview, prepareMailAttachmentUpload,
   });
-  return { ...api, root, organization, ghosts, send, setEnabled, stop, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
+  return { ...api, root, organization, ghosts, send, setEnabled, stop, cancelModelPicker, ghostCanRead, setStoredId: (id: string) => { storedId = id; } };
 }
 
 describe('production plugin instance boundaries', () => {
+  // The disable callback now cancels pending model picks. Inject that dependency
+  // and verify it uses the same physical installation gate as stopping runtime
+  // (plugin-security §3/§5). Existing tests previously omitted the picker fixture.
   it('rejects a confirmed close after source replacement before stopping any runtime', async () => {
     const fixture = harness();
     const confirmedApproval = ghostInstallApprovalToken(fixture.organization.approval);
@@ -66,20 +77,25 @@ describe('production plugin instance boundaries', () => {
     await expect(fixture.setGhostEnabledForUser('helper', false, confirmedApproval)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
     const currentApproval = ghostInstallApprovalToken(fixture.organization.approval);
     await fixture.setGhostEnabledForUser('helper', false, currentApproval);
-    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval);
+    expect(fixture.setEnabled).toHaveBeenCalledExactlyOnceWith('helper', false, currentApproval, undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
   });
   it('does not disable a logical twin after the original physical target disappears', async () => {
     const fixture = harness();
     await fixture.setGhostEnabledForUser('helper', false);
-    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval));
+    expect(fixture.setEnabled).toHaveBeenCalledWith('helper', false, ghostInstallApprovalToken(fixture.organization.approval), undefined);
+    expect(fixture.cancelModelPicker).toHaveBeenCalledExactlyOnceWith(installedGhostStoragePart(fixture.organization));
     fixture.setEnabled.mockClear();
     fixture.stop.mockClear();
+    fixture.cancelModelPicker.mockClear();
     fixture.ghosts.splice(0, 1);
     await expect(fixture.setGhostEnabledForUser('helper', false)).rejects.toThrow('NOT_FOUND');
     expect(fixture.setEnabled).not.toHaveBeenCalled();
     expect(fixture.stop).not.toHaveBeenCalled();
+    expect(fixture.cancelModelPicker).not.toHaveBeenCalled();
   });
   it.each(['root', 'in-place', 'organization'])('opens Mobile media with the protocol host and %s physical authority', async (layout) => {
     const fixture = harness();
@@ -115,4 +131,48 @@ describe('production plugin instance boundaries', () => {
     await expect(dispatcher.dispatch('root-card', 'continue')).resolves.toEqual({ ok: true });
     expect(fixture.send).toHaveBeenLastCalledWith('_root__helper', expect.any(Object));
   });
+});
+
+describe('usage binding instance revalidation', () => {
+  // Unit regression: a market refresh used to rescan every plugin once per
+  // binding. Read the committed target inside the lock and retain fallback for
+  // missing registry entries, without binding a same-name replacement instance.
+  it.each(['indexed', 'fallback', 'removed', 'owner-changed'] as const)(
+    'revalidates the committed installation with %s state', async (state) => {
+      const { organization, root } = harness();
+      const committed: InstalledGhost = {
+        ...organization, approval: { state: 'approved', revision: 'committed' },
+      };
+      let locked = false;
+      let scope = 'owner-a';
+      const list = vi.fn(() => state === 'removed' ? [root] : [committed, root]);
+      const findInstalledInstance = vi.fn((key: string) => {
+        expect(locked).toBe(true);
+        expect(key).toBe(installedGhostStoragePart(organization));
+        return state === 'indexed' ? committed : undefined;
+      });
+      const bind = vi.fn(async () => {});
+      const api = loadUsageBinding({
+        activeOwnerScopeKey: () => scope,
+        currentPluginUsageService: () => ({ bind }),
+        isAppSessionBoundaryPending: () => false,
+        getGhostManager: () => ({ list, findInstalledInstance }),
+        findInstalledGhostByInstanceId,
+        readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+        withGhostInstallLock: async (_id: string, callback: () => Promise<void>) => {
+          locked = true;
+          if (state === 'owner-changed') scope = 'owner-b';
+          await callback();
+        },
+        log: { warn: vi.fn() },
+      });
+      await api.bindPluginUsage(organization);
+      if (state === 'removed' || state === 'owner-changed') {
+        expect(bind).not.toHaveBeenCalled();
+      } else {
+        expect(bind).toHaveBeenCalledExactlyOnceWith(committed.approval, undefined);
+      }
+      expect(list).toHaveBeenCalledTimes(state === 'indexed' || state === 'owner-changed' ? 0 : 1);
+    },
+  );
 });

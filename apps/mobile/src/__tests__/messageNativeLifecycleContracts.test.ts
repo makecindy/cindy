@@ -61,9 +61,13 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     // 重挂仍属于旧父节点的原生 child；listperf 仍可显式做 on/off A/B。
     expect(source).toContain('devRecycleItems = false,');
     expect(source).toContain('const recycleItems = __DEV__ ? devRecycleItems === true : false;');
-    expect(perfHarness).toContain("const recycle = params.recycle !== '0';");
+    expect(perfHarness).toContain("const recycle = params.recycle === '1';");
     expect(listSource).toContain('recycleItems={recycleItems}');
     expect(listSource).toContain('getItemType={mobileMessageListItemType}');
+    // Confirmation must stay in the same LegendList pool as the optimistic row;
+    // changing its type would discard the measured cell just as the persisted
+    // message replaces the pending bubble.
+    expect(source).toContain("return item.type === 'pending_send' ? 'message' : item.type;");
     expect(source).toContain('useRecyclingState');
     // 可见性必须由 cell 自己订阅。把可见 key 集合放进 React Context 会在每个
     // onViewableItemsChanged 回调里广播给所有已挂载长消息，快滑时造成整窗重渲染、GC 和白屏。
@@ -251,7 +255,16 @@ it('resets identity-bound row state before a recycled cell displays another item
     expect(source).toContain('const [failedLocalUris, setFailedLocalUris] = usePreviewState<readonly string[]>([]);');
     expect(source.match(/const \[intrinsicSize, setIntrinsicSize\] = usePreviewState</g)).toHaveLength(2);
     expect(source.match(/usePreviewState=\{usePreviewState\}/g)).toHaveLength(2);
-    expect(source).not.toContain('usePreviewState={useState}');
+    // Rich answers also live outside LegendList. Their ordinary state is safe
+    // only behind a message/source identity key; keep the original list contract
+    // for every other preview. Regression: PR #6373 used unkeyed React state.
+    const richMediaStart = source.indexOf('function RichAnswerMedia(');
+    expect(richMediaStart).toBeGreaterThan(-1);
+    expect(source.slice(0, richMediaStart)).not.toContain('usePreviewState={useState}');
+    const richMediaSource = source.slice(richMediaStart);
+    expect(richMediaSource).toContain('const previewKey = JSON.stringify([origin?.deviceId, origin?.sessionId, body.richStateKey ?? body.markdownImageCacheKey, node.id, url]);');
+    expect(richMediaSource).toContain('<MediaPreview key={previewKey}');
+    expect(richMediaSource).toContain('usePreviewState={useState}');
     const groupSource = readFileSync(
       resolve(process.cwd(), 'src/session/BotGroupMessageAttachments.tsx'), 'utf8',
     );
@@ -290,10 +303,11 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     const markdownBodyEnd = source.indexOf('function renderInline', markdownBodyStart);
     const markdownBodySource = source.slice(markdownBodyStart, markdownBodyEnd);
 
-    // 完成态才可选中;正文与 secondaryBody 都走原生 selectable。
+    // 完成态才可选中；伙伴与普通任务的正文和 secondaryBody 都走原生 selectable。
     expect(source).toContain('const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;');
-    expect(bubbleSource).toContain('selectable={canSelectVisibleText}');
-    expect(bubbleSource).toContain('<MarkdownSelectableText selectable={canSelectVisibleText} style={styles.detailText}>');
+    expect(source).toContain('const bubbleTextSelectable = canSelectVisibleText;');
+    expect(bubbleSource).toContain('selectable={bubbleTextSelectable}');
+    expect(bubbleSource).toContain('<MarkdownSelectableText selectable={bubbleTextSelectable} style={styles.detailText}>');
 
     // iOS 部分选择:RN Text 底层是 UILabel 只能整块拷贝(facebook/react-native#13938),
     // 可选中块在 iOS 换用 react-native-uitextview(真 UITextView,系统选择手柄);
@@ -306,9 +320,10 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 
-    // 气泡是纯 View,不挂 Pressable/onLongPress(避免干扰横向 ScrollView 手势)。
+    // 气泡不抢占正文的原生选字或表格、代码块横向滚动手势。
     expect(bubbleSource).not.toContain('<Pressable');
     expect(bubbleSource).not.toContain('onLongPress');
+    expect(bubbleSource).not.toContain('<GestureDetector');
 
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
@@ -360,9 +375,11 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(source).not.toContain('scrollEnabled={!textSelectionActive}');
 
     // e2e 流程与新交互对齐:长按正文文字 → 系统选择菜单 → Copy。
+    // 精确匹配系统菜单项,避免代码块新增的 Copy Code 按钮抢先命中,让这条
+    // 原生选择回归重新退化成验证整块复制。
     expect(flowSource).toContain('id: "message.markdownBody"');
-    expect(flowSource).toContain('visible: "Copy"');
-    expect(flowSource).toContain('- tapOn: "Copy"');
+    expect(flowSource).toContain('text: "^Copy$"');
+    expect(flowSource).toContain('- tapOn:\n    text: "^Copy$"');
     expect(flowSource).not.toContain('message.textSelectionModal');
     expect(flowSource).not.toContain('message.selectableMarkdownBody');
   });

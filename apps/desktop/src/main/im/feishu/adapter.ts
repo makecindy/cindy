@@ -9,10 +9,8 @@ import { captureImContext } from '../../../shared/imMessageSource';
  *     MCP (send_file_to_user)
  *   - ack emoji: REACTION_PROCESSING
  *   - 群 lane(senderId = `g/{chatId}[/{threadId}]`, @cindy/im feishu/codec.ts):
- *     群主流 @ 入站即开话题(每话题一个会话, 群 lane 仅开话题失败的降级路径);
- *     **`/ctr` 接管严格按话题记账**: binding 的 userId 就是话题 lane, 一个话题
- *     一份接管, 群主流的 @ 恒开新话题走该话题自己的会话(不会被任何接管吃掉);
- *     要跟接管会话说话就在那个话题里说 —— 群主流不是接管的入口;
+ *     群主流提问留在群 lane, 话题内提问留在原话题 lane, 不自动开新话题;
+ *     接管绑定按完整 lane 区分, 群主流不会改道进入某个话题的接管会话;
  *     群里新建的会话一律用渠道设置「群聊新建任务权限档」(sessions.permissionModeFor,
  *     `/ctr` 新建走 cardActionHandler 读同一设置);
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 5 页,
@@ -26,9 +24,10 @@ import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane } from '@cindy/im';
+import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
+import { receivedHistoryScope } from '../shared/receivedImageHistory';
 import type { FeishuToolScope } from '../shared/channelToolScope';
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { readImDefaultSettings } from '../defaultSettingsStore';
@@ -37,7 +36,11 @@ import { createLogger } from '../../logger';
 import {
   buildFeishuGroupContext,
   buildFeishuReplyContextBlock,
+  boundFeishuReplyText,
   sanitizeDisplayText,
+  GROUP_CONTEXT_MAX_CHARS,
+  HISTORY_IMAGE_MAX,
+  HISTORY_FILE_MAX,
 } from './groupContext';
 import {
   FILTERED_HISTORY_PLACEHOLDER,
@@ -167,7 +170,7 @@ async function shouldFilterReplyContext(args: {
           line: `[${sanitizeDisplayText(args.reply.author)}] ${args.reply.text}`,
         },
       ],
-      maxLineChars: 600,
+      maxLineChars: GROUP_CONTEXT_MAX_CHARS + 128,
     });
     return scanned.has(REPLY_CONTEXT_SCAN_ID);
   } catch (err) {
@@ -316,9 +319,8 @@ export function buildFeishuAdapter(
        * 面向私聊的 `permissionMode`。
        *
        * 覆盖到的建会话路径(都经 sessionRepo.prepareNewSession):
-       *   - 群主流 @bot 开新话题 → 话题 lane 首条消息建行(turnRunner)
+       *   - 群主流 / 话题 @bot → 对应 lane 首条消息建行(turnRunner)
        *   - 群里 `/new` 重开上下文(slashCommands → resetSessionToDefaults)
-       *   - 群主流降级 lane(开话题失败时)建行
        * `/ctr` 新建接管会话不走这里(它建的是 desktop 会话, 见
        * cardActionHandler), 那边读的是同一个设置项。
        *
@@ -340,7 +342,7 @@ export function buildFeishuAdapter(
         if (!name) return null;
         return `${groupPrefix(lane.threadId)}${name}`;
       },
-      // 群主流 lane(仅开话题失败的降级路径)标题是稳定的群名, 不参与首条消息
+      // 群主流 lane 标题是稳定的群名, 不参与首条消息
       // oneshot 起名; 话题 lane 需要 oneshot 出「话题简介」, 照常参与。
       skipOneshotTitleFor: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
@@ -367,6 +369,30 @@ export function buildFeishuAdapter(
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    groupHistoryAccessFor: (event) => {
+      const lane = event.groupContextLane ?? decodeFeishuLaneUserId(event.senderId);
+      const scope = receivedHistoryScope(
+        feishuIm.getService(),
+        event.contextId,
+        lane?.chatId ?? event.chatId,
+        lane?.threadId ?? '',
+      );
+      const botId = feishuIm.getBotAppId();
+      const service = feishuIm.getService();
+      scope.readMessageImages = async (messageId) => {
+        if (!botId || feishuIm.getBotAppId() !== botId || feishuIm.getService() !== service)
+          throw new Error('HISTORY_CONNECTION_CHANGED');
+        const images = await feishuIm.readHistoryImages(
+          messageId,
+          scope.lane!.chatId,
+          scope.lane!.threadId,
+        );
+        if (feishuIm.getBotAppId() !== botId || feishuIm.getService() !== service)
+          throw new Error('HISTORY_CONNECTION_CHANGED');
+        return images;
+      };
+      return scope;
+    },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
     // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
@@ -410,6 +436,8 @@ export function buildFeishuAdapter(
         chatId: lane.chatId,
         ...(chatName ? { chatName } : {}),
         ...(event.speaker?.id ? { senderId: event.speaker.id } : {}),
+        // 群里认出主人只能靠这一句: 发言人只有 open_id, 模型无从自行核对。
+        ...(event.speaker?.isOwner === true ? { senderIsOwner: true } : {}),
         toolsHint,
       };
     },
@@ -439,39 +467,76 @@ export function buildFeishuAdapter(
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
-      if (!lane) return null;
-      // 普通群主流「回复某条消息并 @bot」已经由 transport 精确解析 parent_id。
+      // 私聊/群主流引用与直接收到的合并转发由 transport 精确解析。
       // 成功时只给模型这条引用和当前问题，避免同页里无关的近期文字/图片再次
       // 抢走“这个”的指代；解析失败时 replyContext 缺省，继续走下面的旧群历史。
       if (event.replyContext) {
-        const filtered = await shouldFilterReplyContext({
-          question: event.text,
-          reply: event.replyContext,
-        });
-        const safeReply = filtered
+        const reply = {
+          ...event.replyContext,
+          text: boundFeishuReplyText(event.replyContext.text),
+        };
+        const filtered = await shouldFilterReplyContext({ question: event.text, reply });
+        const safeReply: NonNullable<typeof event.replyContext> = filtered
           ? {
               author: event.replyContext.author,
               text: FILTERED_HISTORY_PLACEHOLDER,
               ...(event.replyContext.isBot ? { isBot: true } : {}),
             }
-          : event.replyContext;
+          : reply;
+        const contextAttachments: IMAttachment[] = [];
+        if (!filtered) {
+          let images = 0;
+          let files = 0;
+          // These notes also enter messageHandler's inbound facts. Bound the
+          // structured value itself, rather than only its display rendering.
+          const unavailable: string[] = [];
+          let unavailableChars = 2; // JSON array brackets
+          let omitted = 0;
+          const addUnavailable = (description: string) => {
+            const note = description.slice(0, 160);
+            const size = JSON.stringify(note).length + 1;
+            if (unavailableChars + size > 900) {
+              omitted++;
+              return;
+            }
+            unavailable.push(note);
+            unavailableChars += size;
+          };
+          for (const note of safeReply.unavailableAttachments ?? []) addUnavailable(note);
+          for (const ref of event.feishuReplyAttachments ?? []) {
+            const overLimit = ref.kind === 'image' ? images++ >= HISTORY_IMAGE_MAX : files++ >= HISTORY_FILE_MAX;
+            if (!ref.messageId || overLimit) {
+              omitted++;
+              continue;
+            }
+            const label = ref.kind === 'image' ? '引用图片' : `引用文件 ${ref.fileName.slice(0, 80)}`;
+            try {
+              const downloaded = await feishuIm.downloadMessageAttachments(ref.messageId, [ref]);
+              contextAttachments.push(...downloaded.attachments);
+              for (const entry of downloaded.unsupported) addUnavailable(`${label}：${entry.label}`);
+              if (!downloaded.attachments.length && !downloaded.unsupported.length) {
+                addUnavailable(`${label}：未能下载`);
+              }
+            } catch {
+              addUnavailable(`${label}：下载失败`);
+            }
+          }
+          if (omitted) unavailable.push(`另有 ${omitted} 条引用附件未提供说明已省略（含超出数量上限或缺少来源的附件）`);
+          if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
+          if (unavailable.length) safeReply.unavailableAttachments = unavailable;
+        }
         const replyPrefix = buildFeishuReplyContextBlock(safeReply);
         return {
           agentText: `${replyPrefix}${event.text}`,
           contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }),
           // 审阅器只见过滤后的同一份引用, 被拦下的成员文本不外传给审阅模型。
           replyContext: safeReply,
+          ...(contextAttachments.length ? { contextAttachments } : {}),
         };
       }
-      // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
-      // IMMessageEvent.groupContextLane) — 触发消息发在群主流(只是回复被折成
-      // 了新话题), 所以群历史仍按群主流拉取, 「总结上面」才拿得到上下文。
-      //
-      // 话题里发的消息一律按**话题容器**取数(contextLane = lane): 会话里只看
-      // 会话。`/ctr` 曾把「开话题之前的群主流讨论」记下来补给话题里第一条消息,
-      // 已按产品裁决去掉 —— 它让 /ctr 后的第一句要回翻整条群主流(5 页 + 每页
-      // 一次模型判断), 首句实测被拖到 87s; 而话题的语义本就是「另起一摊」,
-      // 需要群里的上文时在群主流里 @ 即可。
+      if (!lane) return null;
+      // Ordinary inbound context follows its originating group/topic lane.
+      // Retain explicit context overrides for existing callers.
       const contextLane = event.groupContextLane ?? lane;
       const built = await buildFeishuGroupContext({
         lane: contextLane,

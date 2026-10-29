@@ -331,7 +331,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // 两条 device-link 分支都要落,且必须排在各自的 setPending / setPendingGoal 之后、
       // navigate 之前 —— 登记完就有副本,后面无论多久没被消费都捞得回来。
       const sendRemember = source.indexOf(
-        "rememberRecoverableHandoff(remoteSessionId, 'message', message)",
+        "rememberRecoverableHandoff(remoteSessionId, 'message', message, currentBuiltInSkillIntent())",
       );
       const goalRemember = source.indexOf(
         "rememberRecoverableHandoff(remoteSessionId, 'goal', objective)",
@@ -412,8 +412,8 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(sessionViewSource).not.toContain('forgetRecoverableHandoff(');
       expect(pendingHandoffSource).toContain('function forgetRecoverableHandoff(');
       expect(pendingHandoffSource).not.toContain('export function forgetRecoverableHandoff(');
-      // 三处交接(命令派发 / 首轮发送 / 起目标)都要走它。
-      expect(sessionViewSource.match(/deliverRecoverableHandoff\(sessionId,/g)).toHaveLength(3);
+      // 三处交接与内置 Skill 失败后回填 composer 都要走同一交付入口。
+      expect(sessionViewSource.match(/deliverRecoverableHandoff\(sessionId,/g)).toHaveLength(4);
     });
 
     it('内存里没有 pending 时才走恢复,且只回填输入框、不自动补发', () => {
@@ -429,7 +429,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // 输入框已有内容时先让路,且必须在 take 之前判断 —— 否则副本已被取走,
       // 让路就变成了直接丢弃。
       expect(body.indexOf('getComposerDraftPresence(sessionId)')).toBeLessThan(
-        body.indexOf('takeRecoverableHandoff(sessionId, kind)'),
+        body.indexOf('takeRecoverableHandoffPayload(sessionId, kind)'),
       );
     });
   });

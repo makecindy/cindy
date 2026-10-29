@@ -25,6 +25,76 @@ typedef CFTypeRef (*CreateStream)(CGDirectDisplayID, size_t, size_t, int32_t,
                                  CFDictionaryRef, dispatch_queue_t, FrameHandler);
 typedef CGError (*StartStream)(CFTypeRef);
 
+static NSData *encodeCaptureSurface(CIContext *context, CGColorSpaceRef color, IOSurfaceRef surface,
+                                    double quality, long frameLimit, BOOL overlay) {
+  CIImage *image = [CIImage imageWithIOSurface:surface];
+  NSData *jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
+    options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(quality)}];
+  NSUInteger limit = (NSUInteger)frameLimit;
+  if (overlay) {
+    for (NSNumber *q in @[@0.45, @0.25, @0.1]) {
+      if (jpeg.length <= limit) break;
+      jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
+        options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: q}];
+    }
+    // Bound high-detail screens without turning them into disconnects.
+    for (int attempt = 0; jpeg.length > limit && attempt < 4; attempt++) {
+      image = [image imageByApplyingTransform:CGAffineTransformMakeScale(0.75, 0.75)];
+      jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
+        options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @0.25}];
+    }
+  }
+  return jpeg.length <= limit ? jpeg : nil;
+}
+
+// The serial capture queue owns this slot. Demand mode keeps only the newest
+// surface, without copying or encoding frames the recorder will never request.
+// Pinning both the CF object and its use count prevents WindowServer reuse
+// after the callback returns (CGDisplayStreamFrameAvailableHandler contract).
+@interface CaptureFrameStore : NSObject
+- (instancetype)initWithOnRequest:(BOOL)onRequest encoder:(NSData *(^)(IOSurfaceRef))encoder;
+- (void)acceptSurface:(IOSurfaceRef)surface;
+- (NSData *)jpeg;
+- (void)clear;
+@end
+@implementation CaptureFrameStore {
+  BOOL _onRequest;
+  IOSurfaceRef _surface;
+  NSData *_jpeg;
+  NSData *(^_encoder)(IOSurfaceRef);
+}
+- (instancetype)initWithOnRequest:(BOOL)onRequest encoder:(NSData *(^)(IOSurfaceRef))encoder {
+  if ((self = [super init])) { _onRequest = onRequest; _encoder = [encoder copy]; }
+  return self;
+}
+- (void)releaseSurface {
+  if (!_surface) return;
+  IOSurfaceDecrementUseCount(_surface);
+  CFRelease(_surface);
+  _surface = NULL;
+}
+- (void)acceptSurface:(IOSurfaceRef)surface {
+  if (_onRequest) {
+    CFRetain(surface);
+    IOSurfaceIncrementUseCount(surface);
+    [self releaseSurface];
+    _surface = surface;
+    _jpeg = nil;
+  } else {
+    _jpeg = _encoder(surface);
+  }
+}
+- (NSData *)jpeg {
+  if (_surface) {
+    _jpeg = _encoder(_surface);
+    [self releaseSurface];
+  }
+  return _jpeg;
+}
+- (void)clear { [self releaseSurface]; _jpeg = nil; }
+- (void)dealloc { [self releaseSurface]; }
+@end
+
 @interface PrivacyCaptureOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(copy) FrameHandler handler;
 @property(strong) SCStream *stream;
@@ -116,8 +186,10 @@ static NSDictionary *readCursor(CGRect bounds) {
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
-    // Overlay: <display> cursor-overlay <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded | window:<id>]
-    BOOL overlay = (argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay") == 0;
+    // Local recordings opt into deferred encoding; existing invocations stay eager.
+    // Overlay: <display> cursor-overlay[-demand] <fps> <quality> <physical max edge, 0 = logical> <max JPEG bytes> [excluded | window:<id>]
+    BOOL onRequest = (argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay-demand") == 0;
+    BOOL overlay = onRequest || ((argc == 7 || argc == 8) && strcmp(argv[2], "cursor-overlay") == 0);
     if (argc != 2 && argc != 3 && !overlay) return 2;
     NSString *excluded = (overlay && argc == 8) || (!overlay && argc == 3)
       ? [NSString stringWithUTF8String:argv[argc - 1]] : @"";
@@ -179,7 +251,9 @@ int main(int argc, const char *argv[]) {
     dispatch_queue_t queue = dispatch_queue_create("cindy.desktop.capture", DISPATCH_QUEUE_SERIAL);
     CIContext *context = [CIContext contextWithOptions:@{ kCIContextCacheIntermediates: @NO }];
     CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    __block NSData *latest = nil;
+    CaptureFrameStore *frames = [[CaptureFrameStore alloc] initWithOnRequest:onRequest encoder:^NSData *(IOSurfaceRef surface) {
+      return encodeCaptureSurface(context, color, surface, quality, frameLimit, overlay);
+    }];
     __block BOOL requested = NO;
     atomic_store(&lastRequest, time(NULL));
     // The first system cursor read can block on WindowServer for many seconds.
@@ -199,7 +273,9 @@ int main(int argc, const char *argv[]) {
       });
     };
     void (^reply)(void) = ^{
-      if (!requested || !latest) return;
+      if (!requested) return;
+      NSData *latest = [frames jpeg];
+      if (!latest) return;
       requested = NO;
       NSData *data;
       if (overlay) {
@@ -224,26 +300,9 @@ int main(int argc, const char *argv[]) {
     FrameHandler receiveFrame = ^(int32_t status, uint64_t timestamp, IOSurfaceRef surface, const void *update) {
         @autoreleasepool {
           if (status == 3) _exit(5); // stopped; never serve the previous session's frame
-          if (status == 2) { latest = nil; return; } // blank display
+          if (status == 2) { [frames clear]; return; } // blank display
           if (status != 0 || !surface) return;
-          CIImage *image = [CIImage imageWithIOSurface:surface];
-          NSData *jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
-            options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @(quality)}];
-          NSUInteger limit = (NSUInteger)frameLimit;
-          if (overlay) {
-            for (NSNumber *q in @[@0.45, @0.25, @0.1]) {
-              if (jpeg.length <= limit) break;
-              jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
-                options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: q}];
-            }
-            // Bound high-detail screens without turning them into disconnects.
-            for (int attempt = 0; jpeg.length > limit && attempt < 4; attempt++) {
-              image = [image imageByApplyingTransform:CGAffineTransformMakeScale(0.75, 0.75)];
-              jpeg = [context JPEGRepresentationOfImage:image colorSpace:color
-                options:@{(__bridge NSString *)kCGImageDestinationLossyCompressionQuality: @0.25}];
-            }
-          }
-          latest = jpeg.length <= limit ? jpeg : nil;
+          [frames acceptSurface:surface];
           reply();
         }
       };

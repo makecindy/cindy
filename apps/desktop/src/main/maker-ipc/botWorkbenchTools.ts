@@ -6,9 +6,10 @@
  * - 逐任务责任读伙伴家的 task-responsibility 与它自己开的后台任务(bot_delegations);
  * - 继续复用宿主已有的发消息路径(本机 = send_to_session 同一条链路;另一台电脑 =
  *   跨电脑 send_to_session 的同一条通路),由调用方注入;停止走通用的 stop_session_turn。
- * 2026-10-17 放弃「项目」:不再按目录发现候选、不再现算项目素材、不再导入本机外部会话。
+ * 项目关联只提供按需阅读的入口，不按目录发现候选任务或导入本机外部会话。
  */
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { hasTaskActionAuthorization, assertTaskActionCurrent, captureTaskActionSyncGuard } from './taskActionAuthorization.js';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { botDelegations, botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
@@ -19,6 +20,8 @@ import {
 } from '../appSessionState.js';
 import type { WorkbenchDelegationStatus, WorkbenchTranscriptItem } from '../../shared/botWorkbench.js';
 import { broadcastBotWorkbenchChanged } from './botWorkbenchService.js';
+import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
+import { botLinkedProjectAccess } from './botLinkedProjects.js';
 import { boundTranscript, readSessionTranscript } from './botWorkbenchTranscripts.js';
 import { readTaskResponsibilities, responsibleSessionIds, setTaskResponsibility } from './botTaskResponsibility.js';
 import { readBotGlance, readSchedulerBotId, readWatchedSession } from './botWorkbenchAutonomyBridge.js';
@@ -51,13 +54,48 @@ export async function resolveWorkbenchCaller(callerSessionId: string): Promise<W
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '伙伴或它的主任务已停用' };
   }
-  if (row.role !== 'canonical') {
-    return { ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED', message: '只有伙伴的主任务可以使用工作台' };
+  if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'routine') {
+    return {
+      ok: false,
+      errorCode: 'BOT_MAIN_TASK_REQUIRED',
+      message: '当前入口不是伙伴的私聊主任务或私聊话题，不能使用工作台、待办或项目关联工具。'
+        + '本次调用未读取或修改这些记录。请告知主人：在 Cindy 中打开这位伙伴的私聊主聊天（主任务），在那里提出本次请求；私聊话题也可用。'
+        + '不要在当前入口重试。',
+    };
   }
   if (row.remoteHostId) {
     return { ok: false, errorCode: 'REMOTE_WORKBENCH_UNAVAILABLE', message: '远端伙伴暂不支持工作台' };
   }
   return { ok: true, botId: row.botId };
+}
+
+/** Query context only. The workbench authorization and task responsibility remain untouched. */
+export async function runBotProjectsTool(params: {
+  callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean;
+}) {
+  const owner = activeOwnerScopeKey();
+  try {
+    if (isAppSessionBoundaryPending()) throw new Error('OWNER_SCOPE_CHANGED');
+    const caller = await resolveWorkbenchCaller(params.callerSessionId);
+    if (!caller.ok) return caller;
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('OWNER_SCOPE_CHANGED');
+    const access = await botLinkedProjectAccess(caller.botId);
+    let projects;
+    if (params.projectId !== undefined) {
+      if (typeof params.linked !== 'boolean' || !hasTaskActionAuthorization(params.callerSessionId))
+        return { ok: false as const, errorCode: 'TASK_ACTION_AUTHORIZATION_REQUIRED', message: 'Changing project links requires authorization.' };
+      await assertTaskActionCurrent();
+      projects = await access.set(params.projectId, params.linked, captureTaskActionSyncGuard());
+    } else projects = await access.read();
+    return { ok: true as const, projects: projects.filter(project => project.linked || params.includeAvailable).map(project => ({
+      project_id: project.id, name: project.name, working_dir: project.path,
+      device_id: project.deviceId ?? null, linked: project.linked, available_locally: project.available,
+      // These are locations to check on demand, not promises that the files exist.
+      ...(!project.deviceId && project.available ? { context_locations: ['AGENTS.md', 'CLAUDE.md', 'README.md', '.cindy/project-knowledge/TOC.md'] } : {}),
+    })) };
+  } catch {
+    return { ok: false as const, errorCode: 'PROJECTS_UNAVAILABLE', message: 'Could not read or save project links. Re-read the saved state before retrying.' };
+  }
 }
 
 async function readWorkbenchTarget(taskId: string): Promise<WorkbenchTargetFacts | null> {
@@ -134,13 +172,33 @@ export async function readBotResponsibilityScope(
   };
 }
 
+/** Creation attribution is not workbench authorization: channel/group conversations can create tasks too. */
+async function resolveBotTaskCreator(callerSessionId: string): Promise<string | null> {
+  const [row] = await getDbClient().drizzle
+    .select({ botId: botSessionLinks.botId })
+    .from(botSessionLinks)
+    .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+    .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+    .where(and(
+      eq(botSessionLinks.sessionId, callerSessionId),
+      inArray(botSessionLinks.role, ['canonical', 'thread', 'channel', 'group', 'routine']),
+      isNull(botSessionLinks.archivedAt),
+      eq(sessions.source, 'bot'),
+      eq(sessions.status, 'active'),
+      isNull(sessions.remoteHostId),
+      eq(botProfiles.status, 'active'),
+    ))
+    .limit(1);
+  return row?.botId ?? null;
+}
+
 /** Capture the creator before a generic create-mode handoff crosses async boundaries. */
 export async function captureBotCreatedTaskResponsibility(callerSessionId?: string) {
   if (!callerSessionId || isAppSessionBoundaryPending()) return null;
   const scope = activeOwnerScopeKey();
   const root = ownerScopedUserDataPath();
-  const caller = await resolveWorkbenchCaller(callerSessionId);
-  if (!caller.ok) return null;
+  const botId = await resolveBotTaskCreator(callerSessionId);
+  if (!botId) return null;
   const assertCurrent = () => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scope) throw new Error('OWNER_SCOPE_CHANGED');
   };
@@ -150,8 +208,10 @@ export async function captureBotCreatedTaskResponsibility(callerSessionId?: stri
     const target = await readWorkbenchTarget(sessionId);
     if (!target || target.status !== 'active' || target.botLinked || target.remoteHostId || target.orcaRole === 'worker') return;
     assertCurrent();
-    await setTaskResponsibility(root, caller.botId, sessionId, true, assertCurrent);
-    broadcastBotWorkbenchChanged(caller.botId);
+    await setTaskResponsibility(root, botId, sessionId, true, assertCurrent);
+    broadcastBotWorkbenchChanged(botId);
+    // Remote task rows draw the same mark from the teammate roster's links.
+    broadcastBotRemoteResourceChanged(botId);
   };
 }
 
@@ -168,6 +228,12 @@ export interface BotWorkbenchHostDeps {
   readRemoteMessages(deviceId: string, sessionId: string): Promise<{ ok: true; items: WorkbenchTranscriptItem[] } | Failure>;
 }
 
+/** Desktop sidebar marks re-read the scopes; remote task rows re-read the teammate roster links. */
+function broadcastResponsibilityChanged(botId: string): void {
+  broadcastBotWorkbenchChanged(botId);
+  broadcastBotRemoteResourceChanged(botId);
+}
+
 /**
  * 按调用时的账号作用域组装一次工具服务:作用域在调用期间切换则中止,不做投递。
  */
@@ -175,6 +241,7 @@ function createDesktopBotWorkbenchAccess(host: BotWorkbenchHostDeps): BotWorkben
   const scopeKey = activeOwnerScopeKey();
   const userDataDir = ownerScopedUserDataPath();
   return createBotWorkbenchAccess({
+    hasActionAuthorization: hasTaskActionAuthorization,
     resolveCaller: resolveWorkbenchCaller,
     schedulerBotId: readSchedulerBotId,
     readWatched: readWatchedSession,
@@ -185,7 +252,7 @@ function createDesktopBotWorkbenchAccess(host: BotWorkbenchHostDeps): BotWorkben
       const result = await host.readRemoteMessages(deviceId, sessionId);
       return result.ok ? { ok: true as const, transcript: boundTranscript(result.items) } : result;
     },
-    notifyChanged: broadcastBotWorkbenchChanged,
+    notifyChanged: broadcastResponsibilityChanged,
     listDelegations: listBotDelegationChildren,
     readResponsibleSessionIds: (botId) => readBotResponsibleSessionIds(userDataDir, botId),
     saveResponsibility: (botId, sessionId, responsible) => setTaskResponsibility(
@@ -193,8 +260,8 @@ function createDesktopBotWorkbenchAccess(host: BotWorkbenchHostDeps): BotWorkben
         if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) throw new Error('OWNER_SCOPE_CHANGED');
       },
     ),
-    sendToSession: host.sendToSession,
-    sendToRemoteSession: host.sendToRemoteSession,
+    sendToSession: async params => { await assertTaskActionCurrent(); return host.sendToSession(params); },
+    sendToRemoteSession: async params => { await assertTaskActionCurrent(); return host.sendToRemoteSession(params); },
     isOwnerScopeCurrent: () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === scopeKey,
   });
 }
@@ -226,6 +293,15 @@ const NO_HOST: BotWorkbenchHostDeps = {
 };
 
 /** 工作台详情视图(主人自己的界面)读取一件任务的最近内容;与伙伴工具同一条授权规则。 */
+/** Host gate: a teammate acting on its own may only adjust tasks handed to it. */
+export async function canBotContinueWorkbenchTask(callerSessionId: string, taskId: string): Promise<boolean> {
+  const result = await runBotWorkbenchTool(NO_HOST, async (access) => ({
+    ok: true as const,
+    allowed: await access.canContinue({ callerSessionId, taskId }),
+  }));
+  return result.ok && result.allowed;
+}
+
 export async function readBotWorkbenchTaskForOwner(botId: string, taskId: string) {
   return runBotWorkbenchTool(NO_HOST, (access) => access.readForOwner({ botId, taskId }));
 }

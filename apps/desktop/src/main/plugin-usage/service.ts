@@ -8,6 +8,7 @@ import type {
   PluginUsageSummary,
   PluginUsageTransaction,
   PluginUsageReportRow,
+  PluginUsageEntryKind,
 } from '../../shared/pluginUsage.js';
 import { PluginUsageReporter, type PluginUsageReporting } from './reporter.js';
 
@@ -166,6 +167,7 @@ export class PluginUsageService {
     toolName: string,
     sessionId: string | null,
     occurredAt: number,
+    entryKind: PluginUsageEntryKind = 'tool',
   ): void {
     void this.enqueue(async () => {
       const refreshed = await this.tx({
@@ -178,6 +180,7 @@ export class PluginUsageService {
         toolName,
         sessionId,
         occurredAt,
+        entryKind,
       });
       // Refresh only future captures after a cross-instance clear. Never replay this call.
       this.assertCurrent();

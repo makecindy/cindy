@@ -3,23 +3,31 @@
  * (Claude Code 的 ~/.claude、Codex 的 CODEX_HOME)随任务同步到那台；那台给出的影子路径逐级
  * 映射回你这台的真实路径。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { LOCAL_AGENT_CLIENT, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import WebSocket from 'ws';
+import { providerShareGuestPeer } from '@cindy/device-link';
+import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
 
 import {
   collectAncestorInstructionFiles,
+  collectAncestorMarkers,
   collectInstructionImports,
   collectPersonalConfig,
   collectProjectInstructionFiles,
 } from '../controller/projectFiles';
 import { shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
+import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
-import { hostedStartOptions } from '../host/service';
+import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { MAX_ANCESTOR_LEVELS } from '../wire';
 
@@ -39,6 +47,103 @@ function write(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
+
+// Unit tier: real membership ledger, host cleanup adapter and disk index. Controlled
+// legacy purge models its documented best-effort failure, which previously let a
+// reapproved member revive old native IDs / pending relay tombstones after restart.
+describe('reapproved member cleanup admission', () => {
+  it('cannot fork an old native session after a reused member ID is admitted again', async () => {
+    const ledger = path.join(root, 'usage.json');
+    let usage = createProviderShareUsageStore(ledger);
+    const controller = providerShareGuestPeer('s', 'm', 'G');
+    const identity = { ownerScope: 'owner', ownerDeviceId: 'O', shareId: 's', memberId: 'm' };
+    let joinedAt = 'g1';
+    const snapshot = () => [{ shareId: 's', members: [{ memberId: 'm', joinedAt }] }];
+    const forkHosted = vi.fn(async () => ({ newSdkSessionId: 'native-child', uuidMap: new Map() }));
+    const makeHost = () => createRemoteAgentHost({
+      isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input), forkHosted,
+      isControllerAuthorized: () => usage.memberGenerationReady(identity, joinedAt), controllerTrust: () => 'guest',
+      providerAccess: { resolve: async () => 'shared', isAllowed: () => true },
+      bindGuestProviderRoute: async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release() {} }),
+      purgeHostedTranscripts: async () => undefined,
+      captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot: path.join(root, 'remote-agent'),
+    });
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot());
+    let current = makeHost();
+    const fork = { op: 'fork', sourceSessionId: 'task-1', newSessionId: 'task-2', agentKind: 'claude-code',
+      sourceSdkSessionId: 'sdk-1', model: 'claude-opus', upToMessageId: 'message-1' };
+    try {
+      const runId = randomUUID();
+      await current.handle(controller, { op: 'open', runId, agentKind: 'claude-code', payload: { json: {
+        sessionId: 'task-1', virtualWorkspace: true, options: { model: 'claude-opus' },
+        workspace: { workingDir: '/guest/project', platform: 'darwin', shell: 'zsh' },
+        projectFiles: [], ancestorFiles: [], personal: { files: [] }, mcpServers: [],
+      } } });
+      await vi.waitFor(() => expect(fs.readFileSync(path.join(root, 'remote-agent', 'guest-sessions.json'), 'utf8')).toContain('sdk-1'));
+      await expect(current.handle(controller, fork)).resolves.toMatchObject({ newSdkSessionId: 'native-child' });
+      await current.handle(controller, { op: 'close', runId, mode: 'close', reason: 'navigation' });
+      current.dispose();
+      usage = createProviderShareUsageStore(ledger);
+      joinedAt = 'g2';
+      await usage.reconcileMemberGenerations('owner', 'O', snapshot());
+      current = makeHost();
+      await expect(current.handle(controller, fork)).rejects.toThrow();
+      const purge = createProviderShareMemberPurger({ userDataDir: root, usage, current,
+        ownerScope: () => 'owner', ownerDeviceId: () => 'O', isCurrent: () => true,
+        hasAccess: () => usage.memberGenerationReady(identity, joinedAt) });
+      await purge(() => true);
+      expect(usage.memberGenerationReady(identity, joinedAt)).toBe(true);
+      await expect(current.handle(controller, fork)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      expect(forkHosted).toHaveBeenCalledTimes(1);
+    } finally { current.dispose(); }
+  });
+
+  it('waits for legacy relay forgets and preserves directory cleanup receipts after an index deletion failure', async () => {
+    const ledger = path.join(root, 'usage.json');
+    let usage = createProviderShareUsageStore(ledger);
+    const controller = providerShareGuestPeer('s', 'm', 'G');
+    const index = path.join(root, 'remote-agent', 'guest-sessions.json');
+    const home = path.join(root, 'remote-agent', 'guest-homes', createHash('sha256').update(controller).digest('hex').slice(0, 16));
+    const member = { ownerScope: 'owner', ownerDeviceId: 'O', shareId: 's', memberId: 'm' };
+    const snapshot = (joinedAt: string) => [{ shareId: 's', members: [{ memberId: 'm', joinedAt }] }];
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot('g1'));
+    write(index, JSON.stringify({ old: { controller, nativeIds: ['old-native'], hostSessionIds: ['old-task'], relayDevices: ['M'] } }));
+    write(path.join(home, 'native-history'), 'private g1 data');
+    usage = createProviderShareUsageStore(ledger);
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot('g2'));
+    const purgeControllers = vi.fn(async (match: (peer: string) => boolean) => {
+      expect(match(controller)).toBe(true);
+      write(index, JSON.stringify({ old: { controller, nativeIds: [], forgetPending: ['M'] } }));
+    });
+    const makePurger = () => createProviderShareMemberPurger({ userDataDir: root, usage,
+      current: { purgeControllers, activeControllers: () => [] }, ownerScope: () => 'owner', ownerDeviceId: () => 'O',
+      isCurrent: () => true, hasAccess: () => usage.memberGenerationReady(member, 'g2') });
+    await expect(makePurger()(() => true)).rejects.toThrow('legacy history cleanup is still pending');
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(false);
+    // A pending relay forget must not be converted back to a live relayDevices entry.
+    expect(JSON.parse(fs.readFileSync(index, 'utf8')).old.forgetPending).toEqual(['M']);
+    write(path.join(home, 'native-history'), 'failed legacy directory deletion');
+    purgeControllers.mockImplementation(async () => { fs.rmSync(index); });
+    const originalRm = fsp.rm.bind(fsp);
+    const rm = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(home)) throw new Error('guest home busy');
+      await originalRm(target, options);
+    });
+    await expect(makePurger()(() => true)).rejects.toThrow('guest home busy');
+    rm.mockRestore();
+    usage = createProviderShareUsageStore(ledger);
+    expect(usage.listPendingMemberCleanup('owner', 'O')[0]?.cleanupScopes).toContainEqual({ controller });
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(false);
+    purgeControllers.mockImplementation(async () => undefined);
+    await makePurger()(() => true);
+    expect(fs.existsSync(home)).toBe(false);
+    expect(fs.existsSync(index)).toBe(false);
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(true);
+    const purger = makePurger();
+    purgeControllers.mockImplementation(async (match) => { expect(match(controller)).toBe(false); });
+    await purger(() => true); // delayed duplicate must not delete a new g2 task
+  });
+});
 
 describe('mirrorSegments', () => {
   it('keeps each path level and replaces names the other computer cannot store', () => {
@@ -68,6 +173,26 @@ describe('shadowAliases', () => {
       { from: '/runs/fs/Users/me', to: '/Users/me' },
       { from: '/runs/fs/Users', to: '/Users' },
     ]);
+  });
+
+  it.each(['/runs', 'C:\\runs'])('reads inherited fork paths from %s in the original project without granting parent access', (runs) => {
+    const native = runs.startsWith('C:') ? path.win32 : path.posix;
+    const project = path.join(root, 'project');
+    write(path.join(project, 'src', 'index.ts'), 'original file');
+    const mirrorRoot = native.join(runs, 'child', 'fs');
+    const previousMirrorRoots = ['source', 'parent'].map((id) => native.join(runs, id, 'fs'));
+    const suffix = native.join('workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
+    const shadowDir = native.join(mirrorRoot, suffix);
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setAliases(shadowAliases({ shadowDir, mirrorRoot, virtualWorkspace: true, previousMirrorRoots }, project, []));
+    workspace.setVirtualRoot(mirrorRoot);
+    for (const previous of previousMirrorRoots) {
+      const resolved = workspace.resolve(native.join(previous, suffix, 'src', 'index.ts'));
+      expect(workspace.contains(resolved)).toBe(true);
+      expect(fs.readFileSync(resolved, 'utf8')).toBe('original file');
+      expect(workspace.contains(workspace.resolve(native.join(previous, suffix, '..', 'outside.txt')))).toBe(false);
+    }
+    expect(workspace.resolve(workspace.toAgentPath(path.join(project, 'src', 'index.ts')))).toBe(path.join(project, 'src', 'index.ts'));
   });
 
   it('only maps the shadow itself when the other computer did not mirror the path', () => {
@@ -474,6 +599,14 @@ describe('shadow on the other computer', () => {
     expect(input.workspace.homeDir).toBe(os.homedir());
     expect(input.options.userPrompt).toBe(`Please inspect ${path.join(input.shadowDir, 'src', 'index.ts')}.`);
     const opts = hostedStartOptions(input);
+    const application = hostedStartOptions({ ...input,
+      options: { ...input.options, localApplication: { mcpName: 'hhh', hostToolsOnly: true, storageKey: 'a'.repeat(64) } },
+      localApplicationStorage: path.join(root, 'app-runtime'), mcpServers: ['hhh'],
+    });
+    expect(application[LOCAL_AGENT_CLIENT]).toEqual({ url: `${input.tunnel.url}/mcp/hhh`, token: input.tunnel.token,
+      mcpName: 'hhh', hostToolsOnly: true, storageDirectory: path.join(root, 'app-runtime') });
+    expect(application.deviceHosted?.tunnelUrl).toBe(input.tunnel.url);
+    expect(() => hostedStartOptions({ ...input, options: { ...input.options, localApplication: { mcpName: 'hhh', hostToolsOnly: true, storageKey: 'a'.repeat(64) } } })).toThrow('REMOTE_AGENT_INVALID');
     expect(opts.deviceHosted?.workingDir).toBe(input.shadowDir);
     expect(opts.deviceHosted?.pathPlatform).toBe(process.platform);
     expect(opts.deviceHosted?.homeDir).toBeUndefined();
@@ -489,5 +622,146 @@ describe('shadow on the other computer', () => {
 
     await handle.close({ reason: 'navigation' });
     host.dispose();
+  });
+
+  // 2026-10-22 远程供应商调查：Codex 沿虚拟工作区逐级查找，虚拟垫层与任务电脑已报「没有」的标记可以本机回答。
+  // 镜像外的隐藏文件可能在任务电脑同一路径真实存在(#6844 review)，没有确认不存在的一律照常转发。
+  it('answers lookups the task computer cannot map on this computer and forwards the rest', async () => {
+    const project = path.join(root, 'work', 'proj');
+    const external = path.join(root, 'external');
+    fs.mkdirSync(external);
+    write(path.join(project, 'hello.txt'), 'hi');
+    write(path.join(root, 'work', '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    write(path.join(root, '.bashrc'), 'export TASK_SHELL_CONFIG=1\n');
+    // Regression: ancestor absence must preserve existing plugin roots, including their files.
+    const pluginMarkers = ['.codex-plugin', '.claude-plugin', '.cursor-plugin'];
+    for (const marker of pluginMarkers) {
+      write(path.join(root, 'work', marker, 'plugin.json'), JSON.stringify({ name: 'qa-plugin' }));
+    }
+    const inputs: HostedStartInput[] = [];
+    let stop!: () => void;
+    const stopped = new Promise<void>((resolve) => { stop = resolve; });
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => {
+        inputs.push(input);
+        // 事件流一直开着，任务(和它的隧道)活到测试结束。
+        return {
+          ...idleHandle(input),
+          async close() { stop(); },
+          events: () => ({
+            [Symbol.asyncIterator]: (): AsyncIterator<AgentEvent> => ({
+              next: async () => {
+                await stopped;
+                return { done: true, value: undefined };
+              },
+            }),
+          }),
+        };
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: path.join(root, 'host'),
+    });
+    const forwarded = new Set<number>();
+    const handle = await startRemoteAgentSession('claude-code', {
+      sessionId: 'task-lookups',
+      workingDir: project,
+      extraDirs: [external],
+      model: 'claude-opus',
+      permissionMode: 'default',
+    }, {
+      invoke: async (args) => {
+        const request = JSON.parse(JSON.stringify(args[0])) as { op: string };
+        // 本测试只看哪些消息到了任务所在电脑：不让控制端关掉这条连接(Claude Code 的控制端没有 exec-server 中继)。
+        if (request.op === 'push') return {};
+        const result = JSON.parse(JSON.stringify(await host.handle('controller-1', request) ?? null)) as { runs?: Array<{ data?: string }> } | null;
+        for (const run of request.op === 'poll' ? result?.runs ?? [] : []) {
+          for (const line of Buffer.from(run.data ?? '', 'base64').toString('utf8').split('\n').filter(Boolean)) {
+            const item = JSON.parse(line) as { t?: string; kind?: string; data?: string };
+            if (item.t === 'ws' && item.kind === 'message' && item.data) forwarded.add((JSON.parse(item.data) as { id: number }).id);
+          }
+        }
+        return result;
+      },
+      rgPath: RG,
+      prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+      collectProjectFiles: async () => [],
+      collectAncestorMarkers,
+      isGitRepo: async () => false,
+      newId: randomUUID,
+    });
+    const [input] = inputs;
+    // 任务所在电脑上的映射(控制端实际使用的那一份)：有对应目录的最上一级是项目的真实根目录。
+    const mapped = new ExecutorWorkspace({ workingDir: project, aliases: shadowAliases(
+      { ...input, virtualWorkspace: true }, project, [], { extraDirs: [external], writableDirs: [] },
+    ) });
+    let top = input.shadowDir;
+    while (mapped.localPathFromAgent(path.dirname(top)) !== null && path.dirname(top) !== top) top = path.dirname(top);
+    const padded = path.dirname(top);
+    expect(padded.startsWith(path.join(input.mirrorRoot, 'workspace'))).toBe(true);
+    const parent = path.dirname(input.shadowDir);
+    const grandparent = path.dirname(parent);
+    // Windows 的生产路径映射不区分大小写；原矩阵只有小写，遗漏了会把已存在目录误报 -32004 的输入。
+    // 同一 standard fixture 经真实 Host/隧道验证 HOME、TMP、ADDITIONAL，并确认原执行器能解析到现有目录。
+    const mappedCaseVariants = process.platform === 'win32' ? [
+      path.join(input.mirrorRoot, 'HOME'),
+      path.join(input.mirrorRoot, 'TMP'),
+      path.join(input.mirrorRoot, 'ADDITIONAL', 'dir-0'),
+    ] : [];
+    for (const target of mappedCaseVariants) expect(fs.existsSync(mapped.resolve(target))).toBe(true);
+    const cases = [
+      ...mappedCaseVariants.map((target) => ({ target, local: false })),
+      { target: path.join(input.shadowDir, 'hello.txt'), local: false },
+      { target: path.join(input.shadowDir, '.git'), local: false },
+      { target: path.join(parent, '.git'), local: false },
+      { target: path.join(parent, '.git', 'HEAD'), local: false },
+      ...pluginMarkers.flatMap(marker => [
+        { target: path.join(parent, marker, 'plugin.json'), local: false },
+        { target: path.join(root, 'work', marker, 'plugin.json'), local: false },
+      ]),
+      { target: path.join(top, 'not-a-marker'), local: false },
+      { target: path.join(input.mirrorRoot, 'home', '.agents', 'skills'), local: false },
+      { target: path.join(path.parse(input.mirrorRoot).root, 'not-a-cindy-dir', 'tool'), local: false },
+      // 镜像外的绝对路径会原样交给任务电脑；同一路径下的隐藏文件/已存在标记不能凭点前缀判不存在。
+      { target: path.join(root, '.bashrc'), local: false },
+      { target: path.join(root, 'work', '.git', 'HEAD'), local: false },
+      { target: path.join(root, '.codex-plugin', 'plugin.json'), local: true },
+      { target: path.join(grandparent, '.git'), local: true },
+      { target: path.join(grandparent, '.cursor-plugin', 'plugin.json'), local: true },
+      { target: path.join(padded, '.git'), local: true },
+      { target: path.join(padded, '.codex-plugin', 'plugin.json'), local: true },
+      { target: path.join(input.mirrorRoot, 'workspace', '.agents', 'skills'), local: true },
+      { target: path.join(path.dirname(path.dirname(input.mirrorRoot)), '.claude-plugin', 'plugin.json'), local: false },
+    ];
+    const ws = new WebSocket(`${input.tunnel.url.replace(/^http/, 'ws')}/ws/exec-server`, { headers: { authorization: `Bearer ${input.tunnel.token}` } });
+    const replies = new Map<number, { error?: { code?: number } }>();
+    ws.on('message', (data) => {
+      const message = JSON.parse(String(data)) as { id: number; error?: { code?: number } };
+      replies.set(message.id, message);
+    });
+    await once(ws, 'open');
+    try {
+      cases.forEach(({ target }, index) => ws.send(JSON.stringify({ id: index + 1, method: 'fs/getMetadata', params: { path: pathToFileURL(target).href } })));
+      const localIds = cases.flatMap(({ local }, index) => local ? [index + 1] : []);
+      const forwardedIds = cases.flatMap(({ local }, index) => local ? [] : [index + 1]);
+      await vi.waitFor(() => {
+        expect([...replies.keys()].sort((a, b) => a - b)).toEqual(localIds);
+        expect([...forwarded].sort((a, b) => a - b)).toEqual(forwardedIds);
+      });
+      for (const id of localIds) expect(replies.get(id)?.error?.code).toBe(EXEC_SERVER_NOT_FOUND_CODE);
+      // 映射不到的绝对路径会原样转发；本机回答的所有目标在任务电脑上都确实不存在。
+      for (const { target } of cases.filter(({ local }) => local)) {
+        const real = mapped.localPathFromAgent(target) ?? target;
+        expect(fs.existsSync(real)).toBe(false);
+      }
+      expect(fs.existsSync(mapped.localPathFromAgent(path.join(parent, '.git', 'HEAD'))!)).toBe(true);
+      expect(fs.readFileSync(path.join(root, '.bashrc'), 'utf8')).toContain('TASK_SHELL_CONFIG');
+    } finally {
+      ws.close();
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
   });
 });

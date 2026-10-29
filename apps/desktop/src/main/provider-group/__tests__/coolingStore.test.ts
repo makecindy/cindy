@@ -7,20 +7,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PROVIDER_GROUP_STORAGE_MEMBER_CAP } from '../../../shared/providerGroup.js';
 import { PROVIDER_GROUP_COOLING_SCOPE_CAP } from '../cooling.js';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-group-cooling-store-test-'));
+let caseDir = tmpDir;
 
-vi.mock('electron', () => ({ app: { getPath: () => tmpDir } }));
+vi.mock('electron', () => ({ app: { getPath: () => caseDir } }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../appSessionState.js', () => ({
-  ownerScopedUserDataPath: (name: string) => path.join(tmpDir, name),
-  activeOwnerScopeKey: () => 'owner-test',
+  ownerScopedUserDataPath: (name: string) => path.join(caseDir, name),
+  activeOwnerScopeKey: () => caseDir,
 }));
 
 const coolingStore = await import('../coolingStore.js');
@@ -101,6 +102,10 @@ describe('mergeCooling', () => {
 });
 
 describe('writeProviderGroupCooling (real file)', () => {
+  // #6928 Windows CI: the large-file case must not make later writes reprocess
+  // its payload or let a late write leak into the next test's assertions.
+  beforeEach(() => { caseDir = fs.mkdtempSync(path.join(tmpDir, 'case-')); });
+
   it('512 个成员各有 64 个模型范围时全部写入并在重启读取后保留', async () => {
     // PR #6322 review: 单范围用例低于旧 1 MiB 上限，无法发现多模型冷却整次写入失败。
     // unit: 经真实写入/重启读取入口覆盖超过旧预算的合法多范围记录。
@@ -112,7 +117,7 @@ describe('writeProviderGroupCooling (real file)', () => {
       `device:${String(i).padStart(164, 'd')}:${providerId}`, scopes,
     ]));
     coolingStore.writeProviderGroupCooling({ [providerId]: members });
-    const file = path.join(tmpDir, 'provider-group-cooling.json');
+    const file = path.join(caseDir, 'provider-group-cooling.json');
     await vi.waitFor(() => {
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).cooling[providerId]).toEqual(members);
     });
@@ -140,9 +145,9 @@ describe('writeProviderGroupCooling (real file)', () => {
   it('旧文件的 512 个已过期成员释放容量，新成员冷却写盘并在重启后保留', async () => {
     const now = Date.now();
     const expired = Object.fromEntries(Array.from({ length: PROVIDER_GROUP_STORAGE_MEMBER_CAP }, (_, i) => [`device:old${i}:openai`, now - 1000]));
-    const file = path.join(tmpDir, 'provider-group-cooling.json');
+    const file = path.join(caseDir, 'provider-group-cooling.json');
     // 模拟旧版已经写满的文件；当前新版写入不能再把过期条目并回来。
-    const current = coolingStore.readProviderGroupCooling();
+    const current = { anthropic: { 'device:studio:a': { '': now + 120_000 } } };
     fs.writeFileSync(file, JSON.stringify({ cooling: { ...current, openai: expired } }));
     const next = { 'device:new:openai': { '': now + 60_000 } };
     coolingStore.writeProviderGroupCooling({ openai: next });

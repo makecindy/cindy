@@ -1,7 +1,10 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
+import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   deriveOptimisticSessionTitle,
@@ -14,7 +17,8 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
 import type { MobileModelOption } from './agentCapabilities';
-import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
+import { isCindyAutoModelId } from '@cindy/model-providers/provider-identity';
+import { effectiveSourceIdForModel, movedCindyAutoSourceId, type ProviderView } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
@@ -54,7 +58,7 @@ export interface NewSessionDraft {
   providerId: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   firstMessage: string;
   extraDirs?: string[];
   /**
@@ -75,7 +79,7 @@ export interface NewSessionRemoteAgentPick {
   model: string;
   providerId: string | null;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 /** 把选中的远程模型落进要创建的草稿;没选时原样返回。 */
@@ -131,6 +135,12 @@ export interface NewSessionStoredPreferences {
    * 按设备归属,避免把一台电脑的路径套到另一台;没有记忆的设备沿用最近项目默认逻辑。
    */
   workingDirByDevice: Record<string, string>;
+  /**
+   * 每台被控电脑上、每个 agent 上次在新建页显式选的另一台电脑或分享来的模型
+   * (被控电脑 deviceId → agent → 选择)。选回被控电脑自己的模型即清掉;打开新建页时恢复,
+   * 那台电脑 / 那个分享此刻用不了时回到被控电脑的默认。与 workingDirByDevice 同样按账号存。
+   */
+  remoteAgentByDevice: Record<string, Partial<Record<NewSessionAgentKind, NewSessionRemoteAgentPick>>>;
 }
 
 export interface NewSessionDraftSummary {
@@ -267,7 +277,7 @@ export function summarizeNewSessionDraft(
   return {
     agentLabel,
     canCreate: validationMessage === null,
-    runtimeLabel: [agentLabel, model, effort || null, draft.fastMode ? 'Fast' : null].filter(Boolean).join(' · '),
+    runtimeLabel: [agentLabel, model, effort || null, draft.fastMode === 'ultrafast' ? i18n.t('models.options.speed.ultrafast') : draft.fastMode ? 'Fast' : null].filter(Boolean).join(' · '),
     scopeLabel: draft.workspaceKind === 'dialogue'
       ? i18n.t('session.new.assignedDialogueDir')
       : trimmedWorkingDir
@@ -359,8 +369,10 @@ export function buildRecentWorkspaceOptions(
   sessions: readonly RemoteSession[],
   deviceId?: string,
   limit = 6,
+  projectAliases?: ProjectAliasDisplayIndex,
 ): RecentWorkspaceOption[] {
   const byPath = new Map<string, RecentWorkspaceOption>();
+  const membersByPath = new Map<string, RemoteSession[]>();
   for (const session of sessions) {
     if (deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== deviceId) continue;
     if (session.status === 'deleted') continue;
@@ -371,7 +383,10 @@ export function buildRecentWorkspaceOptions(
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.
     const pathKey = normalizeProjectOrderPath(workingDir);
-    const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
+    const members = membersByPath.get(pathKey) ?? [];
+    members.push(session);
+    membersByPath.set(pathKey, members);
+    const lastActivityAt = getSessionListActivityAt(session) ?? session.createdAt;
     const current = byPath.get(pathKey);
     if (!current) {
       byPath.set(pathKey, {
@@ -388,6 +403,10 @@ export function buildRecentWorkspaceOptions(
     }
   }
 
+  for (const [key, workspace] of byPath) {
+    workspace.title = resolveProjectAliasForSessions(membersByPath.get(key) ?? [], projectAliases, deviceId)
+      ?? workspace.title;
+  }
   return [...byPath.values()]
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt) || a.workingDir.localeCompare(b.workingDir))
     .slice(0, Math.max(0, limit));
@@ -469,10 +488,21 @@ export function resolveRecentModelAndProvider(
   recent: { model: string; providerId: string | null },
   agentKind: NewSessionAgentKind,
   catalogReady: boolean,
+  providers: readonly ProviderView[],
   visibilityOverrides?: Record<string, boolean> | null,
 ): { model: string; providerId: string | null } {
   if (!catalogReady || modelNeedsReselection(visibilityOverrides, agentKind, recent.model, recent.providerId)) {
     return { model: recent.model, providerId: recent.providerId };
+  }
+  // 先处理组 Auto：Pi 的 null 来源就是 Cindy AI，不能先落到通用同名来源回退。
+  // 身份取完整目录；目标限定可见模型行，旧来源仍列着模型但停用/断连时不算搬迁。
+  if (isCindyAutoModelId(recent.model)) {
+    const remembered = recent.providerId ?? (agentKind === 'pi' ? 'xd' : null);
+    const relocationProviders = providers.filter((provider) =>
+      provider.id === remembered || validateModelProviderId(modelRows, provider.id, recent.model, true),
+    );
+    const relocated = movedCindyAutoSourceId(relocationProviders, { agent: agentKind, ...recent });
+    if (relocated) return { model: recent.model, providerId: relocated };
   }
   // providerId 为 null 分两种:①该会话本来就走被控端默认路由(合法来源);
   // ②历史版本遗留的「自定义供应商模型 + providerId=NULL」坏数据(#1898 典型
@@ -533,6 +563,15 @@ export function assertSubmitModelResolved(resolved: { model: string }, selectedM
   throw new Error(i18n.t('session.common.modelUnavailableReselect', { model: selectedModel }));
 }
 
+/** 提交守卫的完整快照：身份目录与可见行必须来自同一次响应。 */
+export type SubmitGuardCatalog = {
+  rows: readonly ProviderModelRow[];
+  providers: readonly ProviderView[];
+  catalogKnown: boolean;
+  genAt: number;
+  visibilityOverrides?: Record<string, boolean>;
+};
+
 /**
  * 提交终检的目录取信(代际安全版,独立 review P1-1):**唯一数据源 = 设备缓存 + 代际**,
  * 不再读渲染期 rows——catalogReadyRef 是渲染期镜像,外部驱逐后要等下一渲染才失效,
@@ -556,11 +595,11 @@ export async function resolveSubmitGuardCatalog(args: {
   fetch: () => Promise<DeviceProvidersPayload>;
   /** 把 payload 重建为守卫 rows(含 keepSelected 豁免)。 */
   buildRows: (payload: DeviceProvidersPayload) => readonly ProviderModelRow[];
-}): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number; visibilityOverrides?: Record<string, boolean> }> {
+}): Promise<SubmitGuardCatalog> {
   const { cached, gen, fetch, buildRows } = args;
   if (args.deferRefreshToCreation) {
     // 旧缓存可能缺少刚连接的来源，不能先把用户选择回退、再让 fresh 校验这个回退值。
-    return { rows: [], catalogKnown: false, genAt: gen() };
+    return { rows: [], providers: [], catalogKnown: false, genAt: gen() };
   }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const genAt = gen();
@@ -574,12 +613,12 @@ export async function resolveSubmitGuardCatalog(args: {
       try {
         const fresh = await fetch();
         if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
-        return { rows: buildRows(fresh), catalogKnown: true, genAt,
+        return { rows: buildRows(fresh), providers: fresh.providers, catalogKnown: true, genAt,
           ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
         };
       } catch {
         if (gen() !== genAt) continue;
-        return { rows: buildRows(hit), catalogKnown: true, genAt,
+        return { rows: buildRows(hit), providers: hit.providers, catalogKnown: true, genAt,
           ...(hit.modelVisibilityOverrides ? { visibilityOverrides: hit.modelVisibilityOverrides } : {}),
         };
       }
@@ -592,12 +631,12 @@ export async function resolveSubmitGuardCatalog(args: {
       try {
         const fresh = await fetch();
         if (gen() !== genAt) continue; // 拉取期间换代 → join 新代
-        return { rows: buildRows(fresh), catalogKnown: true, genAt,
+        return { rows: buildRows(fresh), providers: fresh.providers, catalogKnown: true, genAt,
           ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
         };
       } catch {
         if (gen() !== genAt) continue;
-        return { rows: [], catalogKnown: false, genAt };
+        return { rows: [], providers: [], catalogKnown: false, genAt };
       }
     }
     try {
@@ -605,15 +644,15 @@ export async function resolveSubmitGuardCatalog(args: {
       // await 期间换代 → 旧 promise 返回值已过期(缓存层只拒绝回写、仍 resolve),
       // 弃用并 join 新代(下一轮循环重读缓存/新 inflight)。
       if (gen() !== genAt) continue;
-      return { rows: buildRows(fresh), catalogKnown: true, genAt,
+      return { rows: buildRows(fresh), providers: fresh.providers, catalogKnown: true, genAt,
           ...(fresh.modelVisibilityOverrides ? { visibilityOverrides: fresh.modelVisibilityOverrides } : {}),
         };
     } catch {
       if (gen() !== genAt) continue;
-      return { rows: [], catalogKnown: false, genAt };
+      return { rows: [], providers: [], catalogKnown: false, genAt };
     }
   }
-  return { rows: [], catalogKnown: false, genAt: gen() };
+  return { rows: [], providers: [], catalogKnown: false, genAt: gen() };
 }
 
 /**
@@ -776,6 +815,8 @@ export function pickAgentDefaultRuntime(args: {
   /** 被控电脑该 agent 的新建任务默认(hostDraftRuntimeFromDefaults);null = 无 / 旧被控端。 */
   hostRuntime: NewSessionRuntime | null;
   modelRows: readonly ProviderModelRow[];
+  /** 完整目录用于识别没有可见模型行的旧来源。 */
+  providers: readonly ProviderView[];
   currentEffort: string;
   /** 供应商目录是否已就绪(加载完成);未就绪时来源校验信任被控电脑默认(见 validateModelProviderId)。 */
   catalogReady: boolean;
@@ -797,6 +838,7 @@ export function pickAgentDefaultRuntime(args: {
       { model: recent.model, providerId: recent.providerId },
       agentKind,
       catalogReady,
+      args.providers,
       args.visibilityOverrides,
     ));
   } else if (catalogReady && modelRows[0]) {
@@ -944,6 +986,8 @@ export function resolveNewSessionAutoDefault(input: {
   /** 被控电脑 rowsAgentKind 的新建任务默认(hostDraftRuntimeFromDefaults);null = 无。 */
   hostRuntime: NewSessionRuntime | null;
   modelRows: readonly ProviderModelRow[];
+  /** 完整目录用于识别没有可见模型行的旧来源。 */
+  providers: readonly ProviderView[];
   /** modelRows 是按哪个 agent 的目录构建的;被控电脑默认只在同一 agent 时采用。 */
   rowsAgentKind: NewSessionAgentKind;
   /** 供应商目录是否已就绪;未就绪时来源校验信任被控电脑默认(见 validateModelProviderId)。 */
@@ -980,6 +1024,7 @@ export function resolveNewSessionAutoDefault(input: {
       { model: recent.model, providerId: recent.providerId },
       rowsAgentKind,
       catalogReady,
+      input.providers,
       input.visibilityOverrides,
     );
     const sectionModel = findSectionModelRow(modelRows, model, providerId)?.model;
@@ -1148,7 +1193,7 @@ function readNewSessionDeviceOptionsParam(value: unknown): NewSessionDeviceOptio
       const record = item as Record<string, unknown>;
       const deviceId = readString(record.deviceId)?.trim() ?? '';
       if (!deviceId) return [];
-      const name = readString(record.name)?.trim() || deviceId;
+      const name = deviceDisplayName(deviceId, readString(record.name));
       return [{ deviceId, name }];
     });
   } catch {
@@ -1165,7 +1210,7 @@ function normalizeNewSessionDeviceOptions(
     const deviceId = option.deviceId.trim();
     if (!deviceId || seen.has(deviceId)) continue;
     seen.add(deviceId);
-    result.push({ deviceId, name: option.name.trim() || deviceId });
+    result.push({ deviceId, name: deviceDisplayName(deviceId, option.name) });
   }
   return result;
 }

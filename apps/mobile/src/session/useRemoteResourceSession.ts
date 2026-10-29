@@ -10,24 +10,27 @@ import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailabil
 import { createRemoteReadRecovery } from '@/device-link/remoteReadRecovery';
 import { createRemoteSyncCoordinator, retryRemoteSyncRead, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
 import { isAutoRecoveringRemoteError, formatRemoteError } from '@/device-link/remoteStatus';
-import { markRemoteResourceRead } from '@/device-link/remoteResourceCache';
+import { forgetRemoteResource, markRemoteResourceRead } from '@/device-link/remoteResourceCache';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { remoteSessionStore } from './remoteSessionStore';
 import type { RemoteSession } from './types';
+import { useCachedCompanionSession } from './useCachedCompanionSession';
 
 /** Follow a companion's current host-owned task on focus/reconnect, retaining its permanent identity. */
 export function useRemoteResourceSession(deviceId: string, deviceName: string, sessionId: string, canMarkRead: boolean, metadataVerified = false) {
-  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string }>();
-  const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : '';
-  const resourceId = typeof params.resourceId === 'string' ? params.resourceId : '';
-  const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : '';
+  const params = useLocalSearchParams<{ resourceCollectionId?: string; resourceId?: string; resourceKind?: string; openSearch?: string; resourceHistorySessionId?: string }>();
+  const savedCompanion = useCachedCompanionSession(deviceId, sessionId);
+  const collectionId = typeof params.resourceCollectionId === 'string' ? params.resourceCollectionId : savedCompanion ? 'teammates' : '';
+  const resourceId = typeof params.resourceId === 'string' ? params.resourceId : savedCompanion?.ref.id ?? '';
+  const resourceKind = typeof params.resourceKind === 'string' ? params.resourceKind : savedCompanion?.ref.kind ?? '';
   const historyEntry = params.openSearch === '1';
+  const transcriptEntry = params.resourceHistorySessionId === sessionId;
   const { invoke, openLink, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { user, accountGeneration } = useAuth();
   const { t, i18n } = useTranslation();
   const router = useRouter();
   const focused = useIsFocused();
-  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId, historyEntry]);
+  const identity = JSON.stringify([accountGeneration, deviceId, sessionId, collectionId, resourceKind, resourceId, historyEntry, transcriptEntry]);
   const [display, setDisplay] = useState<{ identity: string; resource: RemoteResource } | null>(null);
   const binding = JSON.stringify([identity, connectionEpoch, i18n.language]);
   const current = useRef(binding); current.current = binding;
@@ -38,20 +41,22 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
   const retry = useCallback(() => setAttempt(value => value + 1), []);
   const cached = readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, collectionId)
     .find(row => row.host.deviceId === deviceId && row.item.ref.id === resourceId && row.item.ref.kind === resourceKind)?.item;
-  const resource = display?.identity === identity ? display.resource : cached ?? null;
+  const savedMatches = savedCompanion?.ref.id === resourceId && savedCompanion.ref.kind === resourceKind && collectionId === 'teammates';
+  const resource = display?.identity === identity ? display.resource : cached ?? (savedMatches ? savedCompanion : null);
   const stage = (display?.identity === identity
     ? display.resource.blocks?.find(block => block.id === 'invitation' && block.primitive === 'status')?.data as { stage?: string } | undefined
     : undefined)?.stage;
   const cachedTarget = resource?.links.find(link => link.rel === 'conversation')?.target;
   // Local editing and durable queuing do not confer permission to dispatch.
-  const canCompose = !required || (!!resource && cachedTarget?.kind === 'session' && cachedTarget.sessionId === sessionId
-    && (!stage || stage === 'ready') && (!failure || failure.binding !== binding || isAutoRecoveringRemoteError(failure.message)));
-  const ready = !required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified);
+  const canCompose = !transcriptEntry && (!required || (!!resource && cachedTarget?.kind === 'session' && cachedTarget.sessionId === sessionId
+    && (!stage || stage === 'ready') && (!failure || failure.binding !== binding || isAutoRecoveringRemoteError(failure.message))));
+  // `ready` also unlocks queued sends and runtime controls in the session screen.
+  const ready = !transcriptEntry && (!required || (focused && AppState.currentState === 'active' && status === 'online' && verified === binding && metadataVerified));
   const markReadThrough = useCallback((at: number) => {
-    if (current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
+    if (!transcriptEntry && current.current === binding && AppState.currentState === 'active' && ready && canMarkRead && resourceKind === 'bot' && resource && Number.isFinite(at) && at > 0) {
       void markRemoteResourceRead(user?.id ?? '', deviceId, resourceId, Math.min(at, resource.display.lastReplyAt ?? 0));
     }
-  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id]);
+  }, [binding, canMarkRead, deviceId, ready, resource, resourceId, resourceKind, user?.id, transcriptEntry]);
   useFocusEffect(useCallback(() => {
     if (!collectionId || !resourceId || !resourceKind || !deviceId || status !== 'online') return;
     setVerified(null);
@@ -70,6 +75,21 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
           return getRemoteResource(invoke, { deviceId, deviceName }, { collectionId, id: resourceId, kind: resourceKind }, i18n.language);
         });
         if (!valid()) return;
+        if (transcriptEntry) {
+          const profile = await retryRemoteSyncRead(run, () => invoke<{
+            sessions?: Array<{ id: string; role: string; status: string }>;
+          }>(deviceId, 'local-db:bots:get', [resourceId]));
+          if (!valid()) return;
+          if (!profile?.sessions?.some(row => row.id === sessionId && row.status !== 'deleted'
+            && (row.role === 'canonical' || row.role === 'history'))) {
+            throw new Error(t('devices.resources.noConversation'));
+          }
+          setDisplay({ identity, resource });
+          setFailure(null);
+          setVerified(binding);
+          recovery.succeeded();
+          return;
+        }
         // Reuse this existing read rather than issuing a second profile request per turn.
         setDisplay({ identity, resource });
         setFailure(null);
@@ -105,8 +125,10 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
         setFailure({ binding, message: formatRemoteError(error) });
         recovery.failed(error);
         const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
-        if (code === 'NOT_FOUND' || /\[NOT_FOUND\]/.test(String(error))) {
+        const denied = ['NOT_FOUND', 'FORBIDDEN', 'PERMISSION_DENIED', 'ACCESS_REVOKED', 'DEVICE_REVOKED'];
+        if (denied.includes(String(code)) || denied.some(value => String(error).includes(`[${value}]`))) {
           setDisplay(null);
+          if (user?.id) void forgetRemoteResource(user.id, resourceId);
           // A removed/hidden resource must leave the cached task view immediately.
           // The resolver displays the existing unavailable/retry state.
           router.replace({ pathname: '/resources/[collectionId]/[resourceId]', params: {
@@ -130,6 +152,6 @@ export function useRemoteResourceSession(deviceId: string, deviceName: string, s
     const appState = AppState.addEventListener('change', (state) => { generation += 1; setVerified(null); if (state === 'active') { coordinator.setContext(binding); refresh(); } else coordinator.setContext('background'); });
     refresh();
     return () => { disposed = true; recovery.dispose(); coordinator.setContext('disposed'); setVerified(null); offPush(); offTopic(); appState.remove(); if (timer) clearTimeout(timer); };
-  }, [attempt, binding, historyEntry, collectionId, deviceId, deviceName, identity, invoke, openLink, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
-  return { resource, ready, canCompose, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
+  }, [attempt, binding, historyEntry, transcriptEntry, collectionId, deviceId, deviceName, identity, invoke, openLink, i18n.language, onRemoteResourceChanged, resourceId, resourceKind, router, sessionId, status, subscribe, t, unsubscribe, user?.id]));
+  return { resource, ready, canCompose, readOnly: transcriptEntry, markReadThrough, error: failure?.binding === binding ? failure.message : null, retry };
 }

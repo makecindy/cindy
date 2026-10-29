@@ -458,7 +458,12 @@ export class RsbWindowController {
   async routeCommand(
     request: RsbWindowCommandRouteRequest,
   ): Promise<RsbWindowCommandRouteResult> {
-    const { command, allowOpen } = request;
+    const { allowOpen } = request;
+    // 子窗口执行开页时也需要原点击来源。只从既有路由信封派生一次，
+    // 与 command 一起经过现有排队/交接路径；不信任 command 内自报的来源。
+    const command: RsbWindowCommand = request.command.type === 'open-plugin-task'
+      ? { ...request.command, userInitiated: request.userInitiated === true }
+      : request.command;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
     const hostSessionId = commandHostSessionId(command);
@@ -939,9 +944,9 @@ export class RsbWindowController {
 
   // ── 命令路由辅助 ─────────────────────────────────────────────────
 
-  private adoptHostSession(sessionId: string): void | Promise<void> {
+  private adoptHostSession(sessionId: string, retrying = false): void | Promise<void> {
     if (!sessionId) return;
-    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+    if (!retrying && this.lastContext?.available && this.lastContext.sessionId === sessionId) {
       // 已经在目标宿主上。再钉一次会挡住之后的 setContext。
       // 若 pin 还钉着别人，当前宿主的新请求要先把它拆掉。
       if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
@@ -953,24 +958,53 @@ export class RsbWindowController {
     }
     if (this.pinnedSessionId !== sessionId) this.replacePinnedSession(sessionId);
     const cached = this.knownContexts.get(sessionId);
-    if (cached) {
+    // Bot ownership can change while this session is not focused. In particular,
+    // a cached canonical session may have become history, and a null owner may
+    // have been sent before the renderer's Bot profiles finished loading.
+    const needsFreshBotOwner = cached?.botOwner !== undefined && !!this.deps.resolveHostContext;
+    if (cached && !needsFreshBotOwner) {
       this.applyAdoptedContext(cached);
       return;
     }
-    const pending = this.deps.resolveHostContext?.(sessionId);
-    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
-      return Promise.resolve(pending).then((resolved) => {
-        if (this.disposed) return;
-        if (resolved) this.rememberContext(resolved);
-        if (this.pinnedSessionId !== sessionId) return;
-        this.finishAdoptHostSession(sessionId, resolved);
-      });
+    let pending: ReturnType<NonNullable<RsbWindowControllerDeps['resolveHostContext']>> | undefined;
+    try {
+      pending = this.deps.resolveHostContext?.(sessionId);
+    } catch {
+      this.finishAdoptHostSession(sessionId, null, cached, true);
+      return;
     }
-    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null);
+    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
+      return Promise.resolve(pending).then(
+        (resolved) => {
+          if (this.disposed) return;
+          if (resolved) this.rememberContext(resolved);
+          if (this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, resolved, cached);
+        },
+        () => {
+          if (this.disposed || this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, null, cached, true);
+        },
+      );
+    }
+    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null, cached);
   }
 
-  private finishAdoptHostSession(sessionId: string, resolved: RsbWindowContext | null): void {
+  private finishAdoptHostSession(
+    sessionId: string,
+    resolved: RsbWindowContext | null,
+    cached?: RsbWindowContext,
+    retryOnFailure = false,
+  ): void {
     if (!resolved) {
+      if (cached) {
+        // Draft sessions may not be in the DB yet. Keep their usable host
+        // context, but never publish an unverified cached Bot owner.
+        this.applyAdoptedContext({ ...cached, botOwner: undefined });
+        if (retryOnFailure) this.scheduleAdoptRetry(sessionId);
+        else this.resetAdoptRetry();
+        return;
+      }
       this.scheduleAdoptRetry(sessionId);
       return;
     }
@@ -999,7 +1033,7 @@ export class RsbWindowController {
     this.adoptRetryTimer = setTimeout(() => {
       this.adoptRetryTimer = null;
       if (this.disposed || this.pinnedSessionId !== sessionId) return;
-      void this.adoptHostSession(sessionId);
+      void this.adoptHostSession(sessionId, true);
     }, delay);
   }
 

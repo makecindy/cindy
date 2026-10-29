@@ -48,6 +48,7 @@ type VoiceInputCaptureSessionOptions = {
   workletUrl: string;
   deviceId?: string;
   fastActivationEnabled: boolean;
+  temporaryMicrophone?: boolean;
   getRunId: () => string | null;
   setEngine: (engine: WebMicAudioEngine | null) => void;
   isCurrentEngine?: (engine: WebMicAudioEngine) => boolean;
@@ -84,6 +85,7 @@ export async function startVoiceInputCaptureSession(
       workletUrl: options.workletUrl,
       deviceId,
       ...createVoiceInputAudioProfile(options.fastActivationEnabled),
+      releaseAfterUse: options.temporaryMicrophone,
       onStateChange: options.onStateChange,
       onInterrupted: options.onInterrupted,
     });

@@ -32,7 +32,7 @@ function emit(settings: AppearanceSettings) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
-describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (kind) => {
+describe.each(['sidebar', 'resource'])('%s appearance startup', (kind) => {
   let bridge: {
     getSync(): AppearanceSettings | null;
     onChanged(callback: (settings: AppearanceSettings) => void): () => void;
@@ -50,10 +50,9 @@ describe.each(['sidebar', 'resource', 'ghost-panel'])('%s appearance startup', (
     mocks.sendSync.mockImplementation((channel) =>
       channel === 'appearance-settings:get-sync' ? DEFAULT_APPEARANCE_SETTINGS : null,
     );
-    vi.stubGlobal('window', { location: { search: '?ghostPanelWindow=fixture' } });
+    vi.stubGlobal('window', { location: { search: '?sidebarWindow=1' } });
     if (kind === 'sidebar') await import('../sidebarWindowPreload');
-    else if (kind === 'resource') await import('../resourceUsagePreload');
-    else await import('../ghostPanelWindowPreload');
+    else await import('../resourceUsagePreload');
     bridge = mocks.expose.mock.calls.at(-1)![1].appearanceSettings;
   });
 

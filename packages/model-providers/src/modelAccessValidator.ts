@@ -1,3 +1,4 @@
+import { modelInterfacesError } from './modelInterfaceContract.js';
 import { parseModelDisplayPricing } from './modelDisplayPricing.js';
 import {
   validModelMetadata,
@@ -22,6 +23,7 @@ import {
   MODEL_REGISTRY_V3_SCHEMA_VERSION,
   MODEL_REGISTRY_V4_SCHEMA_VERSION,
   MODEL_REGISTRY_V5_SCHEMA_VERSION,
+  MODEL_REGISTRY_V6_SCHEMA_VERSION,
   MODEL_NATIVE_APIS,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
@@ -1022,6 +1024,7 @@ function registryRouteError(
       ? [
           ...MODEL_REGISTRY_ROUTE_FIELDS,
           ...(schemaVersion >= 5 ? ["referencePriceGroup"] : []),
+          ...(schemaVersion >= 6 ? ["interfaces", "preferredInterfaces"] : []),
           "defaults",
           "forceOverrides",
           "overrideReason",
@@ -1108,6 +1111,7 @@ function registryEntryError(
         ? [
             ...MODEL_REGISTRY_ENTRY_V2_FIELDS,
             "nativeApi",
+            ...(schemaVersion >= 6 ? ["nativeApis"] : []),
             ...(schemaVersion >= 4
               ? [
                   "modelRef",
@@ -1279,12 +1283,13 @@ export function parseModelRegistry(
   const unknownField = unknownFieldError(
     value,
     value.schemaVersion === MODEL_REGISTRY_V4_SCHEMA_VERSION ||
-      value.schemaVersion === MODEL_REGISTRY_V5_SCHEMA_VERSION
+      (value.schemaVersion === MODEL_REGISTRY_V5_SCHEMA_VERSION || value.schemaVersion === MODEL_REGISTRY_V6_SCHEMA_VERSION)
       ? [
           ...MODEL_REGISTRY_FIELDS,
           "nativeApiRules",
           "localModels",
           "baseModels",
+          ...(value.schemaVersion === 6 ? ["interfaceProfiles"] : []),
         ]
       : value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [...MODEL_REGISTRY_FIELDS, "nativeApiRules"]
@@ -1297,10 +1302,13 @@ export function parseModelRegistry(
     value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_V3_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_V4_SCHEMA_VERSION &&
-    value.schemaVersion !== MODEL_REGISTRY_V5_SCHEMA_VERSION
+    value.schemaVersion !== MODEL_REGISTRY_V5_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_V6_SCHEMA_VERSION
   ) {
-    return fail("modelRegistry.schemaVersion must be 1, 2, 3, 4 or 5");
+    return fail("modelRegistry.schemaVersion must be 1, 2, 3, 4, 5 or 6");
   }
+  const interfacesError = modelInterfacesError(value);
+  if (interfacesError) return fail(interfacesError);
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail("modelRegistry.updatedAt must be an ISO timestamp");
   }

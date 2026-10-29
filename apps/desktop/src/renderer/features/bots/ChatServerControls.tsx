@@ -4,13 +4,14 @@ import { ChatInviteDialog } from './ChatInviteDialog';
 import { ChatReactionButton } from './ChatReactionButton';
 import { UserPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { MessageActionBar } from '@/components/chat/MessageActionBar';
+import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
 import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '../../../shared/botGroupChat';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
@@ -58,28 +59,35 @@ interface ChatMessageActionProps {
   onChanged: (messageId: string) => void;
 }
 
-/** The reactions under a message's text; each chip toggles the current actor's reaction. */
-export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', onChanged }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'onChanged'>) {
+/**
+ * The reactions on a message; each badge toggles the current actor's reaction. `corner` hangs them over
+ * the bubble's outer top corner (right for others, left for your own) so they never take a row. They stay
+ * in flow so the bubble widens to fit them, and wrap when even the widest bubble cannot.
+ */
+export function ChatMessageReactions({ groupId, message, members, reactionRevision, align = 'left', corner = false, onChanged }: Pick<ChatMessageActionProps, 'groupId' | 'message' | 'members' | 'reactionRevision' | 'align' | 'onChanged'> & { corner?: boolean }) {
   const { busy, react } = useChatReaction(groupId, message.id, onChanged);
   if (!message.reactions?.length) return null;
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} className={`mt-1 flex flex-wrap items-center gap-1 ${align === 'right' ? 'justify-end' : ''}`}>
+    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-reaction-corner={corner ? align : undefined}
+      className={cn('flex items-center gap-1',
+        corner ? cn('relative z-[5] -mb-2 max-w-[calc(100%+10px)] flex-wrap', align === 'right' ? 'self-start -ml-2.5 flex-row-reverse' : 'self-end -mr-2.5 justify-end')
+          : cn('mt-1 flex-wrap', align === 'right' && 'justify-end'))}>
       {message.reactions.map(reaction => (
         <ChatReactionButton key={reaction.emoji} groupId={groupId} messageId={message.id} reaction={reaction} revision={reactionRevision} members={members}
-          disabled={busy || !groupId} onToggle={() => void react(reaction.emoji, !reaction.me)} />
+          corner={corner} disabled={busy || !groupId} onToggle={() => void react(reaction.emoji, !reaction.me)} />
       ))}
     </div>
   );
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange }: ChatMessageActionProps & {
-  picker: boolean; onPickerChange: (open: boolean) => void;
+function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false }: ChatMessageActionProps & {
+  picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { busy, react } = useChatReaction(groupId, message.id, onChanged);
   return (
     <MessageActionBar copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
-      align={align} hovered simplifiedBotConversation
+      align={align} hovered simplifiedBotConversation compact={compact}
       onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
       quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
       replyAction={onReply ? { onClick: onReply, count: replyCountShown ? undefined : message.replyCount,
@@ -93,17 +101,20 @@ function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQu
 }
 
 /**
- * The message toolbar (copy, share, 引用回复, 话题, reaction, time) floating at the top right of
- * its message, Slack-style. It shows while the message (`group/message`) is hovered, while
- * keyboard focus is inside, while its reaction picker is open, and always on touch screens.
+ * The compact toolbar (引用回复, 话题, reaction, more) beside its message bubble: on the outer side of the
+ * bubble (right of others, left of your own), level with its top, inside the message row so moving
+ * the pointer across the gap keeps the row hovered. With reactions on the bubble's corner it steps
+ * past them. It shows while the message (`group/message`) is hovered, while keyboard focus is
+ * inside, while its reaction picker is open, and always on touch screens. Copy, share and the exact
+ * time are in its more menu.
  */
-export function ChatMessageHoverActions(props: ChatMessageActionProps) {
+export function ChatMessageHoverActions({ besideReactions = false, ...props }: ChatMessageActionProps & { besideReactions?: boolean }) {
   const [picker, setPicker] = useState(false);
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} data-bot-group-message-actions="" data-open={picker ? '' : undefined}
-      className="pointer-events-none absolute -top-3.5 right-1 z-10 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-1 py-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
-      <ChatMessageToolbar {...props} picker={picker} onPickerChange={setPicker} />
-    </div>
+    <BubbleHoverToolbar marker="data-bot-group-message-actions" side={props.align === 'right' ? 'left' : 'right'}
+      open={picker} besideReactions={besideReactions}>
+      <ChatMessageToolbar {...props} compact picker={picker} onPickerChange={setPicker} />
+    </BubbleHoverToolbar>
   );
 }
 

@@ -3,7 +3,8 @@
  * 分享状态、关闭／恢复与删除(收进行内 `···`，与组内电脑一行的「移出组」同一模式)，以及经这个人的供应商组
  * 转给别人用、已处理过的人(provider-sharing.md §4.3)。操作由「远程与分享」页执行，结果以 toast 说明。
  */
-import { CirclePause, CirclePlay, MoreHorizontal, Trash2 } from 'lucide-react';
+import { CirclePause, CirclePlay, MoreHorizontal, Pencil, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 import type { ProviderShareMemberView, ProviderShareReshareView } from '../../../shared/providerShare';
+import { providerShareMemberName } from '../../../shared/providerShareMemberNote';
 import { ShareAvatar } from './ShareAvatar';
 
 export interface ProviderShareMemberActions {
@@ -21,6 +23,8 @@ export interface ProviderShareMemberActions {
   canApproveReshare: boolean;
   onTogglePause: (member: ProviderShareMemberView) => void;
   onRemove: (member: ProviderShareMemberView) => void;
+  onEditNote: (member: ProviderShareMemberView, trigger: HTMLButtonElement | null) => void;
+  onModelAccess?: (member: ProviderShareMemberView, trigger: HTMLButtonElement | null) => void;
   onReshare: (member: ProviderShareMemberView, reshare: ProviderShareReshareView, decision: 'approve' | 'reject') => void;
 }
 
@@ -52,21 +56,27 @@ export function ShareMemberMenu({
   disabled,
   onTogglePause,
   onRemove,
+  onEditNote,
+  onModelAccess,
 }: {
   member: ProviderShareMemberView;
   disabled: boolean;
   onTogglePause: () => void;
   onRemove: () => void;
+  onEditNote: (trigger: HTMLButtonElement | null) => void;
+  onModelAccess?: (trigger: HTMLButtonElement | null) => void;
 }) {
   const { t } = useTranslation();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const paused = member.status === 'paused';
-  const label = t('providerShare.manage.members.moreAria', { name: member.displayName });
+  const label = t('providerShare.manage.members.moreAria', { name: providerShareMemberName(member) });
   const PauseIcon = paused ? CirclePlay : CirclePause;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Tip text={label}>
           <button
+            ref={triggerRef}
             type="button"
             aria-label={label}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
@@ -76,6 +86,14 @@ export function ShareMemberMenu({
         </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {onModelAccess && <DropdownMenuItem disabled={disabled} onClick={() => onModelAccess(triggerRef.current)}>
+          <SlidersHorizontal size={18} className="mr-2.5" />
+          {t('providerShare.modelAccess.memberTitle')}
+        </DropdownMenuItem>}
+        <DropdownMenuItem disabled={disabled} onClick={() => onEditNote(triggerRef.current)}>
+          <Pencil size={18} className="mr-2.5" />
+          {t(member.note ? 'providerShare.manage.memberNote.edit' : 'providerShare.manage.memberNote.add')}
+        </DropdownMenuItem>
         <DropdownMenuItem disabled={disabled} onClick={onTogglePause}>
           <PauseIcon size={18} className="mr-2.5" />
           {t(paused ? 'providerShare.manage.members.resume' : 'providerShare.manage.members.pause')}
@@ -108,7 +126,7 @@ export function ShareMemberReshares({
   return (
     <div className={cn('flex flex-col gap-1.5', className)} data-testid="provider-share-reshare-list">
       <span className="text-12 text-[var(--text-tertiary)]">
-        {t('providerShare.manage.reshare.listTitle', { owner: member.displayName })}
+        {t('providerShare.manage.reshare.listTitle', { owner: providerShareMemberName(member) })}
       </span>
       {decided.map((reshare) => {
         const approved = reshare.state === 'approved';

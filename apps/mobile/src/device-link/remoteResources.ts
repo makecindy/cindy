@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   REMOTE_RESOURCE_GET_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
@@ -45,6 +46,8 @@ const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
+  'plugin-card-forms',
+  'mail-message',
   'teammate-todos',
 ];
 
@@ -86,7 +89,7 @@ export function remoteResourceDiscoveryTargets(
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+    .map((device) => ({ deviceId: device.deviceId, deviceName: deviceDisplayName(device.deviceId, device.name, devices),
       ...(!device.canOpen ? { offline: true } : {}),
     }));
 }
@@ -229,6 +232,7 @@ function validDescriptor(value: unknown): RemoteCollectionDescriptor | null {
     id,
     resourceKind,
     title,
+    ...(record.actions !== undefined ? { actions: normalizeRemoteActions(record.actions) } : {}),
     ...(placement ? { placement } : {}),
     ...(iconName && iconFallbackText !== null
       ? { icon: { name: iconName, fallbackText: iconFallbackText } }
@@ -433,8 +437,9 @@ function normalizeRemoteCollectionItem(
   const display = normalizeRemoteDisplay(item?.display);
   const revision = boundedString(item?.revision, 1_024);
   if (!item || !ref || ref.collectionId !== collectionId || !display || !revision) return null;
+  // A teammate row carries a link per open task it follows (the desktop sends at most 200).
   const links = Array.isArray(item.links)
-    ? item.links.slice(0, 64).flatMap((link) => {
+    ? item.links.slice(0, 256).flatMap((link) => {
         const normalized = normalizeRemoteLink(link);
         return normalized ? [normalized] : [];
       })
@@ -471,6 +476,7 @@ export interface HostedRemoteCollectionItem {
   item: RemoteCollectionItem;
   /** Local direct Chat Server projection; never changes the device-link wire display. */
   lastReplySequence?: string;
+  chatUnread?: { count: number; mentioned: boolean; threadCount: number; threadMentioned: boolean };
   /** Authorized server identities for direct group rows; display only, never cached as permissions. */
   groupMembers?: readonly Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarUrl' | 'avatarColor'>[];
 }
@@ -533,7 +539,7 @@ export function parseRemoteResourceTargets(value: unknown): RemoteResourceHostTa
       ) {
         return [];
       }
-      return [{ deviceId, deviceName: deviceName || deviceId }];
+      return [{ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }];
     });
   } catch {
     return [];

@@ -25,7 +25,7 @@ function setup(virtual: string) {
   const workspace = new ExecutorWorkspace({ workingDir: real, aliases: [{ from: virtual, to: real }] });
   workspace.setVirtualRoot(virtual);
   const controller = createRemoteAgentHandle({
-    client: {} as RemoteAgentRunClient,
+    client: { callWithId: async () => undefined } as unknown as RemoteAgentRunClient,
     started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: virtual, virtualWorkspace: true, methods: [], state: {} },
     workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: () => 'request-id', dispose: async () => {},
   });
@@ -41,6 +41,44 @@ async function eventsFrom(controller: ReturnType<typeof setup>['controller'], in
   expect(input).toEqual(original);
   return output;
 }
+
+// Unit regression: a quota terminal followed by a missing remote run must keep
+// the actionable error (and its reset time), rather than replacing it with EXPIRED.
+describe('remote terminal error ownership', () => {
+  it.each([true, false])('preserves a terminal error across remote close; paired done=%s', async (done) => {
+    const { controller } = setup('/remote/workspace');
+    const error: AgentEvent = { type: 'error', source: 'claude-code', data: {
+      message: "You've hit your weekly limit · resets 9am (Pacific/Auckland)",
+      sdkError: 'rate_limit', usageResetAt: 1792612800000,
+    } };
+    controller.onEvent(error);
+    if (done) controller.onEvent({ type: 'done', source: 'claude-code', data: {} });
+    controller.onClosed('missing', '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.');
+    const events: AgentEvent[] = [];
+    for await (const event of controller.handle.events()) events.push(event);
+    expect(events.filter(event => event.type === 'error')).toEqual([error]);
+  });
+
+  it('still reports remote loss after a nonterminal warning', async () => {
+    const { controller } = setup('/remote/workspace');
+    controller.onEvent({ type: 'error', source: 'claude-code', data: { message: 'retrying', isTerminal: false } });
+    controller.onClosed('missing', '[REMOTE_AGENT_EXPIRED] missing');
+    const events: AgentEvent[] = [];
+    for await (const event of controller.handle.events()) events.push(event);
+    expect(events.at(-1)?.data).toMatchObject({ reason: 'remote_agent_closed' });
+  });
+
+  it('does not carry the previous failure into a newly sent turn', async () => {
+    const { controller } = setup('/remote/workspace');
+    controller.onEvent({ type: 'error', source: 'claude-code', data: { message: 'weekly limit', sdkError: 'rate_limit' } });
+    controller.onEvent({ type: 'done', source: 'claude-code', data: {} });
+    await controller.handle.send({ type: 'user', content: 'try again' });
+    controller.onClosed('missing', '[REMOTE_AGENT_EXPIRED] missing');
+    const events: AgentEvent[] = [];
+    for await (const event of controller.handle.events()) events.push(event);
+    expect(events.at(-1)?.data).toMatchObject({ reason: 'remote_agent_closed' });
+  });
+});
 
 function text(event: AgentEvent): string { return (event.data as { text: string }).text; }
 
@@ -409,4 +447,14 @@ describe('remote file references on the task computer', () => {
     expect(text(final).startsWith(streamed)).toBe(true);
     expect(streamed).not.toContain('/Users/ag');
   });
+});
+
+// #6412: source-local image paths and Base64 are not workspace path projections.
+it('preserves native image bytes and marks source-local paths across the controller boundary', async () => {
+  const { controller } = setup('/linux/agent');
+  const input: AgentEvent = { type: 'image', source: 'codex', data: {
+    kind: 'generation', blockId: 'native', path: '/linux/agent/image.png', data: 'abc/linux/agent/xyz',
+  } };
+  const [output] = await eventsFrom(controller, [input]);
+  expect(output.data).toEqual({ ...(input.data as object), pathOrigin: 'remote-agent' });
 });

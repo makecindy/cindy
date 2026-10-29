@@ -156,12 +156,12 @@ describe("minimal plugin detail state", () => {
       status: "setupRequired",
       statusAction: "settings",
       hasSettings: true,
-      canUseTasks: false,
+      canUseTasks: true,
       missing: ["API key"],
       expired: ["Account"],
     });
   });
-  it("never treats an unknown assessment as ready", () => {
+  it("keeps task entry available without treating an unknown assessment as ready", () => {
     expect(
       pluginDetailModel(
         row(),
@@ -175,7 +175,7 @@ describe("minimal plugin detail state", () => {
     ).toMatchObject({
       status: "setupUnknown",
       statusAction: "retry",
-      canUseTasks: false,
+      canUseTasks: true,
     });
   });
   it("does not advertise tasks for page-only plugins or confuse a crash with disabled", () => {

@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   buildSkipResultText: vi.fn(() => 'skipped'),
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  restoreArchivedSessionForSend: vi.fn(),
+  getManagedWorktreeReadinessForSession: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
@@ -32,7 +34,12 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionRowSnapshotStrict: mocks.getSessionRowSnapshot,
+  restoreArchivedSessionForSend: mocks.restoreArchivedSessionForSend,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../../worktree/restore', () => ({
+  getManagedWorktreeReadinessForSession: mocks.getManagedWorktreeReadinessForSession,
 }));
 vi.mock('../../localDb/dialogueWorkspace', () => ({
   ensureDialogueWorkspaceDir: mocks.ensureDialogueWorkspaceDir,
@@ -104,7 +111,7 @@ function createRunner(getSessionMeta: Maker['getSessionMeta']) {
 }
 
 describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
-  it.each(['archived', 'deleted'])('stops a %s heartbeat before running any hook', async (status) => {
+  it.each(['deleted'])('stops a %s heartbeat before running any hook', async (status) => {
     mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status });
     const { runner, notifier } = createRunner(vi.fn() as never);
     const pause = vi.fn(async () => undefined);
@@ -117,6 +124,9 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getSessionRowSnapshot.mockReset();
+    mocks.restoreArchivedSessionForSend.mockReset();
+    mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('ready');
     // hook 判 skip → fire 在 hook 分支内早退,不进 session 创建,测试聚焦 cwd 传参
     mocks.executePreRunHook.mockResolvedValue({
       status: 'skipped',
@@ -132,6 +142,79 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
       aborted: false,
     });
     mocks.buildSkipResultText.mockReturnValue('skipped');
+  });
+
+  // User decision 2026-10-23: scheduled input restores an archived task like a
+  // user message. Existing tests retired it before hooks. Minimal unit case:
+  // archived target with a recycled managed worktree; hook must see restored files.
+  it.each([false, true])('restores the same archived task and its worktree before the hook (persistent=%s)', async (persistentSession) => {
+    const target = { status: 'archived', workingDir: '/repo/.cindy-worktrees/task' };
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+    mocks.restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    mocks.getManagedWorktreeReadinessForSession.mockImplementation(async () => {
+      expect(target.status).toBe('active');
+      return 'ready';
+    });
+    mocks.executePreRunHook.mockImplementation(async () => {
+      expect(target.status).toBe('active');
+      expect(mocks.getManagedWorktreeReadinessForSession).toHaveBeenCalledWith('owner', target.workingDir);
+      return { decision: 'skip', exitCode: 2 };
+    });
+    const { runner, maker } = createRunner(vi.fn(async () => ({ workDir: target.workingDir })) as never);
+    const pause = vi.fn();
+    const update = vi.fn();
+    runner.attachScheduler({ pause, update } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: 'owner', persistentSession }), createFireContext()))
+      .resolves.toMatchObject({ skipped: true });
+    expect(target.status).toBe('active');
+    expect(pause).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+  });
+
+  // PR #6864: source=user schedules can target managed sessions too. The target's
+  // lifecycle, not just the schedule source, must keep archive retirement intact.
+  it.each([
+    { source: 'bot' },
+    { orcaRole: 'worker' },
+    { orcaRemoteLead: '{"leadSessionId":"lead"}' },
+    { source: 'review' },
+  ])('retires an archived managed target before hooks: %j', async (managed) => {
+    const target = { status: 'archived', ...managed };
+    mocks.getSessionRowSnapshot.mockResolvedValue(target);
+    const { runner, maker } = createRunner(vi.fn() as never);
+    const pause = vi.fn();
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: 'owner' }), createFireContext()))
+      .resolves.toMatchObject({ skipped: true });
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(target.status).toBe('archived');
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+  });
+
+  it('does not run the hook with an unrestored worktree snapshot', async () => {
+    const target = { status: 'archived', workingDir: '/repo/.cindy-worktrees/task' };
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+    mocks.restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('retry');
+    const { runner } = createRunner(vi.fn(async () => ({ workDir: target.workingDir })) as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: 'owner' }), createFireContext()))
+      .rejects.toThrow(/worktree/i);
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+  });
+
+  it.each(['archived', 'deleted'])('does not restore files when a managed target becomes %s while acquiring its route lock', async (status) => {
+    const workingDir = '/repo/.cindy-worktrees/task';
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active', workingDir })
+      .mockResolvedValue({ status, workingDir });
+    const { runner } = createRunner(vi.fn() as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: 'owner' }), createFireContext()))
+      .rejects.toThrow(/unavailable/i);
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(mocks.getManagedWorktreeReadinessForSession).not.toHaveBeenCalled();
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
   });
 
   it('no change starts no model and emits no chat or completion notification', async () => {

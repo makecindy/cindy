@@ -304,9 +304,9 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
       theme: 'light',
     });
     expect(light).toContain('<html lang="zh-CN" data-theme="light">');
-    // 页面底色浅 #EEEEEE/深 #2A2828(design §7.4 条 1),卡底 #FBFBFB/#312F2F
-    expect(light).toContain('--page:#eeeeee');
-    expect(light).toContain('--card:#fbfbfb');
+    // 页面底色 = 登录画布 #F2F2ED/#181818,卡底 = 登录面板 #FDFDF8/#1F1F1F(DESIGN §16.1)
+    expect(light).toContain('--page:#f2f2ed');
+    expect(light).toContain('--card:#fdfdf8');
     const dark = renderOAuthResultPage({
       ...BRAND_BASE,
       variant: 'success',
@@ -314,8 +314,8 @@ describe('wave4 brand login callback card (pageKind=desktop-login)', () => {
       theme: 'dark',
     });
     expect(dark).toContain('<html lang="zh-CN" data-theme="dark">');
-    expect(dark).toContain('--page:#2a2828');
-    expect(dark).toContain('--card:#312f2f');
+    expect(dark).toContain('--page:#181818');
+    expect(dark).toContain('--card:#1f1f1f');
   });
 
   it('callback success/failure/neutral:forced light/dark themes render acceptance states', () => {

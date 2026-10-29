@@ -1,4 +1,5 @@
-import * as SelectPrimitive from '@radix-ui/react-select';
+import { SelectParts as SelectPrimitive } from './select-parts';
+export { SelectParts } from './select-parts';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AriaAttributes, ReactNode } from 'react';
@@ -109,7 +110,7 @@ export function Select({
                 value={option.value}
                 disabled={option.disabled}
                 title={option.title ?? (truncateOptions ? option.label : undefined)}
-                className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[state=checked]:bg-[var(--surface-chip)] data-[highlighted]:bg-[var(--surface-hover)] data-[disabled]:opacity-60"
+                className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[disabled]:opacity-60"
               >
                 {truncateOptions ? (
                   <span className="min-w-0 flex-1 truncate">

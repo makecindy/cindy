@@ -20,6 +20,7 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
+import type { BuiltInSkillDraftIntent } from './composerDraftStore';
 
 export { leadingSlashInvocation };
 
@@ -128,6 +129,33 @@ export async function rewritePiSkillMessageForSend(params: {
     : rewriteAgentSkillInvocationForDispatch(params.message, hit);
 }
 
+/** Preserve a routed built-in choice when the user changes the draft's engine or computer. */
+export async function rewriteBuiltInSkillDraftForSend(params: {
+  message: string;
+  intent: BuiltInSkillDraftIntent;
+  agentKind: AgentKind;
+  workingDir?: string | null;
+  deviceId?: string;
+  remoteHostId?: string | null;
+}): Promise<string | null> {
+  const leading = leadingSlashInvocation(params.message);
+  if (!leading || leading.name !== params.intent.commandName) return params.message;
+  // SSH has no Cindy built-in catalog. Never resolve that task against local files.
+  if (params.remoteHostId) return null;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    forceReload: true,
+  }, params.deviceId);
+  const skill = commands.find((command) => (
+    command.kind === 'agent-skill'
+    && command.builtIn === true
+    && command.enabled !== false
+    && !isSlashCommandUnavailable(command)
+    && (command.name === params.intent.name || command.name === `cindy:${params.intent.name}`)
+  ));
+  if (!skill) return null;
+  return `${params.message.slice(0, leading.start)}/${slashCommandInvocationName(skill)}${params.message.slice(leading.end)}`;
+}
+
 /**
  * Rebase persisted/render-only inline ranges after the leading slash-command
  * token grows or shrinks during runtime alias rewriting.
@@ -230,11 +258,11 @@ export function isSlashCommandRosterReady(
 /**
  * 合并三源 → UnifiedCommand[]。
  * 优先级 (同名时谁覆盖谁) : agent-skill > desktop > agent-builtin。
- *   - agent-skill (用户自定义) 排第一: 体现"用户能盖默认"的语义
+ *   - agent-skill 排第一;同名时 Main 验证过的 Cindy 内置 Skill 优先。
  *   - desktop 第二: app 内置功能 (/help, /clear)
  *   - agent-builtin 兜底: agent 自带 (/compact)
  *
- * 同一类目内按 name 字母序; 不同类目之间按上述优先级排。
+ * Skill 类目内 Cindy 内置项优先，其余按 name 字母序；不同类目按上述优先级排。
  */
 export function mergeCommands(
   desktop: UnifiedCommand[],
@@ -247,7 +275,10 @@ export function mergeCommands(
   const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
   const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
   const tiers: UnifiedCommand[][] = [
-    availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
+    availableSkills.sort((a, b) => (
+      Number(isCindyOfficialSlashCommand(b)) - Number(isCindyOfficialSlashCommand(a))
+      || a.name.localeCompare(b.name)
+    )),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
     [...agentBuiltin].sort((a, b) => a.name.localeCompare(b.name)),
     unavailableSkills.sort((a, b) => a.name.localeCompare(b.name)),
@@ -321,6 +352,33 @@ export function filterSlashCommands(
   return filtered.length > limit ? filtered.slice(0, limit) : filtered;
 }
 
+type SkillListResult = { success: boolean; skills?: unknown[] };
+const pendingSkillLists = new WeakMap<object, Map<string, Promise<SkillListResult>>>();
+
+/** Share only outstanding reads; edits and activation changes remain live. */
+function loadPendingSkills(
+  key: string | null,
+  forceReload: boolean,
+  load: () => Promise<SkillListResult>,
+): Promise<SkillListResult> {
+  const owner = window.electronAPI;
+  let pending = pendingSkillLists.get(owner);
+  if (!pending) {
+    pending = new Map();
+    pendingSkillLists.set(owner, pending);
+  }
+  if (key !== null && !forceReload) {
+    const existing = pending.get(key);
+    if (existing) return existing;
+  }
+  const request = load().catch(() => ({ success: false })).finally(() => {
+    // An older request must not evict an in-flight forced refresh.
+    if (key !== null && pending.get(key) === request) pending.delete(key);
+  });
+  if (key !== null) pending.set(key, request);
+  return request;
+}
+
 /**
  * 拉三路 IPC, 合并成 UnifiedCommand[]。
  *
@@ -348,7 +406,6 @@ export async function loadAllCommands(
     commands?: unknown[];
     runtimeStatus?: PiPackageCommandRuntimeStatus;
   };
-  type SkillRes = { success: boolean; skills?: unknown[] };
 
   // device-link「以被控端为准」:agent-builtin / agent-skill 是被控端**该会话**的能力,远程时经隧道
   // 从被控端读(channel 已 allowlist,workingDir 是被控端路径,扫描在被控端跑正确)。
@@ -384,15 +441,17 @@ export async function loadAllCommands(
     ...(opts?.forceReload !== undefined ? { forceReload: opts.forceReload } : {}),
     ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
   };
-  const skillP: Promise<SkillRes> = shouldLoadSkills
-    ? (
-        deviceId
+  const skillP: Promise<SkillListResult> = shouldLoadSkills
+    ? loadPendingSkills(
+        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        opts?.forceReload === true,
+        () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
               agentKind,
               skillParams,
-            ]) as Promise<SkillRes>)
-          : api.listAgentSkills(agentKind, skillParams)
-      ).catch(() => ({ success: false }))
+            ]) as Promise<SkillListResult>)
+          : api.listAgentSkills(agentKind, skillParams),
+      )
     : Promise.resolve({ success: true, skills: [] });
 
   const [desktopRes, builtinRes, skillRes] = await Promise.all([desktopP, builtinP, skillP]);

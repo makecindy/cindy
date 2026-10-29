@@ -1,8 +1,9 @@
+import type { ProviderShareUsageDetails } from '../../../shared/providerShareInsights';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * 「远程与分享」页的「用量」块(供应商组 §7、§10)：与设置 → 用量同一套版式(2026-10-17 用户确认原型)——
- * 右上筛选(使用方、组内电脑、时间范围与日期)，下面依次是概览、按人、近 30 天每日 token、活跃热力图、
- * 按电脑、按模型。默认是所有人、所有组内电脑的合计；选某个人或某台电脑后整块跟着变，点表格里的一行也一样。
+ * 右上筛选(使用方、组内电脑、时间范围与日期)，下面依次是概览、活跃热力图、明细(按人 / 按电脑 / 按模型切换)、
+ * 近 30 天每日 token。默认是所有人、所有组内电脑的合计；选某个人或某台电脑后整块跟着变。
  *
  * 数据是管理对象所在电脑的按天明细(usage-history)：你自己 = 本机与你其他电脑的合计，分享的人按人，经另一台
  * 电脑转来的看不到具体的人、按那台电脑一行。没有组的供应商当成只有本机一台的组(2026-10-12)，只是不出现组内
@@ -15,7 +16,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import '@/components/settings/usage/usageCharts.css';
 
 import { History, Monitor, RefreshCw } from 'lucide-react';
-import { Fragment, useCallback, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { UsageHeatmap } from '@/components/new-chat/UsageHeatmap';
@@ -42,6 +43,7 @@ import type {
   ProviderUsageHistoryView,
 } from '../../../shared/providerShare';
 import { DEFAULT_USAGE_CURRENCY, type RegionalMoney } from '../../../shared/regionalMoney';
+import { providerShareMemberName } from '../../../shared/providerShareMemberNote';
 import { formatShareMoney, formatShareTokens } from './providerShareFormat';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from './providerShareNames';
 import { deviceIdOfMemberKey, shareAgentDeviceIdOfMemberKey } from './providerUsageBreakdown';
@@ -100,6 +102,7 @@ interface ComputerLabel {
 
 export function ProviderUsageSection({
   providerId,
+  sharedUsage,
   history,
   status,
   legacyOwn,
@@ -111,13 +114,14 @@ export function ProviderUsageSection({
   time,
 }: {
   providerId: string;
+  sharedUsage?: ProviderShareUsageDetails;
   /** 按天明细；还没读到、读失败或旧版本时为 null。 */
   history: ProviderUsageHistoryView | null;
   status: ProviderUsageStatus;
   /** 旧版本电脑：你自己所有时间的合计(own-usage)。 */
   legacyOwn: ProviderOwnUsageView | null;
   members: readonly ProviderShareMemberView[];
-  memberActions: ProviderShareMemberActions;
+  memberActions?: ProviderShareMemberActions;
   selfDeviceName: string | null;
   ownerDeviceId?: string;
   /** 远程管理时由页面传入建组电脑上的组；不传时读本机组设置。 */
@@ -146,12 +150,16 @@ export function ProviderUsageSection({
   const range: UsageHistoryRange = legacy ? 'all' : rangeChoice;
   const [partyChoice, setParty] = useState('all');
   const [computerChoice, setComputer] = useState('all');
+  const [breakdownChoice, setBreakdown] = useState<StackBy>('party');
+  const breakdown: StackBy = !group && breakdownChoice === 'computer' ? 'party' : breakdownChoice;
+  const breakdownId = useId();
   const [stackChoice, setStack] = useState<StackBy>('party');
   const stack: StackBy = !group && stackChoice === 'computer' ? 'party' : stackChoice;
   const [heatmapWeeks, setHeatmapWeeks] = useState(20);
-  const todayKey = history?.todayKey ?? '';
+  const todayKey = sharedUsage?.todayKey ?? history?.todayKey ?? '';
 
   const rows = useMemo<ProviderUsageRow[]>(() => {
+    if (sharedUsage) return sharedUsage.parties.flatMap((party) => party.days.map((day) => ({ ...day, providerId: null, memberKey: null, computer: null, party: party.key })));
     if (history) {
       // owned 刷新比按日历史快；成员删除后先从旧快照排除，避免总量和页面上的成员行短暂不一致。
       const activeMemberIds = new Set(members.map((member) => member.memberId));
@@ -162,9 +170,16 @@ export function ProviderUsageSection({
     }
     if (legacy) return rowsFromLegacy(legacyOwn, members, aliases);
     return [];
-  }, [aliases, history, legacy, legacyOwn, members]);
+  }, [aliases, history, legacy, legacyOwn, members, sharedUsage]);
 
   const parties = useMemo<UsageParty[]>(() => {
+    if (sharedUsage) return sharedUsage.parties.map((party) => ({
+      key: party.key,
+      name: party.isRelay ? t('providerShare.insights.relay') : party.displayName,
+      tag: party.isYou ? t('providerShare.insights.you') : party.isOwner ? t('providerShare.insights.owner') : '',
+      person: party.isRelay ? undefined : { displayName: party.displayName, avatarUrl: party.avatarUrl },
+      lastUsedAt: party.lastUsedAt,
+    }));
     const selfName = user?.name?.trim() || t('settings.userProfile.local.name');
     const legacySelfLast = [legacyOwn?.local, ...(legacyOwn?.devices ?? [])]
       .reduce<number | null>((latest, part) => (part ? Math.max(latest ?? 0, part.lastUsedAt) : latest), null);
@@ -180,7 +195,7 @@ export function ProviderUsageSection({
       const usage = history?.members.find((item) => item.memberId === member.memberId);
       list.push({
         key: memberParty(member.memberId),
-        name: member.displayName,
+        name: providerShareMemberName(member),
         tag: t('providerGroup.usage.shareSource'),
         person: { displayName: member.displayName, avatarUrl: member.avatarUrl },
         member,
@@ -203,16 +218,15 @@ export function ProviderUsageSection({
       });
     }
     return list;
-  }, [devices, history, legacyOwn, members, t, user?.avatar, user?.name]);
+  }, [devices, history, legacyOwn, members, sharedUsage, t, user?.avatar, user?.name]);
 
   const computerLabel = useCallback(
     (key: string | null): ComputerLabel => {
-      if (key === null) return { name: t('providerGroup.usage.unattributed'), source: t('providerGroup.usage.unattributedSource') };
-      const removed = memberKeys.includes(key) ? null : t('providerGroup.usage.removedMember');
+      if (key === null) return { name: t('providerGroup.usage.unattributed'), source: null };
       if (key === PROVIDER_GROUP_LOCAL_MEMBER_KEY) {
         return {
           name: ownerDeviceId ? selfDeviceName ?? t('providerGroup.usage.unknownDevice') : t('providerGroup.member.local'),
-          source: removed ?? (ownerDeviceId ? null : selfDeviceName),
+          source: ownerDeviceId ? null : selfDeviceName,
         };
       }
       const member = group?.members.find((item) => item.key === key)
@@ -221,7 +235,7 @@ export function ProviderUsageSection({
       if (deviceId) {
         return {
           name: devices?.find((device) => device.deviceId === deviceId)?.name || member?.label || t('providerGroup.usage.unknownDevice'),
-          source: removed ?? t('providerGroup.member.sourceDevice'),
+          source: t('providerGroup.member.sourceDevice'),
         };
       }
       // 分享来的电脑只用分享者的昵称称呼，不用电脑名(provider-sharing.md §6)。
@@ -229,10 +243,10 @@ export function ProviderUsageSection({
       const owner = shareDevice ? ownerNameOf(shareDevice) : null;
       return {
         name: shareDevice ? providerShareComputerName(t, owner) : t('providerGroup.usage.unknownDevice'),
-        source: removed ?? (owner ? t('providerGroup.member.sourceShare', { name: owner }) : null),
+        source: owner ? t('providerGroup.member.sourceShare', { name: owner }) : null,
       };
     },
-    [devices, group, memberKeys, ownerDeviceId, ownerNameOf, selfDeviceName, t],
+    [devices, group, ownerDeviceId, ownerNameOf, selfDeviceName, t],
   );
 
   const computers = useMemo(() => computerOrder(memberKeys, rows), [memberKeys, rows]);
@@ -241,7 +255,7 @@ export function ProviderUsageSection({
 
   // 选中的人被删除、选中的电脑移出组后回到全部，不停在一个不存在的选项上。
   const party = parties.some((item) => item.key === partyChoice) ? partyChoice : 'all';
-  const computer = group && computers.includes(computerChoice) ? computerChoice : 'all';
+  const computer = group && memberKeys.includes(computerChoice) ? computerChoice : 'all';
   const filter: ProviderUsageFilter = { range, todayKey, party, computer };
   const selectedDay = usageRangeDay(range, todayKey || undefined);
   const singleDay = isUsageHistorySingleDay(range);
@@ -278,7 +292,7 @@ export function ProviderUsageSection({
     ...parties.map((item) => ({
       value: item.key,
       label: item.name,
-      detail: item.key === SELF_PARTY
+      detail: sharedUsage ? item.tag : item.key === SELF_PARTY
         ? t('providerGroup.usage.filter.selfDetail')
         : item.member
           ? item.member.status === 'paused'
@@ -289,10 +303,9 @@ export function ProviderUsageSection({
   ];
   const computerOptions: UsageFilterOption[] = [
     { value: 'all', label: t('providerGroup.usage.filter.allComputers') },
-    ...computers.flatMap((key) => {
-      if (key === null) return [];
+    ...memberKeys.map((key) => {
       const label = computerLabel(key);
-      return [{ value: key, label: label.name, detail: label.source }];
+      return { value: key, label: label.name, detail: label.source };
     }),
   ];
   const rangeOptions: UsageFilterOption[] = [
@@ -325,12 +338,17 @@ export function ProviderUsageSection({
   );
   const heatDays = useMemo(() => usageRowsByDay(chartRows).map((day) => ({ ...day, money: ZERO_MONEY })), [chartRows]);
 
-  const charts = Boolean(history) && rows.length > 0;
+  const charts = Boolean(history || sharedUsage) && rows.length > 0;
   const stackOptions = [
     { value: 'party' as const, label: t('providerGroup.usage.stack.party') },
     ...(group ? [{ value: 'computer' as const, label: t('providerGroup.usage.stack.computer') }] : []),
     { value: 'model' as const, label: t('providerGroup.usage.stack.model') },
   ];
+  const breakdownSubtitle = [
+    rangeLabel,
+    ...(breakdown !== 'party' && party !== 'all' ? [parties.find((item) => item.key === party)?.name] : []),
+    ...(breakdown !== 'computer' && computer !== 'all' ? [computerLabel(computer).name] : []),
+  ].filter(Boolean).join(' · ');
 
   return (
     <section className="usage-history-charts mt-8 shrink-0" aria-labelledby="provider-usage-title">
@@ -385,7 +403,7 @@ export function ProviderUsageSection({
         </div>
       </div>
 
-      {status === 'loading' && !history ? (
+      {status === 'loading' && !history && !sharedUsage ? (
         <p role="status" className="-mt-1 mb-3 inline-flex items-center gap-1.5 text-12 text-[var(--text-tertiary)]">
           <Spinner icon={RefreshCw} size={11} className="opacity-70" />
           {t('providerShare.manage.loading')}
@@ -396,9 +414,9 @@ export function ProviderUsageSection({
         <p role="status" className="-mt-1 mb-3 text-12 text-[var(--text-tertiary)]">
           {t('providerGroup.usage.legacyNote', { device: selfDeviceName ?? t('providerGroup.usage.unknownDevice') })}
         </p>
-      ) : history?.coverageStart ? (
+      ) : (sharedUsage ?? history)?.coverageStart ? (
         <p className="-mt-1 mb-3 text-12 text-[var(--text-tertiary)]">
-          {t('providerGroup.usage.coverage', { date: time.date(Date.parse(`${history.coverageStart}T12:00:00`)) })}
+          {t('providerGroup.usage.coverage', { date: time.date(Date.parse(`${(sharedUsage ?? history)!.coverageStart}T12:00:00`)) })}
         </p>
       ) : null}
 
@@ -420,22 +438,81 @@ export function ProviderUsageSection({
         </div>
       </UsageCard>
 
-      <PartyTable
-        parties={parties}
-        rows={rows}
-        filter={filter}
-        rangeLabel={rangeLabel}
-        showToday={showToday}
-        showComputers={Boolean(group)}
-        colorOf={partyColor}
-        selected={party}
-        onToggle={toggleParty}
-        memberActions={memberActions}
-        time={time}
-        subtitle={computer === 'all' ? rangeLabel : `${rangeLabel} · ${computerLabel(computer).name}`}
-      />
+      {charts && (
+        <UsageCard title={t('usageHistory.heatmap.title')} subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}>
+          <UsageHeatmap
+            days={heatDays}
+            todayKey={todayKey}
+            windowDays={HEATMAP_WINDOW_DAYS}
+            metric="tokens"
+            selectedDay={selectedDay}
+            onDayClick={handleDayClick}
+            onVisibleWeeksChange={setHeatmapWeeks}
+          />
+        </UsageCard>
+      )}
 
-      {history && rows.length === 0 && (
+      <UsageCard
+        title={(
+          <SegmentedControl
+            role="tablist"
+            value={breakdown}
+            onValueChange={setBreakdown}
+            aria-label={t('providerGroup.usage.title')}
+            options={stackOptions.map((option) => ({
+              ...option,
+              id: `${breakdownId}-${option.value}`,
+              'aria-controls': `${breakdownId}-panel`,
+            }))}
+            height={28}
+            optionHeight={24}
+          />
+        )}
+        subtitle={breakdownSubtitle}
+      >
+        <div
+          id={`${breakdownId}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${breakdownId}-${breakdown}`}
+          tabIndex={0}
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {breakdown === 'party' ? (
+            <PartyTable
+              parties={parties}
+              rows={rows}
+              filter={filter}
+              rangeLabel={rangeLabel}
+              showToday={showToday}
+              showComputers={Boolean(group)}
+              colorOf={partyColor}
+              selected={party}
+              onToggle={toggleParty}
+              memberActions={memberActions}
+              time={time}
+            />
+          ) : breakdown === 'computer' ? (
+            <ComputerTable
+              groupKeys={memberKeys}
+              rows={rows}
+              filter={filter}
+              rangeLabel={rangeLabel}
+              showToday={showToday}
+              labelOf={computerLabel}
+              colorOf={computerColor}
+              selected={computer}
+              onToggle={toggleComputer}
+            />
+          ) : (
+            <>
+              <ModelTable rows={inRange} order={modelOrder} colorOf={modelColor} rangeLabel={rangeLabel} />
+              <p className="mt-2 text-12 text-[var(--text-tertiary)]">{t('providerShare.manage.members.estimateNote')}</p>
+            </>
+          )}
+        </div>
+      </UsageCard>
+
+      {(history || sharedUsage) && rows.length === 0 && (
         <p className="mb-3.5 text-center text-13 text-[var(--text-tertiary)]">{t('usageHistory.empty')}</p>
       )}
 
@@ -465,42 +542,7 @@ export function ProviderUsageSection({
               onDayClick={handleDayClick}
             />
           </UsageCard>
-
-          <UsageCard title={t('usageHistory.heatmap.title')} subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}>
-            <UsageHeatmap
-              days={heatDays}
-              todayKey={todayKey}
-              windowDays={HEATMAP_WINDOW_DAYS}
-              metric="tokens"
-              selectedDay={selectedDay}
-              onDayClick={handleDayClick}
-              onVisibleWeeksChange={setHeatmapWeeks}
-            />
-          </UsageCard>
         </>
-      )}
-
-      {group && rows.length > 0 && (
-        <ComputerTable
-          computers={computers}
-          groupKeys={memberKeys}
-          rows={rows}
-          filter={filter}
-          rangeLabel={rangeLabel}
-          showToday={showToday}
-          labelOf={computerLabel}
-          colorOf={computerColor}
-          selected={computer}
-          onToggle={toggleComputer}
-          subtitle={party === 'all' ? rangeLabel : `${rangeLabel} · ${parties.find((item) => item.key === party)?.name ?? ''}`}
-        />
-      )}
-
-      {rows.length > 0 && (
-        <UsageCard title={t('usageHistory.byModel.title')} subtitle={rangeLabel}>
-          <ModelTable rows={inRange} order={modelOrder} colorOf={modelColor} rangeLabel={rangeLabel} />
-          <p className="mt-2 text-12 text-[var(--text-tertiary)]">{t('providerShare.manage.members.estimateNote')}</p>
-        </UsageCard>
       )}
     </section>
   );
@@ -512,7 +554,7 @@ function UsageCard({
   right,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
   right?: ReactNode;
   children: ReactNode;
@@ -520,7 +562,7 @@ function UsageCard({
   return (
     <div className="mb-3.5 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
       <div className="mb-3 flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="text-14 font-medium text-[var(--text-primary)]">{title}</span>
+        <div className="min-w-0 text-14 font-medium text-[var(--text-primary)]">{title}</div>
         {subtitle ? <span className="text-12 text-[var(--text-tertiary)]">{subtitle}</span> : null}
         {right ? <div className="ml-auto">{right}</div> : null}
       </div>
@@ -568,7 +610,6 @@ function PartyTable({
   onToggle,
   memberActions,
   time,
-  subtitle,
 }: {
   parties: readonly UsageParty[];
   rows: readonly ProviderUsageRow[];
@@ -579,9 +620,8 @@ function PartyTable({
   colorOf: (key: string) => string;
   selected: string;
   onToggle: (key: string) => void;
-  memberActions: ProviderShareMemberActions;
+  memberActions?: ProviderShareMemberActions;
   time: ShareTimeFormat;
-  subtitle: string;
 }) {
   const { t } = useTranslation();
   const byParty = groupUsageRows(filterUsageRows(rows, filter, { party: true }), (row) => row.party);
@@ -601,7 +641,7 @@ function PartyTable({
   const actionColumn = parties.some((party) => party.member);
   const columns = 4 + (showToday ? 1 : 0) + (showComputers ? 1 : 0) + (actionColumn ? 1 : 0);
   return (
-    <UsageCard title={t('providerGroup.usage.byParty.title')} subtitle={subtitle}>
+    <>
       <ShareStrip items={items.map((item) => ({ key: item.party.key, tokens: item.totals.tokens, color: item.color }))} />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[600px] border-collapse">
@@ -675,6 +715,11 @@ function PartyTable({
                             <span className="text-12 text-[var(--text-secondary)]">{party.tag}</span>
                             {member && <ShareMemberStatus member={member} />}
                           </div>
+                          {member?.note && (
+                            <span className="truncate text-12 leading-[1.5] text-[var(--text-secondary)]" title={member.displayName}>
+                              {t('providerShare.manage.memberNote.username', { name: member.displayName })}
+                            </span>
+                          )}
                           <span className="truncate text-12 text-[var(--text-secondary)]">
                             {member
                               ? `${t('providerShare.manage.members.joined', { date: time.date(Date.parse(member.joinedAt)) })} · ${lastUsed}`
@@ -697,18 +742,20 @@ function PartyTable({
                     {actionColumn && (
                       // 行尾菜单的点击(含 portal 里的菜单项)不当成「只看这个人」。
                       <td className={cn(tdClass, 'w-10 pl-1')} onClick={(event) => event.stopPropagation()}>
-                        {member && (
+                        {member && memberActions && (
                           <ShareMemberMenu
                             member={member}
                             disabled={memberActions.busy(member.memberId)}
                             onTogglePause={() => memberActions.onTogglePause(member)}
                             onRemove={() => memberActions.onRemove(member)}
+                            onEditNote={(trigger) => memberActions.onEditNote(member, trigger)}
+                            onModelAccess={memberActions.onModelAccess ? (trigger) => memberActions.onModelAccess!(member, trigger) : undefined}
                           />
                         )}
                       </td>
                     )}
                   </tr>
-                  {member && hasReshares && (
+                  {member && memberActions && hasReshares && (
                     <tr data-usage-party-extra={party.key}>
                       {/* 与昵称一列左对齐：色块 8 + gap 10 + 头像 28 + gap 10 = 56px。 */}
                       <td colSpan={columns} className="border-b border-[var(--border-default)] pb-3 pl-14 pr-3">
@@ -722,13 +769,12 @@ function PartyTable({
           </tbody>
         </table>
       </div>
-    </UsageCard>
+    </>
   );
 }
 
-/** 按电脑：组里每台(按组里的顺序，这段时间没用过的变淡)，已移出组的，以及更早没有区分电脑的记录。 */
+/** 按电脑：只列当前组内电脑；移出组的历史用量合进「更早的记录」，不丢合计。 */
 function ComputerTable({
-  computers,
   groupKeys,
   rows,
   filter,
@@ -738,9 +784,7 @@ function ComputerTable({
   colorOf,
   selected,
   onToggle,
-  subtitle,
 }: {
-  computers: ReadonlyArray<string | null>;
   /** 现在还在组里的电脑：这段时间没用过也列出。 */
   groupKeys: readonly string[];
   rows: readonly ProviderUsageRow[];
@@ -751,11 +795,12 @@ function ComputerTable({
   colorOf: (key: string | null) => string;
   selected: string;
   onToggle: (key: string) => void;
-  subtitle: string;
 }) {
   const { t } = useTranslation();
-  const byComputer = groupUsageRows(filterUsageRows(rows, filter, { computer: true }), (row) => row.computer);
-  const todayByComputer = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { computer: true }), (row) => row.computer);
+  const keyOf = (row: ProviderUsageRow) => row.computer !== null && groupKeys.includes(row.computer) ? row.computer : null;
+  const byComputer = groupUsageRows(filterUsageRows(rows, filter, { computer: true }), keyOf);
+  const todayByComputer = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { computer: true }), keyOf);
+  const computers = [...groupKeys, ...(byComputer.has(null) ? [null] : [])];
   const items = computers
     .map((key) => {
       const list = byComputer.get(key) ?? [];
@@ -767,11 +812,11 @@ function ComputerTable({
         color: colorOf(key),
       };
     })
-    // 组里的电脑都列；移出组的与更早的记录只在这段时间用过时列。
+    // 组里的电脑都列；更早的记录只在这段时间用过时列。
     .filter((item) => item.totals.tokens > 0 || (item.key !== null && groupKeys.includes(item.key)));
   const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
   return (
-    <UsageCard title={t('providerGroup.usage.byComputer.title')} subtitle={subtitle}>
+    <>
       <ShareStrip items={items.map((item) => ({ key: item.key ?? UNATTRIBUTED, tokens: item.totals.tokens, color: item.color }))} />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] border-collapse">
@@ -843,7 +888,7 @@ function ComputerTable({
           </tbody>
         </table>
       </div>
-    </UsageCard>
+    </>
   );
 }
 

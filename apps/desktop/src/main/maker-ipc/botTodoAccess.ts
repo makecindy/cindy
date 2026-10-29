@@ -76,7 +76,7 @@ export function companionTodoStore(botId: string) {
   );
 }
 
-export async function todoAccess(botId: string): Promise<BotTodoAccess> {
+export async function todoAccess(botId: string, ownerAuthored = () => true): Promise<BotTodoAccess> {
   const owner = activeOwnerScopeKey(),
     root = ownerScopedUserDataPath();
   const assertCurrent = () => {
@@ -99,6 +99,7 @@ export async function todoAccess(botId: string): Promise<BotTodoAccess> {
     path.join(botProfileDir(root, botId), 'todos.v1.json'),
     () => readLegacyWorkbenchJudgments(root, botId),
     assertCurrent,
+    ownerAuthored,
   );
   const changed = () => {
     assertCurrent();
@@ -257,10 +258,10 @@ export async function settleBotTodoForSession(
     throw new TodoError('OWNER_SCOPE_CHANGED');
   if (bot?.sessionId === sessionId) await (await todoAccess(bot.id)).settle(requestId, dispatched);
 }
-export async function todoForCaller(callerSessionId: string): Promise<BotTodoAccess> {
+export async function todoForCaller(callerSessionId: string, ownerAuthored = () => false): Promise<BotTodoAccess> {
   const owner = activeOwnerScopeKey();
   const caller = await resolveWorkbenchCaller(callerSessionId);
-  if (!caller.ok) throw new TodoError(caller.errorCode);
+  if (!caller.ok) throw new TodoError(caller.errorCode, caller.message);
   if (owner !== activeOwnerScopeKey()) throw new TodoError('OWNER_SCOPE_CHANGED');
-  return todoAccess(caller.botId);
+  return todoAccess(caller.botId, ownerAuthored);
 }

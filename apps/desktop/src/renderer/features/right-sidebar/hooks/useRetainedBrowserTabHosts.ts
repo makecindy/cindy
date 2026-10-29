@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { browserWebviewPool } from '../lib/browserWebviewPool';
+import { isTabHostedHere } from '../lib/tabHosting';
 import { getBucket, subscribe } from '../store';
 import type { TabState } from '../types';
 
@@ -48,7 +49,9 @@ export function useRetainedBrowserTabHosts(
       remaining.delete(host.tab.id);
       continue;
     }
-    if (!host.sessionId || !browserWebviewPool.peek(host.tab.id)) continue;
+    // 页签已不由本 renderer 承载(弹出到别的窗口 / 从多页签窗口合并回去):不再保留它的后台 body。
+    if (!host.sessionId || !isTabHostedHere(host.tab.id)) continue;
+    if (!browserWebviewPool.peek(host.tab.id)) continue;
     // Background navigation/close updates belong to the original task. Never
     // reuse the foreground task's context or revive a tab missing from its bucket.
     const bucket = getBucket(host.sessionId);

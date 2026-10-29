@@ -181,6 +181,8 @@ export async function withDownloadedRemoteMediaFile<T>(
   maxBytes: number,
   read: (file: File) => Promise<T | null>,
   signal?: AbortSignal,
+  onTooLarge?: () => void,
+  options?: { allowEmpty?: boolean },
 ): Promise<T | null> {
   const dir = new Directory(Paths.cache, SHARE_TMP_DIR_NAME);
   let target: File | null = null;
@@ -191,10 +193,15 @@ export async function withDownloadedRemoteMediaFile<T>(
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
     const file = await copyRemoteFile(url, target, signal, signal ? maxBytes : undefined);
     const size = file.size ?? 0;
-    if (signal?.aborted || size <= 0 || size > maxBytes) return null;
+    if (signal?.aborted || size < 0 || (size === 0 && !options?.allowEmpty)) return null;
+    if (size > maxBytes) {
+      onTooLarge?.();
+      return null;
+    }
     const result = await read(file);
     return signal?.aborted ? null : result;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === 'PREVIEW_TOO_LARGE') onTooLarge?.();
     return null;
   } finally {
     if (url.startsWith('file://')) releasePeerMedia(url);

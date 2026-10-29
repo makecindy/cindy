@@ -8,6 +8,12 @@
     "business": "https://feeds.bbci.co.uk/news/business/rss.xml",
     "sport": "https://feeds.bbci.co.uk/sport/rss.xml"
   },
-  "recipes": ["bbc-news-feed"],
-  "notes": "BBC 的稳定免登录读接口是官方 RSS,host 是 feeds.bbci.co.uk(不是 bbc.com)。bbc-news-feed 配方的 section 入参拼到 https://feeds.bbci.co.uk/{section}/rss.xml:全站头条用 section=news,板块用 news/world、news/technology、news/business、news/health、news/science_and_environment,体育用 sport(或 sport/football 等)。返回是 RSS XML 文本(不是 JSON),每条新闻在 <item> 里:<title> 标题、<description> 摘要、<link> 文章链接、<pubDate> 发布时间、<guid> 唯一 id。需要正文要再 navigate 到 <link>。没有公开搜索 API,只能按板块拉取后本地过滤。"
+  "recipes": [
+    "bbc-news-feed"
+  ],
+  "notes": "BBC 的稳定免登录读接口是官方 RSS,host 是 feeds.bbci.co.uk(不是 bbc.com)。bbc-news-feed 配方的 section 入参拼到 https://feeds.bbci.co.uk/{section}/rss.xml:全站头条用 section=news,板块用 news/world、news/technology、news/business、news/health、news/science_and_environment,体育用 sport(或 sport/football 等)。返回是 RSS XML 文本(不是 JSON),每条新闻在 <item> 里:<title> 标题、<description> 摘要、<link> 文章链接、<pubDate> 发布时间、<guid> 唯一 id。需要正文要再 navigate 到 <link>。没有公开搜索 API,只能按板块拉取后本地过滤。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

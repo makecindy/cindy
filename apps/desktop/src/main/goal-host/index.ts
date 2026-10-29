@@ -12,6 +12,7 @@ import type { Maker } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
 import {
+  hasRestoredCodexQuota,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
@@ -22,13 +23,14 @@ import {
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
-import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
 import {
   readAccountUsageLimit,
   sessionUsesOtherMachineAccount,
   subscriptionFamilyOf,
 } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
+import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
 import { GoalController } from './controller';
 import { readTurnUsageResetAt } from './usageLimit.js';
 import { restoreSessionForGoal } from './sessionRestore.js';
@@ -40,11 +42,14 @@ export interface StartGoalControllerDeps {
   getDb: () => GoalDrizzleDb;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED)。 */
   broadcastStatus: (update: GoalStatusUpdate) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 
 let _controller: GoalController | null = null;
+onCodexAutoResetRestored(async providerId => {
+  await _controller?.resumeRestoredQuota(id => hasRestoredCodexQuota(id, providerId));
+});
 
 /** Incremented on every resetGoalController call. attemptStartScheduler uses
  * this to bail out if a teardown raced its await. */
@@ -72,6 +77,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     beforeDispatchUserTurn: deps.beforeDispatchUserTurn,
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     emitStatus: deps.broadcastStatus,
+    onGoalStopped: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
+    onGoalUserDispatched: (sessionId, atMs) => { void touchSessionActivityInDb(sessionId, atMs); },
     // 护栏默认从 goal-settings-store 读(系统默认 + 用户 override,规则 20);新建 goal
     // 时直接采用最新默认值。
     getDefaults: () => readGoalSettings(),

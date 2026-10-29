@@ -320,7 +320,7 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   const url = record.url;
   if (typeof url !== 'string' || !url) throw new Error('media:fetch 缺少 url');
   const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
-  let sharedRoot: string | undefined;
+  let sharedRoot: string | { file: string } | undefined;
   if (sharedTask) {
     sharedRoot = await assertSharedTaskMedia(url, sharedTask);
   }
@@ -391,8 +391,10 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       throw new Error('媒体文件不存在或不可读');
     }
     // realpath 再查:挡字面形式看似无害的 symlink 逃逸。
-    if (sharedRoot && !isInsideRealDir(real, sharedRoot)) {
-      throw new Error('[PERMISSION_DENIED] Media left the shared task workdir');
+    if (sharedRoot && (typeof sharedRoot === 'string'
+      ? !isInsideRealDir(real, sharedRoot)
+      : path.relative(sharedRoot.file, real) !== '')) {
+      throw new Error('[PERMISSION_DENIED] Media left the shared task file scope');
     }
     if (!isPathAllowedAgainst(real, getSensitiveMediaBlocklist())) {
       log.warn(`media:fetch blocked sensitive realpath ${url.slice(0, 60)}`);

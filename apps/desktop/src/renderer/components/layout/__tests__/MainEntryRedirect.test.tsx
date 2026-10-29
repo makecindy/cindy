@@ -46,6 +46,31 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('main entry startup', () => {
+  // Unit regression: changing tasks must retain the Tasks startup choice without
+  // rewriting it (and synchronously asking Main for its owner) on every route.
+  // Existing restoration tests only check the final value, not repeated writes.
+  it('persists area changes without rewriting the same area for each task', async () => {
+    const writes = vi.spyOn(Storage.prototype, 'setItem');
+    try {
+      const app = launch('/cc-agent/one');
+      const key = 'cindy.mainEntry.v1.owner.account-a';
+      const count = () => writes.mock.calls.filter(([name]) => name === key).length;
+      const initial = count();
+      expect(localStorage.getItem(key)).toBe('tasks');
+      await act(() => app.router.navigate('/cc-agent/two'));
+      expect(screen.getByTestId('route').textContent).toBe('/cc-agent/two');
+      expect(count()).toBe(initial);
+      await act(() => app.router.navigate('/bots/one'));
+      expect(localStorage.getItem(key)).toBe('bots');
+      expect(count()).toBe(initial + 1);
+      await act(() => app.router.navigate('/bots/two'));
+      expect(count()).toBe(initial + 1);
+      await act(() => app.router.navigate('/cc-agent/three'));
+      expect(localStorage.getItem(key)).toBe('tasks');
+      expect(count()).toBe(initial + 2);
+    } finally { writes.mockRestore(); }
+  });
+
   it('reopens the teammate entry after closing a partner chat, without restoring its id', async () => {
     const app = launch();
     await act(() => app.router.navigate('/bots/private-bot/session/private-task'));

@@ -8,9 +8,9 @@ import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationI
 import { buildMakerUserMessage, sanitizeQueuedMessageForPersistence, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { redactMessageOriginForSharedGuest, redactQueueItemForSharedGuest } from '../../device-link/sharedTaskMessageOrigin';
 import { rebuildSessionQueueItem } from '../sessionControlService';
-import { projectCoordinationOutput } from '../coordinationOutput';
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, type AgentEvent } from '@cindy/maker-core';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 import { stripMainOnlySendOpts } from '../mobileClientPromptNote';
+import { captureAgentRequest, formatForwardedRequest } from '../forwardedRequest';
 
 const h = vi.hoisted(() => ({ db: null as ReturnType<typeof drizzle> | null }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: h.db }) }));
@@ -85,15 +85,10 @@ it('retains hidden persistence and routing when the sending task edits its queue
     origin: { kind: 'session', senderSessionId: 'child', displayText: 'Old agreement' },
   } as unknown as AgentInputQueuedMessage;
   const edited = rebuildSessionQueueItem(item, 'Updated agreement');
-  expect(edited.persistedContent).toBe('[UI_ACTION_TRIGGER]Updated agreement');
+  expect(edited.persistedContent).toBe('[UI_ACTION_TRIGGER]' + formatForwardedRequest({ userText: null }, 'Updated agreement'));
   expect(edited.botTaskCoordination).toEqual(receipt);
   expect(buildMakerUserMessage(edited)).toMatchObject({ content: expect.stringContaining('Updated agreement') });
 });
-it.each<AgentEvent['type']>(['interaction_request', 'interaction_dismissed', 'error', 'tool_use', 'tool_result', 'account_usage'])('does not suppress an attention/action event: %s', type => {
-  const event: AgentEvent = { type, source: 'codex', data: { requestId: 'interaction', kind: 'ask_user_question', questions: [] } };
-  expect(projectCoordinationOutput(event, true)).toBe(event);
-});
-
 it('uses the registered host entry for both quiet and explicitly visible delegated sends', async () => {
   const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf('    sendToSession: async (params) => {');
@@ -103,20 +98,27 @@ it('uses the registered host entry for both quiet and explicitly visible delegat
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
   const send = vi.fn(async (params: unknown) => params);
+  const request = { userText: 'Inspect only.', sessionId: 'child', clientId: 'owner-input' };
   let currentOwner = true;
   const dispatch = new Function('captureDataOwnerBroadcastScope', 'isDataOwnerBroadcastScopeCurrent',
     'classifySessionMessagePurpose', 'coordinationInput', 'sendToSessionInternal',
-    'AUTO_REVIEW_DELEGATED_CONTINUATION', code)(
+    'AUTO_REVIEW_DELEGATED_CONTINUATION', 'captureSessionAgentRequest', code)(
     () => 'owner', () => currentOwner, classifySessionMessagePurpose, coordinationInput, send,
-    AUTO_REVIEW_DELEGATED_CONTINUATION);
+    AUTO_REVIEW_DELEGATED_CONTINUATION,
+    (sessionId: string, message: string) => captureAgentRequest(sessionId, message,
+      { clientId: request.clientId, authoredText: request.userText }, async () => []));
   await dispatch({ dispatcherSessionId: 'child', targetSessionId: 'parent', message: 'Agreement' });
   expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ forceQueue: true, botTaskCoordination: receipt,
-    persistedContent: '[UI_ACTION_TRIGGER]Agreement', autoReviewUserText: { kind: 'delegated-continuation' } }));
+    persistedContent: '[UI_ACTION_TRIGGER]Agreement',
+    autoReviewUserText: { kind: 'delegated-continuation' } }));
   await dispatch({ dispatcherSessionId: 'child', targetSessionId: 'parent', message: 'Requested result', messagePurpose: 'user-visible' });
-  expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ message: 'Requested result', autoReviewUserText: { kind: 'delegated-continuation' } }));
+  expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ message: 'Requested result',
+    autoReviewUserText: { kind: 'delegated-continuation' } }));
   expect(send.mock.calls.at(-1)?.[0]).not.toHaveProperty('botTaskCoordination');
   await dispatch({ dispatcherSessionId: 'ordinary', targetSessionId: 'parent', message: 'Ordinary task message' });
-  expect(send).toHaveBeenLastCalledWith({ dispatcherSessionId: 'ordinary', targetSessionId: 'parent', message: 'Ordinary task message' });
+  expect(send).toHaveBeenLastCalledWith({ dispatcherSessionId: 'ordinary', targetSessionId: 'parent',
+    message: 'Ordinary task message',
+    autoReviewUserText: { kind: 'agent-request' } });
   currentOwner = false;
   const count = send.mock.calls.length;
   expect(await dispatch({ dispatcherSessionId: 'child', targetSessionId: 'parent', message: 'Agreement' })).toMatchObject({ ok: false });

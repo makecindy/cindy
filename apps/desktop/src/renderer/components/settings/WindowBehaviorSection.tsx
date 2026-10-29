@@ -10,17 +10,25 @@
  *  3. 「后台窗口首次左键点击仅激活不透传」(swallowActivationClick,PR #446):仅
  *     macOS + Windows 有实际效果,Linux 上两条底层路径均 no-op,故该行在 Linux 隐藏。
  *
- * 卡片样式沿用 NotificationSection 的规格(rounded 12 / Card bg / 1px Board /
- * padding 20)以保持视觉一致。
+ * 各项放在同一张卡片里、以分割线隔开,与「协同」「Agent 资源占用」同一套设置行样式
+ * (settingsRowClasses)。平台不支持的行不渲染,分割线只出现在可见行之间。
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import {
+  SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_CLASS,
+  SETTINGS_ROW_DIVIDER_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+  SETTINGS_SECTION_TITLE_CLASS,
+} from './settingsRowClasses';
 import { useSwallowActivationClickSettings } from '@/hooks/useSwallowActivationClickSettings';
 import { useKeepAwakeSetting } from '@/hooks/useKeepAwakeSetting';
 import { useLoginItemSetting } from '@/hooks/useLoginItemSetting';
@@ -34,8 +42,8 @@ import {
 
 type DesktopCloseBehavior = LinuxCloseBehavior | WindowsCloseBehavior;
 
-/** 一张开关卡片:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
-function BehaviorCard({
+/** 一行开关:左侧标签 + 说明(+ 可选补充说明行),右侧开关。 */
+function BehaviorRow({
   id,
   label,
   hint,
@@ -55,22 +63,12 @@ function BehaviorCard({
   disabled?: boolean;
 }) {
   return (
-    <div
-      id={id}
-      className={cn(
-        'flex items-center justify-between gap-3 rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
-    >
+    <div id={id} className={SETTINGS_ROW_CLASS}>
       <div className="flex min-w-0 flex-col gap-1">
-        <p
-          className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-          style={{ letterSpacing: '0.12px' }}
-        >
+        <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
           {label}
         </p>
-        <p className="whitespace-pre-line text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+        <p className={cn('whitespace-pre-line', SETTINGS_ROW_HINT_CLASS)}>
           {hint}
         </p>
         {note}
@@ -138,23 +136,27 @@ export function WindowBehaviorSection() {
     ? ['minimize', 'quit']
     : ['tray', 'quit'];
 
-  return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.windowBehavior.title')}
-      </h2>
+  const rows: { key: string; node: ReactNode }[] = [
+    {
+      key: 'keep-awake',
+      node: (
+        <BehaviorRow
+          id="settings-search-settings-devices-keepAwake"
+          label={t('settings.devices.keepAwake')}
+          hint={t('settings.devices.keepAwakeHint')}
+          checked={keepAwake}
+          onCheckedChange={(v) => void setKeepAwake(v)}
+          ariaLabel={t('settings.devices.keepAwake')}
+        />
+      ),
+    },
+  ];
 
-      <BehaviorCard
-        id="settings-search-settings-devices-keepAwake"
-        label={t('settings.devices.keepAwake')}
-        hint={t('settings.devices.keepAwakeHint')}
-        checked={keepAwake}
-        onCheckedChange={(v) => void setKeepAwake(v)}
-        ariaLabel={t('settings.devices.keepAwake')}
-      />
-
-      {loginItem.supported && (
-        <BehaviorCard
+  if (loginItem.supported) {
+    rows.push({
+      key: 'login-item',
+      node: (
+        <BehaviorRow
           id="settings-search-login-item"
           label={t('settings.windowBehavior.loginItem.label')}
           hint={t('settings.windowBehavior.loginItem.hint')}
@@ -177,10 +179,15 @@ export function WindowBehaviorSection() {
             </div>
           }
         />
-      )}
+      ),
+    });
+  }
 
-      {menubar.available && (
-        <BehaviorCard
+  if (menubar.available) {
+    rows.push({
+      key: 'menubar',
+      node: (
+        <BehaviorRow
           id="settings-search-menubar"
           label={t('settings.windowBehavior.menubar.label')}
           hint={t('settings.windowBehavior.menubar.hint')}
@@ -189,24 +196,23 @@ export function WindowBehaviorSection() {
           onCheckedChange={(enabled) => void menubar.setEnabled(enabled)}
           ariaLabel={t('settings.windowBehavior.menubar.label')}
         />
-      )}
+      ),
+    });
+  }
 
-      {(isWindows || isLinux) && (
-        <div
-          className={cn(
-            'cindy-segmented-row rounded-xl p-5',
-            'bg-[var(--settings-theme-card-bg)]',
-            'border border-[var(--settings-theme-card-border)]',
-          )}
-        >
+  if (isWindows || isLinux) {
+    rows.push({
+      key: 'close-behavior',
+      node: (
+        <div className="cindy-segmented-row px-4 py-4">
           <div className="flex min-w-0 flex-col gap-1">
             <p id="settings-search-settings-windowBehavior-closeBehavior-label"
-              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              className={SETTINGS_ROW_LABEL_CLASS}
               style={{ letterSpacing: '0.12px' }}
             >
               {t('settings.windowBehavior.closeBehavior.label')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+            <p className={SETTINGS_ROW_HINT_CLASS}>
               {t('settings.windowBehavior.closeBehavior.hint')}
             </p>
           </div>
@@ -221,16 +227,21 @@ export function WindowBehaviorSection() {
             }))}
           />
         </div>
-      )}
+      ),
+    });
+  }
 
-      {showsSwallowActivationClick && (
-        <BehaviorCard
+  if (showsSwallowActivationClick) {
+    rows.push({
+      key: 'activation-click',
+      node: (
+        <BehaviorRow
           id="settings-search-activation-click"
           label={t('settings.windowBehavior.swallowActivationClickLabel')}
           hint={t('settings.windowBehavior.swallowActivationClickHint')}
           note={
             isMac ? (
-              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              <p className={SETTINGS_ROW_HINT_CLASS}>
                 {t('settings.windowBehavior.macRestartNote')}
               </p>
             ) : undefined
@@ -239,7 +250,24 @@ export function WindowBehaviorSection() {
           onCheckedChange={setEnabled}
           ariaLabel={t('settings.windowBehavior.swallowActivationClickAria')}
         />
-      )}
+      ),
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-[14px]">
+      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>
+        {t('settings.windowBehavior.title')}
+      </h2>
+
+      <div className={SETTINGS_CARD_CLASS}>
+        {rows.map((row, index) => (
+          <Fragment key={row.key}>
+            {index > 0 ? <div className={SETTINGS_ROW_DIVIDER_CLASS} /> : null}
+            {row.node}
+          </Fragment>
+        ))}
+      </div>
     </div>
   );
 }

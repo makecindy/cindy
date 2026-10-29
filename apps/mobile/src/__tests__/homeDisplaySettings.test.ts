@@ -79,6 +79,22 @@ describe('home content filters (desktop 筛选 parity)', () => {
     ],
   });
 
+  it('filters by multiple teammate identities, preserves pinned rows and excludes unknown shared owners', () => {
+    const filters: HomeContentFilters = { ...NO_FILTERS, teammates: ['cindy', 'filo'],
+      teammateKey: row => row.session.id === 'chat-cc' ? 'cindy' : row.session.id === 'p2-pi' ? 'filo' : undefined };
+    const result = applyHomeContentFilters(fixture, filters, NOW);
+    expect(result.chats.map(row => row.session.id)).toEqual(['chat-cc']);
+    expect(result.projects.map(row => row.key)).toEqual(['p2']);
+    expect(result.pinned).toBe(fixture.pinned);
+    expect(activeContentFilterCount(filters)).toBe(1);
+    const hidden = applyHomeContentFilters(fixture, { ...filters, teammates: 'none' }, NOW);
+    expect(hidden.chats.map(row => row.session.id)).toEqual(fixture.chats.filter(row => row.session.id !== 'chat-cc').map(row => row.session.id));
+    expect(hidden.projects.map(row => row.key)).toEqual(['p1']);
+    expect(hidden.pinned).toBe(fixture.pinned);
+    expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], { ...filters, teammates: 'none' }, NOW).map(row => row.id)).toEqual(['unknown']);
+    expect(filterSharedHomeRows([{ id: 'unknown' }, { id: 'known', item: item('chat-cc') }], filters, NOW).map(row => row.id)).toEqual(['known']);
+  });
+
   it('returns the same presentation when nothing is filtered', () => {
     expect(applyHomeContentFilters(fixture, NO_FILTERS, NOW)).toBe(fixture);
     expect(activeContentFilterCount(NO_FILTERS)).toBe(0);
@@ -212,7 +228,7 @@ describe('task info and retained Home behavior', () => {
   it('counts each dialogue automation run in the actual display-menu input', () => {
     const projectFilterUniverse = { chats: [item('normal'), { ...item('automation'), automationGroup: { sessionCount: 4 } }], projects: [] };
     const options = surfaceValue('homeDisplayPullDownActions', { useMemo, projectFilterUniverse,
-      selectedDeviceId: null, displayMenuState: {}, t: (key: string) => key,
+      selectedDeviceId: null, teammateOptions: [], displayMenuState: {}, t: (key: string) => key,
       buildHomeDisplayPullDownActions: (value: unknown) => value });
     expect(options.dialogueCount).toBe(5);
   });
@@ -225,10 +241,16 @@ describe('task info and retained Home behavior', () => {
   it('keeps real project candidates available despite nonmatching search and status', () => {
     const sessions = ['A', 'B'].map((name) => ({ ...item(name).session, title: name, workingDir: '/' + name,
       workspaceKind: 'project', status: 'active', deviceLinkDeviceId: 'd', deviceLinkDeviceName: 'Computer' }));
+    // Keep the existing production-expression fixture complete when aliases become an optional Home input.
     const result = surfaceValue('projectFilterUniverse', { useMemo, buildMobileHomePresentation,
       deviceModels: [], scheduleIndex: new Map(), selectedDeviceId: null, homeSessions: sessions,
+      projectAliases: new Map([['device:d:/A', 'Customer Portal']]),
       t: (key: string) => key, searchQuery: 'no match', statusFilter: 'running' });
     expect(result.projects.map((project: { workingDir: string }) => project.workingDir).sort()).toEqual(['/A', '/B']);
+    // #7026: the production initializer consumes host aliases; keep that input
+    // in this unit fixture and verify its visible title without filtering candidates.
+    expect(result.projects.find((project: { workingDir: string }) => project.workingDir === '/A')?.title)
+      .toBe('Customer Portal');
   });
 
   it('expires active-time rows using the actual clock input while Home stays open', () => {
@@ -261,7 +283,7 @@ describe('task info and retained Home behavior', () => {
     const remove = vi.fn(), stopResume = vi.fn(), clearInterval = vi.fn();
     const refreshHomeSessionPr = vi.fn((_key: string, _load: () => unknown, _options: unknown) => 0);
     const AppState = { currentState: 'active', addEventListener: (_event: string, callback: typeof foreground) => { foreground = callback; return { remove }; } };
-    const effect = evaluate(callback, file, { key: 'cache', deviceId: 'd', sessionId: 's', online: true,
+    const effect = evaluate(callback, file, { key: 'cache', deviceId: 'd', sessionId: 's', online: true, foreground: false, includeRelated: false,
       isActive: () => visible, AppState, refreshHomeSessionPr, loadHomeSessionPr: vi.fn(), link: {}, refreshKey: 'updated',
       PR_STATUS_REFRESH_INTERVAL_MS: 90_000, Date, clearInterval, clearTimeout: vi.fn(),
       setInterval: (fn: () => void) => { poll = fn; return 1; }, setTimeout: vi.fn(),
@@ -378,4 +400,17 @@ describe('home PR cache', () => {
     const other = { ref: { ...ref, prNumber: 8 }, status: { ...merged, prNumber: 8 } } as never;
     await expect(loadHomeSessionPr(invoke, 'd', 's', other)).resolves.toEqual({ ref, status: null });
   });
+});
+
+
+// Glance needs multiple associated PRs; the existing Home row keeps its one-PR contract.
+it('loads the bounded PR list for glance and retains each known title through lookup failure', async () => {
+  const refs = [1, 2, 3, 4].map(n => ({ id: String(n), sessionId: 's', owner: 'example', repo: 'app', prNumber: n, lastSeenAt: n }));
+  const invoke = vi.fn(async (_device: string, channel: string) => channel.endsWith('list') ? refs :
+    refs.map(ref => ({ ...ref, ok: true, status: 'merged', title: `Actual PR ${ref.prNumber}` }))) as any;
+  const result = await loadHomeSessionPr(invoke, 'd', 's', null, true);
+  expect([result, ...result!.additional!].map(row => row!.ref.prNumber)).toEqual([4, 3, 2]);
+  expect(result!.status).toMatchObject({ title: 'Actual PR 4' });
+  invoke.mockImplementation(async (_device: string, channel: string) => { if (channel.endsWith('list')) return refs; throw new Error('offline'); });
+  expect(await loadHomeSessionPr(invoke, 'd', 's', result, true)).toEqual(result);
 });

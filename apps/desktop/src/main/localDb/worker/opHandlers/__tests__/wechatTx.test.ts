@@ -392,6 +392,44 @@ describe('WeChat reliable worker transactions', () => {
     );
   });
 
+  // #6492 unit regression through the real worker transaction: deleting a
+  // companion cancels pending/dispatching input and releases staged attachments.
+  // Restart recovery is covered separately and must continue requeuing input.
+  it('cancels deleted companion work without closing authorization or removing final replies', () => {
+    const db = createDb();
+    activate(db, 'epoch-1', null);
+    for (const id of ['pending', 'dispatching', 'accepted', 'reply']) {
+      db.prepare('INSERT INTO sessions (id) VALUES (?)').run(`session-${id}`);
+    }
+    commitBatch(db, {
+      messages: ['pending', 'dispatching', 'accepted', 'reply'].map((id) => message(id, id, `session-${id}`)),
+      mediaBlobs: [{ hash: HASH, ext: '.png', mimeType: 'image/png', bytes: 4,
+        isCache: false, createdAt: 100, lastAccessAt: 100 }],
+      mediaRefs: [{ id: 'pending-media', hash: HASH, taskId: 'pending', label: 'image', createdAt: 100 }],
+      fileAttachments: [{ id: 'pending-file', taskId: 'pending', sessionId: 'session-pending',
+        absPath: '/tmp/wechat-delete-fixture.pdf', originalName: 'fixture.pdf', mimeType: 'application/pdf',
+        bytes: 4, createdAt: 100 }],
+    });
+    db.prepare("UPDATE wechat_inbox SET status = 'dispatching' WHERE id = 'dispatching'").run();
+    db.prepare("UPDATE wechat_inbox SET status = 'accepted_running' WHERE id IN ('accepted', 'reply')").run();
+    runTx(db, 'wechatCommitTerminal', { bindingEpoch: 'epoch-1', taskId: 'reply', now: 200,
+      outbox: [outbox('reply-outbox', 'reply-client', 0, 'already finished')] });
+    expect(runTx(db, 'wechatStopAll', { bindingEpoch: 'epoch-1', now: 201,
+      errorCode: 'COMPANION_DELETED', cancelPending: true,
+    })).toMatchObject({ requeued: 0, cancelled: 2, interrupted: 1 });
+    expect(readTaskStatus(db, 'pending')).toBe('cancelled');
+    expect(readTaskStatus(db, 'dispatching')).toBe('cancelled');
+    expect(readTaskStatus(db, 'accepted')).toBe('interrupted');
+    expect(readTaskStatus(db, 'reply')).toBe('delivery_pending');
+    expect(count(db, 'media_refs')).toBe(0);
+    expect(db.prepare('SELECT status FROM wechat_file_attachments').pluck().get()).toBe('released');
+    expect(count(db, 'wechat_outbox')).toBe(1);
+    expect(db.prepare('SELECT is_active FROM wechat_sync_state').pluck().get()).toBe(1);
+    runTx(db, 'wechatStopAll', { bindingEpoch: 'epoch-1', now: 202, errorCode: 'PROCESS_RESTARTED' });
+    expect(lease(db, 'epoch-1', 203)).toBeNull();
+    expect(readTaskStatus(db, 'pending')).toBe('cancelled');
+  });
+
   it('replays only pre-accepted work and interrupts accepted work after recovery', () => {
     const db = createDb();
     activate(db, 'epoch-1', null);

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { markNewSessionIncomingShare } from '@/session/newSessionForm';
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -309,3 +310,20 @@ it.each(['edited', 'cleared', 'failed'] as const)('keeps the edit claim through 
     expect(container.textContent).toBe('remaining textModel unavailableEdit');
   }
 });
+
+// Unit: a share for another screen must not claim this form or suppress recovery.
+it.each([undefined, 'device/task', 'companion/task', 'new'])(
+  'only protects the new-task draft for its selected share destination: %s', async destination => {
+    const received = { current: false };
+    resume.hasInput = () => received.current;
+    await renderBlank();
+    markNewSessionIncomingShare({}, received);
+    if (destination) markNewSessionIncomingShare({ destination }, received);
+    // Cancellation or successful handoff removes the global batch.
+    markNewSessionIncomingShare(null, received);
+    await act(async () => ready());
+    await notify();
+    expect(container.textContent).toBe(destination === 'new' ? '' : 'device/task');
+    expect(outbox.find).toHaveBeenCalledTimes(destination === 'new' ? 0 : 1);
+  },
+);

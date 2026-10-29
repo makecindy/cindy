@@ -57,7 +57,7 @@ describe('manual Codex resets', () => {
     const { value, selected } = withRows();
     const hook = renderHook(() => useCodexRateLimitReset(value, refresh));
     await act(async () => hook.result.current.reset(selected));
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: 'codexResets.confirmSelectedBody' }));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('codexResets.confirmSelectedBody\n\n') }));
     expect(consume).toHaveBeenCalledExactlyOnceWith(selected.resetOffer.idempotencyKey, 'openai');
   });
 
@@ -81,7 +81,7 @@ describe('manual Codex resets', () => {
     expect(consume).not.toHaveBeenCalled();
   });
 
-  it('does not consume if the quota recovers while confirmation is open', async () => {
+  it('honors manual confirmation even when quota has recovered', async () => {
     let accept!: (value: boolean) => void;
     mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { accept = resolve; }));
     const value = snapshot();
@@ -90,7 +90,7 @@ describe('manual Codex resets', () => {
     act(() => { request = hook.result.current.reset(); });
     hook.rerender({ current: { ...value, rateLimits: { primary: { usedPercent: 0 } } } });
     await act(async () => { accept(true); await request; });
-    expect(consume).not.toHaveBeenCalled();
+    expect(consume).toHaveBeenCalledOnce();
   });
 
   it('does not consume when the confirmation is cancelled', async () => {
@@ -139,7 +139,7 @@ describe('manual Codex resets', () => {
     expect(hook.result.current.canReset).toBe(false);
     expect(hook.result.current.canRetry).toBe(true);
     await act(async () => hook.result.current.reset());
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: 'codexResets.confirmRetryBody' }));
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('codexResets.confirmRetryBody\n\n') }));
     expect(consume).toHaveBeenCalledExactlyOnceWith(value.resetOffer!.idempotencyKey, 'openai');
   });
 
@@ -214,13 +214,13 @@ describe('manual Codex resets', () => {
     expect(mocks.info).toHaveBeenCalledWith(`codexResets.${outcome}`);
   });
 
-  it('does not offer resets before the limit or when credits are depleted', async () => {
+  it('allows manual reset independently of the quota threshold', async () => {
     const value = snapshot();
     value.rateLimits = { primary: { usedPercent: 99 }, rateLimitReachedType: 'credits_depleted' };
     const hook = renderHook(() => useCodexRateLimitReset(value, refresh));
-    expect(hook.result.current.canReset).toBe(false);
+    expect(hook.result.current.canReset).toBe(true);
     await act(async () => hook.result.current.reset());
-    expect(mocks.confirm).not.toHaveBeenCalled();
-    expect(consume).not.toHaveBeenCalled();
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(consume).toHaveBeenCalledOnce();
   });
 });

@@ -308,11 +308,13 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string }; onDispatching?: () => void; signal?: AbortSignal },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void; onAccepted?: () => void | Promise<void>; signal?: AbortSignal },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
     opts?.onDispatching?.();
+    const accepted = opts?.onAccepted?.();
+    if (accepted) await accepted;
     return { accepted: true };
   }
 
@@ -412,6 +414,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   const persistedLimits: GoalLimits[] = [];
   const notices: Array<{ sessionId: string; kind: string }> = [];
   const userMessages: Array<{ sessionId: string; content: string; updated?: boolean }> = [];
+  const stopped = vi.fn();
+  const userDispatched = vi.fn();
   // 可变:测试按需设置"账号是否受限 + resetAt"。
   let accountLimit: AccountLimitInfo | null = null;
   // 可变:模拟"会话已关闭 / 此刻 hydrate 不出来"(ensureSession 返回 undefined)。
@@ -423,6 +427,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     isSessionInTurn: () => false,
     stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
+    onGoalStopped: stopped,
+    onGoalUserDispatched: userDispatched,
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -450,6 +456,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     persistedLimits,
     notices,
     userMessages,
+    stopped,
+    userDispatched,
     setAccountLimit: (v: AccountLimitInfo | null) => {
       accountLimit = v;
     },
@@ -490,6 +498,32 @@ describe('GoalController', () => {
     h = makeController();
   });
 
+  it('reports one handoff when a goal is cleared, not on its intermediate turns', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+    await tick();
+    expect(h.stopped).not.toHaveBeenCalled();
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports accepted manual starts and resumes, but not intermediate goal rounds', async () => {
+    try {
+      await startGoal(h);
+      expect(h.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+      h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+      await tick();
+      expect(h.session.sends).toHaveLength(2);
+      expect(h.userDispatched).toHaveBeenCalledTimes(1);
+      await h.controller.pauseGoal('s1');
+      await h.controller.resumeGoal('s1');
+      expect(h.session.sends).toHaveLength(3);
+      expect(h.userDispatched).toHaveBeenCalledTimes(2);
+    } finally { await h.controller.dispose(); }
+  });
+
   // ── setGoal / updateGoal ──
   it('blocks an unconfirmed dispatch without retrying duplicate Goal work', async () => {
     const local = makeController();
@@ -504,6 +538,7 @@ describe('GoalController', () => {
     await local.controller.setGoal({ sessionId: 's1', objective: 'finish the work' });
 
     expect(local.session.send).toHaveBeenCalledTimes(1);
+    expect(local.userDispatched).not.toHaveBeenCalled();
     expect(await local.storage.get('s1')).toMatchObject({
       status: 'blocked',
       turnsUsed: 0,
@@ -763,6 +798,7 @@ describe('GoalController', () => {
       local.session.sends.push({ content, originKind: opts?.origin?.kind });
       order.push('send');
       attempts += 1;
+      await opts?.onAccepted?.();
       opts?.onDispatching?.();
       return attempts === 1
         ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
@@ -773,6 +809,7 @@ describe('GoalController', () => {
       await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
 
       expect(order).toEqual(['baseline', 'send', 'abort']);
+      expect(local.userDispatched).not.toHaveBeenCalled();
       expect(onUndispatchedUserTurn).toHaveBeenCalledWith('s1');
       expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
 
@@ -786,6 +823,7 @@ describe('GoalController', () => {
       expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(2);
       expect(onUndispatchedUserTurn).toHaveBeenCalledTimes(1);
       expect(local.session.sends).toHaveLength(2);
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1_500);
       expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
     } finally {
       local.controller.dispose();
@@ -2388,6 +2426,7 @@ describe('GoalController', () => {
     expect(h.completions[0].summary.reason).toBe('green');
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
     expect(h.session.sends).toHaveLength(1); // no continuation
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('pauseGoal pauses an active goal, preserves counters, and stops continuation', async () => {
@@ -2403,6 +2442,7 @@ describe('GoalController', () => {
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"x"}\n```' });
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
@@ -4426,6 +4466,27 @@ describe('GoalController', () => {
   });
 
   // ── usageLimited(账号用量受限)──
+  it('a confirmed reset resumes an existing quota wait once before the natural reset time', async () => {
+    h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+    await tick();
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await h.controller.resumeRestoredQuota(async () => true);
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(2);
+  });
+
+  it('a quota refresh does not shorten an overload wait', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 529, message: 'overloaded_error' });
+    await tick();
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
   it('reactive: a usage-limit turn error → usageLimited with resetAt, no continuation', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 }); // 远未来 → 不在测试窗口自动续
     await startGoal(h);
@@ -4581,6 +4642,7 @@ describe('GoalController', () => {
       });
       releaseEnsure();
       await resumed;
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
     } finally {
       releaseEnsure();
       await local.controller.dispose();

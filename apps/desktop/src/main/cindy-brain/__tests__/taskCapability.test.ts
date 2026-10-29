@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, PluginTaskApprovalGate } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
@@ -119,3 +119,38 @@ describe('explicit task capability approval', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+// Missing independent consent is the minimal failing input; no provider or Desktop UI needed.
+it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'write-failure', 'approve'] as const)(
+  'keeps target access separate from old tasks approval: %s', async scenario => {
+    const ghost = legacy();
+    ghost.taskCapabilityApproved = true;
+    if (scenario !== 'missing-declaration') ghost.manifest.agent!.targets = true;
+    let current = true;
+    const confirm = vi.fn(async facts => {
+      expect(facts.added.map((item: { key: string }) => item.key)).toEqual(['agent:targets']);
+      if (scenario === 'account-change') current = false;
+      return scenario !== 'deny';
+    });
+    const approve = vi.fn(async (_id, _revision, isCurrent) => {
+      if (scenario === 'write-failure') throw new Error('disk failure');
+      if (!isCurrent()) return false;
+      ghost.targetCapabilityApproved = true;
+      return true;
+    });
+    expect(hasPluginTargetApproval(ghost)).toBe(false);
+    expect(hasPluginTaskApproval(ghost)).toBe(true);
+    if (scenario !== 'old-receipt') {
+      const result = ensurePluginTaskApproval('p', { getGhost: () => ghost, isCurrent: () => current, confirm, approve }, 'targets');
+      if (scenario === 'write-failure') await expect(result).rejects.toThrow('disk failure');
+      else expect(await result).toBe(scenario === 'approve');
+    }
+    expect(hasPluginTargetApproval(ghost)).toBe(scenario === 'approve');
+    expect(hasPluginTaskApproval(ghost)).toBe(true);
+    if (scenario === 'missing-declaration' || scenario === 'old-receipt') expect(confirm).not.toHaveBeenCalled();
+    if (scenario === 'approve') {
+      await ensurePluginTaskApproval('p', { getGhost: () => ghost, isCurrent: () => current, confirm, approve }, 'targets');
+      expect(confirm).toHaveBeenCalledOnce();
+    }
+  },
+);

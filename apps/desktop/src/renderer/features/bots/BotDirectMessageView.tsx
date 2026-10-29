@@ -1,3 +1,4 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, CircleAlert, LockKeyhole } from 'lucide-react';
@@ -179,7 +180,7 @@ export function BotDirectMessageView() {
                     }`}
                   >
                     {/* Teammate-authored text: rendered like chat, never with privileged links. */}
-                    <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
+                    <MarkdownRenderer workingDir="" content={forwardedRequestDisplayText(message.content)} allowPrivilegedLinks={false} />
                   </div>
                 </div>
                 {ownSide ? <BotAvatar bot={sender} size="sm" /> : null}

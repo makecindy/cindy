@@ -7,7 +7,7 @@ import { parseRemoteResourceGetRequest, type PluginPageDocument } from '@cindy/d
 function setup(
   projection: Pick<
     ConstructorParameters<typeof MobilePluginPages>[0],
-    'setupAssessment' | 'runtimeState' | 'listOrder'
+    'setupAssessment' | 'runtimeState' | 'listOrder' | 'answerModelPicker'
   > = {},
 ) {
   let owner = 'a',
@@ -114,6 +114,44 @@ function setup(
   };
 }
 describe('mobile plugin pages', () => {
+  // New Host picker round trip: page/controller ownership and suspend cancellation are
+  // not covered by the existing directory picker. Minimal input: one native request. Tier: unit.
+  it('delivers model selection only to its source controller and cancels it when the page suspends', async () => {
+    const answer = vi.fn(async () => ({ handled: true, accepted: true }));
+    const h = setup({ answerModelPicker: answer }), { pageId } = await h.open();
+    await h.invoke('poll', { pageId, after: 0 });
+    const target = h.service.modelPickerTarget(pageId, 'practice')!;
+    const cancel = vi.fn();
+    const request = { requestId: 'model-choice', ghostId: 'practice', ghostName: 'Practice', expiresAt: Date.now() + 90_000 };
+    expect(target.send(request, cancel)).toBe(true);
+    const poll = (await h.invoke('poll', { pageId, after: 0 })).result as { modelPickers: unknown[] };
+    expect(poll.modelPickers).toEqual([request]);
+    await expect(h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null }, 'phone-b')).rejects.toThrow();
+    expect(answer).not.toHaveBeenCalled();
+    expect((await h.invoke('answer-model-picker', { pageId, requestId: request.requestId, route: null })).result)
+      .toEqual({ handled: true, accepted: true });
+    expect(answer).toHaveBeenCalledWith(pageId, request.requestId, null);
+    await h.invoke('suspend', { pageId });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(h.service.modelPickerTarget(pageId, 'practice')).toBeNull();
+    target.dismiss(request.requestId);
+    await h.invoke('close', { pageId });
+  });
+  it.each([undefined, true, false])('projects task card visibility without removing task settings access: %s', async (showTaskPreferences) => {
+    const h = setup();
+    h.ghost.manifest.agent = { tasks: true };
+    h.ghost.manifest.showTaskPreferences = showTaskPreferences;
+    const context = { controllerDeviceId: 'phone-a' };
+    const client = { protocolVersion: 1, primitives: ['plugin-capabilities'] };
+    const ref = { collectionId: 'plugins', kind: 'plugin', id: 'practice' };
+    const detail = await h.provider.get!(context, { ref, client });
+    expect(detail.blocks?.find(block => block.id === 'capabilities')?.data)
+      .toMatchObject({ tasks: showTaskPreferences !== false });
+    expect(h.ghost.manifest.agent.tasks).toBe(true);
+    await h.invoke('task-settings:get');
+    expect(h.taskSettings.read).toHaveBeenCalledWith('practice', 'r1');
+  });
+
   it('adds usage facts to the existing capabilities block and preserves unknown setup on a failed read', async () => {
     const h = setup({
       setupAssessment: () => {
@@ -489,6 +527,8 @@ it('projects optional Host ordering facts without changing legacy lists on metad
 });
 
 
+// The real get projection must retain semantic icon keys alongside localized copy;
+// checking both prevents controllers from having to infer permission kinds from text.
 it('projects PC permission facts in the phone locale, excludes tools and keeps OAuth scopes', async () => {
   const h = setup();
   h.ghost.manifest.tools = [{name: 'calendar_events', description: 'Read events', parameters: {type: 'object'}}];
@@ -503,10 +543,14 @@ it('projects PC permission facts in the phone locale, excludes tools and keeps O
     ref: {collectionId: 'plugins', kind: 'plugin', id: 'practice'},
     client: {protocolVersion: 1, primitives: ['plugin-capabilities'], locale: 'zh-CN'},
   });
-  const facts = detail.blocks?.find(block => block.id === 'capabilities')?.data as {tools: unknown[]; permissions: Array<{title: string; description: string}>};
+  const facts = detail.blocks?.find(block => block.id === 'capabilities')?.data as {tools: unknown[]; permissions: Array<{kind?: string; labelKey?: string; title: string; description: string}>};
   expect(facts.tools).toEqual([{name: 'calendar_events', description: 'Read events'}]);
-  expect(facts.permissions.some(item => item.title.includes('calendar.example'))).toBe(true);
-  expect(facts.permissions.some(item => item.description.includes('calendar.read'))).toBe(true);
+  expect(facts.permissions.find(item => item.title.includes('calendar.example'))).toMatchObject({
+    kind: 'network', labelKey: 'networkHost',
+  });
+  expect(facts.permissions.find(item => item.description.includes('calendar.read'))).toMatchObject({
+    kind: 'network', labelKey: 'networkSecretOauth',
+  });
   expect(JSON.stringify(facts.permissions)).not.toContain('calendar_events');
   expect(JSON.stringify(facts.permissions)).not.toContain('public-client-id');
   expect(JSON.stringify(facts.permissions)).not.toContain('settings.ghosts.perm');
@@ -541,4 +585,9 @@ it('projects the same installed Details as PC, with factual unsigned trust and n
   expect(JSON.stringify(signed)).not.toContain('not-a-display-field');
   h.ghost.manifest.panel = {html: 'panel.html', position: 'tab'};
   expect((await read()).find(fact => fact.key === 'panel')?.value).toBe('Panel');
+  h.ghost.publishingSource = { kind: 'public-market', pluginId: 'public-practice' };
+  expect(toGhostPluginDetail(h.ghost).author).toBeNull();
+  expect((await read()).some(fact => fact.key === 'author')).toBe(false);
+  h.ghost.publishingSource = { kind: 'local', source: 'manual' };
+  expect((await read()).find(fact => fact.key === 'author')?.value).toBe('Cindy');
 });

@@ -2,7 +2,7 @@
  * worktree-parallel-sessions: git CLI 包装。
  *
  * 职责:
- *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
+ *   - POSIX 用 detached spawn、Windows 用 execFile 调用 git，保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
  *     幂等地 `git config --global --add safe.directory <path>`(已存在则不重复添加),
  *     重试**一次**原命令
@@ -12,9 +12,10 @@
  * 这里只把 raw stderr/code/cause 暴露出去。
  */
 
-import { execFile, type ChildProcess, type ExecFileOptions } from 'node:child_process';
+import { execFile, spawn, type ChildProcess, type ExecFileOptions } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { assertGitDirectoryReady, currentOperationBudget, quarantineGitDirectory } from '../utils/operationBudget';
 
 import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
@@ -42,6 +43,8 @@ export class GitExecError extends Error {
   readonly cause?: NodeJS.ErrnoException;
   /** 超时是未知状态，探测调用方不得把它当作「目录不存在」。 */
   readonly timedOut: boolean;
+  readonly aborted: boolean;
+  readonly cleanupUnconfirmed: boolean;
 
   constructor(opts: {
     args: readonly string[];
@@ -50,6 +53,8 @@ export class GitExecError extends Error {
     stdout: string;
     cause?: NodeJS.ErrnoException;
     timedOut?: boolean;
+    aborted?: boolean;
+    cleanupUnconfirmed?: boolean;
   }) {
     super(
       `git ${opts.args.join(' ')} failed${
@@ -63,6 +68,8 @@ export class GitExecError extends Error {
     this.stdout = opts.stdout;
     this.cause = opts.cause;
     this.timedOut = opts.timedOut ?? false;
+    this.aborted = opts.aborted ?? false;
+    this.cleanupUnconfirmed = opts.cleanupUnconfirmed ?? false;
   }
 }
 
@@ -78,13 +85,32 @@ export interface GitExecOpts {
    * (git 收 TERM 会清理 .lock), 等**进程组清空**后才收口(直接 git 进程退出 ≠
    * 组清空, 幸存的 git-remote-http 或 credential helper 后代仍可能持锁), 宽限期
    * 内未清空的
-   * 由整组 SIGKILL 兜底后再收口。两个平台都保证收口时进程树已终止——调用方拿到
-   * 超时错误后立刻发起的下一个 git 操作不会与残留进程争抢同一仓库的 .lock。
+   * 由整组 SIGKILL 兜底后再收口。清理预算耗尽仍无法确认退净时返回
+   * cleanupUnconfirmed；自动快照会隔离该仓库的后续快照/回退写入。
    * 省略 = 不超时。
    */
   timeoutMs?: number;
+  /** Optional inactivity budget for Git --progress stderr (LC_ALL=C). Only
+   * advancing object/delta/byte counters renew it; unrelated output does not.
+   * Independent of timeoutMs/deadlineAtMs, which remain absolute ceilings. */
+  idleTimeoutMs?: number;
+  /** Optional absolute performance.now() deadline shared by ownership repair and retries. */
+  deadlineAtMs?: number;
+  signal?: AbortSignal;
   /** Called immediately after the git child is spawned. */
   onSpawn?: (pid: number) => void;
+}
+
+/** Check the caller's monotonic budget before starting another repair step. */
+function remainingDeadlineMs(deadlineAtMs: number | undefined, args: readonly string[]): number | undefined {
+  if (deadlineAtMs === undefined) return undefined;
+  const remaining = Math.ceil(deadlineAtMs - performance.now());
+  if (remaining <= 0) {
+    throw new GitExecError({
+      args, exitCode: null, stdout: '', stderr: 'Git operation deadline exceeded', timedOut: true,
+    });
+  }
+  return remaining;
 }
 
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
@@ -203,6 +229,44 @@ function pidMayBeAliveForGit(pid: number): boolean {
   }
 }
 
+/** execFile drops detached; POSIX must use spawn to actually own a process group. */
+function execDetachedGit(
+  file: string,
+  args: string[],
+  options: ExecFileOptions,
+  callback: (error: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void,
+): ChildProcess {
+  const child = spawn(file, args, { cwd: options.cwd, env: options.env, detached: true });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  let done = false;
+  const finish = (error: NodeJS.ErrnoException | null) => {
+    if (done) return;
+    done = true;
+    callback(error, Buffer.concat(stdout).toString('utf8'), Buffer.concat(stderr).toString('utf8'));
+  };
+  for (const [stream, chunks] of [[child.stdout, stdout], [child.stderr, stderr]] as const) {
+    let size = 0;
+    stream?.on('data', (chunk: Buffer) => {
+      if (done) return;
+      size += chunk.length;
+      if (size > (options.maxBuffer ?? 16 * 1024 * 1024)) {
+        finish(Object.assign(new Error('Git output exceeded maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+  }
+  child.once('error', finish);
+  child.once('close', (code, signal) => {
+    finish(code === 0 && signal === null ? null : Object.assign(
+      new Error(`Git exited with ${signal ?? code}`),
+      { code, signal },
+    ) as unknown as NodeJS.ErrnoException);
+  });
+  return child;
+}
+
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
  */
@@ -211,8 +275,12 @@ function execFileOnce(
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
-  const diagnostic = beginExecFileDiagnostic('worktree.git');
-  return new Promise((resolve, reject) => {
+  const pending = new Promise<GitExecResult>((resolve, reject) => {
+    opts?.signal?.throwIfAborted();
+    const remaining = remainingDeadlineMs(opts?.deadlineAtMs, args);
+    const timeoutMs = remaining === undefined ? opts?.timeoutMs
+      : Math.min(remaining, opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : remaining);
+    const diagnostic = beginExecFileDiagnostic('worktree.git');
     // 超时不走 execFile 内建 timeout:它只终止直接子进程,且回调要等 stdout/stderr
     // 流关闭——被后代进程继承并占住时回调可能远超 deadline 才来。这里自管定时器,
     // 超时先终止整棵进程树/进程组(两个平台都含后代),再显式收口 Promise。
@@ -222,24 +290,27 @@ function execFileOnce(
     // 后代还活着时提前结束 Promise,调用方随即发起的 git 操作与残留进程争锁。
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let reaper: ReturnType<typeof setTimeout> | undefined;
     let groupPoll: ReturnType<typeof setInterval> | undefined;
     let finishWatchdog: ReturnType<typeof setTimeout> | undefined;
     // Windows 收尾用:execFile 回调已到 = 全部继承 stdio 的进程都已退出/放手。
     let stdioReleased = false;
     let onStdioReleased: (() => void) | undefined;
+    let abortListener: (() => void) | undefined;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
       if (reaper !== undefined) clearTimeout(reaper);
       if (groupPoll !== undefined) clearInterval(groupPoll);
       if (finishWatchdog !== undefined) clearTimeout(finishWatchdog);
+      if (abortListener) opts?.signal?.removeEventListener('abort', abortListener);
       fn();
     };
 
-    // ExecFileOptions 类型没收录 detached,但 execFile 运行时把 options 原样传给
-    // spawn,detached 照常生效——用交叉类型补上缺口。
+    // POSIX uses spawn through execDetachedGit; execFile does not forward detached.
     const spawnOptions: ExecFileOptions & { detached: boolean } = {
       cwd,
       // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
@@ -265,7 +336,7 @@ function execFileOnce(
 
     let child: ChildProcess;
     try {
-      child = execFile(
+      child = (process.platform === 'win32' ? execFile : execDetachedGit)(
         'git',
         [...args],
         spawnOptions,
@@ -303,6 +374,15 @@ function execFileOnce(
             //   - typeof (err as any).code === 'number' → 子进程退出码
             const numericCode = (err as unknown as { code?: unknown }).code;
             const exitCode = typeof numericCode === 'number' ? numericCode : null;
+            if (errno.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+              stdioReleased = process.platform === 'win32';
+              // execFile only kills the immediate child on overflow.
+              queueMicrotask(() => startTreeCleanup((treeConfirmedGone) => new GitExecError({
+                args, exitCode, stderr: stderrStr, stdout: '', cause: errno,
+                cleanupUnconfirmed: !treeConfirmedGone,
+              })));
+              return;
+            }
             rejectWithGitError(
               new GitExecError({
                 args,
@@ -342,11 +422,59 @@ function execFileOnce(
         stdout: '',
         cause: cause as NodeJS.ErrnoException,
       });
-      startTreeCleanup(() => failure);
+      startTreeCleanup((treeConfirmedGone) => new GitExecError({
+        args, exitCode: null, stderr: failure.stderr, stdout: failure.stdout,
+        cause: failure.cause, cleanupUnconfirmed: !treeConfirmedGone,
+      }));
     };
     child.once('error', handleChildProcessError);
     child.stdout?.once('error', handleChildProcessError);
     child.stderr?.once('error', handleChildProcessError);
+
+    // --progress emits CR-delimited records even without a terminal. Preserve
+    // split records, but never retain arbitrary stderr or credentials here.
+    if (opts?.idleTimeoutMs && opts.idleTimeoutMs > 0) {
+      const idleMs = opts.idleTimeoutMs;
+      let pending = '';
+      const counters = new Map<string, { objects: number; bytes: number }>();
+      const renew = () => {
+        if (settled || timedOut) return;
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          startTreeCleanup((gone) => new GitExecError({
+            args,
+            exitCode: null,
+            stdout: '',
+            timedOut: true,
+            cleanupUnconfirmed: !gone,
+            stderr: `no Git progress for ${idleMs}ms; process tree ${gone ? 'terminated' : 'cleanup unconfirmed'}`,
+          }));
+        }, idleMs);
+      };
+      const onProgress = (chunk: Buffer | string) => {
+        if (settled || timedOut) return;
+        const records = (pending + chunk.toString()).split(/[\r\n]/);
+        pending = records.pop()!.slice(-1024);
+        for (const record of records) {
+          const match = /^(?:remote:\s*)?(Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Checking connectivity):\s*(?:\d+%\s*\((\d+)\/\d+\)|(\d+))(?:,\s*([\d.]+)\s*(bytes|KiB|MiB|GiB))?/.exec(record.trim());
+          if (!match) continue;
+          const objects = Number(match[2] ?? match[3]);
+          const units: Record<string, number> = { bytes: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 };
+          const bytes = Number(match[4] ?? 0) * (units[match[5]] ?? 1);
+          const previous = counters.get(match[1]);
+          if (!previous || objects > previous.objects || bytes > previous.bytes) {
+            counters.set(match[1], {
+              objects: Math.max(objects, previous?.objects ?? 0),
+              bytes: Math.max(bytes, previous?.bytes ?? 0),
+            });
+            renew();
+          }
+        }
+      };
+      child.stderr?.on('data', onProgress);
+      child.once('close', () => child.stderr?.removeListener('data', onProgress));
+      renew();
+    }
 
     function startTreeCleanup(
       createFailure: (treeConfirmedGone: boolean) => GitExecError,
@@ -459,8 +587,8 @@ function execFileOnce(
         try {
           process.kill(-child.pid, 0);
           return false;
-        } catch {
-          return true;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === 'ESRCH';
         }
       };
       if (!groupEmpty()) {
@@ -490,8 +618,16 @@ function execFileOnce(
       reaper.unref?.();
     }
 
-    const timeoutMs = opts?.timeoutMs;
-    if (timeoutMs !== undefined && timeoutMs > 0) {
+    abortListener = () => startTreeCleanup((treeConfirmedGone) => new GitExecError({
+      args, exitCode: null, stdout: '',
+      stderr: treeConfirmedGone ? 'cancelled; process tree terminated' : 'cancelled; process tree cleanup unconfirmed',
+      aborted: true, cleanupUnconfirmed: !treeConfirmedGone,
+    }));
+    if (!settled) {
+      opts?.signal?.addEventListener('abort', abortListener, { once: true });
+      if (opts?.signal?.aborted) abortListener();
+    }
+    if (!settled && timeoutMs !== undefined && timeoutMs > 0) {
       timer = setTimeout(() => {
         startTreeCleanup((treeConfirmedGone) =>
           new GitExecError({
@@ -502,11 +638,13 @@ function execFileOnce(
               : `timed out after ${timeoutMs}ms; process tree cleanup unconfirmed`,
             stdout: '',
             timedOut: true,
+            cleanupUnconfirmed: !treeConfirmedGone,
           }),
         );
       }, timeoutMs);
     }
   });
+  return currentOperationBudget()?.track(pending) ?? pending;
 }
 
 /**
@@ -567,7 +705,7 @@ export function safeDirectorySpellings(p: string): string[] {
  * 失败)必须向上抛,否则会把「读不到」误判成「未配置」而重复 --add,反而制造出
  * 本条修复要避免的重复条目。
  */
-async function readGlobalSafeDirectories(opts?: Pick<GitExecOpts, 'timeoutMs'>): Promise<string[]> {
+async function readGlobalSafeDirectories(opts?: Pick<GitExecOpts, 'timeoutMs' | 'deadlineAtMs' | 'signal'>): Promise<string[]> {
   try {
     const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory'], undefined, opts);
     return stdout
@@ -589,11 +727,16 @@ async function readGlobalSafeDirectories(opts?: Pick<GitExecOpts, 'timeoutMs'>):
  * dubious-ownership 错误还给调用方,而不是退化成并发写入重复条目。用底层
  * execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
  */
-async function ensureGlobalSafeDirectory(targetPath: string, opts?: Pick<GitExecOpts, 'timeoutMs'>): Promise<void> {
+async function ensureGlobalSafeDirectory(targetPath: string, opts?: Pick<GitExecOpts, 'timeoutMs' | 'deadlineAtMs' | 'signal'>): Promise<void> {
+  const configArgs = ['config', '--global', 'safe.directory'];
+  const remaining = remainingDeadlineMs(opts?.deadlineAtMs, configArgs);
   await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
-    { label: 'git-safe-directory', waitMs: 1_000 },
+    { label: 'git-safe-directory', waitMs: Math.min(1_000, remaining ?? 1_000) },
     async (status) => {
+      opts?.signal?.throwIfAborted();
+      // Lock acquisition may finish after its wait budget; never start Git then.
+      remainingDeadlineMs(opts?.deadlineAtMs, configArgs);
       if (!status.held) {
         throw new Error('could not acquire the global safe.directory lock');
       }
@@ -619,10 +762,22 @@ export async function gitExec(
   cwd?: string,
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
+  const operation = currentOperationBudget();
+  operation?.check();
+  if (operation) {
+    if (cwd) assertGitDirectoryReady(cwd);
+    opts = {
+      ...opts,
+      signal: opts?.signal ? AbortSignal.any([opts.signal, operation.signal]) : operation.signal,
+      deadlineAtMs: Math.min(opts?.deadlineAtMs ?? Infinity, operation.deadlineAtMs),
+    };
+  }
+  const execute = () => execFileOnce(args, cwd, opts);
   try {
-    return await execFileOnce(args, cwd, opts);
+    return await execute();
   } catch (err) {
     if (!(err instanceof GitExecError)) throw err;
+    if (operation && cwd && err.cleanupUnconfirmed) quarantineGitDirectory(cwd);
     // spawn ENOENT(git 未安装) 也走 GitExecError, 这里不该重试
     if (err.cause?.code === 'ENOENT') throw err;
 
@@ -630,10 +785,13 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await ensureGlobalSafeDirectory(dubiousPath, { timeoutMs: opts?.timeoutMs });
+          await ensureGlobalSafeDirectory(dubiousPath, {
+            timeoutMs: opts?.timeoutMs, deadlineAtMs: opts?.deadlineAtMs, signal: opts?.signal,
+          });
           // 配完 safe.directory 后重试原命令
-          return await execFileOnce(args, cwd, opts);
+          return await execute();
         } catch (cause) {
+          if (operation && cwd && cause instanceof GitExecError && cause.cleanupUnconfirmed) quarantineGitDirectory(cwd);
           // 普通修复失败仍返回原始 dubious-ownership 错误；超时单独向上传递。
           // 但 ensureGlobalSafeDirectory 的真实失败(--get-all 权限/锁冲突/配置损坏,
           // 或拿不到跨进程锁)不能被静默吞掉 —— 先落日志保住诊断信息, 再抛原始错误。
@@ -642,7 +800,8 @@ export async function gitExec(
             cause instanceof Error ? cause.message : String(cause),
           );
           // 探测超时不能被误判为目录失效，也不能继续 fallback 启动新的 Git。
-          if (cause instanceof GitExecError && cause.timedOut) throw cause;
+          opts?.signal?.throwIfAborted();
+          if (cause instanceof GitExecError && (cause.timedOut || cause.aborted)) throw cause;
           throw err;
         }
       }

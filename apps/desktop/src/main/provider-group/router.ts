@@ -15,12 +15,18 @@ import { findCatalogModel, isModelSelectableForNewRoute } from '@cindy/model-pro
 import type { AgentKind } from '@cindy/maker-core';
 import type { RemoteAgentCaps } from '@cindy/device-link';
 
-import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../shared/providerGroup.js';
+import type {
+  ProviderGroupConfig,
+  ProviderGroupMember,
+  ProviderGroupMemberQuota,
+  ProviderGroupView,
+  ProviderGroupUsageLimit,
+} from '../../shared/providerGroup.js';
 import type { ProviderGroupBinding } from './bindings.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
 import { pickProviderGroupMember, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';
-import { providerGroupUsageState } from './usage.js';
+import { providerGroupMemberUsageState, providerGroupRebalanceTarget } from './usage.js';
 import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP, type ProviderGroupPersistedCooling } from './cooling.js';
 export { PROVIDER_GROUP_FAILURE_COOLDOWN_MS, type ProviderGroupPersistedCooling } from './cooling.js';
 
@@ -71,6 +77,8 @@ export interface ProviderGroupPickInput {
   exclude?: ReadonlySet<string>;
   /** 现读组内电脑的最新状态，不用短时缓存(试过不行、带着这一轮试过的来选时)。 */
   fresh?: boolean;
+  /** 用户确认的配额均衡，值为当前成员键；同一步重验目标未满载、配额可信、短窗口不紧张及换号收益。 */
+  quotaRebalance?: string;
   /**
    * 选中后在同一步(读负载与选电脑之间没有等待)调用，用来立即记上占用：同时来的几个请求各自读到前一个的
    * 占用，不会全落到同一台。
@@ -89,11 +97,19 @@ export const PROVIDER_GROUP_LOCAL_PROVISIONAL_MS = 30_000;
 export type ProviderGroupPickResult =
   | { kind: 'none' }
   | { kind: 'member'; member: ProviderGroupMember; label: string; resolved: ResolvedProviderGroupMember[] }
-  | { kind: 'unavailable'; resolved: ResolvedProviderGroupMember[] };
+  | { kind: 'unavailable'; resolved: ResolvedProviderGroupMember[]; usageLimit?: ProviderGroupUsageLimit };
 
 export interface ProviderGroupRouter {
   pick(input: ProviderGroupPickInput): Promise<ProviderGroupPickResult>;
-  view(providerId: string, options?: string | { model?: string; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
+  /**
+   * 任务进行中换号能换去的电脑(provider-groups.md §6.2「任务进行中换号」)：能接这个模型、未暂停、未满载、读得到配额、
+   * 5 小时配额不紧张，不含 `exclude`。用调用方刚读到的组内电脑状态，不再读一次；不记占用、不动轮询游标。
+   */
+  rebalanceCandidates(
+    input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model' | 'localTask'> & { exclude: ReadonlySet<string> },
+    resolved: readonly ResolvedProviderGroupMember[],
+  ): { key: string; label: string; quota: ProviderGroupMemberQuota }[];
+  view(providerId: string, options?: string | { model?: string; agentKind?: AgentKind; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
   /** 经本组分到这台、正在运行的任务数。 */
   running(providerId: string, memberKey: string): number;
   markCooling(providerId: string, memberKey: string, until: number, model?: string): void;
@@ -206,16 +222,24 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       && isModelSelectableForNewRoute(found, { userProvider: resolved.view.source === 'user' });
   }
 
+  /** 能接这个模型的任务：提供模型、不在冷却、配额没用完。 */
+  function usableFor(input: Pick<ProviderGroupPickInput, 'providerId' | 'agentKind' | 'model'>) {
+    return (r: ResolvedProviderGroupMember) =>
+      offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
+      && !providerGroupMemberUsageState(r, input.model, deps.now(), input.agentKind).limited;
+  }
+
+  /** 「暂停对外分配」只拦本机以外的新任务；除此之外本机任务与其他使用方同一套组策略，不另设本机优先。 */
+  function pausedFor(input: Pick<ProviderGroupPickInput, 'localTask'>) {
+    return (r: ResolvedProviderGroupMember) => r.member.paused && !(input.localTask === true && r.member.kind === 'local');
+  }
+
   return {
     async pick(input) {
       const config = deps.readGroup(input.providerId);
       if (!config) return { kind: 'none' };
-      const usable = (r: ResolvedProviderGroupMember) =>
-        offersModel(r, input.agentKind, input.model) && coolingUntil(input.providerId, r.member.key, input.model) === null
-        && !providerGroupUsageState(r.claudeUsage, input.model, deps.now()).limited;
-      // 「暂停对外分配」只拦本机以外的新任务；除此之外本机任务与其他使用方同一套组策略，不另设本机优先。
-      const paused = (r: ResolvedProviderGroupMember) =>
-        r.member.paused && !(input.localTask === true && r.member.kind === 'local');
+      const usable = usableFor(input);
+      const paused = pausedFor(input);
       const resolved = await deps.directory.resolveMembers(input.providerId, config, {
         quickMs: PROVIDER_GROUP_PICK_QUICK_MS,
         // 已经有一台能用、可以分的电脑(满载仍可接)：不再等慢的那几台。未满优先由调度器决定。
@@ -226,26 +250,52 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       });
       const now = deps.now();
       const schedulable: SchedulableMember[] = resolved.map((r) => {
-        const quota = providerGroupUsageState(r.claudeUsage, input.model, now);
+        const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
         return {
           key: r.member.key,
-          usable: usable(r),
+          usable: usable(r) && (!input.quotaRebalance
+            || (memberRunning(input.providerId, r) < r.member.limit && !!quota.quota && !quota.fiveHourTight)),
           paused: paused(r),
           running: memberRunning(input.providerId, r),
           limit: r.member.limit,
           weight: r.member.weight,
-          usagePercent: quota.usagePercent,
-          weeklyResetAtMs: quota.weeklyResetAtMs,
-          fiveHourResetAtMs: quota.fiveHourResetAtMs,
+          urgency: quota.urgency,
+          fiveHourTight: quota.fiveHourTight,
         };
       });
       const key = pickProviderGroupMember(schedulable, config.strategy, {
         exclude: input.exclude,
         lastPicked: lastPicked.get(input.providerId) ?? null,
         random: deps.random,
-        now,
       });
-      if (!key) return { kind: 'unavailable', resolved };
+      if (!key) {
+        // Only members that could take this model after a quota reset count. A paused,
+        // offline or model-mismatched member must not supply a misleading reset time.
+        const limited = resolved.filter((r) => !paused(r) && !input.exclude?.has(r.member.key)
+          && offersModel(r, input.agentKind, input.model))
+          .map((r) => {
+            const quota = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
+            // A reset is useful only once this member's existing cooldown also ends.
+            // A cooldown alone is not evidence of when an unknown quota resets.
+            return { ...quota, resetAtMs: quota.resetAtMs === null ? null
+              : Math.max(quota.resetAtMs, coolingUntil(input.providerId, r.member.key, input.model) ?? 0) };
+          })
+          .filter((quota) => quota.limited);
+        const resets = limited.flatMap((quota) => quota.resetAtMs === null ? [] : [quota.resetAtMs]);
+        return {
+          kind: 'unavailable', resolved,
+          ...(limited.length > 0 ? { usageLimit: { resetAtMs: resets.length > 0 ? Math.min(...resets) : null } } : {}),
+        };
+      }
+      if (input.quotaRebalance) {
+        const current = resolved.find((r) => r.member.key === input.quotaRebalance);
+        const chosen = resolved.find((r) => r.member.key === key)!;
+        const currentQuota = current && providerGroupMemberUsageState(current, input.model, now, input.agentKind).quota;
+        const targetQuota = providerGroupMemberUsageState(chosen, input.model, now, input.agentKind).quota;
+        if (!currentQuota || !targetQuota || providerGroupRebalanceTarget(currentQuota, [{ key, quota: targetQuota }], now) !== key) {
+          return { kind: 'unavailable', resolved };
+        }
+      }
       lastPicked.set(input.providerId, key);
       if (input.reserveFor) {
         provisional.set(input.reserveFor, {
@@ -257,6 +307,25 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
       input.onPicked?.(key);
       const chosen = resolved.find((r) => r.member.key === key)!;
       return { kind: 'member', member: chosen.member, label: chosen.label, resolved };
+    },
+
+    rebalanceCandidates(input, resolved) {
+      const config = deps.readGroup(input.providerId);
+      if (!config) return [];
+      const now = deps.now();
+      const usable = usableFor(input);
+      const paused = pausedFor(input);
+      return resolved.flatMap((r) => {
+        if (input.exclude.has(r.member.key) || !usable(r) || paused(r)) return [];
+        if (memberRunning(input.providerId, r) >= r.member.limit) return [];
+        const state = providerGroupMemberUsageState(r, input.model, now, input.agentKind);
+        if (!state.quota || state.fiveHourTight) return [];
+        // 同一台电脑上有几个账号时带上账号名，提示里看得出是哪个号。
+        const sameComputer = config.members.filter((m) => m.kind === r.member.kind && m.agentDeviceId === r.member.agentDeviceId);
+        const account = r.view?.name || r.member.providerName;
+        const label = sameComputer.length > 1 && account ? `${r.label} · ${account}` : r.label;
+        return [{ key: r.member.key, label, quota: state.quota }];
+      });
     },
 
     async view(providerId, options) {
@@ -273,7 +342,7 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           const guestSupport = readSupport
             ? (r.member.kind === 'local' || r.state === 'ok' ? await readSupport(r.member) : 'unknown' as const)
             : undefined;
-          const quota = providerGroupUsageState(r.claudeUsage, model, deps.now());
+          const quota = providerGroupMemberUsageState(r, model, deps.now(), viewOptions?.agentKind);
           const remembered = coolingUntil(providerId, r.member.key, model);
           const until = quota.limited && quota.resetAtMs === null ? null
             : remembered === null ? quota.resetAtMs
@@ -305,6 +374,9 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
             weight: r.member.weight,
             paused: r.member.paused,
             ...(until !== null ? { coolingUntil: until } : {}),
+            // 与选电脑排序用的同一个窗口，同账号电脑据此提议任务进行中换号(provider-groups.md §6.2)；分享来的电脑本来就不读配额。
+            ...(quota.quota ? { quota: quota.quota } : {}),
+            ...(quota.quota && quota.fiveHourTight ? { fiveHourTight: true as const } : {}),
           };
         })),
         ...(model ? { model } : {}),

@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HistoryViewController, projectHistoryView, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
-import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
+import { HistoryViewController, historyAfter, projectHistoryView, type HistoryWorkSummary } from '@cindy/maker-shared/message-window';
+import { buildMobileHistoryRenderItems, buildMobileSessionRenderWindow } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems, type MobileMessageRenderItem } from '../session/messageRenderModel';
 import type { RemoteMessage } from '../session/types';
 import { reconcileMobileMessageRenderItems } from '../session/messageRenderReconcile';
+import { buildMobileStreamingRenderWindow } from '../session/messageRenderStreamingCache';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
+import { companionConversationItems } from '../session/companionConversationPresentation';
 
 function row(index: number, role: RemoteMessage['role'], content: unknown, toolUseId: string | null = null): RemoteMessage {
   return { id: `id-${index}`, clientId: `client-${index}`, sessionId: 'session', role, content, toolUseId,
@@ -33,6 +35,55 @@ function harness(rows: RemoteMessage[], streaming = false, lazyDetails = false) 
 }
 
 describe('remote history preserves original folding', () => {
+  // #7081: the host outline must agree with raw grouping when progress directly precedes the final.
+  it.each([false, true])('folds adjacent companion commentary after history takeover (lazy=%s)', async (lazy) => {
+    const rows = [row(0, 'user', 'Work'),
+      { ...row(1, 'assistant', 'Checking'), agentMeta: { assistantPhase: 'commentary' } },
+      { ...row(2, 'assistant', 'Done'), agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }];
+    const { view, render } = harness(rows, false, lazy);
+    await view.refresh();
+    const loaded = companionConversationItems(render());
+    expect(loaded.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Work', 'Done']);
+    expect(outline(loaded)).toEqual(outline(companionConversationItems(buildMobileMessageRenderItems(rows))));
+    expect(JSON.stringify(loaded.find(item => item.type === 'work_group'))).toContain('Checking');
+    view.setActive(false);
+  });
+  // Unit: a child inherits the transcript for the model but only its new turns
+  // belong on screen. Exercise real rendering with both eager and lazy work.
+  it.each([false, true])('hides inherited work and messages in a side chat (lazy=%s)', async (lazy) => {
+    const rows = [row(0, 'user', 'parent prompt'), thought(1), row(2, 'assistant', 'parent answer'),
+      row(3, 'user', 'child question'), thought(4), row(5, 'assistant', 'child answer')];
+    const { view } = harness(rows, false, lazy);
+    await view.refresh();
+    const result = buildMobileHistoryRenderItems({ view,
+      snapshot: historyAfter(view.getSnapshot(), Date.parse(rows[3].createdAt))!,
+      messages: [], streaming: false, sessionId: 'session', sessionSource: 'side-chat' });
+    expect(result.map(item => item.key)).toEqual(['message-client-3', 'work-client-4', 'message-client-5']);
+    expect(view.getSnapshot().items.length).toBeGreaterThan(3);
+    view.setActive(false);
+  });
+  // Regression: mobile's companion projection used to flatten away deferred
+  // work after history takeover. Verify the production controller's expansion
+  // still reads the original thinking/tool rows and never hides a provider final.
+  it.each(['final_answer', 'commentary'])('preserves companion %s and lazy work through history takeover and expansion', async (assistantPhase) => {
+    const rows = [row(0, 'user', 'Work'),
+      { ...row(1, 'assistant', 'First reply'), agentMeta: { assistantPhase } },
+      thought(2), call(3), row(4, 'tool_result', 'Read result', 'tool-3')];
+    const { view, render, details } = harness(rows, true, true);
+    const raw = companionConversationItems(buildMobileMessageRenderItems(rows, { isSessionStreaming: true }));
+    await view.refresh();
+    const loaded = companionConversationItems(render());
+    expect(loaded.map(item => item.key)).toEqual(raw.map(item => item.key));
+    const work = loaded.find(item => item.type === 'work_group');
+    if (work?.type !== 'work_group') throw new Error('Missing companion work');
+    expect(details).not.toHaveBeenCalled();
+    work.deferred!.setVisible!(true, false);
+    await vi.waitFor(() => expect([...view.getSnapshot().details.values()].some(state => state.complete)).toBe(true));
+    expect(JSON.stringify(companionConversationItems(render()))).toContain('reasoning');
+    expect(companionConversationItems(render()).filter(item => item.type === 'message').map(item => item.message.body))
+      .toEqual(['Work', 'First reply']);
+    view.setActive(false);
+  });
   it.each([false, true])('keeps the earlier answer when recovery follows an unloaded gap (streaming=%s)', async (streaming) => {
     const rows = [row(0, 'user', 'Work'), thought(1), row(2, 'assistant', 'Earlier answer'),
       row(4000, 'user', JSON.stringify({ text: CONTINUE_AFTER_ERROR_PROMPT })),
@@ -255,6 +306,37 @@ it.each([true, false])('loads a folded subagent only on expansion while retainin
     const pending = { ...expanded, deferred: { ...expanded.deferred, loading: true } };
     const reconciled = reconcileMobileMessageRenderItems([pending], [expanded]);
     expect(reconciled[0]).toBe(expanded);
+  }
+  view.setActive(false);
+});
+
+// Unit: existing history rendering tests bypassed the screen's source selection.
+// Minimal regression: distinct cached/raw answers with a previously warmed prefix.
+it.each([false, true])('selects visible rows without reading unused raw bodies (ready=%s)', async ready => {
+  const { view } = harness([row(10, 'assistant', 'Cached answer')]);
+  if (ready) await view.refresh();
+  const prefixCache = { current: null as ReturnType<typeof buildMobileStreamingRenderWindow>['prefix'] };
+  const warmed = [row(0, 'user', 'First'), row(1, 'assistant', 'Done'), row(2, 'user', 'Next'),
+    { ...row(3, 'assistant', 'Streaming'), agentMeta: { isStreaming: true } }];
+  buildMobileStreamingRenderWindow({ cacheKey: 'en', messages: warmed,
+    options: { sessionId: 'session', isSessionStreaming: true }, prefixCache });
+  expect(prefixCache.current).not.toBeNull();
+  const readRawBody = vi.fn(() => 'Raw answer');
+  const raw = row(4, 'assistant', '');
+  Object.defineProperty(raw, 'content', { get: readRawBody });
+  const result = buildMobileSessionRenderWindow({
+    raw: { cacheKey: 'en', messages: [raw], options: { sessionId: 'session' }, prefixCache },
+    history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session' },
+  });
+  expect(result.items).toMatchObject([{ type: 'message', message: { body: ready ? 'Cached answer' : 'Raw answer' } }]);
+  expect(result.diffCount).toBe(0);
+  expect(result.prefix).toBeNull();
+  expect(result.stablePrefixItemCount).toBe(0);
+  if (ready) {
+    expect(readRawBody).not.toHaveBeenCalled();
+    expect(prefixCache.current).toBeNull();
+  } else {
+    expect(readRawBody).toHaveBeenCalled();
   }
   view.setActive(false);
 });

@@ -28,6 +28,7 @@ import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared
 import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
 
 import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
+import type { DbClient } from '../client/DbClient';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
@@ -41,6 +42,7 @@ import { throwIpcError, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
 import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
+import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
 import { restoreTaskImageRows } from '../../cindy-media/taskImageDelivery';
 import {
   removeRefs as removeMediaRefs,
@@ -85,6 +87,32 @@ const messageRowid = sql<number>`rowid`;
  */
 function notAutoResumeAgentMetaSql() {
   return sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`;
+}
+
+// Normal publication stays non-blocking. Authoritative corrections/retractions
+// settle the exact row's create/update hooks before reconciling derived state.
+const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
+const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
+
+function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
+  let rows = pendingMediaWrites.get(dbClient);
+  if (!rows) {
+    rows = new Map();
+    pendingMediaWrites.set(dbClient, rows);
+  }
+  let writes = rows.get(rowId);
+  if (!writes) {
+    writes = new Set();
+    rows.set(rowId, writes);
+  }
+  writes.add(write);
+  const tracked = writes;
+  const trackedRows = rows;
+  void write.then(() => {
+    tracked.delete(write);
+    if (tracked.size === 0 && trackedRows.get(rowId) === tracked) trackedRows.delete(rowId);
+  });
+  return write;
 }
 
 type MessageRow = typeof messages.$inferSelect;
@@ -177,8 +205,9 @@ async function maybeBroadcastSessionListPreview(
   sessionId: string,
   row: MessageRow,
   ownerScope?: DataOwnerBroadcastScope | null,
+  isCurrent?: () => boolean,
 ): Promise<void> {
-  if (!isVisibleSessionListPreviewRow(row)) return;
+  if (isCurrent?.() === false || !isVisibleSessionListPreviewRow(row)) return;
   let latest: Awaited<ReturnType<typeof latestVisiblePreviewRow>>;
   try {
     latest = await latestVisiblePreviewRow(sessionId);
@@ -190,7 +219,7 @@ async function maybeBroadcastSessionListPreview(
     });
     return;
   }
-  if (latest?.clientId !== row.clientId) return;
+  if (isCurrent?.() === false || latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const preview = extractMessagePreview(row.content, row.role);
   // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
@@ -249,6 +278,9 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
     const after = (opts as { after?: string } | undefined)?.after;
     const imageDbClient = getDbClient();
     const db = imageDbClient.drizzle;
+    if (!before && beforeTs == null && !after && !outline) {
+      void recoverGeneratedImagesForHistory(sid).catch(() => undefined);
+    }
 
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
     // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
@@ -1456,15 +1488,113 @@ export async function supersedeRetriedUserTurn(
   return clientIds;
 }
 
+/** Settle media publication off the global message queue, using its captured DB. */
+async function reconcileAssistantMediaRefs(row: MessageRow, dbClient: DbClient): Promise<void> {
+  await Promise.all([...(pendingMediaWrites.get(dbClient)?.get(row.id) ?? [])]);
+  // Cleanup belongs to the committed mutation even if clear/owner changes while
+  // publication settles. Use its captured DB and atomic live-message predicate;
+  // never republish derived state into the replacement scope.
+  for (const hash of collectCindyMediaHashes(row.content)) {
+    try {
+      // Existing ledger lock + atomic live-message predicate protect shared blobs.
+      await removeSessionAttachmentRefIfUnreferencedByLiveMessage(
+        { sessionId: row.sessionId, hash }, dbClient.drizzle,
+      );
+    } catch (error) {
+      log.warn('assistant correction media reference reconciliation failed', {
+        sessionId: row.sessionId, clientId: row.clientId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+/** Reconcile only the corrected row's derived state against current live history. */
+async function reconcileAssistantDerivedState(
+  row: MessageRow,
+  dbClient: DbClient,
+  isCurrent: () => boolean,
+  ownerScope: DataOwnerBroadcastScope | null,
+  refreshPreview: boolean,
+): Promise<void> {
+  // Slow media publication must not hold every task's message write queue.
+  // Cleanup still waits for this row's hooks and retains the live-reference check.
+  void reconcileAssistantMediaRefs(row, dbClient).catch((error) => {
+    log.warn('assistant correction media reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  await pendingPrRefWrites.get(dbClient)?.get(row.id);
+  try {
+    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
+  } catch (error) {
+    log.warn('assistant correction PR reference reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!refreshPreview || !isCurrent()) return;
+  try {
+    const latest = await latestVisiblePreviewRow(row.sessionId);
+    if (!isCurrent()) return;
+    broadcastOwnedPayload('local-db:sessions:patched', {
+      sessionId: row.sessionId,
+      patch: { preview: extractMessagePreview(latest?.content, latest?.role) },
+    }, ownerScope);
+  } catch (error) {
+    log.warn('assistant retraction preview refresh failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Retract an assistant draft rejected by its authoritative empty final.
+ * Reuse the exact-row publication rollback so preview/count invalidation is
+ * atomic and a concurrent edit or replacement can never be removed.
+ */
+export async function discardPersistedAssistantMessage(
+  sessionId: string,
+  clientId: string,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  const ownerScope = captureOwnerBroadcastScope();
+  const dbClient = getDbClient();
+  if (!isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  const [row] = await dbClient.drizzle.select().from(messages).where(and(
+    eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+    eq(messages.role, 'assistant'), isNull(messages.rewindAt),
+  )).limit(1);
+  if (!row || !isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  const result = await dbClient.tx('message.insert', {
+    id: row.id, clientId: row.clientId, sessionId: row.sessionId,
+    role: row.role, content: row.content, toolUseId: row.toolUseId,
+    agentMeta: row.agentMeta, agentKind: row.agentKind, createdAt: row.createdAt,
+    guarded: false, publication: 'rollback',
+  });
+  if (result.changes === 0) return false;
+  await reconcileAssistantDerivedState(row, dbClient,
+    () => isCurrent() && isOwnerBroadcastScopeCurrent(ownerScope), ownerScope, true);
+  return true;
+}
+
 export async function updateMessageContent(
   sessionId: string,
   clientId: string,
   content: unknown,
   autoReviewAnswer?: { text: string; acceptedAt: number },
+  finalSnapshot?: { isCurrent: () => boolean },
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
+  const isCurrent = () => isOwnerBroadcastScopeCurrent(ownerScope) && finalSnapshot?.isCurrent() !== false;
+  const [original] = finalSnapshot
+    ? await db.select().from(messages).where(and(eq(messages.sessionId, sessionId),
+      eq(messages.clientId, clientId), eq(messages.role, 'assistant'), isNull(messages.rewindAt))).limit(1)
+    : [];
+  if (finalSnapshot && (!original || !isCurrent())) return null;
   const serialized = safeStringify(content);
   if (autoReviewAnswer !== undefined) {
     // Host-only interaction result: keep content and its authorization evidence atomic.
@@ -1500,23 +1630,26 @@ export async function updateMessageContent(
   const row: MessageRow | undefined = narrow
     ? (await restoreTaskImageRows(dbClient, [{ ...narrow, content: serialized }]))[0]
     : undefined;
-  if (row) {
+  if (row && (!finalSnapshot || isCurrent())) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
     // 挂账就永久零引用);幂等,create 时已挂的 hasRef 跳过。
-    void commitMessageMediaRefs({
+    trackMessageMediaWrite(dbClient, row.id, commitMessageMediaRefs({
       sessionId,
       role: row.role,
       content: row.content,
-    }).catch((err) => {
+    }).then(() => undefined).catch((err) => {
       log.warn('message media ref commit failed (update)', {
         sessionId,
         clientId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
-    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);
+    }));
+    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope, finalSnapshot?.isCurrent);
   }
+  // The correction already committed: settle its original publication even if
+  // clear/owner changed or another deletion removed the row during readback.
+  if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
   return row ? messageToCamel(row) : null;
 }
 
@@ -1610,6 +1743,8 @@ export async function createMessage(
     /** Host-only admission guard, checked before and after the publication transaction.
      * Must be repeatable. A failed final check rolls back this exact row before delivery hooks. */
     beforePublish?: () => Promise<void>;
+    /** Host delivery owns its guarded attachment commit and compensation. */
+    deferMediaRefs?: boolean;
     /**
      * Optional clear-boundary compare-and-set for optimistic user sends.  The
      * insert is accepted only while the session still has this exact
@@ -1618,6 +1753,8 @@ export async function createMessage(
      * durable user row.
      */
     expectedClearBoundaryMs?: number | null;
+    /** Skip a host-written opening if the user has already spoken, checked in the insert transaction. */
+    requireNoUserMessage?: boolean;
     /**
      * Owner scope captured before an async main-side write.  A stale scope
      * must not broadcast a row into the next signed-in owner.
@@ -1670,6 +1807,7 @@ export async function createMessage(
     createdAt: insertRow.createdAt,
     guarded,
     expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    ...(opts?.requireNoUserMessage ? { requireNoUserMessage: true } : {}),
   };
   try {
     const inserted = await dbClient.tx('message.insert', { ...insertArgs,
@@ -1816,8 +1954,10 @@ export async function createMessage(
     body.role === 'user' &&
     opts !== undefined &&
     Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-  if (shouldAwaitMediaRefs) await commitMediaRefs();
-  else void commitMediaRefs();
+  if (!opts?.deferMediaRefs) {
+    const mediaWrite = trackMessageMediaWrite(dbClient, row.id, commitMediaRefs());
+    if (shouldAwaitMediaRefs) await mediaWrite;
+  }
   // Broadcast 给所有 renderer window — 用于 main 端创建消息 (e.g. feishu /ctr
   // 接管路径下 persistUserMessage / persistAssistantMessage) 时让 renderer
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
@@ -1836,8 +1976,17 @@ export async function createMessage(
   });
   // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
   // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
-  void recordPrRefsForMessage(msg).catch(() => {
+  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
     // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
+  });
+  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
+  if (!pendingPrRefs) {
+    pendingPrRefs = new Map();
+    pendingPrRefWrites.set(dbClient, pendingPrRefs);
+  }
+  pendingPrRefs.set(msg.id, prRefsWrite);
+  void prRefsWrite.then(() => {
+    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
   });
   return msg;
 }
@@ -2054,8 +2203,9 @@ export async function broadcastMessageAgentMetaUpdate(
 export async function readPriorUserRoundCost(
   sessionId: string,
   assistantClientId: string,
+  client: DbClient = getDbClient(),
 ): Promise<PriorUserRoundCost> {
-  const db = getDbClient().drizzle;
+  const db = client.drizzle;
   const [target] = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid })
     .from(messages)
@@ -2117,6 +2267,13 @@ export async function readPriorUserRoundCost(
     );
 
   const values: RegionalMoney[] = [];
+  const mediaCosts = parseAgentMetaRecord(boundary.agentMeta)?.mediaCosts;
+  if (Array.isArray(mediaCosts)) {
+    for (const value of mediaCosts) {
+      const cost = normalizeRegionalMoney(value);
+      if (cost?.kind === 'actual-cost' && cost.amount > 0) values.push(cost);
+    }
+  }
   const estimatedCurrencies = new Set<RegionalMoney['currency']>();
   for (const row of assistantRows) {
     const meta = parseAgentMetaRecord(row.agentMeta);
@@ -2576,7 +2733,7 @@ export async function listMessagesForAgentHandoff(
 > {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
+    .select({ clearedAt: sessions.clearedAt, source: sessions.source, createdAt: sessions.createdAt })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
@@ -2617,6 +2774,8 @@ export async function listMessagesForAgentHandoff(
     .from(messages)
     .where(
       and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
+        // A copied parent instruction is context, never authorization for a side task.
+        role === 'authorization' && sessRow?.source === 'side-chat' ? gte(messages.createdAt, sessRow.createdAt) : undefined,
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role ? eq(messages.role, role) : undefined),
     )
@@ -2644,6 +2803,7 @@ export async function listMessagesForAgentHandoff(
           // 非法 JSON 视为无 meta
         }
       }
+      if (agentMeta?.voiceCall) return null;
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
         return null;
       }

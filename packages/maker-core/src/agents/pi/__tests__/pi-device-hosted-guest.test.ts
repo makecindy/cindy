@@ -20,6 +20,13 @@ const knobs = vi.hoisted(() => ({
   spawnedArgs: [] as string[][],
 }));
 
+/** 追加提示词走 configHome 内的文件(见 pi/index.ts 的 --append-system-prompt),argv 不再内联长文本。 */
+const readAppendedSystemPrompt = (args: string[]): string => {
+  const index = args.indexOf('--append-system-prompt');
+  if (index < 0) return '';
+  return readFileSync(args[index + 1]!, 'utf8');
+};
+
 vi.mock('../transport.js', () => ({
   createPiStdioTransport: (opts: { args: string[]; env: Record<string, string | undefined>; onProcessSpawned?: (pid: number) => void }) => {
     knobs.spawnedEnvs.push({ ...(opts.env ?? {}) });
@@ -247,7 +254,7 @@ describe('Pi device-hosted guest sessions', () => {
       expect(settings.packages).toBeUndefined();
       expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
       expect(JSON.parse(env.CINDY_PI_HOSTED!)).toMatchObject({ guest: true });
-      expect(args[args.indexOf('--append-system-prompt') + 1] ?? '').not.toContain('HOST GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).not.toContain('HOST GHOST ROSTER');
       expect(spies.getGhostRosterPrompt).not.toHaveBeenCalled();
       expect(spies.getManagedSkills).not.toHaveBeenCalled();
       expect(spies.getDisabledSkillPaths).not.toHaveBeenCalled();
@@ -300,7 +307,7 @@ describe('Pi device-hosted guest sessions', () => {
     const registered: Array<string | null> = [];
     const deps: Partial<AgentDeps> = {
       resolvePiNativeProviders: async () => ({
-        providers: [byom('byom-a', 'model-a'), byom('byom-b', 'model-b')],
+        providers: [{ ...byom('byom-a', 'model-a'), models: [{ id: 'model-a' }, { id: 'denied-model' }] }, byom('byom-b', 'model-b')],
         env: {
           CINDY_PI_KEY_BYOM_A: 'key-a',
           CINDY_PI_KEY_BYOM_B: 'key-b',
@@ -329,6 +336,11 @@ describe('Pi device-hosted guest sessions', () => {
       const models = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8'));
       expect(Object.keys(models.providers).sort()).toEqual(['byom-a', 'cindy']);
       expect(models.providers.cindy.models).toEqual([]);
+      expect(models.providers['byom-a'].models.map((m: { id: string }) => m.id)).toEqual(['model-a']);
+      expect(JSON.parse(env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS!)).toEqual([{
+        id: 'byom-a', name: 'byom-a', provider: 'byom-a', keyEnv: 'CINDY_PI_KEY_BYOM_A',
+        models: [{ id: 'model-a', grant: 'model-a' }],
+      }]);
       expect(env.CINDY_PI_KEY_BYOM_A).toBe('key-a');
       expect(env.CINDY_PI_BYOM_A_HEADER_authorization).toBe('header-a');
       expect(env.CINDY_PI_KEY_BYOM_B).toBeUndefined();
@@ -349,7 +361,9 @@ describe('Pi device-hosted guest sessions', () => {
 
   it('keeps a guest sharing the Cindy gateway on gateway models only', async () => {
     const { deps, registered } = providerDeps();
-    const { handle, env, configHome } = await start(true, { deps });
+    const { handle, env, configHome } = await start(true, { deps: { ...deps, capabilityAdditions: {
+      availableModels: ['m', 'denied-gateway-model'].map(id => ({ id, displayName: id, contextWindow: 200000, efforts: [], defaultEffort: null })),
+    } } });
     try {
       const models = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8'));
       expect(Object.keys(models.providers)).toEqual(['cindy']);
@@ -376,7 +390,7 @@ describe('Pi device-hosted guest sessions', () => {
     expect(knobs.spawnedArgs).toHaveLength(0);
   });
 
-  it('keeps same-account provider routes unchanged', async () => {
+  it('keeps same-account provider routes while attaching native remote model checks', async () => {
     const { deps, registered } = providerDeps();
     const { handle, env, configHome } = await start(false, { providerId: 'byom-a', model: 'model-a', deps });
     try {
@@ -387,8 +401,14 @@ describe('Pi device-hosted guest sessions', () => {
       expect(env.CINDY_PI_BYOM_B_HEADER_authorization).toBe('header-b');
       expect(env.CINDY_PI_UNREFERENCED).toBe('stray');
       expect(env.CINDY_PI_VISION_BRIDGE_TEST).toBe('vision-secret');
-      expect(Object.keys(readSubagentRoutes(env)).sort()).toEqual(['m', 'model-a', 'model-b']);
+      expect(Object.keys(readSubagentRoutes(env)).sort()).toEqual(['denied-model', 'm', 'model-a', 'model-b']);
       expect(new Set(registered)).toEqual(new Set(['byom-a', 'byom-b', null]));
+      // §12 / review 4333949156: startup must guard every owner-native source,
+      // including a child's source, instead of enabling the adapter only for guests.
+      expect(JSON.parse(env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS!)).toEqual([
+        { id: 'byom-a', name: 'byom-a', provider: 'byom-a', keyEnv: 'CINDY_PI_KEY_BYOM_A', remoteProviderId: 'byom-a' },
+        { id: 'byom-b', name: 'byom-b', provider: 'byom-b', keyEnv: 'CINDY_PI_KEY_BYOM_B', remoteProviderId: 'byom-b' },
+      ]);
     } finally {
       await handle.close();
     }
@@ -415,7 +435,7 @@ describe('Pi device-hosted guest sessions', () => {
       expect(settings.packages).toEqual(['npm:host-package']);
       expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeTruthy();
       expect(JSON.parse(env.CINDY_PI_HOSTED!).guest).toBeUndefined();
-      expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('HOST GHOST ROSTER');
+      expect(readAppendedSystemPrompt(args)).toContain('HOST GHOST ROSTER');
       expect(spies.getManagedSkills).toHaveBeenCalled();
       expect(spies.resolvePiNativePackagePaths).toHaveBeenCalled();
       expect(args[args.indexOf('--session-dir') + 1]).toBe(path.posix.join(agentHome, 'sessions'));

@@ -27,6 +27,30 @@ separately from a launch request, and exits nonzero if launch is blocked, includ
 when Metro is absent. `--build-only` does not require Metro. A successful launch
 request still requires fresh bundle logs and visible page verification.
 
+### Which iOS Simulator
+
+The repository does not pin a simulator; each developer chooses locally. By default
+(`CINDY_MOBILE_SIMULATOR=auto`) `whoami`, `rebuild` and `open` first use a booted device in
+Cindy's own simulator — the official Baguette plugin's private device set at
+`~/Library/Application Support/BaguetteCindy/devices`, shown in Cindy's sidebar — and fall
+back to the system (Xcode) simulator when Cindy's has no booted device, is not installed, or
+its plugin setting has paused running. `--udid` uses whichever of those sets holds that
+device. Keep a personal choice outside the repository, e.g. in your shell profile:
+
+| `CINDY_MOBILE_SIMULATOR` | Effect |
+|---|---|
+| `auto` (default) | Cindy first, then system |
+| `cindy` | Only Cindy's simulator; error when unavailable |
+| `system` | Only the system simulator |
+| absolute path | Only that CoreSimulator device set |
+
+Devices outside the system set have no external window: `mobile:sim:open` refuses them and
+`whoami --viewer` reports the viewer as unavailable; view Cindy's devices in its sidebar.
+`rebuild` builds those with the generic Simulator destination (xcodebuild only sees the system
+set) and installs with `simctl --set`. Cindy's simulator shuts devices down after its idle
+setting (15 minutes by default; plugin input renews it, scripts do not). Native E2E (Maestro)
+still uses the system simulator.
+
 For the macOS external viewer, use `pnpm mobile:sim:open -- --udid <booted-udid>`.
 It resolves the app inside the selected Xcode toolchain (including `DEVELOPER_DIR`),
 opens Device Hub or Simulator by its absolute path, and exits nonzero on failure.
@@ -38,6 +62,48 @@ Use `mobile:sim:whoami -- --viewer --json` when handing off an external window.
 `viewer.running` checks the selected app process; `viewer.windowVerified: false`
 explicitly leaves visible-window acceptance to a screenshot/manual check. Without
 `--viewer`, a missing external viewer does not fail embedded/headless identity checks.
+
+## 截图与当前版本测试
+
+“给我看这次手机改动的截图”与启动当前版本测试共用此流程。设备选择、接管和系统工具安装的
+授权来自用户及个人工作流；本节只定义通用操作和证据，不指定某个开发者的区域、手机或账号。
+
+1. 固定本任务的 worktree，读取 `git status --short --branch`。使用任务明确指定的机型，
+   未指定时才使用个人选择。先枚举设备，选择精确 UDID；已有设备必须符合本次机型要求，不能
+   因另一型号已经启动就把它当作目标。后续命令保持相同 region、UDID、模拟器后端和 mock 开关。
+2. 先运行 `mobile:sim:whoami`，再决定是否需要启动设备、接管 Metro 或准备原生包。
+   只检查 UI 时对 `whoami/start/rebuild` 都加 `--mock`。命令保留退出码；`pnpm` 的前后日志
+   不属于 JSON，解析时从 stdout 末尾向前找最后一行合法 JSON 对象，不用 `grep | tail` 吞掉失败。
+3. 若 `native-matched`，复用已安装包；缺包、不兼容或包本身无可验证指纹时运行普通
+   `mobile:sim:rebuild`。它先查询 `~/Library/Caches/xdt-maker/sim-app-cache` 中的匹配条目，
+   校验 bundle ID、架构和嵌入指纹，未命中才检查构建工具并编译。`SIM_CACHE` 给出查询位置与
+   `cache-entry-missing`、`cache-bundle-mismatch`、`cache-architecture-mismatch`、
+   `cache-native-mismatch` 等原因；有旧产物不等于兼容，未安装也不等于必须完整编译。
+   不从任意目录捡 `.app` 绕过校验，日常不传 `--clean` 或 `--force-build`。
+4. `SIM_BUILD_PREFLIGHT` 失败时按 [环境说明](../../../docs/dev-rules/environment-setup.md#macosios-模拟器构建工具链)
+   修复具体工具。`whoami` 的 `probeErrors`、阶段失败或 `native.reason` 指向探测/计算故障时，
+   先处理该故障，不能把“检查失败”当作“需要重建”。后台构建保留日志和退出码，用宿主的进程
+   完成通知/状态查看推进，不用固定数分钟的 `sleep` 判断完成，不因等待较久重复启动构建。
+5. 复用匹配的 Metro；需要接管且已获授权时只用 `mobile:sim:start -- --takeover`，不手工
+   `kill`、不清登录态、不改端口来规避身份检查。Metro 持续运行并保留日志。安装和启动是独立
+   结果：`rebuild` 可能已经安装成功但因 Metro 未就绪而以非零退出；此时准备 Metro 后启动正确
+   App，不必再次编译。只有 Metro 属于目标 worktree 后才 launch/reload App。
+6. 按下方身份合同确认 `whoami healthy: true`、`native-matched` 和本次新的 `iOS Bundled …`，
+   再进入真实目标页面。Cindy 模拟器用插件查看器（确认 `previewOpened`），系统外部窗口用
+   `mobile:sim:open` 并以 `whoami --viewer` 检查；两者都需要实际截图/目检页面，窗口进程不等于画面。
+
+截图和 `mobile-identity.json`、本次 bundle 日志放进同一任务产物目录，记录页面/场景、设备
+UDID、方向、主题及未验证项。布局问题按本次要求覆盖横竖屏与深浅色；截图必须来自目标
+版本的实际界面。身份未通过就报告未完成；仅缺目检则报告“版本及 bundle 已验证，画面未目检”。
+本节不授权上传截图到公开平台。
+
+`whoami` 会向 stderr 输出阶段开始与耗时，JSON 的 `checks` / `elapsedMs` 可定位慢在
+配置、Git 源码身份、设备、原生指纹、Metro 还是查看器。Expo config 的单次检查上限 30s，
+simctl/安装信息查询 15s，Git 子命令 30s，Metro 的主要进程查询 5s，原生指纹 120s；
+这些是单步上限，不是总运行时间承诺。失败后按阶段排查，不降低原生/源码身份要求。
+已找到监听 PID 后，命令、cwd、源码环境或 Windows 进程快照查询失败也会写入
+`probeErrors`（`METRO_PROCESS_TIMEOUT` / `METRO_PROCESS_UNAVAILABLE`，附端口与阶段）；
+身份检查未完成时不提示“没发现 Metro”或建议另启一个 Metro。
 
 ## Current Source Verification Contract
 
@@ -60,7 +126,7 @@ apply". Treat the following as a contract, not optional steps:
      fingerprint is **your current worktree**. (Injected by `mobile:sim:start`; see below.)
   2. `pnpm mobile:sim:whoami` exits nonzero unless a booted development client,
      the current worktree's `8081` Metro, and the exact source fingerprint all
-     agree; the label's port must map to your worktree.
+     agree, including `native.healthy: true` / `native-matched`; the label's port must map to your worktree.
   3. The Metro terminal printed a fresh `iOS Bundled …` after your edit.
 
 ### Tools (use these instead of ad-hoc `lsof`/`PlistBuddy`/deep-link dances)
@@ -72,7 +138,7 @@ pnpm mobile:sim:start:cn   # Mainland China; on Windows also starts cindy-api36
 pnpm mobile:sim:start -- --region=cn # 中国大陆版 JS region；先 rebuild 对应 native app
 pnpm mobile:sim:whoami     # doctor: booted install + which port = which worktree
 pnpm mobile:sim:whoami -- --region=cn # inspect the cn native app + Metro ownership
-pnpm mobile:sim:rebuild    # rebuild + reinstall the Global native dev app (native changes only)
+pnpm mobile:sim:rebuild    # install a compatible cached dev app, or build it on a cache miss
 ```
 
 `mobile:sim:start` and `mobile:sim:rebuild` default to `global`; the China
@@ -117,14 +183,14 @@ input — adding a script there would bump the mobile runtime version.
   its compiled default packager port (`8081`) — a `xdmaker://expo-development-client/?url=…`
   deep link or a `--dev-client` "No apps connected" state will NOT switch it.
   Starting Metro on any other port leaves the app loading a stale `8081` bundle.
-- Therefore `mobile:sim:start` **insists on `8081`** (never auto-bumps): if `8081`
-  is held by *another* worktree it refuses and tells you to stop that Metro first
-  (you can only run one mobile dev session at a time); if it's this worktree's own
-  Metro it just says "already running". Use `mobile:sim:whoami` to see who owns
-  each port. Override with `-- --port <p>` only if you'll point the app there yourself.
+- Therefore `mobile:sim:start` defaults to `8081` and never auto-bumps. It reuses a
+  Metro only when worktree, source, region and environment all match. An authorized
+  `--takeover` stops only a confirmed Cindy Metro; unknown/non-Metro owners are refused.
+  Use `mobile:sim:whoami` to inspect ownership. An explicit `--port` is for callers
+  that can actually point their app there, not a workaround for this debug app.
 - If `8081` belongs to this worktree but its injected fingerprint no longer equals
   the current worktree, `mobile:sim:start` refuses instead of claiming Metro is
-  reusable. Stop it and start Metro again after the amend/rebase/reset or edit.
+  reusable. An authorized `--takeover` refreshes its identity after the amend/rebase/reset or edit.
 
 ### Native build gotcha
 

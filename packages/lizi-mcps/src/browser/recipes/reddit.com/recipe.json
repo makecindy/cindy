@@ -1,16 +1,24 @@
 {
   "id": "reddit-listing",
-  "match": ["reddit.com"],
-  "description": "读取某个 subreddit 的热门帖子列表(标题/版块/分数/评论数/作者/链接)。先落到 reddit.com 域,再在页面内同源 fetch JSON——这样带上登录 cookie、不被反爬挡(直接 navigate 到 .json 会被喂 SPA HTML)。",
-  "inputs": { "subreddit": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.reddit.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "posts",
-      "fn": "async () => { const r = await fetch('/r/{{subreddit|js}}/hot.json?limit=25&raw_json=1', { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('reddit 返回非 JSON(被反爬挡或未登录),请在持久浏览器里正常访问/登录该站后重试'); } return (d && d.data && d.data.children ? d.data.children : []).map(c => ({ title: c.data.title, subreddit: c.data.subreddit_name_prefixed, score: c.data.score, comments: c.data.num_comments, author: c.data.author, url: 'https://www.reddit.com' + c.data.permalink })); }"
-    }
+  "match": [
+    "reddit.com"
   ],
-  "output": "{{posts}}"
+  "description": "Reddit 热门帖子",
+  "access": "read",
+  "adapter": "reddit/hot",
+  "inputs": {
+    "subreddit": {
+      "required": false,
+      "type": "str",
+      "default": "",
+      "description": "Subreddit name (e.g. programming). Empty for frontpage"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of posts"
+    }
+  },
+  "steps": []
 }

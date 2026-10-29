@@ -95,6 +95,7 @@ function setup() {
       result: { ok: true },
     })),
     stop: vi.fn(async () => {}),
+    viewHeartbeat: vi.fn(async (_lease: string) => {}),
     input: vi.fn(async (_lease: string, _sequence: number, _events: unknown[]) => {}),
     nativeAudio: vi.fn(async () => new Uint8Array(0)),
     onCommand: (callback: typeof command) => {
@@ -533,41 +534,109 @@ it('answers control requests on the input channel without risking the session', 
   expect(channel.close).not.toHaveBeenCalled();
 });
 
-it('answers control requests while input batches fill their own bound', async () => {
-  const h = setup();
-  h.offer(false);
-  await flush();
-  const [peer] = h.peers as any[];
-  const channel: any = {
-    label: 'input-v1',
-    readyState: 'open',
-    bufferedAmount: 0,
-    send: vi.fn(),
-    close: vi.fn(),
-  };
-  peer.ondatachannel({ channel });
-  h.api.input.mockImplementation(() => new Promise(() => {}));
-  const batch = (sequence: number) =>
-    channel.onmessage({ data: JSON.stringify({ sequence, events: [] }) });
-  for (let sequence = 1; sequence <= 8; sequence++) batch(sequence);
-  channel.onmessage({
-    data: JSON.stringify({
-      type: 'request',
+// Regression: nine valid batches during a slow IPC round trip used to stop the
+// entire desktop. Unit coverage enters the real channel handler and checks that
+// overload releases input before resuming without stopping video/lease or PiP.
+it.each([false, true])(
+  'preserves capture on input overload (release rejects: %s)',
+  async (reject) => {
+    const h = setup();
+    h.offer(false);
+    await flush();
+    const [peer] = h.peers as any[];
+    const channel: any = {
+      label: 'input-v1',
+      readyState: 'open',
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    peer.ondatachannel({ channel });
+    const inputs: Array<{ resolve: () => void; reject: () => void }> = [];
+    h.api.input.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          inputs.push({ resolve, reject: () => reject(new Error('Input unavailable')) });
+        }),
+    );
+    const batch = (sequence: number) =>
+      channel.onmessage?.({
+        data: JSON.stringify({ sequence, events: [{ kind: 'scroll', dx: 0, dy: 1 }] }),
+      });
+    for (let sequence = 1; sequence <= 8; sequence++) batch(sequence);
+    channel.onmessage({
+      data: JSON.stringify({
+        type: 'request',
+        id: 'mute',
+        request: { op: 'hostMute', lease: 'lease', enabled: true },
+      }),
+    });
+    await flush();
+    expect(JSON.parse(channel.send.mock.calls.at(-1)[0])).toEqual({
+      type: 'reply',
       id: 'mute',
-      request: { op: 'hostMute', lease: 'lease', enabled: true },
-    }),
-  });
-  await flush();
-  expect(JSON.parse(channel.send.mock.calls.at(-1)[0])).toEqual({
-    type: 'reply',
-    id: 'mute',
-    ok: true,
-    result: { ok: true },
-  });
-  expect(h.api.stop).not.toHaveBeenCalled();
-  batch(9);
-  expect(h.api.stop).toHaveBeenCalled();
-});
+      ok: true,
+      result: { ok: true },
+    });
+    expect(h.api.stop).not.toHaveBeenCalled();
+    batch(9);
+    expect(h.api.input).toHaveBeenLastCalledWith('lease', 9, [{ kind: 'release' }]);
+    channel.onmessage({
+      data: JSON.stringify({
+        type: 'request',
+        id: 'during-release',
+        request: { op: 'clipboardVersion', lease: 'lease' },
+      }),
+    });
+    batch(10); // Already queued channel messages must not replay after release.
+    expect(h.api.input).toHaveBeenCalledTimes(9);
+    inputs.slice(0, 8).forEach((input) => input.resolve());
+    await flush();
+    expect(JSON.parse(channel.send.mock.calls.at(-1)[0])).toMatchObject({
+      id: 'during-release',
+      ok: true,
+    });
+    batch(11); // Completion of earlier inputs cannot bypass the release fence.
+    expect(h.api.input).toHaveBeenCalledTimes(9);
+    await vi.advanceTimersByTimeAsync(2000);
+    const ping = channel.send.mock.calls
+      .map(([data]: [string]) => JSON.parse(data))
+      .find((message: any) => message.type === 'viewPing');
+    channel.onmessage({ data: ping.challenge });
+    expect(h.api.viewHeartbeat).toHaveBeenCalledWith('lease');
+    expect(channel.close).not.toHaveBeenCalled();
+    if (reject) inputs[8].reject();
+    else inputs[8].resolve();
+    await flush();
+    if (reject) expect(channel.close).toHaveBeenCalledOnce();
+    else {
+      expect(channel.close).not.toHaveBeenCalled();
+      batch(12);
+      expect(h.api.input).toHaveBeenLastCalledWith('lease', 12, [{ kind: 'scroll', dx: 0, dy: 1 }]);
+    }
+    expect(h.api.stop).not.toHaveBeenCalled();
+    expect(peer.close).not.toHaveBeenCalled();
+    expect(h.nativeStop).not.toHaveBeenCalled();
+    expect(h.video.video.stop).not.toHaveBeenCalled();
+  },
+);
+
+it.each(['{', JSON.stringify({ sequence: 9, events: [{ kind: 'scroll', dx: 0, dy: 2001 }] })])(
+  'still rejects malformed input when the input channel is full: %s',
+  async (data) => {
+    const h = setup();
+    h.offer(false);
+    await flush();
+    const channel: any = { label: 'input-v1', readyState: 'open', close: vi.fn() };
+    (h.peers[0] as any).ondatachannel({ channel });
+    h.api.input.mockImplementation(() => new Promise(() => {}));
+    for (let sequence = 1; sequence <= 8; sequence++)
+      channel.onmessage({ data: JSON.stringify({ sequence, events: [] }) });
+    channel.onmessage({ data });
+    expect(h.api.stop).toHaveBeenCalledOnce();
+    expect(h.api.input).toHaveBeenCalledTimes(8);
+  },
+);
 
 it('follows a display swap on the same peer without restarting capture', async () => {
   const h = setup();

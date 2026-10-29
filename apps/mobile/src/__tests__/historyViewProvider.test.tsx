@@ -14,6 +14,8 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+// Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
+vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
 import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
 import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
@@ -50,6 +52,7 @@ vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}),
 }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
+vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}),
   getAllKeys: vi.fn(async () => []), multiRemove: vi.fn(async () => {}),

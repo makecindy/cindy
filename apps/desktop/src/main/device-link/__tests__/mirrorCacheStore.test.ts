@@ -282,6 +282,7 @@ describe('coerceCachedSession', () => {
       attached: true,
       _count: { messages: 99 },
       extraDirs: ['/a', '/b'],
+      companion: { id: 'owner', role: 'channel', channel: 'feishu', secret: 'omit' },
     });
     expect(coerced).not.toBeNull();
     expect(coerced).not.toHaveProperty('deviceLinkConnectionStatus');
@@ -290,6 +291,7 @@ describe('coerceCachedSession', () => {
     expect(coerced).not.toHaveProperty('_count');
     expect(coerced).not.toHaveProperty('extraDirs');
     expect(coerced?.title).toBe('T');
+    expect(coerced?.companion).toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
   });
 
   it('长文本截断到上限', () => {
@@ -753,6 +755,7 @@ describe('session list', () => {
             status: 'active',
             title: 'T',
             createdAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
           },
         ],
@@ -760,6 +763,7 @@ describe('session list', () => {
     ]);
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
+    expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 

@@ -22,21 +22,56 @@ describe('thread previews', () => {
   afterEach(() => vi.useRealTimers());
 
   it('uses the snapshot window for active threads without any extra request', () => {
-    const root = message({ id: rootA, replyCount: 3 });
+    const root = message({ id: rootA, replyCount: 4 });
+    // PR #6549: three distinct recent authors must survive the production projection.
     // Newest first, like the server snapshot; a deleted reply never previews.
-    const window = fullWindow([reply('r3', rootA), reply('gone', rootA, { deleted: true }), reply('r2', rootA), reply('r1', rootA)]);
-    expect(projection.previews(room, [root], window).get(rootA)!.map(m => m.id)).toEqual(['r2', 'r3']);
+    const window = fullWindow([reply('r3', rootA, { authorId: 'c' }), reply('gone', rootA, { deleted: true }), reply('r2', rootA, { authorId: 'b' }), reply('r1', rootA, { authorId: 'a' }), reply('r0', rootA)]);
+    expect(projection.previews(room, [root], window).get(rootA)!.replies.map(m => m.id)).toEqual(['r2', 'r3']);
+    expect(projection.previews(room, [root], window).get(rootA)!.responders.map(m => m.authorId)).toEqual(['a', 'b', 'c']);
     expect(io.threadPage).not.toHaveBeenCalled();
+  });
+
+  // r4325201240: distinct responders must survive repeated replies by the newest
+  // author. Unit tests use the real projection with its snapshot and cached-page inputs;
+  // the old three-distinct-rows case could not expose the premature reply truncation.
+  it.each(['snapshot', 'page'] as const)('keeps distinct responders before truncating %s summaries', async source => {
+    const root = message({ id: rootA, replyCount: 6 });
+    const rows = ['A', 'A', 'A', 'B', 'C', 'D'].map((authorId, index) => reply(`r${6 - index}`, rootA, { authorId }));
+    const snapshot = source === 'snapshot' ? fullWindow(rows) : fullWindow([]);
+    io.threadPage.mockResolvedValue(rows);
+    projection.previews(room, [root], snapshot);
+    await projection.settled();
+    const preview = projection.previews(room, [root], snapshot).get(rootA)!;
+    expect(preview.responders.map(row => row.authorId)).toEqual(['C', 'B', 'A']);
+    expect(preview.replies.map(row => row.id)).toEqual(['r5', 'r6']);
+    expect(io.threadPage).toHaveBeenCalledTimes(source === 'snapshot' ? 0 : 1);
+  });
+
+  // r4325372865: having two spoken summaries is sufficient even when the root
+  // has more replies. Existing tests always supplied three live rows or a short page.
+  // Unit: observe the real projection's output and network reads, for both read gates.
+  it.each(['snapshot', 'page'] as const)('does not fetch a third avatar when %s already supplies two summaries', async source => {
+    const root = message({ id: rootA, replyCount: 5 });
+    const live = [reply('r5', rootA, { authorId: 'A' }), reply('r4', rootA, { authorId: 'B' })];
+    const rows = [...live, ...Array.from({ length: 4 }, (_, i) => reply(`deleted-${i}`, rootA, { deleted: true }))];
+    const snapshot = source === 'snapshot' ? fullWindow(rows) : fullWindow([]);
+    io.threadPage.mockResolvedValueOnce(rows).mockResolvedValue([]);
+    projection.previews(room, [root], snapshot);
+    await projection.settled();
+    expect(io.threadPage).toHaveBeenCalledTimes(source === 'snapshot' ? 0 : 1);
+    const preview = projection.previews(room, [root], snapshot).get(rootA)!;
+    expect(preview.replies.map(row => row.id)).toEqual(['r4', 'r5']);
+    expect(preview.responders.map(row => row.authorId)).toEqual(['B', 'A']);
   });
 
   it('treats a short snapshot as the whole history', () => {
     const root = message({ id: rootA, replyCount: 1 });
-    expect(projection.previews(room, [root], [reply('only', rootA)]).get(rootA)!.map(m => m.id)).toEqual(['only']);
+    expect(projection.previews(room, [root], [reply('only', rootA)]).get(rootA)!.replies.map(m => m.id)).toEqual(['only']);
     expect(io.threadPage).not.toHaveBeenCalled();
   });
 
   it('answers at once and fills quiet threads in the background, then asks for one refresh', async () => {
-    const root = message({ id: rootB, replyCount: 2 });
+    const root = message({ id: rootB, replyCount: 3 });
     const page = deferred<ThreadMessage[]>();
     io.threadPage.mockReturnValue(page.promise);
     // The room is not held back by the thread read.
@@ -45,18 +80,18 @@ describe('thread previews', () => {
     // A refresh while the read is in flight does not start a second one.
     projection.previews(room, [root], fullWindow([]));
     expect(io.threadPage).toHaveBeenCalledTimes(1);
-    page.resolve([reply('b2', rootB), reply('b1', rootB)]);
+    page.resolve([reply('b3', rootB), reply('b2', rootB), reply('b1', rootB)]);
     await projection.settled();
     expect(io.filled).toHaveBeenCalledExactlyOnceWith(room);
-    expect(projection.previews(room, [root], fullWindow([])).get(rootB)!.map(m => m.id)).toEqual(['b1', 'b2']);
+    expect(projection.previews(room, [root], fullWindow([])).get(rootB)!.replies.map(m => m.id)).toEqual(['b2', 'b3']);
     expect(io.threadPage).toHaveBeenCalledTimes(1);
     // A new reply changes the count, so the cached page is no longer trusted.
-    projection.previews(room, [{ ...root, replyCount: 3 }], fullWindow([]));
+    projection.previews(room, [{ ...root, replyCount: 4 }], fullWindow([]));
     expect(io.threadPage).toHaveBeenCalledTimes(2);
   });
 
   it('reads further back when deleted replies fill the newest page', async () => {
-    const root = message({ id: rootB, replyCount: 2 });
+    const root = message({ id: rootB, replyCount: 3 });
     const tombstones = Array.from({ length: 5 }, (_, i) => reply(`gone-${i}`, rootB, { deleted: true }));
     const older = reply('old-1', rootB);
     io.threadPage
@@ -67,7 +102,7 @@ describe('thread previews', () => {
     const before = [...tombstones, reply('x', rootB)].reduce((min, m) => Math.min(min, Number(m.seq)), Infinity);
     expect(io.threadPage).toHaveBeenNthCalledWith(2, room, rootB, 6, expect.any(String));
     expect(Number(io.threadPage.mock.calls[1]![3])).toBeLessThanOrEqual(before);
-    expect(projection.previews(room, [root], fullWindow([])).get(rootB)!.map(m => m.id)).toEqual(['old-1', 'newest']);
+    expect(projection.previews(room, [root], fullWindow([])).get(rootB)!.replies.map(m => m.id)).toEqual(['old-1', 'newest']);
   });
 
   it('stops reading back once history ends or after a bounded number of pages', async () => {
@@ -106,7 +141,7 @@ describe('thread previews', () => {
     // An older reply is deleted while b4 arrives: still three replies.
     const newest = reply('b4', rootB);
     const previews = projection.previews(room, [root], fullWindow([newest]));
-    expect(previews.get(rootB)!.map(m => m.id)).toEqual(['b3', 'b4']);
+    expect(previews.get(rootB)!.replies.map(m => m.id)).toEqual(['b3', 'b4']);
     expect(io.threadPage).toHaveBeenCalledTimes(1);
   });
 
@@ -207,7 +242,7 @@ describe('late reads after a reset or invalidation', () => {
     projection.previews(room, [root], fullWindow([]));
     await projection.settled();
     expect(io.threadPage).toHaveBeenCalledTimes(2);
-    expect(projection.previews(room, [root], fullWindow([])).get(rootB)![0]!.revision).toBe(2);
+    expect(projection.previews(room, [root], fullWindow([])).get(rootB)!.replies[0]!.revision).toBe(2);
   });
 
   it.each(['reset', 'invalidate'] as const)('does not let a share source read started before %s refill the cache', async (clear) => {
@@ -322,7 +357,7 @@ describe('recovering from a failed read in a quiet room', () => {
     const requests = kind === 'source' ? io.message.mock.calls : io.threadPage.mock.calls;
     expect(requests.map(([id]) => id)).toEqual([room, 'other-room', room]);
     if (kind === 'source') expect(read(room).get(sourceId)).toBeNull();
-    else expect(read(room).get(rootA)).toEqual([expect.objectContaining({ content: [{ type: 'text', text: 'edited' }] })]);
+    else expect(read(room).get(rootA)).toMatchObject({ replies: [expect.objectContaining({ content: [{ type: 'text', text: 'edited' }] })] });
     io.filled.mockClear();
     await vi.advanceTimersByTimeAsync(29_000);
     expect(io.filled.mock.calls).toEqual([['other-room']]);
@@ -353,7 +388,7 @@ describe('recovering from a failed read in a quiet room', () => {
     projection.previews(room, [root], fullWindow([]));
     await projection.settled();
     expect(io.threadPage).toHaveBeenCalledTimes(7);
-    expect(projection.previews(room, [root], fullWindow([])).get(rootB)?.map(item => item.id)).toEqual(['r1']);
+    expect(projection.previews(room, [root], fullWindow([])).get(rootB)?.replies.map(item => item.id)).toEqual(['r1']);
   });
 
   it.each(['dispose', 'reset'] as const)('cancels a pending retry on %s', async (stop) => {

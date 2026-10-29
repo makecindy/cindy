@@ -1,5 +1,24 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
 
+const MODEL_DISCOVERY_CONNECTION_ERRORS = new Set([
+  'DEVICE_OFFLINE', 'DEVICE_UNRESPONSIVE', 'INVOKE_TIMEOUT', 'LINK_NOT_OPEN',
+  'NOT_CONNECTED', 'PEER_RESET', 'BACKPRESSURE',
+]);
+
+/** list_available_models 的宿主错误转换；位置发现失败仍需返回结构化原因。 */
+export function orcaModelDiscoveryFailure(err: unknown, executionDevice: boolean): {
+  ok: false; errorCode: string; message: string;
+} {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = /^\[([A-Z_]+)\]/.exec(message)?.[1];
+  let errorCode = 'INTERNAL';
+  if (executionDevice && code) {
+    if (MODEL_DISCOVERY_CONNECTION_ERRORS.has(code)) errorCode = 'REMOTE_AGENT_DEVICE_UNREACHABLE';
+    else if (code === 'HOST_NOT_READY' || code === 'UNSUPPORTED_CAPABILITY' || code.startsWith('REMOTE_AGENT_')) errorCode = code;
+  }
+  return { ok: false, errorCode, message };
+}
+
 /** Orca service result 到 IPC 错误协议的统一翻译，避免不同 handler 的错误码漂移。 */
 export function throwOrcaServiceFailure(result: { ok: false; errorCode: string; message: string }): never {
   switch (result.errorCode) {

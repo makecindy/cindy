@@ -9,7 +9,9 @@
  * DESIGN.md §15.5 的 U2 裁决**明确把它的低对比限定在「二级信息」**(cindy-dark.ts 就把
  * 这个 token 标成「直映: 二级信息; U2 例外」),而这两段不是二级信息。同一条裁决还写明
  * text-secondary 的值 "never darken unilaterally" —— 所以修法只能是在组件内换语义色,
- * 不能去动全局 token(#1347 review 由 codex 指出 P2)。
+ * 不能去动全局 token(#1347 review 由 codex 指出 P2)。U2 于 2026-10-22 由墨水文字阶梯取代,
+ * text-secondary 仍是「次要」档,语义边界不变。CINDY 的文字从此是半透明墨水,前景同样要
+ * 先叠到底色上再算对比度。
  *
  * **本测试从组件源码里读出风险块实际用的 token**,再按四种主题/模式算合成后的对比度。
  * 这样写而不是把 'text-primary' 硬编码进断言:硬编码的话,谁把组件改回
@@ -52,6 +54,11 @@ function parseHex(v: string): RGB {
     : h;
   const n = parseInt(full, 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** 前景:hex 或 rgba()(CINDY 的墨水文字带 alpha,必须先合成再算对比度)。 */
+function parseForeground(v: string): { rgb: RGB; alpha: number } {
+  return v.trim().startsWith('#') ? { rgb: parseHex(v), alpha: 1 } : parseRgba(v);
 }
 
 /** `rgba(r, g, b, a)` → [r,g,b,a]。warning-bg-soft 是 alpha 面,必须先合成再算对比度。 */
@@ -107,11 +114,12 @@ describe('XUsageGuide 风险告知的对比度', () => {
     const token = riskBodyColorToken();
     const failures: string[] = [];
     for (const scene of SCENES) {
-      const fg = parseHex(resolve4(scene.colors, token, scene.mode));
+      const fg = parseForeground(resolve4(scene.colors, token, scene.mode));
       const warn = parseRgba(resolve4(scene.colors, 'warning-bg-soft', scene.mode));
       for (const surface of SURFACES) {
         const base = parseHex(resolve4(scene.colors, surface, scene.mode));
-        const ratio = contrast(fg, composite(warn.rgb, warn.alpha, base));
+        const under = composite(warn.rgb, warn.alpha, base);
+        const ratio = contrast(composite(fg.rgb, fg.alpha, under), under);
         if (ratio < 4.5) {
           failures.push(`${scene.name} × ${surface}: --${token} = ${ratio.toFixed(2)}:1`);
         }

@@ -47,7 +47,9 @@ import {
 // 生产构建由 metro resolveRequest 把整模块替换为空 stub(metro.config.js),
 // 运行时另有 __DEV__ guard 双保险。
 import { resolveLoginScenarioFetch } from '@cindy/auth-client/fixtures';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
+import { AskCardAuthContext, type AskCardAuth } from '@/session/askCardAuth';
 import {
   apiFetchRaw,
   ApiError,
@@ -120,9 +122,11 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
+import { isSelfHostedRelayBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
 import { getMobileAuthOwner, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
+import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -383,7 +387,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       apiFetch: visualMockApiFetch,
     };
     return (
-      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+      <AuthContext.Provider value={value}>
+        <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+      </AuthContext.Provider>
     );
   }
 
@@ -891,6 +897,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAllMobileVoiceInputHistories().catch(() => undefined),
       clearAllMobileVoiceDictionaryCaches().catch(() => undefined),
       clearCachedSessionMessages(),
+      clearMobileChatHistoryStore(),
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
@@ -2069,11 +2076,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               codeChallenge,
               state,
             });
-            const result = await WebBrowser.openAuthSessionAsync(
-              authUrl,
-              MOBILE_REDIRECT_URL,
-            );
-            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            let result: Awaited<ReturnType<typeof WebBrowser.openAuthSessionAsync>>;
+            try {
+              result = await WebBrowser.openAuthSessionAsync(
+                authUrl,
+                MOBILE_REDIRECT_URL,
+              );
+            } catch (error) {
+              // The browser promise outlives the dispatch body. Report launch
+              // failures here, while preserving a newer attempt's ownership.
+              if (loginFlowEpochRef.current !== expectedLoginFlowEpoch
+                || loginActionInFlightRef.current !== run) return false;
+              setAuthError(authErrorCode(error));
+              return false;
+            }
+            if (loginFlowEpochRef.current !== expectedLoginFlowEpoch) return false;
             // Linking may already have handed ownership to a continuation.
             // A late native result must not cancel or mutate that newer work.
             if (loginActionInFlightRef.current !== run) return true;
@@ -2959,6 +2976,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[auth] speaker filter cleanup pending; will retry');
     });
     await clearCachedSessionMessages().catch(() => undefined);
+    await clearMobileChatHistoryStore().catch(() => undefined);
     await clearHistoryDisk();
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
@@ -3295,6 +3313,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts: Omit<ApiFetchOptions, 'token'>,
     ): Promise<T> => {
       opts.assertCurrent?.();
+      // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
+      // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+        return apiFetchRaw<T>(path, { ...opts, token: null });
+      }
       const token = await getAccessToken();
       opts.assertCurrent?.();
       if (!token) throw new Error('UNAUTHENTICATED');
@@ -3415,7 +3438,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      <AskCardAuthContext.Provider value={value as AskCardAuth}>{children}</AskCardAuthContext.Provider>
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth(): AuthContextValue {
@@ -3445,6 +3472,9 @@ function authClientFor(
     clientType: 'mobile',
     locale: getAuthLocale(),
     fetch: scenarioFetch ?? (async (input, init) => fetch(input, init)),
+    onRequestError: (path, status, error) => {
+      mobileDebugLog('warn', 'auth', 'request failed', { path, region, status }, error);
+    },
   });
 }
 

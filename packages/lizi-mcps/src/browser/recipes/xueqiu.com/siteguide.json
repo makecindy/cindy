@@ -1,23 +1,15 @@
 {
   "site": "xueqiu.com",
-  "auth": "需登录:雪球行情/动态接口依赖登录 cookie,未登录会被风控(返回非 JSON 或 400)。在持久浏览器登录 xueqiu.com 后,登录态自动随同源 fetch 带上",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://xueqiu.com",
-    "search": "https://xueqiu.com/stock/search.json?code=<keyword>&size=<n>",
-    "quote": "https://stock.xueqiu.com/v5/stock/batch/quote.json?symbol=<SYMBOL>",
-    "hotStock": "https://stock.xueqiu.com/v5/stock/hot_stock/list.json?size=<n>&type=<10人气|12关注>",
-    "hotStatus": "https://xueqiu.com/statuses/hot/listV3.json?source=hot&page=1",
-    "feed": "https://xueqiu.com/v4/statuses/home_timeline.json?page=<p>&count=<n>",
-    "watchlist": "https://stock.xueqiu.com/v5/stock/portfolio/stock/list.json?size=100&category=<1自选|2持仓|3关注>&pid=-1",
-    "earningsDate": "https://stock.xueqiu.com/v5/stock/screener/event/list.json?symbol=<SYMBOL>&page=1&size=100"
+    "home": "https://xueqiu.com"
   },
-  "pages": [
-    {
-      "type": "search",
-      "url": "https://xueqiu.com/stock/search.json?code=<keyword>&size=10",
-      "notes": "JSON {stocks:[{code,name,exchange(SH/SZ/BJ/...),current,percentage}]};沪深北股票 symbol 需拼前缀,如 SH600519,详情页 https://xueqiu.com/S/<symbol>"
-    }
+  "recipes": [
+    "xueqiu-search-stock"
   ],
-  "recipes": ["xueqiu-search-stock"],
-  "notes": "雪球登录态走 cookie。关键:必须先 navigate 到 https://xueqiu.com,再用 evaluate 步在页面内 fetch(接口全路径, {credentials:'include'})——直接 navigate 到 *.json 会被风控喂 SPA HTML 或拦截,且拿不到 cookie。已收录 xueqiu-search-stock(按代码/名称搜股票)。其它常用读端点同理在页面内 fetch:实时行情 stock.xueqiu.com/v5/stock/batch/quote.json?symbol=<SH600519|AAPL|00700>(响应 data.items[0].quote:current/chg/percent/open/high/low/last_close/volume/amount/market_capital);热门股票榜 stock.xueqiu.com/v5/stock/hot_stock/list.json?size=<n>&type=10(响应 data.items[{symbol,name,current,percent,value(热度)}]);热门动态 xueqiu.com/statuses/hot/listV3.json?source=hot&page=1(响应 list[{id,description(HTML,需去标签),user:{id,screen_name},fav_count,retweet_count,reply_count}],帖子 URL = https://xueqiu.com/<user.id>/<id>);首页时间线 xueqiu.com/v4/statuses/home_timeline.json?page=1&count=20(需登录,响应 home_timeline 或 list,结构同热门动态);自选股 stock.xueqiu.com/v5/stock/portfolio/stock/list.json?size=100&category=1&pid=-1(响应 data.stocks[{symbol,name,current,chg,percent}]);预计财报日 stock.xueqiu.com/v5/stock/screener/event/list.json?symbol=<SYMBOL>&page=1&size=100(响应 data.items,subtype===2 为预计财报发布,timestamp 毫秒)。沪深北 symbol 统一加 SH/SZ/BJ 前缀;港股用 5 位数代码;美股直接代码。"
+  "notes": "兼容入口 xueqiu-search-stock 现执行内置 xueqiu/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

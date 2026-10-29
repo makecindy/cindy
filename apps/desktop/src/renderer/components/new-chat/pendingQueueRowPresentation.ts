@@ -1,4 +1,4 @@
-import { isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -93,7 +93,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
       : isScheduler || isSession || isPlugin
-        ? queueItemVisibleText(entry)
+        ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           : entry.text,
@@ -103,6 +103,22 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };
+}
+
+/**
+ * 空输入框里按 Cmd/Ctrl+Enter 时可直接插话的队列条目:仅当队列恰好一条且该行此刻
+ * 能插话(与行内 ⬆️ 同一判据)时返回其 clientId。多条时无法判断用户指哪条，返回 null,
+ * 仍需把焦点放到具体行上再按快捷键。
+ */
+export function resolveSoleSteerableQueuedMessage(
+  queue: readonly QueuedMessage[],
+  state: { editingClientId: string | null; steeringClientIds: readonly string[] },
+): string | null {
+  if (queue.length !== 1 || state.editingClientId !== null) return null;
+  const [entry] = queue;
+  if (!entry || !getPendingQueueRowPresentation(entry).canSteer) return null;
+  if (state.steeringClientIds.includes(entry.clientId)) return null;
+  return entry.clientId;
 }
 
 /**

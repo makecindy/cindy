@@ -16,6 +16,8 @@ import {
   freezeSessionProviderAtStart,
   getSessionProvider,
   hasSessionProvider,
+  hasHostedSessionModelAccess,
+  hostedSessionModelAllowed,
   setSessionProvider,
 } from '../session-provider-store';
 
@@ -23,19 +25,22 @@ describe('hosted provider binding lifecycle', () => {
   beforeEach(() => clearAllSessionProviders());
 
   it('keeps a replacement run registered despite late updates and cleanup from the old run', () => {
-    const old = bindHostedSessionProvider('remote-task', 'fp');
-    const current = bindHostedSessionProvider('remote-task', 'other');
+    const old = bindHostedSessionProvider('remote-task', 'fp', () => false);
+    const current = bindHostedSessionProvider('remote-task', 'other', (id, model) => id === 'other' && model === 'allowed');
     old.setProvider('stale');
     old.release();
     expect(getSessionProvider('remote-task')).toBe('other');
+    expect(hostedSessionModelAllowed('remote-task', 'other', 'allowed')).toBe(true);
+    expect(hostedSessionModelAllowed('remote-task', 'other', 'denied')).toBe(false);
     current.setProvider('fp');
     expect(getSessionProvider('remote-task')).toBe('fp');
     current.release();
     expect(hasSessionProvider('remote-task')).toBe(false);
+    expect(hasHostedSessionModelAccess('remote-task')).toBe(false);
   });
 
   it.each(['session', 'account', 'overwrite'] as const)('invalidates late callbacks on %s cleanup', (boundary) => {
-    const binding = bindHostedSessionProvider('remote-task', 'fp');
+    const binding = bindHostedSessionProvider('remote-task', 'fp', () => false);
     if (boundary === 'session') clearSessionProvider('remote-task');
     if (boundary === 'account') clearAllSessionProviders();
     if (boundary === 'overwrite') setSessionProvider('remote-task', 'new-source');
@@ -43,6 +48,7 @@ describe('hosted provider binding lifecycle', () => {
     binding.release();
     expect(getSessionProvider('remote-task')).toBe(boundary === 'overwrite' ? 'new-source' : null);
     expect(hasSessionProvider('remote-task')).toBe(boundary === 'overwrite');
+    expect(hasHostedSessionModelAccess('remote-task')).toBe(false);
   });
 });
 

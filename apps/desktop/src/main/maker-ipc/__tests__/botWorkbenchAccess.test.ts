@@ -51,8 +51,9 @@ const WATCHED: Record<string, { creatorBotId: string | null; followerBotId: stri
   'laptop::s-4': { creatorBotId: null, followerBotId: null, shared: true },
 };
 
-function setup(options: { scheduler?: string | null; watched?: boolean } = {}) {
+function setup(options: { scheduler?: string | null; watched?: boolean; authorized?: boolean } = {}) {
   const deps: BotWorkbenchAccessDeps = {
+    hasActionAuthorization: () => options.authorized !== false,
     resolveCaller: async (callerSessionId) => (BOTS[callerSessionId]
       ? { ok: true, botId: BOTS[callerSessionId] }
       : { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: 'no' }),
@@ -77,6 +78,16 @@ function setup(options: { scheduler?: string | null; watched?: boolean } = {}) {
 const code = (result: { ok: boolean; errorCode?: string }) => (result.ok ? 'ok' : result.errorCode);
 
 describe('workbench authorization matrix', () => {
+  it.each(['owner-task', 'taken-task', 'writer-handed', 'laptop::s-1'])(
+    'observation responsibility never authorizes writing %s', async taskId => {
+      const { access, deps } = setup({ authorized: false });
+      expect((await access.read({ callerSessionId: 'main-scheduler', taskId })).ok).toBe(true);
+      expect(await access.continueTask({ callerSessionId: 'main-scheduler', taskId, message: 'continue' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_REQUIRED' });
+      expect(deps.sendToSession).not.toHaveBeenCalled();
+      expect(deps.sendToRemoteSession).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     // caller, task, read, continue
     ['main-scheduler', 'owner-task', 'ok', 'ok'],

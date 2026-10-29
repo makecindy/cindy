@@ -1,13 +1,15 @@
 {
   "site": "finance.sina.com.cn",
-  "auth": "快讯/行情只读无需登录",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://finance.sina.com.cn/",
-    "newsApi": "https://app.cj.sina.com.cn/api/news/pc?page=1&size=<limit>&tag=0",
-    "stockSuggestApi": "https://suggest3.sinajs.cn/suggest/type=11,31,41&key=<keyword>",
-    "stockQuoteApi": "https://hq.sinajs.cn/list=<symbol>",
-    "rollPage": "https://finance.sina.com.cn/roll/"
+    "home": "https://app.cj.sina.com.cn"
   },
-  "recipes": ["sinafinance-news"],
-  "notes": "7x24 快讯走公开 JSON API:app.cj.sina.com.cn/api/news/pc?page=1&size=<limit>&tag=0,无需登录、无需浏览器签名;sinafinance-news 配方 navigate 到该 URL 再读 body 即拿 JSON {result:{data:{feed:{list:[{id,create_time,rich_text(含HTML需strip),view_num}]}}}}。tag 可换分类(对应新浪 API tag id):10=A股 1=宏观 3=公司 4=数据 5=市场 102=国际 6=观点/央行 8=其它,0=全部。行情(A股/港股/美股)走 sinajs:先 suggest3.sinajs.cn/suggest/type=11,31,41&key=<名称或代码> 搜代码(11=A股 31=港股 41=美股),再 hq.sinajs.cn/list=<symbol> 取实时行情 —— 注意这两个接口返回 GBK 编码、且需带 Referer: https://finance.sina.com.cn,navigate+读 body 可能乱码,建议用 evaluate 在页面内 fetch 后用 new TextDecoder('gbk').decode(await r.arrayBuffer()) 解码,A股 symbol 形如 sh600519/sz300xxx、港股 hk<code>、美股 gb_<code>。滚动新闻 finance.sina.com.cn/roll/ 是 SPA DOM(.d_list_txt li),稳定性差,本配方只收录干净的 7x24 快讯 JSON。"
+  "recipes": [
+    "sinafinance-news"
+  ],
+  "notes": "兼容入口 sinafinance-news 现执行内置 sinafinance/news，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

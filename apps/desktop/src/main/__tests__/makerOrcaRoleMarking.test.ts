@@ -46,7 +46,7 @@ describe('maker Orca role marking IPC boundary', () => {
     expectOrder(
       roleMarkingSource,
       'await assertReviewSettingsUnlocked(sessionId);',
-      'await setSessionOrcaRole(sessionId, orcaRole);',
+      'await setSessionOrcaRole(sessionId, orcaRole, { owner: owner!, assertCurrent });',
     );
     expectOrder(
       collabGuardSource,

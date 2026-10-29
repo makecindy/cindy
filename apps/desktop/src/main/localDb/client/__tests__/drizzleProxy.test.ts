@@ -21,6 +21,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
@@ -38,7 +39,9 @@ const DRIZZLE_PROXY_SCHEMA = [
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       orca_role TEXT,
       parent_session_id TEXT,
@@ -86,6 +89,50 @@ const DRIZZLE_PROXY_SCHEMA = [
 ];
 
 describe('drizzle proxy', () => {
+  // Storage integration: the eval worker must own its codec, including legacy numeric fork inputs.
+  // Existing Drizzle round trips do not execute the inline fork transaction.
+  it('preserves speed when the inline worker forks a session', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.exec('ALTER TABLE messages ADD COLUMN agent_kind TEXT');
+      for (const [index, fastMode] of ['ultrafast', true, false, 1, 2].entries()) {
+        const id = `fork-${index}`;
+        await client.tx('fork.session', {
+          sourceSessionId: 'empty-source', sourceClearedAt: null,
+          targetCreatedAt: 10, targetRowid: null,
+          uuidMap: {}, nativeForkAnchorSessionMap: {},
+          legacyTranscriptParentUuids: [], toolParentUuids: [], newMessageIds: [],
+          newSession: {
+            id, title: 'Fork', model: 'gpt-6.1-sol', effort: 'high',
+            permissionMode: 'ask', status: 'active', agentKind: 'codex',
+            workspaceKind: 'project', totalTokenUsage: 0, totalCostUsd: 0,
+            contextTokens: 0, contextWindow: 272000, fastMode, createdAt: 10, updatedAt: 10,
+          },
+        });
+        const expected = fastMode === 'ultrafast' || fastMode === 2 ? 'ultrafast' : !!fastMode;
+        expect(await client.drizzle.select({ fastMode: sessions.fastMode }).from(sessions)
+          .where(eq(sessions.id, id))).toEqual([{ fastMode: expected }]);
+      }
+    } finally { await client.dispose(); }
+  });
+
+  // Storage tier: retain old integer values while new session rows round-trip Ultrafast.
+  it('round-trips all three speeds through the real Drizzle worker mapping', async () => {
+    const client = await createDbClient({ useInlineWorker: true });
+    try {
+      await applyDrizzleProxySchema(client);
+      await client.drizzle.insert(sessions).values({ id: 'speed', title: 'Speed', createdAt: 1, updatedAt: 1, fastMode: 'ultrafast' });
+      for (const [speed, stored] of [['ultrafast', 2], [true, 1], [false, 0]] as const) {
+        await client.drizzle.update(sessions).set({ fastMode: speed }).where(eq(sessions.id, 'speed'));
+        expect(await client.queryOne('SELECT fast_mode FROM sessions WHERE id = ?', ['speed']))
+          .toEqual({ fast_mode: stored });
+        const rows = await client.drizzle.select({ fastMode: sessions.fastMode }).from(sessions);
+        expect(rows).toEqual([{ fastMode: speed }]);
+      }
+    } finally { await client.dispose(); }
+  });
+
   it('maps nested select rows with drizzle mapResultRow semantics', async () => {
     const inProc = new Database(':memory:');
     const client = await createDbClient({ useInlineWorker: true });

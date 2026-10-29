@@ -1,8 +1,10 @@
+import type { ProviderShareMemberBudget } from './providerShareBudget.js';
 /**
  * 供应商分享的 Renderer ↔ Main 契约(只在本机进程之间；服务端契约见
  * docs/provider-sharing-contract.md)。身份只有昵称与头像。
  */
 import type { RemoteAgentLimits, RemoteAgentLimitsView } from './remoteAgentLimits';
+import type { RemoteModelAccessView, RemoteModelSelection } from './remoteModelAccess';
 
 import type {
   ProviderShareLinkPreview,
@@ -12,6 +14,7 @@ import type {
   ProviderShareRequestState,
 } from '@cindy/device-link';
 import type { DataOwnerPushStamp } from './dataOwnerPush';
+import type { ProviderShareInsights, ProviderShareQuotaAccount, ProviderShareVisibility } from './providerShareInsights';
 
 /** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
 export interface ProviderShareReceivedSnapshot {
@@ -85,6 +88,8 @@ export interface ProviderShareReshareView {
 }
 
 export interface ProviderShareMemberView extends ProviderShareMember {
+  /** 分享者给这个成员设置的备注；只用于管理页，不向受邀者公开。旧电脑可能缺省。 */
+  note?: string | null;
   lastUsedAt: number | null;
   runningTasks: number;
   models: ProviderShareModelUsageView[];
@@ -187,11 +192,22 @@ export interface ProviderShareSettledEvent {
   preview: ProviderShareLinkPreview | null;
 }
 
+
 export type ProviderShareCommand =
+  | { action: 'get-fast-policy'; providerId: string }
+  | { action: 'set-fast-policy'; providerId: string; allowFast: boolean }
+  | { action: 'get-model-access'; providerId: string; memberId?: string }
+  | { action: 'set-model-access'; providerId: string; memberId?: string; models: RemoteModelSelection; memberBudget?: ProviderShareMemberBudget | null }
+  | { action: 'get-visibility'; providerId: string }
+  | { action: 'set-visibility'; providerId: string; visibility: Partial<ProviderShareVisibility> }
+  | { action: 'quota-account'; providerId: string }
+  | { action: 'insights'; shareId: string; includeUsage: boolean }
   | { action: 'get-run-limits' }
   | { action: 'reset-run-limits' }
   | { action: 'set-run-limits'; limits: Partial<RemoteAgentLimits> }
   | { action: 'owned'; range: ProviderShareUsageRange }
+  /** 设置页分区只读快照，不计算用量或延长快速拉取窗口。 */
+  | { action: 'shared-provider-ids' }
   /** 这个供应商按使用方的用量(本机与我的其他电脑)。不依赖分享服务。 */
   | { action: 'own-usage'; providerId: string; range: ProviderShareUsageRange }
   /** 这个供应商的用量按天明细(你自己、转来的与分享的人)，「用量」块据此按时间段、人与电脑筛选。 */
@@ -199,6 +215,7 @@ export type ProviderShareCommand =
   | { action: 'create-link'; providerId: string }
   | { action: 'approve' | 'reject'; requestId: string }
   | { action: 'set-member'; memberId: string; status: 'pause' | 'resume' | 'remove' }
+  | { action: 'set-member-note'; memberId: string; note: string }
   /** 转分享：同意或拒绝(拒绝已同意的 = 撤回)。 */
   | { action: 'reshare-decide'; id: string; decision: 'approve' | 'reject' }
   | { action: 'received' }
@@ -218,16 +235,26 @@ export interface ProviderShareCredentialConsentView {
 }
 
 export interface ProviderShareCommandResult {
+  'get-fast-policy': { supported: boolean; allowFast: boolean };
+  'set-fast-policy': { supported: boolean; allowFast: boolean };
+  'get-model-access': RemoteModelAccessView;
+  'set-model-access': RemoteModelAccessView;
+  'get-visibility': ProviderShareVisibility;
+  'set-visibility': ProviderShareVisibility;
+  'quota-account': ProviderShareQuotaAccount;
+  insights: ProviderShareInsights;
   'get-run-limits': RemoteAgentLimitsView;
   'set-run-limits': RemoteAgentLimitsView;
   'reset-run-limits': RemoteAgentLimitsView;
   owned: ProviderShareOwnerState;
+  'shared-provider-ids': { ready: boolean; providerIds: string[] };
   'own-usage': ProviderOwnUsageView;
   'usage-history': ProviderUsageHistoryView;
   'create-link': ProviderShareLinkCreated;
   approve: { ok: true };
   reject: { ok: true };
   'set-member': { ok: true };
+  'set-member-note': { ok: true };
   'reshare-decide': { ok: true };
   received: ProviderShareReceived[];
   'received-snapshot': ProviderShareReceivedSnapshot;

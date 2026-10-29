@@ -199,6 +199,13 @@ describe('remote schedule binding badges', () => {
     expect(() => parseScheduleBindings([{ ...binding(), recurring: 'false' }])).toThrow();
   });
 
+  it('keeps the persistent-session flag only when true, so archive confirmation can skip it', () => {
+    expect(parseScheduleBindings([{ ...binding(), persistentSession: true }])).toEqual([
+      { ...binding(), persistentSession: true },
+    ]);
+    expect(parseScheduleBindings([{ ...binding(), persistentSession: false }])).toEqual([binding()]);
+  });
+
   it.each([
     [{ intervalMs: 600_000 }, 'Every 10 minutes'],
     [{ intervalMs: 1_680_000 }, 'Every 28 minutes'],

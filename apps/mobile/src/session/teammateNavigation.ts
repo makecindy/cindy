@@ -60,6 +60,22 @@ export function cloudCompanionRoute(hosted: HostedRemoteCollectionItem, actorId:
   };
 }
 
+/**
+ * Chat screens of one companion on one computer stacked right under the top route, counted from just below it.
+ * The cloud view opened from a chat leaves that chat underneath; once the companion runs elsewhere, back must skip it.
+ */
+export function staleCompanionChatCount(routes: readonly { name: string; params?: unknown }[], botId: string, deviceId: string): number {
+  let count = 0;
+  for (let index = routes.length - 2; index >= 0; index--) {
+    const route = routes[index]!;
+    const params = route.params as { resourceId?: string; deviceId?: string } | undefined;
+    if (!['sessions/[sessionId]', 'resources/[collectionId]/[resourceId]'].includes(route.name)
+      || params?.resourceId !== botId || params?.deviceId !== deviceId) break;
+    count += 1;
+  }
+  return count;
+}
+
 /** Reuse the actual home route; retired collection routes are replaced. */
 export function homeDismissCount(routes: readonly { name: string; params?: unknown }[]): number | null {
   for (let index = routes.length - 1; index >= 0; index--) {
@@ -78,5 +94,6 @@ export function orderedTeammates(items: readonly HostedRemoteCollectionItem[], q
     if (needle && !title.normalize('NFKC').toLocaleLowerCase(locale).includes(needle)) continue;
     unique.set(JSON.stringify(identity), row);
   }
-  return [...unique.values()].sort((a, b) => (b.item.display.timestamp ?? 0) - (a.item.display.timestamp ?? 0));
+  return [...unique.values()].sort((a, b) => (b.item.display.timestamp ?? 0) - (a.item.display.timestamp ?? 0)
+    || a.key.localeCompare(b.key));
 }

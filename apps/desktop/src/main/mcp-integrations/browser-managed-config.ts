@@ -232,7 +232,13 @@ export function buildManagedConfig(options: ManagedBrowserConfigOptions = {}): B
       defaultProfile,
       headless: false, // headed so the user can see + log into sites
       ...(executablePath ? { executablePath } : {}),
-      ...(proxyServer ? { extraArgs: buildProxyLaunchArgs(proxyServer, route.allowedHostnames) } : {}),
+      // A persistent directory alone does not restore session cookies after a
+      // clean exit. Apply Chrome's native session restore to both profiles and
+      // routes; --no-startup-window still keeps automation launches unobtrusive.
+      extraArgs: [
+        '--restore-last-session',
+        ...(proxyServer ? buildProxyLaunchArgs(proxyServer, route.allowedHostnames) : []),
+      ],
       // Two different contracts, so two different policies:
       //  - DIRECT is the agent's own browser, where reaching the intranet is a
       //    deliberate product decision (see the posture note above).

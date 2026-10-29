@@ -16,9 +16,10 @@
  *   - Codex file_change 与 Claude 文件编辑共用 diff lightbox
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { i18n } from '../i18n';
 
 const ghostFixtures = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
 const openFileMenuAt = vi.hoisted(() => vi.fn());
@@ -26,15 +27,18 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
   useInstalledGhosts: () => ghostFixtures.ghosts,
 }));
 
-vi.mock('react-i18next', () => ({
-  // t 返回原 key(带 count 时后缀 :count),断言直接对 key 做,避免复制文案表。
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
+  // Image delivery uses production translations; other rows retain stable key-based assertions.
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
-      options && typeof options.count === 'number'
-        ? `${key}:${String(options.count)}`
-        : options && typeof options.size === 'string'
-          ? `${key}:${options.size}`
-          : key,
+      key.startsWith('chat.imageDelivery.')
+        ? i18n.t(key, { lng: 'en' })
+        : options && typeof options.count === 'number'
+          ? `${key}:${String(options.count)}`
+          : options && typeof options.size === 'string'
+            ? `${key}:${options.size}`
+            : key,
   }),
 }));
 
@@ -60,6 +64,7 @@ vi.mock('@/lib/filePreview', () => ({ shouldOpenTextLightbox: async () => false 
 vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-file://${p}` }));
 
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
+import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -568,4 +573,30 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
   });
+});
+
+// #6412 / PR #6420: real locale lookup catches misplaced keys hidden by the previous identity mock.
+// The retry button must display translated text and target the existing artifact on the task host.
+it.each(['local', 'device'] as const)('retries image delivery through the %s task route without sending a model message', async (kind) => {
+  const retry = vi.fn(async () => {});
+  const invoke = vi.fn(async () => {});
+  const previous = window.electronAPI;
+  window.electronAPI = { maker: { input: { retryImageDelivery: retry } }, deviceLink: { invoke } } as never;
+  try {
+    render(createElement(ChatSessionFileProvider, { value: {
+      sessionId: 'task', workingDir: '/task', origin: kind === 'device' ? { kind, deviceId: 'task-host' } : { kind },
+    }, children: createElement(AgentActionRow, {
+      message: mkTool('image', 'imagegen', {}),
+      toolResult: JSON.stringify({ kind: 'generation', native_image_delivery: { id: 'a'.repeat(64), state: 'failed' } }),
+    }) }));
+    expect(screen.getByRole('status').textContent).toBe('Image delivery failed. Retry transferring the existing image.');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })); });
+    if (kind === 'device') {
+      expect(invoke).toHaveBeenCalledWith('task-host', 'maker:images:retry', ['task', 'a'.repeat(64)]);
+      expect(retry).not.toHaveBeenCalled();
+    } else {
+      expect(retry).toHaveBeenCalledWith('task', 'a'.repeat(64));
+      expect(invoke).not.toHaveBeenCalled();
+    }
+  } finally { window.electronAPI = previous; }
 });

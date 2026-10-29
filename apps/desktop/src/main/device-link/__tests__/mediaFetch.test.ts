@@ -122,6 +122,18 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
     expect(uploadLocalFile).not.toHaveBeenCalled();
   });
 
+  // Regression: the outside-file exception must survive materialization, while
+  // still pinning a single canonical file rather than opening its whole directory.
+  it('materializes exactly the referenced outside file and rejects a changed target', async () => {
+    const file = path.resolve('deliveries/report.pdf');
+    const arg = { url: 'xdt-file://local?path=' + encodeURIComponent(file) };
+    assertSharedTaskMedia.mockResolvedValue({ file });
+    await expect(shared(() => resolveAuthorizedMedia(arg))).resolves.toMatchObject({ absPath: file });
+    realpathMock.mockResolvedValue(path.resolve('deliveries/private.pdf'));
+    await expect(shared(() => fetchLocalMediaToOss(arg))).rejects.toThrow('PERMISSION_DENIED');
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+
   it('preserves upload size limits and isolates shared-task upload cache', async () => {
     const url = 'xdt-file://local?path=' + encodeURIComponent(path.resolve('work/a.png')) + '&maxBytes=100';
     let scope: string | undefined;

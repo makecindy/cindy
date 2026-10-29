@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RsbWindowContext } from '../../../../shared/rightSidebarWindow';
 
@@ -10,11 +10,7 @@ const mocks = vi.hoisted(() => ({
   sidebarTabHandoffListener: null as
     | ((handoff: import('../../../../shared/rightSidebarWindow').RsbWindowTabHandoff) => void)
     | null,
-  ghostVisibilityListener: null as ((payload: { visible: boolean }) => void) | null,
-  ghostMinimizeListener: null as (() => void) | null,
-  ghostMinimizeEnabled: true,
   confirm: vi.fn(() => Promise.resolve(false)),
-  ghostCloseListener: null as (() => void) | null,
   ghostApprovalRevision: '00000000-0000-4000-8000-000000000001',
   sidebarShellVisible: undefined as boolean | undefined,
   sidebarShellSessionId: undefined as string | null | undefined,
@@ -23,8 +19,6 @@ const mocks = vi.hoisted(() => ({
   sidebarLightboxMountId: undefined as number | undefined,
   initGlobalListeners: vi.fn(),
   importTabSnapshot: vi.fn(),
-  minimizeGhostPanel: vi.fn(),
-  restoreGhostPanel: vi.fn(),
 }));
 
 vi.mock('@/components/title-bar/WindowControls', () => ({
@@ -105,9 +99,6 @@ vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
         name: 'Test Ghost',
         panel: {
           title: 'Test Panel',
-          ...(mocks.ghostMinimizeEnabled
-            ? {}
-            : { systemButtons: { minimize: false } }),
         },
       },
     },
@@ -120,11 +111,6 @@ vi.mock('@/hooks/useAppShortcut', () => ({ useAppShortcut: vi.fn() }));
 vi.mock('@/hooks/useCloseWindowShortcut', () => ({ useCloseShortcutShellOwner: vi.fn() }));
 vi.mock('@/hooks/useLocale', () => ({
   useLocale: () => ({ effectiveLocale: 'en', setLocale: vi.fn() }),
-}));
-vi.mock('@/lib/ghostPanelWindow', () => ({ getGhostPanelWindowGhostId: () => 'test-ghost' }));
-vi.mock('@/lib/ghostPanelBubbleState', () => ({
-  minimizeGhostPanel: mocks.minimizeGhostPanel,
-  restoreGhostPanel: mocks.restoreGhostPanel,
 }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { initGlobalListeners: mocks.initGlobalListeners },
@@ -146,7 +132,6 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-import { GhostPanelWindowLayout } from '../GhostPanelWindowLayout';
 import { SidebarWindowLayout } from '../SidebarWindowLayout';
 
 describe('reusable auxiliary window chrome', () => {
@@ -155,11 +140,7 @@ describe('reusable auxiliary window chrome', () => {
     mocks.controlsMounts = 0;
     mocks.sidebarVisibilityListener = null;
     mocks.sidebarTabHandoffListener = null;
-    mocks.ghostVisibilityListener = null;
-    mocks.ghostMinimizeListener = null;
-    mocks.ghostMinimizeEnabled = true;
     mocks.confirm.mockReset().mockResolvedValue(false);
-    mocks.ghostCloseListener = null;
     mocks.ghostApprovalRevision = '00000000-0000-4000-8000-000000000001';
     mocks.sidebarShellVisible = undefined;
     mocks.sidebarShellSessionId = undefined;
@@ -195,43 +176,12 @@ describe('reusable auxiliary window chrome', () => {
           close: vi.fn(() => Promise.resolve()),
           setDetached: vi.fn(() => Promise.resolve()),
         },
-        ghostPanelWindow: {
-          rendererReady: vi.fn(() => Promise.resolve()),
-          presentationReady: vi.fn(() => Promise.resolve()),
-          onVisibilityChanged: vi.fn((listener) => {
-            mocks.ghostVisibilityListener = listener;
-            return vi.fn();
-          }),
-          onCloseRequested: vi.fn((listener) => {
-            mocks.ghostCloseListener = listener;
-            return vi.fn();
-          }),
-          onMinimizeRequested: vi.fn((listener) => {
-            mocks.ghostMinimizeListener = listener;
-            return vi.fn();
-          }),
-          resolveCloseRequest: vi.fn(() => Promise.resolve()),
-          setDetached: vi.fn(() => Promise.resolve()),
-        },
         ghosts: { setEnabled: vi.fn(() => Promise.resolve()) },
       },
     });
   });
 
   afterEach(() => cleanup());
-
-  it('keeps the detached close bound to the approval shown before confirmation', async () => {
-    let confirmClose!: (confirmed: boolean) => void;
-    mocks.confirm.mockReturnValue(new Promise<boolean>((resolve) => { confirmClose = resolve; }));
-    const view = render(<GhostPanelWindowLayout />);
-    act(() => mocks.ghostCloseListener?.());
-    mocks.ghostApprovalRevision = '00000000-0000-4000-8000-000000000002';
-    view.rerender(<GhostPanelWindowLayout />);
-    await act(async () => confirmClose(true));
-    expect(window.electronAPI.ghosts.setEnabled).toHaveBeenCalledExactlyOnceWith(
-      'test-ghost', false, 'approved:00000000-0000-4000-8000-000000000001',
-    );
-  });
 
   it('remounts right-sidebar controls when the cached window is hidden', async () => {
     render(<SidebarWindowLayout />);
@@ -278,71 +228,6 @@ describe('reusable auxiliary window chrome', () => {
     ).toBeLessThan(
       (window.electronAPI.rightSidebarWindow.presentationReady as ReturnType<typeof vi.fn>).mock
         .invocationCallOrder[0],
-    );
-  });
-
-  it('remounts ghost-panel controls when the cached window is hidden', async () => {
-    render(<GhostPanelWindowLayout />);
-    const controlsBeforeHide = screen.getByTestId('window-controls');
-    controlsBeforeHide.focus();
-
-    await act(async () => mocks.ghostVisibilityListener?.({ visible: false }));
-
-    const controlsAfterHide = screen.getByTestId('window-controls');
-    expect(controlsAfterHide).not.toBe(controlsBeforeHide);
-    expect(document.activeElement).not.toBe(controlsAfterHide);
-  });
-
-  it('uses an icon-only merge-back action for detached plugin windows', async () => {
-    render(<GhostPanelWindowLayout />);
-
-    const mergeBack = screen.getByRole('button', { name: 'rightSidebar.window.mergeBack' });
-    expect(mergeBack.getAttribute('title')).toBeNull();
-    expect(mergeBack.textContent).not.toContain('rightSidebar.window.mergeBack');
-    fireEvent.click(mergeBack);
-
-    expect(window.electronAPI.ghostPanelWindow.setDetached).toHaveBeenCalledWith(
-      'test-ghost',
-      false,
-    );
-  });
-
-  it('minimizes a detached plugin window through the main-window restore flow', async () => {
-    render(<GhostPanelWindowLayout />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'titleBar.minimize' }));
-
-    expect(mocks.minimizeGhostPanel).toHaveBeenCalledWith('test-ghost');
-    expect(window.electronAPI.ghostPanelWindow.setDetached).toHaveBeenCalledWith(
-      'test-ghost',
-      false,
-    );
-    expect(mocks.restoreGhostPanel).not.toHaveBeenCalled();
-  });
-
-  it('restores the bubble state when merging the minimized plugin window fails', async () => {
-    window.electronAPI.ghostPanelWindow.setDetached = vi.fn(() =>
-      Promise.reject(new Error('failed')),
-    );
-    render(<GhostPanelWindowLayout />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'titleBar.minimize' }));
-    });
-
-    expect(mocks.minimizeGhostPanel).toHaveBeenCalledWith('test-ghost');
-    expect(mocks.restoreGhostPanel).toHaveBeenCalledWith('test-ghost');
-  });
-
-  it('uses the same Ghost bubble action for a native minimize request', async () => {
-    render(<GhostPanelWindowLayout />);
-
-    await act(async () => mocks.ghostMinimizeListener?.());
-
-    expect(mocks.minimizeGhostPanel).toHaveBeenCalledWith('test-ghost');
-    expect(window.electronAPI.ghostPanelWindow.setDetached).toHaveBeenCalledWith(
-      'test-ghost',
-      false,
     );
   });
 
@@ -468,14 +353,4 @@ describe('reusable auxiliary window chrome', () => {
     expect(mocks.sidebarLightboxSessionId).toBe('session-b');
   });
 
-  it('respects a plugin manifest that disables minimize in the detached window', async () => {
-    mocks.ghostMinimizeEnabled = false;
-
-    render(<GhostPanelWindowLayout />);
-
-    expect(screen.queryByRole('button', { name: 'titleBar.minimize' })).toBeNull();
-    expect(window.electronAPI.ghostPanelWindow.onMinimizeRequested).not.toHaveBeenCalled();
-    expect(mocks.ghostMinimizeListener).toBeNull();
-    expect(mocks.minimizeGhostPanel).not.toHaveBeenCalled();
-  });
 });

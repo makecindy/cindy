@@ -1,4 +1,37 @@
 {
+  "paneResize": {
+    "label": "分栏宽度",
+    "hint": "左右拖动可调整两栏宽度"
+  },
+  "sideChat": {
+    "collapse": "收起追问",
+    "resume": "继续追问",
+    "list": "追问列表",
+    "summary": "侧边追问 · {{count}} 个",
+    "fromMain": "来自「{{title}}」",
+    "mainTask": "主任务",
+    "commandDescription": "打开侧边追问，可在 /side 后写问题",
+    "commandAttachments": "请先处理当前附件，再用 /side 发起追问。",
+    "unavailable": "当前任务暂不支持侧边追问。",
+    "title": "侧边追问",
+    "ask": "在追问中询问",
+    "create": "新建追问",
+    "returnMain": "返回主任务",
+    "item": "追问 {{index}}",
+    "current": "当前",
+    "description": "继承主任务已有上下文，独立追问。回复不会自动写回主任务。",
+    "empty": "还没有追问",
+    "loadFailed": "未能读取追问。请检查电脑连接；旧版电脑端需要更新后才能使用。",
+    "createFailed": "未能创建追问，主任务保持不变。",
+    "unsupported": "这台电脑暂不支持追问，请更新电脑端。",
+    "waitForReply": "请等主任务完成第一条回复后再创建追问。"
+  },
+  "leaveWhileUploading": {
+    "title": "放弃发送？",
+    "body": "附件还没上传完，现在离开这条消息就不会发送。",
+    "stay": "继续等待",
+    "discard": "放弃发送"
+  },
   "entry": {
     "title": "打开任务",
     "loading": "正在读取任务…",
@@ -224,6 +257,7 @@
     "voiceSenderNotReady": "消息暂时无法发送，请返回后重新进入任务。",
     "voiceStopAndSend": "结束语音输入并发送",
     "sendMessage": "发送远程消息",
+    "inputSyncFailed": "未能读取完整输入，内容已保留，请重试。",
     "voiceStartInput": "开始语音输入",
     "stopSession": "停止远程任务",
     "sessionNotFoundResync": "未找到当前远程任务，请重新同步后再发送。",
@@ -405,6 +439,13 @@
     "copyFailed": "复制失败",
     "deleteConfirmTitle": "删除任务？",
     "deleteConfirmBody": "删除后不可恢复。",
+    "archiveScheduleConfirmTitle": "归档任务？",
+    "archiveScheduleConfirmBody_one": "关联的自动化{{names}}仍会运行，并恢复此任务。",
+    "archiveScheduleConfirmBody_other": "关联的自动化{{names}}仍会运行，并恢复此任务。",
+    "archiveScheduleName": "「{{name}}」",
+    "archiveScheduleNameSeparator": "、",
+    "archiveScheduleBulkNotice_one": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",
+    "archiveScheduleBulkNotice_other": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",
     "dirAlreadyAdded": "这个目录已经在列表里。",
     "resetCodexTitle": "重置 Codex 用量？",
     "resetCodexBody": "将为 {{account}} 消耗 1 次重置。配额窗口会立即重开，此操作不能撤销。",
@@ -505,6 +546,9 @@
     "replyFailed": "回复未完成",
     "showErrorDetails": "错误详情",
     "hideErrorDetails": "收起详情",
+    "diagnose": "诊断",
+    "diagnoseHint": "在新任务中诊断这个错误",
+    "diagnosePrompt": "请帮我诊断这个错误：找出原因，并告诉我怎么解决。\n\n出错任务：{{sessionUrl}}\n错误提示：{{message}}\n错误详情：\n{{details}}\n\n如果确认是 Cindy 本身的问题，请告诉我，我可以选择向 Cindy 团队提交 issue。",
     "interrupted": "任务执行到一半时应用退出，已被中断。",
     "continueTask": "继续任务",
     "retry": "重试",
@@ -521,6 +565,7 @@
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
+    "markRead": "已读",
     "moreOptions": "更多选项",
     "archiveConversation": "归档任务",
     "closeActionMenu": "关闭任务操作菜单",
@@ -542,6 +587,10 @@
     "taskAlreadyCreated": "电脑上已创建这个任务，已保存的消息会在原任务中继续发送。"
   },
   "remoteError": {
+    "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 任务暂不支持切换 Harness。请选择当前 Harness 下的模型，或使用所需 Harness 新建 SSH 任务。",
+    "MODEL_SELECTION_UNAVAILABLE": "所选模型在该供应商下已不可用。请在设置中检查连接，或重新选择可用模型。",
+    "HARNESS_SWITCH_NOT_READY": "Harness 尚未完成切换。请查看错误详情，待 Harness 就绪后重试。",
+    "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
     "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以在电脑上这个供应商的「远程与分享」页查看组内电脑。",
     "REMOTE_DAEMON_CLOSED": "远程连接中断了，可能正在更新。这一轮已经结束，请重新发送。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程任务无法访问本地文件或图片附件。请直接粘贴内容。",
@@ -554,6 +603,7 @@
     "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 无法读取源附件，消息未发送。请将文件另存到“下载”或其他可访问的文件夹，移除原附件，再用附件按钮添加副本后发送。",
     "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
     "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
     "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
@@ -572,9 +622,12 @@
     "REMOTE_AGENT_BUSY": "那台电脑上同时运行的任务太多。先结束一些任务后再试。",
     "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
     "REMOTE_AGENT_TOTAL_LIMIT": "远程电脑保留的任务总数已达上限。请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
+    "REMOTE_AGENT_RESUME_LOST": "之前在那台电脑上的对话没能接上，Agent 会在没有之前上下文的情况下继续。",
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
+    "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
@@ -671,5 +724,39 @@
       "ORCA_CREATE_UNCONFIRMED": "创建 Worker 超时，暂时无法确认是否成功。请先查看 Worker 列表，确认没有新建的 Worker 后再重试。",
       "ORCA_ACTION_UNCONFIRMED": "操作超时，暂时无法确认结果。已刷新列表，请以当前显示的状态为准。"
     }
+  },
+  "resetAutoUse": {
+    "label": "自动使用",
+    "rules": "自动使用规则",
+    "lowQuota": "每周剩余低于 1% 时自动用",
+    "resetDistance": "距离配额重置还剩",
+    "days": "{{count}} 天以上",
+    "unlimited": "不限",
+    "custom": "自定义…",
+    "customDays": "自定义天数",
+    "dayUnit": "天以上",
+    "apply": "应用",
+    "expiring": "临近卡到期时自动用",
+    "leadTime": "提前多久使用",
+    "minutes": "到期前 {{count}} 分钟",
+    "hours": "到期前 {{count}} 小时",
+    "hint": "任一条件满足时，优先用最早到期的卡。配额全满时跳过。由这台电脑执行，需保持 Cindy 运行。",
+    "failed": "保存失败，请重试。",
+    "restore": "恢复默认"
+  },
+  "followUp": {
+    "title": "要我帮你跟进任务吗？",
+    "start": "开始跟进",
+    "notNow": "暂不开启",
+    "saveFailed": "没能保存，请重试"
+  },
+  "providerGroupRebalance": {
+    "title": "换到 {{label}} 继续？",
+    "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
+    "quota": "还剩 {{left}}%",
+    "quotaReset": "还剩 {{left}}%，{{reset}}后重置",
+    "confirm": "换过去",
+    "remember": "换过去，以后自动换（仅本任务）",
+    "cancel": "取消"
   }
 }

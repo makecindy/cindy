@@ -80,19 +80,32 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
     !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner && getDbClient() === db;
   await drainPersistQueue();
   if (!current()) return;
-  const readOwner = () =>
-    db.queryOne<{ botId: string; capabilities: string; rowid: number; meta: string }>(
+  const readOwner = async () => {
+    const candidate = await db.queryOne<{
+      botId: string; role: string; canonicalSessionId: string | null;
+      capabilities: string; rowid: number; meta: string; inputMeta: string | null;
+    }>(
       `
-    SELECT b.bot_id AS botId, v.capabilities_json AS capabilities, m.rowid, m.agent_meta AS meta
+    SELECT b.bot_id AS botId, b.role, p.canonical_session_id AS canonicalSessionId,
+      v.capabilities_json AS capabilities, m.rowid, m.agent_meta AS meta,
+      (SELECT u.agent_meta FROM messages u WHERE u.session_id=m.session_id
+        AND u.client_id=json_extract(m.agent_meta, '$.replyToClientId') AND u.role='user'
+        AND u.rewind_at IS NULL AND (s.cleared_at IS NULL OR u.created_at > s.cleared_at)) AS inputMeta
     FROM messages m JOIN sessions s ON s.id=m.session_id
     JOIN bot_session_links b ON b.session_id=s.id JOIN bot_profiles p ON p.id=b.bot_id
     JOIN bot_profile_versions v ON v.bot_id=p.id AND v.version=p.current_version
     WHERE m.session_id=? AND m.client_id=? AND m.role='assistant' AND m.rewind_at IS NULL
-      AND b.role='canonical' AND b.archived_at IS NULL AND p.status='active' AND s.source='bot' AND s.status='active'
+      AND b.role IN ('canonical','thread','channel') AND b.archived_at IS NULL AND p.status='active' AND s.source='bot' AND s.status='active'
       AND s.remote_host_id IS NULL AND (s.cleared_at IS NULL OR m.created_at > s.cleared_at)
   `,
       [sessionId, replyId],
     );
+    // The live IM lease is already released when this asynchronous review runs.
+    // Only the host-stamped input of this exact reply can authorize lane learning.
+    if (candidate?.role === 'channel'
+      && JSON.parse(candidate.inputMeta || '{}').imSource?.origin?.sender?.isOwner !== true) return null;
+    return candidate;
+  };
   const row = await readOwner();
   if (!current() || !row) return;
   const meta = JSON.parse(row.meta || '{}');
@@ -121,16 +134,31 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
       if (!current() || !(await readOwner())) return;
       const root = ownerScopedUserDataPath();
       // 工作记忆账本随同一次复盘维护(不另起模型调用);读不到按空账本,写入 CAS 失败放弃本轮。
-      const workingBefore = await readBotWorkingMemory(root, row.botId);
-      type Record_ = { id: string; role: string; content: string; order: number };
+      // The existing ledger/watermark belongs to the canonical timeline. Topic
+      // learning shares durable memory, never overwrites that timeline's cursor.
+      const maintainsWorkingMemory = row.role === 'canonical';
+      const workingBefore = maintainsWorkingMemory ? await readBotWorkingMemory(root, row.botId) : null;
+      type Record_ = { id: string; role: string; content: string; order: number; meta?: string; inputMeta?: string };
       // 单条正文按 MESSAGE_CHUNK_CHARS 分块。用户 / 伙伴的消息被截尾即 partial——它们是账本新条目
       // 的证据来源,纠正 / 承诺可能就在长消息的尾部,没看完不能算覆盖;工具结果不是新条目的来源,
       // 截尾只影响 resolved 证据(条目多留一阵),按已覆盖处理,不为它逐块回补。
       const toSnapshot = (m: Record_, offset = 0) => {
-        const parsed: unknown = JSON.parse(m.content);
+        // Message storage accepts both plain text and serialized structured content.
+        let parsed: unknown = m.content;
+        try { parsed = JSON.parse(m.content); } catch { /* Plain text is already the snapshot. */ }
+        const source = JSON.parse((m.role === 'user' ? m.meta : m.inputMeta) || '{}').imSource;
         // 交互答复行的正文是用户的决定,归一成文本后按用户消息对待(证据规则同用户消息)。
         const interaction = INTERACTION_ROLES.has(m.role);
-        const full: string = interaction ? interactionText(parsed) : typeof parsed === 'string' ? parsed : m.content;
+        let full: string = interaction ? interactionText(parsed) : typeof parsed === 'string' ? parsed : m.content;
+        if (row.role === 'channel') {
+          // Interaction rows have no durable sender attribution. Quoted/group
+          // context is not the owner's own statement, even in an owner turn.
+          if (interaction || source?.origin?.sender?.isOwner !== true) full = '';
+          else if (m.role === 'user') {
+            const text = typeof parsed === 'string' ? parsed : (parsed as { text?: unknown } | null)?.text;
+            full = typeof source.userText === 'string' ? source.userText : typeof text === 'string' ? text : '';
+          }
+        }
         const role = interaction ? 'user' : m.role;
         return {
           id: m.id,
@@ -152,10 +180,41 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
         [sessionId, row.rowid],
       );
       const prevCompleted = prev?.rowid ?? 0;
+      type Progress = { coveredThroughMessageId?: string; coveredThroughOffset?: number };
+      // Topic cursors live on their own replies, so deletion/rewind/clear and
+      // account isolation follow message storage without touching the bot ledger.
+      const topicProgressRow = maintainsWorkingMemory ? null : await db.queryOne<{ meta: string }>(
+        `SELECT agent_meta AS meta FROM messages WHERE session_id=? AND role='assistant'
+         AND rewind_at IS NULL AND rowid <= ? ${clearedAtFilter}
+         AND json_valid(agent_meta) AND json_type(agent_meta, '$.botLearningProgress')='object'
+         ORDER BY rowid DESC LIMIT 1 /* topic-learning-progress */`,
+        [sessionId, row.rowid, sessionId],
+      );
+      const topicProgress: Progress | null = topicProgressRow
+        ? JSON.parse(topicProgressRow.meta).botLearningProgress : null;
+      const progressBefore = maintainsWorkingMemory ? workingBefore : topicProgress
+        ?? (prev ? { coveredThroughMessageId: prev.id } : {});
+      const saveTopicProgress = async (progress: Progress) => enqueueDurableWrite(
+        `learning-progress:${sessionId}:${replyId}`, async () => {
+          if (current() && await readOwner()) {
+            await patchMessageAgentMetaWithResult(sessionId, replyId, { botLearningProgress: progress });
+          }
+        },
+      );
+      // Establish the first boundary before the model call: failure must leave
+      // this turn pending, but enabling topic learning must not scan old history.
+      if (!maintainsWorkingMemory && !topicProgress) await saveTopicProgress(progressBefore ?? {});
+      // Backfilled tool/assistant rows must belong to a verified owner input too;
+      // filtering only user rows would let a guest's old tool output teach Skills.
+      const inputMetaColumn = row.role === 'channel'
+        ? `(SELECT u.agent_meta FROM messages u WHERE u.session_id=m.session_id
+             AND u.client_id=json_extract(m.agent_meta, '$.replyToClientId') AND u.role='user'
+             AND u.rewind_at IS NULL AND u.created_at > COALESCE((SELECT cleared_at FROM sessions WHERE id=m.session_id), 0))`
+        : 'NULL';
       // 本轮取材:上一条完成回复之后到当前回复。
       const records = await db.query<Record_>(
         `
-      SELECT client_id AS id, role, content, rowid AS 'order' FROM messages
+      SELECT client_id AS id, role, content, agent_meta AS meta, rowid AS 'order', ${inputMetaColumn} AS inputMeta FROM messages m
       WHERE session_id=? AND rewind_at IS NULL AND rowid <= ? AND rowid > ? ${clearedAtFilter}
       AND ${REVIEW_ROLES} ORDER BY CASE WHEN role='user' THEN 0 ELSE 1 END, rowid DESC LIMIT ${TURN_REVIEW_ROWS}
     `,
@@ -183,18 +242,18 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
       type Watermark = { rowid: number; id: string | undefined; offset?: number };
       // 只认仍在可见时间线上的行:被 rewind 软删、被删成墓碑、/clear 之前的水位消息都按
       // 解析不到——否则一条已撤回的回复会把下界撑在上一条完成回复之上,跳过幸存历史的回补。
-      const resolvedFloor = workingBefore?.coveredThroughMessageId
+      const resolvedFloor = progressBefore?.coveredThroughMessageId
         ? (
             await db.queryOne<{ rowid: number }>(
               `SELECT rowid FROM messages WHERE session_id=? AND client_id=? AND rewind_at IS NULL
                AND role != 'message_tombstone' ${clearedAtFilter} /* ledger-floor */`,
-              [sessionId, workingBefore.coveredThroughMessageId, sessionId],
+              [sessionId, progressBefore.coveredThroughMessageId, sessionId],
             )
           )?.rowid
         : undefined;
       const floor: Watermark =
         resolvedFloor !== undefined
-          ? { rowid: resolvedFloor, id: workingBefore!.coveredThroughMessageId, offset: workingBefore!.coveredThroughOffset }
+          ? { rowid: resolvedFloor, id: progressBefore!.coveredThroughMessageId, offset: progressBefore!.coveredThroughOffset }
           : { rowid: 0, id: undefined };
       let covered: Watermark = turnTruncated ? { rowid: prevCompleted, id: prev?.id } : { rowid: row.rowid, id: replyId };
       let gapMessages: ReturnType<typeof toSnapshot>[] = [];
@@ -205,7 +264,7 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
         const gapAfter = floor.offset !== undefined ? floor.rowid - 1 : floor.rowid;
         const gapRows = await db.query<Record_>(
           `
-      SELECT client_id AS id, role, content, rowid AS 'order' FROM messages
+      SELECT client_id AS id, role, content, agent_meta AS meta, rowid AS 'order', ${inputMetaColumn} AS inputMeta FROM messages m
       WHERE session_id=? AND rewind_at IS NULL AND rowid > ? AND rowid <= ? ${clearedAtFilter}
       AND ${REVIEW_ROLES} ORDER BY rowid ASC LIMIT ?
     `,
@@ -224,7 +283,8 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
           // 下一块从块尾往回留一段重叠:跨块的句子、很短的尾段都能在某一块里完整出现并被引用。
           covered = { rowid: cut.order, id: cut.id, offset: cut.offset + MESSAGE_CHUNK_CHARS - MESSAGE_CHUNK_OVERLAP };
         } else if (gapRows.length > GAP_BACKFILL_ROWS || gapMessages.length < gapCandidates.length) {
-          const last = gapMessages[gapMessages.length - 1];
+          const last = gapMessages[gapMessages.length - 1]
+            ?? (gapCandidates.length === 0 ? gapRows.slice(0, GAP_BACKFILL_ROWS).at(-1) : undefined);
           covered = last ? { rowid: last.order, id: last.id } : floor;
         }
       }
@@ -315,7 +375,7 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
       // 每次校验通过的复盘都写回水位:模型按指令在"本轮没改动"时省略 working,但这一轮同样
       // 已被复盘过,水位必须跟上,否则一句问候就让账本被判不新鲜、70% 换窗悄悄退回 90%。
       // 没有提案时按空提案合并——旧条目原样保留,只推进水位(和 client_id)。
-      if (await readOwner()) {
+      if (maintainsWorkingMemory && await readOwner()) {
         try {
           await writeBotWorkingMemory(
             root,
@@ -382,7 +442,16 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
           description: proposal.description,
           body: proposal.body,
           expectedUpdatedAt: prior?.updatedAt ?? null,
-        });
+        }, row.role === 'channel' ? {
+          // Internal review authority is tied to the durable reply/input, not a
+          // model argument or whichever IM lease happens to be active now.
+          resolveBotId: async () => {
+            const latest = current() ? await readOwner() : null;
+            return latest && current() && latest.botId === row.botId
+              ? { ok: true, botId: latest.botId, canonicalSessionId: latest.canonicalSessionId }
+              : { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: 'Learning source is no longer active' };
+          },
+        } : undefined);
         if (saved.ok && current())
           publish(replyId, [
             {
@@ -393,7 +462,16 @@ export async function reviewTeammateLearning(sessionId: string, replyId: string)
             },
           ]);
       }
-      if (memorySaved && current()) await requestBotRuntimeEpochRefresh(sessionId, 'resource');
+      if (!maintainsWorkingMemory) await saveTopicProgress({
+        ...(covered.id ? { coveredThroughMessageId: covered.id } : {}),
+        ...(covered.offset !== undefined ? { coveredThroughOffset: covered.offset } : {}),
+      });
+      if (memorySaved && current()) {
+        for (const id of new Set([sessionId, row.canonicalSessionId].filter((id): id is string => !!id))) {
+          if (!current()) return;
+          await requestBotRuntimeEpochRefresh(id, 'resource');
+        }
+      }
     });
   running.set(key, job);
   try {

@@ -1,3 +1,4 @@
+import { hasRichAnswer } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
 import { isContinuationMessage } from './syntheticTrigger.js';
 export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
@@ -105,6 +106,8 @@ export interface MessageRenderNormalizedMessage<
   agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入。同一 user turn 的最后一次 seal 是最终答复；更早的 seal 只在带交付内容时留在工作过程外。 */
   turnCompleted?: boolean;
+  /** SDK-proven failed sampling output remains readable inside the work fold. */
+  failedSamplingAttempt?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
   files?: readonly { url: string; title: string }[];
@@ -1528,6 +1531,7 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
       isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
       isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
+      canPrependToAnswer: (item) => item.type !== 'message' || item.message.source.agentMeta?.assistantPhase !== 'commentary',
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,
       isActivity: isWorkActivityItem,
@@ -1573,7 +1577,7 @@ function isRunningAgentTaskItem<
 }
 
 function isCompletedAssistantMessage(message: MessageRenderNormalizedMessage): boolean {
-  return message.turnCompleted === true;
+  return !message.failedSamplingAttempt && message.turnCompleted === true;
 }
 
 function isAssistantAnswerCandidate<
@@ -1581,6 +1585,7 @@ function isAssistantAnswerCandidate<
 >(item: MessageRenderItem<TMessage>): item is MessageRenderMessageItem<TMessage> {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && item.message.body.trim().length > 0;
 }
 
@@ -1631,6 +1636,7 @@ const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false;
+  if (hasRichAnswer(trimmed)) return true;
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
@@ -1654,6 +1660,7 @@ function isDeliveryProseItem<TMessage extends MessageRenderNormalizedMessage>(
 ): boolean {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && isDeliveryProseText(item.message.body);
 }
 
@@ -1672,12 +1679,13 @@ function isWorkChild<
   );
 }
 
-/** Assistant progress text remains visible while running and never consumes the latest-five window. */
+/** Normal progress stays visible; proven failed sampling output uses the existing fold. */
 function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
   item: MessageRenderItem<TMessage>,
-): item is MessageRenderThinkingItem<TMessage> | MessageRenderToolGroupItem<TMessage> | MessageRenderAgentTaskItem<TMessage> {
+): item is Exclude<MessageRenderWorkChildItem<TMessage>, MessageRenderWorkGroupItem<TMessage>> {
   return !isRunningAgentTaskItem(item)
-    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
+    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task' ||
+      (item.type === 'message' && item.message.kind === 'assistant' && item.message.failedSamplingAttempt === true));
 }
 
 /** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
@@ -1724,7 +1732,7 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
   previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.kind === 'assistant',
+    (item) => item.type === 'message' && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt,
   );
   if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 

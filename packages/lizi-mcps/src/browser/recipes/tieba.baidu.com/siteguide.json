@@ -1,20 +1,15 @@
 {
   "site": "tieba.baidu.com",
-  "auth": "热议话题榜公开免登录;搜索/吧内帖子列表/帖子正文需登录态(cookie)且依赖 DOM 结构,易被百度安全验证拦",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://tieba.baidu.com",
-    "hotTopics": "https://tieba.baidu.com/hottopic/browse/topicList?res_type=1",
-    "forum": "https://tieba.baidu.com/f?kw=<吧名>&pn=<(page-1)*50>",
-    "search": "https://tieba.baidu.com/f/search/res?qw=<keyword>&pn=1",
-    "thread": "https://tieba.baidu.com/p/<threadId>?pn=<page>"
+    "home": "https://tieba.baidu.com"
   },
-  "pages": [
-    {
-      "type": "hot-list",
-      "url": "https://tieba.baidu.com/hottopic/browse/topicList?res_type=1",
-      "notes": "服务端渲染列表 li.topic-top-item:标题 a.topic-text(href 为话题链接)、讨论量 span.topic-num、简介 p.topic-top-item-desc"
-    }
+  "recipes": [
+    "tieba-hot-topics"
   ],
-  "recipes": ["tieba-hot-topics"],
-  "notes": "贴吧没有公开稳定的读 JSON API,绝大多数页面是登录态 + DOM 渲染。唯一干净可收录的是热议话题榜(tieba-hot-topics):/hottopic/browse/topicList?res_type=1 是服务端渲染,navigate 后用 extract 按 li.topic-top-item + 子选择器抓即可,免登录、不踩反爬。其它流程已评估为脆弱、暂不收录,需要时让模型现场处理:(1) 搜索 /f/search/res?qw=<encodeURIComponent(kw)>&pn=1——结果卡片 .threadcardclass.thread-new3.index-feed-cards 是 Vue 组件,thread_id 藏在 action bar 的 __vue__ 内部 props(businessInfo.thread_id),仅扒可见 DOM 不可靠,且常触发『百度安全验证』;(2) 吧内帖子列表 /f?kw=<吧名>——真实数据要 POST tieba.baidu.com/c/f/frs/page_pc 且需要对参数做私有 sign 签名,无法用声明式配方表达;(3) 帖子正文 /p/<id>——正文/楼层都从 .pb-content-wrap、.pb-comment-item 等节点的 Vue __vue__ props 里抠,DOM 一变就失效。统一注意:这些页面都需要在持久浏览器登录百度并自然访问以降低风控。"
+  "notes": "兼容入口 tieba-hot-topics 现执行内置 tieba/hot，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

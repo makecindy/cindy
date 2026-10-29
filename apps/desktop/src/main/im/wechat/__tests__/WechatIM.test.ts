@@ -8,6 +8,11 @@ import {
 } from '@cindy/wechat-ilink';
 
 import type { DbClient } from '../../../localDb/client/DbClient';
+import {
+  beginInteractionRoute, installDesktopInteractionHandler, requestHostInteraction,
+} from '../../../maker-ipc/interactionRouter';
+import type { SharedPermission } from '../../../maker-ipc/sharedPermission';
+import { encryptWechatContextToken } from '../contextCrypto';
 import { __testing, sessionIdFor, WechatIM, type WechatIMDeps } from '../WechatIM';
 
 const mediaMocks = vi.hoisted(() => ({
@@ -23,6 +28,72 @@ vi.mock('../mediaStaging', async (importOriginal) => {
 });
 
 describe('WechatIM host boundary', () => {
+  it('clears reconnecting after an empty successful poll', async () => {
+    vi.useFakeTimers();
+    const { im, transport, db } = restoredConnection(() => 0);
+    const poll = vi.spyOn(transport, 'poll');
+    poll.mockRejectedValueOnce(new WechatIlinkError('NETWORK_ERROR', 'offline', true));
+    poll.mockResolvedValueOnce({ cursor: 'recovered', messages: [] });
+    vi.mocked(db.tx).mockImplementation((async (name: string) =>
+      name === 'wechatCommitPollBatch' ? {
+        committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [],
+      } : null) as DbClient['tx']);
+    try {
+      await im.init();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(poll).toHaveBeenCalledTimes(3);
+      expect(im.getState().phase).toBe('connected');
+      expect(im.getState().errorCode).toBeUndefined();
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  // Exercise the durable inbox through the public host lifecycle. Only the
+  // credential-verified owner can request native permissions on a resolved companion route.
+  it.each([
+    { companion: true, peer: 'owner' },
+    { companion: true, peer: 'guest' },
+    { companion: true, peer: '' },
+    { companion: false, peer: 'owner' },
+  ])('preserves the permission boundary: %j', async ({ companion, peer }) => {
+    const { im, db } = restoredConnection(() => 0);
+    let leased = false;
+    vi.mocked(db.tx).mockImplementation((async (name: string) => {
+      if (name !== 'wechatLeaseNextTask' || leased) return null;
+      leased = true;
+      return {
+        id: 'permission-task', bindingEpoch: 'epoch', peerId: peer,
+        sessionId: 'permission-session', conversationEpoch: 1,
+        payloadJson: JSON.stringify({ text: 'hello', attachments: [], unsupportedMedia: [] }),
+        context: encryptWechatContextToken('context', Buffer.alloc(32, 3), 'epoch', 'permission-task'),
+        attempts: 0, receivedAt: 1, expiresAt: Date.now() + 60_000,
+      };
+    }) as DbClient['tx']);
+    const dispatchAgentTurn = vi.fn(async (_input: {
+      turnPermissionPolicy?: { confirmationSurface: string }; requesterIsOwner?: boolean;
+      inheritCompanionOwnerPermissions?: boolean;
+      groupHistoryAccess?: { access: string; lane: { chatId: string; threadId: string } };
+    }) => {
+      void _input;
+      return { kind: 'accepted', terminal: Promise.resolve({ kind: 'done' }) };
+    });
+    im.attachTurnRuntime({ runner: {
+      companionBotIdFor: () => companion ? 'cindy' : undefined,
+      dispatchAgentTurn,
+    } } as never);
+    await im.init();
+    try {
+      await vi.waitFor(() => expect(dispatchAgentTurn).toHaveBeenCalledOnce());
+      const input = dispatchAgentTurn.mock.calls[0]![0];
+      expect(input.inheritCompanionOwnerPermissions).toBe(true);
+      expect(input.requesterIsOwner).toBe(companion ? peer === 'owner' : undefined);
+      expect(input.turnPermissionPolicy?.confirmationSurface).toBe('channel');
+      expect(input.groupHistoryAccess).toMatchObject({ access: 'lane', lane: { chatId: peer, threadId: '' } });
+    } finally { await im.dispose(); }
+  });
+
   it.each([
     { text: '解释这张图', delivered: true },
     { text: '', delivered: true },
@@ -116,7 +187,7 @@ describe('WechatIM host boundary', () => {
   });
 
   it('distinguishes agent-unsupported from permission-mode-unsupported pre-dispatch failures', () => {
-    // Agent 未声明 turnPermissionPolicy(如 Pi):换权限模式无效,文案引导换 Agent。
+    // 未声明 turnPermissionPolicy 的 Agent：换权限模式无效。
     expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).toContain(
       '换成 Claude Code 或 Codex',
     );
@@ -147,6 +218,15 @@ describe('WechatIM host boundary', () => {
     expect(__testing.wechatPreDispatchFailureText('unsupported_turn_permission')).toContain('权限模式');
     expect(__testing.wechatPreDispatchFailureText('missing_auth')).toContain('模型服务');
     expect(__testing.wechatPreDispatchFailureText('boom')).toContain('稍后重试');
+    // Linked companions inherit their runtime: the personal-channel settings and
+    // /permission advice cannot fix their configuration (PR #6492, unit).
+    const companionFailure = __testing.wechatPreDispatchFailureText(
+      'TURN_PERMISSION_POLICY_UNSUPPORTED:agent:bypassPermissions', true,
+    );
+    expect(companionFailure).toContain('伙伴设置');
+    expect(companionFailure).toContain('对话输入框下方');
+    expect(companionFailure).toContain('默认权限或自动审批');
+    expect(companionFailure).not.toContain('/permission');
   });
 
   it('dispatches attachment-only WeChat messages to the agent', () => {
@@ -263,6 +343,18 @@ describe('WechatIM host boundary', () => {
     });
   });
 
+  it('确认提示显示要执行的具体操作和审核原因', () => {
+    const prompt = __testing.formatWechatInteractionPrompt({
+      kind: 'permission',
+      requestId: 'request-2',
+      toolName: 'mcp:cindy_browser:call_tool',
+      input: { name: 'browser', args: { action: 'click', selector: '[data-testid="tweetButton"]' } },
+      metadata: { autoReviewReason: '这会公开发帖。' },
+    });
+    expect(prompt).toContain('操作：\nclick {"selector":"[data-testid=\\"tweetButton\\"]"}');
+    expect(prompt).toContain('自动审批需要你决定：这会公开发帖。');
+  });
+
   it('自动审批故障时在微信确认提示里写明原因', () => {
     const ordinary = __testing.formatWechatInteractionPrompt({
       kind: 'permission',
@@ -329,6 +421,67 @@ describe('WechatIM host boundary', () => {
     });
   });
 
+  // PR #6492 security regression (unit): existing text parser tests did not exercise
+  // a companion guest asking for a tool permission. Use the real router + adapter:
+  // no guest prompt/reply slot, owner decision wins, missing owner surface times out.
+  it.each([true, false])('keeps guest tool approval on the owner surface (available=%s)', async (hasDesktop) => {
+    const im = new WechatIM(deps());
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'cindy' } } as never);
+    const send = vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'prompt' });
+    const session = { id: 'guest-lane', setInteractionListener: vi.fn() };
+    const request = { kind: 'permission' as const, requestId: 'guest-write',
+      toolName: 'Write', input: { file_path: '/tmp/guest-write', content: 'guest input' } };
+    let ownerPermission: SharedPermission | undefined;
+    if (hasDesktop) installDesktopInteractionHandler(session, async (_request, shared) => {
+      ownerPermission = shared;
+      return shared!.result;
+    });
+    const lease = beginInteractionRoute(session, {
+      route: { sessionId: session.id, turnId: 'turn', origin: { kind: 'im', channel: 'wechat' },
+        interactionSurface: 'channel-card', requesterAuthority: 'guest', timeoutMs: 1_000 },
+      handle: (req, sharedPermission) => im.handleTextInteraction('guest', req, { sharedPermission }),
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = requestHostInteraction(session, request, new AbortController().signal);
+      expect(send).not.toHaveBeenCalled();
+      expect(im.cancelTextInteraction('guest', request.requestId,
+        { kind: 'permission', behavior: 'allow' })).toBe(false);
+      if (hasDesktop) {
+        ownerPermission!.decide({ kind: 'permission', behavior: 'allow' });
+        await expect(pending).resolves.toEqual({ kind: 'permission', behavior: 'allow' });
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(pending).resolves.toMatchObject({ kind: 'permission', behavior: 'deny', reason: 'interaction_timeout' });
+        await expect(im.handleTextInteraction('guest', request)).resolves.toMatchObject({
+          kind: 'permission', behavior: 'deny', reason: 'desktop_confirmation_not_installed',
+        });
+      }
+      expect(send).not.toHaveBeenCalled();
+    } finally { lease.release(); vi.useRealTimers(); await im.dispose(); }
+  });
+
+  it('retains companion owner WeChat approvals and guest ordinary questions', async () => {
+    const { im } = restoredConnection(() => 0);
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'cindy' } } as never);
+    const send = vi.spyOn(im, 'sendText').mockResolvedValue({ messageId: 'prompt' });
+    await im.init();
+    try {
+      const permission = { kind: 'permission' as const, requestId: 'owner-write', toolName: 'Write', input: {} };
+      const ownerResult = im.handleTextInteraction('owner', permission);
+      expect(send).toHaveBeenCalledWith('owner', expect.stringContaining('允许'));
+      expect(im.cancelTextInteraction('owner', permission.requestId, { kind: 'permission', behavior: 'allow' })).toBe(true);
+      await expect(ownerResult).resolves.toEqual({ kind: 'permission', behavior: 'allow' });
+      const question = { kind: 'ask_user_question' as const, requestId: 'guest-question',
+        questions: [{ question: '选择格式', options: [{ label: '文本' }] }] };
+      const guestResult = im.handleTextInteraction('guest', question);
+      expect(send).toHaveBeenCalledWith('guest', expect.stringContaining('选择格式'));
+      const answer = { kind: 'ask_user_question' as const, answers: { 选择格式: '文本' } };
+      expect(im.cancelTextInteraction('guest', question.requestId, answer)).toBe(true);
+      await expect(guestResult).resolves.toEqual(answer);
+    } finally { await im.dispose(); }
+  });
+
   it('fails closed before authorization when the signed compatibility policy disables it', async () => {
     const createTransport = vi.fn();
     const im = new WechatIM(
@@ -363,7 +516,10 @@ describe('WechatIM host boundary', () => {
     expect(im.getState()).toMatchObject({ phase: 'disconnected', bound: false });
   });
 
-  it('drops late authorization credentials after a compatibility revision changes', async () => {
+  // #6492 r4318608094, unit: existing policy-cancel coverage missed teammate
+  // deletion during QR confirmation. Public lifecycle must cancel, finish cleanup,
+  // and ignore a late authorization result without writing shared credentials.
+  it.each(['policy', 'companion-deletion'])('drops late authorization credentials after %s cancellation', async (reason) => {
     const testHost = host();
     let resolveCredentials!: (credentials: WechatCredentials) => void;
     const waitAuthorization = vi.fn(
@@ -385,7 +541,17 @@ describe('WechatIM host boundary', () => {
 
     await im.authorize();
     await vi.waitFor(() => expect(waitAuthorization).toHaveBeenCalledOnce());
-    await im.setCompatibilityDisabled(true);
+    if (reason === 'policy') await im.setCompatibilityDisabled(true);
+    else {
+      const update = vi.fn();
+      await expect(im.updateCompanionBinding(update)).rejects.toThrow('WECHAT_CONNECTION_BUSY');
+      await im.updateCompanionBinding(update, { cancelPendingIf: () => false });
+      expect(im.getState().phase).toBe('waiting_confirmation');
+      expect(update).not.toHaveBeenCalled();
+      await im.updateCompanionBinding(update, { cancelPendingIf: () => true });
+      expect(update).toHaveBeenCalledOnce();
+      expect(vi.mocked(authorizationTransport.waitAuthorization).mock.calls[0]![1].aborted).toBe(true);
+    }
     resolveCredentials({
       token: 'late-token',
       botId: 'late-bot',
@@ -396,7 +562,8 @@ describe('WechatIM host boundary', () => {
 
     expect(createTransport).toHaveBeenCalledOnce();
     expect(testHost.secrets.write).not.toHaveBeenCalled();
-    expect(im.getState()).toMatchObject({ phase: 'disabled_by_policy', bound: false });
+    expect(im.getState()).toMatchObject({ phase: reason === 'policy' ? 'disabled_by_policy' : 'disconnected', bound: false });
+    await im.dispose();
   });
 
   it('rolls back a newly activated binding when the account generation becomes stale', async () => {
@@ -460,6 +627,197 @@ describe('WechatIM host boundary', () => {
     );
     expect(createTransport).toHaveBeenCalledOnce();
     await im.dispose();
+  });
+
+  // Regression: changing a teammate must retain credentials and cannot reroute queued messages.
+  // tier: unit; exercise the public lifecycle with a restored authorization and real task store.
+  it('switches an idle connection without reauthorizing and refuses queued work', async () => {
+    let queued = 0;
+    const { im, transport, testHost } = restoredConnection(() => queued);
+    let release!: () => void;
+    let entered!: () => void;
+    const disposing = new Promise<void>((resolve) => { entered = resolve; });
+    const disposed = new Promise<void>((resolve) => { release = resolve; });
+    const disposeAllSessions = vi.fn(() => { entered(); return disposed; });
+    im.attachTurnRuntime({ runner: { disposeAllSessions },
+      repo: {}, config: {}, resetSessionToDefaults: vi.fn() } as never);
+    await im.init();
+    try {
+      expect(im.isOwner('owner')).toBe(true);
+      expect(im.isOwner('guest')).toBe(false);
+      const update = vi.fn();
+      queued = 1;
+      await expect(im.updateCompanionBinding(update)).rejects.toThrow('WECHAT_CONNECTION_BUSY');
+      expect(update).not.toHaveBeenCalled();
+      expect(transport.notifyStop).not.toHaveBeenCalled();
+      expect(disposeAllSessions).not.toHaveBeenCalled();
+      queued = 0;
+      const changing = im.updateCompanionBinding(update);
+      // r4318350746: old background-output listeners must be gone before routing
+      // changes or polling restarts. Exercise the public lifecycle, tier: unit.
+      await Promise.race([disposing, changing]);
+      expect(disposeAllSessions).toHaveBeenCalledOnce();
+      expect(update).not.toHaveBeenCalled();
+      expect(transport.notifyStart).toHaveBeenCalledOnce();
+      release();
+      await changing;
+      expect(update).toHaveBeenCalledOnce();
+      expect(im.getState().phase).toBe('connected');
+      expect(transport.notifyStart).toHaveBeenCalledTimes(2);
+      expect(testHost.secrets.write).not.toHaveBeenCalled();
+      expect(testHost.secrets.remove).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
+  });
+
+  // #6492 unit regression: disabling polling must not allow persisted input to
+  // switch owners, including a cold start where no credential-backed store exists.
+  it.each([false, true])('protects the policy-disabled inbox (cold start=%s)', async (cold) => {
+    let queued = 1;
+    const { im, transport, testHost } = restoredConnection(() => queued, cold);
+    await im.init();
+    if (!cold) await im.setCompatibilityDisabled(true);
+    try {
+      const update = vi.fn();
+      await expect(im.updateCompanionBinding(update)).rejects.toThrow('WECHAT_CONNECTION_BUSY');
+      expect(update).not.toHaveBeenCalled();
+      queued = 0;
+      await im.updateCompanionBinding(update);
+      expect(update).toHaveBeenCalledOnce();
+      expect(im.getState().phase).toBe('disabled_by_policy');
+      expect(transport.notifyStart).toHaveBeenCalledTimes(cold ? 0 : 1);
+      expect(testHost.secrets.write).not.toHaveBeenCalled();
+      expect(testHost.secrets.remove).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
+  });
+
+  // PR #6492: idle-switch coverage missed a poll response arriving during abort.
+  // Unit: public binding switch + real task-store boundary must retain the owner
+  // task and original bot context, then reject switching once that task is queued.
+  it('retains the old owner identity while draining a late poll response', async () => {
+    let queued = 0;
+    const { im, transport, db } = restoredConnection(() => queued);
+    vi.mocked(transport.poll).mockImplementationOnce((_cursor, signal) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ cursor: 'next', messages: [{
+        senderId: 'owner', messageId: 'late-owner', text: 'hello', contextToken: 'context', media: [],
+      }] }), { once: true });
+    }));
+    const resolveRouteTarget = vi.fn(async (_bot: string, peer: string) => ({
+      row: { id: im.isOwner(peer) ? 'companion-owner' : 'companion-guest' },
+    }));
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'cindy', resolveRouteTarget },
+      repo: {}, config: {}, resetSessionToDefaults: vi.fn() } as never);
+    vi.mocked(db.tx).mockImplementation(async (name, args) => {
+      if (name !== 'wechatCommitPollBatch') return null;
+      queued += 1;
+      const batch = args as { messages: Array<{ id: string }> };
+      return { committed: true, insertedTaskIds: batch.messages.map((message) => message.id),
+        duplicateTaskIds: [], rejectedTaskIds: [] };
+    });
+    await im.init();
+    try {
+      const update = vi.fn();
+      await expect(im.updateCompanionBinding(update)).rejects.toThrow('WECHAT_CONNECTION_BUSY');
+      expect(update).not.toHaveBeenCalled();
+      expect(resolveRouteTarget).toHaveBeenCalledWith('wechat-bot', 'owner');
+      expect(db.tx).toHaveBeenCalledWith('wechatCommitPollBatch', expect.objectContaining({
+        messages: [expect.objectContaining({ peerId: 'owner', sessionId: 'companion-owner' })],
+      }));
+      expect(im.isOwner('owner')).toBe(true);
+      expect(im.getState().phase).toBe('connected');
+    } finally { await im.dispose(); }
+  });
+
+  // #6492 unit regression: deletion must include the late poll batch in its
+  // cancellation, preserve authorization, and never restart after settlement failure.
+  // r4318071189: one released file must reach the bounded file cleanup before
+  // ownership changes; the previous regression only checked database settlement.
+  it.each([false, true])('settles deletion after poll drain (failure=%s)', async (fail) => {
+    const { im, transport, db, testHost } = restoredConnection(() => 1);
+    const order: string[] = [];
+    const released = '/isolated/im-attachments/wechat/sessions/companion-owner/queued.pdf';
+    vi.mocked(db.query).mockImplementation(async (sql, params) => {
+      if (!sql.includes('FROM wechat_file_attachments')) return [];
+      expect(order).toContain('cancel');
+      expect(sql).toContain("status = 'released'");
+      expect(params).toEqual(['epoch']);
+      return [{ absPath: released }];
+    });
+    if (!fail) mediaMocks.removeReleasedWechatFiles.mockImplementationOnce(async () => { order.push('files'); });
+    im.attachTurnRuntime({ runner: { companionBotIdFor: () => 'cindy',
+      resolveRouteTarget: async () => ({ row: { id: 'companion-owner' } }),
+      disposeAllSessions: async () => { order.push('dispose'); } },
+      repo: {}, config: {}, resetSessionToDefaults: vi.fn() } as never);
+    vi.mocked(transport.poll).mockImplementationOnce((_cursor, signal) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ cursor: 'next', messages: [{
+        senderId: 'owner', messageId: 'late-owner', text: 'hello', contextToken: 'context', media: [],
+      }] }), { once: true });
+    }));
+    vi.mocked(db.tx).mockImplementation(async (name, args) => {
+      if (name === 'wechatCommitPollBatch') {
+        order.push('batch');
+        return { committed: true, insertedTaskIds: [], duplicateTaskIds: [], rejectedTaskIds: [] };
+      }
+      if (name === 'wechatStopAll' && (args as { cancelPending?: boolean }).cancelPending) {
+        order.push('cancel');
+        if (fail) throw new Error('DRAIN_FAILED');
+      }
+      return null;
+    });
+    await im.init();
+    try {
+      const update = vi.fn(() => { order.push('update'); });
+      const changing = im.updateCompanionBinding(update, { cancelPendingIf: () => true });
+      if (fail) await expect(changing).rejects.toThrow('DRAIN_FAILED');
+      else await changing;
+      expect(order).toEqual(fail ? ['batch', 'cancel'] : ['batch', 'cancel', 'files', 'dispose', 'update']);
+      if (fail) expect(mediaMocks.removeReleasedWechatFiles).not.toHaveBeenCalled();
+      else expect(mediaMocks.removeReleasedWechatFiles).toHaveBeenCalledWith([released]);
+      expect(transport.notifyStart).toHaveBeenCalledTimes(fail ? 1 : 2);
+      expect(testHost.secrets.write).not.toHaveBeenCalled();
+      expect(testHost.secrets.remove).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
+  });
+
+  it('settles a stored inbox without starting an offline transport and skips a changed owner', async () => {
+    const { im, transport, db } = restoredConnection(() => 1);
+    const update = vi.fn();
+    await im.updateCompanionBinding(update, { cancelPendingIf: () => false });
+    expect(db.tx).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    await im.updateCompanionBinding(update, { cancelPendingIf: () => true });
+    expect(db.tx).toHaveBeenCalledWith('wechatStopAll', expect.objectContaining({
+      bindingEpoch: 'epoch', cancelPending: true, errorCode: 'COMPANION_DELETED',
+    }));
+    expect(update).toHaveBeenCalledOnce();
+    expect(transport.notifyStart).not.toHaveBeenCalled();
+  });
+
+  // Regression: the durable inbox used to claim a personal session even for companion messages.
+  // tier: unit; feed transport ingress and inspect the real task-store transaction boundary.
+  it('persists companion ingress against the resolved task before dispatch', async () => {
+    const { im, transport, db } = restoredConnection(() => 0);
+    let receive!: (result: Awaited<ReturnType<WechatTransport['poll']>>) => void;
+    vi.mocked(transport.poll).mockImplementationOnce(() => new Promise((resolve) => { receive = resolve; }));
+    const resolveRouteTarget = vi.fn(async (_bot: string, peer: string) => ({ row: { id: `companion-${peer}` } }));
+    const prepareNewSession = vi.fn();
+    im.attachTurnRuntime({
+      runner: { companionBotIdFor: () => 'cindy', resolveRouteTarget },
+      repo: { prepareNewSession }, config: {}, resetSessionToDefaults: vi.fn(),
+    } as never);
+    await im.init();
+    try {
+      receive({ cursor: 'next', messages: ['owner', 'guest'].map((senderId) => ({
+        senderId, messageId: senderId, text: 'hello', contextToken: 'context', media: [],
+      })) });
+      await vi.waitFor(() => expect(db.tx).toHaveBeenCalledWith('wechatCommitPollBatch', expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ peerId: 'owner', sessionId: 'companion-owner' }),
+          expect.objectContaining({ peerId: 'guest', sessionId: 'companion-guest' }),
+        ]),
+      })));
+      expect(prepareNewSession).not.toHaveBeenCalled();
+      expect(resolveRouteTarget).toHaveBeenCalledTimes(2);
+    } finally { await im.dispose(); }
   });
 
   it('removes staged files returned while replacing the previous binding', async () => {
@@ -607,4 +965,22 @@ function blockingLiveTransport(): WechatTransport {
         }),
     ),
   } as unknown as WechatTransport;
+}
+
+function restoredConnection(queued: () => number, policyDisabled = false) {
+  const credentials = { bindingEpoch: 'epoch', botToken: 'test-token', ilinkBotId: 'wechat-bot',
+    userId: 'owner', baseUrl: 'https://ilinkai.weixin.qq.com', boundAt: 1 };
+  const testHost = host({ secretRead: (name) => name === 'wechat_data_key_v1'
+    ? Buffer.alloc(32, 3).toString('base64') : name === 'wechat_credentials_epoch' ? JSON.stringify(credentials) : null });
+  const db = fakeDb({
+    queryOne: vi.fn(async (sql: string) => sql.includes('FROM wechat_sync_state')
+      ? { bindingEpoch: 'epoch', cursor: '' } : sql.includes('COUNT(*)') ? { count: queued() } : undefined) as DbClient['queryOne'],
+    query: vi.fn(async () => []),
+    tx: vi.fn(async (name: string) => name === 'wechatCommitPollBatch'
+      ? { committed: false, reason: 'stale-cursor' } : null),
+  });
+  const transport = blockingLiveTransport();
+  const im = new WechatIM(deps({ host: testHost, getDbClient: () => db, createTransport: () => transport,
+    isCompatibilityDisabled: () => policyDisabled }));
+  return { im, transport, db, testHost };
 }

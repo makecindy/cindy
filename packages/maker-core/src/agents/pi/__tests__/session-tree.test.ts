@@ -90,6 +90,26 @@ describe('pi session tree adapter', () => {
     expect(() => piRetryBranch(retryTree(settings), '0')).toThrow('no failed response');
   });
 
+  it('allows omission context edits around repeated empty failures', () => {
+    const omit = { type: 'context_edit', targetId: 'failed', replacement: null };
+    expect(piRetryBranch(retryTree([emptyFailure, omit, emptyFailure, omit]), '0')).toEqual({
+      parentId: null,
+      requestTooLarge: true,
+    });
+  });
+
+  it('does not treat an omission edit alone as a failed response', () => {
+    expect(() => piRetryBranch(retryTree([{ type: 'context_edit', targetId: '0', replacement: null }]), '0'))
+      .toThrow('no failed response');
+  });
+
+  it('still protects a context edit that replaces message content', () => {
+    expect(() => piRetryBranch(retryTree([
+      emptyFailure,
+      { type: 'context_edit', targetId: '1', replacement: 'rewritten' },
+    ]), '0')).toThrow('discard output or session state');
+  });
+
   it.each([
     { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'text', text: 'partial' }] } },
     { type: 'message', message: { role: 'assistant', stopReason: 'error', content: [{ type: 'toolCall', name: 'bash' }] } },

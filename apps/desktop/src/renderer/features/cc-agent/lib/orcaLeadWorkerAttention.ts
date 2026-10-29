@@ -1,12 +1,12 @@
 /**
  * Orca Lead 行汇总 Worker 的出错 / 等待确认(2026-10 用户裁决)。
  *
- * Worker 不进普通侧栏,但它自己的 attention 已经记在 sessionAttentionStore(出错记
- * 'error',等待确认记 'awaiting'——当前打开的是 Lead,Worker 永远不算「正在看」)。
+ * Worker 不进普通侧栏；出错读取 sessionAttentionStore 的 error，等待确认读取
+ * awaiting 或未处理交互，避免看过 Worker 后丢失蓝点。
  * 这里把它投到所属 Lead 行上,只做读侧派生:
  *   - 只汇总 error / awaiting;Worker 的 'done' 不汇总(完成由 Lead 被回报唤起的那一轮表达)。
  *   - 优先级:出错 > 等待确认 > Lead 自己的状态(与行内 error > awaiting > done 同一张表)。
- *   - 生命周期完全跟随 Worker 自己的 attention,不新增清除逻辑;点开 Lead 不会消失。
+ *   - 等待确认在未处理交互或任务 awaiting 任一存在时保持；不新增清除或通知逻辑。
  *
  * ⚠️ 汇总结果**不写回** sessionAttentionStore:那份会同步到 Main(Dock / 灵动岛 / 远端),
  * 还会被「导航即已读」的被动清除抹掉,破坏 Lead 自己的 attention 生命周期与完成保持判定。
@@ -15,6 +15,12 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { makerChatStore, type SessionStatusInfo } from '@/lib/makerChatStore';
+import {
+  localOrcaWorkerSessionIds,
+  resolveOrcaWorkerTaskAttention,
+  subscribeOrcaWorkerPendingInteractions,
+} from './orcaWorkerTaskAttention';
 
 import { isRemoteSessionSticky } from '@/lib/makerTransport';
 import {
@@ -38,13 +44,16 @@ const ATTENTION_RANK: Record<AttentionKind, number> = { done: 1, awaiting: 2, er
 export function deriveOrcaLeadWorkerAttention(
   leads: Iterable<LeadWorkerSessions>,
   attentionKinds: ReadonlyMap<string, AttentionKind>,
+  statuses: ReadonlyMap<string, SessionStatusInfo> = new Map(),
 ): Map<string, OrcaLeadWorkerAttentionKind> {
   const result = new Map<string, OrcaLeadWorkerAttentionKind>();
-  if (attentionKinds.size === 0) return result;
   for (const [leadSessionId, workerSessionIds] of leads) {
     let kind: OrcaLeadWorkerAttentionKind | undefined;
     for (const workerSessionId of workerSessionIds) {
-      const workerKind = attentionKinds.get(workerSessionId);
+      const workerKind = resolveOrcaWorkerTaskAttention(
+        attentionKinds.get(workerSessionId),
+        statuses.get(workerSessionId),
+      );
       if (workerKind === 'error') {
         kind = 'error';
         break;
@@ -108,18 +117,24 @@ function sameLeadAttention(
 }
 
 // —— 模块级派生快照 ——
-// useSyncExternalStore 要求内容不变时返回同一引用:按两个上游的快照引用 / 版本号缓存,
+// useSyncExternalStore 要求内容不变时返回同一引用:按上游快照引用 / 版本号缓存,
 // 内容没变就复用旧 Map,逐行订阅与整表订阅都不会被无关广播惊动。
 const EMPTY_LEAD_ATTENTION: ReadonlyMap<string, OrcaLeadWorkerAttentionKind> = new Map();
 let cachedAttentionKinds: ReadonlyMap<string, AttentionKind> | null = null;
 let cachedProjectionVersion = -1;
+let cachedStatuses: ReadonlyMap<string, SessionStatusInfo> | null = null;
 let cachedLeadAttention: ReadonlyMap<string, OrcaLeadWorkerAttentionKind> = EMPTY_LEAD_ATTENTION;
 let cachedMergedKinds: ReadonlyMap<string, AttentionKind> = new Map();
 
 function refreshCache(): void {
   const attentionKinds = getSessionAttentionKinds();
   const projectionVersion = getAllWorkerProjectionVersion();
-  if (attentionKinds === cachedAttentionKinds && projectionVersion === cachedProjectionVersion) {
+  const statuses = makerChatStore.getRunningSnapshot();
+  if (
+    attentionKinds === cachedAttentionKinds &&
+    projectionVersion === cachedProjectionVersion &&
+    statuses === cachedStatuses
+  ) {
     return;
   }
   const leads: LeadWorkerSessions[] = [];
@@ -127,13 +142,14 @@ function refreshCache(): void {
   // Worker(之前按本机查询只会得到空列表),且「已知远程」只增不减。
   for (const [leadSessionId, snapshot] of listRetainedWorkerProjections()) {
     if (snapshot.workers.length === 0 || isRemoteSessionSticky(leadSessionId)) continue;
-    leads.push([leadSessionId, snapshot.workers.map((worker) => worker.sessionId)]);
+    leads.push([leadSessionId, localOrcaWorkerSessionIds(snapshot.workers, leadSessionId)]);
   }
-  const next = deriveOrcaLeadWorkerAttention(leads, attentionKinds);
+  const next = deriveOrcaLeadWorkerAttention(leads, attentionKinds, statuses);
   const leadAttention = sameLeadAttention(next, cachedLeadAttention) ? cachedLeadAttention : next;
   if (leadAttention !== cachedLeadAttention || attentionKinds !== cachedAttentionKinds) {
     cachedMergedKinds = mergeOrcaLeadAttentionKinds(attentionKinds, leadAttention);
   }
+  cachedStatuses = statuses;
   cachedAttentionKinds = attentionKinds;
   cachedProjectionVersion = projectionVersion;
   cachedLeadAttention = leadAttention;
@@ -162,7 +178,15 @@ function subscribeDerived(listeners: Set<() => void>, listener: () => void): () 
     refreshCache();
     const unsubscribeAttention = subscribeSessionAttention(onUpstreamChange);
     const unsubscribeProjections = subscribeAllWorkerProjections(onUpstreamChange);
+    const unsubscribePending = subscribeOrcaWorkerPendingInteractions(
+      () =>
+        listRetainedWorkerProjections().flatMap(([leadId, snapshot]) =>
+          localOrcaWorkerSessionIds(snapshot.workers, leadId),
+        ),
+      onUpstreamChange,
+    );
     unsubscribeUpstream = () => {
+      unsubscribePending();
       unsubscribeAttention();
       unsubscribeProjections();
     };

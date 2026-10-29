@@ -1,3 +1,8 @@
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { Button } from '@/components/ui/button';
+import { ChatVideoView } from './ChatVideoView';
+import { ChatImageView } from './ChatImageView';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * AgentActionRow
@@ -788,12 +793,14 @@ export function AgentActionRow({
   onActivateOverride,
 }: AgentActionRowProps) {
   const { t } = useTranslation();
-  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const processMedia = useMemo(() => readToolProcessMedia(toolResult), [toolResult]);
+  const resultText = readToolProcessText(toolResult);
+  const compactedToolResult = parseToolResultCompactionMarker(resultText);
   const displayedToolResult = compactedToolResult
     ? t('chat.toolResultCompacted', {
         size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
       })
-    : toolResult;
+    : resultText;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -1172,6 +1179,14 @@ export function AgentActionRow({
           {rawCommand}
         </div>
       )}
+      {readFailedImageDelivery(resultText) && <GeneratedImageRetry imageId={readFailedImageDelivery(resultText)!} />}
+      {processMedia.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-3 py-2 pl-8" data-tool-process-media="true">
+          {processMedia.map((media) => media.kind === 'image'
+            ? <ChatImageView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />
+            : <ChatVideoView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />)}
+        </div>
+      )}
       {chipFilePath ? fileChipMenu.menu : null}
 
       {/* v10 就地展开内容:命令类工具(Bash/Grep/Glob/WebFetch/WebSearch/...)
@@ -1240,4 +1255,21 @@ export function AgentActionRow({
       )}
     </div>
   );
+}
+
+function GeneratedImageRetry({ imageId }: { imageId: string }) {
+  const { t } = useTranslation();
+  const { sessionId, origin } = useChatSessionFile();
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <div className="flex flex-wrap items-center gap-2 py-2 pl-8 text-13 text-muted-foreground">
+    <span role="status">{t(failed ? 'chat.imageDelivery.retryFailed' : 'chat.imageDelivery.failed')}</span>
+    {sessionId && !(origin.kind === 'device' && isSharedTaskPeer(origin.deviceId)) && <Button variant="secondary" size="sm" disabled={pending} onClick={async () => {
+      setPending(true); setFailed(false);
+      try {
+        if (origin.kind === 'device') await window.electronAPI.deviceLink.invoke(origin.deviceId, 'maker:images:retry', [sessionId, imageId]);
+        else await window.electronAPI.maker.input.retryImageDelivery(sessionId, imageId);
+      } catch { setFailed(true); } finally { setPending(false); }
+    }}>{t(pending ? 'chat.imageDelivery.retrying' : 'chat.imageDelivery.retry')}</Button>}
+  </div>;
 }

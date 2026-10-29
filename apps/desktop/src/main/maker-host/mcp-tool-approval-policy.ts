@@ -14,8 +14,9 @@
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
  *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件继续走会话审批
- *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
+ *   4. 敏感聚合调用（含 browser recipe）—— 每次进入现有会话审批
+ *   5. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，其余调用静默
+ *   6. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
  * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
 
@@ -24,6 +25,7 @@ import type {
   McpToolApprovalPolicy,
 } from '@cindy/maker-core';
 import { canAutoApproveContactsMcpTool } from '@cindy/mcps';
+import { ORCA_TASK_ACTION_TOOLS, TASK_ACTION_TOOLS } from '../maker-ipc/taskActionAuthorization.js';
 
 
 /**
@@ -202,6 +204,23 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  // Recipes can write through an authenticated profile or be overridden by L2.
+  // Route the exact invocation through the existing session flow, never trust
+  // caller-supplied access metadata or reuse a server grant. Full Access/Auto/Ask
+  // retain their existing semantics; discovery and ordinary browser actions stay trusted.
+  if (serverName === 'cindy_browser') {
+    const params = readJsonObject(toolParams);
+    // Without an outer name, only an exact progressive envelope is unambiguous.
+    // A direct browser call can itself carry name/args plus action=recipe.
+    if (!toolName && (!params || Object.keys(params).some(key => key !== 'name' && key !== 'args'))) {
+      return 'prompt-each-time';
+    }
+    const progressive = toolName === 'call_tool' || !toolName;
+    const name = progressive ? (typeof params?.name === 'string' ? params.name.trim() : '') : toolName;
+    const args = progressive ? readJsonObject(params?.args) : params;
+    if ((name === 'browser' && args?.action === 'recipe')
+      || (progressive && (!name || !args))) return 'prompt-each-time';
+  }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with
   // their credentials. A server-wide grant for one tool must not authorize other
@@ -235,6 +254,9 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    // Use the normal runtime permission flow once: Full Access bypasses approval,
+    // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
+    if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';
     if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
     // Installing or saving a host command uses the session's existing approval flow.
     if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
@@ -277,24 +299,11 @@ export function getDesktopMcpToolApprovalPolicy(
   if (serverName === 'cindy_feishu_bot' && (!toolName || toolName === 'call_api' || toolName === 'recall_message')) {
     return 'prompt-each-time';
   }
-  // Choosing a new Worker root delegates filesystem access. Do not let the
-  // trusted-server shortcut or a cached server grant authorize another root.
-  // Full Access / Auto / Ask still use their existing permission flow.
+  // Orca mutations use the same per-call runtime flow as helper task writes.
+  // Reuse the Host's action set so no mutation slips through the trusted-server
+  // shortcut. Full Access still bypasses; read-only Orca operations stay trusted.
   if (serverName === 'cindy_orca') {
-    if (!toolName) return 'prompt-each-time';
-    if (toolName === 'create_worker' || toolName === 'create_workers') {
-      const params = readJsonObject(toolParams);
-      if (!params) return 'prompt-each-time';
-      const workers = toolName === 'create_worker' ? [params] : params.workers;
-      if (!Array.isArray(workers)) return 'prompt-each-time';
-      if (
-        workers.some((worker) => {
-          const spec = readJsonObject(worker);
-          return !spec || Object.hasOwn(spec, 'working_dir');
-        })
-      )
-        return 'prompt-each-time';
-    }
+    if (!toolName || ORCA_TASK_ACTION_TOOLS.has(toolName)) return 'prompt-each-time';
   }
   if (TRUSTED_MCP_SERVERS.has(serverName)) {
     return 'auto-approve';

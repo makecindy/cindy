@@ -6,20 +6,23 @@
  * Row-only patches reuse membership and ordering, keeping unrelated nodes stable.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
+import { useStableTranslation } from '@/hooks/useStableTranslation';
 import { createProjectGroupsSelector } from '../lib/projectGroupsSelector';
+import { useProvisionalDraftProjectTaskId } from './useProvisionalDraftProjectTaskId';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { buildBotSessionOwners } from '@/features/bots/botSessionOwners';
 import { useBotProfiles } from '@/features/bots/botStore';
+import { remoteProjectAliases } from '@/features/device-link/remoteProjectAliases';
 import {
   type PersistentLocalProject,
   type ProjectGroupsResult,
   type ProjectNode,
 } from '../lib/projectGrouping';
 import {
-  collectAmbiguousDeviceNames,
+  collectProjectDevices,
   resolveRemoteProjectMachineIdentity,
 } from '../lib/remoteProjectIdentity';
 
@@ -31,9 +34,14 @@ export function useProjectGroups(
   localPlatform: string = '',
   /** Reuse an earlier call when the activity filter did not change its inputs. */
   equivalentResult?: ProjectGroupsResult,
+  projectAliasMembers?: readonly Session[],
 ): ProjectGroupsResult {
+  const { i18n } = useStableTranslation();
+  const language = i18n.resolvedLanguage ?? i18n.language;
   const sshHosts = useRemoteSshHosts();
+  const hostProjectAliases = useSyncExternalStore(remoteProjectAliases.subscribe, remoteProjectAliases.getSnapshot);
   const selectGroups = useMemo(() => createProjectGroupsSelector(), []);
+  const provisionalDraftTaskId = useProvisionalDraftProjectTaskId();
   /*
     伙伴归属表。会话行本身不带 botId,归属只有伙伴档案知道 —— 档案还没加载完的
     那一瞬间这张表是空的,伙伴任务就走原来的分组落到别处,**不会消失**。
@@ -45,31 +53,37 @@ export function useProjectGroups(
     if (equivalentResult) return equivalentResult;
     return selectGroups(sessions, {
       projectAliases,
+      remoteProjectAliases: hostProjectAliases,
+      projectAliasMembers,
       includePinnedInProjects,
       botOwnerBySessionId,
       persistentLocalProjects,
       localPlatform,
+      provisionalDraftTaskId,
     });
   }, [
     equivalentResult,
     selectGroups,
     sessions,
     projectAliases,
+    hostProjectAliases,
+    projectAliasMembers,
     includePinnedInProjects,
     persistentLocalProjects,
     localPlatform,
     botOwnerBySessionId,
+    provisionalDraftTaskId,
   ]);
-  const ambiguousDeviceNames = useMemo(
-    () => collectAmbiguousDeviceNames(groups.projects),
+  const projectDevices = useMemo(
+    () => collectProjectDevices(groups.projects),
     [groups.projects],
   );
-  const ambiguityKey = JSON.stringify([...ambiguousDeviceNames].sort());
-  // Weak keys keep only live grouping nodes. Registry/collision changes must
+  const ambiguityKey = JSON.stringify(projectDevices);
+  // Weak keys keep only live grouping nodes. Registry/collision/language changes must
   // re-enrich even unchanged nodes so remote labels never retain stale names.
   const enrichedProjects = useMemo(
     () => new WeakMap<ProjectNode, ProjectNode>(),
-    [sshHosts, ambiguityKey],
+    [sshHosts, ambiguityKey, language],
   );
   return useMemo(() => {
     if (equivalentResult) return equivalentResult;
@@ -81,12 +95,12 @@ export function useProjectGroups(
         const enriched = {
           ...project,
           remoteMachineIdentity: resolveRemoteProjectMachineIdentity(project, sshHosts, {
-            ambiguousDeviceNames,
+            devices: projectDevices,
           }),
         };
         enrichedProjects.set(project, enriched);
         return enriched;
       }),
     };
-  }, [groups, equivalentResult, enrichedProjects, sshHosts, ambiguousDeviceNames]);
+  }, [groups, equivalentResult, enrichedProjects, sshHosts, projectDevices, language]);
 }

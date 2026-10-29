@@ -289,3 +289,14 @@ describe("remote desktop viewerHidden", () => {
     );
   });
 });
+
+// Unit: wire compatibility keeps legacy senders unchanged and rejects invalid safety durations.
+it.each([{ op: "start", displayId: "1" }, { op: "heartbeat", lease: "a" }])(
+  "validates the optional idle duration on $op", (request) => {
+    expect(parseRemoteDesktopRequest(request)).toEqual(request);
+    for (const idleTimeoutMinutes of [0, 1, 5, 10, 15, 30])
+      expect(parseRemoteDesktopRequest({ ...request, idleTimeoutMinutes })).toEqual({ ...request, idleTimeoutMinutes });
+    for (const idleTimeoutMinutes of [-1, 0.5, 2, 60, Infinity, NaN, "5", null, true])
+      expect(() => parseRemoteDesktopRequest({ ...request, idleTimeoutMinutes })).toThrow("INVALID_REQUEST");
+  },
+);

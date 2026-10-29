@@ -830,6 +830,21 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toMatch(/(?:const|let)\s+durationMs\b/);
   });
 
+  // 漂移撤销的接线契约:RN 0.86.3 的 Pressable 不解构 onResponderMove(落入
+  // restProps,render 时 {...eventHandlers} 在后覆盖),挂它收不到事件、12pt 漂移
+  // 兑底形同虚设(划过发送键 300ms 后误发)。movePress 必须走官方 onPressMove 通道;
+  // onResponderMove 保持原样透传(语音按钮在用)。行为层无法在本仓 node 单测覆盖
+  // (真 react-native 是 Flow 依赖链),以本接线断言锁定通道选择。
+  it('wires the composer press fallback drift guard through Pressable onPressMove', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    const button = source.slice(source.indexOf('const RouteActionButton = forwardRef'));
+    const body = button.slice(0, button.indexOf('function ComposerRuntimePill'));
+    expect(body).toContain('onPressMove={interactionDisabled ? undefined : handlePressMove}');
+    expect(body).toContain('pressFallback.movePress(event.nativeEvent.pageX, event.nativeEvent.pageY)');
+    expect(body).toContain('onResponderMove={interactionDisabled ? undefined : onResponderMove}');
+    expect(body).not.toContain('onResponderMove={interactionDisabled ? undefined : handleResponderMove}');
+  });
+
   it('lets the whole top edge of the card resize without covering attachments or text', () => {
     const sharedSource = readTextLf(resolve(process.cwd(), 'src/session/MobileComposerInputRow.tsx'), 'utf8');
     const touchStart = sharedSource.indexOf('resizeGrabberTouch: {');

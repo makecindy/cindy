@@ -1,0 +1,16 @@
+[
+  "src/main/skillhub/__tests__/remoteCatalog.test.ts",
+  "src/main/skillhub/__tests__/remoteManagement.test.ts",
+  "src/main/skillhub/__tests__/scanner.test.ts",
+  "src/main/skillhub/__tests__/installService.test.ts",
+  "src/renderer/features/skillhub/__tests__/RemoteSkillsPage.test.tsx",
+  "src/renderer/features/skillhub/__tests__/SkillhubHomeNavigation.test.tsx",
+  "src/renderer/features/skillhub/__tests__/SkillhubDetailRoute.test.tsx",
+  "src/renderer/features/skillhub/__tests__/SkillhubStoreSync.test.tsx",
+  "src/renderer/features/skillhub/__tests__/SkillhubMarketDetailView.test.tsx",
+  "src/renderer/features/skillhub/components/__tests__/InstallTargetPicker.test.tsx",
+  "src/renderer/features/skillhub/components/__tests__/LocalSkillControls.test.tsx",
+  "src/renderer/features/skillhub/hooks/__tests__/useCategoryList.test.tsx",
+  "src/renderer/features/skillhub/hooks/__tests__/useMarketList.test.tsx",
+  "src/renderer/features/skillhub/hooks/__tests__/useMarketSkillUpdate.test.tsx"
+]

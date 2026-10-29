@@ -7,13 +7,18 @@
  * 调用方拿到的是固定的门面，每次调用按当前账号转发。
  */
 import type { ProviderView } from '@cindy/model-providers';
+import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 
 import { activeOwnerScopeKey } from '../appSessionState.js';
-import { readProviderGroupSummary, type ProviderGroupSessionGroup } from '../../shared/providerGroup.js';
-import { getReceivedShares } from '../device-link/providerShareGuest.js';
+import {
+  readProviderGroupSummary,
+  type ProviderGroupRebalanceSuggestion,
+  type ProviderGroupSessionGroup,
+} from '../../shared/providerGroup.js';
+import { captureProviderShareGroupRecovery, getReceivedShares } from '../device-link/providerShareGuest.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { isMobilePlatform } from '../device-link/controllerPlatform.js';
@@ -28,25 +33,30 @@ import { createProviderGroupRemoteClient, type ProviderGroupRemoteClient } from 
 import { createProviderGroupRouter, type ProviderGroupRouter } from './router.js';
 import type { ProviderGroupRemoteGroups } from './service.js';
 import { readProviderGroup } from './store.js';
-import { createProviderGroupUsageReader } from './usage.js';
+import { createProviderGroupUsageReader, providerGroupUsageSnapshot, providerGroupCodexUsageSnapshot, providerGroupCodexUsageFromReads, type ProviderGroupCodexUsageSnapshot } from './usage.js';
 
 interface OwnerRuntime {
   owner: string;
   directory: ProviderGroupDirectory;
   router: ProviderGroupRouter;
   externalLoad: ProviderGroupExternalLoad;
+  applicationLoad: ReturnType<typeof createLocalAgentLoadRegistry>;
 }
 
 let current: OwnerRuntime | null = null;
+let applicationLoadListener: ((sessionId: string) => void) | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
 let sessionGroupReader: ((sessionId: string) => Promise<ProviderGroupSessionGroup>) | null = null;
 let claudeUsageReader: ((providerId: string) => Promise<ClaudeSubscriptionUsageSnapshot | null>) | null = null;
+let codexUsageReader: ((providerId: string) => Promise<unknown>) | null = null;
+let codexRateLimitsReader: ((providerId: string) => Promise<unknown>) | null = null;
 
 function runtimeForActiveOwner(): OwnerRuntime {
   const owner = activeOwnerScopeKey();
   if (current?.owner === owner) return current;
   const usage = createProviderGroupUsageReader({
+    parseSnapshot: providerGroupUsageSnapshot,
     readLocal: (providerId) => claudeUsageReader?.(providerId) ?? Promise.resolve(null),
     readRemote: async (deviceId, providerId) => {
       const result = await remoteBackgroundInvoke(deviceId, 'maker:usage:claude-subscription', [providerId], {
@@ -65,6 +75,44 @@ function runtimeForActiveOwner(): OwnerRuntime {
     isCurrent: () => activeOwnerScopeKey() === owner,
     now: () => Date.now(),
   });
+  const readRemoteCodexUsage = async (deviceId: string, providerId: string, channel: string, args: unknown[]) => {
+    const result = await remoteBackgroundInvoke(deviceId, channel, args, {
+      preSend: () => {
+        if (activeOwnerScopeKey() !== owner) throw new Error('provider group account changed');
+      },
+    });
+    if (!result.ok) return null;
+    const raw = result.result;
+    if (!raw || typeof raw !== 'object') return null;
+    const echoedProvider = (raw as { providerId?: unknown }).providerId;
+    if (echoedProvider !== undefined ? echoedProvider !== providerId : providerId !== 'openai') return null;
+    return raw;
+  };
+  // Bound/cache each source separately so a slow native RPC cannot discard ready WHAM data (or vice versa).
+  const codexUsage = createProviderGroupUsageReader({
+    parseSnapshot: providerGroupCodexUsageSnapshot,
+    cacheLocal: true,
+    readLocal: (providerId) => codexUsageReader?.(providerId) ?? Promise.resolve(null),
+    readRemote: (deviceId, providerId) => readRemoteCodexUsage(deviceId, providerId, 'maker:usage:account', ['codex', providerId]),
+    isCurrent: () => activeOwnerScopeKey() === owner,
+    now: () => Date.now(),
+  });
+  const codexLimits = createProviderGroupUsageReader({
+    parseSnapshot: providerGroupCodexUsageSnapshot,
+    cacheLocal: true,
+    readLocal: async (providerId) => providerGroupCodexUsageFromReads(null, await codexRateLimitsReader?.(providerId), Date.now()),
+    readRemote: async (deviceId, providerId) => providerGroupCodexUsageFromReads(null,
+      await readRemoteCodexUsage(deviceId, providerId, 'maker:usage:codex-rate-limits', [providerId]), Date.now()),
+    isCurrent: () => activeOwnerScopeKey() === owner,
+    now: () => Date.now(),
+  });
+  const mergeCodexUsage = (account: ProviderGroupCodexUsageSnapshot | null, limits: ProviderGroupCodexUsageSnapshot | null) => {
+    if (activeOwnerScopeKey() !== owner) return null;
+    return providerGroupCodexUsageSnapshot({
+      appServerBuckets: limits?.appServerBuckets ?? account?.appServerBuckets,
+      webSnapshot: account?.webSnapshot,
+    });
+  };
   const directory = createProviderGroupDirectory({
     listLocalProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
     localDeviceName: () => deviceName(),
@@ -75,10 +123,16 @@ function runtimeForActiveOwner(): OwnerRuntime {
     isMobilePlatform: (platform) => isMobilePlatform(platform),
     localRunning: async (providerId) => (await readProviderRunningTurnsByProvider())?.get(providerId) ?? null,
     readClaudeUsage: (member) => usage.read(member),
-    invalidateUsage: () => usage.invalidate(),
+    readCodexUsage: async (member) => {
+      const [account, limits] = await Promise.all([codexUsage.read(member), codexLimits.read(member)]);
+      return mergeCodexUsage(account, limits);
+    },
+    peekCodexUsage: (member) => mergeCodexUsage(codexUsage.peek(member), codexLimits.peek(member)),
+    invalidateUsage: () => { usage.invalidate(); codexUsage.invalidate(); codexLimits.invalidate(); },
     now: () => Date.now(),
   });
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
+  const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
     readCaps: async (member) => {
@@ -89,8 +143,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
       return parseRemoteAgentCaps(reply.result);
     },
     readGroup: readProviderGroup,
-    listBindings: listProviderGroupBindings,
-    isTurnRunning: (sessionId) => isTurnRunning(sessionId),
+    listBindings: () => ({ ...listProviderGroupBindings(), ...Object.fromEntries(
+      Object.entries(applicationLoad.bindings()).filter(([, binding]) => !binding.groupDeviceId),
+    ) }),
+    isTurnRunning: (sessionId) => applicationLoad.isTurnRunning(sessionId) || isTurnRunning(sessionId),
     externalRunning: (providerId, memberKey) => externalLoad.running(providerId, memberKey),
     coolingStore: {
       read: readProviderGroupCooling,
@@ -102,7 +158,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
     now: () => Date.now(),
     random: () => Math.random(),
   });
-  current = { owner, directory, router, externalLoad };
+  applicationLoad.subscribe((id) => {
+    if (activeOwnerScopeKey() === owner) applicationLoadListener?.(id);
+  });
+  current = { owner, directory, router, externalLoad, applicationLoad };
   return current;
 }
 
@@ -119,6 +178,7 @@ const directoryFacade: ProviderGroupDirectory = {
 
 const routerFacade: ProviderGroupRouter = {
   pick: (input) => runtimeForActiveOwner().router.pick(input),
+  rebalanceCandidates: (input, resolved) => runtimeForActiveOwner().router.rebalanceCandidates(input, resolved),
   view: async (providerId, options) => {
     const runtime = runtimeForActiveOwner();
     const view = await runtime.router.view(providerId, options);
@@ -134,6 +194,16 @@ const routerFacade: ProviderGroupRouter = {
 
 export function getProviderGroupDirectory(): ProviderGroupDirectory {
   return directoryFacade;
+}
+
+/** Capture this registry per owner; old application callbacks must never enter a new account's snapshot. */
+export function getProviderGroupApplicationLoad() {
+  return runtimeForActiveOwner().applicationLoad;
+}
+
+/** IPC registers once; forward only the active owner's subsequent application changes. */
+export function setProviderGroupApplicationLoadListener(listener: (sessionId: string) => void): void {
+  applicationLoadListener = listener;
 }
 
 export function getProviderGroupRouter(): ProviderGroupRouter {
@@ -163,7 +233,9 @@ let remoteClient: ProviderGroupRemoteClient | null = null;
 
 /** 问其他电脑上的组(无状态，按调用时的账号经设备互联发出)。 */
 export function getProviderGroupRemoteClient(): ProviderGroupRemoteClient {
-  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke);
+  remoteClient ??= createProviderGroupRemoteClient(remoteBackgroundInvoke, {
+    captureShareRecovery: captureProviderShareGroupRecovery,
+  });
   return remoteClient;
 }
 
@@ -186,7 +258,7 @@ export function getProviderGroupRemoteGroups(): ProviderGroupRemoteGroups {
     },
     pick: (ownerDeviceId, input) => client.pick(ownerDeviceId, input),
     cool: (ownerDeviceId, input) => client.cool(ownerDeviceId, input),
-    view: (ownerDeviceId, providerId, model) => client.view(ownerDeviceId, providerId, model),
+    view: (ownerDeviceId, providerId, model, agentKind) => client.view(ownerDeviceId, providerId, agentKind ? { model, agentKind } : model),
     invalidate: (ownerDeviceId) => directoryFacade.invalidate(ownerDeviceId),
   };
 }
@@ -211,6 +283,38 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
   }
 }
 
+/** register 装配供应商组服务后注入：任务进行中换号的提议与用户的决定(provider-groups.md §6.2「任务进行中换号」)。 */
+export interface ProviderGroupSessionRebalance {
+  suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
+  decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+}
+
+let sessionRebalance: ProviderGroupSessionRebalance | null = null;
+
+export function setProviderGroupSessionRebalance(value: ProviderGroupSessionRebalance | null): void {
+  sessionRebalance = value;
+}
+
+/** 要不要提议换号；还没装配或读不到时不提议(照常发送)。 */
+export async function readProviderGroupRebalanceSuggestion(sessionId: string): Promise<ProviderGroupRebalanceSuggestion> {
+  if (!sessionRebalance) return null;
+  try {
+    return await sessionRebalance.suggest(sessionId);
+  } catch {
+    return null;
+  }
+}
+
+/** 记下用户确认换号；没记上返回 false，这条消息照常发到原来的号。 */
+export async function recordProviderGroupRebalanceDecision(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  try {
+    return await sessionRebalance.decide(sessionId, memberKey, remember, clientId);
+  } catch {
+    return false;
+  }
+}
+
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */
 export function setProviderGroupLocalLoad(probe: (() => Promise<ReadonlyMap<string, number>>) | null): void {
   localLoad = probe;
@@ -219,6 +323,11 @@ export function setProviderGroupLocalLoad(probe: (() => Promise<ReadonlyMap<stri
 /** Reuse the CLI-backed subscription reader without importing the IPC adapter into routing. */
 export function setProviderGroupClaudeUsageReader(reader: typeof claudeUsageReader): void {
   claudeUsageReader = reader;
+}
+
+export function setProviderGroupCodexUsageReader(reader: typeof codexUsageReader, rateLimits: typeof codexRateLimitsReader = null): void {
+  codexUsageReader = reader;
+  codexRateLimitsReader = rateLimits;
 }
 
 /** 这台电脑上每个供应商正在运行一轮的任务数；还没装配或读不到时返回 null(调用方照旧只算经组的)。 */

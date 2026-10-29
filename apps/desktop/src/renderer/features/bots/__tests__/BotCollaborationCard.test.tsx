@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BotSessionTaskCard, BotSessionTaskMessageTrace } from '../BotCollaborationCard';
+import { SessionQuickSendProvider, useSessionQuickSend } from '@/components/chat/SessionQuickSendContext';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -48,7 +49,12 @@ vi.mock('@/contexts/PrRefsContext', () => ({
   usePrStatuses: () => ({ statuses: new Map(), successfulStatuses: new Map(), refreshError: false }),
 }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content, workingDir }: any) => <div data-testid="markdown" data-working-dir={workingDir}>{content}</div>,
+  MarkdownRenderer: ({ content, workingDir }: any) => {
+    const sender = useSessionQuickSend();
+    return <div data-testid="markdown" data-working-dir={workingDir}>{content}
+      {content === 'inline-send-preview' ? <button disabled={!sender} onClick={() => void sender?.send('child reply')}>Preview send</button> : null}
+    </div>;
+  },
 }));
 vi.mock('@/components/chat/ChatSessionFileContext', () => ({
   useChatSessionFile: () => ({ origin: { kind: 'local' }, sessionId: 'parent', workingDir: '/parent' }),
@@ -386,4 +392,18 @@ it('keeps a newer remote mirror instead of publishing a stale GET', async () => 
   await act(async () => resolve({ id: 'child', title: 'Stale title', agentKind: 'pi' }));
   expect(screen.getByRole('button', { name: 'New remote title' })).toBeTruthy();
   expect(screen.getByText('bots.collab.backgroundTask · Codex')).toBeTruthy();
+});
+
+// Tier 1, PR #6871: existing result tests lacked a writable parent context.
+// A child result's Markdown consumer must not acquire the parent's send capability.
+it('keeps expanded child result controls read-only inside a writable parent', async () => {
+  const send = vi.fn().mockResolvedValue(true);
+  mocks.row = delegation({ status: 'completed', resultSummary: 'inline-send-preview' });
+  render(<SessionQuickSendProvider value={{ send }}><BotSessionTaskCard data={data()} sessionId="parent" /></SessionQuickSendProvider>);
+  await screen.findByRole('button', { name: 'Current title' });
+  fireEvent.click(screen.getByRole('button', { name: /bots\.collab\.expandResult/ }));
+  const submit = screen.getByRole('button', { name: 'Preview send' });
+  expect((submit as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(submit);
+  expect(send).not.toHaveBeenCalled();
 });

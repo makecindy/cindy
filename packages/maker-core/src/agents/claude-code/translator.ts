@@ -1,3 +1,4 @@
+import { collectNativeToolMedia, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 /**
  * Claude Code SDKMessage → maker-core 语义 AgentEvent 翻译器。
  *
@@ -349,6 +350,7 @@ function ccLiveStatus(
       openStartedAt: ctx.rt.generation.startedAt,
       reliable: ctx.rt.generation.reliable,
     }),
+    requestUsage: ctx.tracker.getRequestMetering(),
     isRunning,
   };
 }
@@ -481,6 +483,7 @@ export function extractAssistantMeta(rawMsg: unknown): Record<string, unknown> {
 const TERMINAL_OUTPUT_TOOL_NAMES = new Set(['Bash', 'PowerShell']);
 
 interface ToolResultPair {
+  processMedia: NativeToolMedia[];
   toolUseId: string;
   fullText: string;
   isError: boolean;
@@ -493,7 +496,7 @@ function normalizeToolResultFullText(
   const toolName = rt.toolUseIdToName.get(pair.toolUseId);
   if (!toolName || !TERMINAL_OUTPUT_TOOL_NAMES.has(toolName)) return pair;
   return {
-    toolUseId: pair.toolUseId,
+    ...pair,
     fullText: stripTerminalControlSequences(pair.fullText),
     isError: pair.isError,
   };
@@ -510,7 +513,7 @@ function extractToolResultFullText(
     const pair = readToolResultFullText(block);
     if (pair) {
       const normalized = normalizeToolResultFullText(pair, rt);
-      if (normalized.fullText.length > 0) out.push(normalized);
+      if (normalized.fullText.length > 0 || normalized.processMedia.length > 0) out.push(normalized);
     }
   }
   return out;
@@ -535,7 +538,7 @@ function readToolResultFullText(blockRaw: unknown): ToolResultPair | null {
     }
     fullText = parts.join('\n');
   }
-  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true };
+  return { toolUseId: b.tool_use_id, fullText, isError: b.is_error === true, processMedia: collectNativeToolMedia(inner) };
 }
 
 /**
@@ -811,7 +814,7 @@ export function translateSdkMessage(
       for (const pair of fullPairs) {
         queue.push({
           type: 'tool_result_full',
-          data: { toolUseId: pair.toolUseId, fullText: pair.fullText },
+          data: { toolUseId: pair.toolUseId, fullText: pair.fullText, ...(pair.processMedia.length ? { processMedia: pair.processMedia } : {}) },
           source: 'claude-code',
           ...(parentToolUseId ? { agentMeta: { parentUuid: parentToolUseId } } : {}),
         });
@@ -2550,6 +2553,7 @@ function handleResult(
       : msg;
   const resultWithUsageSegments = {
     ...safeResult,
+    requestUsage: ctx.tracker.getRequestMetering(),
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
     modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,

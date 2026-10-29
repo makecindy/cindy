@@ -69,7 +69,7 @@ export function BotGroupQuoteBlock({
     </>
   );
   const frame = cn(
-    'flex w-full min-w-0 max-w-[480px] select-none gap-2 rounded-lg px-2 py-1 text-left',
+    'flex w-fit min-w-0 max-w-full select-none gap-2 rounded-lg py-0.5 text-left',
     align === 'right' && 'self-end',
   );
   if (!onLocate || display.state === 'deleted') {
@@ -84,7 +84,7 @@ export function BotGroupQuoteBlock({
       onClick={onLocate}
       className={cn(
         frame,
-        'outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        'outline-none transition-opacity hover:opacity-75 focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
       )}
     >
       {body}

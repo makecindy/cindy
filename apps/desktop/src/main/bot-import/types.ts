@@ -6,7 +6,7 @@ import type {
 import type { RoutineInput } from '@cindy/maker-scheduler';
 
 export interface ImportSource {
-  kind: CompanionImportSourceKind;
+  kind: CompanionImportSourceKind | 'cindy';
   agentId: string;
   name: string;
   root: string;
@@ -75,6 +75,8 @@ export interface ImportItem {
 }
 
 export interface ImportSnapshot {
+  nativePackage?: import('../../shared/botMarket.js').BotPackageIdentity & { description: string; locale?: string;
+    opening?: import('../../shared/botMarket.js').BotPackageOpening };
   source: ImportSource;
   items: ImportItem[];
   avatarImageBase64?: string;

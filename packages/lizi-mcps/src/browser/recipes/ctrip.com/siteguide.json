@@ -1,10 +1,13 @@
 {
   "site": "ctrip.com",
-  "auth": "公开,无需登录;携程联想搜索接口 gaHotelSearchEngine 对匿名请求开放(用持久浏览器走同源 POST 最稳)",
-  "entry": {
-    "home": "https://m.ctrip.com/",
-    "suggest": "POST https://m.ctrip.com/restapi/soa2/21881/json/gaHotelSearchEngine"
-  },
-  "recipes": ["ctrip-suggest"],
-  "notes": "策略 PUBLIC + 同源 POST。这是个 POST 接口,navigate 只能 GET,所以先 navigate 到 https://m.ctrip.com/ 再用 evaluate 在页面内 fetch POST(同源、避免 CORS;credentials:'include' 顺带带 cookie 但非必需)。请求体核心字段:{keyword:<词>, searchType:'D', platform:'online', pageID:'102001', head:{Locale:'zh-CN', Currency:'CNY', PageId:'102001', clientID:..., group:'ctrip', Frontend:{sessionID:1,pvid:1}, HotelExtension:{group:'CTRIP',WebpSupport:false}}}。响应结构 {Response:{searchResults:[{displayName(展示名), word, cityName, displayType(如「城市」), type(如 City), commentScore(点评分), cStar, countryName}]}}。这是目的地/城市/景区/酒店的联想结果(autocomplete),不含具体可订房单与价格;真要查房价/下单需登录态走更复杂的酒店列表接口,稳定性差,本配方只收录干净的联想读接口。"
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
+  "entry": {},
+  "recipes": [
+    "ctrip-suggest"
+  ],
+  "notes": "兼容入口 ctrip-suggest 现执行内置 ctrip/search，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

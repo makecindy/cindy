@@ -129,7 +129,8 @@ export function mirrorMessageText(row: CompanionMirrorRow, options: { placeholde
     || (typeof meta.parentUuid === 'string' && !!meta.parentUuid && isSubagentParentToolUseId(meta.parentUuid)))) return null;
   if (row.role === 'user' && HIDDEN_INPUT_KEYS.some(key => meta[key] !== undefined && meta[key] !== null && meta[key] !== false)) return null;
   // A delegated continuation (not something said in this chat) carries this marker as an object.
-  if (row.role === 'user' && meta.autoReviewUserText && typeof meta.autoReviewUserText === 'object') return null;
+  if (row.role === 'user' && meta.autoReviewUserText && typeof meta.autoReviewUserText === 'object'
+    && (meta.autoReviewUserText as { kind?: string }).kind !== 'agent-request') return null;
   // IM input keeps the person's own words apart from the context the host put around them.
   const im = row.role === 'user' && meta.imSource && typeof meta.imSource === 'object' ? meta.imSource as Record<string, unknown> : null;
   const typed = typeof im?.userText === 'string' && im.userText.trim() ? im.userText.trim() : visibleMessageText(row.role, row.content);
@@ -178,6 +179,11 @@ export function createCompanionMirror(deps: {
   latestRows: (sessionId: string, limit: number) => Promise<CompanionMirrorRow[]>;
   /** Uploads the owner's attachments so other devices can open them; absent keeps name placeholders. */
   uploadMedia?: CompanionMediaUpload;
+  /**
+   * The files a companion reply refers to (generated media, files in its work folder) that go to
+   * the room with it; given the reply's visible text. Absent keeps replies text only.
+   */
+  replyAttachments?: (botId: string, sessionId: string, row: CompanionMirrorRow, text: string) => Promise<CompanionMirrorAttachment[]>;
   log?: CompanionLog;
 }) {
   async function ensureRoom(botId: string, actorId: string, name: string): Promise<string> {
@@ -212,7 +218,13 @@ export function createCompanionMirror(deps: {
       // address form) keeps its name in the text, as before.
       const media: Array<{ type: string; mediaId?: string; caption?: string }> = [];
       const uploaded: string[] = [];
-      for (const file of deps.uploadMedia ? mirrorAttachments(row) : []) {
+      // A reply's files are found from what it says; a failure to look is not a reason to stop mirroring.
+      const replyFiles = row.role === 'assistant' && deps.uploadMedia && deps.replyAttachments
+        ? await deps.replyAttachments(botId, sessionId, row, mirrorMessageText(row, { placeholders: false }) ?? '').catch((error: unknown) => {
+          deps.log?.warn('Companion reply files could not be listed', { code: errorCode(error) });
+          return [];
+        }) : [];
+      for (const file of deps.uploadMedia ? [...mirrorAttachments(row), ...replyFiles] : []) {
         if (file.size > MIRROR_ATTACHMENT_MAX_BYTES) continue;
         try { media.push(...await deps.uploadMedia!(roomId, sourceId, [file], authorId)); uploaded.push(file.name); }
         catch (error) {

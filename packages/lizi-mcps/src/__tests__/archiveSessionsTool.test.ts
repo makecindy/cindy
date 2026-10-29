@@ -60,6 +60,12 @@ describe('archive_sessions tool', () => {
       sessionIds: ['s1', 's2'],
       status: 'archived',
     });
+    // 折叠形态也要自愈(glm 兼容层 <item> 序列化,同 #6369/images 病),不得报 INVALID_ARGS。
+    await registry.call('archive_sessions', { session_ids: { item: ['s3', 's4'] } });
+    expect(setSessionsStatus).toHaveBeenLastCalledWith({
+      sessionIds: ['s3', 's4'],
+      status: 'archived',
+    });
     expect(parse(res)).toMatchObject({
       ok: true,
       status: 'archived',

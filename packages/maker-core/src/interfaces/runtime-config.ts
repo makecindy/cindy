@@ -131,6 +131,8 @@ export interface AgentRuntimeConfig {
 
   /**
    * Host-managed executable directories to prepend to agent subprocess PATH.
+   * On macOS/Linux, Codex restores the login shell environment, moving these after
+   * the user's PATH; only the Codex package's own codex-path stays at the front.
    *
    * Only agents whose executable lookup is safe for PATH-based discovery should consume this.
    * PI intentionally does not: Windows may resolve an executable from cwd before PATH.
@@ -157,6 +159,9 @@ export interface AgentRuntimeConfig {
    * Codex: SDK 不支持，传了也忽略。
    */
   systemPrompt?: string;
+  /** Host-owned answer presentation protocol. Shared by normal and Bot sessions;
+   * appended to native instructions, never replaces the CLI's own prompt. */
+  answerDeliveryPrompt?: string;
 
   /**
    * 是否启用 agent 的自动记忆 (Claude auto-memory / Codex experimental memories)。

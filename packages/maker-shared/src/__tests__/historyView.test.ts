@@ -9,6 +9,16 @@ function row(id: number, role: string, content: unknown): HistoryMessageSource {
 }
 
 describe('history reading projection', () => {
+  it.each(['pending', 'card', 'media', 'app'] as const)('keeps a plugin %s available outside deferred work', (kind) => {
+    const call = row(1, 'tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 'plugin', input: {} });
+    if (kind === 'app') call.agentMeta = { mcpApp: true };
+    const rows = [row(0, 'user', 'Work'), call];
+    if (kind !== 'pending') rows.push({ ...row(2, 'tool_result', kind === 'card'
+      ? JSON.stringify({ xdt_card_id: 'card' }) : kind === 'media' ? 'cindy-media://blobs/image.png' : 'ready'), toolUseId: 'plugin' });
+    const projected = projectHistoryView(rows, true, true);
+    expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
+      .toContain('1');
+  });
   it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
       row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),
@@ -183,6 +193,28 @@ const ungroupedStructure = {
 };
 
 describe('shared history view lifecycle', () => {
+  it('reports count-only cache/page transitions even when the diagnostic sink throws', async () => {
+    const cachedItems = projectHistoryView([row(0, 'user', 'private cached body')], false);
+    const freshItems = projectHistoryView([row(0, 'user', 'private cached body'), row(1, 'assistant', 'private answer')], false);
+    const diagnostic = vi.fn(() => { throw new Error('diagnostic unavailable'); });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      refreshOnResume: false, diagnostic,
+      page: async () => ({ version: 1, items: freshItems, hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.restoreCachedView(async () => ({ ...view.getSnapshot(), items: cachedItems, ready: true }));
+    await view.refresh();
+    expect(view.getSnapshot()).toMatchObject({ ready: true, error: null, items: freshItems });
+    expect(diagnostic.mock.calls).toEqual([
+      [{ source: 'cache', previousItemCount: 0, itemCount: 1, messageCount: 1,
+        detailMessageCount: 0, ready: true, stale: true }],
+      [{ source: 'latest', previousItemCount: 1, itemCount: 2, messageCount: 2,
+        detailMessageCount: 0, ready: true, stale: false }],
+    ]);
+    view.setActive(false);
+  });
+
   // Unit: Mobile's session coordinator owns resume reads. Previously activation
   // issued a pre-ACK page even when the coordinated batch would read after ACK.
   it('preserves cached content on managed resume and still reconciles changes during a read', async () => {
@@ -223,17 +255,20 @@ describe('shared history view lifecycle', () => {
     const completed = projectHistoryView([...rows, row(5, 'assistant', 'Done')], false);
     expect(completed[0].key).not.toBe(running[0].key);
     const replacement = overlap ? completed : projectHistoryView([row(9, 'user', 'Replaced')], false);
-    const read = vi.fn(async () => ({ version: 1 as const, items: running, hasMore: true, nextCursor: 'latest' }));
+    const read = vi.fn(async (): Promise<HistoryViewPage<HistoryMessageSource>> => ({ version: 1 as const, items: running, hasMore: true, nextCursor: 'latest' }));
     const view = new HistoryViewController({ page: read,
       details: async () => ({ version: 1 as const, messages: [], hasMore: false, nextCursor: null }), expanded: async () => undefined });
     await view.refresh();
     read.mockResolvedValueOnce({ version: 1, items: prefix, hasMore: true, nextCursor: 'older' });
     await view.refresh(true);
     read.mockResolvedValueOnce({ version: 1, items: replacement, hasMore: true, nextCursor: 'new' });
+    // With no overlap, walk the authoritative older page before replacing the
+    // cache. A rewound/cleared source ends here and must not revive the old rows.
+    if (!overlap) read.mockResolvedValueOnce({ version: 1, items: [], hasMore: false, nextCursor: null });
     await view.refresh();
     expect(view.getSnapshot().items).toEqual(overlap ? [...prefix, ...completed] : replacement);
-    expect(view.getSnapshot().nextCursor).toBe(overlap ? 'older' : 'new');
-    expect(view.getSnapshot().hasMore).toBe(true);
+    expect(view.getSnapshot().nextCursor).toBe(overlap ? 'older' : null);
+    expect(view.getSnapshot().hasMore).toBe(overlap);
   });
 
   it.each(['success', 'failure', 'blur', 'unavailable'])('reads again after an ACK over an in-flight %s without changing expansion', async (outcome) => {
@@ -446,6 +481,74 @@ describe('shared history view lifecycle', () => {
     view.setExpanded(items[0].key, false);
     await new Promise((done) => setTimeout(done, 0));
     expect(intents.at(-1)).toEqual([]);
+  });
+
+  // Unit: a delayed ACK used to queue one identical final replacement per
+  // refresh/toggle. Only unsent intents may coalesce; reconnect must resend.
+  it.each([false, true])('coalesces queued interest behind a slow ACK (rejected=%s)', async (rejected) => {
+    const items = projectHistoryView([row(1, 'thinking', 'body')], true);
+    const queue = { tail: Promise.resolve() };
+    let settle!: () => void;
+    const expanded = vi.fn(async (_refs: readonly { key: string }[]): Promise<void> => undefined);
+    const view = new HistoryViewController<HistoryMessageSource>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }), expanded,
+    }, queue);
+    await view.refresh();
+    await queue.tail;
+    expanded.mockClear();
+    expanded.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      settle = () => rejected ? reject(new Error('ACK timeout')) : resolve();
+    }));
+    view.setExpanded(items[0].key, true);
+    // Wait for dispatch, not the deliberately blocked network promise.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(expanded).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 3; index++) {
+      view.setExpanded(items[0].key, false);
+      await view.refresh();
+      view.setExpanded(items[0].key, true);
+    }
+    view.setExpanded(items[0].key, false);
+    settle();
+    await queue.tail;
+    expect(expanded.mock.calls.map(([refs]) => refs.map(ref => ref.key))).toEqual([[items[0].key], []]);
+    // Successful identical intents cannot be cached across connection epochs.
+    view.setNetworkAvailable(false);
+    view.setNetworkAvailable(true);
+    await view.refresh();
+    await queue.tail;
+    expect(expanded).toHaveBeenCalledTimes(3);
+    view.setActive(false);
+    await queue.tail;
+  });
+
+  it('keeps an old Host release ordered before a replacement controller subscription', async () => {
+    const items = projectHistoryView([row(1, 'thinking', 'body')], true);
+    let release!: () => void;
+    const queue = { tail: new Promise<void>(resolve => { release = resolve; }) };
+    const sent: string[] = [];
+    const create = (host: string) => new HistoryViewController<HistoryMessageSource>({
+      refreshOnResume: false,
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async refs => { sent.push(`${host}:${refs.length}`); },
+    }, queue);
+    const oldView = create('old');
+    await oldView.refresh();
+    oldView.setExpanded(items[0].key, true);
+    oldView.setActive(false);
+    const nextView = create('next');
+    await nextView.refresh();
+    nextView.setExpanded(items[0].key, true);
+    release();
+    await queue.tail;
+    expect(sent).toEqual(['old:0', 'next:1']);
+    nextView.setActive(false);
+    await queue.tail;
+    expect(sent.at(-1)).toBe('next:0');
   });
 
   it.each([false, true])('releases old detail interest when reset before a replacement page is ready (inactive=%s)', async (inactive) => {

@@ -3,10 +3,48 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createLiziMcpProviders } from '@cindy/mcps';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../agentCapabilityCatalog';
+import { buildBotMcpCatalog } from '../botMcpCatalog';
 
 const context = { agentKind: 'pi' as const, workingDir: '/repo', sessionId: 'task' };
 
 describe('shared runtime capability discovery', () => {
+  // Incident regression: visible native Apps returned UNKNOWN_CAPABILITY and
+  // disappeared from the default Bot catalog. Existing tests only cover providers.
+  // Unit tier, real catalog entry points with a read-only engine status fixture.
+  it('discovers native Apps without pretending Cindy registered its transport', async () => {
+    const runtime = { ...context, agentKind: 'codex' as const,
+      vendorOptions: { [RUNTIME_MCP_NAMES_KEY]: [] } };
+    const catalog = buildBotMcpCatalog({ ...runtime, providers: [], builtinNames: [], customServers: [] });
+    expect(catalog).toContainEqual(expect.objectContaining({ name: 'codex_apps', source: 'harness', available: true }));
+    expect(await readAgentCapabilityCatalog([], runtime, {})).toMatchObject({ capabilities: [
+      { server: 'codex_apps', source: 'harness', status: 'engine-managed' },
+    ] });
+    const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'github_get_user_login' }] }));
+    expect(await readAgentCapabilityCatalog([], runtime, { server: 'codex_apps' }, undefined, read))
+      .toMatchObject({ ok: true, tools: [{ name: 'github_get_user_login' }] });
+    expect(read).toHaveBeenCalledWith('codex_apps');
+    expect(await readAgentCapabilityCatalog([], runtime, { server: 'codex_apps' }, undefined,
+      async () => ({ state: 'not-mounted', tools: [] })))
+      .toMatchObject({ ok: false, engineState: 'not-mounted' });
+    expect(await readAgentCapabilityCatalog([], { ...runtime, remoteHostId: 'ssh-fixture' }, { server: 'codex_apps' }, undefined, read))
+      .toMatchObject({ ok: false, capability: { status: 'unavailable' } });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  // P1: a custom provider silently replaced native metadata in both catalogs.
+  it('keeps native Apps authoritative when a provider has the same name', async () => {
+    const runtime = { ...context, agentKind: 'codex' as const };
+    const factory = vi.fn();
+    const providers = [{ name: 'codex_apps', toClaudeSdkConfig: factory }];
+    const catalog = buildBotMcpCatalog({ ...runtime, providers, builtinNames: [],
+      customServers: [{ id: 'codex_apps', transport: 'http', updatedAt: 1 }] });
+    expect(catalog).toEqual([expect.objectContaining({ name: 'codex_apps', source: 'harness' })]);
+    expect(await readAgentCapabilityCatalog(providers, runtime, {})).toMatchObject({ capabilities: [
+      { server: 'codex_apps', source: 'harness', status: 'engine-managed' },
+    ] });
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('does not advertise the retired simulator in the %s provider catalog', async (agentKind) => {
     const providers = createLiziMcpProviders({
       android: {} as never, browser: {} as never, computer: {} as never,
@@ -38,6 +76,49 @@ describe('shared runtime capability discovery', () => {
       { server: 'disabled', status: 'unavailable', reason: 'provider-not-enabled-for-session' },
     ] });
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  // #7629: a session-scoped bridge legitimately has no tools outside its
+  // teammate environment. Unit tier: exercise index and query through the
+  // production catalog, not a second catalog implementation.
+  it('awaits session applicability for both the index and a direct query', async () => {
+    const provider = { name: 'session_bridge', toClaudeSdkConfig: vi.fn() };
+    const unavailable = async () => 'not-applicable-without-companion-environment';
+    const read = vi.fn(async () => ({ state: 'no-tools' as const, tools: [] }));
+    const index = await readAgentCapabilityCatalog([provider], context, {}, unavailable, read);
+    expect(index).toMatchObject({ capabilities: [{ server: 'session_bridge',
+      status: 'unavailable', reason: 'not-applicable-without-companion-environment' }] });
+    expect(await readAgentCapabilityCatalog([provider], context, { server: 'session_bridge' }, unavailable, read))
+      .toMatchObject({ ok: false, capability: { reason: 'not-applicable-without-companion-environment' } });
+    expect(read).not.toHaveBeenCalled();
+    expect(provider.toClaudeSdkConfig).not.toHaveBeenCalled();
+    const failed = await readAgentCapabilityCatalog([provider], context, {},
+      async () => { throw new Error('private-environment-secret'); });
+    expect(failed).toMatchObject({ capabilities: [{ status: 'unavailable', reason: 'provider-status-unavailable' }] });
+    expect(JSON.stringify(failed)).not.toContain('private-environment-secret');
+  });
+
+  // #7636 review: an unrelated companion read can queue behind environment
+  // writes. Unit tier: only the full index may request every provider's status.
+  it.each(['requested', 'codex_apps', 'unknown'])('does not read unrelated availability for a direct query: %s', async (server) => {
+    let release!: (reason: null) => void;
+    const saving = new Promise<null>((resolve) => { release = resolve; });
+    const availability = vi.fn((provider: { name: string }) => provider.name === 'companion_connections' ? saving : null);
+    const read = vi.fn(async () => ({ state: 'connected' as const, tools: [{ name: 'fixture_tool' }] }));
+    const pending = readAgentCapabilityCatalog([{ name: 'requested' }, { name: 'companion_connections' }],
+      { ...context, agentKind: 'codex' }, { server }, availability, read);
+    const checked = availability.mock.calls.map(([provider]) => provider.name);
+    release(null);
+    const result = await pending;
+    expect(checked).toEqual(server === 'requested' ? ['requested'] : []);
+    if (server === 'unknown') {
+      expect(result).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CAPABILITY',
+        available: ['requested', 'companion_connections', 'codex_apps'] });
+      expect(read).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ ok: true, tools: [{ name: 'fixture_tool' }] });
+      expect(read).toHaveBeenCalledWith(server);
+    }
   });
 
   it('reads real schemas and builtin progressive metadata without executing business tools', async () => {
@@ -73,6 +154,28 @@ describe('shared runtime capability discovery', () => {
 
   describe('servers the engine connects itself', () => {
     const custom = [{ name: 'custom_omc', toClaudeSdkConfig: vi.fn() }];
+
+    it('does not prescribe connection repair or a new task from an ambiguous empty catalog', async () => {
+      const result = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined,
+        async () => ({ state: 'no-tools', tools: [] }));
+      expect(result).toMatchObject({ ok: false, errorCode: 'HARNESS_MCP_NOT_READY', engineState: 'no-tools' });
+      expect((result as { message: string }).message).not.toMatch(/修正后新建任务|检查该 MCP 的地址/);
+    });
+
+    // Live Apps discovery produced ~60K tokens. Page/filter the actual engine
+    // result so discovery stays bounded without hiding the remaining tools.
+    it('pages and searches large engine catalogs without dropping access to the tail', async () => {
+      const read = async () => ({ state: 'connected' as const, tools: Array.from({ length: 51 }, (_, index) => ({ name: `tool_${index}` })) });
+      const first = await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc' }, undefined, read);
+      expect(first).toMatchObject({ totalTools: 51, matchedTools: 51, nextOffset: 50 });
+      expect('tools' in first && first.tools).toHaveLength(50);
+      expect(await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc', offset: 50 }, undefined, read))
+        .toMatchObject({ tools: [{ name: 'tool_50' }], nextOffset: null });
+      expect(await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc', toolQuery: 'TOOL_50' }, undefined, read))
+        .toMatchObject({ tools: [{ name: 'tool_50' }], matchedTools: 1, nextOffset: null });
+      expect(await readAgentCapabilityCatalog(custom, context, { server: 'custom_omc', toolQuery: 'absent' }, undefined, read))
+        .toMatchObject({ ok: true, tools: [], matchedTools: 0, nextOffset: null });
+    });
 
     it('lists the tools the caller engine actually holds for the server', async () => {
       const read = vi.fn(async () => ({ state: 'connected' as const, tools: [

@@ -1,14 +1,14 @@
 /*
  * 测试价值
  * - 生产入口与可观察结果：bot-autonomy-settings-store 的读 / 写 / 恢复默认，结合 resolveSchedulerBotId 得到
- *   主人看到的「自动跟进所有任务」归属：未自定义跟随默认 Cindy 助理；显式关掉要落盘并跨读保持；
+ *   主人看到的「自动跟进所有任务」归属：未自定义保持关闭；显式关掉要落盘并跨读保持；
  *   恢复默认删除 override。
  * - Bug／规则依据：docs/dev-rules/configuration-and-overrides.md（只存 override，恢复默认 = 删除）；
- *   cindy-bots-runtime.md §6.3「总调度唯一，默认 Cindy 助理」。
+ *   cindy-bots-runtime.md §6.3「总调度唯一，默认关闭」。
  * - 现有覆盖缺口：overrideSettingsFile.test 只测通用文件层，不测 null 作为有意义的 override（关掉总调度）
  *   与「未自定义」的区分。
- * - 最小失败输入：写 null 后若不落盘（preserveDefaults 缺失），重新读会回到默认 Cindy 助理；override 文件损坏时
- *   回落默认，把主人关掉的总调度悄悄打开（必须失败关闭）。
+ * - 最小失败输入：写 null 后若不落盘（preserveDefaults 缺失），重新读会再次展示邀请；override 文件损坏时
+ *   必须保持关闭且不重复邀请。
  * - tier：unit（临时目录真实文件，无计时器）。
  */
 import fs from 'node:fs';
@@ -48,7 +48,7 @@ describe('bot autonomy scheduler setting', () => {
   it('derives the default, persists an explicit off, and restores the default by deleting the override', async () => {
     const file = path.join(rootPath, 'bot-autonomy-settings.json');
     expect(readBotAutonomySettingsOverride({ rootPath })).toEqual({ customized: false, schedulerBotId: null });
-    expect(effective()).toBe(DEFAULT_SCHEDULER_BOT_ID);
+    expect(effective()).toBeNull();
     expect(fs.existsSync(file)).toBe(false);
 
     await writeBotAutonomySchedulerBotId('helper', { rootPath });
@@ -63,7 +63,7 @@ describe('bot autonomy scheduler setting', () => {
 
     await resetBotAutonomySettings({ rootPath });
     expect(readBotAutonomySettingsOverride({ rootPath }).customized).toBe(false);
-    expect(effective()).toBe(DEFAULT_SCHEDULER_BOT_ID);
+    expect(effective()).toBeNull();
   });
 
   it('fails closed when the override file exists but cannot be read, and reset recovers the default', async () => {
@@ -75,6 +75,6 @@ describe('bot autonomy scheduler setting', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('{"schedulerBotId": nul');
     await resetBotAutonomySettings({ rootPath });
     expect(fs.existsSync(file)).toBe(false);
-    expect(effective()).toBe(DEFAULT_SCHEDULER_BOT_ID);
+    expect(effective()).toBeNull();
   });
 });

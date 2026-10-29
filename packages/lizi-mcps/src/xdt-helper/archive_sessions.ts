@@ -20,6 +20,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import type { LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { stringArrayParam } from './_array-param.js';
 import { parseQualifiedSessionId } from './send_to_session.js';
 
 const MAX_BATCH_SIZE = 50;
@@ -125,10 +126,7 @@ function registerSessionStatusTool(
     category: 'control',
     description: config.description,
     inputShape: {
-      session_ids: z
-        .array(z.string().min(1))
-        .min(1)
-        .max(MAX_BATCH_SIZE)
+      session_ids: stringArrayParam(z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE))
         .describe(config.idsDescription),
     },
     handler: async ({ session_ids }) => {

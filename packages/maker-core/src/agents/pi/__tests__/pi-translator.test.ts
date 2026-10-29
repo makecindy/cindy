@@ -487,6 +487,76 @@ describe('pi translator', () => {
     }));
   });
 
+  it.each([
+    ['English', '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}'],
+    ['Chinese (#6649)', '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention",'
+      + '"data":{"field":"prompt_cache_retention"}}'],
+  ])('classifies a %s prompt_cache_retention rejection for provider compat self-heal', (_label, errorMessage) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage,
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          isTerminal: true,
+          reason: 'unsupported-request-option',
+        }),
+      }),
+    ]);
+  });
+
+
+  it('classifies a custom gateway prompt_cache_key rejection for provider compat self-heal', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage:
+            '400: {"message":"Validation: Unsupported parameter(s): `prompt_cache_key`",'
+            + '"type":"invalid_request_error"}',
+          usage: { input: 0, output: 0 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          isTerminal: true,
+          reason: 'unsupported-request-option',
+        }),
+      }),
+    ]);
+  });
+
   it.each(['DeepSeek-V4-Flash-0731', 'claude-sonnet-4-6'])('preserves length-limited text and usage for %s', (model) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -2358,4 +2428,38 @@ describe('pi translator live token speed', () => {
       vi.useRealTimers();
     }
   });
+});
+
+it.each(['none', 'thinking', 'tool'])('reports a route receipt and blocks recovery after %s output', (kind) => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  const receipt = { providerId: 'connection-a', modelId: 'public', wireModelId: 'wire', routeKey: 'a'.repeat(64), applied: false };
+  ctx.getCacheCompatibility = () => receipt;
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  if (kind === 'thinking') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'working' } }), queue, ctx);
+  if (kind === 'tool') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'bash', args: { command: 'true' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+    reason: 'unsupported-request-option', piCacheCompatibility: receipt, piCacheRecoverySafe: kind === 'none',
+  });
+  disposePiTranslateContext(ctx);
+});
+
+// Regression: [image] retained text but lost the actual media. Unit, native RPC entry.
+it('retains tool image bytes and a video resource alongside text', () => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 'media', result: {
+    content: [{ type: 'text', text: 'preview' },
+      { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' },
+      { type: 'resource_link', mimeType: 'video/mp4', uri: 'https://example.com/clip.mp4' }],
+  } }), queue, ctx);
+  expect(events.find(e => e.type === 'tool_result_full')?.data).toMatchObject({
+    toolUseId: 'media', fullText: 'preview\n[image]', processMedia: [
+      { kind: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' },
+      { kind: 'video', url: 'https://example.com/clip.mp4' },
+    ],
+  });
+  disposePiTranslateContext(ctx);
 });

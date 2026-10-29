@@ -244,6 +244,7 @@ const syncOn = async (clipboardSync: RemoteDesktopViewerApi['clipboardSync']) =>
       clipboardSync,
       preferences: async () => ({
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: true,
@@ -346,6 +347,7 @@ it('a display switch that drops and regains control without a reconnect drops th
       clipboardSync,
       preferences: async () => ({
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: true,

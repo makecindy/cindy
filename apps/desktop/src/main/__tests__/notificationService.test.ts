@@ -23,6 +23,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@cindy/maker-core';
+import type { BrowserWindow } from 'electron';
+
+const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups/group-1' }));
+vi.mock('../deepLink', () => ({
+  getDeepLinkMainWindow: () => ({ isFocused: () => true, isVisible: () => true, webContents: { getURL: () => chatWindow.url } }),
+  openMainWindowChatMessage: vi.fn(),
+  openMainWindowSession: vi.fn(),
+}));
+vi.mock('../agent-island/companionIdentity', () => ({ companionAvatarThumbnail: async () => undefined }));
 
 type IpcHandler = (event: unknown, payload: unknown) => Promise<void> | void;
 
@@ -31,6 +41,7 @@ const registeredHandlers = new Map<string, IpcHandler>();
 
 // Notification 构造调用计数(每条 toast 一次)。
 const notificationCtor = vi.fn();
+const notificationClicks: Array<() => void> = [];
 // Notification.isSupported() — 默认 true; 单独用例需改成 false 时,setMock 之前覆盖。
 let notificationSupported = true;
 
@@ -48,6 +59,7 @@ class FakeNotification {
   }
   on(evt: string, cb: (...args: unknown[]) => void): this {
     if (evt === 'close') this.closeCb = cb;
+    if (evt === 'click') notificationClicks.push(cb);
     return this;
   }
   show(): void {
@@ -73,6 +85,7 @@ vi.mock('electron', () => ({
   }),
   nativeImage: {
     createFromPath: () => ({ isEmpty: () => true }),
+    createFromBuffer: (bytes: Buffer) => ({ bytes, isEmpty: () => false }),
   },
 }));
 
@@ -89,6 +102,19 @@ vi.mock('../logger', () => ({
 const markSessionNeedsAttention = vi.fn();
 vi.mock('../appBadgeService', () => ({
   markSessionNeedsAttention,
+}));
+
+// 高权限 IPC 的入站来源断言：真实实现要 BrowserWindow 与 app-content 登记表，
+// 这里只验它在该 handler 上被调到（且在任何副作用之前）。
+const assertTrustedAppRendererEvent = vi.fn((_event: unknown): void => {});
+vi.mock('../security/trustedAppRenderer', () => ({
+  assertTrustedAppRendererEvent: (event: unknown) => assertTrustedAppRendererEvent(event),
+}));
+
+// 「消息免打扰」判定：真实实现读账号库的同步索引，这里只验 handler 在哪个时刻用它。
+const isSessionNotificationsMutedSync = vi.fn((_sessionId: string): boolean => false);
+vi.mock('../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: (sessionId: string) => isSessionNotificationsMutedSync(sessionId),
 }));
 
 // mobile 通道:真实实现在 device-link host(依赖 electron/ws/authManager 全家桶),
@@ -148,14 +174,17 @@ async function freshService() {
   vi.resetModules();
   registeredHandlers.clear();
   notificationCtor.mockClear();
+  notificationClicks.length = 0;
   warn.mockClear();
   notificationSupported = true;
   ownerScopeCurrent = true;
   ownerScopeKey = 'account-a:1';
   markSessionNeedsAttention.mockClear();
+  assertTrustedAppRendererEvent.mockReset();
+  isSessionNotificationsMutedSync.mockReset().mockReturnValue(false);
   sendMobileSessionNotify.mockReset().mockReturnValue(true);
   getMobileNotifyGeneration.mockClear();
-  latestMessageText.mockClear();
+  latestMessageText.mockReset().mockResolvedValue('');
   readSessionNotificationPreview.mockReset().mockImplementation(async (sessionId, includeReply = true) => {
     if (!includeReply) return {};
     const text = await latestMessageText(sessionId, 'assistant');
@@ -191,11 +220,243 @@ const baseDeps = (feishuIm: FakeFeishuIM) => ({
 });
 
 describe('notificationService — channels 分发', () => {
+  // Regression: OS click must keep host + original task + reply anchor through reload,
+  // and a notification from the previous account must not navigate the new account.
+  it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {
+    const { showDesktopSessionEvent, initNotificationService } = await freshService();
+    const { openMainWindowSession } = await import('../deepLink');
+    vi.mocked(openMainWindowSession).mockClear();
+    showDesktopSessionEvent(() => null, {
+      sessionId: 'remote-task', deviceId: 'studio', messageClientId: 'answer', title: 'Reply', kind: 'done',
+    });
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('remote-task', { deviceId: 'studio', messageClientId: 'answer' });
+    ownerScopeCurrent = false;
+    notificationClicks[0]!();
+    expect(openMainWindowSession).toHaveBeenCalledTimes(1);
+    ownerScopeCurrent = true;
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    readSessionNotificationPreview.mockResolvedValue({ reply: { clientId: 'reply-original', text: 'Answer' } });
+    await invokeHandler({ sessionId: 'original', title: 'Reply', kind: 'done' });
+    notificationClicks.at(-1)!();
+    expect(openMainWindowSession).toHaveBeenLastCalledWith('original', { messageClientId: 'reply-original' });
+  });
+
+  it('does not suppress an unread thread merely because its group is focused', async () => {
+    const { showDesktopChatMessage } = await freshService();
+    const payload = { groupId: 'group-1', groupName: 'Group', messageId: 'message-1', senderName: 'Other', avatar: '', preview: 'Reply' };
+    await showDesktopChatMessage(payload, () => true);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    await showDesktopChatMessage({ ...payload, threadRootId: 'thread-2' }, () => true);
+    expect(notificationCtor).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: 'Group', body: 'Other: Reply' }));
+  });
   beforeEach(() => {
     // 每个用例重新注册 handler,避免相互污染。
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  // #6754 review 4373832302 / unit: a finished handoff's delayed event keeps
+  // its host-recorded routing decision; current pending state can already differ.
+  it('uses request ownership after a handoff ends and rejects unknown or cross-session request IDs', async () => {
+    const { initNotificationService } = await freshService();
+    const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const notify = (sessionId: string, inputHandoffRequestId: string) => invokeHandler({
+      sessionId, inputHandoffRequestId, title: 'Bot', kind: 'needs-reply',
+      channels: { desktop: false, feishu: true, mobile: false },
+    });
+    try {
+      await notifyInputHandoffOnce('im-bot', 'settled-request', async () => true);
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notify('other-bot', 'settled-request');
+      forgetInputHandoffNotice('im-bot', 'settled-request');
+      await notify('im-bot', 'settled-request');
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      await notifyInputHandoffOnce('desktop-bot', 'ordinary-request', async () => false);
+      await notify('desktop-bot', 'ordinary-request');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
+  it.each(['owned', 'owner-changed', 'focused', 'muted'] as const)(
+    'keeps desktop independent of delayed handoff ownership (%s)', async outcome => {
+      const { initNotificationService } = await freshService();
+      const { notifyInputHandoffOnce, forgetInputHandoffNotice, clearInputHandoffChannelNotices } =
+        await import('../im/shared/inputHandoffChannelNotice');
+      const feishuIm = makeFeishuIm('owner');
+      let focused = false;
+      initNotificationService({ ...baseDeps(feishuIm), getWindow: () => ({ isFocused: () => focused }) as unknown as BrowserWindow });
+      let release!: (handled: boolean) => void;
+      const decision = new Promise<boolean>(resolve => { release = resolve; });
+      void notifyInputHandoffOnce('bot', 'request', () => decision);
+      try {
+        const pending = registeredHandlers.get('notification:show-session-event')!({}, {
+          sessionId: 'bot', title: 'Bot', kind: 'needs-reply', inputHandoffRequestId: 'request',
+          ...(outcome === 'muted' ? { markAttention: false } : {}),
+          channels: { desktop: true, feishu: true, mobile: false },
+        });
+        // Allow Main's independent identity enrichment to finish; the handoff
+        // routing promise below stays unresolved throughout this desktop check.
+        await flushAsync();
+        expect(notificationCtor).toHaveBeenCalledOnce();
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+        forgetInputHandoffNotice('bot', 'request'); // completion cleanup while resolution is in flight
+        if (outcome === 'owner-changed') ownerScopeCurrent = false;
+        if (outcome === 'focused') focused = true;
+        if (outcome === 'muted') isSessionNotificationsMutedSync.mockReturnValue(true);
+        release(outcome === 'owned');
+        await pending;
+        expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      } finally {
+        clearInputHandoffChannelNotices();
+      }
+    },
+  );
+
+  // #6754 / input-handoff §2.4 / unit: the real notification IPC must not
+  // duplicate Main's channel pointer on successive steps. Both bot tasks have
+  // the same source; only Main's decision for this request distinguishes them.
+  it('deduplicates channel-owned handoff steps while preserving desktop bot fallback and other notices', async () => {
+    const { initNotificationService } = await freshService();
+    const { bindInputHandoffChannelNotice, sendInputHandoffChannelNotice, notifyInputHandoffOnce, clearInputHandoffChannelNotices } =
+      await import('../im/shared/inputHandoffChannelNotice');
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    const statusListeners = new Set<(status: string) => void>();
+    bindInputHandoffChannelNotice({
+      id: 'im-bot',
+      onStatusChange: (listener: (status: string) => void) => {
+        statusListeners.add(listener);
+        return () => statusListeners.delete(listener);
+      },
+    } as unknown as Session, async () => true);
+    const notify = (sessionId: string, kind = 'needs-reply', requestId?: string) => invokeHandler({
+      sessionId, title: 'Bot', kind, ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+      channels: { desktop: true, feishu: true, mobile: false },
+    });
+    const claim = (sessionId: string, requestId: string) => notifyInputHandoffOnce(sessionId, requestId,
+      async () => sendInputHandoffChannelNotice(sessionId, 'pointer', { warn }));
+    try {
+      await claim('im-bot', 'request-1');
+      await notify('im-bot', 'needs-reply', 'request-1'); // first actionable step
+      await notify('im-bot', 'needs-reply', 'request-1'); // next step of the same request
+      expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      expect(markSessionNeedsAttention).toHaveBeenCalledWith('im-bot');
+      expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+
+      await claim('desktop-bot', 'request-desktop');
+      await notify('desktop-bot', 'needs-reply', 'request-desktop'); // ordinary bot: no channel route
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+
+      await notify('im-bot'); // channel route alone must not hide a question
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await claim('im-bot', 'request-2'); // a new handoff request is also owned by Main
+      await notify('im-bot', 'needs-reply', 'request-2');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(2);
+      await notify('im-bot', 'error');
+      await notify('im-bot', 'done');
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(4);
+
+      statusListeners.forEach(listener => listener('closed'));
+      await claim('im-bot', 'request-3');
+      await notify('im-bot', 'needs-reply', 'request-3'); // a removed route cannot suppress a new fallback
+      expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(5);
+    } finally {
+      clearInputHandoffChannelNotices();
+    }
+  });
+
+  it('「消息免打扰」任务不发任何外向提醒，但未读照旧记账', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    // done 与 needs-reply 分别走「预览后的异步分支」和「立即桌面分支」，两条都要断。
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+    await invokeHandler({ sessionId: 'muted', title: 'Muted', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(isSessionNotificationsMutedSync).toHaveBeenCalledWith('muted');
+    expect(markSessionNeedsAttention).toHaveBeenCalledTimes(2);
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
+    expect(feishuIm.sendText).not.toHaveBeenCalled();
+  });
+
+  // bot-autonomy / scheduler 这类 main 内直调方不经过 IPC handler，静音门必须在
+  // 公共出口（showDesktopSessionEvent）上，否则静音任务仍会弹出系统 toast。
+  it('main 内直接调公共出口时同样受静音门禁，其它设备任务不受影响', async () => {
+    const { initNotificationService, showDesktopSessionEvent } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('owner')));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    expect(showDesktopSessionEvent(() => null, { sessionId: 'muted', title: 'Muted', kind: 'needs-reply' })).toBe(false);
+    expect(notificationCtor).not.toHaveBeenCalled();
+
+    // 其它设备的任务（markAttention: false）不查本机静音标记，照旧弹。
+    expect(showDesktopSessionEvent(() => null, { sessionId: 'muted', title: 'Remote', kind: 'needs-reply', markAttention: false })).toBe(true);
+    expect(notificationCtor).toHaveBeenCalledOnce();
+  });
+
+  it('keeps remote-device notifications when a local task with the same id is muted', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+
+    // 还原/复制过的库里可能留着同 id 的本地任务行，那是另一条任务：它的静音标记
+    // 不得把其它设备发来的事件压掉（renderer 对远端任务传 markAttention: false）。
+    await invokeHandler({
+      sessionId: 'collision',
+      title: 'Remote',
+      kind: 'needs-reply',
+      markAttention: false,
+      channels: { desktop: true, feishu: true, mobile: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'collision', muteExempt: true }),
+    );
+  });
+
+  it('keeps every channel for a task that is not muted', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({ sessionId: 'loud', title: 'Loud', kind: 'needs-reply', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
+  });
+
+  it('re-checks the mute after preview enrichment so muting during the wait still suppresses', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('owner');
+    // 交接判定是发出去之前的最后一个 await，就在那里把免打扰打开。
+    const check = vi.fn(async () => {
+      isSessionNotificationsMutedSync.mockReturnValue(true);
+      return false;
+    });
+    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:1:2', fallbackEventId: 'turn:1:2', ended: true });
+
+    await invokeHandler({ sessionId: 's1', title: 'Mid-flight', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
+
+    expect(check).toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
   });
 
   it('hands off delegated completion on every external channel while preserving task attention and consuming retries', async () => {
@@ -320,6 +581,8 @@ describe('notificationService — channels 分发', () => {
       { sessionId: 's1', title: 'x'.repeat(1025), kind: 'done' },
       { sessionId: 's1', title: 'x', kind: 'done', channels: 'all' },
       null,
+      ...['', 1, 'x'.repeat(257)].map(inputHandoffRequestId => ({ sessionId: 's1', title: 'x', kind: 'needs-reply', inputHandoffRequestId })),
+      { sessionId: 's1', title: 'x', kind: 'done', inputHandoffRequestId: 'request' },
     ];
     for (const payload of invalids) {
       await expect(invokeHandler(payload)).rejects.toThrow('invalid session event payload');
@@ -396,6 +659,30 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenCalled();
     await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
       .rejects.toThrow('invalid session event payload');
+  });
+
+  it('rejects a caller that is not the Cindy renderer before any channel or badge work', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    // 插件 webview 等其它 webContents 能调到同一个 channel:来源断言失败时
+    // 不得记角标，也不得把 title/kind 经飞书或手机送出去。
+    assertTrustedAppRendererEvent.mockImplementationOnce(() => {
+      throw new Error('PERMISSION_DENIED');
+    });
+
+    await expect(
+      invokeHandler({
+        sessionId: 's1',
+        title: 'Fix login',
+        kind: 'done',
+        channels: { desktop: true, feishu: true, mobile: true },
+      }),
+    ).rejects.toThrow('PERMISSION_DENIED');
+
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(1);
+    expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
   });
 
   it('does not treat a pre-drain running snapshot as a reason to lose the completion fallback', async () => {
@@ -528,6 +815,7 @@ describe('notificationService — channels 分发', () => {
     await registeredHandlers.get('notification:show-session-event')!({}, {
       sessionId: 's1', title: 'Hello', kind, channels: { desktop: true, mobile: true },
     });
+    await vi.advanceTimersByTimeAsync(0);
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
@@ -590,40 +878,39 @@ describe('notificationService — channels 分发', () => {
     expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', teammateBotId: 'bot-1', teammateAvatar: { kind: 'preset', value: 'cindy' } }));
   });
 
-  it('routes a teammate approval push to the teammate chat without changing its title or fallback', async () => {
+  it.each(['error', 'needs-reply'] as const)('routes teammate %s with its actual identity and state, never an older answer', async (kind) => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
-    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', teammateBotId: 'bot-1' });
-    await invokeHandler({ sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true } });
+    readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Cindy', teammateBotId: 'bot-1', teammateAvatar: { kind: 'jpeg', value: 'YQ==' } });
+    await invokeHandler({ sessionId: 's1', title: 'Hello', kind, channels: { desktop: true, feishu: false, mobile: true } });
     await flushAsync();
     expect(sendMobileSessionNotify).toHaveBeenCalledWith({
-      sessionId: 's1', title: 'Hello', kind: 'needs-reply', generation: 7, teammateBotId: 'bot-1',
+      sessionId: 's1', title: 'Cindy', kind, generation: 7, teammateBotId: 'bot-1', teammateAvatar: { kind: 'jpeg', value: 'YQ==' },
     });
+    expect(latestMessageText).not.toHaveBeenCalled();
+    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ title: 'Cindy', icon: expect.objectContaining({ bytes: Buffer.from('a') }) }));
     // A failed identity read keeps the ordinary push.
     sendMobileSessionNotify.mockClear();
     readSessionNotificationPreview.mockRejectedValueOnce(new Error('read unavailable'));
-    await invokeHandler({ sessionId: 's2', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true } });
+    await invokeHandler({ sessionId: 's2', title: 'Hello', kind, channels: { desktop: false, feishu: false, mobile: true } });
     await flushAsync();
-    expect(sendMobileSessionNotify).toHaveBeenCalledWith({ sessionId: 's2', title: 'Hello', kind: 'needs-reply', generation: 7 });
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith({ sessionId: 's2', title: 'Hello', kind, generation: 7 });
   });
 
-  it('does not let a slow teammate lookup spend the approval push preview window', async () => {
+  it('bounds a slow approval identity lookup without reusing the previous answer', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
     vi.useFakeTimers();
     readSessionNotificationPreview.mockReturnValueOnce(new Promise(() => {}));
-    let releaseDrain!: () => void;
-    drainPersistQueue.mockReturnValueOnce(new Promise<void>((resolve) => { releaseDrain = resolve; }));
-    latestMessageText.mockResolvedValueOnce('要删除 build 目录吗？');
+    latestMessageText.mockResolvedValueOnce('上一轮已完成');
     await registeredHandlers.get('notification:show-session-event')!({}, {
       sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true },
     });
-    // The reply read starts without waiting for the routing lookup.
-    releaseDrain();
+    // A missing identity cannot indefinitely hide the action request.
     await vi.advanceTimersByTimeAsync(1_000);
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
     expect(sendMobileSessionNotify).toHaveBeenCalledWith({
-      sessionId: 's1', title: 'Hello', kind: 'needs-reply', generation: 7, detail: '要删除 build 目录吗？',
+      sessionId: 's1', title: 'Hello', kind: 'needs-reply', generation: 7,
     });
   });
 
@@ -786,18 +1073,18 @@ describe('notificationService — channels 分发', () => {
     expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
   });
 
-  it('伙伴最终答复没有可读正文时飞书使用本地化新回复兜底', async () => {
+  it('伙伴纯图片回复使用本地化图片摘要而不是泛泛新回复', async () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('ou_owner');
     initNotificationService(baseDeps(feishuIm));
     readSessionNotificationPreview.mockImplementation(async (_id, includeReply = true) => ({
       teammateName: 'Mika', eventId: 'turn:300:400',
-      ...(includeReply ? { reply: { clientId: 'final-2', text: '![image](https://example.com/chart.png)' } } : {}),
+      ...(includeReply ? { reply: { clientId: 'final-2', text: '![](https://example.com/chart.png)' } } : {}),
     }));
 
     await invokeHandler({ sessionId: 'bot-main', title: 'Old title', kind: 'done', channels: { desktop: false, feishu: true } });
 
-    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Mika\n有新回复');
+    expect(feishuIm.sendText).toHaveBeenCalledWith('ou_owner', 'Mika\n图片');
     expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
   });
 
@@ -893,6 +1180,7 @@ describe('notificationService — channels 分发', () => {
     );
 
     notificationCtor.mockClear();
+    notificationClicks.length = 0;
     showDesktopSessionEvent(() => null, { sessionId: '', title: '', kind: 'error' });
     expect(notificationCtor).toHaveBeenCalledWith(
       expect.objectContaining({

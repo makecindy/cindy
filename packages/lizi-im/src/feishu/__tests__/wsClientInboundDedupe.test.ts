@@ -196,7 +196,7 @@ describe('feishu inbound message dedupe', () => {
     expect(events[0].text).toBe('出行要注意什么吗');
   });
 
-  it('重推不留任何副作用: 群主流的重推不会再开一次话题', async () => {
+  it('重推不留任何副作用: 群主流只派发一次且不开话题', async () => {
     const events = collectMessages();
     await connect();
 
@@ -214,7 +214,7 @@ describe('feishu inbound message dedupe', () => {
     await mocks.eventHandlers['im.message.receive_v1'](mainFlow);
     await mocks.eventHandlers['im.message.receive_v1'](mainFlow);
 
-    expect(mocks.openThread).toHaveBeenCalledTimes(1);
+    expect(mocks.openThread).not.toHaveBeenCalled();
     expect(events).toHaveLength(1);
   });
 

@@ -7,7 +7,6 @@ export default {
   entries: [
     { id: 'general', tab: 'general', targetId: 'settings-panel-general', titleKey: 'settings.tabs.general', sectionKey: 'settings.tabs.general' },
     { id: 'general.user', tab: 'general', targetId: 'settings-search-target-general-user', titleKey: 'settings.sections.user', sectionKey: 'settings.sections.user' },
-    { id: 'general.appearance', tab: 'general', targetId: 'settings-search-target-general-appearance', titleKey: 'settings.sections.appearance', sectionKey: 'settings.sections.appearance' },
     { id: 'general.language', tab: 'general', targetId: 'settings-search-target-general-language', titleKey: 'settings.sections.language', sectionKey: 'settings.sections.language' },
     { id: 'general.notifications', tab: 'general', targetId: 'settings-notifications', titleKey: 'settings.sections.notifications', sectionKey: 'settings.sections.notifications' },
     { id: 'general.bots', tab: 'general', targetId: 'settings-bots', titleKey: 'settings.sections.bots', sectionKey: 'settings.sections.bots' },

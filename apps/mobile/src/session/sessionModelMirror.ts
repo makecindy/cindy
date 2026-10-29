@@ -22,7 +22,7 @@ import type { MobileModelMemoryAccessors } from './draftModelMemory';
 /** 单槽:某 (agent, 来源) 下每个模型的 effort/fast 镜像。 */
 interface Slot {
   effortByModel: Record<string, string>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
 }
 
 // sessionId → (`${agent}:${providerId}` → Slot)
@@ -74,7 +74,7 @@ function setMirrorEffort(sessionId: string, agent: AgentKind, providerId: string
   emit();
 }
 
-function setMirrorFast(sessionId: string, agent: AgentKind, providerId: string, model: string, enabled: boolean): void {
+function setMirrorFast(sessionId: string, agent: AgentKind, providerId: string, model: string, enabled: boolean | 'ultrafast'): void {
   if (!sessionId || !providerId || !model) return;
   const slot = getSlot(sessionId, agent, providerId, true)!;
   if (slot.fastByModel[model] === enabled) return;
@@ -103,7 +103,7 @@ export function applySessionModelPrefPush(payload: unknown): void {
   if (typeof p.effort === 'string' && p.effort.length > 0) {
     setMirrorEffort(p.sessionId, p.agent, p.providerId, p.model, p.effort);
   }
-  if (typeof p.fast === 'boolean') {
+  if ((typeof p.fast === 'boolean' || p.fast === 'ultrafast')) {
     setMirrorFast(p.sessionId, p.agent, p.providerId, p.model, p.fast);
   }
 }
@@ -124,7 +124,7 @@ export function makeSessionMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: string; fast?: boolean },
+    patch: { effort?: string; fast?: boolean | 'ultrafast' },
   ) => void,
 ): MobileModelMemoryAccessors {
   return {

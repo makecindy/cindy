@@ -6,6 +6,7 @@
  * Empty model preferences use the originating task or the current new-task route.
  * New ordinary tasks use ask; the legacy adapter retains its historical default.
  * Permissions stay independently user-owned, never caller-inherited.
+ * A plugin that hides its Host task card does not read or use this store at runtime.
  * Model admission belongs to the shared ordinary-session resolver, never this store.
  * The same model fields are the plugin's single "model" preference: Cindy quick
  * answers (cindy.text.oneshot) use them too; empty = the system auxiliary model.
@@ -55,7 +56,7 @@ export interface PluginTaskConfig {
   agentKind?: PluginTaskAgentKind;
   model?: string;
   effort?: PluginTaskEffort;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string;
   permissionMode?: GhostErrandPermissionMode;
   /** 绝对路径(用户亲选的项目目录);缺省 = 专属对话目录。 */
@@ -101,7 +102,7 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   ) {
     cfg.effort = r.effort as PluginTaskEffort;
   }
-  if (typeof r.fastMode === 'boolean') cfg.fastMode = r.fastMode;
+  if ((typeof r.fastMode === 'boolean' || r.fastMode === 'ultrafast')) cfg.fastMode = r.fastMode;
   if (typeof r.providerId === 'string' && r.providerId.length > 0 && r.providerId.length <= 128) {
     cfg.providerId = r.providerId;
   }

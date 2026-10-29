@@ -64,7 +64,7 @@ it.each(['ordinary-caller', 'remote-target', 'worker-target', 'owner-switch'])('
     isAppSessionBoundaryPending: () => false,
     activeOwnerScopeKey: () => owner,
     ownerScopedUserDataPath: () => '/synthetic-owner-home',
-    resolveWorkbenchCaller: async () => reason === 'ordinary-caller' ? { ok: false } : { ok: true, botId: 'creator' },
+    resolveBotTaskCreator: async () => reason === 'ordinary-caller' ? null : 'creator',
     readWorkbenchTarget: async () => ({ status: 'active', botLinked: false, remoteHostId: reason === 'remote-target' ? 'remote' : null, orcaRole: reason === 'worker-target' ? 'worker' : null }),
     setTaskResponsibility: save,
     broadcastBotWorkbenchChanged: vi.fn(),

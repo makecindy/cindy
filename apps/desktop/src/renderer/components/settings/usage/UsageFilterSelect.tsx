@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 import { Check, ChevronDown } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -18,7 +18,7 @@ export interface UsageFilterOption {
 }
 
 const itemClassName =
-  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[highlighted]:bg-[var(--surface-hover)] data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)] data-[disabled]:cursor-default data-[disabled]:opacity-50';
+  'flex w-full cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-13 text-[var(--text-primary)] outline-none data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)] data-[disabled]:cursor-default data-[disabled]:opacity-50';
 
 export function UsageFilterSelect({
   value,
@@ -41,7 +41,7 @@ export function UsageFilterSelect({
       <Select.Trigger
         aria-label={ariaLabel}
         className={cn(
-          'flex h-9 w-[190px] max-w-full items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)] disabled:cursor-default disabled:opacity-50',
+          'flex h-9 w-[190px] max-w-full items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-default disabled:opacity-50',
           className,
         )}
       >
@@ -58,7 +58,7 @@ export function UsageFilterSelect({
           side="bottom"
           align="end"
           sideOffset={4}
-          className="z-[10010] max-h-[var(--radix-select-content-available-height)] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1"
+          className="z-[10010] max-h-[var(--radix-select-content-available-height)] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5"
         >
           <Select.Viewport>
             {options.map((option) => (

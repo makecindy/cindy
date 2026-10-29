@@ -5,7 +5,7 @@ import {
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from 'react';
-import { AlertCircle, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, Stethoscope, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { cn } from '@/lib/utils';
@@ -17,6 +17,8 @@ interface ErrorNoticeProps extends Omit<ComponentPropsWithoutRef<'div'>, 'childr
   description?: ReactNode;
   actions?: ReactNode;
   details?: string;
+  /** Offered only after the user expands details; the caller decides where diagnosis happens. */
+  onDiagnose?: () => void;
   icon?: ReactNode;
   onDismiss?: () => void;
   dismissLabel?: string;
@@ -30,6 +32,7 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
     description,
     actions,
     details,
+    onDiagnose,
     icon,
     onDismiss,
     dismissLabel,
@@ -75,6 +78,19 @@ export const ErrorNotice = forwardRef<HTMLDivElement, ErrorNoticeProps>(function
             >
               {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               {t(expanded ? 'chat.errorBanner.networkHideRaw' : 'chat.errorBanner.networkShowRaw')}
+            </Button>
+          )}
+          {details && expanded && onDiagnose && (
+            <Button
+              size="sm"
+              compact
+              type="button"
+              data-split-pane-route-action=""
+              onClick={onDiagnose}
+              title={t('chat.errorBanner.diagnoseTitle')}
+            >
+              <Stethoscope size={12} />
+              {t('chat.errorBanner.diagnose')}
             </Button>
           )}
         </div>

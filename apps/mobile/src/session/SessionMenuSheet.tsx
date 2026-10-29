@@ -1,3 +1,4 @@
+import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
 import type { OpenAiAccountProvider } from './sessionControls';
@@ -30,6 +31,7 @@ import {
   PinOff,
   RefreshCw,
   Search,
+  MessageSquarePlus,
   Sparkles,
   Trash2,
 } from 'lucide-react-native';
@@ -50,7 +52,7 @@ import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { MobileMakerTransport, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
-import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
+import type { CodexResetAutoUseSettings, MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -122,6 +124,7 @@ export interface SessionMenuSheetProps {
   modelLabel?: string | null;
   messageOnly?: boolean;
   onOpenSearch?: () => void;
+  onOpenSideChats?: () => void;
   accountProvider?: OpenAiAccountProvider;
   usageReader: SessionMenuUsageReader & Pick<MobileMakerTransport, 'getContextUsage'>;
   /**
@@ -145,6 +148,7 @@ export interface SessionMenuSheetProps {
   codexRateLimits: MobileCodexRateLimitsResult | null;
   codexResetBusy: boolean;
   onResetCodexRateLimits(): void;
+  onSaveCodexResetAutoUse?: (patch: Partial<CodexResetAutoUseSettings> | null) => Promise<void>;
   onRefreshAccountUsage(): void;
   extraDirBrowser?: SessionExtraDirBrowserState | null;
   onLoadExtraDirPath(path: string): void;
@@ -164,7 +168,10 @@ export interface SessionMenuSheetProps {
   worker?: SessionMenuWorkerActions;
   leavingSharing?: boolean;
   onTogglePinned(): void;
-  onArchive(): void;
+  /** 由调用方在列表预览事务内等待确认，再提交归档。 */
+  onArchive(prepare: (isCurrent: () => boolean) => Promise<boolean>): void;
+  /** 菜单收起后执行归档确认(如绑定了自动化);返回 false 时留在当前任务、不归档。 */
+  confirmArchive?: (isCurrent: () => boolean) => Promise<boolean>;
   onRestore(): void;
   onDelete(): void;
   onClose(): void;
@@ -178,6 +185,7 @@ export function SessionMenuSheet({
   modelLabel,
   messageOnly = false,
   onOpenSearch,
+  onOpenSideChats,
   usageReader,
   accountUsageReader = usageReader,
   accountProvider,
@@ -190,6 +198,7 @@ export function SessionMenuSheet({
   codexRateLimits,
   codexResetBusy,
   onResetCodexRateLimits,
+  onSaveCodexResetAutoUse,
   onRefreshAccountUsage,
   extraDirBrowser,
   onLoadExtraDirPath,
@@ -204,6 +213,7 @@ export function SessionMenuSheet({
   leavingSharing = false,
   onTogglePinned,
   onArchive,
+  confirmArchive,
   onRestore,
   onDelete,
   onClose,
@@ -213,6 +223,13 @@ export function SessionMenuSheet({
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const pendingArchiveRef = useRef<(() => void) | null>(null);
+  const handleClosed = useCallback(() => {
+    const archive = pendingArchiveRef.current;
+    pendingArchiveRef.current = null;
+    onClosed?.();
+    archive?.();
+  }, [onClosed]);
   const menuUsage = useSessionMenuUsage(
     session,
     usageReader,
@@ -485,8 +502,13 @@ export function SessionMenuSheet({
         onClose();
         return;
       case 'archive':
-        if (session.status === 'archived') onRestore();
-        else onArchive();
+        if (session.status === 'archived') {
+          onRestore();
+          onClose();
+          return;
+        }
+        // 先响应点击收起菜单，关闭动画结束后再查询/弹确认，避免原生 Modal 吞掉 Alert。
+        pendingArchiveRef.current = () => onArchive(confirmArchive ?? (async () => true));
         onClose();
         return;
       case 'delete':
@@ -495,7 +517,7 @@ export function SessionMenuSheet({
       default:
         return;
     }
-  }, [confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
+  }, [confirmArchive, confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
 
   const currentExtraDirs = normalizeExtraDirs(session.extraDirs ?? undefined);
   const addExtraDir = useCallback((path: string) => {
@@ -594,7 +616,7 @@ export function SessionMenuSheet({
     );
   }, [codexRateLimits, codexResetBusy, onResetCodexRateLimits, resetSummary, t]);
 
-  const tagsSheet = useTaskTagsSheet(visible, onClosed);
+  const tagsSheet = useTaskTagsSheet(visible, handleClosed);
   const menuContent = (
     <View style={styles.menuBody} testID="session.menuSheetBody">
       {renaming ? (
@@ -677,22 +699,11 @@ export function SessionMenuSheet({
             <WorkerMenuActions onClose={onClose} worker={worker} />
           ) : null}
 
-          {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
+          {onOpenSideChats ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
-              label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
-              onPress: onLeaveSharing, testID: 'session.leaveSharingButton',
+              label: t('session.sideChat.title'), onPress: onOpenSideChats, testID: 'session.sideChat.entry',
             }]} /> : <View style={styles.actionGroup}>
-              <MenuActionRow icon={LogOut} label={t('sharedTask.leave')} danger disabled={leavingSharing}
-                onPress={onLeaveSharing} testID="session.leaveSharingButton" />
-            </View>
-          ) : !messageOnly && onOpenSharing && !isSharedTaskPeer(session.deviceLinkDeviceId) ? (
-            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
-              label: t('sharedTask.title'),
-              onPress: onOpenSharing,
-              testID: 'session.sharingButton',
-            }]} /> : <View style={styles.actionGroup}>
-              <MenuActionRow icon={Link2} label={t('sharedTask.title')}
-                onPress={onOpenSharing} testID="session.sharingButton" />
+              <MenuActionRow icon={MessageSquarePlus} label={t('session.sideChat.title')} onPress={onOpenSideChats} testID="session.sideChat.entry" />
             </View>
           ) : null}
           {Platform.OS === 'ios' ? (
@@ -716,6 +727,25 @@ export function SessionMenuSheet({
               />
             ))}
           </View>}
+
+          {workerMode ? null : !messageOnly && isSharedTaskPeer(session.deviceLinkDeviceId) && onLeaveSharing ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.leave'), danger: true, disabled: leavingSharing,
+              onPress: onLeaveSharing, testID: 'session.leaveSharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={LogOut} label={t('sharedTask.leave')} danger disabled={leavingSharing}
+                onPress={onLeaveSharing} testID="session.leaveSharingButton" />
+            </View>
+          ) : !messageOnly && onOpenSharing && !isSharedTaskPeer(session.deviceLinkDeviceId) ? (
+            Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
+              label: t('sharedTask.title'),
+              onPress: onOpenSharing,
+              testID: 'session.sharingButton',
+            }]} /> : <View style={styles.actionGroup}>
+              <MenuActionRow icon={Link2} label={t('sharedTask.title')}
+                onPress={onOpenSharing} testID="session.sharingButton" />
+            </View>
+          ) : null}
 
           {onOpenSearch && !workerMode ? (
             Platform.OS === 'ios' ? <SessionDetailsNativeActions actions={[{
@@ -829,11 +859,12 @@ export function SessionMenuSheet({
           {resetSummary?.rows.map((row, index) => (
             <InfoRow key={`reset:${row.label}:${index}`} label={row.label} value={row.value} />
           ))}
+          {codexRateLimits?.autoUse && onSaveCodexResetAutoUse && <CodexResetAutoUseControl key={codexRateLimits.autoUse.accountKey} state={codexRateLimits.autoUse} onSave={onSaveCodexResetAutoUse} />}
           {resetSummary?.canReset ? (
             <>
-              <Text style={styles.infoCaption}>
+              {resetSummary.shouldPrompt && <Text style={styles.infoCaption}>
                 {t('session.menu.quotaExhaustedResettable')}
-              </Text>
+              </Text>}
               <View style={styles.infoActionRow}>
                 <MenuPillButton
                   busy={codexResetBusy}

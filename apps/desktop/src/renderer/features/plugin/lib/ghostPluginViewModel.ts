@@ -2,12 +2,13 @@
  * Plugin list/detail view models derived only from the installed Ghost contract.
  *
  * Inputs: shared Ghost manifests and install records.
- * Outputs: renderer-safe list/detail facts without marketplace or runtime invention.
+ * Outputs: renderer-safe list/detail facts, including the optional Host task settings card.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 import {
   ghostContentKeys,
+  ghostFallbackDisplayAuthor,
   ghostPermissionItems,
   type GhostInstallApproval,
   type GhostPermissionItem,
@@ -26,6 +27,7 @@ export interface GhostPluginListItem {
   ghostId: string;
   name: string;
   description: string;
+  publisherKind?: PluginMarketItem['publisherKind'];
   version: string;
   enabled: boolean;
   canUse: boolean;
@@ -67,6 +69,7 @@ export function ghostPrimaryAction(
   return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
+  releaseNotes?: string;
   trust: GhostTrustInfo;
   author: string | null;
   contents: readonly string[];
@@ -76,7 +79,7 @@ export interface GhostPluginDetail extends GhostPluginListItem {
   /**
    * 宿主「模型与任务」卡:插件的唯一模型字段(快问快答与新建任务共用)。声明了
    * 快问快答(cindy.text 含 oneshot)或任何新建任务能力即展示;图像/视频/向量
-   * 没有逐插件选模,始终跟随系统默认。
+   * 没有逐插件选模,始终跟随系统默认。showTaskPreferences:false 仅隐藏该卡。
    */
   hasTaskPreferences: boolean;
   /** 能新建任务(agent.tasks / 旧 agent.errand / workspace):卡片额外展示权限与工作目录。 */
@@ -95,13 +98,14 @@ export interface GhostPluginMarketPresentation {
   name: string;
   description: string;
   author: string | null;
+  publisherKind?: PluginMarketItem['publisherKind'];
   iconDataUrl: string | undefined;
 }
 
 /**
  * Returns a market presentation only when the installed package is the exact
- * market-owned version. A local install, a conflicting ghostId, an unavailable
- * market item, or a pending version update must keep using its local manifest.
+ * market-owned version. A verified older installation keeps its local content
+ * and uses only the saved public attribution and privacy projection from Main.
  */
 export function marketPresentationForInstalledGhost(
   ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
@@ -114,16 +118,27 @@ export function marketPresentationForInstalledGhost(
         | 'name'
         | 'description'
         | 'author'
+        | 'installedAuthor'
         | 'icon'
         | 'sourceType'
       > &
-        Pick<PluginMarketItem, 'namespace'>)
+        Pick<PluginMarketItem, 'namespace'> &
+        Partial<Pick<PluginMarketItem, 'scope' | 'publisherKind'>>)
     | null
     | undefined,
 ): GhostPluginMarketPresentation | null {
   if (
     !marketItem ||
-    !marketItemMatchesInstalledGhost(marketItem, ghost) ||
+    !marketItemMatchesInstalledGhost(marketItem, ghost)
+  ) return null;
+  const publisherKind = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : undefined;
+  if (marketItem.sourceType === 'server' && marketItem.installState === 'update-available'
+    && marketItem.installedAuthor !== undefined) {
+    return { name: ghost.manifest.name, description: ghost.manifest.description ?? '',
+      iconDataUrl: ghost.iconDataUrl, author: marketItem.installedAuthor, publisherKind };
+  }
+  if (
     marketItem.installState !== 'installed' ||
     marketItem.version !== ghost.manifest.version
   ) {
@@ -133,6 +148,7 @@ export function marketPresentationForInstalledGhost(
     name: marketItem.name,
     description: marketItem.description ?? '',
     author: marketItem.author,
+    publisherKind,
     iconDataUrl:
       marketItem.sourceType === 'git-market' && !marketItem.icon
         ? ghost.iconDataUrl
@@ -255,8 +271,8 @@ export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id' |
 /**
  * 将安装清单转换成列表卡片需要的最小字段。
  *
- * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
- * runtime 中没有事实来源,页面不应继续展示伪数据。
+ * 安装量、使用量等没有事实来源的旧原型字段不加入；发布身份仅消费
+ * Host 核实后的 public 市场投影，不能从包内声明或昵称推断。
  */
 export function toGhostPluginListItem(
   ghost: InstalledGhost,
@@ -273,6 +289,7 @@ export function toGhostPluginListItem(
     ghostId: manifest.id,
     name: display.name,
     description: display.description,
+    publisherKind: presentation?.publisherKind,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -308,12 +325,15 @@ export function toGhostPluginDetail(
   return {
     ...listItem,
     trust: listItem.trust!,
-    author: presentation ? presentation.author : (manifest.author ?? null),
+    releaseNotes: manifest.releaseNotes,
+    author: presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],
     hasSettingsUi: Boolean(manifest.settingsHtml),
-    hasTaskPreferences: hasPluginTasks || (manifest.cindy?.text ?? []).includes('oneshot'),
+    hasTaskPreferences:
+      manifest.showTaskPreferences !== false &&
+      (hasPluginTasks || (manifest.cindy?.text ?? []).includes('oneshot')),
     hasPluginTasks,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,

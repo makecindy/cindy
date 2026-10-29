@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, afterEach, it, expect, vi } from 'vitest';
-import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import { useRemoteModelFavorites, __resetRemoteModelFavoritesCacheForTest } from '@/state/useRemoteModelFavorites';
 const item = {
   uid: 'fav-2',
   providerId: 'remote-account',
@@ -34,9 +34,23 @@ beforeEach(() => {
       },
     },
   });
+  __resetRemoteModelFavoritesCacheForTest();
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+// 回归:远控时模型面板每次打开都重新挂载，收藏从空列表开始、等读回来才出现。
+// 重新挂载先显示上次读到的收藏，后台读到新的再替换。
+it('a freshly mounted panel shows the last favorites while the fresh read is in flight', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  act(() => root.unmount());
+  root = createRoot(document.createElement('div'));
+  let resolve!: (v: unknown) => void;
+  invoke.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  await act(async () => root.render(createElement(Probe, {})));
+  expect(view.items).toEqual([item]);
+  await act(async () => resolve([{ ...item, effort: 'low' }]));
+  expect(view.items[0]?.effort).toBe('low');
+});
 it('does not refresh for an opened or administratively cleared breaker', async () => {
   await act(async () => root.render(createElement(Probe, {})));
   invoke.mockClear();

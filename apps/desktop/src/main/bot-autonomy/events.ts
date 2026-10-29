@@ -41,6 +41,8 @@ export const AUTONOMY_EVENT_FIELDS: readonly (keyof AutonomyEventData)[] = [
   'creatorBotId',
   'followerBotId',
   'occurrence',
+  'executionInstanceId',
+  'executionGeneration',
 ];
 
 /** 宿主内置事件源声明；引擎每次创建后由宿主重新登记。 */
@@ -77,7 +79,7 @@ export function dueEventType(row: WatchedSession, now: number): AutonomyEventTyp
     case 'finished':
       // 自动化运行的任务有自己的结果通知，「做完」不再叫醒伙伴；卡住 / 等你 / 出错照常。
       // 伙伴主任务的一轮回复做完不是「任务做完」：否则别的伙伴每回一句话都会叫醒总调度。
-      return row.source === 'routine' || row.canonicalOfBotId ? null : 'finished';
+      return row.source === 'routine' || row.canonicalOfBotId || !row.finalDelivery ? null : 'finished';
     default:
       return null;
   }
@@ -166,6 +168,10 @@ export function toRoutineEvent(candidate: AutonomyEventCandidate, now: number): 
     creatorBotId: row.creatorBotId ?? '',
     followerBotId: row.followerBotId ?? '',
     occurrence: candidate.occurrence,
+    ...(row.execution ? {
+      executionInstanceId: row.execution.instanceId,
+      executionGeneration: row.execution.generation,
+    } : {}),
   };
   return {
     id: candidate.id,

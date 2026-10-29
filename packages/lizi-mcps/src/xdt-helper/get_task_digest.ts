@@ -4,7 +4,8 @@
  * 给被程序叫醒的伙伴用:先读这一份再决定继续、代答、换模型还是提醒主人,不必拉整段聊天记录。
  * 本机任务直接给 id;另一台电脑上的任务写 deviceId::sessionId(只读,对方须在线)。
  * 宿主负责取数;本文件只负责输出合同:每段文字 ≤300 字,整份 JSON ≤2KB(UTF-8 字节),
- * 超出时先收紧长文字、最后置空,不截断成非法 JSON。
+ * 正文超出时先收紧长文字、最后置空;可选链接仅在剩余预算内保留,不挤占正文。
+ * 不截断成非法 JSON;必填元数据仍装不下时返回短错误。
  */
 import { z } from 'zod';
 
@@ -28,11 +29,12 @@ export interface TaskDigestRoute {
   provider_id: string | null;
   model: string;
   effort: string | null;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
 }
 
 export interface TaskDigestWire {
   session_id: string;
+  sessionUrl?: string;
   /** 另一台电脑的名字;本机为 null。 */
   device: string | null;
   title: string;
@@ -68,34 +70,39 @@ export const TASK_DIGEST_TEXT_MAX = 300;
 const TITLE_MAX = 120;
 const SHRINKABLE = ['last_assistant_line', 'last_user_ask', 'pending_question', 'error', 'pr_status'] as const;
 
-function clip(value: string | null | undefined, max: number): string | null {
+function clip(value: string | null | undefined, max: number, keepEnd = false): string | null {
   if (typeof value !== 'string') return null;
   const text = value.replace(/\s+/g, ' ').trim();
   if (!text) return null;
   const chars = Array.from(text);
-  return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
+  if (chars.length <= max) return text;
+  if (!keepEnd) return `${chars.slice(0, max - 1).join('')}…`;
+  const head = Math.floor((max - 1) / 2);
+  return `${chars.slice(0, head).join('')}…${chars.slice(chars.length - (max - 1 - head)).join('')}`;
 }
 
 const encoder = new TextEncoder();
 const payloadBytes = (digest: TaskDigestWire) =>
   encoder.encode(JSON.stringify({ ok: true, ...digest })).length;
 
-/** 输出合同:文字逐段 ≤300 字,整份(含 ok 外壳)≤2KB。 */
+/** 尽力收缩文字与可选字段;handler 负责拒绝仍超过 2KB 的必填元数据。 */
 export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
   const digest: TaskDigestWire = {
     ...raw,
     title: clip(raw.title, TITLE_MAX) ?? '',
     last_user_ask: clip(raw.last_user_ask, TASK_DIGEST_TEXT_MAX),
-    last_assistant_line: clip(raw.last_assistant_line, TASK_DIGEST_TEXT_MAX),
+    last_assistant_line: clip(raw.last_assistant_line, TASK_DIGEST_TEXT_MAX, true),
     pending_question: clip(raw.pending_question, TASK_DIGEST_TEXT_MAX),
     error: clip(raw.error, TASK_DIGEST_TEXT_MAX),
     pr_status: clip(raw.pr_status, TASK_DIGEST_TEXT_MAX),
   };
+  // 先分配摘要内容的预算,避免可选链接导致正文或建议路线被清空。
+  delete digest.sessionUrl;
   for (let max = TASK_DIGEST_TEXT_MAX; payloadBytes(digest) > TASK_DIGEST_MAX_BYTES && max >= 20; max = Math.floor(max / 2)) {
-    for (const key of SHRINKABLE) digest[key] = clip(digest[key], max);
+    for (const key of SHRINKABLE) digest[key] = clip(digest[key], max, key === 'last_assistant_line');
     digest.title = clip(digest.title, Math.min(TITLE_MAX, max)) ?? '';
   }
-  // 极端情况(超长 id / 模型名):去掉可选文字,保证合同成立。
+  // 极端情况(超长 id / 模型名):继续去掉可选文字,不破坏任务身份。
   for (const key of SHRINKABLE) {
     if (payloadBytes(digest) <= TASK_DIGEST_MAX_BYTES) break;
     digest[key] = null;
@@ -104,17 +111,23 @@ export function boundTaskDigest(raw: TaskDigestWire): TaskDigestWire {
     digest.suggested_route = null;
     digest.title = clip(digest.title, 20) ?? '';
   }
+  if (raw.sessionUrl !== undefined) {
+    digest.sessionUrl = raw.sessionUrl;
+    if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) delete digest.sessionUrl;
+  }
   return digest;
 }
 
 const DESCRIPTION = [
-  '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、主人最后的要求、助手最后一句、待回答的问题、错误、当前模型路线、',
-  '建议换到的下一条路线(你的候选链里还没试过的那条,没有则 null)、PR 状态、排队消息数、谁开的 / 谁在跟。',
+  '已知任务 id、需要给用户任务链接时也用本工具；sessionUrl 可直接写成 [任务标题](sessionUrl)。',
+  '读一件任务的短摘要(≤2KB):状态 phase、已持续分钟数、最近用户消息(排除隐藏协调/续跑输入)、最新助手回复首尾片段、待回答的问题、错误、当前模型路线、',
+  '建议换到的下一条路线(只在出错或撞用量上限、换模型确实有用且装得下当前上下文时,给你候选链里还没试过的那条;否则 null,此时提醒主人)、PR 状态、排队消息数、谁开的 / 谁在跟。',
   'idle_minutes 距最后一次动静的分钟数;tool_in_flight 为 true 表示有工具调用(如长时间构建、测试)正在执行,宿主不知道时不出现。',
   '被程序叫醒跟进任务时先读这一份再决定;要看原文再用 get_chat_history。',
   '作用范围:本机任务直接传 id;另一台电脑上的任务传 deviceId::sessionId(只读,对方须在线)。',
-  'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 刚做完 / idle 空闲。',
-  '换模型用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',
+  'phase:running 运行中 / waiting-permission 等权限 / waiting-answer 等回答 / errored 出错 / usage-limit 撞用量上限 / finished 本轮已结束 / idle 空闲。',
+  'finished 只描述所查任务的本轮，不代表它委派的后台任务或用户目标已完成。下一条消息的派发仍由该任务的实时运行状态和输入队列决定。',
+  'suggested_route 只供判断，不是换模型授权。获得目标和变更的明确授权后才用 set_session_runtime(expected_generation 填 runtime_generation;只支持本机任务)。',
 ].join('\n');
 
 export interface GetTaskDigestToolDeps {
@@ -152,7 +165,14 @@ export function registerGetTaskDigestTool(
         callerSessionId: deps.getSessionContext?.()?.sessionId,
       });
       if (!result.ok) return errorPayload(result.errorCode, result.message);
-      return okPayload({ ...boundTaskDigest(result.digest) });
+      const digest = boundTaskDigest({
+        ...result.digest,
+        ...(deps.history.sessionUrl ? { sessionUrl: deps.history.sessionUrl(result.digest.session_id) } : {}),
+      });
+      if (payloadBytes(digest) > TASK_DIGEST_MAX_BYTES) {
+        return errorPayload('DIGEST_TOO_LARGE', '任务摘要的必填元数据超过 2KB，无法安全返回。');
+      }
+      return okPayload({ ...digest });
     },
   });
 }

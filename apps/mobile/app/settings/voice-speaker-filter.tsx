@@ -266,14 +266,6 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
   );
 
   const enrollmentRows: ReactNode[] = [
-    <View key="description" style={rowStyles.row}>
-      <Text style={rowStyles.rowDetail}>
-        {t('settings.voiceSpeakerFilter.enroll.description', {
-          clips: SPEAKER_ENROLLMENT_CLIP_COUNT,
-          seconds: CLIP_SECONDS,
-        })}
-      </Text>
-    </View>,
     <View key="reader" style={[rowStyles.row, styles.reader]}>
       <View style={styles.steps}>
         {CLIP_INDEXES.map((index) => {
@@ -354,19 +346,25 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
     />,
   ];
 
+  // 录入时说明写在分组下方;未录入时提示「录入后才生效」,已录入时录入日期作为行右侧取值。
+  const profileFooter = enrolling
+    ? t('settings.voiceSpeakerFilter.enroll.description', {
+      clips: SPEAKER_ENROLLMENT_CLIP_COUNT,
+      seconds: CLIP_SECONDS,
+    })
+    : state.enrolled ? null : t('settings.voiceSpeakerFilter.profile.missingHint');
   const profileRows: ReactNode[] = [
     <InfoRow
       key="status"
-      detail={state.enrolled && state.enrolledAt
-        ? t('settings.voiceSpeakerFilter.profile.enrolledAt', {
-          date: new Date(state.enrolledAt).toLocaleDateString(),
-        })
-        : t('settings.voiceSpeakerFilter.profile.missingHint')}
       label={t(state.enrolled
         ? 'settings.voiceSpeakerFilter.profile.enrolled'
         : 'settings.voiceSpeakerFilter.profile.missing')}
       testID="settings.voiceSpeakerFilter.profile.status"
-      value=""
+      value={state.enrolled && state.enrolledAt
+        ? t('settings.voiceSpeakerFilter.profile.enrolledAt', {
+          date: new Date(state.enrolledAt).toLocaleDateString(),
+        })
+        : ''}
     />,
     <ActionInfoRow
       key="enroll"
@@ -397,11 +395,10 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
         onScroll={(event) => { scrollOffset.current = event.nativeEvent.contentOffset.y; }}
         scrollEventThrottle={16}
         contentContainerStyle={styles.content} testID="settings.voiceSpeakerFilter.scroll">
-        <SettingsGroup footer={t('settings.voiceSpeakerFilter.privacy')}>
+        <SettingsGroup footer={state.supported ? t('settings.voiceSpeakerFilter.hint') : t('settings.voiceSpeakerFilter.unsupported')}>
           <SettingsSwitchRow
             accessibilityLabel={t('settings.voiceSpeakerFilter.label')}
             disabled={!state.supported || !state.hydrated || saving}
-            hint={state.supported ? t('settings.voiceSpeakerFilter.hint') : t('settings.voiceSpeakerFilter.unsupported')}
             label={t('settings.voiceSpeakerFilter.label')}
             onValueChange={(value) => {
               if (!value) {
@@ -419,7 +416,7 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
         {showDetails && !modelsReady ? <ModelGroup state={state} /> : null}
 
         {showDetails && modelsReady ? (
-          <SettingsGroup title={t('settings.voiceSpeakerFilter.profile.title')}>
+          <SettingsGroup footer={profileFooter} title={t('settings.voiceSpeakerFilter.profile.title')}>
             {enrolling ? enrollmentRows : profileRows}
           </SettingsGroup>
         ) : null}
@@ -467,17 +464,20 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
 
 function ModelGroup({ state }: { state: MobileSpeakerFilterSnapshot }) {
   const { t } = useTranslation();
-  const rowStyles = useSettingsRowStyles();
   const total = formatMegabytes(state.totalBytes);
+  // 下载进度、所需大小与失败原因都写在分组下方;卡片里只留可点的动作行。
   if (state.modelState === 'downloading') {
     return (
-      <SettingsGroup title={t('settings.voiceSpeakerFilter.model.title')}>
+      <SettingsGroup
+        footer={t('settings.voiceSpeakerFilter.model.downloading', {
+          done: formatMegabytes(state.downloadedBytes),
+          total,
+        })}
+        title={t('settings.voiceSpeakerFilter.model.title')}
+      >
         <ActionInfoRow
           accessibilityLabel={t('settings.voiceSpeakerFilter.model.cancel')}
-          detail={t('settings.voiceSpeakerFilter.model.downloading', {
-            done: formatMegabytes(state.downloadedBytes),
-            total,
-          })}
+          chevron={false}
           label={t('settings.voiceSpeakerFilter.model.cancel')}
           onPress={cancelMobileSpeakerModelDownload}
           testID="settings.voiceSpeakerFilter.model.cancel"
@@ -487,26 +487,26 @@ function ModelGroup({ state }: { state: MobileSpeakerFilterSnapshot }) {
   }
   const failed = state.modelState === 'failed';
   return (
-    <SettingsGroup title={t('settings.voiceSpeakerFilter.model.title')}>
-      {[
-        failed ? (
-          <View key="error" style={rowStyles.row}>
-            <Text accessibilityRole="alert" style={rowStyles.rowDetail}>
-              {t(`settings.voiceSpeakerFilter.model.failed.${state.downloadError ?? 'network'}`)}
-            </Text>
-          </View>
-        ) : null,
-        <ActionInfoRow
-          key="download"
-          accessibilityLabel={t(failed ? 'settings.voiceSpeakerFilter.model.retry' : 'settings.voiceSpeakerFilter.model.download')}
-          detail={failed ? undefined : t('settings.voiceSpeakerFilter.model.needed', { size: total })}
-          label={t(failed ? 'settings.voiceSpeakerFilter.model.retry' : 'settings.voiceSpeakerFilter.model.download')}
-          onPress={() => {
-            void downloadMobileSpeakerModels();
-          }}
-          testID="settings.voiceSpeakerFilter.model.download"
-        />,
-      ]}
+    <SettingsGroup
+      footer={failed ? null : t('settings.voiceSpeakerFilter.model.needed', { size: total })}
+      footerTestID="settings.voiceSpeakerFilter.model.footer"
+      messages={[failed
+        ? {
+            text: t(`settings.voiceSpeakerFilter.model.failed.${state.downloadError ?? 'network'}`),
+            testID: 'settings.voiceSpeakerFilter.model.failed',
+          }
+        : null]}
+      title={t('settings.voiceSpeakerFilter.model.title')}
+    >
+      <ActionInfoRow
+        accessibilityLabel={t(failed ? 'settings.voiceSpeakerFilter.model.retry' : 'settings.voiceSpeakerFilter.model.download')}
+        chevron={false}
+        label={t(failed ? 'settings.voiceSpeakerFilter.model.retry' : 'settings.voiceSpeakerFilter.model.download')}
+        onPress={() => {
+          void downloadMobileSpeakerModels();
+        }}
+        testID="settings.voiceSpeakerFilter.model.download"
+      />
     </SettingsGroup>
   );
 }

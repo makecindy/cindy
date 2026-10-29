@@ -10,10 +10,12 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
+import { listErrorTailPendingRows } from '../sessionActiveTurn.js';
 
 const feature = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
@@ -70,6 +72,12 @@ describe('sessionActiveTurn', () => {
         created_at INTEGER NOT NULL,
         rewind_at INTEGER
       );
+      CREATE UNIQUE INDEX uniq_messages_session_client ON messages (session_id, client_id);
+      CREATE INDEX idx_messages_session_created ON messages (session_id, created_at);
+      CREATE INDEX idx_messages_created_at ON messages (created_at, id);
+      CREATE INDEX idx_messages_rewind_at ON messages (rewind_at);
+      CREATE INDEX idx_messages_active_error_tail ON messages (session_id, created_at)
+        WHERE role = 'error' AND rewind_at IS NULL;
     `);
     const db = drizzle(dbHandle, { schema });
     const client: DbClient = {
@@ -511,6 +519,37 @@ describe('sessionActiveTurn', () => {
     ]);
   });
 
+  it('listInterruptedResumeCandidateRows reads the interrupted turn time and last tool use', async () => {
+    const { listInterruptedResumeCandidateRows } = await import('../interruptedResumeCandidates.js');
+    const client = createTestDbClient();
+    const startedAt = Date.now() - 10_000;
+    await seedSession(client, 's-tools', { startedAt });
+    await seedSession(client, 's-silent', { startedAt });
+    const insert = (id: string, sid: string, role: string, content: unknown, createdAt: number, rewindAt?: number) =>
+      client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, id, sid, role, JSON.stringify(content), createdAt, rewindAt ?? null],
+      );
+    // 上一轮的工具调用不属于被中断的这一轮。
+    await insert('m-old', 's-tools', 'tool_use', { toolName: 'Read', input: { file_path: '/a' } }, startedAt - 1);
+    await insert('m-1', 's-tools', 'tool_use', { toolName: 'Read', input: { file_path: '/b' } }, startedAt + 100);
+    await insert('m-2', 's-tools', 'tool_use', { toolName: 'Bash', input: { command: 'pnpm test' } }, startedAt + 200);
+    await insert('m-3', 's-tools', 'assistant', 'running tests', startedAt + 300);
+    // 被 rewind 的行既不算中断时间,也不算最后一次工具调用。
+    await insert('m-4', 's-tools', 'tool_use', { toolName: 'Write', input: {} }, startedAt + 400, startedAt + 500);
+    await insert('m-5', 's-silent', 'tool_use', { toolName: 'Read', input: {} }, startedAt - 1);
+
+    const rows = await listInterruptedResumeCandidateRows();
+    expect(rows.sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+      { sessionId: 's-silent', interruptedAt: startedAt, lastToolUse: null },
+      {
+        sessionId: 's-tools',
+        interruptedAt: startedAt + 300,
+        lastToolUse: { toolName: 'Bash', input: { command: 'pnpm test' } },
+      },
+    ]);
+  });
+
   it('excludes plugin background tasks from both red-dot legs', async () => {
     const { listInterruptedPendingSessionIds, listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();
@@ -646,8 +685,7 @@ describe('sessionActiveTurn', () => {
     expect(await listErrorTailPendingSessionIds()).not.toContain('make-failed');
   });
 
-  it('listErrorTailPendingSessionIds matches undismissed error tails only', async () => {
-    const { listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
+  it('listErrorTailPendingRows preserves visible tail identities for alert dismissal', async () => {
     const client = createTestDbClient();
     const base = Date.now();
     const insert = (
@@ -660,7 +698,7 @@ describe('sessionActiveTurn', () => {
     ) =>
       client.exec(
         'INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [id, id, sessionId, role, content, createdAt, rewindAt],
+        [id, `client-${id}`, sessionId, role, content, createdAt, rewindAt],
       );
 
     // 命中:尾行是未 dismissed 的 error。
@@ -679,6 +717,7 @@ describe('sessionActiveTurn', () => {
 
     // 不命中:用户点过「忽略」(mergeDismissedIntoErrorContent 写入顶层 dismissed)。
     await seedSession(client, 's-dismissed');
+    await insert('s-dismissed', 'e3-older', 'error', '{}', base);
     await insert('s-dismissed', 'e3-err', 'error', '{"message":"boom","dismissed":true}', base + 100);
 
     // 不命中:error 行之后又跑了新 turn,它已不是尾行(turn 重启即自然收敛)。
@@ -701,6 +740,17 @@ describe('sessionActiveTurn', () => {
     await insert('s-same-ms-after', 'e8-err', 'error', '{"message":"boom"}', base + 100);
     await insert('s-same-ms-after', 'e8-user', 'user', '{}', base + 100);
 
+    // 同毫秒较早插入的非错误行不遮挡 error 尾行;不能只按 role 取尾行。
+    await seedSession(client, 's-same-ms-before');
+    await insert('s-same-ms-before', 'e8-before-user', 'user', '{}', base + 100);
+    await insert('s-same-ms-before', 'e8-before-err', 'error', '{}', base + 100);
+
+    // 插入顺序不能盖过 created_at:晚插入的旧 error 仍不是尾行。
+    await seedSession(client, 's-out-of-order');
+    await insert('s-out-of-order', 'out-newer', 'assistant', '{}', base + 200);
+    await insert('s-out-of-order', 'out-older', 'error', '{}', base + 100);
+    await seedSession(client, 's-empty');
+
     // 不命中:非 active 会话。
     await seedSession(client, 's-deleted-err', { status: 'deleted' });
     await insert('s-deleted-err', 'e9-err', 'error', '{"message":"boom"}', base + 100);
@@ -708,6 +758,8 @@ describe('sessionActiveTurn', () => {
     // 不命中:不在桌面可见来源白名单里,红点无处展示。
     await seedSession(client, 's-hidden-err', { source: 'legacy-hidden' });
     await insert('s-hidden-err', 'e10-err', 'error', '{"message":"boom"}', base + 100);
+    await seedSession(client, 's-feishu-err', { source: 'feishu' });
+    await insert('s-feishu-err', 'feishu-err', 'error', '{}', base + 100);
 
     for (const source of ['cindy-make', 'cindy-make-merge']) {
       await seedSession(client, source, { source });
@@ -718,18 +770,52 @@ describe('sessionActiveTurn', () => {
     // 横幅根本不显示,红点若还挂着就永远无法处置(PR #879 review P1)。
     await seedSession(client, 's-cleared-err', { clearedAt: base + 500 });
     await insert('s-cleared-err', 'e11-err', 'error', '{"message":"boom"}', base + 100);
+    await seedSession(client, 's-clear-equal', { clearedAt: base + 100 });
+    await insert('s-clear-equal', 'clear-equal', 'error', '{}', base + 100);
 
     // 命中:error 行在 /clear 之后产生(clear 后又跑了一轮并失败)。
     await seedSession(client, 's-cleared-then-err', { clearedAt: base + 100 });
     await insert('s-cleared-then-err', 'e12-err', 'error', '{"message":"boom"}', base + 500);
 
-    expect((await listErrorTailPendingSessionIds()).sort()).toEqual([
-      's-cleared-then-err',
-      's-err',
-      's-err-array',
-      's-err-bad-json',
-      's-same-ms-rewound',
+    expect((await listErrorTailPendingRows()).sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+      { sessionId: 's-cleared-then-err', clientId: 'client-e12-err' },
+      { sessionId: 's-err', clientId: 'client-e1-err' },
+      { sessionId: 's-err-array', clientId: 'client-e6-err' },
+      { sessionId: 's-err-bad-json', clientId: 'client-e2-err' },
+      { sessionId: 's-feishu-err', clientId: 'client-feishu-err' },
+      { sessionId: 's-same-ms-before', clientId: 'client-e8-before-err' },
+      { sessionId: 's-same-ms-rewound', clientId: 'client-e7-err' },
     ]);
+  });
+
+  // #6513: the old query scans non-rewound messages globally, blocking the shared
+  // worker. Inspect the executed production query's SQLite plan with the real
+  // message indexes; the previous index-free fixture only protected results.
+  // Both the outer row lookup and the tail subquery must stay bounded; a
+  // rowid lookup alone can conceal a full messages scan inside that subquery.
+  // Minimal failure: one eligible session/error plus these indexes. Unit tier;
+  // the 584k-row timing/worker validation stays outside the default unit suite.
+  it('listErrorTailPendingRows looks up message rowids instead of scanning global candidates', async () => {
+    const client = createTestDbClient();
+    await seedSession(client, 's-plan');
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['m-plan', 'c-plan', 's-plan', 'error', '{}', 1],
+    );
+    const prepare = vi.spyOn(rawDb!, 'prepare');
+    expect(await listErrorTailPendingRows()).toEqual([{ sessionId: 's-plan', clientId: 'c-plan' }]);
+    const executedSql = prepare.mock.calls.at(-1)![0];
+    prepare.mockRestore();
+    const plan = await client.query<{ detail: string }>('EXPLAIN QUERY PLAN ' + executedSql, [
+      'active', ...DESKTOP_TASK_LIST_SESSION_SOURCES, 'error',
+    ]);
+    expect(plan.some(({ detail }) =>
+      /SEARCH messages USING INTEGER PRIMARY KEY \(rowid=\?\)/.test(detail),
+    )).toBe(true);
+    expect(plan.some(({ detail }) =>
+      /SEARCH tail USING INDEX idx_messages_session_created \(session_id=\? AND created_at>\?\)/.test(detail),
+    )).toBe(true);
+    expect(plan.some(({ detail }) => /SCAN (messages|tail)(\s|$)/.test(detail))).toBe(false);
   });
 
   // 回归(PR #879 review P1):批量处置先取快照再逐个 ack,快照之后该会话可能已启动

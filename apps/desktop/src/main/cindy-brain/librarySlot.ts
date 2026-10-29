@@ -207,6 +207,8 @@ export interface GhostLibrarySlotDeps {
   getDiskFreeBytes?(root: string): Promise<number | null>;
   workerScriptPath(): string;
   betterSqliteModulePath(): string;
+  /** Host-selected Electron ABI binding; never supplied by the plugin. */
+  betterSqliteNativeBinding?(): string | undefined;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -666,6 +668,7 @@ export class GhostLibrarySlot {
     const sql = this.deps.createSqlService({
       workerScriptPath: this.deps.workerScriptPath,
       betterSqliteModulePath: this.deps.betterSqliteModulePath,
+      betterSqliteNativeBinding: this.deps.betterSqliteNativeBinding,
       log: this.deps.log,
     });
     const record = 'record' in resolution ? resolution.record : undefined;

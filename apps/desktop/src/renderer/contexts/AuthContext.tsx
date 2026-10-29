@@ -42,9 +42,9 @@ import {
 import { sessionsStore } from '@/lib/sessionsStore';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setRecentModelsOwner } from '@/state/recentModels';
 import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
 import { setAgentDeviceModelMemoryOwner } from '@/state/agentDeviceModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
@@ -57,6 +57,7 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { invalidateRemoteCatalogSnapshots } from '@/lib/remoteCatalogSnapshot';
 import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
@@ -144,6 +145,7 @@ function publishDataOwnerGeneration(
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
     resetTaskTagCatalogCache();
+    invalidateRemoteCatalogSnapshots();
   }
   // The pre-commit fence may already publish null. A committed owner change
   // must still close sessions even when that published owner stays null.
@@ -355,6 +357,8 @@ export function AuthProvider({
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
       setModelEnginePrefsOwner(state.dataOwnerId);
       setModelFavoritesOwner(state.dataOwnerId);
+      // 「最近使用」与收藏同分区:多账号不串流水。
+      setRecentModelsOwner(state.dataOwnerId);
       // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
       setFavoriteAnchorMemoryOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
@@ -454,7 +458,7 @@ export function AuthProvider({
   useEffect(() => {
     if (!isAuthenticated || !accountDeletionRestored) return;
     setAccountDeletionRestored(false);
-    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) return;
+    if (isSecondaryWindow() || isSidebarWindow()) return;
     let disposed = false;
     void authServiceRef
       .current!.consumeAccountDeletionRestoredNotice()

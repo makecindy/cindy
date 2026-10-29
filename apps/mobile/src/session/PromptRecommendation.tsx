@@ -73,7 +73,7 @@ export function PromptRecommendation({ prompt, onAccept, onDismiss }: {
       testID="session.promptRecommendationAction"
     >
       <Sparkles color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-      <Text numberOfLines={1} style={styles.text}>{prompt}</Text>
+      <Text numberOfLines={1} ellipsizeMode="tail" style={styles.text}>{prompt}</Text>
     </Pressable>
   );
   return (
@@ -105,8 +105,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
   },
   pressed: { opacity: 0.72 },
-  text: { flex: 1, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  text: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
 });

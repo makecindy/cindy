@@ -20,7 +20,7 @@ export function parseProviderManagementRequest(raw: unknown): ProviderManagement
     return { action: 'manage-group', command: command as ProviderGroupManagementCommand };
   }
   const command = parseProviderShareCommand(raw.command);
-  if (!['owned', 'own-usage', 'usage-history', 'create-link', 'approve', 'reject', 'set-member', 'reshare-decide', 'get-run-limits', 'set-run-limits', 'reset-run-limits'].includes(command.action)) {
+  if (!['owned', 'shared-provider-ids', 'own-usage', 'usage-history', 'create-link', 'approve', 'reject', 'set-member', 'set-member-note', 'reshare-decide', 'get-run-limits', 'set-run-limits', 'reset-run-limits', 'get-visibility', 'set-visibility', 'quota-account', 'get-model-access', 'set-model-access', 'get-fast-policy', 'set-fast-policy'].includes(command.action)) {
     throwIpcError('PERMISSION_DENIED', 'Only owner operations are available through management');
   }
   return { action: 'manage-share', command: command as ProviderShareManagementCommand };

@@ -419,7 +419,7 @@ export function SplashScreen() {
               />
             )}
 
-            {/* spinner 64×64 @面板内(308,188),内弧 #6F6F6F;动画挂 HTML wrapper
+            {/* spinner 64×64 @面板内(308,188),内弧走次要档;动画挂 HTML wrapper
                 (compositor-only,规则 7),reduced-motion 直落静止 */}
             {showSpinner && (
               <span
@@ -433,7 +433,7 @@ export function SplashScreen() {
                   width: SPLASH_PANEL.spinner.size,
                   height: SPLASH_PANEL.spinner.size,
                   // 轨道走 --login-loading-ring-track(与登录页 LoginLoadingRing 同构,
-                  // 暗色 rgba(212,212,212,.18) 才可见;内弧仍按 wave4 帧 #6F6F6F)
+                  // 墨水弱档 黑 10% / 白 13%;内弧走 --login-secondary-text 次要档)
                   border: '6px solid var(--login-loading-ring-track)',
                   borderTopColor: LOGIN_COLORS.secondaryText,
                 }}

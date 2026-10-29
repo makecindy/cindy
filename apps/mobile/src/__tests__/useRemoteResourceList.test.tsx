@@ -3,9 +3,10 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
+import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS } from '@/device-link/remoteResourceAvailability';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true,
-  link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn(() => true as boolean | null),
+  link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn((_deviceId: string) => true as boolean | null),
     invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
   app: { currentState: 'active', listener: null as null | ((state: string) => void) },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
@@ -21,6 +22,7 @@ vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<ty
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
   readRemoteResourceSnapshot: h.snapshot, cacheRemoteResourceItems: h.persist,
+  peekRemoteResourceSnapshot: () => undefined,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
 }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({
@@ -46,6 +48,35 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 describe('shared real resource list', () => {
+  it('fills a slow disk shard after another computer replied, without reviving its deleted rows', async () => {
+    vi.useFakeTimers();
+    let finish!: (snapshot: unknown) => void;
+    h.snapshot.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    h.list.mockImplementation(async (_invoke, host) => host.deviceId === 'mac'
+      ? { items: [] } : new Promise(() => {}));
+    await render();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await act(async () => finish({ home: [], items: { teammates: [cached(targets[0], 'deleted'), cached(targets[1], 'saved-pc')] }, read: {} }));
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['saved-pc']);
+    expect(result.isOnline(targets[1])).toBe(false);
+  });
+  // Regression: one sleeping computer raised a section-wide warning on a healthy phone.
+  // Unit: real roster hook, cached offline shard + a successful online shard.
+  it('keeps known offline computers without reporting a failed refresh and reads them on return', async () => {
+    h.cached = [cached(targets[1], 'sleeping')];
+    h.link.getPresenceAvailability.mockImplementation(id => id !== 'pc');
+    h.list.mockResolvedValue({ items: [item('fresh')] });
+    await render();
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh', 'sleeping']);
+    expect(result.error).toBeNull();
+    expect(result.isOnline(targets[1])).toBe(false);
+    expect(h.link.openLink.mock.calls.map(([id]) => id)).toEqual(['mac']);
+    h.link.getPresenceAvailability.mockReturnValue(true);
+    h.link.presenceVersion++;
+    await render();
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh', 'fresh']);
+    expect(result.isOnline(targets[1])).toBe(true);
+  });
   it('reconciles deletion from a successful host, retains a failed host as offline, and reports partial failures', async () => {
     h.cached = [cached(targets[0], 'deleted'), cached(targets[1], 'offline')];
     h.list.mockImplementation(async (_invoke, host) => {
@@ -177,8 +208,26 @@ it('shows disk-cached rows during the first slow network read without claiming a
   h.list.mockReturnValue(new Promise(() => {}));
   await render();
   expect(result.items[0].item.ref.id).toBe('cached-visible');
-  expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+  expect(result.loading).toBe(true); expect(result.syncing).toBe(true);
   expect(result.isOnline(targets[0])).toBe(false);
+});
+
+it('ends a stalled cold relay wait with cached rows and retries after reconnect', async () => {
+  vi.useFakeTimers();
+  h.cached = [cached(targets[0], 'cached-startup')];
+  h.link.status = 'connecting';
+  await render();
+  expect(h.list).not.toHaveBeenCalled();
+  expect(result.loading).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(REMOTE_RESOURCE_STARTUP_TIMEOUT_MS));
+  expect(result.loading).toBe(false);
+  expect(result.error).toContain('devices.resources.hostOffline');
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['cached-startup']);
+  h.link.status = 'online'; h.link.connectionEpoch++;
+  h.list.mockResolvedValue({ items: [item('fresh-after-reconnect')] });
+  await render();
+  expect(h.list).toHaveBeenCalled();
+  expect(result.error).toBeNull();
 });
 
 it('commits and persists a successful host before a slow sibling settles', async () => {
@@ -189,6 +238,7 @@ it('commits and persists a successful host before a slow sibling settles', async
   expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh-mac']);
   expect(result.isOnline(targets[0])).toBe(true);
   expect(result.syncing).toBe(true);
+  expect(result.loading).toBe(true);
   expect(h.persist).toHaveBeenCalledWith('owner', 'teammates', result.items);
   await act(async () => finish({ items: [] }));
   expect(result.syncing).toBe(false);

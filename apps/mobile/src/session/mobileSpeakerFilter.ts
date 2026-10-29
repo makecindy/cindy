@@ -37,8 +37,9 @@ import { logMobileVoice } from './mobileVoiceDiagnostics';
  * "Recognize my voice" on mobile. Same models, thresholds and gate as desktop;
  * inference runs through ONNX Runtime in the cindy-speaker-onnx module.
  *
- * Dictation start waits for saved preferences and the voiceprint before
- * choosing its gate. Model loading stays lazy; failures still pass through.
+ * Audio forwarding waits for saved preferences and the voiceprint before
+ * choosing its gate; microphone capture may buffer locally meanwhile.
+ * Model loading stays lazy; failures still pass through.
  *
  * The voiceprint is biometric data: it stays on this device, in the OS
  * keychain/keystore through SecureStore, one per account, and is never

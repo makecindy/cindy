@@ -112,7 +112,7 @@ describe('bot profile store', () => {
       vendorKey: 'pi',
     });
     setProviders([
-      piProvider('xd', true, [piModel('z-ai/glm-5.3-flash')]),
+      piProvider('xd', true, [piModel('auto')]),
     ]);
   });
 
@@ -143,25 +143,25 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('uses Cindy selected default when it is selectable', () => {
+  it('uses the teammate recommendation independently of the new-task draft', () => {
     const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('does not replace an unavailable Cindy default with another connected model', async () => {
+  it('does not recommend a subscription on an unsupported default harness', async () => {
     setProviders([
       piProvider(
         'openai',

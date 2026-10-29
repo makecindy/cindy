@@ -35,6 +35,7 @@ import {
 	productionUserDataDir,
 	readDesktopStartupStatus,
 	parseWorktreePaths,
+	scanRestartProcessTable,
 	osascriptLaunchDarwinTerminalArgs,
 	writeDarwinTerminalLaunchScript,
 	darwinTerminalSourceCommand,
@@ -50,6 +51,7 @@ import {
 	WORKTREE_ISOLATED_ARG,
 	SHARED_USERDATA_ARG,
 	DEFAULT_ISOLATED_ARG,
+	UI_MOCK_ISOLATED_ARG,
 	buildDesktopDevVerdictFromFailure,
 	buildDesktopDevVerdictFromWhoami,
 	desktopRestartArgvConflictMessage,
@@ -67,7 +69,9 @@ import {
 	collectDesktopWhoamiReport,
 	identifyDesktopProcesses,
 	mergeDesktopInstanceRecords,
+	parsePosixProcessTable,
 	parseWorktreeEntries,
+	scanProcessTable,
 } from "../desktop-whoami.mjs";
 import {
 	assertDesktopRestartStepSucceeded,
@@ -350,6 +354,22 @@ test("--shared conflicts with explicit or ambient isolation", () => {
 		"--shared cannot be combined with --isolated or XDT_ISOLATED=1",
 	);
 	assert.equal(desktopRestartArgvConflictMessage(["--shared"], {}), null);
+});
+
+// --mock writes demo tasks (docs/dev-rules/ui-mock-data.md): it gets its own sandbox
+// by default and must never reach the shared official profile.
+test("--mock defaults to the ui-mock sandbox and refuses shared userData", () => {
+	assert.deepEqual(normalizeDesktopRestartArgv(["--mock"], {}), ["--mock", UI_MOCK_ISOLATED_ARG]);
+	assert.deepEqual(
+		normalizeDesktopRestartArgv(["--mock", "--isolated=review"], {}),
+		["--mock", "--isolated=review"],
+	);
+	for (const shared of [SHARED_USERDATA_ARG, "--preserve-running"]) {
+		assert.match(
+			desktopRestartArgvConflictMessage(normalizeDesktopRestartArgv(["--mock", shared], {}), {}),
+			/--mock .* isolated sandbox/,
+		);
+	}
 });
 
 test("isOfficialProductionUserDataDir matches every official region profile", () => {
@@ -1021,6 +1041,16 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 });
 
+test("devEnvPrefix forwards only the requested local relay override and unsets stale macOS values", () => {
+	const env = { XDT_DEVICE_LINK_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_CN_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_GLOBAL_LOCAL_URL: "http://127.0.0.1:33356" };
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_LOCAL_URL='http://127.0.0.1:33355'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_LOCAL_URL"));
+	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL='http://127.0.0.1:33356'"));
+	assert.ok(devEnvPrefix(env, "win32").includes('set "XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:33355"'));
+	assert.ok(darwinStaleDevEnvUnset({}).includes("XDT_DEVICE_LINK_GLOBAL_LOCAL_URL"));
+});
+
 test("devEnvPrefix carries the Cindy Make test-window marker through restart", () => {
 	assert.equal(
 		devEnvPrefix({ XDT_CINDY_MAKE_TEST: "1" }, "darwin"),
@@ -1222,6 +1252,32 @@ test("whoami mismatch on shared start suggests isolated retry", () => {
 	assert.equal(verdict.next, ISOLATED_RESTART_NEXT);
 });
 
+test("an unreadable process table is unavailable, not a mismatch", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: false,
+		expected: { rootDir: root, commit: "abc123" },
+		processScan: { ok: false, code: "ENOBUFS", message: "spawnSync ps ENOBUFS" },
+		instances: [],
+	}, { isolated: false });
+	assert.equal(verdict.state, "failed");
+	assert.equal(verdict.code, "WHOAMI_UNAVAILABLE");
+	assert.match(verdict.message, /ENOBUFS/);
+	// 重开沙箱解决不了「读不到进程表」，不要再建议重启。
+	assert.equal(verdict.next, undefined);
+});
+
+test("a readable process table keeps the mismatch verdict", () => {
+	const root = path.resolve("/repo/cindy-preview");
+	const verdict = buildDesktopDevVerdictFromWhoami({
+		match: false,
+		expected: { rootDir: root, commit: "abc123" },
+		processScan: { ok: true },
+		instances: [],
+	}, { isolated: false });
+	assert.equal(verdict.code, "WHOAMI_MISMATCH");
+});
+
 test("shared migration policy failure keeps an isolated next command", () => {
 	const verdict = buildDesktopDevVerdictFromFailure(
 		new Error("Shared Cindy userData cannot run migration artifacts that are not canonical on origin/main."),
@@ -1311,7 +1367,107 @@ test("collectDesktopWhoamiReport can be built from injected process facts", () =
 		}],
 	});
 	assert.equal(report.match, true);
+	assert.deepEqual(report.processScan, { ok: true });
 	assert.equal(buildDesktopDevVerdictFromWhoami(report).state, "ready");
+});
+
+test("process scans report ENOBUFS instead of an empty process table", () => {
+	// Node spawnSync 默认 maxBuffer 是 1 MiB；大进程表上 ps 会 ENOBUFS，status 为 null，
+	// stdout 只有半截。旧实现 return []，等于告诉调用方「系统里一个进程都没有」。
+	const enobufs = {
+		status: null,
+		error: Object.assign(new Error("spawnSync ps ENOBUFS"), { code: "ENOBUFS" }),
+		stdout: "1 0 s001 /sbin/launchd\n",
+	};
+	const runCommand = () => enobufs;
+
+	const posix = scanProcessTable({ platform: "darwin", runCommand });
+	assert.deepEqual(posix.processes, []);
+	assert.equal(posix.error.code, "ENOBUFS");
+	assert.match(posix.error.message, /ENOBUFS/);
+
+	const win32 = scanProcessTable({ platform: "win32", runCommand });
+	assert.equal(win32.error.code, "ENOBUFS");
+
+	assert.throws(
+		() => scanRestartProcessTable({ platform: "darwin", runCommand }),
+		/\[PROCESS_SCAN_FAILED\].*ENOBUFS/,
+	);
+	assert.throws(
+		() => scanRestartProcessTable({ platform: "win32", runCommand }),
+		/\[PROCESS_SCAN_FAILED\].*ENOBUFS/,
+	);
+});
+
+test("restart scan failure gets its own verdict code", () => {
+	assert.equal(
+		inferDesktopDevFailureCode("[PROCESS_SCAN_FAILED] Could not read the process table (ENOBUFS)"),
+		"PROCESS_SCAN_FAILED",
+	);
+	const verdict = buildDesktopDevVerdictFromFailure(
+		new Error("[PROCESS_SCAN_FAILED] Could not read the process table (ENOBUFS)"),
+		{ isolated: false, rootDir: "/repo/cindy-feature" },
+	);
+	assert.equal(verdict.code, "PROCESS_SCAN_FAILED");
+	assert.equal(verdict.next, undefined);
+});
+
+test("process scans ask ps for more than the 1 MiB spawnSync default", () => {
+	const output = [
+		"  501     1 s001 /sbin/launchd",
+		"  777   501 s002 /repo/cindy/node_modules/electron/Electron.app/Contents/MacOS/Electron .",
+	].join("\n");
+	const calls = [];
+	const runCommand = (command, args, options) => {
+		calls.push({ command, args, options });
+		return { status: 0, stdout: output };
+	};
+
+	const whoamiScan = scanProcessTable({ platform: "darwin", runCommand });
+	assert.equal(whoamiScan.error, null);
+	assert.deepEqual(whoamiScan.processes.map((proc) => proc.pid), [501, 777]);
+
+	const restartScan = scanRestartProcessTable({ platform: "darwin", runCommand });
+	assert.equal(restartScan[1].pid, 777);
+	assert.equal(restartScan[1].ppid, 501);
+	assert.equal(restartScan[1].tty, "s002");
+	assert.match(restartScan[1].command, /node_modules\/electron\//);
+
+	assert.deepEqual(calls.map((call) => call.command), ["ps", "ps"]);
+	for (const call of calls) assert.ok(call.options.maxBuffer >= 4 * 1024 * 1024);
+});
+
+test("Windows scans read process tables larger than the spawnSync default", () => {
+	// #6537 / review P1: the existing buffer regression only covered ps. Exercise
+	// both production scanners with >1 MiB JSON; a fake spawn boundary reproduces
+	// ENOBUFS without a real subprocess in the default runner tier.
+	const commandLine = `node ${"x".repeat(1024 * 1024)}`;
+	const stdout = JSON.stringify({ ProcessId: 777, ParentProcessId: 501, CommandLine: commandLine });
+	const runCommand = (command, _args, options = {}) => {
+		assert.equal(command, "powershell.exe");
+		if (Buffer.byteLength(stdout) > (options.maxBuffer ?? 1024 * 1024)) {
+			return {
+				status: null, stdout: "",
+				error: Object.assign(new Error("spawnSync powershell.exe ENOBUFS"), { code: "ENOBUFS" }),
+			};
+		}
+		return { status: 0, stdout };
+	};
+	const expected = [{ pid: 777, ppid: 501, command: commandLine }];
+	const whoami = scanProcessTable({ platform: "win32", runCommand });
+	assert.equal(whoami.error, null);
+	assert.deepEqual(whoami.processes, expected);
+	assert.deepEqual(scanRestartProcessTable({ platform: "win32", runCommand }), expected);
+});
+
+test("posix process rows parse the pid/ppid/command columns", () => {
+	assert.deepEqual(
+		parsePosixProcessTable("  501     1 /sbin/launchd\n   12 501 node script.mjs\n"),
+		[
+			{ pid: 501, ppid: 1, command: "/sbin/launchd" },
+			{ pid: 12, ppid: 501, command: "node script.mjs" },
+		],
+	);
 });
 
 test("isolatedRestartNextCommand keeps region and local mode", () => {

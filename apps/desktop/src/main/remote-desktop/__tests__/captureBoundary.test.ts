@@ -189,8 +189,8 @@ vi.mock('../controller', () => ({
       this.stop();
     }
     stopAndRestore = h.stopAndRestore;
-    releaseControl() {
-      h.releaseControl();
+    releaseControl(recoverInput = false) {
+      h.releaseControl(recoverInput);
     }
     tick() {}
     input = h.input;
@@ -554,6 +554,7 @@ it('turns an input-helper failure into a control release instead of a session st
   // Input is a lease-scoped capability: the desktop session keeps its lease,
   // its capture owner and its media when the helper dies.
   expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.releaseControl).toHaveBeenLastCalledWith(true);
   expect(h.stop).not.toHaveBeenCalled();
   expect(h.owner.dead).toBe(false);
 });
@@ -566,6 +567,7 @@ it('releases control when the input host refuses a batch before injecting it', (
   // later take-control must actually restart the helper.
   expect(() => h.deps.input([{ kind: 'release' }])).toThrow('DESKTOP_INPUT_UNAVAILABLE');
   expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.releaseControl).toHaveBeenLastCalledWith(true);
   expect(h.stop).not.toHaveBeenCalled();
 });
 

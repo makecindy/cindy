@@ -79,7 +79,7 @@ function fail(
  *
  * ⚠️ 本判据被 review 连着推了三轮(面板窗 → 会话副窗 → utility 窗),所以这一版**按
  * 窗口约定收口,不再逐个枚举**:main 侧全部 `new BrowserWindow` 的位置只有 7 处
- * (secondary-windows / bootstrap / 插件沙箱 / ghost-panel-window /
+ * (secondary-windows / bootstrap / 插件沙箱 / sidebar-tab-window /
  * right-sidebar-window / computer-permission-guide / voice-input),下面四条把它们
  * 全覆盖了,**只有 bootstrap 建的主窗口不带任何标识** —— 新增窗口类型只要沿用现有
  * 约定(utility 窗带 `?view=`),就自动落在排除侧,不需要再改这里。
@@ -92,11 +92,11 @@ function fail(
  *    `voice-input-dictionary-toast`、权限引导 `computer-permission-guide` 与它的
  *    backdrop。这里按 **`view` 这个 key** 排除而不是枚举取值 —— 它是 app 的 utility
  *    窗约定,枚举取值就等着下一个新窗口再漏一次(review 第三轮)。
- * 3. **插件面板独立窗**(`?ghostPanelWindow=<id>`)与**右侧栏独立窗**(`?sidebarWindow=1`):
- *    与 MainLayout **平级**(router.tsx 两条根路由),只挂轻壳,**没有草稿订阅、也去不了
- *    自动化页** → 投过去静默丢失。而插件面板恰恰可以被用户拉成独立窗口,「在插件面板
- *    上点一下」正是本能力的主使用路径(编写手册 §4.11.2 第 1 步)——那一刻 focused 就是
- *    面板窗,若照 confirm 槽那样只写 `focused ?? all[0]` 就丢了。hash 两路也查,兜底。
+ * 3. **右侧栏独立窗**(`?sidebarWindow=1`,含整栏子窗口与单页签弹出窗口):与 MainLayout
+ *    **平级**,只挂轻壳,**没有草稿订阅、也去不了自动化页** → 投过去静默丢失。而插件视图
+ *    页签恰恰可以被用户弹成独立窗口,「在插件面板上点一下」正是本能力的主使用路径
+ *    (编写手册 §4.11.2 第 1 步)——那一刻 focused 就是弹出窗,若照 confirm 槽那样只写
+ *    `focused ?? all[0]` 就丢了。hash 也查,兜底。
  * 4. **「在新窗口打开」的会话副窗**(`?secondaryWindow=1`,main/secondary-windows.ts):
  *    它**挂的是完整 MainLayout**(有订阅、技术上接得住),但它是用户为某个会话单独开的
  *    窗口。回落时把创建面板弹进它 = 落错地方:用户以为在主窗口建任务,主窗口却什么也
@@ -121,7 +121,6 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
   if (
     // utility 窗的统一约定:按 key 排除,不枚举取值(见上方第 2 条)。
     parsed.searchParams.has('view') ||
-    parsed.searchParams.has('ghostPanelWindow') ||
     parsed.searchParams.has('sidebarWindow') ||
     // 会话副窗:挂完整壳、技术上接得住,但它不是用户建任务时看的那个窗口。
     // 取 === '1' 而不是 has():带 secondaryWindow=0 的主窗不该被误排除。
@@ -130,7 +129,7 @@ export function isMainShellWindowUrl(rawUrl: string): boolean {
     return false;
   }
   const hash = parsed.hash;
-  if (hash.includes('/ghost-panel-window') || hash.includes('/sidebar-window')) return false;
+  if (hash.includes('/sidebar-window')) return false;
   return true;
 }
 

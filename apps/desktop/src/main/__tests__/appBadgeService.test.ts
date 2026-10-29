@@ -123,7 +123,7 @@ afterEach(() => {
 });
 
 describe('appBadgeService', () => {
-  it('suppresses late hidden Make notifications through the raw session catalog without dropping Bot attention', async () => {
+  it('takes late hidden Make notifications from the raw catalog and keeps off-catalog ids out of the badge', async () => {
     const service = await freshService();
     service.markSessionNeedsAttention('hidden-make');
     expect(service.getAttentionCount()).toBe(1);
@@ -131,8 +131,9 @@ describe('appBadgeService', () => {
     expect(service.getAttentionCount()).toBe(0);
     service.markSessionNeedsAttention('hidden-make-merge');
     expect(service.getAttentionCount()).toBe(0);
+    // 目录外的任务在界面上没有行、也没有读到/删除这类清除入口：目录就绪后不再抬高角标。
     service.markSessionNeedsAttention('bot-task');
-    expect(service.getAttentionCount()).toBe(1);
+    expect(service.getAttentionCount()).toBe(0);
   });
 
   it.each([
@@ -181,18 +182,32 @@ describe('appBadgeService', () => {
     expect(dockSetBadge).toHaveBeenLastCalledWith('');
   });
 
-  it('preserves Bot attention outside the catalog and deduplicates IDs entering it', async () => {
+  it('counts the projection once it arrives while keeping off-catalog attention in the event ledger', async () => {
     const service = await freshService();
     const event = { sender: mainWebContents };
+    // 首份投影前 renderer 还没挂载：逐任务通知独自撑角标，且重复打点不重复计数。
+    service.markSessionNeedsAttention('early-task');
+    service.markSessionNeedsAttention('early-task');
+    expect(service.getAttentionCount()).toBe(1);
+    service.markSessionNeedsAttention('late-review-run');
+    expect(service.getAttentionCount()).toBe(2);
+    // 目录就绪后它是角标的权威清单：目录外的 id 既不可见也不可清除，不再抬角标，
+    // 否则角标会永久停在界面读不掉的数字上（“有未读但点不掉”）。
     await publish(event, 3, ['a', 'b', 'c']);
-    service.markSessionNeedsAttention('bot-task');
-    service.markSessionNeedsAttention('bot-task');
-    expect(service.getAttentionCount()).toBe(4);
-    await publish(event, 2, ['a', 'b', 'c']);
     expect(service.getAttentionCount()).toBe(3);
+    // 但事件账本不能跟着收缩：灵动岛靠 hasSessionAttention() 水合未读，
+    // 目录外会话（/review、追问 fork）的恢复路径要靠它。
+    expect(service.hasSessionAttention('early-task')).toBe(true);
+    expect(service.hasSessionAttention('late-review-run')).toBe(true);
+    await publish(event, 2, ['a', 'b', 'c']);
+    expect(service.getAttentionCount()).toBe(2);
+    expect(service.hasSessionAttention('late-review-run')).toBe(true);
     service.clearSessionAttention('bot-task');
     expect(service.getAttentionCount()).toBe(2);
+    // 目录内的 id 始终由投影接管：重复打点、迟到打点都不叠加计数。
     service.markSessionNeedsAttention('bot-task');
+    service.markSessionNeedsAttention('bot-task');
+    expect(service.getAttentionCount()).toBe(2);
     await publish(event, 3, ['a', 'b', 'c', 'bot-task']);
     expect(service.getAttentionCount()).toBe(3);
     await publish(event, 0, []);
@@ -247,7 +262,7 @@ describe('appBadgeService', () => {
     await expect(publish(event, 99, ['new-id'])).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(service.getAttentionCount()).toBe(4);
     service.markSessionNeedsAttention('new-id');
-    expect(service.getAttentionCount()).toBe(5); // 被拒投影没有部分写入目录。
+    expect(service.getAttentionCount()).toBe(4); // 被拒投影没有部分写入目录，目录外 id 也不抬角标。
     service.clearAllSessionAttention();
     await publish(event, 1, ['x'.repeat(512)]);
     expect(service.getAttentionCount()).toBe(1);
@@ -270,9 +285,9 @@ describe('appBadgeService', () => {
       expect(setBadgeCount).not.toHaveBeenCalled();
       expect(setOverlayIcon).not.toHaveBeenCalled();
       service.markSessionNeedsAttention('rejected-id');
-      expect(service.getAttentionCount()).toBe(10_001); // Rejected snapshots cannot retain catalog IDs.
+      expect(service.getAttentionCount()).toBe(10_000); // Rejected snapshots cannot retain catalog IDs.
       await publish(event, 0, []);
-      expect(service.getAttentionCount()).toBe(1); // Directory-external attention remains independent.
+      expect(service.getAttentionCount()).toBe(0); // 目录就绪后目录外 attention 不参与计数。
     },
   );
 

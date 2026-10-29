@@ -79,7 +79,11 @@ import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
-import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
+import {
+  readWindowsDesktopSupport,
+  configureWindowsDesktopSupport,
+  WindowsDesktopSetupError,
+} from './windowsHost';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
@@ -176,6 +180,11 @@ let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
 const applyExcludedWindows = () =>
   nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+// While the phone shows picture-in-picture the input helper is stopped on purpose;
+// the local exit confirmation then has nothing to pause, and cancelling it must not
+// bring remote control back.
+const pauseInputForPrivacy = (): Promise<() => Promise<void>> =>
+  remoteDesktop.viewOnlyBackground ? Promise.resolve(async () => {}) : input.pauseForPrivacy();
 const privacyScreen = new PrivacyScreen(
   (ids) => {
     privacyExcluded = ids;
@@ -186,11 +195,11 @@ const privacyScreen = new PrivacyScreen(
       .stopPrivacyByUser()
       .catch((error) => console.error('[remote-desktop] privacy exit lock failed', error));
   },
-  () => input.pauseForPrivacy(),
+  pauseInputForPrivacy,
 );
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
-  () => input.pauseForPrivacy(),
+  pauseInputForPrivacy,
 );
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
@@ -208,6 +217,10 @@ const controlledOverlay = new ControlledOverlay(
   async (peer) => {
     if (!controllerDirectory) throw new Error('controller directory unavailable');
     await controllerDirectory.revoke(peer);
+  },
+  // Same as the main window's Disconnect, for the session the overlay names only.
+  (peer) => {
+    if (remoteDesktop.state?.peer === peer) remoteDesktop.stopByUser();
   },
 );
 /** Device-link owns names and revocation; injected at registration (no import cycle). */
@@ -268,8 +281,14 @@ let pending: {
   timer: ReturnType<typeof setTimeout>;
 } | null = null;
 // A dead input helper or a refused injection is an input failure, not a session
-// failure: release control and keep the lease, capture and media running.
-const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
+// failure: repair input once while keeping the lease, capture and media running.
+const input = new DesktopInputHost(
+  () => {
+    void remoteDesktop.releaseControl(true);
+  },
+  undefined,
+  (points) => controlledOverlay.viewerPointer(points),
+);
 const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
 // A display change holds native capture instead of stopping it: frames pause
 // until the changed display is known, then the same stream follows it. The
@@ -916,7 +935,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       // lease's display is unavailable). Release control so the host and the
       // viewer agree, and so taking control again genuinely restarts the
       // helper instead of being skipped as "already controlling".
-      remoteDesktop.releaseControl();
+      void remoteDesktop.releaseControl(true);
       throw error;
     }
   },
@@ -1140,6 +1159,7 @@ export function registerRemoteDesktopIpc(
     return {
       enabled: readDeviceLinkSettings().remoteDesktopEnabled,
       active: remoteDesktop.state,
+      overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
@@ -1157,8 +1177,11 @@ export function registerRemoteDesktopIpc(
     remoteDesktop.stop(undefined, undefined, 'disabled');
     try {
       await configureWindowsDesktopSupport(enabled);
-    } catch {
-      throwIpcError('PERMISSION_DENIED', 'Windows desktop support setup failed');
+    } catch (error) {
+      // Carry the helper's step code so settings can name the failed step.
+      // It holds no path or account name, only a fixed code and OS number.
+      const detail = error instanceof WindowsDesktopSetupError ? error.detail : undefined;
+      throwIpcError('PERMISSION_DENIED', detail ?? 'Windows desktop support setup failed');
     } finally {
       windowsSetupBusy = false;
     }

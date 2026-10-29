@@ -1,14 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { REMOTE_RESOURCE_MANIFEST_CHANNEL, type RemoteResourceManifestResponse } from '@cindy/device-link';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { toDeviceListItems } from '@/device-link/devices';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
-import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { discoverRemoteHomeCollections, remoteResourceDiscoveryTargets,
   type RemoteHomeCollection, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
@@ -39,9 +40,9 @@ export function useTeammateRoster(enabled = true) {
   // Hosts whose manifest advertises group chats (bot-group-chat.md §8); an older desktop never does.
   const lastGroupTargets = useRef<{ binding: string; targets: RemoteResourceHostTarget[] }>({ binding: '', targets: NO_TARGETS });
   const [discovery, setDiscovery] = useState<{
-    binding: string; ready: boolean; loading: boolean; targets: RemoteResourceHostTarget[]; createTargets: RemoteResourceHostTarget[];
+    binding: string; ready: boolean; loading: boolean; settled: boolean; targets: RemoteResourceHostTarget[]; createTargets: RemoteResourceHostTarget[];
     groupTargets: RemoteResourceHostTarget[]; error: string | null;
-  }>({ binding: '', ready: false, loading: true, targets: NO_TARGETS, createTargets: NO_TARGETS, groupTargets: NO_TARGETS, error: null });
+  }>({ binding: '', ready: false, loading: true, settled: false, targets: NO_TARGETS, createTargets: NO_TARGETS, groupTargets: NO_TARGETS, error: null });
   const discover = useCallback(async (run: RemoteSyncRun) => {
     const expected = ++generation.current;
     const signal = focusController.current.signal;
@@ -68,13 +69,17 @@ export function useTeammateRoster(enabled = true) {
       const targets = home.find(collection => collection.id === TEAMMATE_COLLECTION_ID && collection.resourceKind === 'bot')?.targets ?? NO_TARGETS;
       lastCollections.current = { binding, home };
       const filtered = targets.filter(host => !revoked.has(host.deviceId));
-      setDiscovery(old => ({ ...old, binding, ready: true, loading,
+      setDiscovery(old => ({ ...old, binding, ready: true, loading, settled: old.binding === binding && old.settled,
         createTargets: old.binding === binding ? old.createTargets : NO_TARGETS,
         groupTargets: old.binding === binding ? old.groupTargets : NO_TARGETS,
         targets: old.binding === binding && JSON.stringify(old.targets) === JSON.stringify(filtered) ? old.targets : filtered }));
     };
     // Cached capabilities are navigation hints; authorization stays at the host.
     publish(collections, true);
+    // During relay startup the cached directory remains a navigation hint, but
+    // the roster must stay in its loading state until a live directory read.
+    // The status dependency reruns this coordinator after the relay is online.
+    if (status === 'stopped' || status === 'connecting') return;
     const failures: unknown[] = [];
     let error: string | null = null;
     const createTargets: RemoteResourceHostTarget[] = [];
@@ -116,6 +121,7 @@ export function useTeammateRoster(enabled = true) {
           });
         } catch (cause) {
           if (current()) {
+            mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-manifest' });
             failures.push(cause);
             if (isAutoRecoveringRemoteError(cause)) failedHosts.current.add(deviceId);
           }
@@ -139,7 +145,10 @@ export function useTeammateRoster(enabled = true) {
       groupTargets = targets.filter((target) => advertisingGroups.has(target.deviceId)
         || (!answered.has(target.deviceId) && previousGroupTargets.some((host) => host.deviceId === target.deviceId)));
       void cacheRemoteResourceHome(user?.id ?? '', collections);
-    } catch (cause) { error = formatRemoteError(cause); failures.push(cause); }
+    } catch (cause) {
+      mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'computer-directory' });
+      error = formatRemoteError(cause); failures.push(cause);
+    }
     if (!current()) return;
     lastCollections.current = { binding, home: collections };
     if (!failures.length) recovery.current?.succeeded();
@@ -149,10 +158,20 @@ export function useTeammateRoster(enabled = true) {
     lastGroupTargets.current = { binding, targets: groupTargets };
     lastCreateTargets.current = { binding, targets: createTargets };
     const filtered = targets.filter(host => !revoked.has(host.deviceId));
-    setDiscovery(old => ({ binding, ready: true, loading: false, createTargets,
+    setDiscovery(old => ({ binding, ready: true, loading: false, settled: true, createTargets,
       targets: old.binding === binding && JSON.stringify(old.targets) === JSON.stringify(filtered) ? old.targets : filtered,
       groupTargets, error: error ?? (failures.length ? formatRemoteError(failures[0]) : null) }));
   }, [binding, i18n.language, invoke, openLink, readDeviceList, revoked, status, t, user?.id]);
+  useEffect(() => {
+    if (!enabled || discovery.binding !== binding || !discovery.ready || discovery.settled
+      || (status !== 'stopped' && status !== 'connecting')) return;
+    const timer = setTimeout(() => {
+      setDiscovery((old) => old.binding === binding && !old.settled ? {
+        ...old, settled: true, loading: false, error: t('devices.resources.hostOffline'),
+      } : old);
+    }, REMOTE_RESOURCE_STARTUP_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [binding, discovery.binding, discovery.ready, discovery.settled, enabled, status, t]);
   const requestDiscover = useRemoteSyncCoordinator(discover, JSON.stringify([binding, connectionEpoch, presenceVersion, status, enabled]));
   useFocusEffect(useCallback(() => {
     if (!enabled) return;
@@ -182,8 +201,9 @@ export function useTeammateRoster(enabled = true) {
     // Stable reference (revocation is applied at discovery and again to the listed rows).
     groupTargets: ready ? discovery.groupTargets : NO_TARGETS,
     createTargets: ready && status === 'online' ? discovery.createTargets.filter((host) => !revoked.has(host.deviceId) && list.isOnline(host)) : NO_TARGETS,
-    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error && (!discovery.targets.length || !list.error),
-    loading: items.length === 0 && (!ready || list.loading),
+    authoritative: ready && !discovery.loading && !list.loading && !list.syncing && status === 'online' && !discovery.error
+      && (!discovery.targets.length || (!list.error && discovery.targets.every(list.isOnline))),
+    loading: !ready || !discovery.settled || list.loading,
     refreshing: list.refreshing,
     error: ready ? discovery.error ?? (discovery.targets.length ? list.error : null) : null, refresh };
 }

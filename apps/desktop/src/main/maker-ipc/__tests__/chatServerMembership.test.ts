@@ -5,6 +5,10 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+// These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
+// journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
+vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
+vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -78,6 +82,26 @@ describe('Chat Server membership notices', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
 
+  it('records the displayed main message using its exact server position and reflects another device read', async () => {
+    const seq = '9007199254740993';
+    messages = [{ ...joined(), origin: 'human', seq, content: [{ type: 'text', text: '**Hello** [team](https://example.com)' }] } as unknown as ReturnType<typeof joined>];
+    let readSeq = '0';
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/read')) { readSeq = body.readSeq; return { body: { readSeq } }; }
+      const response = original(route, method, body);
+      if (route.endsWith('/snapshot')) response.body.reads = [{ thread_key: 'main', read_seq: readSeq }];
+      return response;
+    });
+    const before = await service.getGroup(roomId);
+    expect(before.ok && before.group.serverUnread).toEqual({ count: 1, mentioned: false });
+    expect(before.ok && before.group.lastMessage?.preview).toBe('Hello team');
+    expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: messages[0]!.id } })).toEqual({ ok: true });
+    expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${seq}`, readSeq: seq });
+    const after = await service.getGroup(roomId);
+    expect(after.ok && after.group.serverUnread).toEqual({ count: 0, mentioned: false });
+  });
+
   it('reads a persisted join into the main timeline and sidebar using its name snapshot', async () => {
     const result = await service.getGroup(roomId);
     expect(result.ok && result.group.messages).toEqual([expect.objectContaining({
@@ -95,6 +119,15 @@ describe('Chat Server membership notices', () => {
       seq: '11', origin: 'user', createdAt: replyAt }];
     const result = await service.getGroup(roomId);
     expect(result.ok && result.group.lastReplyAt).toBe(Date.parse(replyAt));
+  });
+
+  it('uses the latest visible topic activity for the sidebar, not snapshot array order or a deleted message', async () => {
+    const topic = { ...joined(), id: '40000000-0000-4000-8000-000000000002', seq: '9007199254740993',
+      origin: 'user', threadRootId: joined().id, createdAt: '2026-10-09T00:00:00Z',
+      content: [{ type: 'text', text: 'Latest topic reply' }] } as unknown as ReturnType<typeof joined>;
+    messages = [joined(), { ...joined(), seq: '9007199254740994', deleted: true }, topic];
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.lastMessage).toMatchObject({ preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
   });
 
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {

@@ -2,7 +2,7 @@
  * 群聊「引用回复」(docs/product-rules/bot-group-chat.md §10「引用回复」)。
  *
  * 引用是主时间线上的一条新消息，带着被引用消息的作者与摘要；它不是 Thread（话题），
- * 也不改变点名。服务器的 `replyToId` 只允许指向同一 Thread 内的消息，所以主时间线的
+ * 发送端会把被引用的在群伙伴加入点名。服务器的 `replyToId` 只允许指向同一 Thread 内的消息，所以主时间线的
  * 引用以版本化卡片块持久化：与 `cindy.plan`、`cindy.membership` 同一扩展机制，由
  * Chat Server 保存与同步；不认识它的旧端读到 `fallback` 里可读的 Markdown 引用行。
  *

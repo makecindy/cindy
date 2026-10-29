@@ -8,7 +8,7 @@
  *   - 群 / 话题 / 外部用户私聊 → bots.ts 的 channel 专线(幂等创建);
  *   - 发送前守卫 → register.ts 的 prepareBotSessionForImSend(与桌面发送同源)。
  *
- * 一份连接实例只属于一位伙伴, 所以归属解析就是常量 botId。
+ * 独立连接使用固定归属；个人微信单实例通过回调读取当前伙伴归属。
  */
 
 import { eq } from 'drizzle-orm';
@@ -42,9 +42,9 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
   return row?.status === 'active' && row.source === 'bot';
 }
 
-export function createImCompanionRouteDeps(ownerBotId: string): ImCompanionRouteDeps {
+export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
   return {
-    readBinding: () => ownerBotId,
+    readBinding: () => typeof ownerBotId === 'function' ? ownerBotId() : ownerBotId,
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {

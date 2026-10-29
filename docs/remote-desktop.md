@@ -1,5 +1,35 @@
 # Remote desktop
 
+## Idle protection
+
+Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
+Security panel. Each controller remembers its setting per computer: 1, 5 (default),
+10, 15, 30 minutes, or Never. The host must advertise `idleLock`; older hosts and
+platforms without native screen locking show this setting as unsupported.
+This is separate from default-off lock-on-exit and privacy-screen preferences.
+
+The host counts elapsed time since actual remote input or manual clipboard actions.
+Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
+reset it. Viewing a static desktop or video without input still counts as idle.
+When the deadline expires, the host revokes input, requests native locking and
+ends the remote desktop. It rejects automatic recovery until a new explicit start.
+Lock failures are logged; the viewer reports disconnection without claiming that
+an unconfirmed native lock succeeded. Single-window input handoffs are excluded.
+
+Desktop controller lock/suspend retires its viewer immediately and requests a host
+lock. With idle protection enabled, Mobile backgrounding without PiP also ends the
+connection and requests a lock; temporary inactive states (such as biometric prompts)
+do not. PiP keeps the same host idle deadline. Neither path automatically reopens the
+remote desktop when the controller returns. The lock request is retained for any
+in-flight start reply. Background PiP failure or preparation timeout follows the
+same protected exit. Automatic Mobile recovery
+does not use a saved password; deliberate reconnects may still auto-unlock.
+If the exit request cannot arrive, the host's existing 12-second heartbeat expiry
+locks the protected lease. A transient
+media reconnect preserves the live host lease and its idle deadline until resume;
+failed recovery reaches heartbeat expiry instead of renewing the idle budget.
+Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
 ## Desktop viewer
 
 The desktop interaction hierarchy follows a canvas-first approach: device and
@@ -329,24 +359,44 @@ device/network verification before claiming a measured connection-success gain.
 
 Control is a lease-scoped capability, not the session itself. When the host can
 no longer inject input — the native helper died, it reported a failed injection,
-or its write path failed — it releases control and keeps everything else: the
-lease, the capture owner, the video track and the last picture. It does not call
+or its write path failed — it stops the old input helper and immediately attempts
+one repair on the same lease. Successful repair preserves privacy masks, host
+mute and clipboard settings as well as capture, video and the last picture.
+Failure falls back to the existing control-release cleanup. It does not call
 `stop()` on the host. A desktop viewer may still end its own lease when it sees
 the lost control; the mobile viewer can keep watching.
 
 The host also releases control when its own input path refuses a batch before
 injecting anything, so the two sides cannot disagree about who controls: a later
 take-control genuinely restarts the helper instead of being skipped as "already
-controlling".
+controlling". Repair uses the normal authorization, display and lease checks;
+stop, takeover, background presentation and layout changes supersede it. A
+replacement helper that fails before new input does not restart itself again;
+fresh input or a new viewer control request permits another attempt. The
+host-side behavior is covered in
+[`controller.test.ts`](../apps/desktop/src/main/remote-desktop/__tests__/controller.test.ts).
 
 The mobile viewer follows the host's control bit instead of rebuilding the session. A
 rejected input batch, a failed control request or a heartbeat that reports
-`controlling: false` all drop the phone to view only with the existing view-only
-hint and take-control action; media and lease identity are untouched. A dropped
+`controlling: false` all stop local input while media and lease identity stay
+untouched. For control-capable hosts in a visible foreground viewer, input
+rejection and return from PiP immediately request control through the host's
+normal permission checks. If
+control or settings are still settling, their completion continues the pending
+restore without waiting for a timer. The existing 3-second heartbeat is only a
+fallback after a failed or uncertain attempt; a temporary host refusal does not
+change the intent to control. Actual PiP, pending presentation,
+background/inactive state, route blur, offline signaling and in-flight control
+or settings changes defer recovery. The local **View only** choice still blocks
+input after host control returns. Hosts without input capability instead send
+`presentation enabled:false` on return from PiP, restoring foreground video and
+signaling policy without requesting control. A new PiP entry waits for that
+reply before authorizing background viewing again. A dropped
 stalled batch (WebView overflow) also asks the host to drop control: posting
 `control:false` to the WebView clears its queued release without flushing it, so
 only an explicit host `control enabled:false` (which stops the input helper and
-injects a native release) can let go of a held key or button. If that host
+injects a native release) can let go of a held key or button. Its confirmation
+immediately requests fresh control, dropping the stale queue. If that host
 request times out, the viewer keeps the intended control bit and the next
 heartbeat retries the release (or restores local control after a lost
 take-control reply) instead of ignoring a host-`true` while the phone stays
@@ -359,7 +409,13 @@ a control request that collides with one still settling — do not rebuild the
 session: a batch that may have been injected must not be answered with a
 release that discards its key-up, and the heartbeat still owns liveness. Errors
 that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`,
-revocation, an unsupported channel) still recover the session as before.
+revocation, an unsupported channel) still follow the existing session failure
+policy; an explicit stop or permission refusal never triggers automatic control
+reacquisition. Recovery never replays old clicks or keys, replaces the lease or
+resets shared device-link connections. Fullscreen restore, transient refusal,
+overflow release ordering and late replies are covered through the real mobile
+screen in
+[`screen.test.tsx`](../apps/mobile/src/remote-desktop/__tests__/screen.test.tsx).
 
 Desktop viewers require control. They request it on every connection and do not
 offer a view-only action. If the host refuses control, revokes it later, rejects
@@ -939,13 +995,70 @@ Remaining platform adapters are explicitly separate:
 The macOS pre-login and Linux service adapters remain unimplemented. The remote business protocol and shared relay are unchanged. Recovery
 affects only this desktop lease/video track, not other connected peers.
 
-### Windows system service (implementation awaiting Windows runtime validation)
+### Windows system service
 
-Packaged Windows builds include a native SCM service, a Main-only Node-API pipe
+Windows builds include a native SCM service, a Main-only Node-API pipe
 transport, a session-scoped SYSTEM GDI capture worker and the SendInput helper.
 The settings page installs/removes the service through Windows administrator
-consent. Only a protected all-users Program Files installation is eligible;
-per-user/development installations retain the ordinary desktop path.
+consent. Any packaged installation is eligible, including Cindy's default
+per-user one. Source-mode development runs build the same two host helpers in
+the per-user userData cache for the running Electron architecture, then use the
+same protected staging path; their
+Electron process is accepted only for the exact PID approved by that setup's
+administrator prompt.
+
+#### Where the service executable comes from
+
+The service must not start an executable that ordinary processes can replace,
+or any process running as the user would reach SYSTEM permanently and without a
+prompt. Requiring an all-users Program Files installation was one way to get
+that, at the cost of an administrator prompt on every update, so setup takes the
+other route: while the user is already confirming the administrator prompt, the
+elevated setup child copies `cindy-windows-desktop-host.exe` and
+`cindy-windows-desktop-input.exe` into
+`%ProgramFiles%\Cindy Remote Desktop\<installation id>\`, creates that directory
+owned by Administrators and writable only by Administrators and SYSTEM, and
+registers the service against the copy. The copies are read from the
+installation through a handle opened without write or delete sharing, so the
+bytes that are checked are the bytes that land.
+
+The installation id is a hash of the installation directory, so two
+installations — Cindy and CindyDev, or two copies of one edition — never share a
+service, a pipe or a staged executable. Every participant derives that id from
+the installation directory rather than from its own path, because they run from
+different places: `naming.rs` holds the single derivation, and
+`naming::tests::staged_copy_and_installation_agree_on_one_service_name` pins the
+two sides together.
+
+Setup always stops the service, restages and restarts, so an upgraded Cindy does
+not keep running the previous version's copy. Removal deletes the service, the
+staged directory, and a service registered under the pre-staging name.
+
+The UAC transition does not launch the helper from that user-writable
+directory. It starts the absolute-path Windows PowerShell binary from
+`System32` with `-NoProfile -NonInteractive -EncodedCommand`; the script checks
+the Program Files parent and staging directory for administrator/SYSTEM-only
+ACLs and reparse points, copies the helper there, and starts only that protected
+copy. The unelevated helper holds read-only handles on both bundled helpers
+until the elevated copy and setup finish, so a same-user writer cannot swap the
+bytes during the transition or inject an adjacent `VCRUNTIME140.dll`.
+
+What staging removes is the standing risk: the executable the service starts
+afterwards is out of reach of ordinary processes.
+
+Because Cindy's own uninstaller runs per user without administrator rights, it
+cannot delete the staged directory or the service registration. Removing them is
+the settings page's "remove service" action, which asks for administrator
+consent. A leftover registration is inert — the service is demand-start and
+exits with the Cindy process it was authorized for.
+
+Both helpers import `VCRUNTIME140.dll` and the UCRT api-sets, as the shipped
+helpers already did before staging; the UCRT is part of Windows, and
+`VCRUNTIME140.dll` comes from the Visual C++ redistributable, which setup does
+not install. Where it is missing the service cannot start, which surfaces as the
+`service-ready` step rather than silently.
+
+#### Authorization and validation
 
 Authorization records a live process handle for the Cindy process explicitly
 approved through the elevated setup helper. Executable path alone is insufficient:
@@ -953,11 +1066,50 @@ plugin utility processes share Cindy.exe. The service starts on demand and exits
 Restarting Cindy or the service requires fresh administrator approval. This is a current limitation, not unattended
 post-reboot support. No authorization secrets or screenshots are persisted.
 
-The broker validates file/directory ownership, writable ACLs, reparse points,
-SCM identity, peer PIDs and active console session. It retains installation
-handles for its lifetime. Workers are fixed-purpose children in kill-on-close jobs
+Registration is accepted only from an elevated process whose image has the same
+contents as the running service's own image: the setup bootstrap runs from the
+protected staging directory and the service from its protected host copy, so
+their paths differ by design and identical contents is what shows they are one
+build. Which
+installation may then drive the service comes from `install.txt` in the
+protected directory — an administrator-written value rather than a path handed
+over the pipe — and it is accepted only if it hashes back to the directory's own
+name, so a rewritten record cannot redirect the service elsewhere. That path is
+user-writable, so the Cindy.exe check against it is a consistency check; what
+actually gates the service is the approved process handle and the active console
+session.
+
+Packaged setup checks that the host and input helpers have a valid Authenticode
+signature from the same signer as the running Cindy executable. Source-mode
+development setup uses an explicit unsigned development trust boundary; it is
+intended for a developer-controlled checkout and does not claim publisher
+provenance. In both modes the broker validates file/directory ownership, writable
+ACLs, reparse points, SCM identity, peer PIDs and active console session over the
+staged directory and
+its parents up to Program Files, and retains those handles for its lifetime.
+Workers are fixed-purpose children in kill-on-close jobs
 with local-only, bounded, timed pipes. Uninstall/upgrade waits for the service to
 stop before removing binaries. Upgrade clears the authorization.
+
+#### Diagnosing a failed setup
+
+Every setup step has a fixed code — `stage-write`, `service-create`,
+`authorize-connect` and so on — carrying the OS error number and nothing else:
+no path, account name or other machine content. The elevated child is hidden, so
+its console output never reaches the parent; it returns its step as its exit
+code instead, and the parent reports it as `elevate-child/<step>`. A failure in
+the generated bootstrap script itself — a check it refuses or an error it raises
+— is `elevate-child/elevate-bootstrap`, so it cannot be mistaken for a rejected
+argument list. Main logs the code under `remote-desktop:windows` and the
+settings page shows it beside the failure, so a report says which step failed
+rather than only that setup failed.
+`windowsLockScreenSetup.test.ts` covers that path end to end in Main.
+
+The service drops and recreates its listening pipe instance after every accept
+timeout, and reports RUNNING just before the first instance exists.
+`WaitNamedPipeW` returns immediately when no instance exists at all, so
+`Pipe::client` retries within its three-second budget rather than failing on a
+connection that merely landed in one of those gaps.
 
 Desktop transitions terminate the old input helper, including pending batches
 and long text input; Main then recovers only the remote desktop lease. Ctrl+Alt+Del
@@ -966,9 +1118,10 @@ Windows policy decides whether software SAS is allowed; Cindy never changes it.
 Capture follows the input desktop and validates the selected monitor's geometry.
 The GDI compatibility stream is capped at a 1280-pixel long edge and 180 KB JPEG.
 
-Validation available on macOS: Windows-target Rust compilation checks and Desktop
-TypeScript checking. Still required on Windows 10/11: signed package linking and
-installation, administrator consent/cancellation, lock/unlock, UAC, policy-enabled
+Validation so far: native release build and unit tests on Windows 11, Desktop
+TypeScript checking, and the Main-side setup tests above. Still required on
+Windows 10/11: signed package linking and installation, administrator
+consent/cancellation, lock/unlock, UAC, policy-enabled
 SAS, mixed-DPI displays, worker cleanup, upgrade/uninstall, and plugin rejection.
 Windows display-mode changes and pre-login/unattended post-reboot control are not
 implemented. A Linux pre-login service remains deferred. Do not present this as fully validated
@@ -1100,6 +1253,20 @@ position corrections only outside active touchpad movement. Late messages from
 old RTC generations are discarded. Hidden cursors are not drawn. Unsupported
 cursor images fall back to the existing position indicator without killing video.
 Both Light and Dark use the source raster rather than tinting it.
+
+On a portrait half-fold, the upper region shows the desktop and the lower region
+holds the touchpad or keyboard controls. Landscape half-folds use the ordinary
+full-width landscape viewer. The keyboard toolbar remains below the hinge rather
+than moving into the video region when the system keyboard leaves little room.
+The lower touchpad owns relative cursor movement for its entire contact, including
+pauses, regardless of the video surface's touch/pointer preference. Host position
+feedback resumes after a full 200ms grace period measured from lift (or a later
+local input), even when the finger paused before lifting. New contacts preserve
+edge coordinates; only viewport changes request cursor re-entry. Gesture
+cancellation, control loss and leaving the pad clear that ownership. The local
+React Native/WebView bridge carries contact start/end; the remote input protocol
+is unchanged. Regression coverage lives in Mobile's `viewer.test.ts` and
+`screen.test.tsx` under `src/remote-desktop/__tests__/`.
 
 Desktop viewers use the local system pointer instead of drawing this raster.
 An optional `shape` hint selects a bounded standard cursor keyword (text, hand,

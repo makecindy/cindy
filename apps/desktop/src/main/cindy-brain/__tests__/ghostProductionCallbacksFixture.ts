@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
+import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
@@ -8,6 +9,8 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  ghostInstallTargetContext,
+  resolveForgeInstallTarget,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
   isPluginInstanceKey,

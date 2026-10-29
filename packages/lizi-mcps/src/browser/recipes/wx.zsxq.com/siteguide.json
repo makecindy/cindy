@@ -1,22 +1,15 @@
 {
   "site": "wx.zsxq.com",
-  "auth": "需登录:知识星球用 httpOnly cookie(分布在 zsxq.com 子域),无法读 cookie 判断登录态——只能靠 api 调用是否返回 JSON 判断。在持久浏览器登录 wx.zsxq.com 后,登录态随同源 fetch 自动带上",
+  "auth": "鉴权以具体命令为准：cookie。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "home": "https://wx.zsxq.com",
-    "dynamics": "https://api.zsxq.com/v2/dynamics?scope=general&count=<n>",
-    "groups": "https://api.zsxq.com/v2/groups",
-    "groupTopics": "https://api.zsxq.com/v2/groups/<groupId>/topics?scope=all&count=<n>",
-    "search": "https://api.zsxq.com/v2/search/groups/<groupId>/topics?keyword=<kw>&count=<n>",
-    "topic": "https://api.zsxq.com/v2/topics/<topicId>",
-    "topicComments": "https://api.zsxq.com/v2/topics/<topicId>/comments?sort=asc&count=<n>"
+    "home": "https://wx.zsxq.com"
   },
-  "pages": [
-    {
-      "type": "feed",
-      "url": "https://api.zsxq.com/v2/dynamics?scope=general&count=20",
-      "notes": "响应 {resp_data:{dynamics:[{create_time,action,topic:{topic_id,type,group:{name},owner:{name},title,talk:{text,owner},comments_count,likes_count}}]}};话题 URL = https://wx.zsxq.com/topic/<topic_id>"
-    }
+  "recipes": [
+    "zsxq-dynamics"
   ],
-  "recipes": ["zsxq-dynamics"],
-  "notes": "知识星球页面域是 wx.zsxq.com,数据 API 在 api.zsxq.com。关键:必须先 navigate 到 https://wx.zsxq.com,再用 evaluate 步在页面内 fetch(api.zsxq.com 全路径, {credentials:'include'})——cookie 是 httpOnly 且跨子域,只有页面内带凭证发请求才会附带登录态。响应统一包一层:成功时数据在 resp_data(或 data),失败时 {succeeded:false, code, info};正文要从 topic 的 title / talk.text / question.text / answer.text / task.text / solution.text 里取第一个非空。已收录 zsxq-dynamics(跨所有星球的最新动态,无需 group_id)。其它读流程需要 group_id:列出我加入的星球 api.zsxq.com/v2/groups(resp_data.groups[{group_id,name,category:{title},statistics:{subscriptions_count,topics_count},user_specific:{join_time}}]);某星球话题列表 api.zsxq.com/v2/groups/<groupId>/topics?scope=all&count=<n>;星球内搜索 api.zsxq.com/v2/search/groups/<groupId>/topics?keyword=<encodeURIComponent(kw)>&count=<n>;话题详情 api.zsxq.com/v2/topics/<topicId>(resp_data.topic 或顶层即 topic),评论 api.zsxq.com/v2/topics/<topicId>/comments?sort=asc&count=<n>(resp_data.comments[{owner:{name},text,repliee:{name},likes_count}])。当前活跃星球 group_id 也可从页面 localStorage 的 target_group 取(JSON.parse 后读 group_id)。"
+  "notes": "兼容入口 zsxq-dynamics 现执行内置 zsxq/dynamics，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

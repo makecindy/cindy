@@ -12,6 +12,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   DeviceLinkError,
+  DeviceLinkClient,
+  DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+  parseTransportPayload,
+  type Envelope,
+  type WsLike,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
@@ -134,6 +140,151 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+// Real transport regression: the previous client stub always reported depth zero,
+// hiding both the 32-vs-16 window mismatch and authorization's async admission gap.
+// Unit tier: no sockets or wall-clock waits; forwardPush drives production dispatch.
+class StatePushSocket implements WsLike {
+  sent: Envelope[] = [];
+  bufferedAmount = 0;
+  private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  on(event: string, callback: (...args: never[]) => void): void {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), callback as (...args: unknown[]) => void]);
+  }
+  send(data: string): void { this.sent.push(JSON.parse(data)); }
+  close(): void { this.emit('close', 1000); }
+  emit(event: string, ...args: unknown[]): void {
+    for (const callback of this.handlers.get(event) ?? []) callback(...args);
+  }
+  push(frame: Envelope): void { this.emit('message', { toString: () => JSON.stringify(frame) }); }
+  acknowledge(dst: string): void {
+    const tail = this.sent.filter(frame => frame.dst === dst && parseTransportPayload(frame.payload)).at(-1);
+    if (!tail) return;
+    const { meta } = parseTransportPayload(tail.payload)!;
+    this.push({ v: 1, kind: 'push', src: dst, payload: {
+      channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId: meta.streamId, ackSeq: meta.seq },
+    } });
+  }
+}
+
+it.each(['sync', 'async'] as const)('reserves real transport slots for replies during %s-authorized activity replay', async (authorization) => {
+  const socket = new StatePushSocket();
+  const client = new DeviceLinkClient({
+    getWsUrl: () => 'ws://fixture', getToken: async () => 'fixture',
+    getHello: () => ({ deviceName: 'host', platform: 'darwin', appVersion: '1', remoteControlEnabled: true, busy: false }),
+    createWebSocket: () => socket,
+  });
+  try {
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emit('open');
+    socket.push({ v: 1, kind: 'hello-ack', payload: { serverProtocolVersion: 1, deviceId: 'host', userId: 'fixture' } });
+    client.onFrame(frame => {
+      if (frame.kind === 'link-open' && frame.src && frame.id) client.sendLinkAccept(frame.src, frame.id, { appVersion: '1', allowlistHash: 'fixture' });
+    });
+    for (const dst of ['phone', 'desktop']) {
+      socket.push({ v: 1, kind: 'link-open', src: dst, id: `open-${dst}`, payload: {
+        controllerName: dst, protocolVersion: 1, appVersion: '1',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT], transportStreamId: `${dst}-stream`, transportBaseSeq: 1,
+      } });
+      subscriptions.subscribe(dst, ['sessions'], dst);
+    }
+    __testing.setActiveClient(client);
+    if (authorization === 'async') setRemoteBotSessionLookup(async () => 'visible');
+    for (let i = 0; i < 48; i++) __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${i}`, phase: 'working' });
+    await vi.advanceTimersByTimeAsync(0);
+    client.sendInvokeResult('phone', 'subscription-response', { ok: true, result: { ok: true } });
+    expect(socket.sent.some(frame => frame.id === 'subscription-response')).toBe(true);
+    // Phone stops ACKing; the second peer must still drain, without a relay reset.
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's47', phase: 'completed' });
+    for (let i = 0; i < 8; i++) {
+      socket.acknowledge('desktop');
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    const activities = (dst: string) => [...new Map(socket.sent.filter(frame => frame.dst === dst)
+      .map(frame => parseTransportPayload(frame.payload))
+      .filter(transport => transport !== null)
+      .map(transport => [transport.meta.seq, JSON.parse(transport.data)] as const)).values()]
+      .filter(body => body?.channel === SESSION_ACTIVITY_CHANNEL)
+      .map(body => body!.payload as { sessionId: string; phase: string });
+    expect(activities('desktop')).toHaveLength(48);
+    expect(activities('desktop').at(-1)).toEqual({ sessionId: 's47', phase: 'completed' });
+    expect(activities('phone').length).toBeLessThan(16);
+    for (let i = 0; i < 8; i++) {
+      socket.acknowledge('phone');
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(activities('phone')).toHaveLength(48);
+    expect(activities('phone').at(-1)).toEqual({ sessionId: 's47', phase: 'completed' });
+    expect(client.getStatus()).toBe('online');
+  } finally { client.stop(); }
+});
+
+it.each([SESSION_ACTIVITY_CHANNEL, 'local-db:sessions:patched'])('rechecks %s capacity after authorization and retains the newer final value', async (channel) => {
+  const h = mkClient();
+  __testing.setActiveClient(h.client as never);
+  subscriptions.subscribe('phone', ['sessions']);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+  const payload = (value: string) => channel === SESSION_ACTIVITY_CHANNEL
+    ? { sessionId: 's1', phase: value } : { sessionId: 's1', patch: { title: value } };
+  __testing.forwardPush(channel, payload('working'));
+  await vi.advanceTimersByTimeAsync(250);
+  // Other traffic consumes capacity while SQLite authorization is in flight.
+  h.client.getReliableSendQueueDepth.mockReturnValue(8);
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.sent).toEqual([]);
+  __testing.forwardPush(channel, payload('completed'));
+  h.client.getReliableSendQueueDepth.mockReturnValue(0);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(h.sent.map(push => push.payload)).toEqual([payload('completed')]);
+});
+
+// Review regression (unit): a lifecycle patch can overtake activity still in the
+// stage, including the item awaiting authorization. Existing ordering tests only
+// covered maker-event batches. Observe outgoing pushes through real dispatch.
+it.each(['deleted', 'archived'] as const)('drops older activity before a %s patch across staging boundaries', async (status) => {
+  for (const boundary of ['authorizing', 'queued', 'backpressure'] as const) {
+    const h = mkClient();
+    __testing.setActiveClient(h.client as never);
+    subscriptions.subscribe('phone', ['sessions']);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
+    if (boundary === 'backpressure') h.client.getReliableSendQueueDepth.mockReturnValue(8);
+    if (boundary === 'queued') __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's0', phase: 'working' });
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'working' });
+    __testing.forwardPush('local-db:sessions:patched', { sessionId: 's1', patch: { status } });
+    __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's2', phase: 'completed' });
+    h.client.getReliableSendQueueDepth.mockReturnValue(0);
+    release();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.sent.filter(push => push.channel === SESSION_ACTIVITY_CHANNEL).map(push => push.payload))
+      .toEqual(boundary === 'queued'
+        ? [{ sessionId: 's0', phase: 'working' }, { sessionId: 's2', phase: 'completed' }]
+        : [{ sessionId: 's2', phase: 'completed' }]);
+    expect(h.sent.filter(push => push.channel === 'local-db:sessions:patched').map(push => push.payload))
+      .toEqual([{ sessionId: 's1', patch: { status } }]);
+    handleControllerOffline('phone');
+  }
+});
+
+it.each(['superseded', 'offline', 'hidden'] as const)('discards %s activity while authorization is pending', async (outcome) => {
+  const h = mkClient();
+  __testing.setActiveClient(h.client as never);
+  subscriptions.subscribe('phone', ['sessions']);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  setRemoteBotSessionLookup(async () => { await pending; return outcome === 'hidden' ? 'hidden' : 'visible'; });
+  __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'working' });
+  if (outcome === 'offline') handleControllerOffline('phone');
+  else __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed' });
+  release();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(h.sent.map(push => push.payload)).toEqual(outcome === 'superseded' ? [{ sessionId: 's1', phase: 'completed' }] : []);
 });
 
 describe('[1] 能力协商', () => {
@@ -943,14 +1094,17 @@ describe('running session recovery on slow links', () => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     setRemoteBotSessionLookup(async () => { await pending; return 'visible'; });
-    subscriptions.subscribe('phone', ['sessions']);
+    subscriptions.subscribe('phone', ['sessions', 'session:busy']);
+    for (let index = 0; index < 64; index++) {
+      __testing.forwardPush('maker:status-changed', { sessionId: 'busy', status: 'running' });
+    }
     for (let index = 0; index < 65; index++) {
       __testing.forwardPush(SESSION_ACTIVITY_CHANNEL, { sessionId: `s${index}`, phase: 'completed' });
     }
     expect(h.sent).toHaveLength(0);
     finish();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(h.sent).toHaveLength(65);
+    expect(h.sent.filter(push => push.channel === SESSION_ACTIVITY_CHANNEL)).toHaveLength(65);
     expect(h.sent.at(-1)?.payload).toEqual({ sessionId: 's64', phase: 'completed' });
   });
 

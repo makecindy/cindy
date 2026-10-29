@@ -6,7 +6,9 @@
  * coordinator scheduling, rollback, or agent lifecycles.
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as nativeFs } from 'node:fs';
+import { operationFileSystem } from '../utils/operationFileSystem';
+import { operationCheckpoint, operationWait, operationYield } from '../utils/operationBudget';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -36,6 +38,7 @@ import {
 } from './savepointRefs';
 
 const log = createLogger('git-snapshot');
+const fs = operationFileSystem(nativeFs);
 
 const PATHSPEC_CHUNK_SIZE = 80;
 const STAGED_DIFF_TEXT_MAX_BYTES = 16_000;
@@ -117,6 +120,8 @@ export interface CreateSnapshotDetailedResult {
 
 /** One savepoint parsed from Git history (HEAD log for legacy, hidden ref chain for shadow). */
 export interface SnapshotEntry {
+  /** Dispatch intent identity, distinct from a user-message anchor. */
+  attemptId?: string;
   commit: string;
   label: string;
   kind: SnapshotKind;
@@ -393,6 +398,10 @@ const SHADOW_IDENTITY_ENV: Record<string, string> = {
 
 /** Input for shadow savepoints written to the session's hidden ref chain. */
 export interface CreateShadowSavepointInput {
+  /** Automatic turns need a completion record even when the tree is unchanged. */
+  recordUnchanged?: boolean;
+  /** Reject incomplete after-edit trees before publishing a completion record. */
+  baselineSkippedFingerprints?: readonly SkippedFileFingerprint[];
   sessionId: string;
   /** Commit label or a factory used after staging when diff context is needed. */
   label: string | SnapshotLabelFactory;
@@ -478,11 +487,16 @@ export async function createShadowSavepoint(
   // be treated as deleted — never handed to `git add`, which would either
   // refuse it or, worse, snapshot out-of-repo content.
   const skippedFingerprints = await collectSkippedFingerprints(repoPath, skippedFiles);
+  if (input.baselineSkippedFingerprints && skippedFingerprintsChanged(input.baselineSkippedFingerprints, skippedFingerprints)) {
+    throw new Error('File rewind gap: turn changes were partially filtered');
+  }
 
   const repoReal = await fs.realpath(repoPath);
   const presentFiles: SnapshotIncludedFile[] = [];
   const missingPaths: string[] = [];
+  let scanIndex = 0;
   for (const file of plan.includedFiles) {
+    await operationYield(scanIndex++);
     const abs = resolveSnapshotGitPath(repoPath, file.path);
     if (!abs) continue;
     if (!(await pathExists(abs))) {
@@ -517,9 +531,11 @@ export async function createShadowSavepoint(
 
     const tree = (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
 
+    let unchanged = false;
     if (input.skipIfTreeEquals) {
       const baselineTree = await resolveTreeOf(repoPath, input.skipIfTreeEquals);
-      if (baselineTree && baselineTree === tree) {
+      unchanged = !!baselineTree && baselineTree === tree;
+      if (unchanged && !input.recordUnchanged) {
         log.debug('[createShadowSavepoint] tree unchanged, skip', {
           sessionId: input.sessionId,
           baseline: input.skipIfTreeEquals.slice(0, 8),
@@ -534,14 +550,15 @@ export async function createShadowSavepoint(
       }
     }
 
-    const label =
+    operationCheckpoint();
+    const label = unchanged ? '保存改动' :
       typeof input.label === 'function'
-        ? await input.label(
+        ? await operationWait(input.label(
             // Diff against the turn baseline, not HEAD: the worktree stays
             // dirty across turns now, so a HEAD-based diff would describe the
             // cumulative session delta instead of this turn's changes.
             await collectStagedDiff(repoPath, commitPathspecs, extraEnv, input.skipIfTreeEquals),
-          )
+          ))
         : input.label;
     const [branch, baseHead, parent] = await Promise.all([
       getCurrentBranch(repoPath).catch(() => undefined),
@@ -577,7 +594,9 @@ async function collectSkippedFingerprints(
   skippedFiles: readonly SnapshotSkippedFile[],
 ): Promise<SkippedFileFingerprint[]> {
   const out: SkippedFileFingerprint[] = [];
+  let scanIndex = 0;
   for (const file of skippedFiles) {
+    await operationYield(scanIndex++);
     const abs = resolveSnapshotGitPath(repoPath, file.path);
     if (!abs) continue;
     const stats = await fs.lstat(abs).catch(() => null);
@@ -591,6 +610,16 @@ async function collectSkippedFingerprints(
     });
   }
   return out;
+}
+
+function skippedFingerprintsChanged(before: readonly SkippedFileFingerprint[], after: readonly SkippedFileFingerprint[]): boolean {
+  if (before.length !== after.length) return true;
+  const baseline = new Map(before.map((fp) => [fp.path, fp]));
+  return after.some((fp) => {
+    const previous = baseline.get(fp.path);
+    return !previous || previous.sizeBytes !== fp.sizeBytes || previous.mtimeMs !== fp.mtimeMs ||
+      previous.ctimeMs !== fp.ctimeMs || previous.ino !== fp.ino;
+  });
 }
 
 /** Input for metadata-only shadow markers (gap / rollback records on the chain). */
@@ -707,6 +736,7 @@ export async function listShadowSavepoints(
       ...(parsed.anchor ? { anchor: parsed.anchor } : {}),
       ...(parsed.branch ? { branch: parsed.branch } : {}),
       ...(parsed.baselineCommit ? { baselineCommit: parsed.baselineCommit } : {}),
+      ...(parsed.attemptId ? { attemptId: parsed.attemptId } : {}),
       ...(parsed.baseHead ? { baseHead: parsed.baseHead } : {}),
     });
   }
@@ -1068,8 +1098,9 @@ export async function withPathspecFile<T>(
 ): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'xdt-snapshot-pathspec-'));
   const file = path.join(dir, 'paths');
-  await fs.writeFile(file, `${uniquePathspecs(pathspecs).join('\0')}\0`, 'utf8');
   try {
+    await fs.writeFile(file, `${uniquePathspecs(pathspecs).join('\0')}\0`, 'utf8');
+    operationCheckpoint();
     return await fn(file);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

@@ -1,4 +1,11 @@
 {
+  "imageDelivery": {
+    "stored": "画像を受け取りました",
+    "failed": "画像の転送に失敗しました。既存の画像の転送を再試行できます。",
+    "retry": "転送を再試行",
+    "retrying": "転送中…",
+    "retryFailed": "転送できません。画像を生成したパソコンがオンラインか確認してください。"
+  },
   "agentActionRow": {
     "noContent": "表示できる内容はありません",
     "fileChange": {

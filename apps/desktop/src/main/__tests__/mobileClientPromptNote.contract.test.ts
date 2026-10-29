@@ -16,8 +16,9 @@ describe('注入接线(源码级守卫)', () => {
       'deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true',
     );
     // 注入链:normalized → withHandoff → withPlanReconcile → withGoalInactiveNote
-    // → 来源说明 → 客户端说明(元信息都在交接段之前)。
-    expect(source).toContain('prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, messageSourceNote)');
+    // → 引用说明 → 来源说明 → 客户端说明(元信息都在交接段之前)。
+    expect(source).toContain('prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)');
+    expect(source).toContain('prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)');
     // 环境说明经 wireNoteMemory 去重后再前置(内容没变就不重复),链路位置不变。
     expect(source).toContain("prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, plannedNotes['client-environment'])");
     expect(source).toContain('deps.planRepeatableWireNotes?.(sessionId, repeatableNotes, { force: pendingHandoff !== null })');
@@ -80,7 +81,7 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)。
     const stamps = register.match(/stampMobileClientOrigin\(/g) ?? [];
     expect(stamps.length).toBe(3);
-    expect(register.match(/stampQueuedEditProvenance\(updated, remote, editor\)/g)?.length).toBe(2);
+    expect(register.match(/stampQueuedEditProvenance\(sid, updated, remote, editor\)/g)?.length).toBe(2);
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
@@ -121,7 +122,9 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
   it('steer 投递也注入说明,且只进 wire payload', () => {
     expect(register).toContain("isMobileControllerInvoke() || so.fromMobileClient === true");
     expect(register).toContain('shouldPrependMobileClientPromptNote(normalized, sess.agentKind)');
-    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerSourceNote)');
+    // 插话同样先接引用说明,再接来源说明(与 send 事务同序)。
+    expect(register).toContain('prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)');
+    expect(register).toContain('prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)');
     // steer 与 send 事务共用同一份环境说明去重记忆,投递成功后才记为已发送。
     expect(register).toContain("prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])");
     expect(register).toContain('steerNotePlan?.commit()');

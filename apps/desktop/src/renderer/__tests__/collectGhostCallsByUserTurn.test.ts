@@ -29,7 +29,7 @@ describe('collectGhostCallsByUserTurn', () => {
     const root = { ...ghostCall('t1', 'helper'), toolInput: { ghost_id: 'helper', namespace: null, tool: 'run' } };
     const organization = { ...ghostCall('t2', 'helper'), toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } };
     const map = collectGhostCallsByUserTurn([user('u1'), root, organization]);
-    expect([...(map.get('u1') ?? [])].sort()).toEqual(['_ns__acme__helper', 'helper']);
+    expect([...(map.get('u1') ?? [])].sort()).toEqual(['_ns__acme__helper', '_root__helper']);
   });
 
   it('keeps legacy unqualified calls and ignores malformed namespace inputs', () => {

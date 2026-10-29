@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DL_SESSION_HANDOFF_CHANNEL,
   DeviceLinkError,
@@ -7,6 +7,10 @@ import {
   type InvokeResultPayload,
 } from '@cindy/device-link';
 import { createRemoteSessionHandoff } from '../sessionHandoffRemote.js';
+import { releaseRemoteTaskActionReceipt, validateRemoteTaskActionReceipt } from '../../maker-ipc/remoteTaskActionReceipt.js';
+
+const issued: string[] = [];
+afterEach(() => { issued.splice(0).forEach(releaseRemoteTaskActionReceipt); });
 
 const accepted = {
   ok: true,
@@ -16,7 +20,9 @@ const accepted = {
   targetLastUserSendAt: null,
 };
 function setup(outcome: unknown = { ok: true, result: accepted }) {
-  const invoke = vi.fn(async (): Promise<InvokeResultPayload> => {
+  const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+    if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1 } };
+    issued.push((args[0] as { taskActionReceipt: string }).taskActionReceipt);
     if (outcome instanceof Error) throw outcome;
     return outcome as InvokeResultPayload;
   });
@@ -32,17 +38,48 @@ function setup(outcome: unknown = { ok: true, result: accepted }) {
 }
 
 describe('cross-device send_to_session sender', () => {
+  // #6399, unit: the existing result-code matrix did not inspect receipt lifetime.
+  // Known-unsent attempts must not exhaust the 256 live delivery slots; unknown
+  // attempts and accepted queued messages must remain verifiable by the receiver.
+  it.each([
+    [Object.assign(new DeviceLinkError('DEVICE_OFFLINE', ''), { inFlight: false }), false],
+    [new Error('[DEVICE_LINK_CONTROL_DISABLED] off'), false],
+    [{ ok: false, error: { code: 'DEVICE_OFFLINE', message: '' } }, false],
+    [{ ok: true, result: { ok: false, errorCode: 'ARCHIVED' } }, false],
+    [Object.assign(new DeviceLinkError('NOT_CONNECTED', ''), { inFlight: true }), true],
+    [Object.assign(new DeviceLinkError('INVOKE_TIMEOUT', ''), { inFlight: true }), true],
+    [new DeviceLinkError('INVOKE_TIMEOUT', ''), true],
+    [{ ok: false, error: { code: 'BACKPRESSURE', message: 'receipt query overloaded' } }, true],
+    [new Error('unknown transport failure'), true],
+    [{ ok: true, result: accepted }, true],
+    [{ ok: true, result: { ...accepted, wakeKind: 'future-mode' } }, true],
+    [{ ok: true, result: { ...accepted, wakeKind: 'resumed' } }, false],
+  ])('retains a receipt only while delivery may need it (%#)', async (outcome, retained) => {
+    await setup(outcome).send();
+    expect(await validateRemoteTaskActionReceipt('mbp', {
+      receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 's9', message: 'hi',
+    })).toBe(retained);
+  });
+
+  it('keeps sending after more than 256 proven pre-send failures', async () => {
+    const s = setup(Object.assign(new DeviceLinkError('DEVICE_OFFLINE', ''), { inFlight: false }));
+    for (let attempt = 0; attempt < 260; attempt++) {
+      expect(await s.send()).toMatchObject({ ok: false, errorCode: 'REMOTE_DEVICE_OFFLINE' });
+    }
+    expect(s.invoke).toHaveBeenCalledTimes(520);
+  });
+
   it('sends one request on the same-account handoff channel and returns the remote acceptance', async () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has(DL_SESSION_HANDOFF_CHANNEL)).toBe(true);
     // 慢恢复的任务不能被默认 30s 误报成结果未知。
     expect(resolveRemoteInvokeTimeoutMs(DL_SESSION_HANDOFF_CHANNEL)).toBe(65_000);
     const s = setup();
     expect(await s.send()).toEqual(accepted);
-    expect(s.invoke).toHaveBeenCalledOnce();
+    expect(s.invoke).toHaveBeenCalledTimes(2);
     expect(s.invoke).toHaveBeenCalledWith(
       'mbp',
       DL_SESSION_HANDOFF_CHANNEL,
-      [{ sessionId: 's9', message: 'hi', sender: { sessionId: 'me', title: 'T' } }],
+      [{ sessionId: 's9', message: 'hi', sender: { sessionId: 'me', title: 'T' }, taskActionReceipt: expect.any(String) }],
       { preSend: expect.any(Function) },
     );
   });
@@ -112,7 +149,7 @@ describe('cross-device send_to_session sender', () => {
       const s = setup(outcome);
       expect(await s.send()).toMatchObject({ ok: false, errorCode });
       // 任何失败都不自动重发。
-      expect(s.invoke).toHaveBeenCalledOnce();
+      expect(s.invoke).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -157,7 +194,9 @@ describe('cross-device send_to_session sender', () => {
     expect(early).toMatchObject({ ok: false, errorCode: 'HOST_NOT_READY' });
     expect(beforeSend).not.toHaveBeenCalled();
     // 发出后、回执前切换账号：结果未知，且不返回上一个账号的任务信息。
-    const inFlight = vi.fn(async (): Promise<InvokeResultPayload> => {
+    const inFlight = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: { taskActionVersion: 1 } };
+      issued.push((args[0] as { taskActionReceipt: string }).taskActionReceipt);
       owner += 1;
       return { ok: true, result: { ...accepted, targetTitle: 'old account task' } };
     });

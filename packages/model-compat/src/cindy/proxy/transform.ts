@@ -264,6 +264,28 @@ export function stripEncryptedContentFromBody(rawBody: Buffer): Buffer | null {
   }
 }
 
+/**
+ * OpenAI rejects replayed raw reasoning content from providers such as DeepSeek.
+ * Drop only those protocol items, including their provider-bound blob: retaining
+ * the blob after deleting content would immediately cause another rejection.
+ * Ordinary messages, tool payloads and compacted context are never traversed.
+ */
+export function stripResponsesReasoningContentFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed) || !Array.isArray(parsed.input)) return null;
+  const input = parsed.input.filter((item) => !(
+    isPlainObject(item) && item.type === 'reasoning' && Array.isArray(item.content) &&
+    item.content.some((part) => isPlainObject(part) && part.type === 'reasoning_text')
+  ));
+  if (input.length === parsed.input.length) return null;
+  return Buffer.from(JSON.stringify({ ...parsed, input }), 'utf8');
+}
+
 function isImageGenerationType(type: unknown): boolean {
   if (typeof type !== 'string') return false;
   return type.startsWith('image_generation') || type.startsWith('imageGeneration');
@@ -1601,6 +1623,11 @@ const RESPONSES_ITEM_ID_PREFIX_RE =
 const RESPONSES_ITEM_ID_LENGTH_RE =
   /input\[\d+\]\.id\\?["']?[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i;
 
+// DeepSeek history resumed on OpenAI (2026-10-20): raw reasoning content is
+// output-only on that route. Do not treat other array limits as this repair.
+const RESPONSES_REASONING_CONTENT_RE =
+  /Invalid\s+\\?["']input\[\d+\]\.content\\?["']:\s*array too long\.\s*Expected an array with maximum length 0, but got an array with length [1-9]\d* instead\./i;
+
 // Azure/LiteLLM 400: "Image generation items without `id` are not supported for this request."
 const IMAGE_GENERATION_WITHOUT_ID_RE =
   /image generation items without [`']?id[`']? are not supported/i;
@@ -1660,6 +1687,24 @@ export function createEncryptedContentRecoveryRule(opts: {
     },
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/** Recover only after the target explicitly rejects raw reasoning content. */
+export function createResponsesReasoningContentRecoveryRule(opts: {
+  onRetry?: (threadId: string, model: string) => void;
+} = {}): RecoveryRule {
+  return {
+    id: 'responses_reasoning_content',
+    useUpstreamModel: true,
+    enabled: () => true,
+    matches: (text) => RESPONSES_REASONING_CONTENT_RE.test(text),
+    strip: stripResponsesReasoningContentFromBody,
+    // Raw reasoning is valid on its original provider. Neither apply this rule
+    // on unrelated errors nor let broad encrypted strips remove valid GPT state.
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
+    onRetry: opts.onRetry,
   };
 }
 
@@ -1839,5 +1884,27 @@ export function createToolExchangeAdjacencyRecoveryRule(opts: {
     strip: repairToolExchangeStructureFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/** Retry only after a gateway explicitly rejects the top-level context editor (#7041). */
+export function createAnthropicContextManagementRecoveryRule(): RecoveryRule {
+  return {
+    id: 'anthropic_context_management',
+    enabled: () => true,
+    matches: (text) => /(?:^|[\s"'])context_management\s*:\s*extra inputs are not permitted\b/i.test(text),
+    strip: (body) => {
+      try {
+        const parsed: unknown = JSON.parse(body.toString('utf8'));
+        if (!isPlainObject(parsed) || !Array.isArray(parsed.messages) || !('context_management' in parsed)) return null;
+        const next = { ...parsed };
+        delete next.context_management;
+        return Buffer.from(JSON.stringify(next), 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
   };
 }

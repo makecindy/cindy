@@ -26,8 +26,12 @@ export interface TeammateSearchMatch {
  * 侧栏总搜索里的伙伴 / 群聊命中(2026-10-13:伙伴段不再有独立搜索框)。
  * 本机伙伴按名字、简介、技能匹配,含已隐藏、不含已停止;远程伙伴按名字、简介、电脑名;
  * 群聊按群名与成员名,含已归档的群(段内不列出,在这里找回)。只读已有的名册投影,不发起额外查询。
+ * 锁定任务分组时不搜索名册，避免组内搜索混入伙伴或群聊。
  */
-export function useTeammateSearchMatches(rawQuery: string): TeammateSearchMatch[] {
+export function useTeammateSearchMatches(
+  rawQuery: string,
+  lockedSessionGroupName: string | null,
+): TeammateSearchMatch[] {
   const cloud = useCompanionCloud();
   const allBots = useBotProfiles();
   const rosterRemoteBots = useRemoteBots();
@@ -37,7 +41,7 @@ export function useTeammateSearchMatches(rawQuery: string): TeammateSearchMatch[
   const { groups } = useBotGroupList();
   return useMemo(() => {
     const query = rawQuery.trim().toLocaleLowerCase();
-    if (!query) return [];
+    if (!query || lockedSessionGroupName !== null) return [];
     const includes = (...values: Array<string | null | undefined>) =>
       values.some((value) => Boolean(value) && value!.toLocaleLowerCase().includes(query));
     const local = filterBotRoster(
@@ -73,7 +77,7 @@ export function useTeammateSearchMatches(rawQuery: string): TeammateSearchMatch[
         avatar: group.members[0] ?? null,
       }));
     return [...local, ...remote, ...groupMatches];
-  }, [bots, remoteBots, groups, rawQuery]);
+  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName]);
 }
 
 /** 与会话结果行同几何(rounded-lg、px-3 py-2.5、20px 标记、13 号标题、类型小标签)。 */

@@ -5,12 +5,12 @@ import { errorPayload } from './xdt-helper/_payload.js';
  * (prompt-cache rule), so a turn-dependent limit is enforced when the call runs.
  */
 export type ToolCallAuthorization =
-  | { ok: true }
+  | { ok: true; run?<T>(operation: () => Promise<T>): Promise<T> }
   | { ok: false; errorCode: string; message: string };
 
 export type ToolCallAuthorizer = (input: {
   sessionId: string | undefined;
-  server: 'cindy_helper' | 'cindy_scheduler';
+  server: 'cindy_helper' | 'cindy_scheduler' | 'cindy_orca';
   tool: string;
   args: unknown;
 }) => Promise<ToolCallAuthorization>;
@@ -29,5 +29,5 @@ export async function withToolCallAuthority<T>(
     decision = { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: '暂时无法确认这次调用的权限，请稍后重试。' };
   }
   if (!decision.ok) return errorPayload(decision.errorCode, decision.message);
-  return operation();
+  return decision.run ? decision.run(operation) : operation();
 }

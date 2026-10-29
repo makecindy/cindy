@@ -13,6 +13,7 @@
 - **iOS 优先**,触控优先,跟随系统 light / dark 自动切换(`useColorScheme`)。
 - **灰度环境**:除品牌 teal(就绪态)、Heart Orange(运行/thinking 态)和已登记的 Beta 渠道红色状态徽标外,界面全是黑白之间的灰阶。不引入任何品牌蓝 / 绿 / 红等装饰色。
   - 唯一的个性化例外:用户在设置里主动选择的「我的消息气泡颜色」,只染用户自己的消息气泡,默认仍是灰阶;规则见根规范 `DESIGN.md`「Personal message bubble colors」。
+  - 模型选择器的账号额度条沿用桌面语义：剩余 ≥30% 用 `textSecondary`，10% < 剩余 <30% 用 `quotaBarWarn`，剩余 ≤10% 用 `quotaBarCrit`。额度专用语义在根规范 `DESIGN.md` §2 / §10 登记，不借用房主皇冠或任务错误 token。颜色只用于额度条，百分比文字继续保留；iOS / Android 共用真实比例绘制，不设置最小填充长度，0% 留空。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的三档制约束的是桌面 surface;其「Mobile」节明确把 §15.13 / §16 之外的 mobile 布局细节委托给 `apps/mobile` 的实现,mobile 圆角阶梯以 `tokens.ts` 为准。
 - **默认零阴影**:层次靠背景色差 + 1px 边框。2026-09-27 用户明确要求的局部例外：首页主菜单抽屉（含伙伴入口）用右侧容器圆角与柔和投影，颜色走 homeDrawerShadow，外壳承载阴影、内层裁切内容；不扩展到页面卡片或任务列表侧栏，见 DESIGN.md §6。
 - **字重克制**:按角色用 400 / 500 / 600(见 §3「字重与字色按角色搭配」)。**UI chrome 无 700+**。唯一例外是根规范 `docs/design-rules/DESIGN.md` §3「排版豁免登记表」已登记的域——原生 Markdown strong(`src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`)与登录品牌画布(`app/(auth)/login.tsx`、`src/components/LoginSkinControls.tsx`、`src/auth/loginSkinLayout.ts`)。这些是用户内容语义与品牌画布,不算 chrome;chrome 本身的上限仍是 600。
@@ -47,6 +48,8 @@
 | `homeListFab` | `#0F0F0F` | `#E6E6E6` | 素雅新建对话 FAB:dark 比 cta 略收,避免主入口在深底上过跳 |
 | `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
 | `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
+| `quotaBarWarn` | `#F3A115` | `#F3A115` | 账号额度条剩余不足 30%、高于 10% 的填充，其他用途不复用 |
+| `quotaBarCrit` | `#D91F37` | `#D91F37` | 账号额度条剩余不超过 10% 的填充，其他用途不复用 |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
 | `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
@@ -190,6 +193,17 @@
 
 文本 / 卡片 / 分隔线目前仍在各屏重复定义——这是已知优化点(见执行计划),新代码尽量收敛、不要再新增一份同义样式。
 
+### 设置类分组:说明文字写在卡片外(2026-10-19 用户定稿)
+
+设置页及其二级页统一用 `src/session/SettingsGroupRows.tsx` 的 `SettingsGroup`。对齐 iOS Section footer / Android 列表辅助文字:
+
+- **卡片里只放「名称 + 取值 / 开关 / 箭头」**。成句的说明写在分组下方的 `footer`(13/18 400 `textSecondary`);操作结果、权限被拒、保存失败等临时提示走 `messages`,接在说明后面。行组件不提供 `hint` / `detail`。
+- **一组只配一段说明**。同组几行各需说明时拆成几个分组。
+- **点不了的入口不摆出来**:检查更新等当前不可用的动作直接不显示,原因写进 footer,不留灰按钮加解释。
+- 原地执行的动作行(检查更新、清空日志)传 `chevron={false}`,只有进入子页 / 外链的行画箭头。
+- 例外:列表条目自身的元数据(如词典别名)和录入流程里紧贴控件的步骤状态,可以留在行内。
+- **「+」面板里的表单(开启协同 / 创建 Worker 等 `ContextSheet*`)同一规则**:`ContextSheetGroup` 的 `footer` 承载说明与校验提示(报错传 `footerTone="error"`),`ContextSheetRow` 用 `value` 放右侧取值、不再把说明塞进行内 `detail`;iOS 下拉行自带行名、分段控件选项自明,分组不再加标题(Android 药丸没有行名,保留分组标题);底部主按钮撑满宽度。iOS 上「+」面板的分组标题用 13/18 600 `textTertiary`(系统默认分组标题在新版 iOS 是大号粗体,由 `ComposerSectionSettingsHeader` 统一换掉);面板底与卡片保持系统玻璃样式,不改实色,以免丢掉原生 sheet 的玻璃过渡动画。
+
 ### 主题接入模式(强制)
 
 样式随主题变化,**不能再用模块级静态 `StyleSheet.create`**。统一两种写法:
@@ -221,11 +235,10 @@ function Foo() {
 
 ### iOS 外壳 vs Cindy 内容
 
-- **项目标题滑动（iOS / Android）**：仅标题整行横移，展开的子任务不随之移动。左滑露出「新建任务」，超过屏宽 55% 松手打开预填项目电脑与目录的新建页；发送后才创建任务。右滑露出「全部任务」「搜索」，必须点按，搜索限定当前项目并聚焦输入框。点标题继续展开／收起，已有滑开行时先收起操作；自定义排序仍为长按后纵向拖动。项目与任务共用滑动互斥注册表，滚动收行，左屏缘保留返回手势。动作沿用普通任务的圆形到胶囊形态，按钮直径为 56pt，间距使用 spacing.md、图标使用 iconSize.swipeAction；使用双模式 token，并通过标题的无障碍动作提供等价入口。只对有明确电脑和目录的项目启用，不把对话或 Cindy Make 聚合组视为单一目录。实现见 `src/session/SwipeableProjectHeader.tsx`、`HomeSurface.tsx`。
-- **任务／伙伴切换**：按左任务、右伙伴的顺序做同一套横向滑动转场，抽屉和标题下拉选择都复用 HomeModePanes；不重建已访问列表，不丢搜索或滚动位置。滑动用不回弹的临界阻尼弹簧（参数见 DESIGN.md §14.4），快速反向切换从当前位置继续；系统减弱动态效果或尚未取得该偏好时直接切换。滑动只用于 iOS；Android 顶栏画在各自页面里，滑动会带着顶栏一起走，因此保持直接切换。导航栏和顶部模糊固定不动，模糊由 HomeModePanes 统一绘制一层。
-- **首页菜单提示点**：可见圆点直径 6pt，原生工具栏用同尺寸画布的有点／无点模板图，避免空的数字徽章被系统放大。图标位置、按钮外框和点击范围不随提示点出现而变化。
+- **任务行滑动（2026-10-24 用户裁决，iOS / Android）**：右滑提供已读与置顶，全滑默认标记已读；左滑提供选项与归档，全滑归档。跨端组合沿用已有方案：已读沿用灵动岛的青绿色单勾（Lucide `Check` / SF Symbols `checkmark`），归档沿用手机版的蓝色归档盒（`Archive` / `archivebox`），置顶为橙色图钉，选项为中性灰省略号。Mobile 的已读底色独立加深以保证白色图标对比度，数值由 `swipeActionRead` 管理；不把灵动岛深色背景上的高亮色直接复制到手机浅色背景。
 
-- **首页导航共用组件（2026-10-13）**：iOS 任务与伙伴首页都调用 platform/chrome/HomeStackHeader，统一系统导航栏、菜单按钮与居中标题宽度；顶部模糊背景由 HomeModePanes 在滑动层外统一绘制。页面只提供标题内容、菜单动作和右侧工具；仅当前可见首页注册导航栏。伙伴标题允许独立对齐，目前保持居中；任务标题保留长名称避让。伙伴列表、安全区、滚动指示器和下拉刷新只计算一次顶部占位。普通页面、聊天身份栏、面板及 Android 导航暂未纳入这一批，不视为全端迁移完成。
+- **项目标题滑动（iOS / Android）**：仅标题整行横移，展开的子任务不随之移动。左滑露出「新建任务」，超过屏宽 55% 松手打开预填项目电脑与目录的新建页；发送后才创建任务。右滑露出「全部任务」「搜索」，必须点按，搜索限定当前项目并聚焦输入框。点标题继续展开／收起，已有滑开行时先收起操作；自定义排序仍为长按后纵向拖动。项目与任务共用滑动互斥注册表，滚动收行，左屏缘保留返回手势。动作沿用普通任务的圆形到胶囊形态，按钮直径为 56pt，间距使用 spacing.md、图标使用 iconSize.swipeAction；使用双模式 token，并通过标题的无障碍动作提供等价入口。只对有明确电脑和目录的项目启用，不把对话或 Cindy Make 聚合组视为单一目录。实现见 `src/session/SwipeableProjectHeader.tsx`、`HomeSurface.tsx`。
+- **首页导航共用组件（2026-10-13，2026-10-24 收为单一首页）**：iOS 首页调用 platform/chrome/HomeStackHeader，统一系统导航栏、菜单按钮与居中标题宽度；顶部模糊背景由首页路由绘制一层。页面只提供标题内容、菜单动作和右侧工具；任务标题保留长名称避让。列表、安全区、滚动指示器和下拉刷新只计算一次顶部占位。手机不再有任务／伙伴两种首页与切换转场，伙伴以任务首页的伙伴段呈现。普通页面、聊天身份栏、面板及 Android 导航暂未纳入这一批，不视为全端迁移完成。
 
 iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-rules/ios-native-design.md)。该规范区分系统容器、原生控件和 Cindy 业务内容；取代原先“复杂内容面板一律使用 SheetSurface”的规定。
 
@@ -250,7 +263,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
   新建任务的设备、工作区和远程目录选择复用 RN `NewTaskSelectionRow`；设备使用原生底部弹层，
   目录仍在同一兼容弹层内逐级返回，盘符通过原生菜单切换，继续调用被控端目录接口。
   开关和普通文本输入原本已是原生控件；富文本编辑器不属于此次迁移。
-- **Android 交互跟随 iOS**（2026-09-27 产品裁决）：入口位置、顺序、分组、显示哪些信息与输入校验以 iOS 为准；外观保持 Android 平台实现，不照搬玻璃。贴着控件弹出的菜单统一走 `NativePullDownMenu`，Android 通过 `AnchoredPullDownMenu.android` 使用现有 Expo UI 的 Material `DropdownMenu`，保留分组标题、勾选、禁用、危险操作、子菜单返回行及 `keepPresented`。弹出定位、滚动、焦点及动画交给系统；外部点击和系统返回收起原生菜单。触发器整块是一个读屏按钮，触发控件禁用时不挂菜单。自绘实现保留用于兼容，不使用能力不足的基础 PopupMenu 替代。
+- **Android 交互跟随 iOS**（2026-09-27 产品裁决）：入口位置、顺序、分组、显示哪些信息与输入校验以 iOS 为准；外观保持 Android 平台实现，不照搬玻璃。贴着控件弹出的菜单统一走 `NativePullDownMenu`，Android 通过 `AnchoredPullDownMenu.android` 使用现有 Expo UI 的 Material `DropdownMenu`，保留分组标题、勾选、禁用、危险操作、子菜单返回行及 `keepPresented`。弹出定位、滚动、焦点及动画交给系统；外部点击和系统返回收起原生菜单。触发器整块是一个读屏按钮，触发控件禁用时不挂菜单。例外是伙伴私聊气泡的长按菜单：气泡里有引用、链接和横向滚动，菜单不能接管整块触摸，改由调用方用同一个 RNGH 长按手势识别后，以受控方式（`open` / `onOpenChange`）打开 `AnchoredPullDownMenu`。自绘实现保留用于兼容，不使用能力不足的基础 PopupMenu 替代。
   原生菜单首次使用时创建 Compose 容器，随后随触发器复用；收起只修改 `expanded`，保留系统关闭动画，避免每次点击重建整棵原生树。锚点的 RN 外层使用 `pointerEvents="none"`，防止关闭后的容器挡住触发器；弹出窗口独立接收菜单点击。验收必须覆盖关闭后再次打开、外部点击和菜单项选择，不能只验证首次呈现。
   可勾选菜单项在原生弹出窗口中使用 `RNHostView` 承载一个 RN `menuitem`，通过 `accessibilityState.checked` 表达选中、未选中和半选，禁用态与整行点击共用同一节点；勾号只是装饰，不能代替无障碍语义。现有 Compose modifier 未提供完整三态设置，不增加第二个可点击复选框。回归见 `androidMaterialMenu.test.tsx`，模拟器须核验真实节点。
 
@@ -278,6 +291,16 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - **动效**:新消息与卡片用 `CompanionEntering` / `CompanionFadeIn`(RN `Animated`,原生驱动,只动 opacity /
   transform,系统减弱动效时静止);工作中用 `CompanionPresenceRing` + `ThinkingDots`,不另写循环动画。
 
+### 待发送气泡（2026-10-21 定稿，任务与伙伴私聊共用）
+
+`PendingSendBubble` 是自己刚发出、还没被确认的消息。稿件：`Designs/cindy/send-bubble`（选定 B 方案）。
+
+- **一直是实色**：点发送当帧上屏，与正式气泡同款；网络往返、排队、等电脑都不变灰。只有「正在下方输入框编辑」时淡化。
+- **状态只放两处**：气泡左侧图标（转圈 = 发送中 / 上传中，队列图标 = 排队中，时钟 = 等电脑或网络，红色感叹号 `statusError` = 失败），以及气泡下方那一行。送达后正式消息的「复制 / …」占的就是这一行，所以前后行高不变、列表不跳。
+- **本机刚发出的消息**：0.6 秒内不出任何状态，慢了才淡入转圈；入场上浮一次，确认时不重播。
+- **下方那一行**：排队中「排队中 | 插话 编辑 取消」；失败「未发送 | 重试 删除」，有具体原因时原因写在下面；等待「等电脑连上后发送 | 取消」。文字 13/18，按钮命中区补到 44。报错文字保持黑白（`errorText`），只有左侧图标是红色。
+- **带图**：每张图自己转圈；只有那张没传上去的图上显示重传按钮。
+
 ## 5. 间距 / 圆角 / 触控 / 安全区
 
 - **间距 `spacing`**:`xs 4 · sm 8 · md 12 · lg 16 · xl 24 · xxl 32`(基数 4)。避免 `2 / 6 / 13 / 17` 这类裸数字;1-2pt 的微调若实在需要,集中、少量、写注释。
@@ -302,6 +325,7 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 - 颜色走 token(`colors.textPrimary` / `textSecondary` / `statusAccent` / `permAutoAccent` 等),不写死。
 - 会话 Agent 身份图标走 `MobileVendorIcon`；provider / model 厂牌图标分别走 `MobileProviderMark` / `MobileModelIconMark`。
 - **底部浮窗按平台承载**：iOS 新增与迁移优先系统 sheet，详情默认中等高度、短工具按内容高度，具体见 iOS 规范。Android 和尚未迁移的兼容实现继续复用 `SheetModal` / `SheetSurface`，不另造自绘外壳；其二级内容保留单 Modal 内导航。不同面板之间等待关闭回调后再呈现，避免叠加遮罩。
+- **创建群表单（2026-10-28 用户修正）**：iOS 使用展开的系统 page sheet 与 UIKit 导航栏，正文采用不透底的主题 surface。左侧为系统关闭图标按钮，右侧为文字创建按钮，均保留中性玻璃底；创建不用蓝色或 prominent 填充。标题、按钮几何与交互由导航栏负责，不在内容里用自定义标题行模拟 toolbar。表单可滚动并避让键盘，呈现完成后聚焦群名；有草稿或提交中禁止滑动关闭，显式关闭沿用丢弃确认。
 
 ---
 

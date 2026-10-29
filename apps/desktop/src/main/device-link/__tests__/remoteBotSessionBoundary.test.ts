@@ -204,3 +204,15 @@ it('does not let another computer message a hidden teammate task through session
     .rejects.toThrow('[NOT_FOUND] Session does not exist');
   await expect(assertRemoteBotInvocationAllowed(request('normal'), 'maker:session:handoff')).resolves.toBeUndefined();
 });
+
+// A cached search reply must respect a later hide just like a fresh query. Unit tier.
+it('rechecks companion search snippets on queued delivery without hiding ordinary tasks', async () => {
+  let hidden = false;
+  setRemoteBotSessionLookup(async id => id === 'task' ? 'ordinary' : hidden ? 'hidden' : 'background');
+  const ordinary = { session: { id: 'task' } };
+  const personal = { session: { id: 'chat', companion: { id: 'bot' } }, contentHit: { preview: 'private' } };
+  const page = { results: [ordinary, personal] };
+  expect(await projectRemoteSessionResult('local-db:conversations:search', page)).toEqual(page);
+  hidden = true;
+  expect(await projectRemoteSessionResult('local-db:conversations:search', page)).toEqual({ results: [ordinary] });
+});

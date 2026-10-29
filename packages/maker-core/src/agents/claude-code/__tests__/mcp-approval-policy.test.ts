@@ -775,6 +775,17 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
     expect(result.behavior).toBe('allow');
     expect(result.updatedPermissions).toBeUndefined();
+    // A live owner permission change supersedes the IM policy on this same turn.
+    await handle.setPermissionMode!('bypassPermissions');
+    expect((await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-full-access',
+    })).behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.setPermissionMode!('ask');
+    await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-restored',
+    });
+    expect(permissionRequests(seen)).toHaveLength(2);
     await handle.close();
   });
 
@@ -998,10 +1009,13 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.close();
   });
 
-  it('Full access overrides a pending prompt-each-time MCP approval', async () => {
+  it.each([false, true])('Full access overrides a pending MCP approval (IM policy=%s)', async (imPolicy) => {
     const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
       // 决策永不返回：请求挂起，等模式切换来结算。
       decide: () => undefined,
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Merge the contacts.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
 
     const pending = canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_merge' }, {
@@ -1291,6 +1305,7 @@ describe('fail-closed still precedes the MCP policy', () => {
     const { handle, canUseTool, seen } = await startSession(() => 'auto-approve', {
       permissionMode: 'auto',
     });
+    expect(handle.getAutoReviewOwner?.()).toBe('cindy');
 
     const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-auto-trusted' });
 
@@ -1703,7 +1718,7 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
-  it.each([false, true])('remote Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+  it.each([false, true])('remote Auto to Full access applies the owner choice during review (IM policy=%s)', async (restricted) => {
     let release!: (decision: { verdict: 'allow' }) => void;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt-each-time', {
@@ -1721,7 +1736,7 @@ describe('remote sessions share the same permission semantics', () => {
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
     await handle.setPermissionMode!('bypassPermissions');
     release({ verdict: 'allow' });
-    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(await pending).toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });

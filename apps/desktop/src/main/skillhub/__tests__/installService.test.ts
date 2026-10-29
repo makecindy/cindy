@@ -189,6 +189,32 @@ describe('skillhub/installService', () => {
     expect(isCindySkillEnabled(source)).toBe(true);
   });
 
+  it('keeps files intact when a remote approval expires after the uninstall leases are acquired', async () => {
+    const { source, target } = await localFixture('remote-remove');
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const beforeCommit = vi.fn(() => false);
+    expect((await uninstall(source, target, () => true, beforeCommit)).success).toBe(false);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(shell.trashItem).not.toHaveBeenCalled();
+  });
+
+  it('checks the remote instance after extraction and preserves the old version when confirmation is stale', async () => {
+    const { source } = await localFixture('remote-update');
+    await setupInstallDownload('remote-update', await makeZip({ 'SKILL.md': 'new content' }));
+    const { getCurrentDataOwnerId } = await import('../../authManager');
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner');
+    const { install } = await import('../installService');
+    const { registryService } = await import('../registry');
+    const beforeCommit = vi.fn(async () => false);
+    const result = await install({ name: 'remote-update', installPath: source, version: '2.0.0', force: true }, () => {}, { current: () => true, beforeCommit });
+    expect(result).toMatchObject({ success: false, errorCode: 'CANCELLED' });
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(registryService.addInstall).not.toHaveBeenCalled();
+  });
+
   it('serializes an in-flight scanner repair before uninstall snapshots and removes its completed link', async () => {
     const { source, target } = await localFixture('scanner-race');
     const { registryService } = await import('../registry');

@@ -1,3 +1,5 @@
+import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { formatDuration } from '@cindy/maker-shared/message-render';
 import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
@@ -90,6 +92,8 @@ export interface NormalizedRemoteMessage {
   role: RemoteMessageRole;
   label: string;
   body: string;
+  /** Original forwarded envelope for fork / rewind; display-only decoding must not change drafts. */
+  draftBody?: string;
   rawError?: string;
   errorSummaryKey?: string;
   /** user 消息正文包含产品引用编码；驱动跨端 marker/legacy 解析。 */
@@ -100,6 +104,8 @@ export interface NormalizedRemoteMessage {
   slashCommandRanges?: Array<{ start: number; end: number }>;
   /** user Composer 的结构化语义引用；用于 fork / rewind 恢复同款 chip。 */
   agentReferences?: AgentInputReference[];
+  /** user 专用：伙伴私聊的引用回复（信封 replyQuote），气泡正文上方显示引用块。 */
+  replyQuote?: ChatReplyQuote;
   secondaryBody?: string;
   authorization?: Record<string, unknown>;
   systemCardData?: Record<string, unknown>;
@@ -122,6 +128,7 @@ export interface NormalizedRemoteMessage {
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时同一 turn 可有多次 seal，最后一次是最终答复。 */
   turnCompleted?: boolean;
+  failedSamplingAttempt?: boolean;
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
@@ -413,6 +420,15 @@ export function normalizeRemoteMessages(
       continue;
     }
 
+    if (message.role === 'assistant' && readRecord(message.agentMeta?.modelChange)) {
+      result.push({
+        key: messageNormalizeKey(message), source: message, kind: 'system',
+        role: message.role, label: 'system:agent-switch', body: '',
+        systemCardType: 'agent-switch', systemCardData: readRecord(message.agentMeta?.modelChange)!,
+        align: 'agent', createdAt: message.createdAt,
+      });
+      continue;
+    }
     // Desktop persists context rebuilds as empty assistant rows with metadata.
     if (message.role === 'assistant') {
       const rebuild = readRecord(message.agentMeta?.contextRebuild);
@@ -575,7 +591,8 @@ export function normalizeRemoteMessages(
     // 本机 IM 落库的就是用户原文:正文保持完整落库内容,分叉 / 回退据此恢复草稿。
     const body = hookSource && !hookSource.userTextContent
       ? hookSource.userText
-      : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody) : rawBody;
+      : message.role === 'assistant' ? stripGoalVerdictBlock(rawBody)
+        : readRecord(message.agentMeta?.origin)?.kind === 'session' ? forwardedRequestDisplayText(rawBody) : rawBody;
     const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
@@ -584,6 +601,7 @@ export function normalizeRemoteMessages(
       role: message.role,
       label: message.role,
       body,
+      ...(message.role === 'user' && !hookSource && body !== rawBody ? { draftBody: rawBody } : {}),
       attachments: userContent?.attachments,
       ...(userContent?.quotesEncoded === true ? { quotesEncoded: true } : {}),
       sessionReferences: userContent?.sessionReferences,
@@ -596,6 +614,7 @@ export function normalizeRemoteMessages(
       ...(userContent?.agentReferences?.length
         ? { agentReferences: userContent.agentReferences }
         : {}),
+      ...(userContent?.replyQuote ? { replyQuote: userContent.replyQuote } : {}),
       align: message.role === 'user' && hookSource === undefined ? 'user' : 'agent',
       createdAt: message.createdAt,
       isStreaming: readMessageStreaming(message) || undefined,
@@ -604,6 +623,7 @@ export function normalizeRemoteMessages(
         : {}),
       ...turnCost,
       ...readModelMismatch(message),
+      ...(message.role === 'assistant' && message.agentMeta?.failedSamplingAttempt ? { failedSamplingAttempt: true } : {}),
       ...(message.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(message.agentMeta) } : {}),
       ...(message.role === 'assistant' && message.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
@@ -611,6 +631,24 @@ export function normalizeRemoteMessages(
       ...(message.role === 'user' ? readMessageSourceFields(message) : {}),
       ...(hookSource ? { hookSource } : {}),
     });
+    const quotaResumeInfo = readRecord(message.agentMeta?.autoResumeInfo);
+    if (message.role === 'user' && quotaResumeInfo?.reason === 'usage-limit-reset') {
+      // Same durable row, two visible parts: retain the user's original input
+      // and show the existing recovery activity without creating another turn.
+      result.push({
+        key: `${messageNormalizeKey(message)}:usage-limit-resume`,
+        source: message,
+        kind: 'system',
+        role: message.role,
+        label: 'system:auto-resume',
+        body: '',
+        systemCardType: 'auto-resume',
+        systemCardData: quotaResumeInfo,
+        isSyntheticTrigger: true,
+        align: 'agent',
+        createdAt: message.createdAt,
+      });
+    }
   }
 
   const pluginInvocations = collectPluginInvocations(sorted, toolResultPairing);
@@ -724,6 +762,7 @@ function parseUserContent(content: unknown): {
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
   agentReferences?: AgentInputReference[];
+  replyQuote?: ChatReplyQuote;
 } {
   const parsed = parseMaybeJsonObject(content);
   if (!parsed) {
@@ -738,8 +777,10 @@ function parseUserContent(content: unknown): {
   const pastedTextRanges = readSentPastedTextRanges(parsed.pastedTextRanges, text);
   const slashCommandRanges = readSentSlashCommandRanges(parsed.slashCommandRanges, text);
   const agentReferences = readAgentInputReferences(parsed.agentReferences, text);
+  const replyQuote = readChatReplyQuote(parsed.replyQuote);
   return {
     text,
+    ...(replyQuote ? { replyQuote } : {}),
     quotesEncoded: parsed.quotesEncoded === true,
     ...(pastedTextRanges ? { pastedTextRanges } : {}),
     ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
@@ -1037,6 +1078,7 @@ export function remoteMessageCompletesTurn(
   message: RemoteMessage,
   turnCost = readTurnCost(message),
 ): boolean {
+  if (message.agentMeta?.failedSamplingAttempt) return false;
   return message.role === 'assistant' && (
     message.agentMeta?.turnCompleted === true
     || (turnCost.turnMoney?.amount ?? 0) > 0

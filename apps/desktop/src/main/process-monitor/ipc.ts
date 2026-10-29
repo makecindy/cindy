@@ -70,6 +70,11 @@ export interface ProcessMonitorIpcOptions {
   scanOsProcessesSync?: () => OsProcessSnapshot;
   /** sampler 的异步 OS 扫描。 */
   scanOsProcesses?: () => Promise<OsProcessSnapshot>;
+  /**
+   * 登记 session id → 任务标题（生产装配见 session-label.ts）。缺省 =
+   * agent 条目不带归属标题；抛错由 sampler 吞掉，只丢标题。
+   */
+  resolveSessionLabel?: (sessionId: string) => Promise<string | null> | string | null;
   /** 隐藏预热窗口等 sender 可保留订阅，但 Main 不允许它触发采样或接收快照。 */
   allowsSampling?: (sender: WebContents) => boolean;
   classify?: (cmdLineLower: string) => MonitoredAgentKind | null;
@@ -137,6 +142,7 @@ export function registerProcessMonitorIpc(opts: ProcessMonitorIpcOptions = {}): 
       describeRendererProcess: describeRendererProcessByPid,
       classify,
       resolveAgentProcessRegistration: resolveAgentRegistration,
+      resolveSessionLabel: opts.resolveSessionLabel,
       selfPid,
       log,
       // Windows 冷启 PowerShell 可达秒级；用户打开后的首帧只等 app.getAppMetrics，

@@ -40,7 +40,7 @@ export interface NewMakerDraftSnapshot {
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   /** 每个 vendor 是否由用户在 New Maker picker 明确选过模型；旧 renderer 缺省不提供。 */
   modelChosenByVendor?: Partial<Record<VendorKey, boolean>>;
-  fastModeByModel: Record<string, boolean>;
+  fastModeByModel: Record<string, boolean | 'ultrafast'>;
   effortByModel: Record<string, string>;
   /**
    * 「新建会话默认启用 worktree」勾选记忆(vendor 无关的草稿根字段)。
@@ -74,7 +74,7 @@ export type ProviderModelMemorySnapshot = Record<
   string,
   {
     effortByModel: Record<string, string>;
-    fastByModel: Record<string, boolean>;
+    fastByModel: Record<string, boolean | 'ultrafast'>;
     thinkingByModel?: Record<string, boolean>;
   }
 >;
@@ -128,13 +128,81 @@ export function getWorkerPermissionModeFromCreationPrefs(): OrcaWorkerPermission
 
 /** Renderer push handler 调; 整体替换 providerModelMemory 镜像。 */
 export function setProviderModelMemoryCache(snapshot: ProviderModelMemorySnapshot): void {
-  providerMemoryCache = snapshot;
+  providerMemoryCache = applyPinnedThinkingIntents(snapshot);
+}
+
+/**
+ * 跨引擎切换提交时写入的思考开关「钉子」：renderer 的全量快照推送可能仍基于尚未
+ * 学习到本次选择的状态（远端推送未回流 / 旧快照在途），整体替换会把刚写入的值抹掉。
+ * 钉子叠加在每次快照替换之上，直到快照自己带上同一个值（renderer 已追上）才撤掉；
+ * 撤掉之后 renderer 就是该值的唯一来源，后续改动不会再被压住。
+ */
+const pinnedThinkingIntents = new Map<string, Map<string, boolean>>();
+
+function applyPinnedThinkingIntents(
+  snapshot: ProviderModelMemorySnapshot,
+): ProviderModelMemorySnapshot {
+  if (pinnedThinkingIntents.size === 0) return snapshot;
+  let next: ProviderModelMemorySnapshot | null = null;
+  for (const [key, pinned] of pinnedThinkingIntents) {
+    const incoming = snapshot[key]?.thinkingByModel ?? {};
+    let merged: Record<string, boolean> | null = null;
+    for (const [model, value] of pinned) {
+      if (incoming[model] === value) {
+        // renderer 已追上该选择：撤钉，之后的改动以 renderer 为准。
+        pinned.delete(model);
+        continue;
+      }
+      merged ??= { ...incoming };
+      merged[model] = value;
+    }
+    if (pinned.size === 0) pinnedThinkingIntents.delete(key);
+    if (merged) {
+      next ??= { ...snapshot };
+      next[key] = {
+        effortByModel: snapshot[key]?.effortByModel ?? {},
+        fastByModel: snapshot[key]?.fastByModel ?? {},
+        thinkingByModel: merged,
+      };
+    }
+  }
+  return next ?? snapshot;
+}
+
+/**
+ * 局部写入某 (agent, provider, model) 的思考开关。跨引擎切换提交后由主进程调用：
+ * 普通 send 的 lazy-create 只读镜像（不经过 bootstrap），远端推送尚未回流时也能
+ * 读到用户刚选的值，避免新建会话用旧偏好。
+ */
+export function setThinkingEnabledInMemory(
+  agentKind: 'claude-code' | 'codex' | 'pi',
+  providerId: string | null | undefined,
+  model: string | undefined,
+  enabled: boolean,
+): void {
+  if (!providerId || !model) return;
+  const key = `${agentKind}:${providerId}`;
+  // 镜像已经带上同一个值：renderer 自己就是该值的来源，不需要钉，钉住只会
+  // 压住后来的用户改动。
+  if (providerMemoryCache?.[key]?.thinkingByModel?.[model] === enabled) return;
+  const entry = providerMemoryCache?.[key];
+  providerMemoryCache = {
+    ...(providerMemoryCache ?? {}),
+    [key]: {
+      effortByModel: entry?.effortByModel ?? {},
+      fastByModel: entry?.fastByModel ?? {},
+      thinkingByModel: { ...entry?.thinkingByModel, [model]: enabled },
+    },
+  };
+  const pinned = pinnedThinkingIntents.get(key) ?? new Map<string, boolean>();
+  pinned.set(model, enabled);
+  pinnedThinkingIntents.set(key, pinned);
 }
 
 export interface WorkerDefaultsFromNewMaker {
   model?: string;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
 }
 
@@ -170,7 +238,7 @@ export function getWorkerDefaultsFromNewMaker(
   // effortByModel 是跨 vendor 的"按模型记忆", 优先用; 没有就退回 vendor prefs 上次记录的 effort。
   const effort = cache.effortByModel[model] ?? prefs.effort;
   // fastModeByModel 缺省按 false 兜底 (用户没显式开过就是关)。
-  const fastMode = cache.fastModeByModel[model] === true;
+  const fastMode = (cache.fastModeByModel[model] ?? false);
   return { model, effort, fastMode, providerId: prefs.providerId };
 }
 
@@ -212,12 +280,12 @@ export interface RemoteNewMakerDefaults {
   /** false = 明确未选过，可应用目录新任务默认；undefined = 旧端未知，保守保留原模型。 */
   modelChosenByUser?: boolean;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   providerId?: string | null;
   /** 每个模型各自记忆的 effort / fast(切模型还原用)。旧版被控端不回 → 控制端拿到 undefined。 */
   effortByModel?: Record<string, string>;
-  fastModeByModel?: Record<string, boolean>;
+  fastModeByModel?: Record<string, boolean | 'ultrafast'>;
   /**
    * providerModelMemory 全量快照;`${agent}:*` 是模型级全局预设,来源槽保留旧 v2 兼容副本。
    * device-link 草稿列表行(非选中模型)的真实权威读源:控制端据此镜像被控端每个模型的
@@ -255,7 +323,7 @@ export function getRemoteNewMakerDefaults(
   return {
     model,
     effort: prefs.effort ?? cache.effortByModel[model],
-    fastMode: cache.fastModeByModel[model] === true,
+    fastMode: (cache.fastModeByModel[model] ?? false),
     permissionMode: prefs.permissionMode,
     providerId: prefs.providerId ?? null,
     effortByModel: cache.effortByModel,
@@ -284,7 +352,7 @@ export function getSelectedNewMakerRoute(ownerScope: string): BotModelRoute | un
 
 /** Same snapshot as the selected route; never consume the unfenced legacy preference cache. */
 export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' | 'codex' | 'pi',
-  providerId: string, model: string): { effort?: string; fastMode?: boolean } {
+  providerId: string, model: string): { effort?: string; fastMode?: boolean | 'ultrafast' } {
   if (selectedRouteOwner !== ownerScope || !cache) return {};
   const memory = cache.providerModelMemory;
   // 权威 `${agent}:*` 槽优先,来源副本只兜底旧客户端(同 getThinkingEnabledFromMemory 与
@@ -295,5 +363,5 @@ export function getNewMakerModelTuning(ownerScope: string, agent: 'claude-code' 
   const effort = preset?.effortByModel?.[model] ?? provider?.effortByModel?.[model] ?? cache.effortByModel[model];
   const fastMode = preset?.fastByModel?.[model] ?? provider?.fastByModel?.[model] ?? cache.fastModeByModel[model];
   return { ...(typeof effort === 'string' ? { effort } : {}),
-    ...(typeof fastMode === 'boolean' ? { fastMode } : {}) };
+    ...((typeof fastMode === 'boolean' || fastMode === 'ultrafast') ? { fastMode } : {}) };
 }

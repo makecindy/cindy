@@ -15,6 +15,7 @@ import {
   Mic,
   MonitorCog,
   MonitorSmartphone,
+  Palette,
   Plug,
   Settings2,
   Sparkles,
@@ -63,6 +64,7 @@ type SettingsNavIcon = ComponentType<LucideProps>;
 
 const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
+  appearance: Palette,
   billing: CircleDollarSign,
   usage: ChartColumn,
   personalization: Sparkles,

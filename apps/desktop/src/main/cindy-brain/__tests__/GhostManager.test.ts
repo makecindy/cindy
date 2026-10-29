@@ -13,7 +13,14 @@ import {
   validateGhostManifest,
   type InstalledGhost,
 } from '../../../shared/ghost';
-import { CINDY_OFFICIAL_GHOST_TRUST, GhostManager, readLegacyGhostApprovalProjection, type GhostManagerOptions } from '../GhostManager';
+import {
+  CINDY_OFFICIAL_GHOST_TRUST,
+  DEFAULT_RENAME_RETRY_DELAYS_MS,
+  GhostManager,
+  RENAME_RETRY_EXHAUSTED_HINT,
+  readLegacyGhostApprovalProjection,
+  type GhostManagerOptions,
+} from '../GhostManager';
 import {
   installedFileModeFromZip,
   unixPermissionsForRepackedEntry,
@@ -96,7 +103,189 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
   };
 }
 
+describe('official simulator identity migration', () => {
+  it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(
+    'recovers an interrupted rename at %s without duplicating the installed instance', async phase => {
+      await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+      const old = manager.list()[0]!;
+      const oldRelId = installedGhostPhysicalRelId(old);
+      const other = new GhostManager({ getRootDir: () => path.join(workDir, 'package-fixture') });
+      await other.install(await makeCindy('new.cindy', goodManifest('cindy-simulator')), { namespace: null });
+      const next = other.list()[0]!;
+      const relId = installedGhostPhysicalRelId(next);
+      const nextStore = new GhostInstallReceiptStore(() => other.approvalStateRoot());
+      const nextApproval = nextStore.read(relId);
+      if (nextApproval.state !== 'approved') throw new Error('missing fixture approval');
+      const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+      const backupDirName = `.cindy-updating-${pluginInstallStoragePart(relId)}-1234abcd`;
+      await store.writePendingMutation(relId, {
+        kind: 'update', packageSha256: nextApproval.receipt.packageSha256!,
+        receiptRevision: nextApproval.receipt.revision, backupDirName,
+        phase: phase === 'prepared' ? 'prepared' : 'backed-up', simulatorPreviousRelId: oldRelId,
+      });
+      const finalDir = path.join(rootDir, relId);
+      if (phase !== 'prepared') fs.renameSync(old.dir, path.join(rootDir, backupDirName));
+      if (phase === 'placed' || phase === 'committed') fs.cpSync(next.dir, finalDir, { recursive: true });
+      if (phase === 'committed') await store.write({ ...nextApproval.receipt, simulatorPreviousRelId: oldRelId },
+        { relId, skillSourceDir: finalDir });
+      manager = new GhostManager({ getRootDir: () => rootDir });
+      const recovered = manager.list();
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]!.manifest.id).toBe(phase === 'committed' ? 'cindy-simulator' : 'baguette-simulator');
+      expect(installedGhostStoragePart(recovered[0]!)).toBe(installedGhostStoragePart(old));
+      expect(recovered[0]!.approval.state).toBe('approved');
+      expect(store.readPendingMutationSync(relId).state).toBe('missing');
+      expect(fs.existsSync(path.join(rootDir, backupDirName))).toBe(false);
+    },
+  );
+
+  it('does not take over an organization installation', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: 'acme' });
+    const old = manager.list()[0]!;
+    const file = await makeCindy('new.cindy', goodManifest('cindy-simulator'));
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old), expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    }), 'state-changed');
+    expect(manager.list()[0]!.dir).toBe(old.dir);
+  });
+
+  it('does not replace a separately installed target or accept a stale source approval', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+    const old = manager.list()[0]!;
+    const file = await makeCindy('new.cindy', goodManifest('cindy-simulator'));
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: 'approved:00000000-0000-4000-8000-000000000001',
+    }), 'state-changed');
+    await manager.install(file, { namespace: null });
+    await expectRejection(await manager.update(file, { namespace: null,
+      simulatorPreviousRelId: installedGhostPhysicalRelId(old), expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    }), 'state-changed');
+    expect(manager.list()).toHaveLength(2);
+  });
+
+  it('keeps the original bare storage key and existing task grants for a legacy root install', async () => {
+    const manifest = { ...goodManifest('baguette-simulator'), slots: ['tool', 'agent'], agent: { tasks: true, targets: true } };
+    await installLegacyApproved(await makeCindy('legacy.cindy', manifest));
+    const old = manager.list()[0]!;
+    const store = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    const approval = store.read(installedGhostPhysicalRelId(old));
+    if (approval.state !== 'approved') throw new Error('missing fixture receipt');
+    await store.write({ ...approval.receipt, taskCapabilityApproved: true, targetCapabilityApproved: true },
+      { relId: installedGhostPhysicalRelId(old), skillSourceDir: old.dir });
+    const result = await manager.update(await makeCindy('new.cindy', { ...manifest, id: 'cindy-simulator' }), {
+      namespace: null, simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+    });
+    expect(result).toHaveProperty('ghost');
+    const next = manager.list()[0]!;
+    expect(installedGhostStoragePart(next)).toBe('baguette-simulator');
+    const receipt = manager.readApprovedInstallReceipt(installedGhostStoragePart(next));
+    expect(receipt).toMatchObject({ id: 'cindy-simulator', taskCapabilityApproved: true, targetCapabilityApproved: true });
+    await manager.setEnabled(installedGhostPhysicalRelId(next), false, ghostInstallApprovalToken(next.approval));
+    expect(manager.list()[0]!.enabled).toBe(false);
+    await manager.uninstall(installedGhostPhysicalRelId(manager.list()[0]!));
+    expect(manager.list()).toHaveLength(0);
+  });
+
+  it.each([true, false])('preserves storage and enabled=%s across rename, restart and subsequent updates', async (enabled) => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')),
+      { initiallyEnabled: enabled, namespace: null });
+    const old = manager.list()[0]!;
+    const previousRelId = installedGhostPhysicalRelId(old);
+    const nextPackage = await makeCindy('new.cindy', { ...goodManifest('cindy-simulator'), version: '2.0.0' });
+    const result = await manager.update(nextPackage, {
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      namespace: null, simulatorPreviousRelId: previousRelId,
+    });
+    expect(result).toHaveProperty('ghost');
+    expect(manager.list()).toHaveLength(1);
+    const next = manager.list()[0]!;
+    expect(next.manifest.id).toBe('cindy-simulator');
+    expect(next.enabled).toBe(enabled);
+    expect(installedGhostStoragePart(next)).toBe(installedGhostStoragePart(old));
+    expect(fs.existsSync(old.dir)).toBe(false);
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    expect(installedGhostStoragePart(manager.list()[0]!)).toBe(installedGhostStoragePart(old));
+    // Registry recovery must derive the same key from the host receipt, never from the new name.
+    fs.unlinkSync(path.join(manager.approvalStateRoot(), 'plugin-instances.v2.json'));
+    manager = new GhostManager({ getRootDir: () => rootDir });
+    const recovered = manager.list()[0]!;
+    expect(installedGhostStoragePart(recovered)).toBe(installedGhostStoragePart(old));
+    const update = await manager.update(await makeCindy('next.cindy', {
+      ...goodManifest('cindy-simulator'), version: '3.0.0',
+    }), { expectedInstalledApproval: ghostInstallApprovalToken(recovered.approval), namespace: null });
+    expect(update).toHaveProperty('ghost');
+    expect(installedGhostStoragePart(manager.list()[0]!)).toBe(installedGhostStoragePart(old));
+  });
+
+  it('restores the old package and approval when the new receipt cannot commit', async () => {
+    await manager.install(await makeCindy('old.cindy', goodManifest('baguette-simulator')), { namespace: null });
+    const old = manager.list()[0]!;
+    const result = await manager.update(await makeCindy('new.cindy', goodManifest('cindy-simulator')), {
+      namespace: null, simulatorPreviousRelId: installedGhostPhysicalRelId(old),
+      expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      beforePackageCommit: () => { throw new Error('injected commit failure'); },
+    });
+    expect(result).toHaveProperty('rejection.code', 'io');
+    expect(manager.list()).toHaveLength(1);
+    expect(manager.list()[0]!.manifest.id).toBe('baguette-simulator');
+    expect(manager.list()[0]!.approval).toEqual(old.approval);
+  });
+});
+
 describe('GhostManager enable revision boundary', () => {
+  // Unit regression: an unreadable installation subtree used to become an empty
+  // scan and persist active:false. Exercise list(), retain the approved install
+  // and registry bytes, then recover without reinstalling (compatibility §5).
+  it.each(['root', 'namespaces', 'namespace'] as const)(
+    'does not persist missing installations when the %s directory cannot be read',
+    async (scope) => {
+      await manager.install(await makeCindy('unreadable.cindy', goodManifest()));
+      expect(manager.list()[0].enabled).toBe(true);
+      const registryPath = path.join(workDir, 'ghosts-install-state', 'plugin-instances.v2.json');
+      const before = fs.readFileSync(registryPath, 'utf8');
+      const target = scope === 'root' ? rootDir : scope === 'namespaces'
+        ? path.join(rootDir, '_ns') : path.join(rootDir, '_ns', '_root');
+      const realReaddir = fs.readdirSync;
+      const read = vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: never, options: never) => {
+        if (String(dir) === target) throw Object.assign(new Error('scan unavailable'), { code: 'EACCES' });
+        return realReaddir(dir, options);
+      }) as never);
+      try {
+        if (scope === 'root') expect(() => manager.list()).toThrow('scan unavailable');
+        else {
+          expect(manager.list()).toEqual([]);
+          expect(manager.isInstallationScanComplete()).toBe(false);
+        }
+        expect(fs.readFileSync(registryPath, 'utf8')).toBe(before);
+      } finally { read.mockRestore(); }
+      expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    },
+  );
+
+  // Regression: one list() used two validated receipt reads per plugin. Unit
+  // coverage also rejects a cross-call cache: the next scan must see revocation.
+  it('reads each receipt once per scan and observes changed approval on the next scan', async () => {
+    await manager.install(await makeCindy('scan.cindy', goodManifest()));
+    const read = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
+    try {
+      expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(read).toHaveBeenCalledTimes(1);
+      read.mockClear();
+      const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      receipt.enabled = false;
+      fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+      expect(manager.list()[0]).toMatchObject({ enabled: false, approval: { state: 'approved' } });
+      expect(read).toHaveBeenCalledTimes(1);
+      fs.writeFileSync(receiptPath, '{invalid');
+      expect(manager.list()[0]).toMatchObject({ enabled: false, approval: { state: 'invalid' } });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it('rejects a delayed enable change bound to an obsolete approval revision', async () => {
     await manager.install(await makeCindy('original.cindy', goodManifest(), { 'main.js': 'module.exports = {};' }));
     const original = manager.list()[0];
@@ -351,6 +540,30 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => true)).toBe(true);
     expect(manager.list().find(ghost => installedGhostStoragePart(ghost) === instanceId)?.taskCapabilityApproved).toBe(true);
     expect(manager.list().find(ghost => installedGhostStoragePart(ghost) !== instanceId)?.taskCapabilityApproved).toBeUndefined();
+  });
+
+  it('binds independent target consent to the approved instance and preserves it only for the same capability', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true, targets: true } };
+    const pkg = await makeCindy('targets.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true });
+    await manager.install(pkg, { namespace: 'acme', taskCapabilityApproved: true });
+    const selected = manager.list().find(ghost => ghost.namespace === 'acme')!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const instanceId = installedGhostStoragePart(selected);
+    expect(selected.targetCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability(instanceId, 'stale', () => true, 'targets')).toBe(false);
+    expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => false, 'targets')).toBe(false);
+    expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => true, 'targets')).toBe(true);
+    expect(manager.list().find(ghost => ghost.namespace === 'acme')?.targetCapabilityApproved).toBe(true);
+    expect(manager.list().find(ghost => ghost.namespace !== 'acme')?.targetCapabilityApproved).toBeUndefined();
+    const update = await makeCindy('targets-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.targetCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('targets-removed.cindy', { ...manifest, version: '1.0.2', agent: { tasks: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).toHaveProperty('ghost.taskCapabilityApproved', true);
+    expect(result).not.toHaveProperty('ghost.targetCapabilityApproved');
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
@@ -1640,6 +1853,342 @@ describe('GhostManager · review 第 6 轮回归(P0/P1 修复钉住)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('GhostManager · 安装事务目录 rename 失败(#5026)', () => {
+  const pendingMarkerPath = (id = 'hello', namespace: string | null = null) =>
+    path.join(workDir, 'ghosts-install-state', '_ns', namespace ?? '_root', `.pending-${id}.json`);
+  const managerWithRenameRetry = (renameRetry: { enabled: boolean; delaysMs?: number[] }) =>
+    new GhostManager({
+      getRootDir: () => rootDir,
+      getLocale: () => hostLocale,
+      onChanged,
+      renameRetry,
+      mutateSnapshot: async (request) => {
+        const { parentDir, ...workerRequest } = request;
+        await runGhostSnapshotWorkerRequest(workerRequest, parentDir);
+      },
+    });
+
+  it('新装 rename 持续 EPERM:事务失败后清掉 journal 与隔离标记,插件可重新安装', async () => {
+    const local = managerWithRenameRetry({ enabled: false });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      await expectRejection(await local.install(await makeCindy('a.cindy', goodManifest())), 'io');
+    } finally {
+      spy.mockRestore();
+    }
+    // 没有发布任何字节:journal 与隔离标记都不能留下,否则审批检查持续 invalid、
+    // 插件永远停用且没有正常入口恢复(#5026)。
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+    expect(fs.existsSync(finalDir)).toBe(false);
+    expect(local.list()).toEqual([]);
+    expect(fs.readdirSync(rootDir).filter((name) => name.startsWith('.cindy-installing-'))).toEqual([]);
+
+    // 环境恢复后同一插件能正常装上并获得批准。
+    const result = await local.install(await makeCindy('b.cindy', goodManifest()));
+    expect('rejection' in result).toBe(false);
+    expect(local.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+  });
+
+  it('新装 rename 吃到瞬时 EPERM 时有界重试,窗口过去后安装成功', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1, 1] });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    let placementAttempts = 0;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        placementAttempts += 1;
+        if (placementAttempts <= 2) {
+          throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+        }
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      const result = await local.install(await makeCindy('a.cindy', goodManifest()));
+      expect('rejection' in result).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(placementAttempts).toBe(3);
+    expect(local.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+  });
+
+  it.each([null, 'acme'] as const)('新装 %s rename 退避等待期间取消:不再发布、不写成功 receipt,清理后可重新安装(#5028 review)', async (namespace) => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [20, 20, 20] });
+    const finalDir = path.join(rootDir, '_ns', namespace ?? '_root', 'hello');
+    const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', namespace ?? '_root', 'hello.json');
+    const realRename = fs.promises.rename;
+    const controller = new AbortController();
+    let placementAttempts = 0;
+    let guardChecks = 0;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        placementAttempts += 1;
+        if (placementAttempts === 1) {
+          // 第一次 rename 吃到瞬时 EPERM;请求在随后的退避等待期间被取消。
+          setTimeout(() => controller.abort(), 5);
+          throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+        }
+      }
+      return realRename(from as never, to as never);
+    });
+    const guard = vi.fn(() => {
+      guardChecks += 1;
+      expect(fs.existsSync(pendingMarkerPath('hello', namespace))).toBe(true);
+      expect(fs.existsSync(finalDir)).toBe(false);
+      controller.signal.throwIfAborted();
+    });
+    try {
+      await expectRejection(await local.install(await makeCindy('a.cindy', goodManifest()), {
+        namespace,
+        beforePackagePlacement: guard,
+      }), 'io');
+    } finally {
+      spy.mockRestore();
+    }
+    // 取消发生在成功 rename 之前:检查必须在重试前再跑一次并拦下,第二次 rename 不能发生。
+    expect(guardChecks).toBe(2);
+    expect(placementAttempts).toBe(1);
+    expect(fs.existsSync(finalDir)).toBe(false);
+    expect(fs.existsSync(receiptPath)).toBe(false);
+    expect(fs.existsSync(pendingMarkerPath('hello', namespace))).toBe(false);
+    expect(local.list()).toEqual([]);
+    expect(fs.readdirSync(rootDir).filter((name) => name.startsWith('.cindy-installing-'))).toEqual([]);
+
+    // 清理完整:同一插件可重新安装并获得批准。
+    const retried = await local.install(await makeCindy('b.cindy', goodManifest()), { namespace });
+    expect('rejection' in retried).toBe(false);
+    expect(local.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(fs.existsSync(receiptPath)).toBe(true);
+  });
+
+  it('新装 rename 已成功后取消不再执行发布前检查,仍提交成功 receipt', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1] });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
+    const realRename = fs.promises.rename;
+    const controller = new AbortController();
+    const guard = vi.fn(() => controller.signal.throwIfAborted());
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      await realRename(from, to);
+      if (path.resolve(String(to)) === path.resolve(finalDir)) controller.abort();
+    });
+    try {
+      const result = await local.install(await makeCindy('committed.cindy', goodManifest()), {
+        beforePackagePlacement: guard,
+      });
+      expect(result).toHaveProperty('ghost');
+      expect(controller.signal.aborted).toBe(true);
+      expect(guard).toHaveBeenCalledOnce();
+      expect(fs.existsSync(finalDir)).toBe(true);
+      expect(fs.existsSync(receiptPath)).toBe(true);
+      expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+      expect(local.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('新装 rename 失败后目录状态查不清(lstat 非 ENOENT)时保留 journal,不误清隔离标记', async () => {
+    const local = managerWithRenameRetry({ enabled: false });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    const realLstat = fs.promises.lstat;
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    });
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (target, ...rest) => {
+      if (path.resolve(String(target)) === path.resolve(finalDir)) {
+        throw Object.assign(new Error('EACCES: permission denied, lstat'), { code: 'EACCES' });
+      }
+      return (realLstat as (...a: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+    });
+    try {
+      await expectRejection(await local.install(await makeCindy('a.cindy', goodManifest())), 'io');
+    } finally {
+      renameSpy.mockRestore();
+      lstatSpy.mockRestore();
+    }
+    // 看不清 finalDir 是否已出现:journal 必须留给启动恢复,不能当作"没发布"清掉。
+    expect(fs.existsSync(pendingMarkerPath())).toBe(true);
+  });
+
+  it('更新放置 rename 吃到瞬时 EPERM 时重试成功,新版本就位且备份已回收', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1, 1] });
+    await local.install(await makeCindy('a.cindy', goodManifest()));
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    let placementAttempts = 0;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (
+        path.resolve(String(to)) === path.resolve(finalDir) &&
+        path.basename(String(from)).startsWith('.cindy-installing-')
+      ) {
+        placementAttempts += 1;
+        if (placementAttempts <= 2) {
+          throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+        }
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      const bumped = await makeCindy('b.cindy', { ...goodManifest(), version: '1.0.1' });
+      const result = await local.update(bumped, {
+        expectedInstalledApproval: ghostInstallApprovalToken(local.list()[0]?.approval),
+      });
+      expect('rejection' in result).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(placementAttempts).toBe(3);
+    expect(local.list()[0]).toMatchObject({
+      manifest: { version: '1.0.1' },
+      approval: { state: 'approved' },
+    });
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+    expect(fs.readdirSync(rootDir).filter((name) => name.startsWith('.cindy-'))).toEqual([]);
+  });
+
+  it('更新放置 rename 重试耗尽后回滚到旧版本,journal 清空且不报 rollbackFailed', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1] });
+    await local.install(await makeCindy('a.cindy', goodManifest()));
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    let placementAttempts = 0;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (
+        path.resolve(String(to)) === path.resolve(finalDir) &&
+        path.basename(String(from)).startsWith('.cindy-installing-')
+      ) {
+        placementAttempts += 1;
+        throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      const bumped = await makeCindy('b.cindy', { ...goodManifest(), version: '1.0.1' });
+      const result = await local.update(bumped, {
+        expectedInstalledApproval: ghostInstallApprovalToken(local.list()[0]?.approval),
+      });
+      await expectRejection(result, 'io');
+      expect((result as { rejection: { rollbackFailed?: boolean } }).rejection.rollbackFailed).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(placementAttempts).toBe(3);
+    // 旧版本从备份位滚回,事务标记清空,没有遗留 staging/backup 目录。
+    expect(local.list()[0]).toMatchObject({
+      manifest: { version: '1.0.0' },
+      approval: { state: 'approved' },
+    });
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+    expect(fs.readdirSync(rootDir).filter((name) => name.startsWith('.cindy-'))).toEqual([]);
+  });
+
+  it('非瞬时错误码不重试,重试耗尽后仍如实返回 io 拒绝', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1] });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    let placementAttempts = 0;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        placementAttempts += 1;
+        throw Object.assign(new Error('EXDEV: cross-device link'), { code: 'EXDEV' });
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      await expectRejection(await local.install(await makeCindy('a.cindy', goodManifest())), 'io');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(placementAttempts).toBe(1);
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+
+    const exhausted = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1] });
+    placementAttempts = 0;
+    const spy2 = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        placementAttempts += 1;
+        throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+      }
+      return realRename(from as never, to as never);
+    });
+    try {
+      await expectRejection(await exhausted.install(await makeCindy('c.cindy', goodManifest())), 'io');
+    } finally {
+      spy2.mockRestore();
+    }
+    expect(placementAttempts).toBe(3);
+    expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+  });
+
+  // #5028 review:#5026 对照实验「等 5s 失败、等 10s 成功」且 100MB+ 包稳定失败,
+  // 默认预算必须覆盖到 10s 量级,而不是原先累计 3.1s。
+  it('默认重试预算累计约 10s、仍有界且逐步退避(#5028 review)', () => {
+    const total = DEFAULT_RENAME_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+    expect(total).toBeGreaterThanOrEqual(9_000);
+    expect(total).toBeLessThanOrEqual(11_000);
+    expect(DEFAULT_RENAME_RETRY_DELAYS_MS.length).toBeLessThanOrEqual(8);
+    for (let i = 1; i < DEFAULT_RENAME_RETRY_DELAYS_MS.length; i += 1) {
+      expect(DEFAULT_RENAME_RETRY_DELAYS_MS[i]).toBeGreaterThanOrEqual(DEFAULT_RENAME_RETRY_DELAYS_MS[i - 1]);
+    }
+  });
+
+  it('重试耗尽后的 io 拒绝附带用户可读提示,并保留原始 errno 信息', async () => {
+    const local = managerWithRenameRetry({ enabled: true, delaysMs: [1, 1] });
+    const finalDir = path.join(rootDir, '_ns', '_root', 'hello');
+    const realRename = fs.promises.rename;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    });
+    let result: Awaited<ReturnType<GhostManager['install']>>;
+    try {
+      result = await local.install(await makeCindy('a.cindy', goodManifest()));
+    } finally {
+      spy.mockRestore();
+    }
+    expect('rejection' in result).toBe(true);
+    const rejection = (result as { rejection: { code: string; reason: string } }).rejection;
+    expect(rejection.code).toBe('io');
+    expect(rejection.reason).toContain('EPERM');
+    expect(rejection.reason).toContain(RENAME_RETRY_EXHAUSTED_HINT);
+
+    // 未启用重试(非 Windows 缺省)时 EPERM 通常是永久性权限问题,不附「稍后重试」提示。
+    const plain = managerWithRenameRetry({ enabled: false });
+    const spy2 = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (path.resolve(String(to)) === path.resolve(finalDir)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return realRename(from as never, to as never);
+    });
+    let plainResult: Awaited<ReturnType<GhostManager['install']>>;
+    try {
+      plainResult = await plain.install(await makeCindy('b.cindy', goodManifest()));
+    } finally {
+      spy2.mockRestore();
+    }
+    const plainRejection = (plainResult as { rejection: { code: string; reason: string } }).rejection;
+    expect(plainRejection.code).toBe('io');
+    expect(plainRejection.reason).not.toContain(RENAME_RETRY_EXHAUSTED_HINT);
   });
 });
 
@@ -3029,21 +3578,23 @@ describe('GhostManager · install', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
-  it('main-view 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async () => {
+  // 安装入口与 Forge 必须同样拒绝缺失页面；原先只覆盖 main-view，task-view 会漏装。
+  it.each(['main-view', 'task-view'] as const)('%s 清单声明的 HTML 不在包内 → inspect/install 都拒绝', async (slot) => {
+    const field = slot === 'main-view' ? 'mainView' : 'taskView';
     const manifest = {
       ...goodManifest(),
       minCindyVersion: '1.2.3',
-      slots: ['tool', 'main-view'],
-      mainView: { html: 'ui/main-view.html' },
+      slots: ['tool', slot],
+      [field]: { html: `ui/${slot}.html` },
     };
-    const cindy = await makeCindy('missing-main-view.cindy', manifest, {
+    const cindy = await makeCindy(`missing-${slot}.cindy`, manifest, {
       'main.js': '// browser entry',
     });
 
     expect(await manager.inspect(cindy)).toMatchObject({
       rejection: {
         code: 'file-invalid',
-        reason: expect.stringContaining('ui/main-view.html'),
+        reason: expect.stringContaining(`ui/${slot}.html`),
       },
     });
     await expectRejection(await manager.install(cindy), 'file-invalid');
@@ -3447,6 +3998,138 @@ describe('GhostManager · uninstall', () => {
 });
 
 describe('GhostManager · list', () => {
+  // Compatibility §5 / #6667: an IO failure must not persist active:false or
+  // trigger a default reinstall. Existing sync-list coverage misses async IO.
+  // Unit; one approved install and one unreadable directory, then IO recovery.
+  it.each(['root', 'namespaces', 'namespace', 'install'] as const)('async scan refuses an incomplete %s view without changing the registry', async (scope) => {
+    await manager.install(await makeCindy('unreadable-async.cindy', goodManifest()));
+    const registryPath = path.join(workDir, 'ghosts-install-state', 'plugin-instances.v2.json');
+    const before = fs.readFileSync(registryPath, 'utf8');
+    const target = scope === 'root' ? rootDir : scope === 'namespaces'
+      ? path.join(rootDir, '_ns') : scope === 'namespace'
+      ? path.join(rootDir, '_ns', '_root') : path.join(rootDir, '_ns', '_root', 'hello');
+    const refresh = manager.createBackgroundRefresh();
+    const fail = () => { throw Object.assign(new Error('scan unavailable'), { code: 'EACCES' }); };
+    const readdir = fs.promises.readdir;
+    const lstat = fs.promises.lstat;
+    const read = scope === 'install'
+      ? vi.spyOn(fs.promises, 'lstat').mockImplementation(((file: never, options: never) => {
+          if (String(file) === target) fail();
+          return lstat(file, options);
+        }) as never)
+      : vi.spyOn(fs.promises, 'readdir').mockImplementation(((dir: never, options: never) => {
+          if (String(dir) === target) fail();
+          return readdir(dir, options);
+        }) as never);
+    try {
+      await expect(refresh.list()).rejects.toThrow('scan unavailable');
+      expect(fs.readFileSync(registryPath, 'utf8')).toBe(before);
+    } finally {
+      read.mockRestore();
+    }
+    expect((await refresh.list())[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+  });
+
+  // One market refresh must read installations once, while later refreshes and
+  // Host mutations observe fresh approval. Existing listAsync tests only cover
+  // independent scans, not this request lifetime (unit; one installed plugin).
+  it('reuses one scan inside a refresh and reads current approval in the next refresh', async () => {
+    await manager.install(await makeCindy('refresh.cindy', goodManifest()));
+    const read = vi.spyOn(GhostInstallReceiptStore.prototype, 'readAsync');
+    try {
+      const refresh = manager.createBackgroundRefresh();
+      const lists = await Promise.all([refresh.list(), refresh.list()]);
+      for (let i = 0; i < 4; i++) expect((await refresh.list())[0].enabled).toBe(true);
+      expect(lists[0]).toEqual(lists[1]);
+      expect(read).toHaveBeenCalledTimes(1);
+      const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
+      await fs.promises.writeFile(receiptPath, '{invalid');
+      expect((await manager.createBackgroundRefresh().list())[0]).toMatchObject({ enabled: false, approval: { state: 'invalid' } });
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it.each(['disable', 'install', 'uninstall'] as const)('invalidates a refresh after a queued %s', async (change) => {
+    await manager.install(await makeCindy('refresh.cindy', goodManifest()));
+    const refresh = manager.createBackgroundRefresh();
+    expect((await refresh.list())[0].enabled).toBe(true);
+    const mutation = change === 'disable' ? manager.setEnabled('hello', false)
+      : change === 'uninstall' ? manager.uninstall('hello')
+      : manager.install(await makeCindy('new.cindy', goodManifest('other')));
+    const listing = refresh.list();
+    await mutation;
+    const current = await listing;
+    if (change === 'disable') expect(current[0].enabled).toBe(false);
+    if (change === 'uninstall') expect(current).toEqual([]);
+    if (change === 'install') expect(current.map((ghost) => ghost.manifest.id)).toEqual(['hello', 'other']);
+  });
+
+  it('rejects a cached refresh after the owner generation changes', async () => {
+    let owner = '1';
+    manager = new GhostManager({ getRootDir: () => rootDir, getOwnerContextKey: () => owner });
+    await manager.install(await makeCindy('refresh.cindy', goodManifest()));
+    const refresh = manager.createBackgroundRefresh();
+    await refresh.list();
+    owner = '2';
+    await expect(refresh.list()).rejects.toThrow(/owner context changed/);
+  });
+
+  // Background scanning must yield during receipt IO, reject an obsolete owner,
+  // and retry after a Host removal. Sync list coverage cannot exercise these
+  // await windows (plugin-security-and-authoring §5; unit, one installed plugin).
+  it('async scan reads fresh receipts without using the synchronous receipt reader', async () => {
+    await manager.install(await makeCindy('async.cindy', goodManifest()));
+    const syncRead = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
+    try {
+      const first = await manager.listAsync();
+      expect(first[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(syncRead).not.toHaveBeenCalled();
+      const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
+      await fs.promises.writeFile(receiptPath, '{invalid');
+      expect((await manager.listAsync())[0]).toMatchObject({ enabled: false, approval: { state: 'invalid' } });
+    } finally {
+      syncRead.mockRestore();
+    }
+  });
+
+  it.each(['owner', 'uninstall'] as const)('async scan does not publish stale approval after %s changes during IO', async (change) => {
+    let ownerGeneration = 1;
+    manager = new GhostManager({ getRootDir: () => rootDir, getOwnerContextKey: () => String(ownerGeneration) });
+    await manager.install(await makeCindy('race.cindy', goodManifest()));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => { entered = resolve; });
+    const original = GhostInstallReceiptStore.prototype.readAsync;
+    let paused = false;
+    const read = vi.spyOn(GhostInstallReceiptStore.prototype, 'readAsync').mockImplementation(async function (this: GhostInstallReceiptStore, id: string) {
+      const receipt = await original.call(this, id);
+      if (!paused && id.endsWith('/hello')) {
+        paused = true;
+        entered();
+        await gate;
+      }
+      return receipt;
+    });
+    try {
+      const listing = manager.listAsync();
+      const observed = change === 'owner' ? expect(listing).rejects.toThrow(/owner context changed/) : null;
+      await reading;
+      if (change === 'owner') ownerGeneration++;
+      else await manager.uninstall('hello');
+      release();
+      if (observed) await observed;
+      else {
+        expect(await listing).toEqual([]);
+      }
+    } finally {
+      release();
+      read.mockRestore();
+    }
+  });
+
   it('根目录不存在 → 空清单(不报错)', () => {
     expect(manager.list()).toEqual([]);
   });
@@ -4893,6 +5576,33 @@ describe('GhostManager · setEnabled(启用/停用)', () => {
 });
 
 describe('GhostManager · inspect(只验不装)', () => {
+  // Unit: first-install inspects twice before install parses the same archive.
+  // Reuse must still isolate returned manifests and reread source bytes; existing
+  // replacement tests did not cover repeated decompression of unchanged input.
+  it('reuses verified package parsing without trusting mutated inspection results or changed bytes', async () => {
+    const cindy = await makeCindy('reused.cindy', goodManifest());
+    const parseZip = vi.spyOn(JSZip, 'loadAsync');
+    try {
+      const inspected = await manager.inspect(cindy);
+      if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+      inspected.manifest.name = 'Changed by inspection caller';
+      inspected.canonicalManifest.name = 'Changed canonical manifest';
+
+      expect(await manager.inspect(cindy)).toMatchObject({
+        manifest: { name: 'Hello 意识' }, canonicalManifest: { name: 'Hello 意识' },
+      });
+      expect(await manager.install(cindy, { expectedPackageSha256: inspected.packageSha256 }))
+        .toMatchObject({ ghost: { manifest: { name: 'Hello 意识' }, enabled: true } });
+      expect(parseZip).toHaveBeenCalledTimes(1);
+
+      await makeCindy('reused.cindy', { ...goodManifest(), name: 'Replaced package' });
+      expect(await manager.inspect(cindy)).toMatchObject({ manifest: { name: 'Replaced package' } });
+      expect(parseZip).toHaveBeenCalledTimes(2);
+    } finally {
+      parseZip.mockRestore();
+    }
+  });
+
   it('opens a top-level .cindy source in non-blocking mode', async () => {
     const cindy = await makeCindy('nonblocking.cindy', goodManifest());
     const realOpen = fs.promises.open;
@@ -5044,6 +5754,10 @@ describe('GhostManager · inspect(只验不装)', () => {
         name: 'Base name',
         tools: [{ name: 'do_thing', description: '做点事' }],
       },
+    });
+    hostLocale = 'en';
+    expect(await manager.inspect(cindy)).toMatchObject({
+      manifest: { name: 'English name' }, canonicalManifest: { name: 'Base name' },
     });
   });
 

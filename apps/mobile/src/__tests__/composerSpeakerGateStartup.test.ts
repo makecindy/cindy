@@ -26,11 +26,15 @@ function readStart(page: string) {
 
 describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page => {
   const start = readStart(page);
-  function setup() {
+  function setup(pendingStart = false) {
     let finishGate!: (gate: object | undefined) => void;
     const pendingGate = new Promise<object | undefined>(resolve => { finishGate = resolve; });
     const createGate = vi.fn(() => pendingGate);
-    const controller = { start: vi.fn(async () => {}), cancel: vi.fn(async () => {}) };
+    let finishStart!: () => void;
+    const startReady = pendingStart
+      ? new Promise<void>(resolve => { finishStart = resolve; })
+      : Promise.resolve();
+    const controller = { start: vi.fn(() => startReady), cancel: vi.fn(async () => {}) };
     const createController = vi.fn((_options: Record<string, unknown>) => controller);
     const prewarmed = { credential: { settings: {} }, voiceContext: {}, asr: { stop: vi.fn(async () => {}) } };
     const startupSeq = { current: 0 };
@@ -60,32 +64,36 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page =>
       takeRefinementContextTail: (value: string) => value,
       buildMobileVoiceSessionRefinementContext: () => ({}), renderItems: [],
       formatRemoteError: String,
+      prewarmAgentOnTyping: () => {},
     };
-    return { run: start(bindings), createGate, createController, controller, startupSeq, finishGate, prewarmed, setVoiceError };
+    return { run: start(bindings), createGate, createController, controller, startupSeq, finishGate, pendingGate, finishStart, prewarmed, setVoiceError };
   }
 
-  it('waits for hydration before constructing and starting the first controller', async () => {
+  // PR #7126: opening capture now overlaps hydration; the real controller tests
+  // enforce filtering before ASR. These unit cases execute both page callbacks
+  // to protect the promise handoff and cancellation of an in-flight startup.
+  it('starts the first controller with pending hydration instead of waiting for it', async () => {
     const test = setup();
     const pending = test.run();
     await vi.waitFor(() => expect(test.createGate).toHaveBeenCalledOnce());
-    expect(test.createController).not.toHaveBeenCalled();
+    expect(test.createController).toHaveBeenCalledWith(expect.objectContaining({ audioGate: test.pendingGate }));
+    expect(test.controller.start).toHaveBeenCalledOnce();
     const gate = { fixture: 'saved speaker gate' };
     test.finishGate(gate);
     await pending;
-    expect(test.createController).toHaveBeenCalledWith(expect.objectContaining({ audioGate: gate }));
-    expect(test.controller.start).toHaveBeenCalledOnce();
+    await expect(test.pendingGate).resolves.toBe(gate);
     expect(test.setVoiceError).toHaveBeenCalledExactlyOnceWith(null);
   });
 
-  it('releases the claimed ASR without opening the mic if cancelled during hydration', async () => {
-    const test = setup();
+  it('cancels the opened controller when the page abandons startup during hydration', async () => {
+    const test = setup(true);
     const pending = test.run();
-    await vi.waitFor(() => expect(test.createGate).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(test.controller.start).toHaveBeenCalledOnce());
     test.startupSeq.current += 1; // Page teardown/background cancels this startup.
     test.finishGate({});
+    test.finishStart();
     await pending;
-    expect(test.createController).not.toHaveBeenCalled();
-    expect(test.prewarmed.asr.stop).toHaveBeenCalledOnce();
+    expect(test.controller.cancel).toHaveBeenCalledOnce();
     expect(test.setVoiceError).toHaveBeenCalledExactlyOnceWith(null);
   });
 
@@ -93,7 +101,8 @@ describe.each(['new.tsx', '[sessionId].tsx'])('%s speaker gate startup', page =>
     const test = setup();
     test.finishGate(undefined);
     await test.run();
-    expect(test.createController).toHaveBeenCalledWith(expect.objectContaining({ audioGate: undefined }));
+    expect(test.createController).toHaveBeenCalledWith(expect.objectContaining({ audioGate: test.pendingGate }));
+    await expect(test.pendingGate).resolves.toBeUndefined();
     expect(test.controller.start).toHaveBeenCalledOnce();
     expect(test.setVoiceError).toHaveBeenCalledExactlyOnceWith(null);
   });

@@ -33,8 +33,9 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
-vi.mock('../index.js', () => ({
-  deviceLinkApiBase: () => 'http://relay.test:3335',
+// presign 经 deviceLinkApi 发往当前中转;未启用自建中转时即官方清单里的 device-link 地址。
+vi.mock('../../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'http://relay.test:3335',
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -167,6 +168,19 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
     expect(netFetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(['stat', 'presign', 'read', 'put'])('stops a stale attachment after %s and cleans any staged object', async stage => {
+    let current = true;
+    const assertCurrent = () => { if (!current) throw new Error('stale attachment'); };
+    if (stage === 'stat') statMock.mockImplementationOnce(async () => { current = false; return { isFile: () => true, size: 100 }; });
+    if (stage === 'presign') apiFetch.mockImplementationOnce(async () => { current = false; return { putUrl: 'https://oss.example/put', key: KEY }; });
+    if (stage === 'read') readFileMock.mockImplementationOnce(async () => { current = false; return Buffer.alloc(100); });
+    if (stage === 'put') undiciFetchMock.mockImplementationOnce(async () => { current = false; return { ok: true, status: 200 }; });
+    await expect(uploadLocalFile('/tmp/a.png', { assertCurrent })).rejects.toThrow('stale attachment');
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual(stage === 'stat' ? [] : [PUT_PATH, DEL_PATH]);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(stage === 'put' ? 1 : 0);
+    expect(netFetchMock).not.toHaveBeenCalled();
+  });
+
   it('取消上传 → 立刻中止 PUT,不换传输栈重试,并删除已签发的对象', async () => {
     const abort = new AbortController();
     undiciFetchMock.mockImplementation(
@@ -241,6 +255,51 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
 });
 
 describe('uploadLocalFile — bounded snapshots', () => {
+  // #6530 / r4322420399, unit: the OSS entry must classify pathless local fd denials,
+  // unlike fetch failures. Existing source-error tests cover EIO, not permission recovery.
+  it.each(['buffer', 'bounded-stream', 'large-stream'] as const)(
+    'returns a safe access error for a pathless %s source denial', async mode => {
+      const size = mode === 'large-stream' ? __testing.STREAM_THRESHOLD + 1 : 100;
+      statMock.mockResolvedValue({ isFile: () => true, size });
+      const denial = Object.assign(new Error('read denied'), {
+        code: 'EACCES', syscall: mode === 'buffer' ? 'fstat' : 'read',
+      });
+      if (mode === 'buffer') readFileMock.mockRejectedValueOnce(denial);
+      createReadStreamMock.mockImplementation(() => new Readable({
+        read() { this.destroy(denial); },
+      }));
+      undiciFetchMock.mockImplementation(drainingPut);
+      const failure = await uploadLocalFile('/private/source.xlsx',
+        mode === 'bounded-stream' ? { maxBytes: size } : undefined).catch(error => error);
+      expect(failure).toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+      expect(String(failure)).not.toContain('/private/');
+      expect(failure).not.toHaveProperty('path');
+      expect(failure).not.toHaveProperty('cause');
+      expect(netFetchMock).not.toHaveBeenCalled();
+      if (mode !== 'large-stream') expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(apiFetch).toHaveBeenCalledWith(
+        DEL_PATH, expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),
+      );
+    },
+  );
+
+  it.each(['network', 'other-source'] as const)(
+    'does not label %s permission errors as attachment access denial', async kind => {
+      statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+      const denial = Object.assign(new Error('permission failure'), kind === 'network'
+        ? { code: 'EACCES', syscall: 'connect' }
+        : { code: 'EPERM', syscall: 'read', path: '/other/source' });
+      readFileMock.mockResolvedValue(Buffer.alloc(100));
+      if (kind === 'other-source') readFileMock.mockRejectedValueOnce(denial);
+      undiciFetchMock.mockRejectedValue(denial);
+      netFetchMock.mockRejectedValue(denial);
+      const failure = await uploadLocalFile('/private/source.xlsx').catch(error => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.code).not.toBe('DEVICE_LINK_MEDIA_ACCESS_DENIED');
+      if (kind === 'other-source') expect(failure).toBe(denial);
+    },
+  );
+
   it.each([NaN, Infinity, -1, 1.5, 99])(
     'rejects invalid or exceeded budget %s before presign',
     async (maxBytes) => {
@@ -674,6 +733,15 @@ describe('putBytesToOss — 传输栈回退', () => {
 });
 
 describe('uploadBuffer — 内存字节(base64 附件)', () => {
+  it.each(['presign', 'put'])('discards a stale in-memory attachment after %s', async stage => {
+    let current = true;
+    if (stage === 'presign') apiFetch.mockImplementationOnce(async () => { current = false; return { putUrl: 'https://oss.example/put', key: KEY }; });
+    else undiciFetchMock.mockImplementationOnce(async () => { current = false; return { ok: true, status: 200 }; });
+    await expect(uploadBuffer(Buffer.from([1]), { ext: 'png', assertCurrent: () => { if (!current) throw new Error('stale'); } })).rejects.toThrow('stale');
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual([PUT_PATH, DEL_PATH]);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(stage === 'put' ? 1 : 0);
+  });
+
   it('presign-put 带 size/ext/contentType,整体 PUT,返回 key', async () => {
     okPut();
     const r = await uploadBuffer(Buffer.from([1, 2, 3, 4, 5]), {

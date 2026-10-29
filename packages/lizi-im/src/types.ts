@@ -6,6 +6,7 @@
  * `IMHost` shape using whatever Electron / Node / browser APIs they need.
  */
 
+import type { AttachmentRef } from './feishu/incomingContent.js';
 import type { Logger } from './logger.js';
 
 /** Result of a secret read when callers must distinguish absence from failure. */
@@ -265,14 +266,18 @@ export interface IMMessageEvent {
    * 不支持引用语义的渠道恒 undefined。
    */
   replyContext?: {
+    /** Original message ID, distinct from the current trigger message. */
+    messageId?: string;
     author: string;
     text: string;
     isBot?: boolean;
-    /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
+    /** 被引消息已随本轮提供的附件数(transport attachments 或 host contextAttachments)。 */
     attachmentCount?: number;
     /** Referenced media that was not supplied to this turn. */
     unavailableAttachments?: string[];
   };
+  /** Feishu quote resources; host downloads only after screening the quote. */
+  feishuReplyAttachments?: AttachmentRef[];
   /** Native private topic metadata. Root message id and thread id are distinct. */
   replyThread?: { rootMessageId: string; threadId: string };
   /** Channel-specific raw event for debug. */

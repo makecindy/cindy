@@ -15,6 +15,7 @@ import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import type { SessionTailBannerState } from '@/session/sessionTailBannerModel';
+import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 
 import { spacing } from '@/theme/tokens';
 
@@ -22,6 +23,8 @@ export interface SessionTailBannerProps {
   state: NonNullable<SessionTailBannerState>;
   busy?: boolean;
   onRecoverHistory?: () => void;
+  /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   onContinue(): void;
   onDismiss(): void;
 }
@@ -32,6 +35,7 @@ export function SessionTailBanner({
   onContinue,
   onDismiss,
   onRecoverHistory,
+  onDiagnose,
 }: SessionTailBannerProps) {
   const { t } = useTranslation();
   const isInterrupted =
@@ -82,7 +86,15 @@ export function SessionTailBanner({
       dismissBusy={busy}
     >
       {state.kind === 'error-tail' && state.rawError && !isInterrupted ? (
-        <AgentErrorDetails message={state.rawError} actions={actions} />
+        <AgentErrorDetails
+          message={state.rawError}
+          actions={actions}
+          onDiagnose={
+            onDiagnose
+              ? () => onDiagnose({ message: text, details: state.rawError ?? '', reason: state.reason })
+              : undefined
+          }
+        />
       ) : (
         <View style={styles.actions}>{actions}</View>
       )}

@@ -7,6 +7,7 @@
  *  - 删掉受邀者时请 M 清掉它留下的东西，M 只清调用方自己的 relay。
  */
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,7 +21,11 @@ import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
+import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
+import { createGuestProviderRouteBinder } from '../host/providerAccess';
+import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
+import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
+import { memberBudgetStatus } from '../../device-link/providerShareBudgetCalculation';
 import {
   createRemoteAgentHost,
   hostSessionIdFor,
@@ -45,7 +50,7 @@ interface Started {
   /** 这台上是否正在运行一轮(写进状态)。 */
   running: boolean;
   /** 这台上的 Agent 事件流意外结束(进程退出等)。 */
-  end(): void;
+  end(error?: Error): void;
 }
 
 function fakeAgentHost(name: string, started: Started[], options: {
@@ -53,21 +58,35 @@ function fakeAgentHost(name: string, started: Started[], options: {
   guestRelayCapable?: boolean;
   purge?: (hostSessionIds: readonly string[], nativeIds: readonly string[]) => Promise<void>;
   groupRelay?: RemoteAgentGroupRelayDeps;
+  directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
+  captureOwner?: () => unknown;
+  isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
+  prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
+  imageArtifacts?: Parameters<typeof createRemoteAgentHost>[0]['imageArtifacts'];
   /** 这台的 Agent 启动失败(启动前受邀者目录已经建好)。 */
   failStart?: boolean;
+  beforeStart?: (input: HostedStartInput) => Promise<void>;
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
+  onSend?: (record: Started) => void | Promise<void>;
   /** 转分享的同意(本机是分享者)。 */
   reshare?: Parameters<typeof createRemoteAgentHost>[0]['reshare'];
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
+  modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
+  bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
 }) {
   return createRemoteAgentHost({
-    isAgentAvailable: () => true,
+    forkHosted: async (_kind, opts) => ({ newSdkSessionId: `${opts.sourceSdkSessionId}-fork`, uuidMap: new Map([['old', 'new']]) }),
+    prepareImageEvent: options.prepareImageEvent,
+    imageArtifacts: options.imageArtifacts,
+    isAgentAvailable: options.isAgentAvailable ?? (() => true),
     startHosted: async (input) => {
       if (options.failStart) throw new Error('the agent could not start');
+      await options.beforeStart?.(input);
       const queue: AgentEvent[] = [];
       let wake: (() => void) | null = null;
       let ended = false;
+      let endError: Error | undefined;
       const record: Started = {
         input,
         sends: [],
@@ -77,8 +96,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
           wake?.();
           wake = null;
         },
-        end() {
+        end(error) {
           ended = true;
+          endError = error;
           wake?.();
           wake = null;
         },
@@ -90,6 +110,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
         model: input.options.model,
         async send(message) {
           record.sends.push(message);
+          await options.onSend?.(record);
         },
         async steer() {},
         async abort() {},
@@ -100,6 +121,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
             next: async () => {
               if (options.endImmediately) return { value: undefined as unknown as AgentEvent, done: true };
               while (queue.length === 0 && !ended) await new Promise<void>((resolve) => { wake = resolve; });
+              if (queue.length === 0 && endError) throw endError;
               if (queue.length === 0) return { value: undefined as unknown as AgentEvent, done: true };
               return { value: queue.shift()!, done: false };
             },
@@ -115,14 +137,16 @@ function fakeAgentHost(name: string, started: Started[], options: {
     providerAccess: {
       resolve: options.resolveProvider ?? (async (_kind, _model, providerId) => providerId ?? 'shared-provider'),
       isAllowed: () => true,
+      ...options.modelAccess,
     },
     ...(options.guestRelayCapable === false ? {} : {
-      bindGuestProviderRoute: async () => ({ routeToken: 'route', modelIds: ['claude-opus'], release: () => {} }),
+      bindGuestProviderRoute: options.bindGuestProviderRoute ?? (async () => ({ routeToken: 'route', modelIds: ['claude-opus'], release: () => {} })),
     }),
     ...(options.purge ? { purgeHostedTranscripts: options.purge } : {}),
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
+    ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
-    captureOwner: () => 'owner',
+    captureOwner: options.captureOwner ?? (() => 'owner'),
     isOwnerCurrent: () => true,
     runsRoot: path.join(root, name),
   });
@@ -194,9 +218,15 @@ function setup(options: {
   miniCapable?: boolean;
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
-  mini?: { failStart?: boolean; endImmediately?: boolean };
+  mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+  memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
-  owner?: { failStart?: boolean };
+  owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
+    modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
+    directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
 } = {}) {
@@ -205,6 +235,7 @@ function setup(options: {
     mini: fakeAgentHost('mini', memberStarted.mini, {
       trust: () => 'owner',
       guestRelayCapable: options.miniCapable ?? true,
+      bindGuestProviderRoute: options.memberBinder,
       purge: async () => undefined,
       ...options.mini,
     }),
@@ -297,6 +328,192 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  it('does not let a group relay discard external application isolation on an older member', async () => {
+    const env = setup({ intercept: async (_device, request, forward) => {
+      const result = await forward();
+      if (request.op === 'caps') delete (result as { localApplication?: boolean }).localApplication;
+      return result;
+    } });
+    try {
+      await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+        options: { localApplication: { mcpName: 'hhh', hostToolsOnly: true, storageKey: 'a'.repeat(64) } }, mcpServers: ['hhh'],
+      }))).rejects.toThrow();
+      expect(env.memberStarted.mini).toHaveLength(0);
+      expect(env.memberStarted.studio).toHaveLength(0);
+    } finally { await env.owner.dispose(); await Promise.all(Object.values(env.members).map(member => member.dispose())); }
+  });
+  // Unit regression for provider-sharing.md §3: first local work must reach the member with its push,
+  // before either poll batch can report hold. Existing relay cases did not carry this busy-state field.
+  // Real guest -> owner Host.handle -> member RunClient.push with JSON serialization on both hops.
+  it('forwards the first local hold with the process startup reply to the group member', async () => {
+    let forwarded: Record<string, unknown> | undefined;
+    const env = setup({ intercept: async (_device, request, forward) => {
+      if (request.op === 'push') forwarded = request;
+      return forward();
+    } });
+    const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    try {
+      await env.owner.handle(GUEST_A, {
+        op: 'push', runId: client.runId, seq: 1, hold: true,
+        frames: [{ connId: relayConnId(1, 'exec-1'), kind: 'message', data: '{"id":1,"result":{}}' }],
+      });
+      await vi.waitFor(() => expect(forwarded).toBeDefined());
+      expect(forwarded).toMatchObject({
+        hold: true,
+        frames: [{ connId: 'exec-1', kind: 'message', data: '{"id":1,"result":{}}' }],
+      });
+    } finally {
+      await client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // Review 4328897446, unit: the old three-host harness never exercised the
+  // original member's model restrictions at the executing computer. A allows
+  // only opus, while the executor offers opus and sonnet; revoke opus mid-run.
+  it('projects the original member catalog and rechecks every child call across the relay', async () => {
+    const allowed = new Set(['claude-opus']);
+    const ledger = createProviderShareUsageStore(path.join(root, 'ratio-usage.json'));
+    const record = (model: string, tokens: number) => ledger.record('share', GUEST_A, { providerId: 'shared-provider', kind: 'claude-code', memberKey: 'mini',
+      samples: [{ model, inputTokens: tokens, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0, turns: 0 }] });
+    record('claude-opus', 60); record('claude-sonnet', 140);
+    const policy = { basis: 'member-input-output-7d' as const, enabled: true, recommendedModel: 'claude-sonnet',
+      rules: [{ id: 'limit', models: ['claude-opus'], maxPercent: 50 }] };
+    let executorAllowed = true;
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [{ id: MEMBER_MINI.providerId, models: { 'claude-code': [
+        { id: 'claude-opus' }, { id: 'claude-sonnet' },
+      ] } }] as never,
+      guestAccess: () => null, ownerAllowed: () => true, providerAllowed: () => executorAllowed,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+    });
+    const check = vi.fn((_provider: string, controller: string, model?: string) => {
+      if (controller !== GUEST_A || (model && !allowed.has(model))) return false;
+      const status = memberBudgetStatus(ledger.memberTokenSnapshot(new Set(['share']), 'shared-provider', GUEST_A), policy);
+      if (model && status.rules.some(rule => rule.models.includes(model) && rule.blocked))
+        throw new Error('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] Model share reached');
+      return true;
+    });
+    const env = setup({ memberBinder: binder, owner: { modelAccess: {
+      isAllowed: check, models: async () => [...allowed], restricted: () => true,
+    } } });
+    try {
+      const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      try {
+        const input = env.memberStarted.mini[0].input;
+        expect(input.guestProvider!.modelIds).toEqual(['claude-opus']);
+        const decision = async (model: string) => {
+          const response = await fetch(input.tunnel.url + '/cindy/model-access', { method: 'POST',
+            headers: { Authorization: 'Bearer ' + input.tunnel.token }, body: JSON.stringify({ model }) });
+          return await response.json() as { allowed: boolean; code?: string };
+        };
+        const allows = async (model: string) => (await decision(model)).allowed;
+        expect(await allows('claude-opus')).toBe(true);
+        expect(await allows('claude-sonnet')).toBe(false);
+        record('claude-opus', 200);
+        expect(await decision('claude-opus')).toEqual({ allowed: false, code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED' });
+        await expect(client.call('send', [{ content: 'blocked', attachments: [] }, {}])).rejects.toThrow('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]');
+        expect(env.memberStarted.mini[0].sends).toHaveLength(0);
+        record('claude-sonnet', 200);
+        expect(await allows('claude-opus')).toBe(true);
+        await client.call('send', [{ content: 'resumed', attachments: [] }, {}]);
+        expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+        allowed.clear();
+        expect(await allows('claude-opus')).toBe(false);
+        allowed.add('claude-opus');
+        expect(await allows('claude-opus')).toBe(true);
+        executorAllowed = false;
+        expect(await allows('claude-opus')).toBe(false);
+      } finally { await client.close('close', 'navigation'); }
+    } finally {
+      await ledger.flush();
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  it.each([true, false])('handles a legacy executor with restricted=%s and stops it when new restrictions appear', async restrictedAtStart => {
+    let restricted = restrictedAtStart;
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { modelAccess: { models: async () => ['claude-opus'], restricted: () => restricted } },
+      intercept: async (id, request, forward) => {
+        const result = await forward();
+        return id === 'mini' && request.op === 'caps' ? { ...(result as object), relayModelAccess: undefined } : result;
+      },
+    });
+    try {
+      const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      try {
+        expect(env.memberStarted.mini).toHaveLength(restrictedAtStart ? 0 : 1);
+        expect(env.memberStarted.studio).toHaveLength(restrictedAtStart ? 1 : 0);
+        restricted = true;
+        await env.owner.revalidateModelAccess();
+        expect(env.owner.runCount()).toBe(restrictedAtStart ? 1 : 0);
+      } finally { await client.close('close', 'navigation'); }
+    } finally { for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); } }
+  });
+  // Unit regression for review 4328468761: existing three-computer tests stubbed
+  // the production binding. The real binder must start an owner-relayed guest,
+  // keep its isolated home/provider, and release the proxy token on close.
+  it('starts and releases a same-account group relay through the production guest binder', async () => {
+    const binder = createGuestProviderRouteBinder({
+      readProviders: async () => [],
+      guestAccess: () => null,
+      ownerAllowed: controller => controller === OWNER_DEVICE,
+      providerAllowed: provider => provider === MEMBER_MINI.providerId,
+      modelAccess: { allows: () => true, read: () => ({ models: null, providerModels: null }) },
+    });
+    const env = setup({ memberBinder: binder });
+    try {
+      const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      try {
+        const input = env.memberStarted.mini[0].input;
+        expect(input.guest).toBe(true);
+        expect(input.guestHome).toContain(path.join('mini', 'guest-homes'));
+        const token = input.guestProvider!.routeToken;
+        expect(guestProviderRouteForToken(token)).toEqual({ sessionId: input.hostSessionId, providerId: MEMBER_MINI.providerId });
+        await client.call('send', [{ content: 'hello', attachments: [] }, {}]);
+        expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+        await client.close('close', 'navigation');
+        await vi.waitFor(() => expect(guestProviderRouteForToken(token)).toBeNull());
+      } finally { await client.close('close', 'navigation'); }
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // Public G -> O -> M handlers, with JSON serialization: a fork must remain pinned
+  // to its original member and preserve the guest ownership needed for another fork.
+  it('forks and resumes on the original member without allocating another group member', async () => {
+    // The group owner need not have the member's harness installed.
+    const env = setup({ owner: { isAgentAvailable: () => false } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    const request = { op: 'fork', sourceSessionId: SESSION, newSessionId: 'child-task',
+      agentKind: 'claude-code', sourceSdkSessionId: first.started.id, model: 'claude-opus', upToMessageId: 'old' };
+    await first.client.close('close', 'navigation');
+    const child = await env.owner.handle(GUEST_A, request) as { newSdkSessionId: string; uuidMap: unknown };
+    expect(child).toEqual({ newSdkSessionId: `${first.started.id}-fork`, uuidMap: [['old', 'new']] });
+    await expect(env.owner.handle(GUEST_B, request)).rejects.toThrow('REMOTE_AGENT_INVALID');
+    await expect(env.owner.handle(GUEST_A, { ...request, sourceSessionId: 'child-task',
+      newSessionId: 'grandchild-task', sourceSdkSessionId: child.newSdkSessionId }))
+      .resolves.toMatchObject({ newSdkSessionId: `${child.newSdkSessionId}-fork` });
+    const resumed = await openAsGuest(env, GUEST_A, openPayload('child-task', { options: { resumeSessionId: child.newSdkSessionId } }));
+    expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(child.newSdkSessionId);
+    expect(env.relay.plan).toHaveBeenCalledTimes(1);
+    await resumed.client.close('close', 'navigation');
+  });
+  // The guest cannot see or fix the member computer: a member whose agent went away
+  // before the fork must surface as the neutral unavailable error, not "install it there".
+  it('masks a member whose agent became unavailable before a guest fork', async () => {
+    let available = true;
+    const env = setup({ mini: { isAgentAvailable: () => available } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+    await first.client.close('close', 'navigation');
+    available = false;
+    await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION, newSessionId: 'child-task',
+      agentKind: 'claude-code', sourceSdkSessionId: first.started.id, model: 'claude-opus', upToMessageId: 'old',
+      acceptsForkFailed: true })).rejects.toThrow(/^\[REMOTE_AGENT_UNAVAILABLE\]/);
+  });
   it('hands a shared user’s new task to the chosen computer, which runs it isolated as a shared user', async () => {
     const env = setup();
     const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
@@ -314,6 +531,36 @@ describe('provider group relay for shared users', () => {
     expect(env.memberStarted.mini[0].sends).toHaveLength(1);
     expect(env.relay.trackRun).toHaveBeenCalledWith('shared-provider', MEMBER_MINI.memberKey);
     await client.close('close', 'navigation');
+  });
+
+  // #6420: the relay must retain the member's task/relay receipt, not just restage its bytes.
+  it('carries the upstream artifact identity and clear generation through the provider-group relay', async () => {
+    let finishPreparation!: () => void;
+    const waiting = new Promise<void>((resolve) => { finishPreparation = resolve; });
+    const prepareImageEvent = vi.fn(async (_sessionId: string, event: AgentEvent) => { await waiting; return event; });
+    const env = setup({ owner: { prepareImageEvent } });
+    const { client, stream, isClosed } = await openAsGuest(env, GUEST_A, openPayload(SESSION, { imageDeliveryEpoch: 123, acceptsImageDeliveryReceipts: true }));
+    try {
+      env.memberStarted.mini[0].emit({ type: 'image', source: 'codex', data: { kind: 'generation', blockId: 'image', deliveryEpoch: 999, url: 'data:image/png;base64,bytes' } } as AgentEvent);
+      env.memberStarted.mini[0].end();
+      await vi.waitFor(() => expect(prepareImageEvent).toHaveBeenCalledTimes(1));
+      expect(isClosed()).toBe(false);
+      finishPreparation();
+      const call = prepareImageEvent.mock.calls[0] as unknown as [string, AgentEvent, { agentDeviceId: string; sessionId: string; relay: string }, boolean];
+      expect(call[3]).toBe(true);
+      expect(call[0]).toBe(hostSessionIdFor(GUEST_A, SESSION));
+      expect(call[1].data).toMatchObject({ deliveryEpoch: 123 });
+      expect(call[2]).toMatchObject({ agentDeviceId: 'mini', relay: relayKeyFor(GUEST_A) });
+      const imageArtifacts = vi.fn(async (_sessionId: string) => ({ ok: true }));
+      const member = fakeAgentHost('release-member', [], { trust: () => 'owner', imageArtifacts });
+      try {
+        await member.handle(OWNER_DEVICE, { op: 'images', ...call[2], action: 'release', imageId: 'a'.repeat(64) });
+        expect(imageArtifacts.mock.calls[0]?.[0]).toBe(env.memberStarted.mini[0].input.hostSessionId);
+        await member.handle('other-owner', { op: 'images', ...call[2], action: 'release', imageId: 'a'.repeat(64) });
+        expect(imageArtifacts.mock.calls[1]?.[0]).not.toBe(imageArtifacts.mock.calls[0]?.[0]);
+      } finally { member.dispose(); }
+      await vi.waitFor(() => expect(stream.some((item) => item.t === 'event' && item.event.type === 'image')).toBe(true));
+    } finally { finishPreparation(); await client.close('close', 'navigation'); }
   });
 
   it('keeps two shared users apart on the computer even with the same task id', async () => {
@@ -423,6 +670,411 @@ describe('provider group relay for shared users', () => {
     void a;
   });
 
+  // Unit / real host.handle: service-only tests cannot prove old O history
+  // bypasses allocation or that accepted fallback reaches the durable handoff.
+  it('locates only for guests, preserves legacy O tasks, and claims a fresh fallback', async () => {
+    const started: Started[] = [];
+    const locate = vi.fn(async () => null);
+    const allocate = vi.fn(async () => ({ deviceId: 'member', generation: runId() }));
+    const acceptRelay = vi.fn(async () => undefined);
+    const direct = {
+      ownerScope: () => 'account', locate, allocate, acceptRelay,
+      status: () => undefined, release: async () => undefined, switch: async () => ({}),
+      sessionAllowed: () => true, sessionDelegated: () => false,
+      usage: () => undefined, delegate: async () => true, forget: () => true,
+    };
+    const makeHost = () => fakeAgentHost('legacy-location', started, {
+      trust: (controller) => controller === OWNER_DEVICE ? 'owner' : 'guest', directGuestExecution: direct,
+    });
+    let host = makeHost();
+    try {
+      await expect(host.handle(OWNER_DEVICE, { op: 'direct-locate', sessionId: SESSION })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      expect(locate).not.toHaveBeenCalled();
+      expect(await host.handle(GUEST_A, { op: 'direct-locate', sessionId: SESSION })).toBeNull();
+      await host.handle(GUEST_A, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload(SESSION) } });
+      await waitFor(() => started.length === 1);
+      expect(acceptRelay).toHaveBeenCalledWith(GUEST_A, SESSION, false);
+      const request = { op: 'allocate', agentKind: 'claude-code', model: 'claude-opus', sessionId: SESSION };
+      expect(await host.handle(GUEST_A, request)).toBeNull();
+      expect(allocate).not.toHaveBeenCalled();
+      await host.abortAll();
+      host.dispose();
+      host = makeHost();
+      expect(await host.handle(GUEST_A, request)).toBeNull();
+      expect(allocate).not.toHaveBeenCalled();
+      // Equal task IDs under a different guest have their own route namespace.
+      expect(await host.handle(GUEST_B, request)).toMatchObject({ deviceId: 'member' });
+      expect(allocate).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.abortAll();
+      host.dispose();
+    }
+  });
+
+  // Direct G→M has no relay key. The production host entry must persist O's
+  // authenticated grant before allowing a later, idempotent deletion (unit tier).
+  it('forgets only the direct guest delegated by this owner, including after the lease is gone', async () => {
+    const started: Started[] = [];
+    const purge = vi.fn(async () => undefined);
+    const peer = providerShareGuestPeer('share-a', 'member-a', 'guest-pc');
+    const other = providerShareGuestPeer('share-b', 'member-b', 'other-pc');
+    let ownerGeneration = 1;
+    const directSessions = new Map<string, Set<string>>();
+    const makeHost = () => fakeAgentHost('direct-member', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      captureOwner: () => ({ ownerScopeKey: `account-one:${ownerGeneration}` }),
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}),
+        sessionAllowed: (controller, sessionId) => directSessions.get(controller)?.has(sessionId) === true,
+        sessionDelegated: (controller, sessionId) => directSessions.get(controller)?.has(sessionId) === true,
+        usage: () => undefined,
+        delegate: async (_owner, request) => {
+          const key = providerShareGuestPeer(request.shareId, request.memberId, request.guestDeviceId);
+          const sessions = directSessions.get(key) ?? new Set<string>();
+          sessions.add(request.sessionId);
+          directSessions.set(key, sessions);
+          return true;
+        },
+        forget: (_owner, controller) => { directSessions.delete(controller); return true; },
+      },
+    });
+    let host = makeHost();
+    const grant = (shareId: string, memberId: string, guestDeviceId: string, cleanupEpoch = 1,
+      sessionId = 'task-direct') => ({
+      op: 'delegate' as const, action: 'grant' as const, shareId, memberId, guestDeviceId,
+      sessionId, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111', cleanupEpoch,
+    });
+    const open = (controller: string, sessionId: string, extra: Record<string, unknown> = {}, id = runId()) =>
+      host.handle(controller, { op: 'open', runId: id, agentKind: 'claude-code',
+        payload: { json: openPayload(sessionId, extra) } });
+    try {
+      const directRunId = runId(), relayRunId = runId();
+      await host.handle(OWNER_DEVICE, grant('share-a', 'member-a', 'guest-pc'));
+      await host.handle(OWNER_DEVICE, grant('share-b', 'member-b', 'other-pc', 1, 'task-other'));
+      await open(peer, 'task-direct', {}, directRunId);
+      await open(other, 'task-other');
+      await open(peer, 'task-relay', { relay: relayKeyFor(peer) }, relayRunId);
+      await waitFor(() => started.length === 3);
+      const directHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'task-direct'))!.input.guestHome!;
+      const otherHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(other, 'task-other'))!.input.guestHome!;
+      const relayScope = `${peer}\0relay:${relayKeyFor(peer)}`;
+      const relayHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(relayScope, 'task-relay'))!.input.guestHome!;
+      const peerHash = createHash('sha256').update(peer).digest('hex').slice(0, 16);
+      const base = path.join(root, 'direct-member');
+      const directWorkspace = path.join(base, 'workspaces', peerHash, hostSessionIdFor(peer, 'task-direct'));
+      const directAttachments = path.join(base, 'attachments', peerHash, directRunId);
+      const relayWorkspace = path.join(base, 'workspaces', peerHash, hostSessionIdFor(relayScope, 'task-relay'));
+      const relayAttachments = path.join(base, 'attachments', peerHash, relayRunId);
+      // A restarted M has no live Run to clean. Recreate failed shutdown
+      // residue under the real on-disk layout, alongside same-peer relay data.
+      host.dispose();
+      await waitFor(() => !fs.existsSync(directWorkspace) && !fs.existsSync(relayWorkspace)
+        && !fs.existsSync(directAttachments) && !fs.existsSync(relayAttachments));
+      directSessions.clear();
+      host = makeHost();
+      for (const dir of [directHome, otherHome, relayHome, directWorkspace, directAttachments,
+        relayWorkspace, relayAttachments]) fs.mkdirSync(dir, { recursive: true });
+      const forget = { op: 'forget', directGuest: { shareId: 'share-a', memberId: 'member-a',
+        guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+      await expect(host.handle('other-owner', forget)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      await expect(host.handle(peer, forget)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      ownerGeneration = 2; // same account, a newer app-session generation
+      await host.handle(OWNER_DEVICE, forget);
+      expect(purge).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(directHome)).toBe(false);
+      expect(fs.existsSync(otherHome)).toBe(true);
+      expect(fs.existsSync(relayHome)).toBe(true);
+      expect(fs.existsSync(directWorkspace)).toBe(false);
+      expect(fs.existsSync(directAttachments)).toBe(false);
+      expect(fs.existsSync(relayWorkspace)).toBe(true);
+      expect(fs.existsSync(relayAttachments)).toBe(true);
+      expect(purge).toHaveBeenCalledWith(expect.arrayContaining([hostSessionIdFor(peer, 'task-direct')]),
+        expect.arrayContaining([expect.stringContaining('sdk-direct-member')]));
+      await host.handle(OWNER_DEVICE, forget); // lost ACK: no second purge
+      expect(purge).toHaveBeenCalledTimes(1);
+      // A delayed old deletion can arrive after the same member rejoins on M.
+      await host.handle(OWNER_DEVICE, grant('share-a', 'member-a', 'guest-pc', 2, 'task-new'));
+      await open(peer, 'task-new');
+      await waitFor(() => started.length === 4);
+      const newHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'task-new'))!.input.guestHome!;
+      await host.handle(OWNER_DEVICE, forget);
+      expect(fs.existsSync(newHome)).toBe(true);
+      expect(purge).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  // Unit / real host.handle + disk index: transcript-failure tests did not fail
+  // the tombstone's atomic rename. A failed rename followed by the same forget
+  // ID must keep rejecting (O keeps it pending), then survive retry and restart
+  // with no old native IDs (provider-sharing-direct-execution, deletion rules).
+  it('acknowledges a repeated direct forget only after its tombstone is durable', async () => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-durable', 'member-durable', 'guest-pc');
+    const sessions = new Set<string>();
+    const purge = vi.fn(async () => undefined);
+    const makeHost = () => fakeAgentHost('direct-forget-durable', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); return true; },
+      },
+    });
+    let host = makeHost();
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-durable', memberId: 'member-durable', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const open = (sessionId: string, extra = {}) => host.handle(peer, {
+      op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload(sessionId, extra) },
+    });
+    const indexFile = path.join(root, 'direct-forget-durable', 'guest-sessions.json');
+    const readRecord = () => Object.values(JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+      { controller: string; nativeIds: string[]; hostSessionIds: string[]; cleanupEpoch: number; lastDirectForgetId?: string }>)
+      .find((record) => record.controller === peer)!;
+    const request = { op: 'forget', directGuest: { shareId: 'share-durable', memberId: 'member-durable',
+      guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    let acknowledgements = 0;
+    const forget = () => host.handle(OWNER_DEVICE, request).then(() => { acknowledgements += 1; });
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    let failRename = false;
+    let failedWrites = 0;
+    const rename = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === indexFile && failRename) {
+        failedWrites += 1;
+        throw Object.assign(new Error('injected guest index rename failure'), { code: 'EIO' });
+      }
+      return originalRename(from, to);
+    });
+    try {
+      await grant('old-task', 1);
+      await open('old-task');
+      await waitFor(() => started.length === 1 && readRecord().nativeIds.length === 1);
+      const oldNative = readRecord().nativeIds[0];
+      failRename = true;
+      await expect(forget()).rejects.toThrow('injected guest index rename failure');
+      await expect(forget()).rejects.toThrow('injected guest index rename failure');
+      expect(acknowledgements).toBe(0);
+      expect(failedWrites).toBe(2);
+      expect(readRecord().nativeIds).toEqual([oldNative]);
+      expect(readRecord().lastDirectForgetId).toBeUndefined();
+      failRename = false;
+      await forget();
+      expect(acknowledgements).toBe(1);
+      expect(readRecord()).toMatchObject({ hostSessionIds: [], nativeIds: [], cleanupEpoch: 1,
+        lastDirectForgetId: request.directGuest.forgetId });
+      const purges = purge.mock.calls.length;
+      host.dispose();
+      host = makeHost();
+      await forget();
+      expect(purge).toHaveBeenCalledTimes(purges);
+      expect(readRecord().nativeIds).toEqual([]);
+      await grant('new-task', 2);
+      await expect(open('new-task', { options: { resumeSessionId: oldNative } })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      await open('new-task');
+      await waitFor(() => started.length === 2 && readRecord().nativeIds.length === 1);
+      await forget(); // old epoch must not delete the newly granted task
+      expect(readRecord().cleanupEpoch).toBe(2);
+      expect(readRecord().nativeIds).toEqual([`sdk-direct-forget-durable-${started[1].input.hostSessionId}`]);
+      expect(fs.existsSync(started[1].input.guestHome!)).toBe(true);
+    } finally {
+      rename.mockRestore();
+      await host.abortAll();
+      host.dispose();
+    }
+  });
+
+  // Host.handle regression (unit): sequential forget coverage missed F1/F2
+  // sharing an ID while F1 is still deleting transcripts. An early F2 ACK let
+  // a new epoch open before F1 overwrote its native IDs and cleanup epoch.
+  it.each([false, true])('joins duplicate direct forgets until cleanup settles (failure=%s)', async (failFirst) => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-race', 'member-race', 'guest-pc');
+    const sessions = new Set<string>();
+    let releasePurge!: () => void;
+    let enteredPurge!: () => void;
+    const purging = new Promise<void>((resolve) => { enteredPurge = resolve; });
+    const barrier = new Promise<void>((resolve) => { releasePurge = resolve; });
+    const purge = vi.fn(async () => undefined).mockImplementationOnce(async () => {
+      enteredPurge();
+      await barrier;
+      if (failFirst) throw new Error('transcript cleanup failed');
+    });
+    const host = fakeAgentHost('direct-forget-race', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); return true; },
+      },
+    });
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-race', memberId: 'member-race', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const open = (sessionId: string) => host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+      payload: { json: openPayload(sessionId, { projectFiles: [{ path: 'AGENTS.md', data: Buffer.from('new task').toString('base64') }] }) } });
+    const forget = { op: 'forget', directGuest: { shareId: 'share-race', memberId: 'member-race',
+      guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    const results: string[] = [];
+    const capture = (label: string, work: Promise<unknown>) => work.then(() => { results.push(`${label}:ok`); },
+      () => { results.push(`${label}:failed`); });
+    try {
+      await grant('old-task', 1);
+      await open('old-task');
+      await waitFor(() => started.length === 1);
+      const first = capture('F1', host.handle(OWNER_DEVICE, forget));
+      await purging;
+      const second = host.handle(OWNER_DEVICE, forget);
+      const secondResult = capture('F2', second);
+      const reopened = second.then(async () => {
+        await grant('new-task', 2);
+        await open('new-task');
+      }, () => undefined);
+      // Give the duplicate real file I/O a short scheduling window. F1 is held
+      // by an explicit barrier; no wall-clock timeout releases the deletion.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const earlyResults = [...results];
+      releasePurge();
+      await Promise.all([first, secondResult, reopened]);
+      expect(earlyResults).toEqual([]);
+      expect(results.sort()).toEqual(failFirst ? ['F1:failed', 'F2:failed'] : ['F1:ok', 'F2:ok']);
+      expect(purge).toHaveBeenCalledTimes(1);
+      if (failFirst) {
+        // Failed cleanup must release its queue and dedupe entry for retry.
+        await host.handle(OWNER_DEVICE, forget);
+        await grant('new-task', 2);
+        await open('new-task');
+      }
+      await waitFor(() => started.length === 2);
+      const session = started[1].input;
+      const indexFile = path.join(root, 'direct-forget-race', 'guest-sessions.json');
+      await waitFor(() => fs.readFileSync(indexFile, 'utf8').includes(`sdk-direct-forget-race-${session.hostSessionId}`));
+      // Also reject a delayed older epoch with a different ID, after persistence.
+      await host.handle(OWNER_DEVICE, { ...forget, directGuest: { ...forget.directGuest,
+        forgetId: '33333333-3333-4333-8333-333333333333' } });
+      const records = JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+        { controller: string; cleanupEpoch: number; nativeIds: string[] }>;
+      const record = Object.values(records).find((item) => item.controller === peer)!;
+      expect(record.cleanupEpoch).toBe(2);
+      expect(record.nativeIds).toContain(`sdk-direct-forget-race-${session.hostSessionId}`);
+      expect(fs.existsSync(session.guestHome!)).toBe(true);
+      expect(fs.readFileSync(path.join(session.shadowDir, 'AGENTS.md'), 'utf8')).toContain('new task');
+    } finally {
+      releasePurge();
+      host.dispose();
+    }
+  });
+
+  // Host.handle(open/forget/delegate), unit: forgetting during native startup
+  // must drain its late file writes before a newer grant/open. Sequential tests
+  // miss this; a same-peer relay and poll must still progress while it drains.
+  it('drains direct startup before forgetting and queues a newer grant/open without blocking relay or poll', async () => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-start', 'member-start', 'guest-pc');
+    const sessions = new Set<string>();
+    let releaseStart!: () => void;
+    let enteredStart!: () => void;
+    let revoked!: () => void;
+    const starting = new Promise<void>((resolve) => { enteredStart = resolve; });
+    const barrier = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const revoking = new Promise<void>((resolve) => { revoked = resolve; });
+    const oldSessionId = hostSessionIdFor(peer, 'old-task');
+    const purge = vi.fn(async () => undefined);
+    const host = fakeAgentHost('direct-start-race', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      beforeStart: async (input) => {
+        if (input.hostSessionId !== oldSessionId) return;
+        enteredStart();
+        await barrier;
+        // A native startup already in progress may still create its files
+        // after finishRun has marked the Run closing.
+        fs.mkdirSync(input.guestHome!, { recursive: true });
+        fs.writeFileSync(path.join(input.guestHome!, 'late-native.txt'), 'old history');
+      },
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); revoked(); return true; },
+      },
+    });
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-start', memberId: 'member-start', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const oldRunId = runId();
+    const open = (sessionId: string, extra = {}, id = runId()) => host.handle(peer, { op: 'open', runId: id, agentKind: 'claude-code',
+      payload: { json: openPayload(sessionId, extra) } });
+    let pending: Promise<unknown> | undefined;
+    try {
+      await grant('old-task', 1);
+      await open('old-task', {}, oldRunId);
+      await starting;
+      let forgetAcknowledged = false;
+      const forget = host.handle(OWNER_DEVICE, { op: 'forget', directGuest: {
+        shareId: 'share-start', memberId: 'member-start', guestDeviceId: 'guest-pc',
+        forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1,
+      } }).then(() => { forgetAcknowledged = true; });
+      await revoking;
+      const newGrant = grant('new-task', 2);
+      const newOpen = open('new-task');
+      pending = Promise.all([forget, newGrant, newOpen]);
+      await open('relay-task', { relay: relayKeyFor(peer) });
+      await waitFor(() => started.some((item) => item.input.hostSessionId !== oldSessionId));
+      await host.handle(peer, { op: 'poll', runs: [{ runId: oldRunId, cursor: 0 }], waitMs: 0 });
+      await host.handle(OWNER_DEVICE, { op: 'delegate', action: 'grant',
+        shareId: 'other-share', memberId: 'other-member', guestDeviceId: 'other-pc',
+        sessionId: 'other-task', cleanupEpoch: 1, providerId: 'shared-provider', model: 'claude-opus',
+        generation: '11111111-1111-4111-8111-111111111111' });
+      expect(forgetAcknowledged).toBe(false);
+      expect(purge).not.toHaveBeenCalled();
+      expect(sessions.has('new-task')).toBe(false);
+      expect(sessions.has('other-task')).toBe(true);
+      releaseStart();
+      await pending;
+      await waitFor(() => started.length === 3);
+      const newSession = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'new-task'))!.input;
+      expect(fs.existsSync(newSession.guestHome!)).toBe(true);
+      expect(fs.existsSync(path.join(newSession.guestHome!, 'late-native.txt'))).toBe(false);
+      const relaySession = started.find((item) => item.input.hostSessionId !== oldSessionId && item.input !== newSession)!.input;
+      expect(fs.existsSync(relaySession.guestHome!)).toBe(true);
+      expect(purge).toHaveBeenCalledTimes(1);
+      expect(purge).toHaveBeenCalledWith([oldSessionId], []);
+      const indexFile = path.join(root, 'direct-start-race', 'guest-sessions.json');
+      await waitFor(() => fs.readFileSync(indexFile, 'utf8').includes(`sdk-direct-start-race-${newSession.hostSessionId}`));
+      const records = JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+        { controller: string; relay?: string; cleanupEpoch: number; nativeIds: string[] }>;
+      const record = Object.values(records).find((item) => item.controller === peer && !item.relay)!;
+      expect(record.cleanupEpoch).toBe(2);
+      expect(record.nativeIds).toEqual([`sdk-direct-start-race-${newSession.hostSessionId}`]);
+    } finally {
+      releaseStart();
+      await pending?.catch(() => undefined);
+      host.dispose();
+    }
+  });
+
   it('runs a relayed task from a same-account computer as a shared user, never with owner trust', async () => {
     const started: Started[] = [];
     const member = fakeAgentHost('member', started, { trust: () => 'owner' });
@@ -448,6 +1100,74 @@ describe('provider group relay for shared users', () => {
       .rejects.toThrow(/cannot be resumed/);
     await client.close('close', 'navigation');
   });
+
+  it.each([
+    { groupAssigned: true },
+    { groupAssigned: true, relay: relayKeyFor(GUEST_A) },
+  ])('keeps the local group policy on a guest execution even when routing was already assigned: %j', async (extra) => {
+    const env = setup({ plans: [{ kind: 'local' }] });
+    const started: Started[] = [];
+    const host = fakeAgentHost('policy-host', started, { trust: () => 'guest', groupRelay: env.relay });
+    try {
+      await host.handle(GUEST_A, { op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload('policy-task', extra) } });
+      await waitFor(() => started.length > 0);
+      expect(started[0].input.groupProviderId).toBe('shared-provider');
+      expect(env.relay.plan).not.toHaveBeenCalled();
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  // Direct routing regression (provider-sharing-direct-execution.md): Host.handle(open)
+  // must use M's server-checked task grant. Earlier cases all supplied groupAssigned,
+  // so a G omitting that untrusted hint made M forward to its own group (unit tier).
+  it('runs a delegated guest locally when G omits groupAssigned while ordinary guests still use the group', async () => {
+    const env = setup();
+    const started: Started[] = [];
+    const delegated = new Set<string>();
+    const directPeer = providerShareGuestPeer('share-a', 'member-a', 'guest-pc');
+    const ordinaryPeer = providerShareGuestPeer('share-b', 'member-b', 'guest-pc');
+    const grantKey = (controller: string, sessionId: string) => JSON.stringify([controller, sessionId]);
+    const host = fakeAgentHost('assigned-member', started, {
+      trust: (controller) => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      groupRelay: env.relay,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}),
+        // Production sessionAllowed also permits an ordinary guest with no lease.
+        sessionAllowed: () => true,
+        sessionDelegated: (controller, sessionId) => delegated.has(grantKey(controller, sessionId)),
+        usage: () => undefined,
+        delegate: async (_owner, request) => {
+          delegated.add(grantKey(providerShareGuestPeer(request.shareId, request.memberId,
+            request.guestDeviceId), request.sessionId));
+          return false;
+        },
+        forget: () => true,
+      },
+    });
+    try {
+      await host.handle(OWNER_DEVICE, { op: 'delegate', action: 'grant',
+        shareId: 'share-a', memberId: 'member-a', guestDeviceId: 'guest-pc',
+        sessionId: 'direct-task', providerId: 'shared-provider', model: 'claude-opus',
+        generation: '11111111-1111-4111-8111-111111111111', cleanupEpoch: 1 });
+      await host.handle(directPeer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('direct-task') } });
+      expect(env.relay.plan).not.toHaveBeenCalled();
+      await waitFor(() => started.length === 1);
+      expect(started[0].input.guest).toBe(true);
+      await host.handle(ordinaryPeer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('ordinary-task') } });
+      await waitFor(() => env.memberStarted.mini.length === 1);
+      expect(env.relay.plan).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const item of [host, env.owner, ...Object.values(env.members)]) {
+        await item.abortAll();
+        item.dispose();
+      }
+    }
+  });
 });
 
 describe('provider group relay: starting, load and cleanup', () => {
@@ -464,6 +1184,27 @@ describe('provider group relay: starting, load and cleanup', () => {
     expect(env.relay.noteStartFailure).toHaveBeenCalledTimes(9);
     expect(env.memberStarted.studio).toHaveLength(1);
     await client.close('close', 'navigation');
+  });
+
+  // Unit: Host.handle(open) must release a reserved group slot if final admission throws.
+  // Regression #7666/r4398894989: existing cleanup tests covered boolean denials, not budget exceptions.
+  // Minimal input: group plan reserves a slot, then isAllowed throws the stable pause error before runs.set.
+  it('releases reserved group load when final admission throws a member budget pause', async () => {
+    const load = { setRunning: vi.fn(), release: vi.fn() };
+    const paused = Object.assign(new Error('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED] Model share reached'), {
+      code: 'REMOTE_AGENT_MEMBER_BUDGET_PAUSED',
+    });
+    const env = setup({ plans: [{ kind: 'local', load }], owner: { modelAccess: { isAllowed: () => { throw paused; } } } });
+    try {
+      await expect(env.owner.handle(GUEST_A, {
+        op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload(SESSION) },
+      })).rejects.toBe(paused);
+      expect(load.release).toHaveBeenCalledTimes(1);
+      expect(env.owner.runCount()).toBe(0);
+      expect(env.ownerStarted).toHaveLength(0);
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
   });
 
   it('counts the load from the moment it picks, including tasks the group runs on this computer', async () => {
@@ -668,6 +1409,220 @@ describe('provider group relay: starting, load and cleanup', () => {
 });
 
 describe('provider group "switch to another computer" for shared users', () => {
+  // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
+  // Existing cases emitted a terminal event independently of send(), missing the
+  // quota RPC rejection that could overtake the switch offer and lose recovery.
+  // Cover local/relayed execution and both native-event orders; one failure must
+  // produce one offer/error before rejecting send, then one send on the new host.
+  it.each(['local', 'member'] as const)('settles quota replies through one switch offer on %s', async placement => {
+    for (const eventFirst of [true, false]) {
+      const onSend = (record: Started) => {
+        if (eventFirst) record.emit(USAGE_LIMIT_ERROR);
+        throw new Error('You have hit your usage limit');
+      };
+      const env = setup({
+        plans: [
+          placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+          { kind: 'member', ...MEMBER_STUDIO },
+          { kind: 'member', ...MEMBER_STUDIO },
+        ],
+        ...(placement === 'local' ? { owner: { onSend } } : { mini: { onSend } }),
+      });
+      const first = await openAsGuest(env, GUEST_A, openPayload(`${SESSION}-${eventFirst}`, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, { throwOnStartFailure: true }]))
+          .rejects.toThrow('usage limit');
+        const token = switchTokenIn(first.stream);
+        expect(token).toBeDefined();
+        const errors = () => first.stream.filter(item => item.t === 'event' && item.event.type === 'error');
+        expect(errors()).toHaveLength(1);
+        expect(first.stream.findIndex(item => item.t === 'state' && item.state.providerGroupSwitch === token))
+          .toBeLessThan(first.stream.findIndex(item => item.t === 'event' && item.event.type === 'error'));
+
+        // A late or repeated SDK terminal must not offer another switch or resume.
+        record.emit(USAGE_LIMIT_ERROR);
+        record.emit({ type: 'status', source: 'claude-code', data: { status: 'quota-tail-flushed' } });
+        await waitFor(() => first.stream.some(item => item.t === 'event'
+          && (item.event.data as { status?: string })?.status === 'quota-tail-flushed'));
+        expect(errors()).toHaveLength(1);
+        expect(first.stream.filter(item => item.t === 'state' && item.state.providerGroupSwitch)).toHaveLength(1);
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(1);
+        await first.client.close('close', 'navigation');
+
+        const next = await openAsGuest(env, GUEST_A, openPayload(`${SESSION}-${eventFirst}`, {
+          acceptsGroupSwitch: true, groupSwitchToken: token,
+        }));
+        try {
+          await next.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]);
+          expect(env.memberStarted.studio[0].sends).toHaveLength(1);
+          expect(record.sends).toHaveLength(1);
+        } finally {
+          await next.client.close('close', 'navigation');
+        }
+      } finally {
+        await first.client.close('close', 'navigation');
+        for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+      }
+    }
+  });
+
+  it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
+    const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]))
+        .rejects.toThrow('request timed out');
+      expect(switchTokenIn(first.stream)).toBeUndefined();
+      expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+    } finally {
+      await first.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  it('ignores an obsolete quota rejection after the user stops and sends again', async () => {
+    let entered!: () => void;
+    const sending = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const response = new Promise<void>(resolve => { release = resolve; });
+    const env = setup({ mini: { onSend: async record => {
+      if (record.sends.length > 1) return;
+      entered();
+      await response;
+      throw new Error('You have hit your usage limit');
+    } } });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const obsolete = first.client.call('send', [{ type: 'user', content: 'old attempt' }, {}]).catch(error => error);
+    try {
+      await sending;
+      await first.client.call('abort', []);
+      await first.client.call('send', [{ type: 'user', content: 'new attempt' }, { groupNewRound: true }]);
+      release();
+      expect(await obsolete).toMatchObject({ message: expect.stringContaining('usage limit') });
+      expect(env.memberStarted.mini[0].sends).toHaveLength(2);
+      expect(switchTokenIn(first.stream)).toBeUndefined();
+      expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await first.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // A delayed group decision used to let the RPC rejection overtake its terminal
+  // event. Keep it pending while another controller completes a send on the same
+  // member: the failure's scope is one run, without resetting any shared link.
+  it('holds a quota rejection behind its switch decision without blocking another controller', async () => {
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      mini: { onSend: record => {
+        if (record !== failing) return;
+        record.emit(USAGE_LIMIT_ERROR);
+        throw new Error('You have hit your usage limit');
+      } },
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const failing = env.memberStarted.mini[0];
+    const other = await openAsGuest(env, GUEST_B, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    let release!: () => void;
+    const decision = new Promise<void>(resolve => { release = resolve; });
+    env.relay.plan.mockImplementationOnce(async () => {
+      await decision;
+      return { kind: 'member', ...MEMBER_STUDIO };
+    });
+    let rejected = false;
+    const send = first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]).catch(error => {
+      rejected = true;
+      return error;
+    });
+    try {
+      await waitFor(() => env.relay.plan.mock.calls.length === 3);
+      await other.client.call('send', [{ type: 'user', content: 'unrelated task' }, {}]);
+      expect(env.memberStarted.mini[1].sends).toHaveLength(1);
+      expect(other.isClosed()).toBe(false);
+      expect(switchTokenIn(other.stream)).toBeUndefined();
+      expect(rejected).toBe(false);
+      release();
+      expect(await send).toMatchObject({ message: expect.stringContaining('usage limit') });
+      expect(switchTokenIn(first.stream)).toBeDefined();
+      expect(first.stream.filter(item => item.t === 'event' && item.event.type === 'error')).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.all([first.client.close('close', 'navigation'), other.client.close('close', 'navigation')]);
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
+  // Review r4386499053: an SDK stream/legacy member can end after rejecting send,
+  // before the next-member decision completes. Only passive shutdown must wait;
+  // otherwise closing invalidates the pending offer before it reaches the guest.
+  it.each([
+    ['local', 'end'], ['local', 'error'], ['local', 'explicit'],
+    ['member', 'end'], ['member', 'error'], ['member', 'explicit'],
+  ] as const)('settles pending quota recovery on %s shutdown (%s)', async (placement, endKind) => {
+    let rejectQuota = placement === 'member';
+    const env = setup({
+      plans: [
+        placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_MINI },
+      ],
+      owner: { onSend: () => { throw new Error('You have hit your usage limit'); } },
+      // Model an older member returning a quota rejection without a native error.
+      intercept: async (_device, request, forward) => {
+        if (rejectQuota && request.op === 'call' && request.method === 'send') {
+          rejectQuota = false;
+          throw new Error('You have hit your usage limit');
+        }
+        return forward();
+      },
+    });
+    const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+    const other = await openAsGuest(env, GUEST_B, openPayload(SESSION));
+    const memberEnded = placement === 'member'
+      ? vi.spyOn(env.relay.connect(MEMBER_MINI.agentDeviceId).poller, 'unregister')
+      : null;
+    let release!: () => void;
+    const decision = new Promise<void>(resolve => { release = resolve; });
+    env.relay.plan.mockImplementationOnce(async () => {
+      await decision;
+      return { kind: 'member', ...MEMBER_STUDIO };
+    });
+    const send = first.client.call('send', [{ content: 'finish the task' }, {}]).catch(error => error);
+    try {
+      await waitFor(() => env.relay.plan.mock.calls.length === 3);
+      if (endKind === 'explicit') {
+        await first.client.close('close', 'navigation');
+        expect(first.isClosed()).toBe(true);
+        release();
+        await send;
+        expect(switchTokenIn(first.stream)).toBeUndefined();
+        expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
+        return;
+      }
+      record.end(endKind === 'error' ? new Error('agent stream ended unexpectedly') : undefined);
+      if (memberEnded) await waitFor(() => memberEnded.mock.calls.length > 0);
+      // Another full round trip lets the passive end propagate while plan waits.
+      await other.client.call('send', [{ content: 'unrelated task' }, {}]);
+      expect(first.isClosed()).toBe(false);
+      expect(other.isClosed()).toBe(false);
+      release();
+      expect(await send).toMatchObject({ message: expect.stringContaining('usage limit') });
+      await waitFor(() => first.isClosed());
+      expect(switchTokenIn(first.stream)).toBeDefined();
+      expect(first.stream.filter(item => item.t === 'event' && item.event.type === 'error')).toHaveLength(1);
+      expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.all([first.client.close('close', 'navigation'), other.client.close('close', 'navigation')]);
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
   it('sends the switch token before the error, and the reopened task avoids the failed computer', async () => {
     const env = setup({
       plans: [
@@ -740,8 +1695,15 @@ describe('provider group "switch to another computer" for shared users', () => {
     }
   });
 
-  it('accepts a token only once, and only from the shared user and task it was sent to', async () => {
+  it('accepts a retried token only from the shared user and task it was sent to', async () => {
+    const switched = vi.fn(async () => undefined);
     const env = setup({
+      owner: { directGuestExecution: {
+        ownerScope: () => 'owner', allocate: async () => null,
+        status: () => undefined, release: async () => undefined, switch: async () => ({}),
+        switched, sessionAllowed: () => true, sessionDelegated: () => false,
+        usage: () => undefined, delegate: async () => false, forget: () => false,
+      } },
       plans: [
         { kind: 'member', ...MEMBER_MINI },
         { kind: 'member', ...MEMBER_STUDIO },
@@ -762,12 +1724,14 @@ describe('provider group "switch to another computer" for shared users', () => {
     const otherTask = await openAsGuest(env, GUEST_A, openPayload('task-2', { groupSwitchToken: token }));
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
     await otherTask.client.close('close', 'navigation');
+    expect(switched).not.toHaveBeenCalled();
 
     const used = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    expect(switched).toHaveBeenCalledWith(GUEST_A, SESSION, token);
     await used.client.close('close', 'navigation');
     const again = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
-    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
     await again.client.close('close', 'navigation');
   });
 
@@ -1099,4 +2063,165 @@ describe('provider group reshare consent', () => {
     expect(env.relay.plan).toHaveBeenCalledTimes(1);
     await env.owner.abortAll();
   });
+});
+
+// Unit: real Host.handle and the existing disk/agent boundary fixture. F3 was
+// missed by write-only tombstone tests: one failed initial read, malformed tail,
+// or failed strict rename must not erase ownership or acknowledge cached state.
+describe('guest index failure recovery', () => {
+  const peer = providerShareGuestPeer('share-index', 'member-index', 'guest-pc');
+  const otherPeer = providerShareGuestPeer('share-other', 'member-other', 'other-pc');
+  const digest = (controller: string) => createHash('sha256').update(controller).digest('hex').slice(0, 32);
+  const forgetId = '22222222-2222-4222-8222-222222222222';
+  function setupIndex() {
+    const started: Started[] = [];
+    const leases = new Set<string>();
+    const host = fakeAgentHost('index-recovery', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null,
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+        sessionAllowed: (_controller, sessionId) => leases.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => leases.has(sessionId),
+        delegate: async (_owner, request) => {
+          if (request.action === 'grant') leases.add(request.sessionId);
+          else leases.delete(request.sessionId);
+          return true;
+        },
+        forget: () => true,
+      },
+    });
+    const file = path.join(root, 'index-recovery', 'guest-sessions.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const record = { controller: peer, hostSessionIds: [hostSessionIdFor(peer, 'old')], nativeIds: ['native-old'],
+      directOwnerDeviceId: OWNER_DEVICE, directOwnerScopeKey: 'account-one', cleanupEpoch: 9,
+      lastDirectForgetId: forgetId, attachmentRunIds: [forgetId], forkWorkspaces: { 'native-old': [forgetId] } };
+    const old = { [digest(peer)]: record, [digest(otherPeer)]: { controller: otherPeer, nativeIds: ['native-other'],
+      members: { 'native-other': { memberKey: 'device:old:provider', agentDeviceId: 'old-device', providerId: 'provider' } } } };
+    const grant = (owner = OWNER_DEVICE) => host.handle(owner, {
+      op: 'delegate', action: 'grant', shareId: 'share-index', memberId: 'member-index', guestDeviceId: 'guest-pc',
+      sessionId: 'old', cleanupEpoch: 9, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const fork = (controller = peer, nativeId = 'native-old') => host.handle(controller, {
+      op: 'fork', agentKind: 'claude-code', sourceSessionId: 'old', sourceSdkSessionId: nativeId,
+      newSessionId: 'forked', providerId: 'shared-provider', model: 'claude-opus',
+    });
+    return { host, file, record, old, grant, fork, leases };
+  }
+  it.each(['EBUSY', 'EIO'])('retries an initial %s in the same host without replacing old safety records', async (code) => {
+    const env = setupIndex();
+    const original = JSON.stringify(env.old, null, 2);
+    fs.writeFileSync(env.file, original);
+    const read = fs.promises.readFile.bind(fs.promises);
+    let injected = false;
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: Parameters<typeof read>) => {
+      if (String(args[0]) === env.file && !injected) {
+        injected = true;
+        throw Object.assign(new Error(`injected ${code}`), { code });
+      }
+      return read(...args);
+    }) as typeof read);
+    try {
+      await expect(env.grant()).rejects.toThrow(`injected ${code}`);
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe(original);
+      await env.grant();
+      const saved = JSON.parse(fs.readFileSync(env.file, 'utf8'));
+      expect(saved[digest(peer)]).toEqual(env.record);
+      expect(saved[digest(otherPeer)].nativeIds).toEqual(['native-other']);
+      expect(saved[digest(otherPeer)].members['native-other'].sameAccount).toBe(false);
+      await expect(env.fork(otherPeer)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      await expect(env.fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
+      // A same-account caller does not acquire the guest index boundary.
+      await expect(env.host.handle(OWNER_DEVICE, { op: 'caps' })).resolves.toMatchObject({ version: 1 });
+    } finally { spy.mockRestore(); await env.host.dispose(); }
+  });
+  it.each([
+    ['root', []], ['json', '{'], ['record', null], ['controller', 7], ['relay', []],
+    ['nativeIds', ['native', 1]], ['hostSessionIds', ['../unsafe']], ['attachmentRunIds', ['unsafe-path']],
+    ['forkWorkspaces', { native: ['unsafe-path'] }], ['members', { native: { memberKey: 'm', agentDeviceId: 'd' } }],
+    ['relayDevices', ['ok', null]], ['forgetPending', {}], ['directOwnerDeviceId', ''],
+    ['directOwnerScopeKey', false], ['cleanupEpoch', -1], ['lastDirectForgetId', 'bad'],
+    ['identity', 'different-controller'],
+  ])('rejects a corrupt %s without publishing a partial cache, then accepts a repaired file', async (field, value) => {
+    const env = setupIndex();
+    const tail = { ...env.record, controller: otherPeer };
+    const invalid = field === 'root' ? JSON.stringify(value) : field === 'json' ? String(value)
+      : JSON.stringify({ [digest(peer)]: env.record, [digest(otherPeer)]: field === 'record' ? value
+        : { ...tail, [field === 'identity' ? 'controller' : String(field)]: value } });
+    fs.writeFileSync(env.file, invalid);
+    try {
+      await expect(env.grant()).rejects.toThrow();
+      await expect(env.grant()).rejects.toThrow();
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe(invalid);
+      fs.writeFileSync(env.file, JSON.stringify(env.old));
+      await env.grant();
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)]).toEqual(env.record);
+    } finally { await env.host.dispose(); }
+  });
+  it('retains omitted legacy fields and all native ownership entries during migration', async () => {
+    const env = setupIndex();
+    const nativeIds = Array.from({ length: 20_001 }, (_, i) => `native-${i}`);
+    fs.writeFileSync(env.file, JSON.stringify({ [digest(peer)]: { controller: peer, nativeIds } }));
+    try {
+      await env.grant();
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)].nativeIds).toEqual(nativeIds);
+      await expect(env.fork(peer, nativeIds.at(-1))).resolves.toMatchObject({ newSdkSessionId: 'native-20000-fork' });
+    } finally { await env.host.dispose(); }
+  });
+  it('does not cache an owner whose grant failed to persist', async () => {
+    const env = setupIndex();
+    fs.writeFileSync(env.file, JSON.stringify({}));
+    const rename = fs.promises.rename.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === env.file) throw new Error('injected rename failure');
+      return rename(from, to);
+    });
+    try {
+      await expect(env.grant()).rejects.toThrow('injected rename failure');
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe('{}');
+      spy.mockRestore();
+      await expect(env.grant('replacement-owner')).resolves.toEqual({});
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)].directOwnerDeviceId).toBe('replacement-owner');
+    } finally { spy.mockRestore(); await env.host.dispose(); }
+  });
+});
+
+// Strict session writes must remain retryable as well as initial owner writes.
+it('does not acknowledge a repeated direct fork whose native index write failed', async () => {
+  const peer = providerShareGuestPeer('share-write', 'member-write', 'guest-pc');
+  const host = fakeAgentHost('index-fork-write', [], {
+    trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+    directGuestExecution: {
+      ownerScope: () => 'account-one', allocate: async () => null,
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      sessionAllowed: () => true, sessionDelegated: () => true,
+      delegate: async () => true, forget: () => true,
+    },
+  });
+  const file = path.join(root, 'index-fork-write', 'guest-sessions.json');
+  const digest = createHash('sha256').update(peer).digest('hex').slice(0, 32);
+  const record = { controller: peer, nativeIds: ['native-old'], hostSessionIds: [],
+    directOwnerDeviceId: OWNER_DEVICE, directOwnerScopeKey: 'account-one', cleanupEpoch: 1 };
+  const original = JSON.stringify({ [digest]: record });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, original);
+  const rename = fs.promises.rename.bind(fs.promises);
+  const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+    if (String(to) === file) throw new Error('injected session index failure');
+    return rename(from, to);
+  });
+  const fork = () => host.handle(peer, { op: 'fork', agentKind: 'claude-code', sourceSessionId: 'old',
+    sourceSdkSessionId: 'native-old', newSessionId: 'forked', providerId: 'shared-provider', model: 'claude-opus' });
+  try {
+    await expect(fork()).rejects.toThrow('injected session index failure');
+    await expect(fork()).rejects.toThrow('injected session index failure');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    spy.mockRestore();
+    await expect(fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))[digest].nativeIds).toEqual(['native-old', 'native-old-fork']);
+  } finally { spy.mockRestore(); await host.dispose(); }
 });

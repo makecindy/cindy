@@ -110,14 +110,34 @@ export interface BotGroupLaneTerminal {
   undispatched?: boolean;
 }
 
+/** Ordinary and recovery-held replies must read their fallback text after queued writes. */
+export async function settleBotGroupLaneTerminal(
+  service: Pick<BotGroupChatService, 'settleLaneTurn'>,
+  terminal: BotGroupLaneTerminal,
+  drainPersistQueue: () => Promise<void>,
+): Promise<boolean> {
+  if (terminal.outcome === 'done' && !terminal.resultText.trim() && terminal.resultMessageClientId) {
+    await drainPersistQueue();
+  }
+  return service.settleLaneTurn(terminal);
+}
+
 export interface BotGroupChatServiceDeps {
-  /** With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4). */
+  /** A durable, owner-captured UI projection; tests and hosts without persistence can omit it. */
+  chatHistoryStore?: (endpoint: string, humanActorId: string, readerActorId: string, current: () => boolean) => import('@cindy/maker-shared/chat-history').ChatHistoryStore;
+  /**
+   * With `plan`, the Bot's 分工 Session for that plan (bot-group-chat.md §7.4); with
+   * `threadRootId`, the Bot's own lane for that Thread (§3); with `talkPlanId`, its own
+   * lane for that queue (§7.0).
+   */
   ensureLane: (input: {
     botId: string;
     groupId: string;
     title: string;
     chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
+    threadRootId?: string;
+    talkPlanId?: string;
   }) => Promise<LaneResult>;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
@@ -165,6 +185,8 @@ export interface BotGroupChatServiceDeps {
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
+  onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
+  onChatGroupAttention?: (groupId: string, input: import('../agent-island/groupChat.js').AgentIslandGroupChatInput | null, current: () => boolean) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('../companion-cloud/runtime.js').CompanionCloudHost;
   now?: () => number;
@@ -228,8 +250,8 @@ type TurnOutcome =
   | { kind: 'failed'; notice: BotGroupNoticeCode; failureCode?: BotGroupRuntimeFailureCode }
   | { kind: 'cancelled' };
 
-function unavailableLaneOutcome(errorCode: string): Extract<TurnOutcome, { kind: 'failed' }> {
-  const failureCode = botGroupRuntimeFailureCode({ code: errorCode });
+function unavailableLaneOutcome(errorCode: string, message: string): Extract<TurnOutcome, { kind: 'failed' }> {
+  const failureCode = botGroupRuntimeFailureCode({ code: errorCode, message });
   // Keep the existing unavailable-member notice when preparation has no specific recovery category.
   return { kind: 'failed', notice: 'member-unavailable', ...(failureCode !== 'RUNTIME_ERROR' ? { failureCode } : {}) };
 }
@@ -452,7 +474,10 @@ export function resolveGroupMentions(
     });
     if (!match) continue;
     if (!match.botId) all = true;
-    else if (!ordered.includes(match.botId)) ordered.push(match.botId);
+    // Same-named members are indistinguishable in text: address them all, as the composer's parser does.
+    else for (const twin of labels) {
+      if (twin.botId && twin.label.toLocaleLowerCase() === match.label.toLocaleLowerCase() && !ordered.includes(twin.botId)) ordered.push(twin.botId);
+    }
   }
   return { all, botIds: structured.length > 0 ? structured : ordered };
 }
@@ -911,7 +936,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
   ): Promise<TurnOutcome> => {
     const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
-    if (!lane.ok) return unavailableLaneOutcome(lane.errorCode);
+    if (!lane.ok) return unavailableLaneOutcome(lane.errorCode, lane.message);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
     try {
       await deps.syncLanePermission?.(lane.sessionId, member.botId);
@@ -1488,7 +1513,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;
-      if (!lane.ok) return await settle(unavailableLaneOutcome(lane.errorCode));
+      if (!lane.ok) return await settle(unavailableLaneOutcome(lane.errorCode, lane.message));
       active.sessionId = lane.sessionId;
       emit(groupId, 'round', scope);
       try {
@@ -2050,8 +2075,12 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
           parallelFirstCircle: isParallelBroadcast(group, mentions, responders),
           scope,
         });
-        // Naming specific Bots is ordinary chat; everything else goes through 分工 routing (§7.2–7.4),
-        // including 「@所有人」 and groups where only mentioned Bots reply.
+        // Mention-only applies to planning too: ordinary messages must not wake
+        // the organizer. Explicit arrangements and @all remain actionable.
+        if (!division && group.replyMode === 'mentioned' && !mentions.all && !mentions.botIds.length) {
+          return { ok: true, messageId: appended.id } as const;
+        }
+        // Naming specific Bots is ordinary chat; @all may use 分工 routing (§7.2–7.4).
         const direct = mentions.botIds.length > 0;
         if (direct && !division) {
           chatRound();
@@ -2128,7 +2157,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     });
   };
 
-  const stopRound = async (groupIdInput: unknown): Promise<BotGroupMutationResult> => {
+  // Local groups have one owner; the stop scope only matters in multi-account server groups.
+  const stopRound = async (groupIdInput: unknown, _scope?: unknown): Promise<BotGroupMutationResult> => {
     const groupId = readId(groupIdInput);
     if (!groupId) return failure('INVALID_PARAMS', 'groupId 无效');
     return serialize(groupId, async () => {
@@ -2194,6 +2224,8 @@ export interface BotGroupTaskPostInput {
   card: BotGroupTaskCard;
   /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
   files?: Array<{ absolutePath: string }>;
+  /** A task started in a Thread reports back into that Thread. */
+  threadRootId?: string;
 }
 export type BotGroupTaskPostResult =
   | { ok: true; messageId: string }

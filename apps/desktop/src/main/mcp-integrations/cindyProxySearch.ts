@@ -13,6 +13,24 @@ export const CINDY_SEARCH_MODEL_NAME = 'cindy/web-search';
 const CINDY_SEARCH_WEB_TOOL_TYPE = 'web_search_20250305';
 const CINDY_SEARCH_MAX_TOKENS = 2_048;
 const CINDY_SEARCH_TIMEOUT_MS = 30_000;
+const CINDY_SEARCH_MAX_SNIPPET_CHARS = 500;
+
+/**
+ * 搜索后端的结果只带标题、链接与加密正文，没有 cited_text / citations，摘要会全空；
+ * 后端模型也会无视 max_uses 再搜一次。让模型只搜一次，并为前 limit 条结果各写一行
+ * `<url> | 摘要`，由 parseSearchResponse 按链接回填 snippet。
+ */
+function buildSearchSystemPrompt(limit: number): string {
+  return [
+    'You are a web search backend. Call web_search exactly once with the user query, then stop searching.',
+    `After the search, output one line for each of the first ${limit} results, in result order, formatted exactly as:`,
+    '<url> | <one or two sentences stating what that page says about the query>',
+    'Copy each URL verbatim from the search result.',
+    // 只写「用查询的语言」时，后端模型会对英文查询输出中文摘要；写明映射后才稳定。
+    'Write each summary in the same language as the user query (English query -> English, Chinese query -> Chinese).',
+    'Output nothing else.',
+  ].join('\n');
+}
 
 /**
  * Join the Anthropic-compatible Messages endpoint for either a gateway root or
@@ -238,9 +256,26 @@ function normalizedHttpUrl(value: unknown): string | null {
   try {
     const url = new URL(value.trim());
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    // 后端会给链接追加 `#1` 这类序号锚点、把换行编码进路径末尾，同一页面因此去重失败。
+    if (/^#\d+$/.test(url.hash)) url.hash = '';
+    url.pathname = url.pathname.replace(/(?:%0A|%0D|%09|%20)+$/i, '');
     return url.toString();
   } catch {
     return null;
+  }
+}
+
+/**
+ * 模型复述链接时可能改写协议或末尾斜杠，回填摘要只忽略这两项差异；端口、查询串与
+ * 有意义的锚点(`#install` / `#upgrade`)标识不同的页面或章节，必须保留。序号锚点
+ * 已在 normalizedHttpUrl 去掉。
+ */
+function sourceMatchKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname.replace(/\/+$/, '')}${parsed.search}${parsed.hash}`;
+  } catch {
+    return url;
   }
 }
 
@@ -249,6 +284,40 @@ function fallbackTitle(url: string): string {
     return new URL(url).hostname;
   } catch {
     return url;
+  }
+}
+
+// 只剥真实的 HTML 标签：带属性的开标签，或常见标签名的开/闭/自闭标签。
+// `<T>`、`<K, V>` 这类泛型/代码文本不在其中，必须保留。
+const HTML_TAG_PATTERN = new RegExp(
+  '<[a-z][a-z0-9-]*\\s+[^<>]*=[^<>]*>|' +
+    '</?(?:p|div|span|a|b|i|u|em|strong|br|hr|img|center|h[1-6]|ul|ol|li|table|tr|td|th|' +
+    'section|article|header|footer|nav|main|font|small|code|pre|html|head|body|title|meta|link|script|style)' +
+    '(?:\\s[^<>]*)?/?>',
+  'gi',
+);
+
+function cleanTitle(value: unknown, url: string): string {
+  // 抓取到的标题偶尔是页面里的 HTML 片段(如 `<p align="center">`)。
+  const title =
+    typeof value === 'string'
+      ? value.replace(HTML_TAG_PATTERN, ' ').replace(/\s+/g, ' ').trim()
+      : '';
+  return title || fallbackTitle(url);
+}
+
+const SNIPPET_LINE_PATTERN =
+  /^\s*(?:[-*>]|\d+[.)]|\[\d+\])?\s*<?(https?:\/\/[^\s|<>]+)>?\s*\|\s*(.+?)\s*$/;
+
+/** 解析 buildSearchSystemPrompt 要求的 `<url> | 摘要` 行;只回填已有结果，不据此新增来源。 */
+function collectSnippetLines(text: string, into: Map<string, string>): void {
+  for (const line of text.split('\n')) {
+    const match = SNIPPET_LINE_PATTERN.exec(line);
+    if (!match) continue;
+    const url = normalizedHttpUrl(match[1]);
+    if (!url) continue;
+    const key = sourceMatchKey(url);
+    if (!into.has(key)) into.set(key, match[2].slice(0, CINDY_SEARCH_MAX_SNIPPET_CHARS));
   }
 }
 
@@ -272,10 +341,7 @@ type ParsedSearchResponse =
 function sourceFromRecord(value: Record<string, unknown>): SearchSource | null {
   const url = normalizedHttpUrl(value.url);
   if (!url) return null;
-  const title =
-    typeof value.title === 'string' && value.title.trim().length > 0
-      ? value.title.trim()
-      : fallbackTitle(url);
+  const title = cleanTitle(value.title, url);
   const snippet =
     typeof value.cited_text === 'string'
       ? value.cited_text.trim()
@@ -344,6 +410,11 @@ function parseSearchResponse(raw: unknown, limit: number): ParsedSearchResponse 
     if (!existing.snippet && source.snippet) existing.snippet = source.snippet;
   };
 
+  // 后端在一次响应里可能先给出结果、再因后续搜索报错(如 max_uses_exceeded)。
+  // 工具级错误只在一条结果都没有时才代表本次搜索失败。
+  let toolError: { errorCode: unknown } | null = null;
+  const snippetLines = new Map<string, string>();
+
   for (const block of raw.content) {
     if (!isRecord(block)) continue;
 
@@ -351,32 +422,44 @@ function parseSearchResponse(raw: unknown, limit: number): ParsedSearchResponse 
       if (Array.isArray(block.content)) {
         if (block.content.length > 0) sawCandidate = true;
         for (const item of block.content) {
-          if (!isRecord(item) || item.type !== 'web_search_result') continue;
+          if (!isRecord(item)) continue;
+          if (item.type === 'web_search_tool_result_error') {
+            toolError ??= { errorCode: item.error_code };
+            continue;
+          }
+          if (item.type !== 'web_search_result') continue;
           const source = sourceFromRecord(item);
           if (source) mergeSource(source);
         }
       } else if (isRecord(block.content) && block.content.type === 'web_search_tool_result_error') {
-        return searchToolFailure(block.content.error_code);
+        toolError ??= { errorCode: block.content.error_code };
       } else {
         return invalidSearchResponse();
       }
     }
 
-    if (block.type === 'text' && Array.isArray(block.citations)) {
-      if (block.citations.length > 0) sawCandidate = true;
-      for (const citation of block.citations) {
-        if (!isRecord(citation)) continue;
-        const source = sourceFromRecord(citation);
-        if (source) mergeSource(source);
+    if (block.type === 'text') {
+      if (typeof block.text === 'string') collectSnippetLines(block.text, snippetLines);
+      if (Array.isArray(block.citations)) {
+        if (block.citations.length > 0) sawCandidate = true;
+        for (const citation of block.citations) {
+          if (!isRecord(citation)) continue;
+          const source = sourceFromRecord(citation);
+          if (source) mergeSource(source);
+        }
       }
     }
   }
 
-  if (sawCandidate && sources.size === 0) return invalidSearchResponse();
-  return {
-    ok: true,
-    results: Array.from(sources.values()).slice(0, limit),
-  };
+  if (sources.size === 0) {
+    if (toolError) return searchToolFailure(toolError.errorCode);
+    if (sawCandidate) return invalidSearchResponse();
+  }
+  const results = Array.from(sources.values()).slice(0, limit);
+  for (const result of results) {
+    if (!result.snippet) result.snippet = snippetLines.get(sourceMatchKey(result.url)) ?? '';
+  }
+  return { ok: true, results };
 }
 
 function webSearchRequestsOf(raw: unknown): number | undefined {
@@ -415,6 +498,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           body: JSON.stringify({
             model: CINDY_SEARCH_MODEL_NAME,
             max_tokens: CINDY_SEARCH_MAX_TOKENS,
+            system: buildSearchSystemPrompt(limit),
             messages: [{ role: 'user', content: query }],
             tools: [
               {

@@ -9,9 +9,9 @@ import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
-import { isBotChannelLaneSession } from './botGroupLane';
+import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
 import { useRemoteBots } from './useRemoteBots';
-import { RemoteBotSettings } from './RemoteBotSettings';
+import { RemoteTeammateSettings } from './RemoteTeammateSettings';
 
 /** Route-owned compact drawer that keeps the current teammate chat mounted below it. */
 export function BotSettingsDrawer() {
@@ -26,12 +26,19 @@ export function BotSettingsDrawer() {
     (item) =>
       item.id === remoteMatch?.params.botId && item.deviceId === remoteMatch?.params.deviceId,
   );
+  // Group routes stay on /bots/groups/:id. A generic /bots/:botId match would
+  // treat "groups" as a teammate and replace the chat with a private route.
+  const groupMatch = matchPath('/bots/groups/:groupId', location.pathname);
   const match =
-    matchPath('/bots/:botId/*', location.pathname) ?? matchPath('/bots/:botId', location.pathname);
+    remoteMatch || groupMatch
+      ? null
+      : (matchPath('/bots/:botId/*', location.pathname) ??
+        matchPath('/bots/:botId', location.pathname));
   const cloud = useCompanionCloud();
+  const settingsBotId = groupMatch ? searchParams.get('settingsBot') : null;
   const localBot = remoteMatch
     ? null
-    : (bots.find((candidate) => candidate.id === match?.params.botId) ?? null);
+    : (bots.find((candidate) => candidate.id === (settingsBotId ?? match?.params.botId)) ?? null);
   // A demoted copy (the companion runs on another computer) is read-only: edits here would never
   // reach the companion. Its settings live on the main computer (the banner on its task links there).
   const bot = localBot && cloud.demotedBotIds.includes(localBot.id) ? null : localBot;
@@ -39,9 +46,11 @@ export function BotSettingsDrawer() {
 
   const requestedPage = searchParams.get('settingsPage');
   const initialPage = requestedPage === 'memory' || requestedPage === 'capabilities' ? requestedPage : 'home';
-  // 「模型」「消息平台」只有本机伙伴有; 远端伙伴仍只认上面两页。
+  // 「模型」「语音」「消息平台」可直接深链；远程伙伴同样，所在电脑不支持的页会回到设置首页。
   const localInitialPage =
-    requestedPage === 'model' || requestedPage === 'channels' ? requestedPage : initialPage;
+    requestedPage === 'model' || requestedPage === 'voice' || requestedPage === 'channels'
+      ? requestedPage
+      : initialPage;
   const allowNavigation = useRef(false);
   const pendingGuard = useRef<Promise<boolean> | null>(null);
   const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -82,9 +91,27 @@ export function BotSettingsDrawer() {
     };
   }, [blocker]);
 
+  const clearSettingsParams = () => {
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete('settings');
+        next.delete('settingsPage');
+        next.delete('settingsBot');
+        return next;
+      },
+      { replace: true },
+    );
+  };
   const performClose = (alreadyChecked = true) => {
     // These callers already passed BotSettings' async save/draft guard.
     allowNavigation.current = alreadyChecked;
+    // Opened over a group: the chat underneath is the group, not this teammate's
+    // private page. Closing must not follow the paused/archived redirects.
+    if (groupMatch) {
+      clearSettingsParams();
+      return;
+    }
     if (bot?.status === 'archived') {
       navigate('/bots', { replace: true });
       return;
@@ -95,15 +122,7 @@ export function BotSettingsDrawer() {
       navigate('/bots/list', { replace: true });
       return;
     }
-    setSearchParams(
-      (current) => {
-        const next = new URLSearchParams(current);
-        next.delete('settings');
-        next.delete('settingsPage');
-        return next;
-      },
-      { replace: true },
-    );
+    clearSettingsParams();
   };
 
   // Header, Escape and overlay dismissal take the same route guard as Back
@@ -118,7 +137,6 @@ export function BotSettingsDrawer() {
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
           <Dialog.Content
-            onPointerDownOutside={(event) => event.preventDefault()}
             aria-describedby={undefined}
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
@@ -140,12 +158,18 @@ export function BotSettingsDrawer() {
                 <X size={17} />
               </Dialog.Close>
             </header>
+            {groupMatch && bot ? (
+              <p className="shrink-0 border-b border-[var(--border-default)] px-5 py-3 text-12 leading-5 text-[var(--text-secondary)]">
+                {t('bots.groupChat.server.settings.capabilityScope', { name: bot.name })}
+              </p>
+            ) : null}
             {remoteBot ? (
-              <RemoteBotSettings
-                key={`${remoteBot.deviceId}:${remoteBot.id}:${open}:${initialPage}`}
+              <RemoteTeammateSettings
+                key={`${remoteBot.deviceId}:${remoteBot.id}:${open}:${localInitialPage}`}
                 bot={remoteBot}
-                initialPage={initialPage}
+                initialPage={localInitialPage}
                 beforeCloseRef={beforeCloseRef}
+                onBack={performClose}
                 onDeleted={() => {
                   allowNavigation.current = true;
                   navigate('/bots', { replace: true });
@@ -160,14 +184,7 @@ export function BotSettingsDrawer() {
                   bot={bot}
                   onBack={performClose}
                   onOpenSession={(sessionId, searchJump) => {
-                    const projection = bot.sessions.find((item) => item.id === sessionId);
-                    // IM 专线的记录在 IM 里，不在伙伴页面打开。
-                    if (isBotChannelLaneSession(projection)) return;
-                    const route =
-                      projection?.kind === 'history'
-                        ? `/bots/${bot.id}/history/${sessionId}`
-                        : `/bots/${bot.id}/session/${sessionId}`;
-                    navigate(route, { state: searchJump ? { searchJump } : undefined });
+                    navigate(standardSessionRoute(sessionId), { state: searchJump ? { searchJump } : undefined });
                   }}
                 />
               </BotPronounProvider>

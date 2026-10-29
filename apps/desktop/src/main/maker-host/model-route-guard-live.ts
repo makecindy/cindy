@@ -25,6 +25,7 @@ import {
 } from '@cindy/model-providers';
 
 import { resolveNewTaskDefaultRoute } from '../../shared/draftModelCalibration.js';
+import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
@@ -238,14 +239,14 @@ export async function resolveLenientSessionRoute(
   agent: AgentKind,
   model: string | undefined,
   providerId: string | null,
-  opts: { fallbackModel?: string; desiredEffort?: string; desiredFastMode?: boolean } = {},
+  opts: { fallbackModel?: string; desiredEffort?: string; desiredFastMode?: boolean | 'ultrafast' } = {},
 ): Promise<{
   model?: string;
   providerId: string | null;
   degraded: boolean;
   effort?: string;
   /** 仅 desiredFastMode=true 且路由被本解析改动时给出:落地拷贝不支持 Fast ⇒ false。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }> {
   const catalog = getActiveCatalog();
   const guardOptions = tombstoneGuardOptions(catalog);
@@ -279,28 +280,45 @@ export async function resolveLenientSessionRoute(
     providerId: string | null;
     degraded: boolean;
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
   } = resolveLenientRoute(views, agent, model, providerId, { ...opts, ...guardOptions });
   // Fast reconcile(PR #744 review 第十七轮):Fast 能力是 per-(来源, 模型) 的
   // (modelSupportsFastMode)。保存的 fast=true 是对**原路由**的选择,解析改了模型
   // 或来源时按落地那份拷贝重查,不支持则清掉 —— 否则不支持 Fast 的兜底路由会带着
   // fast 标志被上游拒。路由原样时不产出(调用方保持自己的保存值)。
-  if (opts.desiredFastMode === true && route.model) {
+  if (opts.desiredFastMode && route.model) {
     const routeChanged = route.model !== model || route.providerId !== providerId;
     if (routeChanged) {
       const provider = route.providerId
         ? views.find((p) => p.id === route.providerId)
         : sourcesForModel([...views], route.model, agent)[0];
-      route.fastMode = !!provider && modelSupportsFastMode(provider, route.model, agent);
+      route.fastMode = provider && modelSupportsFastMode(provider, route.model, agent)
+        && (opts.desiredFastMode !== 'ultrafast' || (agent === 'codex' && provider.models.codex?.some(m => m.id === route.model && m.supportsUltrafastMode)))
+        ? opts.desiredFastMode : false;
     }
   }
   return route;
 }
 
-/** Resolve one provider-specific snapshot after route admission for fresh and bound sends. */
+/**
+ * Resolve one provider-specific snapshot after route admission for fresh and bound sends.
+ * An Agent on another computer resolves against that computer's authorized catalog and
+ * never falls back to a local provider with the same id.
+ */
 export async function resolveScheduledModelSelectionLive(
   selection: ScheduledModelSelection,
+  readRemoteProviders?: (agentDeviceId: string) => Promise<ProviderView[]>,
 ): Promise<ScheduledModelSelection> {
+  if (selection.agentDeviceId) {
+    if (!readRemoteProviders) throw new Error('Scheduled remote model resolution is not available');
+    let views: ProviderView[] = [];
+    const rejection = await checkDeviceRoute(async () => {
+      views = await readRemoteProviders(selection.agentDeviceId!);
+      return views;
+    }, selection.agentKind, selection.providerId, selection.model);
+    if (rejection) throw new Error(`Scheduled remote model route unavailable: ${rejection}`);
+    return resolveScheduledModelSelection(selection, views);
+  }
   const providers = await getDesktopProviderService().listProviders({
     allowSideEffects: false, catalog: getActiveCatalog(),
   });
@@ -321,6 +339,7 @@ export async function resolveRouteCopyCapabilities(
   efforts: readonly string[];
   defaultEffort: string | null;
   supportsFastMode: boolean;
+  supportsUltrafastMode?: boolean;
 } | null> {
   let views: ProviderView[];
   try {
@@ -335,6 +354,7 @@ export async function resolveRouteCopyCapabilities(
     efforts: copy.efforts,
     defaultEffort: copy.defaultEffort ?? null,
     supportsFastMode: modelSupportsFastMode(provider, modelId, agent),
+    supportsUltrafastMode: agent === 'codex' && copy.supportsUltrafastMode === true,
   };
 }
 

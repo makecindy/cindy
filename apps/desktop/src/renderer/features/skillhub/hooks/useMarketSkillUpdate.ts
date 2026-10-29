@@ -8,10 +8,12 @@ import { semverCompare } from '../versionUtils';
 import type { MarketSkill } from './useMarketList';
 import { invalidateHash } from './useSkillFolderHash';
 import { refresh } from './useSkillhub';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Update the copy represented by the card, without opening the install picker. */
 export function useMarketSkillUpdate() {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
   const owner = getDataOwnerGeneration();
   // The installer serializes by name, including same-name records in other catalogs.
   const running = useRef(new Set<string>());
@@ -24,6 +26,16 @@ export function useMarketSkillUpdate() {
     running.current.add(skill.name);
     setUpdatingNames(new Set(running.current));
     try {
+      if (target) {
+        const locals = await target.refresh();
+        if (!target.current()) return;
+        const local = marketLocalCopies(locals, skill).find((entry) => entry.id === target.state.skills.find((entry) => entry.absolutePath === skill.installedAbsolutePath)?.id);
+        if (!local) return;
+        const result = await target.mutate('update', local, skill);
+        if (target.current() && result.phase === 'failed') toast.error(t('skillhub.marketCard.updateFailed'));
+        else if (target.current() && result.phase === 'succeeded') toast.success(t('skillhub.detail.updatedToast', { name: skill.name, version: skill.latestVersion }));
+        return;
+      }
       // Recheck the registry before authorizing replacement of an existing directory.
       const locals = await refresh();
       if (!isDataOwnerGenerationCurrent(owner)) return;
@@ -52,12 +64,12 @@ export function useMarketSkillUpdate() {
         toast.error(t('skillhub.marketCard.updateFailed'));
       }
     } catch {
-      if (isDataOwnerGenerationCurrent(owner)) toast.error(t('skillhub.marketCard.updateFailed'));
+      if (isDataOwnerGenerationCurrent(owner) && (!target || target.current())) toast.error(t('skillhub.marketCard.updateFailed'));
     } finally {
       running.current.delete(skill.name);
       setUpdatingNames(new Set(running.current));
     }
-  }, [owner, t]);
+  }, [owner, t, target]);
 
   return { update, updatingNames, isUpdating };
 }

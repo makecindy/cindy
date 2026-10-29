@@ -16,7 +16,7 @@ const targets: Record<string, BotSessionEntryTarget> = {
   lane: { route: '/bots/groups/g-1', consumesAlert: true },
   slow: { route: '/bots/groups/slow', consumesAlert: true },
 };
-/** Sessions whose route lookup waits for releaseLookup (e.g. Bot profiles still loading). */
+/** Sessions unknown to the in-memory projection whose re-read waits for releaseLookup. */
 const slowLookups = new Set(['lane-slow-lookup']);
 
 const routers: Array<ReturnType<typeof createMemoryRouter>> = [];
@@ -33,12 +33,13 @@ function setup() {
   function Shell() {
     const navigate = useNavigate();
     const [entryNavigator] = useState(() => createSessionEntryNavigator({
+      readKnownBotRoute: (sessionId) => targets[sessionId] ?? null,
       resolveBotRoute: async (sessionId) => {
         if (slowLookups.has(sessionId)) {
           await lookupGate;
           return targets.lane!;
         }
-        return targets[sessionId] ?? null;
+        return null;
       },
       openBotRoute: (route) => { void navigate(route); },
       consumeAlert: (sessionId, islandEntryId) => {
@@ -126,16 +127,15 @@ describe('island card disposal waits for the router to commit the target', () =>
     expect(consumeAlert).toHaveBeenCalledExactlyOnceWith('slow', 'entry-3');
   });
 
-  it('a commit while the lookup is still resolving forfeits disposal but keeps navigation', async () => {
+  it('a re-read that finds a Bot page after the user moved elsewhere neither navigates nor disposes', async () => {
     const { router, consumeAlert, open, releaseLookup } = setup();
     await screen.findByText('new task');
     await act(async () => open()('lane-slow-lookup', undefined, 'entry-5'));
     await act(async () => { void router.navigate('/elsewhere'); });
     await screen.findByText('elsewhere');
     releaseLookup();
-    await screen.findByText('group page');
     await flush();
-    expect(router.state.location.pathname).toBe('/bots/groups/g-1');
+    expect(router.state.location.pathname).toBe('/elsewhere');
     expect(consumeAlert).not.toHaveBeenCalled();
   });
 

@@ -13,6 +13,8 @@ import { computeVanishedQueueItems } from '@/session/queueSettling';
 import { getSentMessageImagePreview, rememberOutboxImagePreviews, rememberSentMessageImagePreviews, type GetSentMessageImagePreview, type SentMessageImagePreviews } from '@/session/sentMessageImagePreviews';
 import { createDurableOutbox, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { QueuedRemoteMessage, RemoteSerializedAttachment } from '@/session/types';
+import { createRemoteMediaResolveQueue } from '@/session/remoteMediaResolveQueue';
+import type { MobileResolvedRemoteMedia } from '@/session/remoteMedia';
 import {
   ImageLightbox,
   type ImageLightboxProps,
@@ -40,6 +42,7 @@ const runtime = vi.hoisted(() => ({
   gesture: null as GestureNode | null,
   alerts: [] as Array<[string, string, Array<{ text: string; style?: string; onPress?: () => void }>]>,
   scrollToOffset: vi.fn(),
+  renderPageIndex: 0,
 }));
 
 vi.mock("expo-router", () => ({
@@ -58,14 +61,19 @@ vi.mock("lucide-react-native", () => ({
   Share: () => null,
   Undo2: () => null,
   X: () => null,
+  CircleAlert: () => null,
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
-vi.mock("@/theme", async () => await import("@/theme/tokens"));
+vi.mock("@/theme", async () => {
+  const tokens = await import("@/theme/tokens");
+  return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
+    useThemedStyles: (make: (colors: typeof tokens.lightColors) => unknown) => make(tokens.lightColors) };
+});
 vi.mock("react-native", async () => {
   const { createElement, useImperativeHandle } = await import("react");
   const view = (name: string) => (props: any) => {
     runtime.nodes.set(props.testID ?? name, props);
-    return createElement("div", null, props.children as ReactNode);
+    return createElement("div", { 'data-testid': props.testID, 'data-native-name': name }, props.children as ReactNode);
   };
   return {
     View: view("View"),
@@ -90,7 +98,8 @@ vi.mock("react-native", async () => {
         () => ({ scrollToOffset: runtime.scrollToOffset }),
         [],
       );
-      return props.data.length ? props.renderItem({ item: props.data[0], index: 0 }) : null;
+      const index = runtime.renderPageIndex;
+      return props.data.length ? props.renderItem({ item: props.data[index], index }) : null;
     },
   };
 });
@@ -215,6 +224,8 @@ vi.mock("react-native-reanimated", async () => {
 });
 
 let root: Root;
+let container: HTMLDivElement;
+const isMounted = (id: string) => !!container.querySelector(`[data-testid="${id}"]`);
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   runtime.nodes.clear();
@@ -224,7 +235,8 @@ beforeEach(() => {
   runtime.insets = { top: 40, bottom: 20, left: 0, right: 0 };
   runtime.alerts = [];
   runtime.scrollToOffset.mockClear();
-  root = createRoot(document.createElement("div"));
+  runtime.renderPageIndex = 0;
+  root = createRoot(container = document.createElement("div"));
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -1059,7 +1071,55 @@ describe('pending image gallery updates', () => {
   });
 });
 
-describe('Markdown gallery prefetch boundaries', () => {
+describe('gallery prefetch boundaries', () => {
+  // #6517 review P1, unit: real viewer + production queue, with both slots occupied
+  // and a background thumbnail ahead of a prefetched neighbor. Queue-only tests
+  // cannot detect the viewer dropping the promotion when the user pages to it.
+  // Single-file validation: 117 tests, 3.39s (vitest run imageLightboxInteraction.test.tsx --maxWorkers=1).
+  it.each([0, 1])('promotes the last selected image %i ahead of background work without downloading it twice', async (selected) => {
+    const images = ['a', 'b', 'c'].map<ImageLightboxProps['images'][number]>((key) => ({ key, title: key, url: `xdt-image://cache/${key}.png`,
+      payload: { kind: 'media', title: key, body: '', media: { kind: 'image', url: `xdt-image://cache/${key}.png`, previewable: false } },
+    }));
+    const pending = new Map<string, (media: MobileResolvedRemoteMedia) => void>();
+    const download = vi.fn((media: { url: string }) => new Promise<MobileResolvedRemoteMedia>((resolve) => {
+      pending.set(media.url, resolve);
+    }));
+    const queue = createRemoteMediaResolveQueue({ resolve: download });
+    const resolver = vi.fn<NonNullable<ImageLightboxProps['onResolveRemoteMedia']>>((media, opts) => queue.request(media, opts));
+    const result = (key: string): MobileResolvedRemoteMedia => ({ url: `file:///${key}.png`,
+      ossKey: '', mimeType: 'image/png', size: 1, expiresAt: '2099-01-01T00:00:00Z', previewable: true });
+    const onShareImage = vi.fn();
+    const page = (index: number) => act(() => {
+      runtime.renderPageIndex = index;
+      runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: index * 400 } } });
+    });
+    try {
+      for (const url of ['block-1', 'block-2', 'background']) {
+        void queue.request({ kind: 'image', url, thumbnail: true }).catch(() => undefined);
+      }
+      await act(async () => { mount({ images, initialUrl: images[0].url, onResolveRemoteMedia: resolver, onShareImage }); });
+      page(1);
+      page(0);
+      if (selected === 1) page(1);
+      const image = images[selected];
+      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      await act(async () => { pending.get('block-1')!(result('block-1')); });
+      expect(download.mock.calls.map(([media]) => media.url)).toEqual(['block-1', 'block-2', image.url]);
+      await act(async () => { pending.get(image.url)!(result(image.key)); });
+      expect(runtime.nodes.get('Image').source.uri).toBe(`file:///${image.key}.png`);
+      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
+      await act(async () => { press('message.imageLightboxShareButton'); });
+      expect(onShareImage).toHaveBeenCalledWith(image.payload.media, `file:///${image.key}.png`, 'image/png', 1);
+      expect(download.mock.calls.filter(([media]) => media.url === image.url)).toHaveLength(1);
+    } finally {
+      await act(async () => {
+        queue.releaseAll();
+        for (const [url, finish] of pending) finish(result(url));
+      });
+    }
+  });
+
   it('does not fetch a titled outside-workdir image when a neighboring image is opened', async () => {
     const items = [{
       type: 'message', key: 'm1',
@@ -1968,16 +2028,21 @@ describe("chrome toggle, loading and video pages", () => {
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(false);
   });
 
-  it("unlocks paging when the original fails after the placeholder was zoomed", async () => {
+  // #6517, unit: mount the real viewer with a decoded preview, then reject the original.
+  // Existing coverage checked paging reset, allowing the visible image to be discarded.
+  // Also cover loss of the last readable layer and native decode/refresh failure at the same URI.
+  // Single-file validation: 117 tests, 3.39s (vitest run imageLightboxInteraction.test.tsx --maxWorkers=1).
+  it("keeps the zoomed preview through original failures and retries until the original paints", async () => {
     const url = "xdt-image://cache/broken.png";
     const image = {
       key: "broken", title: "Broken", url,
       payload: { kind: "media", media: { kind: "image", url, previewable: false } },
     } as ImageLightboxProps["images"][number];
     const failures = new Map<string, (error: Error) => void>();
+    let finish!: (media: unknown) => void;
     const resolver = vi.fn((media: { url: string; thumbnail?: boolean }) => (media.thumbnail
       ? Promise.resolve({ url: "file:///thumb.png", previewable: true })
-      : new Promise((_resolve, reject) => { failures.set(media.url, reject); })));
+      : new Promise((resolve, reject) => { finish = resolve; failures.set(media.url, reject); })));
     const fail = (error: Error) => failures.get(url)!(error);
     await act(async () => {
       const nextUrl = "xdt-image://cache/next.png";
@@ -1985,16 +2050,100 @@ describe("chrome toggle, loading and video pages", () => {
         key: "next", title: "Next", url: nextUrl,
         payload: { kind: "media", media: { kind: "image", url: nextUrl, previewable: false } },
       } as ImageLightboxProps["images"][number];
-      mount({ images: [image, next], initialUrl: url, onResolveRemoteMedia: resolver as never });
+      mount({ images: [image, next], initialUrl: url, onResolveRemoteMedia: resolver as never,
+        onShareImage: vi.fn(), annotation: { submitLabel: 'Send', allowDirectSubmit: true, onSubmit: vi.fn() } });
     });
     act(() => runtime.nodes.get("message.imageLightboxPreviewLayer").onLoad({ source: { width: 160, height: 90 } }));
     doubleTapAtCorner();
     finishAnimations();
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
 
-    await act(async () => { fail(new Error("gone")); });
+    await act(async () => { fail(Object.assign(new Error('offline'), { code: 'NOT_CONNECTED' })); });
+    const preview = () => runtime.nodes.get('message.imageLightboxPreviewLayer');
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(true);
+    expect(preview().source.uri).toBe('file:///thumb.png');
+    expect(preview().style[1].current.transform[4].scale).toBe(2.5);
+    expect(container.textContent).toContain('message.lightbox.originalUnavailable');
+    expect(container.textContent).toContain('message.lightbox.deviceOffline');
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
-    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(true);
+    expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+    expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
+
+    fire(singleTap(), 'onEnd', {}, true);
+    finishAnimations();
+    expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
+    fire(singleTap(), 'onEnd', {}, true);
+    finishAnimations();
+    press('message.imageLightboxRetryButton');
+    const callsWhileLoading = resolver.mock.calls.length;
+    press('message.imageLightboxRetryButton');
+    expect(resolver.mock.calls).toHaveLength(callsWhileLoading);
+    expect(runtime.nodes.get('message.imageLightboxRetryButton').disabled).toBe(true);
+    expect(preview().style[1].current.transform[4].scale).toBe(2.5);
+    expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({ url }), { front: true, forceRefresh: true });
+    await act(async () => { fail(new Error('still offline')); });
+    expect(preview().source.uri).toBe('file:///thumb.png');
+    expect(runtime.nodes.get('message.imageLightboxRetryButton').disabled).toBe(false);
+    press('message.imageLightboxRetryButton');
+    await act(async () => { finish({ url: 'file:///full.png', previewable: true, mimeType: 'image/png' }); });
+    expect(preview()).toBeDefined();
+    expect(runtime.nodes.get('message.imageLightboxRetryButton').disabled).toBe(true);
+    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+    expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
+    expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
+    expect(runtime.nodes.get('Image').style[1].current.transform[4].scale).toBe(2.5);
+    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(false);
+    expect(runtime.nodes.get('message.imageLightboxAnnotateButton').disabled).toBe(false);
+  });
+
+  it('shows a terminal error when both the original request and its preview fail', async () => {
+    const url = 'xdt-image://cache/missing.png';
+    let fail!: (error: Error) => void;
+    const resolver = vi.fn((media: { thumbnail?: boolean }) => media.thumbnail
+      ? Promise.resolve({ url: 'file:///thumb.png', previewable: true })
+      : new Promise((_resolve, reject) => { fail = reject; }));
+    await act(async () => { mount({ images: [{ key: 'missing', url,
+      payload: { kind: 'media', media: { kind: 'image', url, previewable: false } } } as never],
+      initialUrl: url, onResolveRemoteMedia: resolver as never }); });
+    await act(async () => { fail(new Error('offline')); });
+    act(() => runtime.nodes.get('message.imageLightboxPreviewLayer').onError());
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
+    expect(isMounted('message.imageLightboxLoading')).toBe(false);
+    expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
+    expect(runtime.nodes.has('message.imageLightboxRetryButton')).toBe(true);
+    expect(runtime.nodes.get('FlatList').scrollEnabled).toBe(true);
+  });
+
+  it('retains the preview after native decode and refresh fail, and can reload the same repaired path', async () => {
+    const url = 'xdt-image://cache/repair.png';
+    const full = { url: 'file:///full.png', previewable: true, mimeType: 'image/png' };
+    let fail!: (error: Error) => void;
+    const resolver = vi.fn((media: { thumbnail?: boolean }) => media.thumbnail
+      ? Promise.resolve({ url: 'file:///thumb.png', previewable: true })
+      : Promise.resolve(full));
+    await act(async () => { mount({ images: [{ key: 'repair', url,
+      payload: { kind: 'media', media: { kind: 'image', url, previewable: false } } } as never],
+      initialUrl: url, onResolveRemoteMedia: resolver as never, onShareImage: vi.fn() }); });
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
+    resolver.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+    await act(async () => { runtime.nodes.get('Image').onError(); });
+    await act(async () => { fail(new Error('offline')); });
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(true);
+    expect(isMounted('message.imageLightboxOriginalNotice')).toBe(true);
+    expect(container.querySelector('[data-native-name="Image"]:not([data-testid])')).toBeNull();
+    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+
+    resolver.mockResolvedValue({ ...full });
+    await act(async () => { press('message.imageLightboxRetryButton'); });
+    expect(container.querySelector('[data-native-name="Image"]:not([data-testid])')).not.toBeNull();
+    act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
+    expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
+    expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
+    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(false);
   });
 
   it("plays video pages with the native player, falls back to the web player and releases on close", async () => {

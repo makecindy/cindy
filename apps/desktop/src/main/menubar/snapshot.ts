@@ -117,6 +117,8 @@ export interface MenubarQuotaPeriod {
   resetsAtMs: number | null;
   /** Spent today (UTC day) across every client; null when the gateway did not say. */
   todaySpend: number | null;
+  /** Undefined preserves the legacy gateway's daily display. */
+  dailyLimitEnabled?: boolean;
 }
 
 export interface MenubarPaygInput {
@@ -712,7 +714,7 @@ class Builder {
             : this.t('fact.cindyModels'),
         },
       );
-      if (quota.todaySpend !== null) {
+      if (quota.dailyLimitEnabled !== false && quota.todaySpend !== null) {
         const suggested = source.fullAmount ? (source.fullAmount / 30) * DAILY_SOFT_LIMIT_FACTOR : null;
         facts.push({
           label: this.t('fact.todaySpent'),

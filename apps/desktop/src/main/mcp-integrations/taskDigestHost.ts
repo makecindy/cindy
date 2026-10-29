@@ -6,15 +6,20 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { InvokeResultPayload } from '@cindy/device-link';
 import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
+import type { AgentKind } from '@cindy/model-providers';
 
+import { deriveFollowUpUsage, suggestFollowUpRoute } from '../bot-autonomy/followUpRoute.js';
 import { parseActiveSessionList } from '../bot-autonomy/phase.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { resolveConfiguredContextWindow } from '../maker-host/model-context-settings.js';
+import { lookupVerifiedContextWindow } from '../maker-ipc/contextOverflowRollover.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { readWatchedSession } from '../maker-ipc/botWorkbenchAutonomyBridge.js';
 import { lastExchange, readSessionLastExchange } from '../maker-ipc/botWorkbenchTranscripts.js';
-import { nextBotModelRoute, type BotHarness } from '../../shared/botModelChain.js';
+import type { BotHarness } from '../../shared/botModelChain.js';
 import { readChatHistoryMessages } from './remoteChatHistory.js';
 import {
   formatPrStatuses,
@@ -42,6 +47,15 @@ export interface DesktopTaskDigestHost {
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
+  /**
+   * 运行时对这件任务的读数:当前 runtime 的上下文用量(没有在跑为 null)、上一段 runtime 关闭那一刻
+   * 固化的用量(没有为 null),与本轮终态错误的结构化字段(摘要投影里没有 sdkError / errorStatus / codexErrorInfo)。
+   */
+  readRuntimeFacts?(sessionId: string): Promise<{
+    live: { contextTokens: number; contextWindow: number } | null;
+    closed: { contextTokens: number; contextWindow: number } | null;
+    terminalError: { sdkError?: string; errorStatus?: number; codexErrorInfo?: string } | null;
+  }>;
 }
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -54,12 +68,24 @@ function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestR
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,
-    fast: profile.fastMode === true,
+    fast: (profile.fastMode === 'ultrafast' ? 'ultrafast' : profile.fastMode === true),
   };
 }
 
 const toBotHarness = (harness: TaskDigestRoute['harness']): BotHarness => (harness === 'claude-code' ? 'claude' : harness);
 const toDigestHarness = (harness: BotHarness): TaskDigestRoute['harness'] => (harness === 'claude' ? 'claude-code' : harness);
+const toAgentKind = (harness: BotHarness): AgentKind => (harness === 'claude' ? 'claude-code' : harness);
+
+/** 目录里核实过的窗口(与主机切换闸门同一口径);查不到返回 null。 */
+function verifiedRouteWindow(harness: BotHarness, model: string, providerId: string | null): number | null {
+  const catalog = getActiveCatalog();
+  return lookupVerifiedContextWindow(
+    (agentKind, modelId, pid) => resolveConfiguredContextWindow(catalog, agentKind as AgentKind, pid, modelId),
+    model,
+    providerId,
+    toAgentKind(harness),
+  );
+}
 
 /** 调用方伙伴(主任务)的有效候选链。非伙伴调用方返回 null。 */
 async function readCallerBotChain(callerSessionId: string) {
@@ -176,23 +202,32 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         return result.ok ? (result.counts[sessionId] ?? 0) : null;
       },
       prStatus: async (sessionId) => formatPrStatuses(await host.readSessionPrStatuses(sessionId)),
-      suggestRoute: async ({ callerSessionId, targetSessionId, current }) => {
+      suggestRoute: async ({ callerSessionId, targetSessionId, current, failure }) => {
         if (!callerSessionId) return null;
         const chain = await readCallerBotChain(callerSessionId);
         if (!chain?.length) return null;
         const [target] = await getDbClient()
-          .drizzle.select({ remoteHostId: sessions.remoteHostId })
+          .drizzle.select({ remoteHostId: sessions.remoteHostId, contextTokens: sessions.contextTokens })
           .from(sessions)
           .where(eq(sessions.id, targetSessionId))
           .limit(1);
         const harness = toBotHarness(current.harness);
-        const next = nextBotModelRoute(
+        const runtime = (await host.readRuntimeFacts?.(targetSessionId)) ?? null;
+        const usage = deriveFollowUpUsage({
+          live: runtime?.live,
+          closed: runtime?.closed,
+          dbContextTokens: target?.contextTokens,
+        });
+        const next = suggestFollowUpRoute({
           chain,
-          { harness, model: current.model, providerId: current.provider_id },
-          getSessionRuntimeControlSnapshot(targetSessionId).visitedRoutes,
-          // SSH 远端任务不能跨 harness 切换(与候选链自动恢复同一口径)。
-          (candidate) => !target?.remoteHostId || candidate.harness === harness,
-        );
+          current: { harness, model: current.model, providerId: current.provider_id },
+          failure: { ...failure, ...(failure.phase === 'errored' ? runtime?.terminalError ?? {} : {}) },
+          visitedRoutes: getSessionRuntimeControlSnapshot(targetSessionId).visitedRoutes,
+          sameHarnessOnly: !!target?.remoteHostId,
+          contextTokens: usage.contextTokens,
+          currentContextWindow: usage.contextWindow ?? verifiedRouteWindow(harness, current.model, current.provider_id),
+          windowOf: (candidate) => verifiedRouteWindow(candidate.harness, candidate.model, candidate.providerId),
+        });
         return next
           ? {
               harness: toDigestHarness(next.harness),

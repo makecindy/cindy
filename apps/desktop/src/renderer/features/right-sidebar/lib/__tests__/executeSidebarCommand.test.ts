@@ -14,6 +14,9 @@ vi.mock('../../store', () => ({
 vi.mock('../openInSidebarBrowser', () => ({
   openUrlInSidebarBrowser: vi.fn(async () => undefined),
 }));
+vi.mock('../openPluginTaskTab', () => ({
+  openPluginTaskTab: vi.fn(async () => undefined),
+}));
 vi.mock('../openInSidebarFileBrowser', () => ({
   openDirInSidebarFileBrowser: vi.fn(async () => undefined),
   openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
@@ -21,10 +24,6 @@ vi.mock('../openInSidebarFileBrowser', () => ({
 }));
 vi.mock('../openSubagentsTab', () => ({
   openSubagentsTab: vi.fn(async () => undefined),
-}));
-vi.mock('../openBotWorkbenchTab', () => ({
-  ensureBotWorkbenchTab: vi.fn(async () => undefined),
-  openBotWorkbenchTab: vi.fn(async () => undefined),
 }));
 vi.mock('../../plugins/orca-workers/actions', () => ({
   ensureOrcaWorkersTab: vi.fn(async () => undefined),
@@ -37,6 +36,7 @@ import {
   ensureOrcaWorkersTab,
 } from '../../plugins/orca-workers/actions';
 import { executeSidebarCommand } from '../executeSidebarCommand';
+import { openPluginTaskTab } from '../openPluginTaskTab';
 import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
@@ -44,18 +44,15 @@ import {
 } from '../openInSidebarFileBrowser';
 import { openUrlInSidebarBrowser } from '../openInSidebarBrowser';
 import { openSubagentsTab } from '../openSubagentsTab';
-import { ensureBotWorkbenchTab, openBotWorkbenchTab } from '../openBotWorkbenchTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('distinguishes a detached passive restore from an explicit workbench click', async () => {
-    await executeSidebarCommand({ type: 'open-bot-workbench-tab', sessionId: 's1', botId: 'bot-1' });
-    expect(ensureBotWorkbenchTab).toHaveBeenCalledWith('s1', 'bot-1');
-    expect(openBotWorkbenchTab).not.toHaveBeenCalled();
-    await executeSidebarCommand({ type: 'open-bot-workbench-tab', sessionId: 's1', botId: 'bot-1', focusTab: true });
-    expect(openBotWorkbenchTab).toHaveBeenCalledWith('s1', 'bot-1');
-    expect(ensureBotWorkbenchTab).toHaveBeenCalledOnce();
+  // PR #6939 discussion_r4357929340：分离宿主执行命令不能降级已验证的点击来源。
+  // unit：真实 executor 的输出是传给开页入口的来源协议；原用例未覆盖插件命令。
+  it.each([true, false, undefined])('preserves plugin task intent, defaulting old commands to passive: %s', async (userInitiated) => {
+    await executeSidebarCommand({ type: 'open-plugin-task', sessionId: 's1', instanceId: 'sim', userInitiated });
+    expect(openPluginTaskTab).toHaveBeenCalledWith('s1', 'sim', { userInitiated: userInitiated === true });
   });
 
   it('dispatches every command kind to the current renderer host implementation', async () => {

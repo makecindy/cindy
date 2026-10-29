@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
@@ -654,7 +654,7 @@ function SelectControl({
         className={cn(
           'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
           'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
           className,
         )}
@@ -696,7 +696,6 @@ function SelectControl({
                     className={cn(
                       'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
                       'text-[var(--text-primary)]',
-                      'data-[highlighted]:bg-[var(--surface-hover)]',
                       'data-[state=checked]:font-medium',
                     )}
                   >

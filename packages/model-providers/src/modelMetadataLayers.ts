@@ -192,6 +192,7 @@ export function resolveModelMetadata(
   providerDefaults?: ModelMetadata,
   declaredDefaultEffort?: ModelMetadata["defaultEffort"],
   generationDefaults?: ModelMetadata,
+  interfaceDefaults?: ModelMetadata,
 ): ResolvedModelMetadata {
   const ids = [modelId];
   if (providerId === "openai" && modelId.startsWith("chatgpt/"))
@@ -246,6 +247,8 @@ export function resolveModelMetadata(
     familyDefaults,
     inheritedLiveWindow ? { contextWindow: live?.contextWindow } : undefined,
     defaults,
+    interfaceDefaults,
+    agent && matched ? pickModelMetadata(matched.entry.perAgent?.[agent as keyof NonNullable<typeof matched.entry.perAgent>]) : undefined,
     currentLive,
     // A Harness's suggested default is not a model capability. Keep the shared
     // model intent (including explicit route/Harness exceptions), then adapt it
@@ -261,7 +264,7 @@ export function resolveModelMetadata(
   );
   // Resolve the pair only after all layers: a maximum-only report is a usable
   // fallback, not a verified working-window report. Never replace a known window.
-  const hasOwnWorkingWindow = [defaults, currentLive, matched?.route.forceOverrides, user]
+  const hasOwnWorkingWindow = [defaults, interfaceDefaults, currentLive, matched?.route.forceOverrides, user]
     .some(source => source?.contextWindow !== undefined);
   if (!hasOwnWorkingWindow && currentLive?.contextWindowMax !== undefined) {
     // This model's reported maximum takes precedence over a predecessor's
@@ -471,6 +474,8 @@ export function applyModelMetadata(
 export interface DiscoveredModel {
   id: string;
   name: string;
+  /** Account entitlement, never inherited as public model metadata. */
+  supportsUltrafastMode?: boolean;
   contextWindow?: number;
   discoveredCost?: import("./types.js").ModelCost;
   discoveredMetadata?: ModelMetadata;
@@ -488,6 +493,11 @@ export function mergeDiscoveredRuntimeModels(
     if (!model.id || !model.name || seen.has(model.id)) continue;
     seen.add(model.id);
     const index = models.findIndex((m) => m.id === model.id);
+    // Unlike descriptive metadata, a refreshed account entitlement must not stick
+    // when the latest response no longer declares it.
+    const accountCapabilities = model.supportsUltrafastMode !== undefined ||
+      (index >= 0 && models[index].supportsUltrafastMode !== undefined)
+      ? { supportsUltrafastMode: model.supportsUltrafastMode === true } : {};
     const discoveredMetadata = mergeModelMetadata(
       index >= 0 ? models[index].discoveredMetadata : undefined,
       pickModelMetadata(model.discoveredMetadata ?? model),
@@ -503,6 +513,7 @@ export function mergeDiscoveredRuntimeModels(
       added.push({
         id: model.id,
         name: model.name,
+        ...accountCapabilities,
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
@@ -510,6 +521,7 @@ export function mergeDiscoveredRuntimeModels(
     else
       models[index] = {
         ...models[index],
+        ...accountCapabilities,
         ...(!models[index].discoveredMetadata ? { nameExplicit: true } : {}),
         discoveredMetadata,
         ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),

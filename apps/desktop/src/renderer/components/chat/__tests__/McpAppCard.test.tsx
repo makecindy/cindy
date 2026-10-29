@@ -67,6 +67,83 @@ afterEach(() => {
   state.openError = undefined;
   state.originListeners.clear();
 });
+
+// #6432: the real card must release a mounted View without letting cleanup
+// escape React. Existing jsdom tests lack moveBefore and close immediately.
+// Unit tier models its connected-node constraint and delays close; the browser
+// experiment separately verifies Chromium preserves the actual App document.
+it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-api'])(
+  'finishes bounded View cleanup after %s', async (scenario) => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+      observe(element: Element) { state.intersections.set(element, this.callback); }
+      disconnect() {}
+    });
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const added = vi.spyOn(window, 'addEventListener');
+    const removed = vi.spyOn(window, 'removeEventListener');
+    const move = vi.fn((node: Node, child: Node | null) => {
+      if (!node.isConnected || scenario === 'rejected-move')
+        throw new DOMException('Atomic move requires a connected node', 'HierarchyRequestError');
+      document.body.insertBefore(node, child);
+    });
+    Object.defineProperty(document.body, 'moveBefore', {
+      configurable: true, value: scenario === 'no-move-api' ? undefined : move,
+    });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    let finish!: () => void;
+    const closed = new Promise<void>((resolve) => { finish = resolve; });
+    try {
+      await act(async () => root.render(<article><div>
+        <McpAppCard sessionId="task" clientId="card" title="App" fallbackText="Saved result" />
+      </div></article>));
+      await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+      const controller = state.controllers[0];
+      controller.close.mockReturnValue(closed);
+      const receive = added.mock.calls.find(([type]) => type === 'message')![1];
+      const frame = container.querySelector('iframe')!;
+      if (scenario === 'disconnected') frame.remove();
+      if (scenario === 'failure-retry') {
+        await act(async () => controller.fail(new Error('MCP_APP_FAILED')));
+        expect(container.querySelector('[role="alert"]')).not.toBeNull();
+        expect(container.textContent).toContain('Saved result');
+        expect(frame.isConnected).toBe(true);
+        await act(async () => container.querySelector('button')!.click());
+        expect(state.controllers).toHaveLength(2);
+        expect(container.querySelector('iframe')).not.toBe(frame);
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+      } else {
+        // Delete the ancestor message tree, as session switching/virtualization does.
+        await act(async () => root.render(null));
+      }
+      expect(controller.close).toHaveBeenCalledOnce();
+      expect(removed).not.toHaveBeenCalledWith('message', receive);
+      if (scenario === 'unmount' || scenario === 'failure-retry') {
+        expect(frame.parentElement).toBe(document.body);
+        expect(frame.isConnected).toBe(true);
+      }
+      if (scenario === 'disconnected') expect(move).not.toHaveBeenCalled();
+      await act(async () => { finish(); await closed; });
+      expect(frame.isConnected).toBe(false);
+      expect(removed).toHaveBeenCalledWith('message', receive);
+      if (scenario === 'failure-retry') {
+        expect(container.querySelector('iframe')?.isConnected).toBe(true);
+        expect(state.controllers[1].close).not.toHaveBeenCalled();
+      }
+    } finally {
+      finish();
+      await act(async () => root.unmount());
+      container.remove();
+      Reflect.deleteProperty(document.body, 'moveBefore');
+    }
+  },
+);
+
 it('reopens when device ownership is restored but ignores unchanged ownership', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');

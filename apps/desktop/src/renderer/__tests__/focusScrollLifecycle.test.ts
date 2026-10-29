@@ -418,7 +418,7 @@ describe('MessageStream focus cancellation wiring', () => {
       'const scrollbarDragStartTopRef',
     );
     expect(pin).toContain('if (!windowCoversEndRef.current) return');
-    expect(pin).toContain('setUnreadCount(0)');
+    expect(pin).toContain('setUnreadKeys(NO_UNREAD_KEYS)');
     expect(pin).toContain('setFirstVisibleItemKey(null)');
   });
 

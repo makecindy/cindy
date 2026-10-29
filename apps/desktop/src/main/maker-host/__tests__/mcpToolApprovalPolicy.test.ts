@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ORCA_TASK_ACTION_TOOLS } from '../../maker-ipc/taskActionAuthorization.js';
 
 import {
   getDesktopClaudeReadOnlyAllowedTools,
@@ -88,6 +89,38 @@ describe('desktop Claude read-only allowlist', () => {
 });
 
 describe('desktop MCP approval policy', () => {
+  // #6826 security review 4354459321, unit: the shared policy must route each
+  // recipe invocation through normal session approval, including read-labelled
+  // recipes overridden by the user layer. Existing tests trusted the whole server.
+  it('reviews recipe calls without trusting caller-supplied access or reusable grants', () => {
+    for (const recipeId of ['opencli:weibo/delete', 'opencli:linkedin/safe-send', 'opencli:web/read', 'custom-recipe']) {
+      const args = { action: 'recipe', recipeId, access: 'read', inputs: { send: true } };
+      for (const toolName of ['call_tool', undefined]) {
+        for (const encoded of [args, JSON.stringify(args)]) {
+          expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName,
+            toolParams: { name: 'browser', args: encoded },
+          })).toBe('prompt-each-time');
+        }
+      }
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'browser', toolParams: args }))
+        .toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolParams: args }))
+        .toBe('prompt-each-time');
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser',
+        toolParams: { ...args, name: 'browser', args: { action: 'snapshot' } },
+      })).toBe('prompt-each-time');
+    }
+    for (const toolParams of [undefined, { name: 'browser' }, { name: 'browser', args: 'broken' }]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool', toolParams }))
+        .toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'list_tools' })).toBe('auto-approve');
+    for (const action of ['siteguide', 'snapshot', 'tabs']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action } },
+      })).toBe('auto-approve');
+    }
+  });
   it('never lets import discovery grant reusable approval to start a migration', () => {
     for (const operation of ['sources', 'preview', 'status', 'start', undefined]) {
       for (const toolName of ['import_agent', undefined]) {
@@ -176,7 +209,6 @@ describe('desktop MCP approval policy', () => {
   it('auto-approves only explicitly reviewed builtin servers', () => {
     for (const serverName of [
       'cindy_android',
-      'cindy_browser',
       'cindy_computer',
       // cindy_feishu_bot / cindy_telegram_bot 也在 trusted 表里, 但省略 toolName 时按次审批
       // (都带 call_api; 见下方专项用例)。
@@ -372,7 +404,6 @@ describe('helper task workspace and SkillHub publication authorization', () => {
       'create_project',
       'rename_project',
       'remove_project',
-      'send_to_session',
       'search_skills',
       'list_my_published_skills',
       'get_skill_publish_status',
@@ -440,12 +471,28 @@ describe('Orca Worker directory authorization', () => {
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_orca__create_workers');
   });
 
-  it('preserves inherited-directory creation and other Orca operations', () => {
-    expect(policy('create_worker', { label: 'inherits' })).toBe('auto-approve');
+  // PR2: a new checkout delegates filesystem access even without working_dir.
+  it.each([{}, {source_branch: 'main'}, null, true])('reviews new_worktree %j in single and batch calls before trusted-server approval', new_worktree => {
+    for (const [name, params] of [
+      ['create_worker', {new_worktree}],
+      ['create_workers', {workers: [{label: 'inherits'}, {new_worktree}]}],
+    ] as const) {
+      expect(policy(name, params)).toBe('prompt-each-time');
+      expect(policy(name, JSON.stringify(params))).toBe('prompt-each-time');
+    }
+  });
+
+  // #6699: trusted-server approval used to skip Ask/Auto for Orca mutations.
+  // Unit: use the production policy for each protected action, preserving reads.
+  it('reviews all Orca mutations, including inherited-directory creation, and preserves reads', () => {
+    for (const tool of ORCA_TASK_ACTION_TOOLS) {
+      expect(policy(tool), tool).toBe('prompt-each-time');
+    }
+    expect(policy('create_worker', { label: 'inherits' })).toBe('prompt-each-time');
     expect(policy('create_workers', { workers: [{ label: 'a' }, { label: 'b' }] })).toBe(
-      'auto-approve',
+      'prompt-each-time',
     );
-    expect(policy('send_to_worker', { worker_id: 'a', message: 'continue' })).toBe('auto-approve');
+    expect(policy('send_to_worker', { worker_id: 'a', message: 'continue' })).toBe('prompt-each-time');
     expect(policy('list_workers')).toBe('auto-approve');
   });
 
@@ -498,9 +545,9 @@ describe('cross-device actions use the task permission mode', () => {
       }
     }
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool',
-      toolParams: { name, args: { session_ids: ['s1'] } } })).toBe('auto-approve');
+      toolParams: { name, args: { session_ids: ['s1'] } } })).toBe('prompt-each-time');
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool',
-      toolParams: { name, args: { session_ids: ['local::s1'] } } })).toBe('auto-approve');
+      toolParams: { name, args: { session_ids: ['local::s1'] } } })).toBe('prompt-each-time');
   });
 
   const scheduler = (name: string, args: Record<string, unknown>, toolName: string | undefined = 'call_tool') =>
@@ -538,7 +585,7 @@ describe('cross-device actions use the task permission mode', () => {
     expect(scheduler('schedule_create', { name: 'n' })).toBe('auto-approve');
   });
 
-  it('reviews a message to a task on another computer, not a local one', () => {
+  it('requires action review for local and remote task messages', () => {
     const helper = (target: unknown, toolName: string | undefined = 'call_tool') =>
       getDesktopMcpToolApprovalPolicy({
         serverName: 'cindy_helper',
@@ -547,9 +594,9 @@ describe('cross-device actions use the task permission mode', () => {
       });
     expect(helper('mbp::sess-9')).toBe('prompt-each-time');
     expect(helper('mbp::sess-9', undefined)).toBe('prompt-each-time');
-    expect(helper('sess-9')).toBe('auto-approve');
-    expect(helper('local::sess-9')).toBe('auto-approve');
-    expect(helper(undefined)).toBe('auto-approve');
+    expect(helper('sess-9')).toBe('prompt-each-time');
+    expect(helper('local::sess-9')).toBe('prompt-each-time');
+    expect(helper(undefined)).toBe('prompt-each-time');
     // A follow-up continue into another computer's task is the same cross-computer write.
     const follow = (taskId: string, toolName: string) => getDesktopMcpToolApprovalPolicy({
       serverName: 'cindy_helper',
@@ -560,6 +607,6 @@ describe('cross-device actions use the task permission mode', () => {
     });
     expect(follow('mbp::sess-9', 'call_tool')).toBe('prompt-each-time');
     expect(follow('mbp::sess-9', 'continue_workbench_task')).toBe('prompt-each-time');
-    expect(follow('sess-9', 'continue_workbench_task')).toBe('auto-approve');
+    expect(follow('sess-9', 'continue_workbench_task')).toBe('prompt-each-time');
   });
 });

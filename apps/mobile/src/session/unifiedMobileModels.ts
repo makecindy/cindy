@@ -9,7 +9,7 @@ export interface MobileModelConfiguration {
   modelId: string;
   agent: AgentKind;
   effort: string;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
 }
 export interface MobileModelFavorite extends MobileModelConfiguration { uid: string }
 export interface MobileModelPreferences {
@@ -41,7 +41,8 @@ export function resolveMobileModelConfig(entry: UnifiedModelEntry, args: {
   const fast = args.favorite?.fast ?? args.live?.fast ?? args.memory?.getFast(agent, entry.providerId, cap.wireModelId) ?? false;
   return { providerId: entry.providerId, modelId: cap.wireModelId, agent,
     effort: effort && levels.includes(effort) ? effort : cap.defaultEffort ?? levels[0] ?? '',
-    fast: fast && cap.supportsFastMode && args.fastCapable(agent),
+    fast: cap.supportsFastMode && args.fastCapable(agent) &&
+      (fast !== 'ultrafast' || cap.supportsUltrafastMode === true) ? fast : false,
   };
 }
 export function sameConfiguration(a: MobileModelConfiguration, b: MobileModelConfiguration) {

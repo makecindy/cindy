@@ -1,9 +1,9 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 568,
+  "snapshotCount": 570,
   "categories": {
-    "literal": 281,
+    "literal": 283,
     "alias": 249,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 32
@@ -278,8 +278,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -292,8 +292,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -1194,8 +1194,8 @@
       "id": "login-panel-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1230,8 +1230,8 @@
       "id": "login-link-pressed",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1246,24 +1246,24 @@
       "id": "login-callback-card-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-title",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-body",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1302,80 +1302,80 @@
       "id": "login-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-action-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-back-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-active",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-disabled",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-placeholder",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-title-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1414,16 +1414,16 @@
       "id": "login-disabled-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-disabled-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1438,16 +1438,16 @@
       "id": "login-link-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-link-hover",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1470,24 +1470,24 @@
       "id": "login-deletion-bubble-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-track",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-fill",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1558,16 +1558,16 @@
       "id": "login-consent-radio-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-consent-radio-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1598,24 +1598,24 @@
       "id": "login-secondary-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1628,6 +1628,22 @@
     },
     {
       "id": "login-overlay-secondary-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-pressed",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "rgb",

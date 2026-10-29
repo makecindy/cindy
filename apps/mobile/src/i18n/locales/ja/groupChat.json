@@ -1,8 +1,8 @@
 {
   "title": "グループチャット",
   "memberSeparator": "、",
-  "memberCount_one": "仲間 {{count}} 人",
-  "memberCount_other": "仲間 {{count}} 人",
+  "memberCount_one": "メンバー {{count}} 人",
+  "memberCount_other": "メンバー {{count}} 人",
   "organizer": "まとめ役",
   "waitingConfirm": "{{name}} があなたの確認を待っています",
   "loadFailedTitle": "このグループチャットを読み込めません",
@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "グループチャットを作成",
-    "description": "何人かの仲間を 1 つのグループにまとめます。あなたが話しかけると、仲間たちが一緒に返信します。",
     "nameLabel": "グループ名",
     "namePlaceholder": "例: 週末のお出かけ",
     "nameRequired": "グループ名を入力してください",
     "membersLabel": "仲間を選択",
     "selectedCount_one": "{{count}} 人選択中（最大 {{max}} 人）",
     "selectedCount_other": "{{count}} 人選択中（最大 {{max}} 人）",
-    "minMembers": "仲間を {{min}} 人以上選択してください",
-    "notEnoughBots": "グループチャットを作成するには、利用できる仲間が {{min}} 人以上必要です。まず仲間を追加してください。",
+    "close": "閉じる",
+    "submitShort": "作成",
     "submit": "グループチャットを作成",
-    "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください",
-    "chooseComputer": "作成するパソコンを選択",
-    "computerNote": "このグループチャットは {{deviceName}} に作成され、仲間はそのパソコンで作業します。"
+    "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください"
   },
   "memberStatus": {
     "paused": "一時停止中",
@@ -60,6 +57,8 @@
     "send": "送信"
   },
   "timeline": {
+    "newMessages_one": "新着メッセージ {{count}} 件",
+    "newMessages_other": "新着メッセージ {{count}} 件",
     "emptyTitle": "このグループにはまだメッセージがありません",
     "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
     "roundEnded": "仲間たちの発言が終わりました",
@@ -80,7 +79,8 @@
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
     "deleted": "元のメッセージは削除されました",
-    "attachments": "{{name}} など {{total}} 件"
+    "attachments": "{{name}} など {{total}} 件",
+    "unavailable": "このメッセージは見つかりません。"
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
@@ -94,15 +94,61 @@
     "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
     "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
     "runtimeFailure": {
-      "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。",
-      "MODEL_UNAVAILABLE": "{{name}}は返信できませんでした。利用可能なモデルがありません。\n仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。",
-      "AUTH_REQUIRED": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。\n設定でモデルのプロバイダーに再接続し、メッセージを再送してください。",
-      "RATE_LIMITED": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
-      "UPSTREAM_OVERLOADED": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
-      "QUOTA_EXCEEDED": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。\nプロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。",
-      "NETWORK_ERROR": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。\nネットワークやプロキシを確認し、メッセージを再送してください。",
-      "RUNTIME_TIMEOUT": "{{name}}の返信がタイムアウトしました。\nメッセージを再送するか、別の利用可能なモデルを選んでください。",
-      "RUNTIME_ERROR": "{{name}}は今回は返信できませんでした。\nメッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。",
+        "advice": "仲間の所有者に、未使用のセッションのアーカイブを依頼してください。",
+        "details": "仲間の所有者に不要なセッションのアーカイブを依頼するか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。"
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。",
+        "advice": "リモートコンピューターの所有者に、未使用のセッションの整理または上限の引き上げを依頼してください。",
+        "details": "そのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。"
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。",
+        "advice": "画像対応のモデルに切り替えてください。",
+        "details": "画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。"
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}は返信できませんでした。利用可能なモデルがありません。",
+        "advice": "仲間の設定で利用可能なモデルを選択してください。",
+        "details": "仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。"
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。",
+        "advice": "モデルの接続先に再接続してください。",
+        "details": "設定でモデルのプロバイダーに再接続し、メッセージを再送してください。"
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。",
+        "advice": "しばらくしてから再送信してください。",
+        "details": "しばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。",
+        "advice": "しばらくしてから再送信してください。",
+        "details": "しばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。",
+        "advice": "利用枠を確認するか、別のモデルを選択してください。",
+        "details": "プロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。"
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。",
+        "advice": "ネットワークまたはプロキシを確認してください。",
+        "details": "ネットワークやプロキシを確認し、メッセージを再送してください。"
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}の返信がタイムアウトしました。",
+        "advice": "メッセージを再送信してください。",
+        "details": "メッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}は今回は返信できませんでした。",
+        "advice": "メッセージを再送信してください。",
+        "details": "メッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+      }
     },
     "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
   },
@@ -113,6 +159,7 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
     "dismissed": "見送りました",
@@ -137,6 +184,7 @@
     "allDone": "すべて完了"
   },
   "speaking": {
+    "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
   },
@@ -171,6 +219,7 @@
     "replyModeAll": "誰でも返信できる",
     "replyModeMentioned": "@ された仲間だけ返信",
     "replyModeNote": "付け加えることがない仲間は発言しません。1 ラウンドは最大 3 周・10 件までで、その後は「議論を続ける」を押すまで待ちます。",
+    "replyModeNoteQueue": "仲間が順番に一人ずつ答え、最初の 5 人は自動で続きます。仲間のメッセージを引用したり、そのスレッドに返信したりしても呼び出せます。",
     "replyModeSaveFailed": "返信の設定を保存できませんでした。もう一度お試しください",
     "delete": "グループチャットを削除",
     "deleteNote": "削除されるのはこのグループチャットとそのメッセージだけです。仲間本人、その記憶、個別のチャットには影響しません。",
@@ -192,20 +241,25 @@
     "add": "仲間を追加",
     "projectDirOnComputer": "パソコンで選択・変更できます",
     "memberActions": "{{name}} の操作",
-    "managementComputer": "管理用コンピュータ",
     "retry": "再試行",
-    "reconnect": "再接続",
     "conflict": "グループ設定が更新されました。内容を確認してから再保存してください。入力内容は保持されています。",
     "archive": "グループチャットをアーカイブ",
     "archiveConfirmTitle": "「{{name}}」をアーカイブしますか？",
     "archiveNote": "アーカイブできるのは所有者のみです。新しいメッセージは送信できなくなりますが、履歴は保持されます。",
-    "managementStatus": {
-      "ready": "接続済み",
-      "loading": "接続中…",
-      "noHost": "未接続",
-      "permission": "読み取り専用",
-      "upgrade": "更新が必要",
-      "unavailable": "設定を取得できません"
+    "description": "グループの説明",
+    "descriptionSaveFailed": "グループの説明を保存できませんでした。",
+    "makeAdmin": "管理者にする",
+    "removeAdmin": "管理者を解除",
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "guest": "ゲスト"
+    },
+    "cloudStatus": {
+      "loading": "設定を読み込み中…",
+      "permission": "この設定を変更できるのはグループのオーナーと管理者だけです。",
+      "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     }
   },
   "errors": {
@@ -241,6 +295,15 @@
     "loadFailed": "グループチャットを読み込めません。もう一度お試しください。",
     "loadOlder": "以前のメッセージを読み込む",
     "attachmentFailed": "添付ファイルを開けませんでした。もう一度お試しください。",
+    "attachmentPreviewLoading": "添付ファイルを読み込み中…",
+    "attachmentPreviewFailed": "この添付ファイルをプレビューできません。もう一度お試しください。",
+    "attachmentPreviewTooLarge": "ファイルが10 MBを超えているため、スマートフォンではプレビューできません。",
+    "attachmentPreviewBinary": "この添付ファイルは読み取り可能なテキストではないため、プレビューできません。",
+    "attachmentPreviewTruncated": "プレビューは最大10,000行、100,000文字まで表示します。",
+    "attachmentPreviewEmpty": "このファイルは空です。",
+    "attachmentPreviewRetry": "再試行",
+    "attachmentPreviewOpenOutside": "ブラウザーで開く",
+    "attachmentPreviewClose": "添付ファイルのプレビューを閉じる",
     "previewUnavailable": "プレビューを読み込めません",
     "endpointUnavailable": "グループチャットのサービス設定を利用できません。再試行してください。"
   },

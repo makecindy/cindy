@@ -11,6 +11,12 @@ const authState = vi.hoisted(() => ({
   mode: 'cloud' as 'signed-out' | 'local' | 'cloud',
   dataOwnerId: 'owner-a' as string | null,
 }));
+const directoryPicker = vi.hoisted(() =>
+  vi.fn<(props: Record<string, unknown>) => null>(() => null),
+);
+vi.mock('@/components/new-chat/AddRemoteProjectDialog', () => ({
+  AddRemoteProjectDialog: directoryPicker,
+}));
 
 import type { InstalledGhost } from '../../../shared/ghost';
 import { GhostSettingsWebview } from '../GhostSettingsWebview';
@@ -39,6 +45,8 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  directoryPicker.mockClear();
 });
 
 function renderSettings(settingsHeight?: number, measuredHeight?: number) {
@@ -96,25 +104,107 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  it('keeps the target page and directory picker bound to B, and closes the lease on unmount', async () => {
+    let receive!: (value: { viewId: string; request: { id: string; expiresAt: number } }) => void;
+    const unsubscribe = vi.fn(),
+      answer = vi.fn(async () => {}),
+      close = vi.fn(async () => {});
+    const open = vi.fn(async () => ({
+      id: 'view-b',
+      partition: 'remote-plugin-settings:view-b',
+      src: 'cindy-ghost://example-settings-layout/settings.html',
+    }));
+    vi.stubGlobal('electronAPI', {
+      ghosts: {
+        openRemoteSettings: open,
+        closeRemoteSettings: close,
+        answerRemoteSettingsDirectory: answer,
+        onRemoteSettingsDirectory: (listener: typeof receive) => {
+          receive = listener;
+          return unsubscribe;
+        },
+      },
+    });
+    const { ghost, view } = renderSettings();
+    view.rerender(<GhostSettingsWebview ghost={ghost} remoteDeviceId="B" />);
+    await waitFor(() =>
+      expect(view.container.querySelector('webview')?.getAttribute('partition')).toBe(
+        'remote-plugin-settings:view-b',
+      ),
+    );
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: 'B', instanceId: 'example-settings-layout' }),
+    );
+    act(() =>
+      receive({
+        viewId: 'foreign-view',
+        request: { id: 'foreign', expiresAt: Date.now() + 90_000 },
+      }),
+    );
+    expect(directoryPicker).not.toHaveBeenCalled();
+    act(() =>
+      receive({ viewId: 'view-b', request: { id: 'directory-b', expiresAt: Date.now() + 90_000 } }),
+    );
+    const props = directoryPicker.mock.calls.at(-1)?.[0] as unknown as {
+      fixedDeviceId: string;
+      onProjectAdded(target: unknown): Promise<void>;
+      onOpenChange(open: boolean): void;
+    };
+    expect(props.fixedDeviceId).toBe('B');
+    await expect(
+      props.onProjectAdded({ kind: 'device-link', deviceId: 'C', path: '/other' }),
+    ).rejects.toThrow();
+    expect(answer).not.toHaveBeenCalled();
+    await act(async () => {
+      await props.onProjectAdded({ kind: 'device-link', deviceId: 'B', path: '/target/folder' });
+      props.onOpenChange(false);
+    });
+    expect(answer).toHaveBeenCalledExactlyOnceWith({
+      viewId: 'view-b',
+      requestId: 'directory-b',
+      path: '/target/folder',
+    });
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalled();
+    expect(close).toHaveBeenCalledWith('view-b');
+  });
   it('recreates the settings guest when a same-version source gets a new receipt', () => {
     const { ghost, view } = renderSettings();
     const approved = { ...ghost, approval: { state: 'approved' as const, revision: 'receipt-a' } };
     view.rerender(<GhostSettingsWebview ghost={approved} />);
     const original = view.container.querySelector('webview');
-    view.rerender(<GhostSettingsWebview ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }} />);
+    view.rerender(
+      <GhostSettingsWebview
+        ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }}
+      />,
+    );
     const replacement = view.container.querySelector('webview');
     expect(replacement).not.toBe(original);
     expect(original?.isConnected).toBe(false);
     expect(replacement?.getAttribute('src')).toBe(original?.getAttribute('src'));
-    view.rerender(<GhostSettingsWebview ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }} />);
+    view.rerender(
+      <GhostSettingsWebview
+        ghost={{ ...approved, approval: { state: 'approved', revision: 'receipt-b' } }}
+      />,
+    );
     expect(view.container.querySelector('webview')).toBe(replacement);
   });
   it('keeps an in-place settings page on its physical WebView partition', () => {
     const { ghost, view, webview } = renderSettings();
     expect(webview.getAttribute('partition')).toBe('cindy-ghost-example-settings-layout');
-    view.rerender(<GhostSettingsWebview ghost={{ ...ghost, dir: '/ghosts/example-settings-layout', instanceKey: 'example-settings-layout', namespace: 'acme' }} />);
-    expect(view.container.querySelector('webview')?.getAttribute('partition'))
-      .toBe('cindy-ghost-example-settings-layout');
+    view.rerender(
+      <GhostSettingsWebview
+        ghost={{
+          ...ghost,
+          dir: '/ghosts/example-settings-layout',
+          instanceKey: 'example-settings-layout',
+          namespace: 'acme',
+        }}
+      />,
+    );
+    expect(view.container.querySelector('webview')?.getAttribute('partition')).toBe(
+      'cindy-ghost-example-settings-layout',
+    );
   });
   it('keeps account status visible and the plugin form collapsed without a duplicate title', () => {
     const { ghost, view } = renderSettings();

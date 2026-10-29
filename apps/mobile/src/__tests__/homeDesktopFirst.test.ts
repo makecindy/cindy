@@ -6,6 +6,7 @@ import { i18n } from '@/i18n';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import { connectionHealthCopy, describeRemoteError } from '@/device-link/remoteStatus';
+import { isTaskSuggestionsSyncPending } from '@/session/useRemoteTaskSuggestionsPresentation';
 
 function readSource(relativePath: string): string {
   return readFileSync(resolve(process.cwd(), relativePath), 'utf8').replace(/\r\n/g, '\n');
@@ -15,8 +16,16 @@ function readSource(relativePath: string): string {
 // phone-wide outages and broke when the same shared policy gained that input.
 const homeSource = ts.createSourceFile('HomeSurface.tsx', readSource('src/session/HomeSurface.tsx'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const feedbackExpressions = new Map<string, string>();
-const feedbackNames = new Set(['healthCopy', 'showConnectionRow', 'showHomeSyncAction', 'showHomeRecoveryProgress', 'connectionTitle']);
+const feedbackNames = new Set(['homeListScopePending', 'initialHomeLoading', 'initialHomeError', 'healthCopy', 'showConnectionRow', 'showHomeSyncAction', 'showHomeRecoveryProgress', 'connectionTitle']);
+let listScopeEffect = '';
 function collectFeedback(node: ts.Node) {
+  if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+    && node.expression.expression.getText(homeSource) === 'useLayoutEffect'
+    && node.expression.arguments[0]?.getText(homeSource).includes('homeListFilterRef.current === requestedListFilter')) {
+    listScopeEffect = ts.transpileModule(node.getText(homeSource), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+  }
   if (ts.isVariableDeclaration(node) && feedbackNames.has(node.name.getText(homeSource)) && node.initializer) {
     feedbackExpressions.set(node.name.getText(homeSource), ts.transpileModule(`const result = ${node.initializer.getText(homeSource)};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -30,6 +39,9 @@ function homeFeedback(overrides: Record<string, unknown>) {
     network: 'available', networkUnavailable: false, status: 'online',
     selectedDeviceDisconnected: false, activeConnectionIssue: null,
     homeDeviceRecovery: false, homeDeviceUnresponsive: false, connectionError: null,
+    initialHomeSettled: true, homeListFilterChanged: false, indexedSearch: { status: 'idle' },
+    homeSyncDeviceIds: ['mac'], homeListOwnedDeviceIdsRef: { current: new Set(['mac']) },
+    rawDeviceConnectionStates: { mac: 'idle' }, isTaskSuggestionsSyncPending,
     resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, connectionHealthCopy,
     t: (key: string) => i18n.t(key), homeConnectionTitle: () => 'online', ...overrides,
   };
@@ -42,6 +54,52 @@ function homeFeedback(overrides: Record<string, unknown>) {
 }
 
 describe('mobile Home connection feedback', () => {
+  // PR #6381: an error from A masked B's loading state. Existing feedback tests
+  // never changed the selection after an error. Unit: run the production layout
+  // effect with React's dependency comparison, before deriving the next frame.
+  it('retires the previous computer error before painting a new selection', () => {
+    let previousDeps: unknown[] = [];
+    let error: string | null = null;
+    const bindings = {
+      useLayoutEffect: (effect: () => void, deps: unknown[]) => {
+        if (deps.some((value, index) => value !== previousDeps[index])) effect();
+        previousDeps = deps;
+      },
+      setError: (value: string | null) => { error = value; },
+      homeListFilterRef: { current: 'active' }, requestedListFilter: 'active',
+      selectedDeviceId: 'a', advanceHomeSyncGeneration: () => undefined,
+    };
+    const render = () => new Function(...Object.keys(bindings), listScopeEffect)(...Object.values(bindings));
+    render();
+    error = 'A failed';
+    render();
+    expect(error).toBe('A failed');
+    bindings.selectedDeviceId = 'b';
+    render();
+    expect(homeFeedback({
+      connectionError: error, homeListOwnedDeviceIdsRef: { current: new Set() },
+    })).toMatchObject({ initialHomeLoading: true, initialHomeError: false });
+  });
+
+  // Unit regression for the reported active/archive flash: run Home's actual
+  // presentation expressions after startup has already settled. Existing tests
+  // only exercised connection banners and never a new list scope or search.
+  it.each([
+    { homeListFilterChanged: true },
+    { homeListOwnedDeviceIdsRef: { current: new Set() } },
+    { rawDeviceConnectionStates: { mac: 'syncing' } },
+    { indexedSearch: { status: 'searching' } },
+  ])('keeps an empty list loading during %o after the first sync', (state) => {
+    expect(homeFeedback(state).initialHomeLoading).toBe(true);
+  });
+
+  it('shows a failed reload as an error instead of a successful empty result', () => {
+    expect(homeFeedback({ connectionError: 'failed' })).toMatchObject({
+      initialHomeLoading: false, initialHomeError: true,
+    });
+    expect(homeFeedback({})).toMatchObject({ initialHomeLoading: false, initialHomeError: false });
+  });
+
   it('does not offer manual sync for the device-prefixed unresponsive error shown on Home', () => {
     expect(resolveConnectionBannerSyncActionVisibility({
       online: true,
@@ -255,7 +313,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const [groupByProject, setGroupByProject]');
     expect(source).toContain('testID="home.deviceMenu"');
     expect(source).toContain('testID="home.chromeMenu"');
-    expect(source).toContain('testID="home.displaySettingsButton"');
+    // The display-menu e2e anchor belongs to its extracted platform component;
+    // nativeGlassControls.test.tsx checks it on the rendered menu.
     expect(source).toContain('<HomeChromeDrawer');
     expect(source).toContain('<HomeHeaderGlassButton');
     const headerGlass = readSource('src/session/HomeHeaderGlassButton.ios.tsx');
@@ -317,9 +376,6 @@ describe('mobile home desktop-first surface', () => {
       expect(source).not.toContain(`pendingMenuActionRef.current = () => guardedPush('${route}')`);
       expect(source).toContain(`setChromeMenuOpen(false);\n          guardedPush('${route}');`);
     }
-    const teammateHome = readSource('src/session/TeammateHomeScreen.tsx');
-    expect(teammateHome).toContain("onOpenSettings={() => openDrawerPage('/settings')}");
-    expect(teammateHome).toContain("onOpenAccounts={() => afterDrawer(() => setAccounts(true))}");
     const rootLayout = readSource('app/_layout.tsx');
     expect(rootLayout).not.toContain("animation: 'slide_from_left'");
     expect(source).toContain("label={t('devices.list.allConversations')}");
@@ -730,13 +786,22 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
     expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
-    expect(source).toContain('onRefresh={() => void loadHome({ visible: true })}');
-    expect(source).toContain('onPress={() => void loadHome({ visible: true })}');
+    // 下拉刷新与同步按钮都走可见的 loadHome,并一起刷新伙伴段。
+    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    void loadHome\(\{ visible: true \}\);/);
+    expect(source).toContain('onRefresh={refreshHome}');
+    expect(source).toContain('onPress={refreshHome}');
     expect(source).toContain('patchDeviceViewsWithPresence(');
     expect(source).toContain('result.becameControllable');
     expect(source).toContain('remoteSessionStore.registerReseedHandler(item.device.deviceId');
     expect(source).toContain('syncInFlightRef');
-    expect(source).not.toContain('presenceVersion');
+    // Presence can refresh the pure project-icon projection. It must not
+    // restart network hydration/silent sync for every heartbeat.
+    expect(hydrateSource).not.toContain('presenceVersion');
+    const silentSyncSource = source.slice(
+      source.indexOf('const startSilentHomeSync = useCallback'),
+      source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'),
+    );
+    expect(silentSyncSource).not.toContain('presenceVersion');
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
   });
 
@@ -791,8 +856,12 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain('const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;');
-    expect(source).toContain('const initialHomeLoading = !initialHomeSettled && !connectionError;');
-    expect(source).toContain('const initialHomeError = !initialHomeSettled && !!connectionError;');
+    expect(homeFeedback({ initialHomeSettled: false })).toMatchObject({
+      initialHomeLoading: true, initialHomeError: false,
+    });
+    expect(homeFeedback({ initialHomeSettled: false, connectionError: 'failed' })).toMatchObject({
+      initialHomeLoading: false, initialHomeError: true,
+    });
     expect(source).toContain('const hasOpenableLiveDevice = deviceModels.some((item) => item.canOpen);');
     // 首次 loadHome 落地前(含失败态)FAB 只认 live 设备:首页列表缓存画出的会话会合成出
     // 「可用」的 primaryDevice,但缓存设备不能当 live 设备开新会话(settle 后回归 primaryDevice 语义)。

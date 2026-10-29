@@ -155,32 +155,21 @@ describe('Bot task creation cannot leave navigation permanently gated', () => {
 describe('Bot task route recovery', () => {
   const source = readFileSync(resolve(__dirname, '..', 'BotSessionView.tsx'), 'utf8');
 
-  it('keeps load failures visible and retryable instead of silently redirecting', () => {
-    expect(source).not.toContain('<Navigate');
-    expect(source).toContain("kind: 'error'");
-    expect(source).toContain('setReloadVersion');
-    expect(source).toContain('bots.sessionLoadFailedTitle');
-  });
+  // Retryable load failures are exercised through the rendered BotSessionView
+  // in botIslandVisibility.test.tsx. Valid stale URLs may redirect to their task.
 
   it('passes the live Bot roster and the teammate identity into the shared task composer', () => {
     expect(source).toContain('window.electronAPI.localDb.bots.list(');
     expect(source).toContain('lastReadAtByBotId: { [botId]: lastReadAt }');
-    expect(source).toContain('botMentions={gate.mentions}');
+    expect(source).toContain('botMentions={mentions}');
     expect(source).toContain('botIdentity={chatIdentity ?? gate.identity}');
     // The live identity is wrapped with canonicalChat so only the main private chat offers add-to-group.
     expect(source).toContain('{ ...(identity ?? gateIdentity), canonicalChat }');
     expect(source).toContain('botUnreadBoundaryAt={gate.unreadBoundaryAt}');
   });
 
-  it.each(['\n', '\r\n'])('keeps the teammate a teammate in archived transcripts with line ending %j, without touching the write path', (lineEnding) => {
-    const history = readFileSync(resolve(__dirname, '..', 'BotHistorySessionView.tsx'), 'utf8')
-      .replace(/\r?\n/g, lineEnding);
-    // 只读历史也带头像与伙伴 lockup:这个视图本来就已经查过 history(botId) 确认归属。
-    expect(history).toMatch(/window\.electronAPI\.localDb\.bots\s*\.get\(botId\)/);
-    expect(history).toContain(
-      "botIdentity={{ ...(identity ?? { id: botId, name: '' }), sessionId }}",
-    );
-  });
+  // Archived transcript identity/read-only coverage lives in the rendered
+  // BotHistorySessionView cases in botSessionPresentation.test.tsx.
 
   it('keeps welcome delivery out of the renderer navigation projection', () => {
     // 欢迎语由 main 在创建伙伴和持久任务关系的同一边界内落库。URL 只负责

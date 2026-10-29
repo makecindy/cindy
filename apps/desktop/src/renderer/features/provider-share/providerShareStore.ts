@@ -16,7 +16,7 @@ import { useSyncExternalStore } from 'react';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 
-import { getCachedDeviceProviders } from '@/hooks/useDeviceProviders';
+import { getCachedDeviceProviders, hasSubscriptionShareCatalog, isSubscriptionShareCatalogStale } from '@/hooks/useDeviceProviders';
 import { refreshRemoteCatalogSnapshot } from '@/lib/remoteCatalogSnapshot';
 import { createLogger } from '@/lib/logger';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -53,6 +53,7 @@ export interface ReceivedSnapshot {
 
 let receivedSnapshot: ReceivedSnapshot = { received: [], loaded: false };
 let receivedStarted = false;
+let unsubscribeCatalogPush: (() => void) | undefined;
 /** 推送序号：首次 `received` 命令晚于推送返回时，不得用旧列表覆盖。 */
 let receivedPushSeq = 0;
 const receivedSubscribers = new Set<() => void>();
@@ -72,6 +73,12 @@ function invalidateShareCatalogs(
     const deviceId = providerShareAgentDeviceId(shareId);
     // 没取过目录就没有要作废的缓存；取过的重取一次，让模型列表拿到「已不可用」。
     if (getCachedDeviceProviders(deviceId)) {
+      void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
+    }
+  }
+  for (const share of next) {
+    const deviceId = providerShareAgentDeviceId(share.shareId);
+    if (share.status === 'active' && isSubscriptionShareCatalogStale(deviceId)) {
       void refreshRemoteCatalogSnapshot(deviceId).catch(() => undefined);
     }
   }
@@ -136,6 +143,13 @@ export function ensureProviderShareReceivedStarted(): void {
   const api = providerShareApi();
   if (!api) return;
   receivedStarted = true;
+  unsubscribeCatalogPush = window.electronAPI?.deviceLink?.onRemotePush?.(push => {
+    if (push.channel !== 'maker:provider:changed' || !push.deviceId.startsWith('share:')) return;
+    if (!receivedSnapshot.received.some(share => providerShareAgentDeviceId(share.shareId) === push.deviceId && share.status === 'active')) return;
+    if (hasSubscriptionShareCatalog(push.deviceId)) {
+      void refreshRemoteCatalogSnapshot(push.deviceId).catch(() => undefined);
+    }
+  });
   api.onReceivedChanged((list) => {
     receivedPushSeq += 1;
     setReceived(Array.isArray(list) ? list : []);
@@ -350,6 +364,8 @@ export async function refreshProviderShareOwnerPending(): Promise<ProviderShareO
 
 /** 仅测试用：重置模块状态。 */
 export function resetProviderShareStoreForTests(): void {
+  unsubscribeCatalogPush?.();
+  unsubscribeCatalogPush = undefined;
   receivedSnapshot = { received: [], loaded: false };
   receivedStarted = false;
   receivedPushSeq = 0;

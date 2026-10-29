@@ -3,7 +3,8 @@ import { useNewSessionHostDefaults } from '@/session/useNewSessionHostDefaults';
 import { useNewSessionDefaultSelection } from '@/session/useNewSessionDefaultSelection';
 import { DEFAULT_NEW_SESSION_DRAFT, isNewSessionRuntimePending, type NewSessionAgentKind, type NewSessionStoredPreferences } from '@/session/newSession';
 import type { MobileNewMakerDefaults } from '@/device-link/mobileMakerTransport';
-import { buildMobileModelSections } from '@/session/providerModelSections';
+import type { ProviderView } from '@cindy/model-providers';
+import { flattenProviderSections, buildMobileModelSections } from '@/session/providerModelSections';
 import { act, createElement, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -16,6 +17,7 @@ vi.mock('@/session/fullAccessConfirmation', () => ({ confirmFullAccessChange: vi
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
 function usePageDefaults(bindings: Parameters<typeof useNewSessionHostDefaults>[0] & {
   preferences: NewSessionStoredPreferences | null;
+  providers?: ProviderView[];
 }) {
   const [draft, setDraft] = useState(bindings.draft);
   const [settledDeviceId, setSettledDeviceId] = useState<string | null>(null);
@@ -23,7 +25,8 @@ function usePageDefaults(bindings: Parameters<typeof useNewSessionHostDefaults>[
   const defaults = useNewSessionHostDefaults({ ...bindings, draft });
   const selectedDeviceRef = useRef(bindings.selectedDeviceId);
   selectedDeviceRef.current = bindings.selectedDeviceId;
-  const deviceProviders = useRef({ providers: [], ready: false, loading: true, unsupported: false, error: null }).current;
+  const deviceProviders = useRef({ providers: bindings.providers ?? [], ready: !!bindings.providers, loading: !bindings.providers, unsupported: false, error: null }).current;
+  const modelSections = buildMobileModelSections({ providers: deviceProviders.providers, agentKind: draft.agentKind });
   useNewSessionDefaultSelection({
     ...defaults, draft, setDraft, userTouchedRuntimeRef,
     selectedDeviceId: bindings.selectedDeviceId, selectedDeviceRef,
@@ -32,8 +35,8 @@ function usePageDefaults(bindings: Parameters<typeof useNewSessionHostDefaults>[
     autoDefaultDeviceRef: useRef(null),
     appliedPermissionMemoryRef: useRef(true),
     runtimeActionSeqRef: useRef(0), deviceProviders, deviceProvidersRef: useRef(deviceProviders),
-    catalogReadyRef: useRef(false), capabilities: null, modelRows: [],
-    modelSections: buildMobileModelSections({ providers: [], agentKind: draft.agentKind }),
+    catalogReadyRef: useRef(deviceProviders.ready), capabilities: null, modelRows: flattenProviderSections(modelSections.sections),
+    modelSections,
     flatModelsForUnsupportedHost: () => undefined, targetAgentHasFast: () => false,
     draftMemory: { getFast: () => false, getEffort: () => undefined, setFast: () => {}, setEffort: () => {} },
     settleRuntime: (_source, deviceId) => setSettledDeviceId(deviceId),
@@ -69,17 +72,17 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function mount(deviceId = 'desktop', agentKind: NewSessionAgentKind = 'codex', failedAgent?: string, storedAgent: NewSessionAgentKind | null = null, pendingAgents: NewSessionAgentKind[] = []) {
+function mount(deviceId = 'desktop', agentKind: NewSessionAgentKind = 'codex', failedAgent?: string, storedAgent: NewSessionAgentKind | null = null, pendingAgents: NewSessionAgentKind[] = [], providers?: ProviderView[]) {
   if (root) act(() => root!.unmount());
   const read = deferred<MobileNewMakerDefaults>();
   const pendingReads = new Map(pendingAgents.map((agent) => [agent, deferred<MobileNewMakerDefaults>()]));
   const bindings = {
-    selectedDeviceId: deviceId, deviceLinkStatus: 'online', selectedDeviceRef: { current: deviceId },
+    providers, selectedDeviceId: deviceId, deviceLinkStatus: 'online', selectedDeviceRef: { current: deviceId },
     outboxOwner: getMobileAuthOwner(), remoteAgentChoice: null,
     draft: { ...DEFAULT_NEW_SESSION_DRAFT, agentKind, model: 'chosen', providerId: 'provider', effort: 'high', fastMode: false },
     maker: { getNewMakerDefaults: vi.fn((agent?: string) => agent === failedAgent ? Promise.reject(new Error('read failed')) : pendingReads.get(agent as NewSessionAgentKind)?.promise ?? read.promise), applyNewMakerDraftPref: vi.fn(async () => {}) },
     openLink: vi.fn(async () => {}),
-    preferences: storedAgent ? { agentKind: storedAgent, permissionModeByAgent: {}, device: null, workspaceKind: null, workingDirByDevice: {} } : null,
+    preferences: storedAgent ? { agentKind: storedAgent, permissionModeByAgent: {}, device: null, workspaceKind: null, workingDirByDevice: {}, remoteAgentByDevice: {} } : null,
   };
   let state!: State;
   function Harness() { state = usePageDefaults(bindings); return null; }
@@ -231,4 +234,22 @@ it('caches a confirmed empty default but retries an unready host without discard
   expect(second.bindings.maker.getNewMakerDefaults).toHaveBeenCalledTimes(9);
   expect(mount().state.settled).toBe(true);
   await act(async () => {});
+});
+
+// PR #6355 Greptile P1：旧号池无模型行时仍须保留目录身份，不能误选同名自定义模型。
+// unit：真实页面 hooks + 列表构建 + 默认选择，覆盖初次默认和恢复已记住的引擎两条入口。
+it.each([null, 'pi'] as const)('旧号池没有模型行时按完整目录跟随 Auto（保存的引擎：%s）', async (storedAgent) => {
+  const auto = 'auto/group-1';
+  const provider = (id: string, source: ProviderView['source'], modelIds: string[]): ProviderView => ({
+    id, name: id, source, agents: ['pi'], connected: true,
+    auth: { method: source === 'user' ? 'apiKey' : 'managed' },
+    access: { kind: source === 'user' ? 'api' : 'managed' },
+    routing: { pi: { upstream: 'https://example.test', authStrategy: 'api-key-header' } },
+    models: { pi: modelIds.map(id => ({ id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null })) },
+  });
+  const providers = [provider('custom', 'user', [auto]), provider('pool-old', 'organization', []), provider('pool-new', 'organization', [auto])];
+  const page = mount('auto-desktop', 'pi', undefined, storedAgent, [], providers);
+  await act(async () => page.read.resolve({ worktreeEnabled: false, model: auto, providerId: 'pool-old', effort: '' }));
+  expect(page.state.draft.model).toBe(auto);
+  expect(page.state.draft.providerId).toBe('pool-new');
 });

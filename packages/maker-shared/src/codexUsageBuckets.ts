@@ -204,7 +204,10 @@ export function nextCodexBucketStaleAtMs(buckets: unknown, nowMs: number): numbe
     // 与 isCodexBucketStale 同口径: 有窗口缺时间戳就永不进入陈旧, 无需定时。
     if (resets.length !== windows.length) continue;
     const staleAt = Math.max(...resets) * 1000 + STALE_BUCKET_GRACE_MS;
-    if (staleAt > nowMs && (soonest === null || staleAt < soonest)) soonest = staleAt;
+    // isCodexBucketStale 用严格 `<` 判定: 到 staleAt 这一毫秒尚未陈旧, 下一毫秒才陈旧。
+    // 这里若用 `>` 过滤, 恰好在 staleAt 回调时会返回 null, 面板就不再安排重选,
+    // 正是 docstring 要避免的「过期促销桶一直挂着」。
+    if (staleAt >= nowMs && (soonest === null || staleAt < soonest)) soonest = staleAt;
   }
   return soonest;
 }
@@ -221,3 +224,4 @@ function readBucketTable(value: unknown): Record<string, BucketSnapshotLike> | n
   }
   return Object.keys(out).length > 0 ? out : null;
 }
+

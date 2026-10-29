@@ -147,21 +147,35 @@ export function parsePlanDecision(
   if (!Array.isArray(record.steps) || record.steps.length === 0 || record.steps.length > BOT_GROUP_PLAN_MAX_STEPS) {
     return null;
   }
-  const steps: PlanStepDraft[] = [];
+  const items: Array<{ botId: string; task: string }> = [];
   for (const item of record.steps) {
     if (!item || typeof item !== 'object') return null;
     const { botId, task } = item as { botId?: unknown; task?: unknown };
     if (typeof botId !== 'string' || !memberIds.has(botId)) return null;
     if (typeof task !== 'string') return null;
+    items.push({ botId, task });
+  }
+  const steps = draftPlanSteps(items);
+  if (!steps) return null;
+  if (mode === 'auto' && new Set(steps.map((step) => step.botId)).size < 2) return { needsPlan: false };
+  return { needsPlan: true, steps };
+}
+
+/**
+ * Card steps from an organizer's answer or a request that wrote them out (§7.0). Each step stops
+ * for 继续, so one member's consecutive work is one step; code, not a prompt, keeps it so.
+ * Null when a task is empty or the merged steps exceed the plan limit.
+ */
+export function draftPlanSteps(items: ReadonlyArray<{ botId: string; task: string }>): PlanStepDraft[] | null {
+  const steps: PlanStepDraft[] = [];
+  for (const { botId, task } of items) {
     const flat = task.replace(/\s+/g, ' ').trim();
     if (!flat) return null;
-    // Each step stops for 继续, so one member's consecutive work is one step (code, not prompt, keeps it so).
     const previous = steps[steps.length - 1];
     if (previous && previous.botId === botId) previous.task = clamp(`${previous.task}；${flat}`, BOT_GROUP_PLAN_TASK_MAX_CHARS);
     else steps.push({ botId, task: clamp(flat, BOT_GROUP_PLAN_TASK_MAX_CHARS) });
   }
-  if (mode === 'auto' && new Set(steps.map((step) => step.botId)).size < 2) return { needsPlan: false };
-  return { needsPlan: true, steps };
+  return steps.length && steps.length <= BOT_GROUP_PLAN_MAX_STEPS ? steps : null;
 }
 
 export interface PlanStepBriefInput {

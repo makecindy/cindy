@@ -202,12 +202,21 @@ describe('cindy_telegram_bot sends into the current lane', () => {
 
   it('send_media goes through the transport; guests may only upload files inside the task directory', async () => {
     const t = fakeTransport();
-    const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-mcp-'));
-    const inside = path.join(workingDir, 'chart.png');
-    fs.writeFileSync(inside, 'png');
-    const escapeLink = path.join(workingDir, 'hosts-link');
-    fs.symlinkSync('/etc/hosts', escapeLink);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-mcp-'));
     try {
+      const workingDir = path.join(root, 'work');
+      const outsideDir = path.join(root, 'outside');
+      fs.mkdirSync(workingDir);
+      fs.mkdirSync(outsideDir);
+      const inside = path.join(workingDir, 'chart.png');
+      const outside = path.join(outsideDir, 'private.txt');
+      fs.writeFileSync(inside, 'png');
+      fs.writeFileSync(outside, 'fixture');
+      const escapeDir = path.join(workingDir, 'outside-link');
+      // A file reached through a directory link still escapes realpath containment;
+      // Windows junctions keep this regression runnable without symlink privileges.
+      fs.symlinkSync(outsideDir, escapeDir, process.platform === 'win32' ? 'junction' : 'dir');
+      const escapeLink = path.join(escapeDir, 'private.txt');
       await withServer(
         groupScope(t),
         async (call) => {
@@ -217,7 +226,7 @@ describe('cindy_telegram_bot sends into the current lane', () => {
             file: 'chart.png',
           });
           expect(t.sendMedia).toHaveBeenLastCalledWith('g/-100/7', { kind: 'photo', absPath: fs.realpathSync.native(inside), caption: 'c' });
-          expect(await call('send_media', { kind: 'document', path: '/etc/passwd' })).toMatchObject({
+          expect(await call('send_media', { kind: 'document', path: outside })).toMatchObject({
             ok: false,
             errorCode: 'PERMISSION_DENIED',
           });
@@ -226,6 +235,7 @@ describe('cindy_telegram_bot sends into the current lane', () => {
             ok: false,
             errorCode: 'PERMISSION_DENIED',
           });
+          expect(t.sendMedia).toHaveBeenCalledTimes(1);
           expect(await call('send_media', { kind: 'document', path: 'relative.bin' })).toMatchObject({ errorCode: 'PATH_NOT_ABSOLUTE' });
           expect(await call('send_media', { kind: 'sticker', file_id: 'CAAC1' })).toMatchObject({ ok: true });
           expect(await call('send_media', { kind: 'photo' })).toMatchObject({ ok: false, errorCode: 'NO_SOURCE' });
@@ -234,10 +244,10 @@ describe('cindy_telegram_bot sends into the current lane', () => {
       );
       // The owner may send any absolute path (same as the Feishu send_file_to_user tool).
       await withServer(ownerDmScope(t), async (call) => {
-        expect(await call('send_media', { kind: 'document', path: '/etc/hosts' })).toMatchObject({ ok: true });
+        expect(await call('send_media', { kind: 'document', path: outside })).toMatchObject({ ok: true });
       });
     } finally {
-      fs.rmSync(workingDir, { recursive: true, force: true });
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -31,13 +31,13 @@ export function resolveRetainedRuntimeEffort(input: {
 interface RuntimeSelectionAxesSession {
   agentKind: AgentKind;
   setEffort: (effort: Effort) => Promise<void>;
-  setFastMode: (enabled: boolean) => Promise<void>;
+  setFastMode: (enabled: boolean | 'ultrafast') => Promise<void>;
 }
 
 export interface ApplyRuntimeSelectionAxesWithRecoveryInput {
   session: RuntimeSelectionAxesSession;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   applyEffort?: boolean;
   applyFastMode?: boolean;
   assertCanCommit?: () => void;

@@ -59,7 +59,7 @@ export interface CreateImOrchestratorOptions {
    * 这条连接属于哪位伙伴: 主人私聊进伙伴主任务, 群 / 话题 / 外部私聊进伙伴的隐藏
    * 专线(需 adapter.companionLane)。缺省 = 渠道自己的路由。
    */
-  companionBotId?: string;
+  companionBotId?: string | (() => string | null);
 }
 
 /**
@@ -72,7 +72,7 @@ const registry = new Map<string, ImOrchestrator>();
 // routing from the saved channel identity, without creating/resuming a session.
 onChannelTurn(async (session, phase, source) => {
   if (phase !== 'starting') return;
-  if (source === 'provider-wake') {
+  if (source === 'provider-wake' || source === 'provider-wake-local') {
     // No send precedes a harness wake-up: its first event fans out right after this synchronous
     // call. Only output already wired for a channel can be marked in time; a cold route restored
     // after the row query would relay from mid-turn, so it is not attempted. Same admission as
@@ -167,7 +167,7 @@ export function createImOrchestrator(
         ? acquirePendingAgentSwitchForImSend(sessionId, () => defaultRouteSync.syncUnderLock(sessionId))
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
-    // 发送前上下文体检与桌面直发同源(到线换窗 / 空闲间隔刷新 / 坏历史重建)。
+    // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
     prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId

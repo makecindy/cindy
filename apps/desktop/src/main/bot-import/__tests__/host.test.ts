@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
-import { deserializeImportSnapshotAsync, fingerprint } from '../files.js';
+import { deserializeImportSnapshotAsync, serializeImportSnapshotAsync, fingerprint } from '../files.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
 import { t } from '../../i18n.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
@@ -22,16 +22,17 @@ import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 
 const h = vi.hoisted(() => ({ root: '', botId: '', created: false, verified: false, sourceEnabled: true, failReadyWrite: false, boundary: false,
   snapshot: null as unknown as ImportSnapshot, store: null as unknown as ReturnType<typeof createCompanionEnvironmentStore>,
-  routines: [] as Routine[], pause: vi.fn(), lifecycle: vi.fn(), sourceEnvironment: {} as Record<string, string>,
+  routines: [] as Routine[], pause: vi.fn(), lifecycle: vi.fn(), sourceEnvironment: {} as Record<string, string>, native: false, invitation: vi.fn(),
   profile: { config: {} } as Record<string, unknown>, importMedia: vi.fn(), writeProfile: vi.fn(), importDocument: vi.fn(), readName: vi.fn(), secretValues: new Map<string, string>(),
   connectImBot: vi.fn(),
 }));
-vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
+vi.mock('electron', () => ({ app: { getPath: () => h.root, getAppPath: () => process.cwd(), isPackaged: false } }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.root, ownerScopedUserDataPath: () => h.root, getActiveAppSession: () => ({ dataOwnerId: 'fixture-owner' }), isAppSessionBoundaryPending: () => h.boundary }));
 vi.mock('../../localDb/ipc/bots.js', () => ({
   listBotRemoteResourceSources: async () => [],
   getBotRemoteResourceSource: vi.fn(),
   createBotProfile: vi.fn(), createBotCanonicalSession: async () => ({ canonicalSessionId: 'chat' }),
+  prepareImportedBotInvitation: h.invitation,
   getBotMemoryService: () => ({ importDocument: h.importDocument }), reconcileBotProfileFolder: async () => {},
 }));
 vi.mock('../../localDb/ipc/botAvatarSelection.js', () => ({ validateBotAvatarBuffer: vi.fn(), decodeBotAvatarImage: vi.fn() }));
@@ -63,7 +64,9 @@ vi.mock('../../routines/service.js', () => ({
     list: async () => structuredClone(h.routines),
     createOnce: async (botId: string, input: RoutineInput, id: string) => {
       // The real engine publishes creationId as the stable routine ID.
-      expect((await h.store.read(h.root, botId, () => {}))?.automations?.[id]?.handover).toBe(h.sourceEnabled ? 'pending' : 'ready');
+      const binding = (await h.store.read(h.root, botId, () => {}))?.automations?.[id];
+      if (h.native) { expect(binding).toBeUndefined(); expect(input.enabled).toBe(false); }
+      else expect(binding?.handover).toBe(h.sourceEnabled ? 'pending' : 'ready');
       const routine = { ...input, botId, id, revision: 1, createdAt: 1, updatedAt: 1 };
       h.routines.push(routine); return routine;
     },
@@ -73,7 +76,8 @@ vi.mock('../../routines/service.js', () => ({
     h.routines = h.routines.map(row => row.id === id ? { ...row, ...input, revision: row.revision + 1 } : row);
   } }),
 }));
-import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady } from '../host.js';
+import { readNativeBotPackage } from '../nativePackage.js';
+import { submitRemoteCompanionImport, readRemoteCompanionImport, listCompanionImportSources, previewCompanionImport, startCompanionImport, getCompanionImportResult, getCompanionImportSetupStatus, recoverCompanionImports, prepareCompanionImportDeletion, cancelCompanionImportsForDeletion, ensureImportedAutomationReady, listNativeBotPackages, inviteNativeBotPackage } from '../host.js';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock.js';
 import { assertImportedAutomationReady, prepareImportedAutomation } from '../automationRuntime.js';
 import { decodeBotAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
@@ -84,6 +88,7 @@ import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutom
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-host-test-'));
+  h.native = false; h.invitation.mockReset().mockResolvedValue(undefined);
   h.created = false; h.verified = false; h.sourceEnabled = true; h.failReadyWrite = false; h.boundary = false; h.routines = []; h.pause.mockReset(); h.sourceEnvironment = {};
   h.connectImBot.mockReset().mockResolvedValue(undefined);
   h.lifecycle.mockReset().mockImplementation(async (_botId: string, action: string) => {
@@ -112,6 +117,231 @@ beforeEach(async () => {
 });
 afterEach(async () => { vi.restoreAllMocks(); await fs.rm(h.root, { recursive: true, force: true }); });
 
+// SOUL receives the package identity text verbatim; the catalog entry does not expose it.
+const nativeIdentity = async (packageId: string) => (await readNativeBotPackage(path.resolve('resources/bot-packages'), packageId))
+  .snapshot.items.find(item => item.role === 'identity')!.text;
+async function nativeFinished(result: Awaited<ReturnType<typeof inviteNativeBotPackage>>) {
+  // Admission can return while the transfer still owns the profile lock.
+  // Wait for that transfer (including file writes and checkpoint cleanup),
+  // rather than racing Windows IO against a fixed 500ms polling budget.
+  if (result.status === 'running') {
+    await withBotProfileLocks([result.botId], async () => {});
+    // The result reader may acquire the same lock for reconciliation.
+    result = (await getCompanionImportResult(result.requestId))!;
+  }
+  expect(result.status).not.toBe('running');
+  return result;
+}
+it('invites a bundled native package through the original receipt and full file writers, without source handover', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'nightly-audit-engineer')!;
+  const result = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'zh-CN' }, 'renderer:1'));
+  expect(result).toMatchObject({ saved: true, status: 'complete' });
+  expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ description: entry.description, prepareInvitation: false }));
+  expect(h.profile.identitySource).toBe(await nativeIdentity(entry.packageId));
+  expect((h.profile.config as Record<string, unknown>).mcpServers).toBeUndefined();
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+  expect(h.importDocument.mock.calls[0]?.[4]).toBe('reference');
+  expect(h.routines).toHaveLength(1); expect(h.routines[0]?.enabled).toBe(false);
+  expect(h.pause).not.toHaveBeenCalled(); expect(verifyImportedAutomation).not.toHaveBeenCalled();
+  expect(discoverImportSources).not.toHaveBeenCalled(); expect(inspectImportSource).not.toHaveBeenCalled();
+  expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, 'zh-CN', expect.objectContaining({
+    onboardingSkill: 'nightly-audit-engineer-getting-started', capabilities: entry.capabilities.map(capability => capability.label) }));
+  expect(createMessage).not.toHaveBeenCalled();
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', result.requestId + '.json'), 'utf8'));
+  expect(receipt.nativePackage).toMatchObject({ packageId: entry.packageId, packageHash: entry.packageHash });
+  expect(receipt.copied).toHaveLength(5); // identity, three Skills (incl. onboarding), method reference
+  expect(await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills', 'nightly-audit-engineer-evidence', 'scripts', 'finding_keys.py'), 'utf8')).toContain('def ');
+});
+it('serializes concurrent package invitations from different windows onto one request and companion', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  const results = await Promise.all([inviteNativeBotPackage(entry, 'renderer:1'), inviteNativeBotPackage(entry, 'renderer:2')]);
+  await nativeFinished(results[0]!);
+  expect(results[0]?.requestId).toBe(results[1]?.requestId);
+  expect(results[0]?.botId).toBe(results[1]?.botId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+});
+it('recovers a failed native knowledge write using the same receipt without copying identity as user memory', async () => {
+  h.native = true;
+  h.importDocument.mockRejectedValueOnce(new Error('fixture disk failure'));
+  const entry = (await listNativeBotPackages())[0]!;
+  const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  expect(partial.status).toBe('needs-attention'); expect(partial.saved).toBe(true);
+  expect(h.invitation).not.toHaveBeenCalled();
+  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.botId).toBe(partial.botId); expect(complete.requestId).toBe(partial.requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(2);
+});
+const olderInstall = async (requestId: string) => {
+  const file = path.join(h.root, 'companion-imports', `${requestId}.json`);
+  const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
+  receipt.nativePackage.packageVersion = '0.5.0';
+  receipt.nativePackage.packageHash = fingerprint('older package');
+  receipt.nativePackage.opening.welcome = 'Older package welcome';
+  await fs.writeFile(file, JSON.stringify(receipt));
+  const stored = await h.store.read(h.root, receipt.result.botId, () => {});
+  if (stored?.pendingImport) {
+    const snapshot = await deserializeImportSnapshotAsync(stored.pendingImport.snapshotJson, () => {});
+    snapshot.nativePackage = { ...snapshot.nativePackage!, ...receipt.nativePackage };
+    stored.pendingImport.snapshotJson = await serializeImportSnapshotAsync(snapshot, () => {});
+    await h.store.write(h.root, receipt.result.botId, stored, () => {});
+  }
+  return receipt.nativePackage;
+};
+it('resumes an unfinished save of an older installed version from its stored checkpoint, as the same request', async () => {
+  h.native = true;
+  h.importDocument.mockRejectedValueOnce(new Error('fixture disk failure'));
+  const entry = (await listNativeBotPackages())[0]!;
+  const partial = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  expect(partial.status).toBe('needs-attention');
+  const originalPackage = await olderInstall(partial.requestId);
+  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(partial.requestId); expect(complete.botId).toBe(partial.botId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  const receipt = JSON.parse(await fs.readFile(path.join(h.root, 'companion-imports', `${partial.requestId}.json`), 'utf8'));
+  expect(receipt.nativePackage).toEqual(originalPackage);
+  expect(h.invitation).toHaveBeenCalledWith(partial.botId, partial.requestId, originalPackage.locale, originalPackage.opening);
+});
+it('keeps an older installed version unchanged when it has no unfinished checkpoint', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  await olderInstall(first.requestId);
+  const again = await inviteNativeBotPackage(entry, 'renderer:2');
+  expect(again.requestId).toBe(first.requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+});
+it('restarts an older install that never saved its checkpoint, as the same request and companion', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  // The request index is written before the checkpoint; a failure in between leaves a receipt with nothing created or copied.
+  vi.spyOn(h.store, 'write').mockRejectedValueOnce(new Error('fixture failure before checkpoint'));
+  await inviteNativeBotPackage(entry, 'renderer:1').catch(() => undefined);
+  const indexes = await fs.readdir(path.join(h.root, 'companion-imports'));
+  expect(indexes).toHaveLength(1);
+  const requestId = indexes[0]!.slice(0, -'.json'.length);
+  expect(h.created).toBe(false);
+  await olderInstall(requestId);
+  const complete = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(h.importDocument).toHaveBeenCalledTimes(1);
+});
+// PR #6520 discussion_r4358525338 (unit): inviteNativeBotPackage must persist the package actually installed.
+// Existing restart tests covered completion/name only; a pre-checkpoint failure followed by an upgrade left stale receipt metadata.
+it('restarts with current package metadata while preserving the original language and rejecting later hash drift', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  vi.spyOn(h.store, 'write').mockRejectedValueOnce(new Error('fixture failure before checkpoint'));
+  await inviteNativeBotPackage({ ...entry, locale: 'ja' }, 'renderer:1').catch(() => undefined);
+  const indexes = await fs.readdir(path.join(h.root, 'companion-imports'));
+  expect(indexes).toHaveLength(1);
+  const requestId = indexes[0]!.slice(0, -'.json'.length);
+  await olderInstall(requestId);
+  // The profile name is part of the stored selection identity, so a language switched since then must not change it.
+  const complete = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:2'));
+  expect(complete.status).toBe('complete'); expect(complete.requestId).toBe(requestId);
+  expect(createBotProfile).toHaveBeenCalledTimes(1);
+  expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ name: entry.locales!.ja!.name }));
+  const file = path.join(h.root, 'companion-imports', `${requestId}.json`);
+  const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
+  const ja = entry.locales!.ja!;
+  expect(receipt.nativePackage).toMatchObject({ packageId: entry.packageId, packageVersion: entry.packageVersion,
+    packageHash: entry.packageHash, locale: 'ja', opening: { welcome: ja.welcome,
+      capabilities: ja.capabilities.map(capability => capability.label) } });
+  expect(receipt.nativePackage.opening).toEqual(h.invitation.mock.calls[0]![3]);
+  expect(receipt.result.requestId).toBe(requestId);
+  // Keep the catalog identity valid: only the saved hash differs, so this exercises the receipt's drift fence.
+  receipt.nativePackage.packageHash = fingerprint('different content at the same version');
+  await fs.writeFile(file, JSON.stringify(receipt));
+  await expect(inviteNativeBotPackage({ ...entry, locale: 'en' }, 'renderer:3')).rejects.toMatchObject({ code: 'SELECTION_CHANGED' });
+});
+it('saves the teammate, opening and routine names in the language the invite was made in', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'engineer-bot')!;
+  const result = await nativeFinished(await inviteNativeBotPackage({ ...entry, locale: 'ja' }, 'renderer:1'));
+  expect(result).toMatchObject({ saved: true, status: 'complete' });
+  const ja = entry.locales!.ja!;
+  expect(createBotProfile).toHaveBeenCalledWith(expect.objectContaining({ name: ja.name, description: ja.description, prepareInvitation: false }));
+  expect(h.routines[0]).toMatchObject({ name: ja.routines[0]!.name, enabled: false });
+  // The opening (scripted fallback and model input) is Japanese too: greeting and starter choices of this package.
+  expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, 'ja', expect.objectContaining({
+    welcome: ja.welcome, capabilities: ja.capabilities.map(capability => capability.label),
+    onboardingSkill: 'engineer-bot-getting-started', starterOptions: expect.arrayContaining([expect.stringMatching(/[぀-ヿ]/)]) }));
+  // The identity prompt stays the package's own, whatever language the invite was made in.
+  expect(h.profile.identitySource).toBe(await nativeIdentity(entry.packageId));
+});
+it('respects the original memory switch without enabling it or importing identity as reference', async () => {
+  h.native = true; h.profile = { config: { memory: false } };
+  const entry = (await listNativeBotPackages())[0]!;
+  const result = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  expect(result.status).toBe('needs-attention');
+  expect(result.checks).toContainEqual(expect.objectContaining({ message: 'MEMORY_DISABLED' }));
+  expect(h.importDocument).not.toHaveBeenCalled(); expect(h.profile.config).toEqual({ memory: false });
+  expect(h.profile.identitySource).toBe(await nativeIdentity(entry.packageId));
+  // Memory off is the user's choice: the teammate still opens the conversation.
+  expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, undefined, expect.objectContaining({ onboardingSkill: expect.any(String) }));
+});
+it('still opens the conversation when only a disabled routine definition fails to save', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages()).find(entry => entry.routines.length > 0)!;
+  const create = vi.spyOn(h, 'routines', 'get');
+  create.mockReturnValue(new Proxy([], { get: (target, key) => key === 'push' ? () => { throw new Error('ROUTINE_ENGINE_PASSIVE'); } : Reflect.get(target, key) }) as never);
+  const result = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  create.mockRestore();
+  expect(result).toMatchObject({ saved: true, status: 'needs-attention' });
+  expect(result.checks.filter(check => check.status === 'needs-attention').every(check => check.entryId.startsWith('routine-'))).toBe(true);
+  expect(h.invitation).toHaveBeenCalledWith(result.botId, result.requestId, undefined, expect.objectContaining({ welcome: entry.welcome }));
+});
+it('keeps deletion cancellation as a fence and allocates a new request only for an explicit reinstall', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  await withBotProfileLocks([first.botId], () => cancelCompanionImportsForDeletion(first.botId));
+  expect((await getCompanionImportResult(first.requestId))?.checks).toContainEqual(expect.objectContaining({ message: 'IMPORT_CANCELLED' }));
+  expect((await listNativeBotPackages())[0]?.installation).toBeUndefined();
+  h.created = false;
+  const second = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:2'));
+  expect(second.requestId).not.toBe(first.requestId); expect(second.botId).not.toBe(first.botId);
+  expect(createBotProfile).toHaveBeenCalledTimes(2);
+});
+it('rejects stale package identities before profile or source operations, and isolates the owner catalog', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages())[0]!;
+  await expect(inviteNativeBotPackage({ ...entry, packageHash: '0'.repeat(64) }, 'renderer:1')).rejects.toThrow('SELECTION_CHANGED');
+  expect(createBotProfile).not.toHaveBeenCalled();
+  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  const originalRoot = h.root;
+  const nextOwnerRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-import-native-owner-test-'));
+  try { h.root = nextOwnerRoot; expect((await listNativeBotPackages())[0]?.installation).toBeUndefined(); }
+  finally { h.root = originalRoot; await fs.rm(nextOwnerRoot, { recursive: true, force: true }); }
+  expect((await listNativeBotPackages())[0]?.installation?.requestId).toBe(first.requestId);
+});
+
+it('keeps an already installed teammate working after its package leaves the catalog', async () => {
+  h.native = true;
+  const entry = (await listNativeBotPackages()).find(entry => entry.packageId === 'cooper')!;
+  const first = await nativeFinished(await inviteNativeBotPackage(entry, 'renderer:1'));
+  // The receipt of a package that is no longer bundled (a teammate retired from the catalog).
+  const file = path.join(h.root, 'companion-imports', `${first.requestId}.json`);
+  // A complete result can precede checkpoint cleanup. Join its lifecycle lock so
+  // the trailing receipt save cannot overwrite this retired-package fixture.
+  await withBotProfileLocks([first.botId], async () => {
+    const receipt = JSON.parse(await fs.readFile(file, 'utf8'));
+    receipt.nativePackage.packageId = 'retired-example';
+    await fs.writeFile(file, JSON.stringify(receipt));
+  });
+  const catalog = await listNativeBotPackages();
+  expect(catalog.map(item => item.packageId)).not.toContain('retired-example');
+  expect(catalog.every(item => item.installation === undefined)).toBe(true);
+  expect((await getCompanionImportResult(first.requestId))?.status).toBe('complete');
+  await expect(inviteNativeBotPackage({ ...entry, packageId: 'retired-example' }, 'renderer:2')).rejects.toThrow('INVALID_PACKAGE');
+  await withBotProfileLocks([first.botId], () => cancelCompanionImportsForDeletion(first.botId));
+  expect((await getCompanionImportResult(first.requestId))?.checks).toContainEqual(expect.objectContaining({ message: 'IMPORT_CANCELLED' }));
+});
 it('compiles credential matching once for a large preview and preserves all entries', async () => {
   const secret = (index: number) => `fixture-compiled-secret-${index.toString().padStart(5, '0')}`;
   h.snapshot.items = [
@@ -1244,9 +1474,13 @@ it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])
   const [source] = await listCompanionImportSources('phone');
   const preview = await previewCompanionImport(source!.id, 'phone');
   const selection = { previewId: preview.id, requestId: 'fixture-recovered-docs', name: 'Ada', entryIds: ['memory-original-entry'], takeover: false, deferSetup: true };
-  await startCompanionImport(selection, 'phone');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  const accepted = await startCompanionImport(selection, 'phone');
+  // CI on Windows can accept before real memory writes finish. Join the host's
+  // existing profile lock instead of polling under a fixed wall-clock budget;
+  // retain the partial-save and stable-ID assertions through the real import.
+  await withBotProfileLocks([accepted.botId], async () => {});
   const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result.status).toBe('needs-attention');
   // Simulate the old durable checkpoint, without an available source tree.
   await h.store.update(h.root, result.botId, () => {}, environment => {
     const snapshot = JSON.parse(environment.pendingImport!.snapshotJson);
@@ -1256,7 +1490,9 @@ it.each(['short-legacy-document', `memory-${'a'.repeat(20)}-${'b'.repeat(20)}`])
   const firstFiles = (await storage.list()).map(record => record.filename);
   expect(firstFiles).toHaveLength(1);
   await startCompanionImport(selection, 'reconnected');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  await withBotProfileLocks([result.botId], async () => {});
+  const completed = await getCompanionImportResult(selection.requestId);
+  expect(completed?.status).toBe('complete');
   expect((await storage.list()).map(record => record.filename)).toEqual(firstFiles);
   const ids = h.importDocument.mock.calls.map(call => call[1] as string);
   expect(ids[0]).toBe(ids[1]);

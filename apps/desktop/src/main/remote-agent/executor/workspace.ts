@@ -29,6 +29,13 @@ export interface ExecutorWorkspaceRoots {
   aliases?: readonly ExecutorPathAlias[];
 }
 
+/** 单条返回结果共用的路径视图；不用于文件访问授权。 */
+export interface ExecutorAgentProjection {
+  toAgentPath(input: string): string;
+  mapTextForAgent(text: string, context?: PathTextContext): string;
+  mapOutputForAgent(data: Buffer): Buffer;
+}
+
 export class ExecutorPathError extends Error {
   constructor(message: string) {
     super(message);
@@ -61,6 +68,36 @@ export function realPathOrAncestor(target: string): string {
 /** Windows 的 native realpath 可能返回长路径，而 Node 的普通实现保留短路径写法；两者都要覆盖。 */
 function realPathOrAncestorPortable(target: string): string {
   return realPathOrAncestorWith(target, fs.realpathSync);
+}
+
+/** realpath 的磁盘访问交给 Node 文件系统线程池，不能在输出热路径阻塞 Electron。 */
+async function realPathOrAncestorAsync(
+  target: string, resolveRealpath: (target: string) => Promise<string> = fs.promises.realpath,
+): Promise<string> {
+  let current = path.resolve(target);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = await resolveRealpath(current);
+      return rest.length ? path.join(real, ...rest.reverse()) : real;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function portableRealpathAsync(target: string): Promise<string> {
+  return new Promise((resolve, reject) => fs.realpath(target, (error, real) => error ? reject(error) : resolve(real)));
+}
+
+function projectUtf8Output(data: Buffer, project: (text: string) => string): Buffer {
+  const text = data.toString('utf8');
+  if (data.includes(0) || !Buffer.from(text, 'utf8').equals(data)) return data;
+  const projected = project(text);
+  return projected === text ? data : Buffer.from(projected, 'utf8');
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -272,15 +309,33 @@ export function mapJsonPathText(
   });
 }
 
+interface ProjectionPlan { size: number; entries: ExecutorPathAlias[]; prefixes?: AliasPrefixes<ExecutorPathAlias> }
+
+/**
+ * 别名排序和前缀正则只与别名数组有关，按数组引用缓存(#7710)：每段输出、每个流式 delta 都要投影，
+ * 别名几百条时逐次重建会占满主线程。数组必须整体替换，不得原地修改；长度变了也视为失效。
+ */
+const projectionPlans = new WeakMap<readonly ExecutorPathAlias[], Map<boolean, ProjectionPlan>>();
+
+function projectionPlan(aliases: readonly ExecutorPathAlias[], escapedSeparators: boolean): ProjectionPlan {
+  let byEscape = projectionPlans.get(aliases);
+  if (!byEscape) projectionPlans.set(aliases, byEscape = new Map());
+  const cached = byEscape.get(escapedSeparators);
+  if (cached?.size === aliases.length) return cached;
+  const entries = aliases.filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
+    .sort((a, b) => b.from.length - a.from.length);
+  const plan: ProjectionPlan = { size: aliases.length, entries, prefixes: entries.length ? aliasPrefixes(entries, { escapedSeparators }) : undefined };
+  byEscape.set(escapedSeparators, plan);
+  return plan;
+}
+
 /** 对已知目录做单次双向投影，最长前缀先匹配，防止替换结果再次被短祖先别名改写。 */
 export function projectPathText(
   text: string, aliases: readonly ExecutorPathAlias[], context: PathTextContext = 'text',
   isCompletePath?: (mapped: string) => boolean, options: ProjectPathTextOptions = {},
 ): string {
-  const entries = aliases.filter((alias) => alias.from.replace(/[\\/]+$/, '').length > 2)
-    .sort((a, b) => b.from.length - a.from.length);
-  if (!entries.length) return text;
-  const prefixes = aliasPrefixes(entries, { escapedSeparators: options.escapedSeparators });
+  const { entries, prefixes } = projectionPlan(aliases, options.escapedSeparators ?? false);
+  if (!prefixes) return text;
   const { spellings } = options;
   // 同一个路径在 JSON 字符串里和正文里的转义不同，原写法按所处层级分别记录与还原。
   let depth = 0;
@@ -505,11 +560,15 @@ export class PathSpellings {
   }
 }
 
+const NO_PREFIXES: readonly string[] = [];
+
 export class ExecutorWorkspace {
   readonly workingDir: string;
   private roots: string[];
   private extraDirs: string[];
   private aliases: ExecutorPathAlias[];
+  /** 由 this.aliases 派生的数组，按它的引用缓存；别名整体替换后自然失效(#7710)。 */
+  private derived?: { aliases: ExecutorPathAlias[]; toLocal?: ExecutorPathAlias[]; prefixes?: readonly string[]; toAgent?: ExecutorPathAlias[] };
   private virtualRoot?: string;
 
   constructor(roots: ExecutorWorkspaceRoots) {
@@ -533,6 +592,10 @@ export class ExecutorWorkspace {
         if (path.resolve(canonical) !== path.resolve(alias.to)) expanded.push({ from: alias.from, to: canonical });
       }
     }
+    this.installAliases(expanded);
+  }
+
+  private installAliases(expanded: readonly ExecutorPathAlias[]): void {
     const seen = new Set<string>();
     this.aliases = expanded
       .filter((alias) => {
@@ -542,6 +605,14 @@ export class ExecutorWorkspace {
         return true;
       })
       .sort((a, b) => b.from.length - a.from.length);
+  }
+
+  /**
+   * 连回同一个会话时补进对方新给的映射。已有的保持原来的目标、排在同长度的新映射前面：对话里出现过的
+   * 虚拟路径(含运行中分配的 runtime-*)接回后仍指向同一个本机目录，不会被换成别的目录。
+   */
+  addAliases(aliases: readonly ExecutorPathAlias[]): void {
+    this.setAliases([...this.aliases, ...aliases]);
   }
 
   /**
@@ -580,6 +651,22 @@ export class ExecutorWorkspace {
     });
   }
 
+  /** exec-server 初始化返回的目录也异步解析；等待期间新增的别名不能被旧快照覆盖。 */
+  async virtualizeDirsAsync(dirs: readonly string[]): Promise<void> {
+    if (!this.virtualRoot) return;
+    const native = /^[A-Za-z]:|^\\\\/.test(this.virtualRoot) ? path.win32 : path.posix;
+    for (const dir of dirs) {
+      const real = this.resolve(dir);
+      if (this.aliases.some((alias) => path.resolve(alias.to) === real)) continue;
+      const canonical = await Promise.all([
+        realPathOrAncestorAsync(real), realPathOrAncestorAsync(real, portableRealpathAsync),
+      ]);
+      if (this.aliases.some((alias) => path.resolve(alias.to) === real)) continue;
+      const from = native.join(this.virtualRoot, 'additional', 'runtime-' + this.aliases.length);
+      this.installAliases([...this.aliases, ...[real, ...canonical].map((to) => ({ from, to }))]);
+    }
+  }
+
   /** 任务运行中附加目录变化时更新。 */
   setExtraDirs(extraDirs: readonly string[]): void {
     this.extraDirs = extraDirs.filter((dir) => path.isAbsolute(dir)).map((dir) => path.resolve(dir));
@@ -597,8 +684,8 @@ export class ExecutorWorkspace {
   }
 
   /** 影子路径对应的本机路径；不是影子路径(Agent 主机自己的路径)时返回 null。 */
-  localPathFromAgent(input: string): string | null {
-    for (const alias of this.aliases) {
+  localPathFromAgent(input: string, aliases: readonly ExecutorPathAlias[] = this.aliases): string | null {
+    for (const alias of aliases) {
       const rest = stripAliasPrefix(input, alias.from);
       if (rest !== null) return rest ? path.join(alias.to, ...rest.split('/')) : alias.to;
     }
@@ -627,7 +714,11 @@ export class ExecutorWorkspace {
   /** 本机真实路径投影到 Agent 主机上的路径；仅匹配完整路径段。 */
   toAgentPath(input: string): string {
     if (!this.virtualRoot) return input;
-    const aliases = [...this.aliases].sort((a, b) => b.to.length - a.to.length);
+    return this.pathToAgent(input, this.aliases);
+  }
+
+  private pathToAgent(input: string, pathAliases: readonly ExecutorPathAlias[]): string {
+    const aliases = [...pathAliases].sort((a, b) => b.to.length - a.to.length);
     for (const alias of aliases) {
       const rest = stripAliasPrefix(input, alias.to);
       if (rest === null) continue;
@@ -648,14 +739,54 @@ export class ExecutorWorkspace {
       { ...options, continuesName: this.continuesName });
   }
 
+  /** 每条结果刷新一次 canonical 目录；同一结果的所有字段复用，后续结果仍能看到 junction 的变化。 */
+  async prepareAgentProjection(): Promise<ExecutorAgentProjection> {
+    if (!this.virtualRoot) return { toAgentPath: (text) => text, mapTextForAgent: (text) => text, mapOutputForAgent: (data) => data };
+    const aliases = this.aliases;
+    const targets = [...new Set(aliases.map((alias) => alias.to))];
+    const canonical = new Map(await Promise.all(targets.map(async (target) => {
+      const paths = [realPathOrAncestorAsync(target)];
+      // Windows native realpath expands 8.3 names, while process output can retain
+      // them. Refresh both spellings when a junction changes its target.
+      if (process.platform === 'win32') paths.push(realPathOrAncestorAsync(target, portableRealpathAsync));
+      return [target, await Promise.all(paths)] as const;
+    })));
+    const projectedAliases = this.agentAliases(aliases, canonical);
+    const pathAliases = aliases.flatMap((alias) => [alias, ...canonical.get(alias.to)!.map((to) => ({ from: alias.from, to }))]);
+    const project = (text: string, context: PathTextContext = 'text') =>
+      projectPathText(text, projectedAliases, context, (mapped) => fs.existsSync(this.localPathFromAgent(mapped, aliases) ?? mapped),
+        { continuesName: this.continuesName });
+    return {
+      toAgentPath: (input) => this.pathToAgent(input, pathAliases),
+      mapTextForAgent: project,
+      mapOutputForAgent: (data) => projectUtf8Output(data, project),
+    };
+  }
+
   /** 本机真实路径(含 Git Bash 写法)→ Agent 看到的虚拟路径。 */
-  private agentAliases(): ExecutorPathAlias[] {
+  private agentAliases(aliases: readonly ExecutorPathAlias[] = this.aliases, canonical?: ReadonlyMap<string, readonly string[]>): ExecutorPathAlias[] {
+    if (canonical || aliases !== this.aliases) return this.buildAgentAliases(aliases, canonical);
+    // 每次都同步 realpath 全部别名会随输出条数相乘；同一个事件循环批次内复用，下一批重新解析(junction 变化仍可见)。
+    const derived = this.derivedAliases();
+    if (!derived.toAgent) {
+      derived.toAgent = this.buildAgentAliases(aliases, canonical);
+      setImmediate(() => { derived.toAgent = undefined; });
+    }
+    return derived.toAgent;
+  }
+
+  private derivedAliases(): NonNullable<ExecutorWorkspace['derived']> {
+    if (this.derived?.aliases !== this.aliases) this.derived = { aliases: this.aliases };
+    return this.derived;
+  }
+
+  private buildAgentAliases(aliases: readonly ExecutorPathAlias[], canonical?: ReadonlyMap<string, readonly string[]>): ExecutorPathAlias[] {
     const seen = new Set<string>();
-    return this.aliases.flatMap((alias) => {
+    return aliases.flatMap((alias) => {
       // A junction/symlink can be resolved differently by the Windows runner and by
       // the process that created the alias. Include the current canonical target at
       // projection time so both spellings still map to the same virtual directory.
-      const targets = [alias.to, realPathOrAncestor(alias.to)];
+      const targets = [alias.to, ...(canonical ? canonical.get(alias.to)! : [realPathOrAncestor(alias.to)])];
       return targets.flatMap((target) => {
         const real = target.replace(/\\/g, '/');
         const entries: ExecutorPathAlias[] = [{ from: real, to: alias.from }];
@@ -703,7 +834,8 @@ export class ExecutorWorkspace {
   };
 
   private agentPathsToLocal(): ExecutorPathAlias[] {
-    return this.aliases.map((alias) => ({ from: alias.from.replace(/\\/g, '/'), to: alias.to }));
+    const derived = this.derivedAliases();
+    return derived.toLocal ??= this.aliases.map((alias) => ({ from: alias.from.replace(/\\/g, '/'), to: alias.to }));
   }
 
   /**
@@ -833,15 +965,14 @@ export class ExecutorWorkspace {
 
   /** 展示层延迟尚未传完整的虚拟路径；别名仍由当前执行器维护。 */
   agentPathPrefixes(): readonly string[] {
-    return this.virtualRoot ? this.aliases.map((alias) => alias.from) : [];
+    if (!this.virtualRoot) return NO_PREFIXES;
+    const derived = this.derivedAliases();
+    return derived.prefixes ??= this.aliases.map((alias) => alias.from);
   }
 
   mapOutputForAgent(data: Buffer): Buffer {
-    const text = data.toString('utf8');
     // 二进制 stdout 不做 UTF-8 往返，避免 exec.run / process/output 改变原始字节。
-    if (data.includes(0) || !Buffer.from(text, 'utf8').equals(data)) return data;
-    const projected = this.mapTextForAgent(text);
-    return projected === text ? data : Buffer.from(projected, 'utf8');
+    return projectUtf8Output(data, (text) => this.mapTextForAgent(text));
   }
 
   /** Agent 写入的文件字节；original 为写入前的文本内容(见 mapContentFromAgent)。 */

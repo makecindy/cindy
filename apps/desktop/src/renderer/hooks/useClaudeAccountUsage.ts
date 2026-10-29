@@ -26,7 +26,7 @@
  */
 
 import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claudeQuotaState';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,16 +47,35 @@ export interface ClaudeAccountUsageSnapshot {
    * 此时消费方应隐藏 daily 段。
    */
   todaySpend: number | null;
+  /** 企业日额度开关；false 隐藏日额度和读取失败提示，旧网关路径不设置。 */
+  dailyLimitEnabled?: boolean;
   fetchedAt: number;
 }
 
 interface OwnerBoundSnapshot {
   ownerKey: string;
   cachedAt: number;
-  usage: ClaudeAccountUsageSnapshot;
+  usage: ClaudeAccountUsageSnapshot | null;
+  unlimited: boolean;
 }
 
 let lastSnapshot: OwnerBoundSnapshot | null = null;
+
+// All panes for one account share a read. A null push emitted by that read must
+// not make an idle pane start another forced read and wake the other panes again.
+const reads = new Map<string, Promise<unknown>>();
+function readQuota(ownerKey: string): Promise<unknown> {
+  const pending = reads.get(ownerKey);
+  if (pending) return pending;
+  const request = Promise.resolve().then(() =>
+    window.electronAPI.maker.usage.getAccount('claude-code', CLAUDE_QUOTA_STATE_READ),
+  );
+  reads.set(ownerKey, request);
+  const clear = () => { if (reads.get(ownerKey) === request) reads.delete(ownerKey); };
+  void request.then(clear, clear);
+  return request;
+}
+
 
 function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
   if (!v || typeof v !== 'object') return false;
@@ -71,17 +90,18 @@ function isSnapshot(v: unknown): v is ClaudeAccountUsageSnapshot {
 }
 
 export function useClaudeAccountUsageResult(enabled: boolean) {
-  const { dataOwnerId, mode, user } = useAuth();
+  const { dataOwnerId, dataOwnerGeneration, mode, user } = useAuth();
   const ownerKey =
     enabled &&
     dataOwnerId &&
     (mode === 'local' || (mode === 'cloud' && user?.membershipKind === 'org'))
-      ? `${mode}:${dataOwnerId}`
+      ? `${mode}:${dataOwnerId}:${dataOwnerGeneration}`
       : null;
   const [snapshot, setSnapshot] = useState<OwnerBoundSnapshot | null>(() =>
     ownerKey && lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : null,
   );
 
+  const reading = useRef(false);
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   const [request, setRequest] = useState<{ ownerKey: string; loading: boolean } | null>(null);
@@ -94,28 +114,37 @@ export function useClaudeAccountUsageResult(enabled: boolean) {
     // Display warm data immediately, but read again to replay a missed authoritative clear.
     let cancelled = false;
     setRequest({ ownerKey, loading: true });
-    void window.electronAPI.maker.usage
-      .getAccount('claude-code', CLAUDE_QUOTA_STATE_READ)
+    reading.current = true;
+    void readQuota(ownerKey)
       .then((res) => {
         if (cancelled) return;
         if (isClaudeQuotaClear(res)) {
-          if (lastSnapshot?.ownerKey === ownerKey) lastSnapshot = null;
-          setSnapshot(null);
+          lastSnapshot = {
+            ownerKey,
+            cachedAt: Date.now(),
+            usage: null,
+            unlimited: res.quotaState === 'unlimited',
+          };
+          setSnapshot(lastSnapshot);
           return;
         }
         // Unavailable reads must retain the last owner-bound snapshot.
         if (!isSnapshot(res)) return;
-        lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: res };
+        lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: res, unlimited: false };
         setSnapshot(lastSnapshot);
       })
       .catch(() => {
         /* best-effort warm-start */
       })
       .finally(() => {
-        if (!cancelled) setRequest({ ownerKey, loading: false });
+        if (!cancelled) {
+          reading.current = false;
+          setRequest({ ownerKey, loading: false });
+        }
       });
     return () => {
       cancelled = true;
+      reading.current = false;
     };
   }, [ownerKey, revision]);
 
@@ -126,16 +155,19 @@ export function useClaudeAccountUsageResult(enabled: boolean) {
       if (p === null) {
         if (lastSnapshot?.ownerKey === ownerKey) lastSnapshot = null;
         setSnapshot(null);
+        // The legacy push cannot distinguish unlimited from invalidation. Read the explicit state.
+        if (!reading.current) refresh();
         return;
       }
       if (!isSnapshot(p)) return;
-      lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: p };
+      lastSnapshot = { ownerKey, cachedAt: Date.now(), usage: p, unlimited: false };
       setSnapshot(lastSnapshot);
     });
-  }, [ownerKey]);
+  }, [ownerKey, refresh]);
 
   const currentSnapshot = lastSnapshot?.ownerKey === ownerKey ? lastSnapshot : snapshot;
   return {
+    unlimited: Boolean(ownerKey && currentSnapshot?.ownerKey === ownerKey && currentSnapshot.unlimited),
     usage: ownerKey && currentSnapshot?.ownerKey === ownerKey ? currentSnapshot.usage : null,
     loading: Boolean(ownerKey && (request?.ownerKey !== ownerKey || request.loading)),
     refresh,

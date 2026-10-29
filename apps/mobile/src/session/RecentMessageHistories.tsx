@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useSegments } from 'expo-router';
+import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { NavigationContext, NavigationRouteContext, useIsFocused } from 'expo-router/react-navigation';
 import { PaneViewportProvider, usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import { useTheme } from '@/theme';
@@ -40,6 +40,9 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
   const tasks = useSyncExternalStore(subscribeRecentTasks, getRecentTasks, getRecentTasks);
   const [entries, setEntries] = useState<Map<string, Entry>>(() => new Map());
   const segments = useSegments() as string[];
+  const sheetParams = useGlobalSearchParams<{ sideChat?: string; sideChatParentId?: string; deviceId?: string }>();
+  const coveredTaskKey = sheetParams.sideChat === '1' && sheetParams.sideChatParentId
+    ? recentTaskKey({ deviceId: sheetParams.deviceId, sessionId: sheetParams.sideChatParentId }) : null;
   const onTaskRoute = segments[0] === 'sessions' && segments[1] === '[sessionId]';
   const allowed = useMemo(() => new Set(tasks.map(task => recentTaskKey(task.params))), [tasks]);
   const publish = useCallback((entry: Entry) => {
@@ -104,7 +107,7 @@ export function RecentMessageHistoriesProvider({ children }: { children: ReactNo
           accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
           style={[styles.clip, { left: entry.frame.left, top: entry.frame.top + top,
             width: entry.frame.width, height: entry.frame.height - top - bottom,
-            backgroundColor: colors.surface, opacity: active ? 1 : 0 }]}>
+            backgroundColor: colors.surface, opacity: active || key === coveredTaskKey ? 1 : 0 }]}>
           <View collapsable={false} style={{ position: 'absolute', top: -top, width: entry.frame.width, height: entry.frame.height }}>
             {content}
           </View>
@@ -186,12 +189,22 @@ export function MessageHistoryOverlay({ children, enabled = true }: { children: 
   const focused = useIsFocused();
   const navigation = useContext(NavigationContext);
   const route = useContext(NavigationRouteContext);
+  const sheetParams = useGlobalSearchParams<{ sideChat?: string; sideChatParentId?: string; deviceId?: string }>();
+  const covered = sheetParams.sideChat === '1' && !!sheetParams.sideChatParentId
+    && recentTaskKey(route?.params ?? {}) === recentTaskKey({
+      deviceId: sheetParams.deviceId, sessionId: sheetParams.sideChatParentId,
+    });
   useLayoutEffect(() => {
     if (NativeHistorySlot || needsResidentHistoryUpgrade) return;
-    setOverlay(owner, enabled && focused ? <NavigationContext.Provider value={navigation}>
-      <NavigationRouteContext.Provider value={route}>{residentChildren}</NavigationRouteContext.Provider>
+    setOverlay(owner, enabled && (focused || covered) ? <NavigationContext.Provider value={navigation}>
+      <NavigationRouteContext.Provider value={route}>
+        <View style={StyleSheet.absoluteFill} pointerEvents={focused ? 'box-none' : 'none'}
+          accessibilityElementsHidden={!focused} importantForAccessibility={focused ? 'auto' : 'no-hide-descendants'}>
+          {residentChildren}
+        </View>
+      </NavigationRouteContext.Provider>
     </NavigationContext.Provider> : null);
-  }, [setOverlay, owner, enabled, focused, navigation, route, residentChildren]);
+  }, [setOverlay, owner, enabled, focused, covered, navigation, route, residentChildren]);
   useLayoutEffect(() => () => setOverlay(owner, null), [setOverlay, owner]);
   return !enabled || NativeHistorySlot || needsResidentHistoryUpgrade ? children : null;
 }

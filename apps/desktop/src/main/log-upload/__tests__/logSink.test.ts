@@ -233,6 +233,7 @@ describe('sendLogs', () => {
 
     const result = await sendLogs({ fetchImpl }, TARGET, META, [record(1)]);
 
-    expect(result).toEqual({ ok: false, batches: 0, sentRecords: 0, status: 0 });
+    expect(result).toEqual({ ok: false, batches: 0, sentRecords: 0, status: 0,
+      error: 'getaddrinfo ENOTFOUND' });
   });
 });

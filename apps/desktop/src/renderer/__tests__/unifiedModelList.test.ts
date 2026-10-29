@@ -423,3 +423,15 @@ it('enabling an imported Gemini row only enables Pi even when the supplier expos
   expect(modelVisibilityTargets(p, row, true)).toEqual([{ agent: 'pi', modelId: entry.id }]);
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
 });
+
+// Unit: settings must retain a decision filter/group, not fold it into chat or other.
+// Existing audio cases did not cover evaluation; these three modes also lock Console parity.
+it('groups and filters decision, OCR and image editing as distinct management kinds', () => {
+  const p = { ...provider, agents: ['codex'], models: { codex: [
+    { ...model('jev'), mode: 'evaluation' }, { ...model('ocr'), mode: 'ocr' }, { ...model('edit'), mode: 'image_edit' },
+  ] } } as ProviderView;
+  const rows = buildUnionRows(p);
+  expect(rows.map(row => managementKindOfRow(row, true))).toEqual(['decision', 'other', 'image']);
+  expect(rows.every(row => isCapabilityRow(row, true))).toBe(true);
+  expect(groupModelsForManagement(rows, 'model', row => managementKindOfRow(row, true)).map(group => group.key)).toEqual(['image', 'decision', 'other']);
+});

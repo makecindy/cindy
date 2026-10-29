@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
@@ -15,7 +16,11 @@ import {
 import { useDetectCwd } from '@/hooks/useWorktreeQueries';
 import { useAgentCapabilities, type ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
-import { ModelIconMark, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
+import { ModelIconMark } from '@/components/new-chat/ModelSelector';
+import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -63,6 +68,8 @@ interface ChipButtonProps {
   active?: boolean;
   variant?: 'toolbar' | 'pill';
   className?: string;
+  /** 悬停 / 读屏的完整说明(label 会被截断时用)。 */
+  title?: string;
   onClick?: () => void;
 }
 
@@ -1048,6 +1055,7 @@ export function ModelEffortChip({
   onSelect,
   onFollowSession,
   agentKind,
+  agentDeviceId,
   modelValue,
   onChangeModel,
   effortValue,
@@ -1060,9 +1068,10 @@ export function ModelEffortChip({
   fastMode,
   onChangeFast,
 }: {
-  onSelect: NonNullable<React.ComponentProps<typeof ModelSelectorContent>['onUnifiedSelect']>;
+  onSelect: NonNullable<React.ComponentProps<typeof ModelRouteSelectorContent>['onUnifiedSelect']>;
   onFollowSession: () => void;
   agentKind: AgentKind;
+  agentDeviceId?: string;
   modelValue: string;
   onChangeModel: (v: string) => void;
   effortValue: EffortValue | '';
@@ -1081,8 +1090,8 @@ export function ModelEffortChip({
   /** 0 个 / 引导连接来源时跳设置→供应商页;不传则来源轨不显示「连接」入口。 */
   onNavigateToProviders?: () => void;
   /** Fast 模式状态 + 回调(与聊天一致,收进模型选择器 Edit 配置列)。绑定任务同样保存，下一次触发时应用。 */
-  fastMode?: boolean;
-  onChangeFast?: (v: boolean) => void;
+  fastMode?: boolean | 'ultrafast';
+  onChangeFast?: (v: boolean | 'ultrafast') => void;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -1109,12 +1118,22 @@ export function ModelEffortChip({
     },
     [disabled, discovery],
   );
-  const pickerAgents = useModelPickerAgents(agentKind);
-  const caps = useAgentCapabilities(agentKind);
+  const pickerAgents = useModelPickerAgents(agentKind, agentDeviceId || undefined);
+  const caps = useAgentCapabilities(agentKind, agentDeviceId || undefined);
   // 触发器(trigger)展示用:仍按 openai-codex/ 与 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
   // 过滤 + 分组),这里只为 trigger 文案保留最小化 model 解析。
-  const { providers, loading: providersLoading } = useProviders();
+  const localProviders = useProviders();
+  const remoteProviders = useDeviceProviders(agentDeviceId || undefined);
+  const { providers, loading: providersLoading } = agentDeviceId ? remoteProviders : localProviders;
+  // 触发器的位置说明与统一选择器使用相同候选，沿用设备名称的统一回退规则。
+  const routeDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: agentDeviceId,
+  });
+  const agentDeviceName = agentDeviceId
+    ? deviceDisplayName(agentDeviceId, undefined, routeDevices.devices ?? [])
+    : null;
   const xdConnected = providers.some((p) => p.id === 'xd' && p.connected);
   const availableModels = caps.capabilities?.availableModels;
   const models = useMemo(
@@ -1173,26 +1192,29 @@ export function ModelEffortChip({
     [providers, effectiveProviderId, effectiveId, agentKind],
   );
   const activeProvider = providers.find((p) => p.id === activeSourceId);
+  const modelIcon = !isFollowingSession && (activeSourceId || agentDeviceId) ? (
+    <ModelIconMark
+      icon={activeProvider ? getModel(activeProvider, effectiveId, agentKind)?.icon : undefined}
+      providerId={activeSourceId ?? providerId}
+      name={activeProvider?.name}
+      routing={activeProvider?.routing}
+      logoKind={activeProvider?.logoKind}
+      colorClass=""
+      withMargin={false}
+    />
+  ) : undefined;
+
+  const agentDeviceTitle = agentDeviceName
+    ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDeviceName })
+    : null;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
-          icon={
-            !isFollowingSession && activeSourceId ? (
-              // 图标统一规则(与聊天 trigger 同口径):模型条目 icon(AI Gateway / 目录设定)
-              // 优先,缺省回落来源供应商标。
-              <ModelIconMark
-                icon={activeProvider ? getModel(activeProvider, effectiveId, agentKind)?.icon : undefined}
-                providerId={activeSourceId}
-                name={activeProvider?.name}
-                routing={activeProvider?.routing}
-                colorClass=""
-                withMargin={false}
-              />
-            ) : undefined
-          }
+          icon={agentDeviceId && modelIcon ? <RemoteSourceMark>{modelIcon}</RemoteSourceMark> : modelIcon}
           label={display}
+          title={agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"
@@ -1214,7 +1236,8 @@ export function ModelEffortChip({
       >
         {/* 直接复用聊天的下拉内容本体(唯一真源:聊天选择器改了这里跟着变)。
             来源轨 / 模型分组 / 搜索 / effort / 空态全套自带;followSession 行为 opt-in。 */}
-        <ModelSelectorContent
+        <ModelRouteSelectorContent
+          agentDeviceId={agentDeviceId || null}
           fastModeConfigurable={['codex', 'pi']}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={onSelect}

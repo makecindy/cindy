@@ -1,5 +1,5 @@
+import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
-import { extractRenderedMarkdownImageTargets } from '@/components/chat/markdownImageTargets';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -29,21 +29,17 @@ function expandWorkGroups(items: readonly RenderItem[]): RenderItem[] {
 
 /** A presentation-only projection. Never mutate messages or infer intent from prose.
  * isFinal from the adapters closes a text block, not a turn (Pi/Claude can call
- * another tool afterwards). Reuse the normal work-group turn seal, showing provider-marked final prose immediately while keeping
- * unclassified top-level intermediate prose hidden. Work groups (live activity and
- * the completed "worked Xs" summary), running agent tasks and workflow cards pass
- * through untouched so the bot chat shows its work exactly like a normal session.
- * On stop/error or old history without a seal, expose the last useful
- * prose so an answer or plain-text question cannot disappear permanently.
+ * another tool afterwards). Normal task grouping owns progress visibility and
+ * completion folds. Keep its prose and work history; only lift addressed replies
+ * and remove companion-specific synthetic rows or duplicate result receipts.
  */
 export function simplifyBotRenderItems(
   items: readonly RenderItem[],
   isStreaming: boolean,
-  visibleGeneratedFileKeys?: ReadonlySet<string>,
+  _visibleGeneratedFileKeys?: ReadonlySet<string>,
 ): RenderItem[] {
-  // Preserve the shared grouping's history-window boundary before filtering
-  // prose (work groups carry timestamp anchors). Only the final window is
-  // active; earlier legacy answers retain their own fallback.
+  // Preserve history-window boundaries while lifting addressed replies;
+  // a later seal must not promote prose across an unloaded history gap.
   const result: RenderItem[] = [];
   let window: RenderItem[] = [];
   let previousEnd: number | null = null;
@@ -53,14 +49,14 @@ export function simplifyBotRenderItems(
     const userBoundary = item.type === 'message' && item.message.role === 'user';
     if (!userBoundary && previousEnd !== null && start !== null
       && start - previousEnd > HISTORY_GAP_SPLIT_MS) {
-      result.push(...projectWindow(window, false, visibleGeneratedFileKeys));
+      result.push(...projectWindow(window));
       window = [];
     }
     window.push(item);
     if (userBoundary) previousEnd = end ?? previousEnd;
     else if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
   }
-  result.push(...projectWindow(window, isStreaming, visibleGeneratedFileKeys));
+  result.push(...projectWindow(window));
   const attached = new Set(result.flatMap(item => item.type === 'message'
     && item.message.role === 'assistant' && item.message.turnCompleted === true && item.message.content.trim()
     ? (item.message.botTaskResults ?? []).map(botTaskResultKey) : []));
@@ -150,8 +146,6 @@ function liftRepliesFromWorkGroup(
 
 function projectWindow(
   items: readonly RenderItem[],
-  isStreaming: boolean,
-  visibleGeneratedFileKeys?: ReadonlySet<string>,
 ): RenderItem[] {
   // A sealed answer may span several contiguous prose blocks; only the last carries
   // the seal. groupWorkRuns folds earlier background-wake seals into work groups, so
@@ -161,7 +155,8 @@ function projectWindow(
   let sealedRun = false;
   for (let index = expanded.length - 1; index >= 0; index -= 1) {
     const item = expanded[index];
-    if (!isProse(item) || !item.message.content.trim()) {
+    if (!isProse(item) || !item.message.content.trim() || item.message.failedSamplingAttempt
+      || item.message.assistantPhase === 'commentary') {
       sealedRun = false;
       continue;
     }
@@ -169,63 +164,25 @@ function projectWindow(
     if (sealedRun) sealedAnswers.add(item.message);
   }
   const isAddressedReply = (message: ChatMessage) => Boolean(message.content.trim())
-    && !(message.assistantPhase === 'commentary' && !message.explicitDelivery)
-    && (message.assistantPhase === 'final_answer' || Boolean(message.sourceGroup)
+    && !message.failedSamplingAttempt
+    && !(message.assistantPhase === 'commentary' && !message.explicitDelivery && !hasRichAnswer(message.content))
+    && (hasRichAnswer(message.content) || message.assistantPhase === 'final_answer' || Boolean(message.sourceGroup)
       || Boolean(message.explicitDelivery) || isCompletedAssistantMessage(message) || sealedAnswers.has(message));
   const result: RenderItem[] = [];
-  let turn: RenderItem[] = [];
-  const flushTurn = (active: boolean) => {
-    let lastProse = -1;
-    let lastDelivery = -1;
-    for (let index = 0; index < turn.length; index += 1) {
-      const item = turn[index];
-      if (isProse(item) && item.message.content.trim()) lastProse = index;
-      if ((isProse(item) && (hasAttachments(item.message)
-        || extractRenderedMarkdownImageTargets(item.message.content).length > 0))
-        || (item.type === 'message' && item.message.systemCardType === 'bot-session-task-result')
-        || (item.type === 'generated_files' && visibleGeneratedFileKeys?.has(item.key))
-        || (item.type === 'tool_media' && item.items.length > 0)
-        || (item.type === 'ghost_card' && (item.settled || Boolean(item.media?.length)))) {
-        lastDelivery = index;
-      }
-    }
-    // Only the card's checked visible files count, never unverified candidates.
-    // A later attachment/card is already the result; do not resurrect its preamble.
-    // Keep later explanatory text after a partial delivery on stop/error/history.
-    const fallbackProse = !active && lastProse > lastDelivery ? lastProse : -1;
-    turn.forEach((item, index) => {
-      // Bots never produce change cards; keep them out like before. Thinking is
-      // always folded into a work group by the shared grouping, never top level.
-      if (item.type === 'turn_changes') return;
-      if (item.type === 'message' && item.message.role === 'thinking') return;
-      if (item.type === 'message' && item.message.isSyntheticTrigger) return;
-      if (isProse(item)) {
-        if (!item.message.content.trim() && !hasAttachments(item.message)) return;
-        if (item.message.assistantPhase === 'commentary' && !item.message.explicitDelivery && !hasAttachments(item.message)) return;
-        if (item.message.assistantPhase !== 'final_answer' && !item.message.sourceGroup && !item.message.explicitDelivery && !isCompletedAssistantMessage(item.message) && !sealedAnswers.has(item.message)
-          && !hasAttachments(item.message) && index !== fallbackProse
-          && extractRenderedMarkdownImageTargets(item.message.content).length === 0) {
-          return;
-        }
-      }
-      // Includes work groups, agent tasks, plans, authorization, answered
-      // questions, errors and all delivery cards.
-      result.push(item);
-    });
-    turn = [];
-  };
-
   const lifted = items.flatMap((item) => item.type !== 'work_group' ? [item]
     : hasWorkContent(item) ? liftRepliesFromWorkGroup(item, isAddressedReply) : []);
-  for (const item of lifted) {
-    if (item.type === 'message' && item.message.role === 'user'
-      && item.message.delivery !== 'steer') {
-      flushTurn(false);
-      if (!item.message.isSyntheticTrigger) result.push(item);
-    } else {
-      turn.push(item);
+  lifted.forEach((item) => {
+    // Bots never produce change cards; keep them out like before. Thinking is
+    // always folded into a work group by the shared grouping, never top level.
+    if (item.type === 'turn_changes') return;
+    if (item.type === 'message' && item.message.role === 'thinking') return;
+    if (item.type === 'message' && item.message.isSyntheticTrigger) return;
+    if (isProse(item)) {
+      if (!item.message.content.trim() && !hasAttachments(item.message) && !hasRichAnswer(item.message.content)) return;
+      if (item.message.failedSamplingAttempt) return;
     }
-  }
-  flushTurn(isStreaming);
+    // Normal task grouping owns progress visibility and completed work folds.
+    result.push(item);
+  });
   return result;
 }

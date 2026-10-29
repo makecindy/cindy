@@ -1,3 +1,9 @@
+import { createHookMediaStore } from '../hookOutbox';
+import { prepareChatReplyFiles } from '../../maker-ipc/chatServerReplyFiles';
+import { mergeChatReplyAttachments } from '../../maker-ipc/chatServerReplyAttachments';
+import { prepareChatReplyImages } from '../../maker-ipc/chatServerReplyImages';
+import { createHookRequestLedger, HOOK_TERMINAL_DELIVERY_TTL_MS } from '../../hook-control/requestLedger';
+import type { TurnEndPayload } from '@cindy/slack-hook-protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -108,6 +114,131 @@ function insert(text: string) {
 }
 
 describe('task image delivery', () => {
+  // #6773: run both production preparation passes; a shared PDF definition
+  // must not be interpreted as an image after the file has been extracted.
+  it.each(['nested', 'sibling'].flatMap(mode => ['pdf', 'png'].map(ext => [mode, ext])))('delivers shared non-image references through both preparation passes (%s, .%s)', async (mode, ext) => {
+    const pdf = path.join(work, `report.${ext}`);
+    const bytes = Buffer.from('%PDF-1.4\nreport');
+    await fs.writeFile(pdf, bytes);
+    const label = mode === 'nested' ? '[![preview][report]][report]' : '[report][report] ![preview][report]';
+    const files = await prepareChatReplyFiles(`${label}\n\n[report]: <${pdf}>`, 's', () => {});
+    expect(files.attachments).toHaveLength(1);
+    expect(await files.attachments[0]!.readBytes!()).toEqual(bytes);
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    expect(images.attachments).toEqual([]);
+    expect(images.text).not.toContain(pdf);
+    expect(images.text).not.toContain('![');
+    expect(images.text).not.toContain('[report]');
+  });
+
+  it.each(['nested', 'sibling'])('keeps a real shared-reference image through both reply passes (%s)', async mode => {
+    // Content, not the extension, decides whether this shared target is an image.
+    const source = path.join(work, 'asset.bin');
+    await fs.writeFile(source, PNG);
+    const body = mode === 'nested' ? '[![preview][asset]][asset]' : '[download][asset] ![preview][asset]';
+    const files = await prepareChatReplyFiles(`${body}\n\n[asset]: <${source}>`, 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ category: 'image', mimeType: 'image/png', sourceOffset: 0 });
+    expect(images.text).toContain('preview');
+    expect(images.text).not.toContain('![');
+    expect(images.text).not.toContain('[asset]');
+    expect(images.text).not.toContain(source);
+  });
+
+  it.each(['inline', 'reference'])('reconciles accepted in-task symlink image/file targets (%s)', async mode => {
+    const aliases: string[] = [];
+    for (let i = 0; i < 11; i++) {
+      const source = path.join(work, `source-${i}.png`), alias = path.join(work, `latest-${i}.png`);
+      await fs.writeFile(source, Buffer.concat([PNG, Buffer.from([i])]));
+      await fs.symlink(source, alias);
+      aliases.push(alias);
+    }
+    const body = mode === 'inline'
+      ? aliases.map(alias => `![preview](<${alias}>) [download](<${alias}>)`).join(' ')
+      : aliases.map((alias, i) => `[download][a${i}] ![preview][a${i}]\n\n[a${i}]: <${alias}>\n`).join('\n');
+    const files = await prepareChatReplyFiles(body, 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    expect(attachments).toHaveLength(11);
+    expect(attachments.every(a => a.category === 'image')).toBe(true);
+    expect(images.text).not.toContain('![');
+    expect(images.text).not.toContain(work);
+  });
+
+  it.each(['image-first', 'file-first'])('uploads eleven real images once through both reply passes, in source order (%s)', async order => {
+    const pdf = path.join(work, 'report.pdf');
+    await fs.writeFile(pdf, '%PDF-1.4');
+    const targets = Array.from({ length: 11 }, (_, i) => path.join(work, `chart-${i}.png`));
+    for (const [i, target] of targets.entries()) await fs.writeFile(target, Buffer.concat([PNG, Buffer.from([i])]));
+    const image = (i: number) => `![preview](<${targets[i]}>)`;
+    const file = (i: number) => `[download](<${targets[i]}>)`;
+    // The first alias must retain its position relative to a distinct PDF.
+    const body = `${order === 'image-first' ? image(0) : file(0)} [report](<${pdf}>) ${order === 'image-first' ? file(0) : image(0)} `
+      + targets.slice(1).map((_, index) => `${image(index + 1)} ${file(index + 1)}`).join(' ');
+    const files = await prepareChatReplyFiles(body, 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    expect(attachments).toHaveLength(12);
+    expect(attachments.map(a => a.category)).toEqual(['image', 'file', ...Array(10).fill('image')]);
+    expect(attachments[0]!.sourcePaths).toContain(await fs.realpath(targets[0]!));
+    expect(images.text).not.toContain(work);
+    expect((await attachments[1]!.readBytes!()).toString()).toBe('%PDF-1.4');
+  });
+
+  it.each([2, 21])('reconciles %s local image paths before the combined attachment limit', async count => {
+    const sources = Array.from({ length: count }, (_, i) => path.join(work, `same-${i}.png`));
+    for (const source of sources) await fs.writeFile(source, PNG);
+    const files = await prepareChatReplyFiles(sources.map(source => `[download](<${source}>) ![preview](<${source}>)`).join(' '), 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({ category: 'image', sourceOffset: 0 });
+    expect(attachments[0]!.sourcePaths).toEqual(await Promise.all(sources.map(source => fs.realpath(source))));
+  });
+
+  it.each([false, true])('rejects 21 non-image files even with rendered images (shared references: %s)', async shared => {
+    const image = path.join(work, 'preview.png');
+    await fs.writeFile(image, PNG);
+    const sources = Array.from({ length: 21 }, (_, i) => path.join(work, `report-${i}.pdf`));
+    for (const source of sources) await fs.writeFile(source, '%PDF-1.4');
+    const body = shared
+      ? sources.map((source, i) => `[file][r${i}] ![preview][r${i}]\n\n[r${i}]: <${source}>\n`).join('\n')
+      : `![preview](<${image}>) ` + sources.map(source => `[file](<${source}>)`).join(' ');
+    await expect((async () => {
+      const files = await prepareChatReplyFiles(body, 's', () => {});
+      return prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    })()).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+  });
+
+  it.each(['direct', 'symlink'])('retains file read safeguards for hard-linked image/download targets (%s)', async mode => {
+    const source = path.join(work, 'linked.png');
+    await fs.writeFile(source, PNG);
+    await fs.link(source, path.join(state.root, 'outside.png'));
+    const alias = mode === 'symlink' ? path.join(work, 'latest.png') : source;
+    if (mode === 'symlink') await fs.symlink(source, alias);
+    const files = await prepareChatReplyFiles(`![preview](<${alias}>) [download](<${alias}>)`, 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    expect(attachments.map(a => a.category)).toEqual(['image', 'file']);
+    await expect(attachments[1]!.readBytes!()).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+  });
+
+  it('retains file containment when an image symlink points into the image-only scratchpad root', async () => {
+    const scratch = claudeScratchpadPath({ workingDir: work, sdkSessionId: sdk, agentKind: 'cc' })!;
+    await fs.mkdir(scratch, { recursive: true });
+    const source = path.join(scratch, 'scratch.png'), alias = path.join(work, 'latest.png');
+    await fs.writeFile(source, PNG);
+    await fs.symlink(source, alias);
+    const files = await prepareChatReplyFiles(`![preview](<${alias}>) [download](<${alias}>)`, 's', () => {});
+    const images = await prepareChatReplyImages(files.text, 's', () => {}, files.attachments);
+    const attachments = mergeChatReplyAttachments(images.attachments, files.attachments);
+    // Image policy already permits this scratchpad; explicit files remain workdir-only.
+    expect(attachments.map(a => a.category)).toEqual(['image', 'file']);
+    await expect(attachments[1]!.readBytes!()).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
+  });
+
   it.each(['before', 'during'].flatMap((order) =>
     ['publish', 'rollback'].map((result) => [order, result]),
   ))('reconciles a reused reference when cleanup runs %s %s', async (order, result) => {
@@ -372,6 +503,19 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
+  it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
+    // 2026-10-26 Slack: previews saved outside the workdir showed on desktop but never reached the channel.
+    const outside = path.join(state.root, 'elsewhere');
+    await fs.mkdir(outside, { recursive: true });
+    const source = path.join(outside, 'preview.png');
+    await fs.writeFile(source, PNG);
+    const text = `![preview](${source})`;
+    const row = insert(text);
+    expect(await restoreTaskImageRows(client, [row])).toEqual([row]);
+    expect(await materializeTaskImageText('s', text)).toContain('cindy-media://');
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
+  });
+
   it('serializes concurrent channel imports without duplicate task references', async () => {
     const source = path.join(work, 'shot.png');
     await fs.writeFile(source, PNG);
@@ -597,4 +741,56 @@ describe('Markdown image contract', () => {
       rewriteTaskImageReferences(text, new Map([[ref.url, 'cindy-media://blobs/test.png']])),
     ).toBe('before ![a](cindy-media://blobs/test.png "caption") after');
   });
+});
+
+// #6447 integration: actual media bytes/DB, owner-scoped JSON, fresh store restore,
+// ACK release, task deletion and expiry. Old tests only exercised the JSON ledger.
+it.each(['image/png', 'video/mp4'])('hook outbox manages %s through recovery and deletion', async (mimeType) => {
+  const bytes = mimeType === 'image/png' ? PNG : Buffer.alloc(6 * 1024 * 1024, 7);
+  const attachments = [{ name: 'result', mimeType, dataBase64: bytes.toString('base64') }];
+  const turn: TurnEndPayload = { requestId: 'r', externalKey: 'x:t', sessionId: 's', status: 'ok',
+    finalText: 'done', errorMessage: null, usage: { durationMs: 0 }, attachments };
+  const store = createHookMediaStore();
+  const media = await store.prepare(turn, () => {});
+  const { attachments: _, ...text } = turn;
+  const filePath = path.join(state.root, 'hook-ledger.json');
+  const log = { warn: vi.fn() };
+  const saved = { connectionId: 'x', requestId: 'r', ack: { requestId: 'r', result: 'accepted' as const,
+    sessionId: 's', reason: null, queuePosition: null }, turnEnd: text, media,
+    delivery: 'pending' as const, completedAt: Date.now() };
+  const first = createHookRequestLedger({ filePath, log, releaseMedia: store.release });
+  expect(first.set(saved)).toBe(true);
+  expect((await fs.stat(filePath)).size).toBeLessThan(2048);
+  expect(await fs.readFile(filePath, 'utf8')).not.toContain('dataBase64');
+  const next = createHookMediaStore();
+  const ledgerAfterRestart = createHookRequestLedger({ filePath, log, releaseMedia: next.release });
+  const recovered = ledgerAfterRestart.listPending('x')[0]!;
+  expect((await next.restore(recovered.turnEnd!, recovered.media!))?.attachments).toEqual(attachments);
+  ledgerAfterRestart.markSent('x', 'r');
+  // The release runs asynchronously after the atomic JSON write.
+  await vi.waitFor(() => expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 }), { interval: 1 });
+  expect((await fs.readFile(resolveSafe(media[0]!.url).absPath)).equals(bytes)).toBe(true); // recycler owns bytes
+
+  const deletedMedia = await next.prepare(turn, () => {});
+  raw.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 's'").run();
+  await ledger.removeSessionRefs('s', client.drizzle);
+  expect(await next.restore(text, deletedMedia)).toBeNull();
+  expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
+
+  raw.prepare("UPDATE sessions SET status = 'active' WHERE id = 's'").run();
+  await next.prepare(turn, () => {});
+  raw.prepare('UPDATE media_refs SET created_at = ?').run(Date.now() - HOOK_TERMINAL_DELIVERY_TTL_MS - 1);
+  await next.prune();
+  expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
+});
+
+// Integration: a switch during ingestion must leave neither a pin nor a replayable result.
+it('rolls back hook media if its owner changes during ingestion', async () => {
+  const store = createHookMediaStore();
+  state.afterIngest = () => { state.valid = false; };
+  await expect(store.prepare({ requestId: 'r', externalKey: 'x:t', sessionId: 's', status: 'ok',
+    finalText: 'done', errorMessage: null, usage: { durationMs: 0 },
+    attachments: [{ name: 'image.png', mimeType: 'image/png', dataBase64: PNG.toString('base64') }],
+  }, () => {})).rejects.toThrow();
+  expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 0 });
 });

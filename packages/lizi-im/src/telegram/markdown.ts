@@ -36,6 +36,13 @@ export function escapeHtml(text: string): string {
  * replace 对嵌套构造(`<<b>`)剥不干净。输出走无 parse_mode 的 text 字段,
  * 残余尖括号只是字面字符, 不会被再解释。
  */
+const TELEGRAM_ENTITY_TEXT: Record<string, string> = {
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&amp;': '&',
+};
+
 export function stripTelegramHtmlTags(html: string): string {
   let out = '';
   let inTag = false;
@@ -48,7 +55,9 @@ export function stripTelegramHtmlTags(html: string): string {
       out += ch;
     }
   }
-  return out;
+  // 先剥标签再解码，避免把原文里的转义 <tag> 当成真标签删掉；
+  // 单次映射不会把 &amp;lt; 二次解码成 <。
+  return out.replace(/&(?:lt|gt|quot|amp);/g, (entity) => TELEGRAM_ENTITY_TEXT[entity]);
 }
 
 function splitByCodeFence(text: string): Segment[] {

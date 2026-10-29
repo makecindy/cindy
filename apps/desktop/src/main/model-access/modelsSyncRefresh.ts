@@ -1,4 +1,5 @@
 import {
+  isCindyAutoModelId,
   MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
   parseListModelsResponse,
 } from '@cindy/model-providers';
@@ -18,6 +19,21 @@ export const XD_MODELS_SYNC_PATH =
 export type ModelsSyncPayloadParseResult =
   | { ok: true; models: ModelAccessGatewayModel[]; accountTier: ModelAccessAccountTier }
   | { ok: false; error: string };
+
+/**
+ * 同一个 Cindy Auto（预设 auto 与 auto/<组ID>）会随管理员改目标在 Cindy AI 与企业号池之间换位置；
+ * 任一边列表里的 Auto 有增减，说明另一边很可能也变了，需要一起刷新后再判断进行中任务的跟随。
+ */
+export function cindyAutoModelIdsChanged(
+  before: readonly { id: string }[],
+  after: readonly { id: string }[],
+): boolean {
+  const autoIds = (models: readonly { id: string }[]) =>
+    new Set(models.map((model) => model.id).filter(isCindyAutoModelId));
+  const previous = autoIds(before);
+  const next = autoIds(after);
+  return previous.size !== next.size || [...previous].some((id) => !next.has(id));
+}
 
 /** 失败后的 LKG 只保留可执行模型；过期的付费差集不能继续作为升级营销事实。 */
 export function modelsWithoutStalePaymentUpsell(

@@ -1,7 +1,6 @@
 {
   "localLogs": {
     "upload": "上傳日誌",
-    "uploadHint": "僅傳送篩選後的執行記錄及應用程式、系統版本。詳細 Debug 日誌請使用匯出。",
     "uploadResult": {
       "unavailable": "目前版本未設定日誌上傳。",
       "consentRequired": "上傳日誌前需同意隱私政策。",
@@ -9,18 +8,16 @@
       "failed": "上傳失敗，日誌仍保留在手機上。"
     },
     "title": "Debug 日誌",
-    "record": "記錄 Debug 日誌",
-    "hint": "記錄手機上的連線、恢復、檔案預覽與播放、捲動、鍵盤與效能細節。預設關閉，最多保留 7 天、8 MB，不會自動上傳。",
-    "export": "匯出 Debug 日誌",
+    "record": "記錄日誌",
+    "export": "匯出日誌",
     "clear": "清空日誌",
     "busy": "處理中…",
     "failed": "無法儲存或分享日誌，請重試。",
     "clearHint": "刪除已儲存的診斷日誌？",
     "cancel": "取消",
-    "exportHint": "分享詳細本機日誌供疑難排解；不含任務內文或憑證。",
-    "options": "日誌選項",
     "uploadCopied": "日誌已上傳，編號 {{code}} 已複製",
-    "uploadSucceeded": "日誌已上傳，編號 {{code}}"
+    "uploadSucceeded": "日誌已上傳，編號 {{code}}",
+    "footer": "日誌儲存在手機上，最多 7 天、8 MB，不會自動上傳。匯出的完整日誌不含對話內文和憑證；上傳只傳送篩選後的執行記錄和版本資訊。"
   },
   "title": "設定",
   "appearance": {
@@ -47,8 +44,8 @@
       "preview": "訊息預覽",
       "sampleUser": "幫我整理一下今天的靈感。",
       "sampleAssistant": "好的，我們一起把想法梳理清楚。",
-      "hint": "顏色會依淺色和深色模式自動調整明暗，確保文字清晰。僅儲存在此裝置。",
-      "customHint": "左右拖曳色帶選擇顏色。顏色會依淺色和深色模式自動調整明暗，確保文字清晰。僅儲存在此裝置。",
+      "hint": "深淺模式下自動調整明暗，確保文字清晰。僅儲存在此裝置。",
+      "customHint": "左右拖曳色帶選擇顏色。深淺模式下自動調整明暗，僅儲存在此裝置。",
       "saveFailed": "顏色已在本次使用中生效，但未能儲存。",
       "retry": "重試",
       "cancel": "取消",
@@ -71,46 +68,50 @@
   },
   "version": {
     "sectionTitle": "版本",
-    "appVersion": "版本 {{version}}",
-    "updateMethodInApp": "更新方式：在 App 內更新，重新啟動後生效",
-    "updateMethodPackage": "更新方式：下載並安裝新版本",
-    "updateMethodUnavailable": "開發版，不支援 App 內更新",
-    "pairedDesktopVersion": "配套桌面版本 {{version}}",
+    "updateMethodInApp": "可在 App 內更新，重新啟動後生效。",
+    "updateMethodPackage": "需要下載並安裝新版本。",
+    "updateMethodUnavailable": "開發版不支援 App 內更新。",
     "checkAction": "檢查更新",
     "testFlightCheckAction": "檢查內容更新",
     "checking": "檢查中",
     "checkingAccessibility": "正在檢查更新",
     "testFlightCheckingAccessibility": "正在檢查內容更新",
-    "testFlightUpdateManaged": "測試版安裝更新由 TestFlight 管理",
-    "testFlightNoContentUpdate": "當前沒有可用的內容更新。新測試版本請在 TestFlight 中檢視。",
-    "testFlightContentUpdateUnavailable": "當前構建無法檢查內容更新。新測試版本請在 TestFlight 中檢視。",
-    "googlePlayUpdateManaged": "應用程式版本更新由 Google Play 管理",
-    "googlePlayNoContentUpdate": "目前沒有可用的內容更新。新應用程式版本請在 Google Play 中查看。",
-    "googlePlayContentUpdateUnavailable": "目前無法檢查內容更新。新應用程式版本請在 Google Play 中查看。",
+    "testFlightUpdateManaged": "新測試版請在 TestFlight 中安裝。",
+    "testFlightNoContentUpdate": "目前沒有可用的內容更新。",
+    "testFlightContentUpdateUnavailable": "目前的建置無法檢查內容更新。",
+    "googlePlayUpdateManaged": "新版本請在 Google Play 中更新。",
+    "googlePlayNoContentUpdate": "目前沒有可用的內容更新。",
+    "googlePlayContentUpdateUnavailable": "目前的建置無法檢查內容更新。",
     "bundleUpdateFound": "發現整包更新",
     "upToDate": "已是最新版本",
-    "bundleUpToDateNoOta": "整包已是最新，當前版本不支援熱更新",
+    "bundleUpToDateNoOta": "已是最新，此版本不支援熱更新。",
     "downloadedRestarting": "更新已下載，正在重啟",
-    "downloadedRestartRequired": "更新已下載，完全退出 App 後重新開啟即可生效",
+    "downloadedRestartRequired": "更新已下載，完全結束並重新開啟 App 後生效。",
     "bundleCheckFailed": "無法檢查整包更新，請稍後重試",
     "checkFailedDetail": "檢查更新失敗：{{detail}}",
-    "checkFailed": "檢查更新失敗，請稍後重試"
+    "checkFailed": "檢查更新失敗，請稍後重試",
+    "currentLabel": "目前版本",
+    "pairedDesktopLabel": "配套桌面版本"
   },
   "betaChannel": {
     "title": "Beta 測試管道",
     "badge": "Beta",
-    "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。",
-    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
-    "ok": "我知道了",
+    "description": "提前接收即將發布的用戶端更新。內容更新會在下次檢查時下載，重新啟動 App 後生效。",
     "saveFailed": "儲存 Beta 測試管道設定失敗",
     "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "任務完成通知",
-    "taskDoneHint": "電腦上的任務完成、出錯或需要你回覆時，推送到這臺手機；完成或需要回復時附帶最新回覆內容。",
-    "permissionDenied": "系統通知權限未開啟。請到 iOS「設定 → 通知 → {{appName}}」允許通知後重試。",
-    "unregisterQueued": "已關閉。當前網路下注銷未完成，將在下次聯網時自動補上。"
+    "taskDone": "訊息與任務通知",
+    "taskDoneHint": "收到新訊息，或任務完成、出錯、等你回覆時通知你。",
+    "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
+    "unregisterQueued": "已關閉，連網後自動完成註銷。",
+    "preview": "顯示訊息內容預覽",
+    "background": "在背景保持訊息連線",
+    "backgroundActive": "正在背景接收訊息",
+    "backgroundStop": "停止接收",
+    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
+    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",
@@ -182,7 +183,7 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登入後還包含你的帳號 ID；不包含任何對話內容、檔案或提示詞。",
+    "analyticsHint": "用於瞭解啟動與留存。上報裝置型號、系統與應用版本、裝置識別符號等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
     "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
@@ -190,7 +191,7 @@
   "account": {
     "logoutConfirmTitle": "退出登入？",
     "logoutConfirmRunning": "仍有任務正在執行。退出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端映象也會被清除。",
-    "logoutHint": "退出會清除這臺手機上儲存的全部帳號和本地遠端映象，不會影響電腦端任務。",
+    "logoutHint": "退出會清除這臺手機上的全部帳號和遠端映象，不影響電腦上的任務。",
     "logout": "退出登入",
     "loggingOut": "退出中",
     "loggingOutAccessibility": "正在退出登入"
@@ -203,7 +204,7 @@
   "voiceDictionary": {
     "sectionTitle": "語音詞典",
     "label": "檢視詞典",
-    "hint": "詞典儲存在電腦上，並在你的電腦之間自動同步；手機只能檢視，新增和刪除請回電腦操作。",
+    "hint": "詞典在電腦上編輯並自動同步，手機僅可檢視。",
     "openAccessibility": "檢視語音詞典",
     "screenTitle": "語音詞典",
     "entryCount": "{{count}} 個詞條",
@@ -225,12 +226,11 @@
     "openAccessibility": "開啟辨識我的聲音設定",
     "on": "已開啟",
     "off": "未開啟",
-    "hint": "語音輸入時將旁人的聲音靜音，只把你說的話送去辨識。需要先錄製聲紋；別人和你同時說話時無法完全濾掉。",
+    "hint": "語音輸入時將旁人的聲音靜音，只辨識你說的話；和你同時說話的聲音無法完全濾掉。聲紋加密儲存在這臺手機上，不會上傳或同步。",
     "unsupported": "目前安裝的版本不支援聲紋辨識，請更新到最新版本。",
-    "privacy": "聲紋只儲存在這支手機上並加密保存，不會上傳，也不會同步到其他裝置。",
     "model": {
       "title": "辨識模型",
-      "needed": "首次使用需要下載約 {{size}} 的辨識模型，建議連接 Wi-Fi。",
+      "needed": "首次使用需下載約 {{size}} 的辨識模型，建議連接 Wi-Fi。",
       "download": "下載辨識模型",
       "downloading": "正在下載（{{done}} / {{total}}）",
       "cancel": "取消下載",
@@ -260,7 +260,7 @@
     },
     "strictness": {
       "label": "靈敏度",
-      "hint": "越嚴格越不容易放進旁人的聲音，但在吵雜環境中也更容易剪掉你自己的話。",
+      "hint": "越嚴格越能擋住旁人的聲音，但吵雜時也更容易剪掉你的話。",
       "restoreDefault": "恢復預設",
       "options": {
         "relaxed": "寬鬆",
@@ -318,5 +318,10 @@
     "discardBody": "裝置名稱的修改還沒有儲存。",
     "discardConfirm": "放棄修改",
     "keepEditing": "繼續編輯"
+  },
+  "developer": {
+    "title": "開發者",
+    "identity": "識別資訊",
+    "updateInfo": "更新資訊"
   }
 }

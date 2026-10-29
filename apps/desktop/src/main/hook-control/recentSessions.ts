@@ -7,6 +7,7 @@ import type { QuerySessionEntry } from '@cindy/slack-hook-protocol';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
+import { isProvisionalSession } from '../localDb/provisionalSessions.js';
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { isPathWithin } from './paths.js';
@@ -84,5 +85,6 @@ export async function listRecentHookSessions(
     .orderBy(desc(sql`COALESCE(${sessions.userSendAt}, ${sessions.updatedAt})`))
     // Fetch extra rows because sessions outside the configured workspace allowlist are removed.
     .limit(100);
-  return minimiseRecentSessions(rows, workspaces);
+  // 新建页里还没发送的任务不算最近任务。
+  return minimiseRecentSessions(rows.filter((row) => !isProvisionalSession(row.id)), workspaces);
 }

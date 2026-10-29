@@ -1,3 +1,5 @@
+import { materializeToolProcessMedia } from './cindy-media/toolProcessMedia.js';
+import { withToolProcessMedia, type ProcessMediaRef, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 import { readTaskResultsForReply } from './botTaskReplyResults.js';
 /**
  * messagePersistBroadcaster — 把 agent 消息的持久化从 renderer 收口到 main 单点。
@@ -35,6 +37,8 @@ import { desc, eq } from 'drizzle-orm';
 
 import {
   broadcastMessageRow,
+  broadcastMessageDeleted,
+  discardPersistedAssistantMessage,
   broadcastMessageAgentMetaUpdate,
   createMessage as createDbMessage,
   findVisibleToolUseMessageByAliases,
@@ -206,6 +210,47 @@ interface AssistantBlock {
 }
 
 const assistantBlocks = new Map<string, AssistantBlock>();
+/** Exact provider item → durable row links, scoped to the current product turn. */
+const assistantItemPersistIds = new Map<string, Map<string, string>>();
+
+/** Mark an SDK-proven failed sampling attempt without changing or deleting its prose. */
+export function onAssistantAttemptFailure(sessionId: string, data: unknown): void {
+  if (!data || typeof data !== 'object') return;
+  const failure = (data as { assistantAttemptFailure?: unknown }).assistantAttemptFailure;
+  if (!failure || typeof failure !== 'object') return;
+  const { threadId, turnId, attempt, agentMessageIds } = failure as Record<string, unknown>;
+  if (typeof threadId !== 'string' || typeof turnId !== 'string' ||
+    !Number.isSafeInteger(attempt) || typeof attempt !== 'number' || attempt < 1 ||
+    !Array.isArray(agentMessageIds)) return;
+  const links = assistantItemPersistIds.get(sessionId);
+  if (!links) return;
+  for (const itemId of agentMessageIds) {
+    if (typeof itemId !== 'string') continue;
+    const persistId = links.get(itemId);
+    if (!persistId) continue;
+    const message = (data as { message?: unknown }).message;
+    const marker = { threadId, turnId, attempt, itemId,
+      ...(typeof message === 'string' ? { error: redactSensitiveText(message) } : {}),
+    };
+    links.delete(itemId);
+    const block = assistantBlocks.get(sessionId);
+    if (block?.persistId === persistId) {
+      block.agentMeta = { ...block.agentMeta, failedSamplingAttempt: marker, turnCompleted: false };
+      flushAssistantBlock(sessionId);
+    } else {
+      enqueueWrite(`assistant_attempt_failed:${sessionId}:${persistId}`, async (ownerScope) => {
+        const patched = await patchMessageAgentMetaWithResult(sessionId, persistId, {
+          failedSamplingAttempt: marker,
+          turnCompleted: false,
+        });
+        if (patched) await broadcastMessageAgentMetaUpdate(sessionId, persistId, ownerScope);
+      });
+    }
+    if (lastTopLevelAssistantPersistIdBySession.get(sessionId) === persistId) {
+      lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+    }
+  }
+}
 
 /**
  * 本轮 prompt 之前到达的非 final text（运行时就绪 / 重连期间的提示文本）会先建一个 block，
@@ -337,6 +382,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
   if (!Number.isFinite(parsed)) return;
   const current = clearBoundaryBySession.get(sessionId);
   if (current === undefined || parsed > current) {
+    assistantItemPersistIds.delete(sessionId);
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
@@ -1599,6 +1645,14 @@ export function onThinkingEvent(
 const toolResultIdByToolUseId = new Map<string, Map<string, string>>();
 const pendingFullTextByToolUseId = new Map<string, Map<string, { text: string; createdAt: number }>>();
 const toolResultContentByClientId = new Map<string, Map<string, string>>();
+// Tied to the exact turn's content map; pending imports keep their old map alive
+// without polluting the next turn or retaining completed sessions globally.
+const processMediaByContentMap = new WeakMap<Map<string, string>, Map<string, ProcessMediaRef[]>>();
+function contentWithProcessMedia(map: Map<string, string>, id: string, text: string): string {
+  const media = processMediaByContentMap.get(map)?.get(id);
+  return media?.length ? withToolProcessMedia(text, media) : text;
+}
+
 
 function getOrCreateSessionMap<V>(
   outer: Map<string, Map<string, V>>,
@@ -1711,7 +1765,7 @@ export function onToolResultEvent(
     // 内容没增长 → 不写库;renderer 已显示该条,返回现有内容即可(upsert 命中后无变化)。
     if (prev === undefined || content.length <= prev.length) {
       if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
-      return { persistId: existing, content: prev ?? content };
+      return { persistId: existing, content: contentWithProcessMedia(contentMap, existing, prev ?? content) };
     }
     // contentMap 存全文(增长比较与 renderer 显示都要它);DB 只落有界内容。
     // 截断后内容没变(全文都在 8KB 之外增长)就跳过 UPDATE——省掉重复写同一
@@ -1721,12 +1775,12 @@ export function onToolResultEvent(
     const capped = persistableToolResultContent(sessionId, content);
     if (capped !== cappedPrev) {
       enqueueWrite(`tool_result_update:${sessionId}:${existing}`, () =>
-        updateDbMessageContent(sessionId, existing!, capped),
+        updateDbMessageContent(sessionId, existing!, contentWithProcessMedia(contentMap, existing!, capped)),
       );
     }
     if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', existing);
     if (backgroundState) releaseBackgroundStateForToolUses(sessionId, backgroundState, ids);
-    return { persistId: existing, content };
+    return { persistId: existing, content: contentWithProcessMedia(contentMap, existing, content) };
   }
 
   const persistId = createId();
@@ -1745,6 +1799,53 @@ export function onToolResultEvent(
   return { persistId, content };
 }
 
+/** Fetch outside the global write queue; only the final row update is serialized. */
+export async function persistToolProcessMedia(
+  sessionId: string,
+  persistId: string,
+  text: string,
+  items: NativeToolMedia[],
+  origin?: import('./cindy-media/toolProcessMedia').ToolMediaOrigin,
+  scope: 'turn' | 'background' = 'turn',
+): Promise<void> {
+  if (!items.length) return;
+  const ownerScope = captureOwnerScope();
+  const assertStillValid = () => {
+    if (!isOwnerScopeCurrent(ownerScope)) throw ownerScopeSupersededError();
+  };
+  // Capture the accepted result's map before fetching: a background summary
+  // may release its state while media is still being materialized.
+  const contentMap = scope === 'background'
+    ? backgroundTurnPersistStatesBySession.get(sessionId)
+      ?.find(state => state.toolResultContentByClientId.has(persistId))?.toolResultContentByClientId
+    : toolResultContentByClientId.get(sessionId) ?? new Map([[persistId, text]]);
+  if (!contentMap) return;
+  try {
+    assertStillValid();
+    const db = getDbClient().drizzle;
+    const media = await materializeToolProcessMedia(items, db, assertStillValid, origin);
+    assertStillValid();
+    if (!media.length) return;
+    let mediaMap = processMediaByContentMap.get(contentMap);
+    if (!mediaMap) processMediaByContentMap.set(contentMap, mediaMap = new Map());
+    mediaMap.set(persistId, [...new Map([...(mediaMap.get(persistId) ?? []), ...media]
+      .map(item => [item.kind + ':' + item.url, item])).values()]);
+    enqueueWrite(`tool_media:${sessionId}:${persistId}`, async () => {
+      assertStillValid();
+      const content = contentWithProcessMedia(contentMap, persistId, contentMap.get(persistId) ?? text);
+      const updated = await updateDbMessageContent(sessionId, persistId, content);
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+    });
+  } catch (error) {
+    if (!isOwnerScopeSupersededError(error)) log.warn('Native tool media persistence failed', { sessionId, persistId });
+  }
+}
+
+function markFailedToolResultText(text: string, isError: boolean): string {
+  if (!isError || text.includes('<tool_use_error>')) return text;
+  return `<tool_use_error>${text}</tool_use_error>`;
+}
+
 /**
  * 处理 tool_result_full 事件(toolUseId + 全文)。返回 { persistId, content } 让
  * renderer 把对应 tool_result 气泡内容更新成全文;返回 null 表示无需显示变更
@@ -1753,11 +1854,6 @@ export function onToolResultEvent(
  * 对齐老 renderer:有映射 → 覆盖更新;无映射但 tool_use 已到 → eager-create;
  * tool_use 也没到 → buffer。
  */
-function markFailedToolResultText(text: string, isError: boolean): string {
-  if (!isError || text.includes('<tool_use_error>')) return text;
-  return `<tool_use_error>${text}</tool_use_error>`;
-}
-
 export function onToolResultFullEvent(
   sessionId: string,
   data: { toolUseId?: unknown; fullText?: unknown; isError?: unknown },
@@ -1825,11 +1921,11 @@ export function onToolResultFullEvent(
   const capped = persistableToolResultContent(sessionId, fullText);
   if (capped !== cappedPrev) {
     enqueueWrite(`tool_result_full:${sessionId}:${target}`, () =>
-      updateDbMessageContent(sessionId, target, capped),
+      updateDbMessageContent(sessionId, target, contentWithProcessMedia(contentMap, target, capped)),
     );
   }
   if (scope !== 'background') notePersistedMessage(sessionId, 'tool_result', target);
-  return { persistId: target, content: fullText };
+  return { persistId: target, content: contentWithProcessMedia(contentMap, target, fullText) };
 }
 
 /**
@@ -2040,6 +2136,7 @@ export function flushOrphanToolResults(sessionId: string, agentMeta: AgentMeta |
  * + knownToolUseIds + lastAgentMeta。必须在 flushOrphanToolResults 之后调用。
  */
 export function resetTurnPersistState(sessionId: string): void {
+  assistantItemPersistIds.delete(sessionId);
   // Event-stream completion is not a persistence barrier. Thinking snapshots
   // survive until their write succeeds or an explicit history/owner cleanup.
   toolResultIdByToolUseId.delete(sessionId);
@@ -2108,6 +2205,24 @@ export function onAssistantTextEvent(
   agentMeta: AgentMeta | null,
   turnScope?: 'turn' | 'background',
 ): string | undefined {
+  const persistId = assembleAssistantTextEvent(sessionId, data, agentMeta, turnScope);
+  if (persistId && typeof data.agentMessageId === 'string' && turnScope !== 'background') {
+    let links = assistantItemPersistIds.get(sessionId);
+    if (!links) {
+      links = new Map();
+      assistantItemPersistIds.set(sessionId, links);
+    }
+    links.set(data.agentMessageId, persistId);
+  }
+  return persistId;
+}
+
+function assembleAssistantTextEvent(
+  sessionId: string,
+  data: { text?: unknown; isFinal?: unknown; isFullText?: unknown; agentMessageId?: unknown; phase?: string; runtimeRecovery?: boolean },
+  agentMeta: AgentMeta | null,
+  turnScope?: 'turn' | 'background',
+): string | undefined {
   if (typeof data.phase === 'string' || data.runtimeRecovery === true) {
     agentMeta = { ...agentMeta, assistantPhase: data.runtimeRecovery === true ? 'commentary' : data.phase as string };
   }
@@ -2120,6 +2235,48 @@ export function onAssistantTextEvent(
       : undefined;
 
   const activeBlock = assistantBlocks.get(sessionId);
+  const linkedPersistId = agentMessageId && turnScope !== 'background'
+    ? assistantItemPersistIds.get(sessionId)?.get(agentMessageId)
+    : undefined;
+  // Codex can finish an item after tool events already flushed its text, or
+  // after a newer item started streaming. Calibrate that exact durable row
+  // before the item-boundary logic can flush the newer stream. Text equality
+  // cannot identify an item: separate messages may legitimately say the same thing.
+  if (isFinal && isFullText && linkedPersistId && activeBlock?.persistId !== linkedPersistId) {
+    const visible = stripInternalWebCitations(rawText);
+    const clearBoundary = clearBoundaryBySession.get(sessionId);
+    const isCurrentBoundary = () => clearBoundaryBySession.get(sessionId) === clearBoundary;
+    enqueueWrite(`assistant_item_final:${sessionId}:${linkedPersistId}`, async (ownerScope) => {
+      if (!isCurrentBoundary()) return;
+      if (!visible) {
+        const discarded = await discardPersistedAssistantMessage(sessionId, linkedPersistId,
+          () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope));
+        if (discarded && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
+          broadcastMessageDeleted({ sessionId, clientId: linkedPersistId, clientIds: [linkedPersistId] }, ownerScope);
+        }
+        return;
+      }
+      const updated = await updateDbMessageContent(sessionId, linkedPersistId, visible, undefined, {
+        isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope),
+      });
+      if (!isCurrentBoundary() || !isOwnerScopeCurrent(ownerScope)) return;
+      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+      if (agentMeta) {
+        const patched = await patchMessageAgentMetaWithResult(sessionId, linkedPersistId, { ...agentMeta });
+        if (patched && isCurrentBoundary()) {
+          await broadcastMessageAgentMetaUpdate(sessionId, linkedPersistId, ownerScope);
+        }
+      }
+    });
+    if (!visible && lastTopLevelAssistantPersistIdBySession.get(sessionId) === linkedPersistId) {
+      lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+    }
+    if (!visible && lastAssistantPersistIdBySession.get(sessionId) === linkedPersistId) {
+      lastAssistantPersistIdBySession.delete(sessionId);
+    }
+    // Preserve the newer stream and its completion/cost target.
+    return linkedPersistId;
+  }
   if (
     activeBlock?.agentMessageId &&
     agentMessageId &&
@@ -2141,18 +2298,20 @@ export function onAssistantTextEvent(
     ) {
       const contentChanged = visible !== lateFinalCandidate.text;
       if (contentChanged) {
-        const isCandidateCurrent = () =>
-          sealedAssistantLateFinalBySession.get(sessionId) === lateFinalCandidate;
+        const clearBoundary = clearBoundaryBySession.get(sessionId);
+        const isCurrentBoundary = () => clearBoundaryBySession.get(sessionId) === clearBoundary;
         enqueueWrite(
           `assistant_late_final:${sessionId}:${lateFinalCandidate.persistId}`,
           async (ownerScope) => {
-            if (!isCandidateCurrent()) return;
+            if (!isCurrentBoundary()) return;
             const updated = await updateDbMessageContent(
               sessionId,
               lateFinalCandidate.persistId,
               visible,
+              undefined,
+              { isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope) },
             );
-            if (updated && isCandidateCurrent()) {
+            if (updated && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
               lateFinalCandidate.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);
             }
@@ -2214,6 +2373,10 @@ export function onAssistantTextEvent(
       // delta 未消费 / 流式纠错),此时用全文更新既有行,而不是要求逐字相等后另起
       // 一行(否则仍是"部分文本 + 提问卡 + 完整文本"两行)。
       if (isFullText && boundaryFlushed.text !== visible) {
+        // Eligibility ends at the next block, but an already accepted correction
+        // still owns its durable row. Only clear/account changes invalidate it.
+        const clearBoundary = clearBoundaryBySession.get(sessionId);
+        const isCurrentBoundary = () => clearBoundaryBySession.get(sessionId) === clearBoundary;
         enqueueWrite(
           `boundary_flushed_content:${sessionId}:${boundaryFlushed.persistId}`,
           async (ownerScope) => {
@@ -2221,6 +2384,8 @@ export function onAssistantTextEvent(
               sessionId,
               boundaryFlushed.persistId,
               visible,
+              undefined,
+              { isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope) },
             );
             if (updated) {
               // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
@@ -2332,7 +2497,15 @@ function flushAssistantBlockInternal(
   if (!block) return undefined;
   assistantBlocks.delete(sessionId);
   const visible = stripInternalWebCitations(block.text);
-  if (!visible) return undefined;
+  if (!visible) {
+    // No row was queued for this block, so a later full snapshot must create
+    // one rather than treating the discarded item as an already durable row.
+    if (block.agentMessageId) {
+      const links = assistantItemPersistIds.get(sessionId);
+      if (links?.get(block.agentMessageId) === block.persistId) links.delete(block.agentMessageId);
+    }
+    return undefined;
+  }
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
@@ -2849,6 +3022,7 @@ export function clearCodexPlanRowsForSession(sessionId: string): void {
 }
 
 export function clearSessionPersistState(sessionId: string): void {
+  assistantItemPersistIds.delete(sessionId);
   clearSessionThinkingSnapshots(sessionId);
   clearCodexPlanRowsForSession(sessionId);
   assistantBlocks.delete(sessionId);

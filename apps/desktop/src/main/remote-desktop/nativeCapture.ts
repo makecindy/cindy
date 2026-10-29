@@ -148,6 +148,10 @@ export async function photographMacWindow(
  * No adapter keeps frame history on disk.
  */
 export class NativeDesktopCapture {
+  // Local recording can defer JPEG work until a frame is requested. Remote
+  // desktop and window-only callers retain their existing eager stream.
+  constructor(private readonly options: { encodeOnRequest?: boolean } = {}) {}
+
   private excludedWindows = '';
   private confirmedExclusion = '';
   setExcludedWindows(ids: number[]): void {
@@ -267,7 +271,7 @@ export class NativeDesktopCapture {
           : overlay
             ? [
                 display,
-                'cursor-overlay',
+                this.options.encodeOnRequest ? 'cursor-overlay-demand' : 'cursor-overlay',
                 String(fps),
                 String(quality),
                 String(profile.physicalMaxEdge),

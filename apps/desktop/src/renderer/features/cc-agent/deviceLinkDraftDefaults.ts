@@ -29,7 +29,7 @@ export interface RemoteDraftDefaults {
   /** false = 被控端明确未在 New Maker picker 选过模型；undefined = 旧端未知。 */
   modelChosenByUser?: boolean;
   effort?: string | null;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   providerId?: string | null;
   /**
@@ -37,7 +37,7 @@ export interface RemoteDraftDefaults {
    * 按目标 model id 查这两张表还原被控端记的值;旧版被控端不回 → undefined → 回落该模型 capabilities 默认。
    */
   effortByModel?: Record<string, string>;
-  fastModeByModel?: Record<string, boolean>;
+  fastModeByModel?: Record<string, boolean | 'ultrafast'>;
   /**
    * 被控端 providerModelMemory 全量快照;`${agent}:*` 是模型级全局预设,
    * `${agent}:${providerId}` 是旧 v2 兼容副本。device-link 草稿列表行据此镜像被控端预设;
@@ -45,7 +45,7 @@ export interface RemoteDraftDefaults {
    */
   providerModelMemory?: Record<
     string,
-    { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
+    { effortByModel: Record<string, string>; fastByModel: Record<string, boolean | 'ultrafast'> }
   >;
   /**
    * 被控端「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段)。控制端远程草稿
@@ -59,7 +59,7 @@ export interface RemoteDraftDefaults {
 export interface DeviceLinkDraftSelection {
   model: string;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** 仍是被控端支持的权限档则带上;否则 undefined(由 ChatInput 回落自身默认)。 */
   permissionMode?: PermissionMode;
   /** 来源透传,合法性交 ChatInput 校准;null = 跟随被控端默认路由。 */
@@ -83,6 +83,43 @@ export function shouldReseedDeviceLinkDraftDefaults(input: {
     !input.controllerTouched && (input.defaultsChanged === true
       || (input.capabilitiesChanged && input.remoteModelChosenByUser === false))
   );
+}
+
+/** worktree 勾选镜像的一帧输入:当前草稿目标设备 + 当时的远端草稿快照(按引用比较)。 */
+export interface DeviceLinkWorktreeEnabledFrame {
+  deviceId: string | null;
+  remoteDraftState: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    value: Pick<RemoteDraftDefaults, 'worktreeEnabled'> | null;
+  };
+}
+
+/**
+ * device-link 草稿的 worktree 勾选 = 被控端勾选记忆的镜像。返回要写入的勾选值,
+ * null = 保持当前显示不变。
+ *
+ *   - 切设备:先回到默认未勾选;若这一帧的快照对象仍是上一帧那份(属于上一台设备),
+ *     不得用它播种新设备,等新设备自己的快照到达。
+ *   - 切设备时同一批更新里就带来了新设备快照(设备域浏览器 inline 拉取后直接 seed,
+ *     且会跳过 hook 的再次拉取):必须立刻采用,否则此后再无快照变化能把勾选恢复,
+ *     被控端已勾选 worktree 却静默按普通会话建在默认分支上。
+ *   - 同设备:快照 ready 且带明确 boolean 才采用;缺字段 / 拉取中保留最后镜像。
+ */
+export function resolveDeviceLinkWorktreeEnabled(
+  previous: DeviceLinkWorktreeEnabledFrame | null,
+  current: DeviceLinkWorktreeEnabledFrame,
+): boolean | null {
+  const deviceChanged = !previous || previous.deviceId !== current.deviceId;
+  const snapshotFromPreviousDevice =
+    deviceChanged && previous?.remoteDraftState === current.remoteDraftState;
+  const remotePreference =
+    current.remoteDraftState.status === 'ready'
+      ? current.remoteDraftState.value?.worktreeEnabled
+      : undefined;
+  if (!snapshotFromPreviousDevice && typeof remotePreference === 'boolean') {
+    return remotePreference;
+  }
+  return deviceChanged ? false : null;
 }
 
 /**
@@ -178,8 +215,8 @@ export function resolveDeviceLinkDraftDefaults(
   const wantedFast =
     presetFast ??
     (isActiveModel
-      ? remoteDraft?.fastMode === true
-      : remoteDraft?.fastModeByModel?.[chosen.id] === true);
+      ? (remoteDraft?.fastMode ?? false)
+      : (remoteDraft?.fastModeByModel?.[chosen.id] ?? false));
   const supportedEfforts = effortModel.efforts as readonly string[];
 
   const effort: Effort | null =
@@ -190,7 +227,7 @@ export function resolveDeviceLinkDraftDefaults(
       : wantedEffort && supportedEfforts.includes(wantedEffort)
         ? wantedEffort
         : (effortModel.defaultEffort ?? supportedEfforts[0] ?? wantedEffort ?? 'high');
-  const fastMode = Boolean(capabilities.hasFastMode && chosen.supportsFastMode && wantedFast);
+  const fastMode = capabilities.hasFastMode && chosen.supportsFastMode && (wantedFast !== 'ultrafast' || chosen.supportsUltrafastMode === true) ? wantedFast : false;
 
   return { model: chosen.id, effort, fastMode, permissionMode, providerId };
 }

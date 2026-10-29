@@ -1,3 +1,4 @@
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
@@ -133,9 +134,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' },
         { id: 'taskFollowsPrimary', label: copy.taskFollowsPrimary, kind: 'toggle' },
         { id: 'taskModel', label: copy.taskModel, kind: 'multiline' }],
-        { followsDefault: settings.followsDefault, modelChain: JSON.stringify(settings.modelChain),
+        { followsDefault: settings.followsDefault, modelChain: serializeModelRoutes(settings.modelChain),
           taskFollowsPrimary: !settings.taskModelOverride,
-          taskModel: JSON.stringify(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
+          taskModel: serializeModelRoutes(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
       { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.

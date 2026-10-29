@@ -20,6 +20,7 @@ vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => h
 vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: String }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ cacheRemoteResourceHome: vi.fn(), readRemoteResourceSnapshot: h.snapshot }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.list }));
+import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS } from '@/device-link/remoteResourceAvailability';
 import { useTeammateRoster } from '@/session/useTeammateRoster';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -37,15 +38,50 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers
 it('offers only real online hosts advertising create, including a host with an empty roster', async () => {
   await render();
   expect(result.targets.map(host => host.deviceId)).toEqual(['old', 'new']);
-  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.createTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   expect(h.link.invoke).toHaveBeenCalledTimes(2); // No extra capability probe or mutation.
   expect(result.authoritative).toBe(true);
   h.list.isOnline.mockReturnValue(false); await render(); expect(result.createTargets).toEqual([]);
+  // Offline cached shards no longer raise refresh errors, but are still not authoritative.
+  expect(result.authoritative).toBe(false);
 });
 it('does not treat initial offline discovery as authoritative; recovers on connection', async () => {
   h.link.status = 'offline'; await render(); expect(result.authoritative).toBe(false); expect(result.createTargets).toEqual([]);
   h.link.status = 'online'; h.link.connectionEpoch++; await render();
   expect(result.authoritative).toBe(true); expect(result.createTargets[0].deviceId).toBe('new');
+});
+
+it('keeps a cold launch loading while the relay is starting, without reporting cached hosts offline', async () => {
+  const cached = { key: 'old:bot', host: { deviceId: 'old', deviceName: 'Old' }, item: {
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', display: { title: 'Cached' }, links: [],
+  } };
+  h.link.status = 'stopped';
+  h.list.items = [cached];
+  h.snapshot.mockResolvedValue({ home: [], items: { teammates: [cached] }, read: {} });
+  h.link.readDeviceList.mockRejectedValue(new Error('should wait for relay'));
+  await render();
+  expect(result.items).toEqual([cached]);
+  expect(result.loading).toBe(true);
+  expect(result.error).toBeNull();
+  expect(h.link.readDeviceList).not.toHaveBeenCalled();
+});
+it('falls back to the cached roster after a stalled relay startup and recovers on reconnect', async () => {
+  vi.useFakeTimers();
+  const cached = { key: 'old:bot', host: { deviceId: 'old', deviceName: 'Old' }, item: {
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, revision: '1', display: { title: 'Cached' }, links: [],
+  } };
+  h.link.status = 'connecting';
+  h.list.items = [cached];
+  h.snapshot.mockResolvedValue({ home: [], items: { teammates: [cached] }, read: {} });
+  await render();
+  expect(result.loading).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(REMOTE_RESOURCE_STARTUP_TIMEOUT_MS));
+  expect(result.loading).toBe(false);
+  expect(result.items).toEqual([cached]);
+  expect(result.error).toContain('devices.resources.hostOffline');
+  h.link.status = 'online'; h.link.connectionEpoch++;
+  await render();
+  expect(h.link.readDeviceList).toHaveBeenCalled();
 });
 it('drops old account discovery replies', async () => {
   let finish!: (value: unknown) => void;
@@ -88,7 +124,7 @@ it('shows cached teammates while host discovery is pending, then removes revoked
   h.snapshot.mockResolvedValue({ home: [], items: { teammates: h.list.items }, read: {} });
   h.list.isOnline.mockReturnValue(false);
   await render();
-  expect(result.items).toHaveLength(1); expect(result.loading).toBe(false);
+  expect(result.items).toHaveLength(1); expect(result.loading).toBe(true);
   expect(result.authoritative).toBe(false); expect(result.isOnline(h.list.items[0].host)).toBe(false);
   h.revoked = new Set(['old']); await render();
   expect(result.items).toEqual([]);
@@ -101,7 +137,7 @@ it('exposes only computers whose manifest advertises group chats, keeping them t
   ] });
   h.link.invoke.mockImplementation(async (deviceId) => manifest(deviceId === 'new'));
   await render();
-  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'new' }]);
+  expect(result.groupTargets).toEqual([{ deviceId: 'new', deviceName: 'another computer (1)' }]);
   // A transient manifest failure keeps the computer's groups; an older desktop never gains them.
   h.link.invoke.mockImplementation(async (deviceId) => { if (deviceId === 'new') throw new Error('timeout'); return manifest(false); });
   h.link.connectionEpoch++; await render();
@@ -192,7 +228,7 @@ it('retains in-memory teammates if the disk capability read stalls', async () =>
   await act(async () => vi.advanceTimersByTimeAsync(2000));
   expect(result.targets.map(host => host.deviceId)).toEqual(['old']);
   expect(result.items).toEqual([cached]);
-  expect(result.loading).toBe(false);
+  expect(result.loading).toBe(true);
 });
 
 it('keeps every cached roster host in the list targets while a partial home manifest catches up', async () => {

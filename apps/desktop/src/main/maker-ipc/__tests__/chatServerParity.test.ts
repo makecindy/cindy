@@ -5,6 +5,10 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({ read: () => null, save: vi.fn() }) }));
 vi.mock('../chatMigrationReceipts.js', () => ({ chatMigrationReceipts: () => ({ read: () => null, save: vi.fn() }) }));
+// These transport/lifecycle fixtures isolate native disk IO; actual snapshot and
+// journal persistence is exercised through chatPersistence.test.ts and chatServer.test.ts.
+vi.mock('../chatLocalHistory.js', () => ({ chatLocalHistory: () => ({ read: () => null, save: vi.fn(), forget: vi.fn() }) }));
+vi.mock('../chatSendJournal.js', () => ({ chatSendJournal: () => ({ read: () => null, save: vi.fn(), confirm: vi.fn(), forgetRoom: vi.fn() }) }));
 vi.mock('electron', () => ({ app: { get isPackaged() { return fixture.packaged; }, getPath: () => '/isolated' } }));
 vi.mock('node:fs', () => ({ existsSync: fixture.exists, readFileSync: () => fixture.config || '{"baseUrl":"https://example.com","token":"test"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
@@ -80,6 +84,20 @@ describe('server group feature parity', () => {
     } as unknown as BotGroupChatServiceDeps;
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
+  // Unit regression: remote executions have no local lane but must keep their
+  // exact identity and waiting/stopping state; concurrent turns cannot be deduped.
+  it('retains remote waiting and stopping executions in the group projection', async () => {
+    fixture.handle.mockImplementation((route: string) => route.endsWith('/executions') ? { body: [
+      { ...execution, status: 'needs_input' },
+      { ...execution, id: '40000000-0000-4000-8000-000000000002', status: 'stopping' },
+    ] } : response(route));
+    const result = await service.getGroup(roomId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.group.round.speakers.map(speaker => [speaker.executionId, speaker.executionStatus, speaker.sessionId])).toEqual([
+      [execution.id, 'needs_input', null], ['40000000-0000-4000-8000-000000000002', 'stopping', null],
+    ]);
+  });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
   const secondBotId = '20000000-0000-4000-8000-000000000002';
   const planId = '70000000-0000-4000-8000-000000000001';
@@ -103,6 +121,30 @@ describe('server group feature parity', () => {
     });
   }
   async function flush() { await vi.advanceTimersByTimeAsync(0); }
+  // Mention-only must suppress the auxiliary planning request as well as model replies.
+  it.each([undefined, 'proposed', 'waiting'] as const)('keeps unaddressed mention-only messages idle with plan=%s', async status => {
+    arrange(status ? { ...proposed, status } : undefined);
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => route.endsWith('/snapshot')
+      ? { body: { room: { ...room(roomId), response_mode: 'mentioned' }, members, messages: [], cursor: '1' } }
+      : base(route, method, data));
+    expect((await send()).ok).toBe(true); await flush();
+    expect(deps.decidePlan).not.toHaveBeenCalled();
+    expect(planPosts()).toHaveLength(0);
+    expect(fixture.handle.mock.calls.some(([route, method]) => route.includes(`/plans/${planId}`) && method === 'POST')).toBe(false);
+    const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
+    expect(posted).toMatchObject({ deferExecution: false, mentions: [] });
+  });
+  it.each([{ division: true }, { mentions: { all: true, botIds: [] } }])('keeps directed planning available in mention-only rooms: %j', async input => {
+    arrange();
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => route.endsWith('/snapshot')
+      ? { body: { room: { ...room(roomId), response_mode: 'mentioned' }, members, messages: [], cursor: '1' } }
+      : base(route, method, data));
+    expect((await send(input)).ok).toBe(true); await flush();
+    expect(deps.decidePlan).toHaveBeenCalledTimes(1);
+    expect(planPosts()).toHaveLength(1);
+  });
   it.each([
     ['proposed', 'dismiss'],
     ['waiting', 'stop'],
@@ -257,6 +299,45 @@ describe('server group feature parity', () => {
     expect(input.message).toContain('attachment limit');
     expect(input.message).toContain('file-0');
     expect(input.attachments![0].id).toBe(messages[0].content[0].mediaId);
+  });
+  // Runtime regression: stopping a running group reply used to forget the lane
+  // without acknowledging cancel, leaving every device spinning until lease expiry.
+  it.each(['local', 'remote', 'retry'] as const)('acknowledges %s stop without publishing a reply or losing the task during retry', async origin => {
+    arrange();
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+    let state = 'running';
+    let cancels = 0;
+    const base = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, data) => {
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status: state }] };
+      if (route.endsWith('/control')) { state = 'stopping'; return { body: {} }; }
+      if (route.endsWith(`/executions/${execution.id}`)) {
+        if (data.action === 'heartbeat' && state === 'stopping') return { status: 409, body: { error: { code: 'STOP_REQUESTED' } } };
+        if (data.action === 'cancel') {
+          cancels++;
+          if (origin === 'retry' && cancels === 1) return { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
+          state = 'cancelled';
+        }
+      }
+      return base(route, method, data);
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+    if (origin === 'remote') {
+      state = 'stopping';
+      await vi.advanceTimersByTimeAsync(13000);
+    } else await service.stopRound(roomId);
+    if (origin === 'retry') {
+      expect(await service.getGroup(roomId)).toMatchObject({ group: { round: { speakers: [{ sessionId: 'lane', executionStatus: 'stopping' }] } } });
+      await vi.advanceTimersByTimeAsync(16000);
+    }
+    expect(state).toBe('cancelled');
+    expect(deps.abortLane).toHaveBeenCalledOnce();
+    expect(deps.dispatch).toHaveBeenCalledOnce();
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route.endsWith(`/executions/${execution.id}`) && method === 'POST');
+    expect(writes.some(([, , data]) => data.action === 'complete')).toBe(false);
+    expect(writes.filter(([, , data]) => data.action === 'cancel').every(([, , data]) => !data.content)).toBe(true);
+    expect(await service.getGroup(roomId)).toMatchObject({ group: { round: { status: 'idle', speakers: [] } } });
   });
   it('negotiates broadcast and cancels the server deferred source on stop', async () => {
     arrange();

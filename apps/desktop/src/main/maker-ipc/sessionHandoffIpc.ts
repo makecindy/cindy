@@ -1,10 +1,13 @@
 import { ipcMain } from 'electron';
+import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
 import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { hasRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import type { TaskActionDeliveryGuard } from './taskActionAuthorization.js';
+import { validateRemoteTaskActionReceipt } from './remoteTaskActionReceipt.js';
 
 /**
  * `maker:session:handoff` 的被控端业务体：同账号另一台电脑上的任务，把一条消息发给
@@ -18,6 +21,10 @@ import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
 const MAX_MESSAGE_CHARS = 200_000;
 
 export interface SessionHandoffSendParams {
+  autoReviewUserText: AgentRequestReceipt;
+  clientId?: string;
+  forceQueue?: boolean;
+  taskActionDeliveryGuard?: TaskActionDeliveryGuard;
   targetSessionId: string;
   message: string;
   origin: NonNullable<AgentInputQueuedMessage['origin']>;
@@ -43,14 +50,23 @@ function boundedString(value: unknown, name: string, max: number): string {
 
 export function createSessionHandoffHandler(deps: {
   send(params: SessionHandoffSendParams): Promise<SessionHandoffSendResult>;
+  validate?(controllerDeviceId: string, input: { receiptId: string; sessionId: string; targetSessionId: string; message: string; release?: boolean }): Promise<boolean>;
 }) {
+  // Claim before the first await. The sender receipt expires after one hour; retain
+  // claims longer so transport replay cannot enqueue a second copy in that lifetime.
+  const claimed = new Map<string, number>();
   return async (controllerDeviceId: string, value: unknown): Promise<SessionHandoffSendResult> => {
     const request = requireObject(value, 'request');
     const targetSessionId = boundedString(request.sessionId, 'sessionId', 512);
     // 目标必须是本机任务；带设备前缀的 id 属于别的电脑，不代为转发。
     if (targetSessionId.includes('::'))
       throwIpcError('INVALID_PARAMS', 'Handoff cannot forward to another device');
-    const message = boundedString(request.message, 'message', MAX_MESSAGE_CHARS);
+    const body = boundedString(request.message, 'message', MAX_MESSAGE_CHARS);
+    // Same-account host transport, never an Agent tool argument. Old peers have no receipt.
+    const requestSource = readForwardedRequestSource(request.requestSource);
+    if (request.requestSource !== undefined && (!requestSource || !matchesForwardedRequest(requestSource, body)))
+      throwIpcError('INVALID_PARAMS', 'Request source does not match the forwarded body');
+    const message = body;
     const sender = requireObject(request.sender, 'sender');
     // 任务 id 是不透明字符串（IM 任务的 id 可以很长）；只拒绝会伪造设备前缀或说明结构的写法。
     const senderSessionId = boundedString(sender.sessionId, 'sender.sessionId', 512);
@@ -58,7 +74,33 @@ export function createSessionHandoffHandler(deps: {
       throwIpcError('INVALID_PARAMS', 'Invalid sender.sessionId');
     }
     const senderSessionTitle = sanitizeSourceName(sender.title);
+    if (typeof request.taskActionReceipt !== 'string' || !deps.validate) {
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization is required; update the sending computer.' };
+    }
+    const receiptId = boundedString(request.taskActionReceipt, 'taskActionReceipt', 128);
+    for (const [key, expires] of claimed) if (expires <= Date.now()) claimed.delete(key);
+    const claimKey = JSON.stringify([controllerDeviceId, receiptId]);
+    if (claimed.has(claimKey) || claimed.size >= 1024)
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action already claimed or pending limit reached; inspect the target before retrying.' };
+    claimed.set(claimKey, Date.now() + 2 * 60 * 60_000);
+    const taskActionDeliveryGuard: TaskActionDeliveryGuard = async () => {
+      if (!await deps.validate!(controllerDeviceId, { receiptId, sessionId: senderSessionId, targetSessionId, message: body }))
+        throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    };
+    taskActionDeliveryGuard.onSettled = async () => {
+      // Once the sender forgets the receipt, a replay fails validation even after
+      // removing our claim. Failed release keeps the original expiry as fallback.
+      if (await deps.validate!(controllerDeviceId, { receiptId, sessionId: senderSessionId,
+        targetSessionId, message: body, release: true })) claimed.delete(claimKey);
+    };
+    try { await taskActionDeliveryGuard(); } catch {
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization expired; no message was sent.' };
+    }
     const result = await deps.send({
+      autoReviewUserText: { kind: 'agent-request', request: requestSource ?? { userText: null } },
+      clientId: `remote-task-action:${receiptId}`,
+      forceQueue: true,
+      taskActionDeliveryGuard,
       targetSessionId,
       message,
       origin: {
@@ -69,7 +111,10 @@ export function createSessionHandoffHandler(deps: {
       },
       resumeWithStoredPermissionMode: true,
     });
-    if (!result.ok) return { ok: false, errorCode: result.errorCode, message: result.message };
+    if (!result.ok) {
+      await taskActionDeliveryGuard.onSettled().catch(() => undefined);
+      return { ok: false, errorCode: result.errorCode, message: result.message };
+    }
     return {
       ok: true,
       agentKind: result.agentKind,
@@ -95,6 +140,18 @@ export function registerSessionHandoffIpc(
     }
     if (!hasRemoteBotSessionLookup())
       throwIpcError('PRECONDITION_FAILED', 'Task visibility is not ready');
+    const request = requireObject(value, 'request');
+    if (request.action === 'task-action-capability') return { taskActionVersion: 1 };
+    if (request.action === 'validate-task-action') {
+      const valid = await validateRemoteTaskActionReceipt(context!.controllerDeviceId, {
+        receiptId: boundedString(request.receiptId, 'receiptId', 128),
+        sessionId: boundedString(request.sessionId, 'sessionId', 512),
+        targetSessionId: boundedString(request.targetSessionId, 'targetSessionId', 512),
+        message: boundedString(request.message, 'message', MAX_MESSAGE_CHARS),
+        release: request.release === true,
+      });
+      return { valid, ...(request.release === true ? { released: valid } : {}) };
+    }
     return handle(context!.controllerDeviceId, value);
   });
 }

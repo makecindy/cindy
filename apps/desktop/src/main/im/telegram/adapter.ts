@@ -210,23 +210,32 @@ export function buildTelegramAdapter(
     // Full access 是 owner 对这条任务的明确授权。该档下各 Agent 的工具调用不会
     // 冒泡到 host，逐轮强确认策略无法兑现；owner 触发时取缔策略，避免 provider
     // 启动前报不支持。非 owner 仍保留策略并 fail-closed，不能借同一群任务的
-    // Full access 直接驱动工具。其它权限档与群上下文隔离都不受影响。
+    // Full access 直接驱动工具。这里仅负责新消息准入；主人对已受理轮次主动切档
+    // 按普通任务立即生效(2026-10-23 Dash 裁决)，不在这里增加运行中限制。
+    // 其它权限档与群上下文隔离都不受影响。
     // 伙伴自有 bot: 完全访问是主人对这个伙伴的明确授权, 三种 Agent 在该档下都
     // 无法兑现逐轮策略, 成员触发的轮次同样取缔策略而不是拒跑 —— 要成员动手前
     // 必须确认, 把伙伴设成 Auto 或 Ask。
     turnPolicyOptionalForMode: (mode, policy) =>
       mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
-    groupHistoryAccessFor: (event): GroupHistoryAccessScope => {
+    groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
+      // Companion bots admit guest DMs too. Reuse the verified requester identity
+      // used by channelToolScopeFor; a DM alone is not proof of ownership.
+      if (
+        !lane &&
+        !(event.speaker ? event.speaker.isOwner : event.senderId === telegramIm.getOwnerUserId())
+      ) return undefined;
       const provider = `telegram-personal:${event.contextId}`;
       return {
-        // 跨 lane 检索只给 DM(!lane, 上游已保证 DM 非 owner 不进业务链路)。
+        // 跨 lane 检索只给通过主人身份检查的 DM。
         // 群轮次一律 lane-only —— 与上面 turnPermissionPolicyFor 的 2026-07-30
         // 裁决同一信任模型: 群窗口/引用块把成员可控文本注入 owner 触发的轮次,
         // 注入可借 owner 轮次把其它 lane 的历史检索出来回帖泄漏。owner 要跨
         // lane 查, 走私聊(检索类调用无强确认卡, 不能靠确认兜底)。
         access: lane ? 'lane' : 'owner',
         provider,
+        readImage: (fileId) => telegramIm.readGroupHistoryImage(fileId),
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };
     },

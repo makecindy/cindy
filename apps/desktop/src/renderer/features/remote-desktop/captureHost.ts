@@ -458,6 +458,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             }, 50);
           }
           let pending = 0;
+          let releasing = false;
           let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
@@ -471,7 +472,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
             channel.send(JSON.stringify({ type: 'viewPing', challenge }));
           }, 2000);
           channel.onmessage = ({ data }) => {
-            if (current !== generation) return;
+            if (current !== generation || channel.readyState !== 'open') return;
             if (typeof data === 'string' && challenge && data === challenge) {
               challenge = '';
               void api.viewHeartbeat(lease).catch(() => {});
@@ -535,9 +536,7 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
                   });
                 return;
               }
-              // Only input batches count toward the input overflow bound.
               if (
-                pending >= 8 ||
                 !Number.isSafeInteger(message.sequence) ||
                 !Array.isArray(message.events) ||
                 message.events.length > 64 ||
@@ -545,6 +544,20 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               ) {
                 stop();
                 void api.stop().catch(() => {});
+                return;
+              }
+              if (releasing) return;
+              if (pending >= 8) {
+                // A valid burst is congestion, not a reason to end the lease.
+                // Drop stale input until held keys/buttons are released, but
+                // keep requests and PiP heartbeats on this channel working.
+                releasing = true;
+                void api
+                  .input(lease, message.sequence, [{ kind: 'release' }])
+                  .catch(() => channel.close())
+                  .finally(() => {
+                    releasing = false;
+                  });
                 return;
               }
               pending++;

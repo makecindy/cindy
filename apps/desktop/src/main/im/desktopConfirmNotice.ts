@@ -18,6 +18,11 @@ export interface DesktopConfirmNoticeDeps {
   /** 会话绑定的飞书 openId;非飞书会话返回 null(桌面本来就是唯一交互面)。 */
   getFeishuOpenId(sessionId: string): Promise<string | null>;
   sendFeishuText(openId: string, markdown: string): Promise<unknown>;
+  /**
+   * 该任务开了「消息免打扰」→ IM 侧提示也不发,与 toast / 灵动岛 / 手机推送
+   * 同一口径。桌面卡片本身不受影响:提示是提醒,卡片是交互面。
+   */
+  isSuppressed?(sessionId: string): boolean;
   logWarn?(message: string): void;
 }
 
@@ -58,23 +63,28 @@ export function buildInputHandoffNoticeText(taskTitle: string): string {
 
 /**
  * 组装 fire-and-forget 通知函数(DI 便于单测;生产接线见
- * desktopConfirmNoticeWiring.ts)。
+ * desktopConfirmNoticeWiring.ts)。返回提醒是否已接管(含免打扰),而非是否发送成功;
+ * 忽略返回值的既有调用方仍为 best-effort,不抛出。
  */
 export function createDesktopConfirmNotifier(
   deps: DesktopConfirmNoticeDeps,
   buildText: (what: string) => string = buildDesktopConfirmNoticeText,
-): (sessionId: string, what: string) => void {
-  return (sessionId, what) => {
-    void (async () => {
-      try {
-        const openId = await deps.getFeishuOpenId(sessionId);
-        if (!openId) return;
-        await deps.sendFeishuText(openId, buildText(what));
-      } catch (err) {
-        deps.logWarn?.(
-          `desktop-confirm IM notice failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    })();
+): (sessionId: string, what: string) => Promise<boolean> {
+  return async (sessionId, what) => {
+    if (deps.isSuppressed?.(sessionId)) return true;
+    let handled = false;
+    try {
+      const openId = await deps.getFeishuOpenId(sessionId);
+      if (deps.isSuppressed?.(sessionId)) return true;
+      if (!openId) return false;
+      // Finding a target claims this notice, even when best-effort delivery fails.
+      handled = true;
+      await deps.sendFeishuText(openId, buildText(what));
+    } catch (err) {
+      deps.logWarn?.(
+        `desktop-confirm IM notice failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return handled;
   };
 }

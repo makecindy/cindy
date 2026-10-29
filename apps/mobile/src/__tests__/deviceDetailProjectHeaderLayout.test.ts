@@ -39,7 +39,7 @@ function renderProject(searchOpen: boolean) {
   const inset = { contentInsetAdjustmentBehavior: 'automatic' };
   const scope: Record<string, unknown> = {
     createElement, projectWorkingDir: '/project', sections: [], displaySections: [],
-    showConnectionBanner: false, loading: false, status: 'connected', styles: {},
+    showConnectionBanner: false, loading: false, status: 'connected', styles: {}, effectiveError: null,
     simpleScrollScreenSafeAreaEdges: () => ['left', 'right', 'bottom'],
     simpleScrollInsetProps: inset, usesNativeStackHeader: () => true, headerHeight: 88,
     t: (key: string) => key, projectName: 'Project', deviceName: 'Computer', deviceId: 'device',

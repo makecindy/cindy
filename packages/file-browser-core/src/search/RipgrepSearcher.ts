@@ -296,10 +296,10 @@ export class RipgrepSearcher extends EventEmitter {
   }
 
   private killChild(child: ChildProcessWithoutNullStreams): void {
-    if (child.killed || child.exitCode !== null) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
     try { child.kill('SIGTERM'); } catch { /* ignore */ }
     setTimeout(() => {
-      if (!child.killed && child.exitCode === null) {
+      if (child.exitCode === null && child.signalCode === null) {
         try { child.kill('SIGKILL'); } catch { /* ignore */ }
       }
     }, KILL_GRACE_MS).unref();

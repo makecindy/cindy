@@ -96,7 +96,7 @@ describe('dedicated Auto-review candidate policy', () => {
     });
 
     await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
-    expect(calls).toEqual(['capture', 'cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'custom']);
+    expect(calls).toEqual(['capture', 'cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'custom']);
     expect(fallback).toHaveBeenCalledTimes(1);
   });
 
@@ -178,7 +178,7 @@ describe('dedicated Auto-review candidate policy', () => {
       candidate.model,
     ])).toEqual([
       ['xd', 'cindy/auto-review'],
-      ['openai', 'gpt-5.4-nano'],
+      ['openai', 'codex-auto-review'],
       ['openai', 'gpt-6-luna'],
     ]);
     // Claude 订阅只供内置 Claude Code CLI 使用,不作为 Cindy 直连审阅的候选。
@@ -195,7 +195,7 @@ describe('dedicated Auto-review candidate policy', () => {
       switch (candidate.id) {
         case 'cindy-gateway':
           return succeeded(candidate, 'not json');
-        case 'chatgpt-nano':
+        case 'chatgpt-auto-review':
           return failed(candidate, 'http_error', 400);
         case 'chatgpt-luna':
           // 首次空响应在原位重试一次,重试成功即收口。
@@ -213,7 +213,7 @@ describe('dedicated Auto-review candidate policy', () => {
     );
     expect(calls).toEqual([
       'cindy-gateway',
-      'chatgpt-nano',
+      'chatgpt-auto-review',
       'chatgpt-luna',
       'chatgpt-luna',
     ]);
@@ -251,7 +251,7 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(12_000);
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review']);
   });
 
   it('retries a timed-out gateway after unavailable fallbacks skip instantly', async () => {
@@ -274,7 +274,7 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'cindy-gateway']);
     expect(log.warn).toHaveBeenCalledWith('auto-review model candidate failed', expect.objectContaining({
       candidateId: 'cindy-gateway',
       reason: 'timeout',
@@ -287,7 +287,7 @@ describe('dedicated Auto-review candidate policy', () => {
     const calls: string[] = [];
     const requestCandidate = vi.fn((_prompt, candidate) => {
       calls.push(candidate.id);
-      if (candidate.id === 'chatgpt-nano') {
+      if (candidate.id === 'chatgpt-auto-review') {
         return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
       }
       if (candidate.id === 'cindy-gateway' && calls.length > 1) {
@@ -303,7 +303,7 @@ describe('dedicated Auto-review candidate policy', () => {
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
     // luna 不得原位重试插到已排队的网关重试前面。
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'cindy-gateway']);
   });
 
   it('does not retry a timed-out candidate without a full timeout left', async () => {
@@ -320,12 +320,12 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna']);
     // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 deferred。
     const skipped = log.warn.mock.calls
       .filter(([message]) => message === 'auto-review model candidate retry skipped')
       .map(([, fields]) => fields.candidateId);
-    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna']);
   });
 
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {

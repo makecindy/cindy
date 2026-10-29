@@ -62,6 +62,34 @@ describe('buildByokProvider model types', () => {
     ]);
   });
 
+  it('keeps a model-group Auto as the server named it, with its Pi default marker and Pi route', () => {
+    const groupAuto = {
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+      agents: ['pi'] as Array<'pi'>,
+      mode: 'chat' as const,
+      currency: 'CNY' as const,
+      newSessionDefault: ['pi'] as Array<'pi'>,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      perAgent: { pi: { wireProtocol: 'openai-responses' as const } },
+    };
+    const result = buildByokProvider({
+      provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1, models: [groupAuto] },
+      credential,
+    });
+    expect(result.models.pi?.[0]).toMatchObject({
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+      newSessionDefault: ['pi'],
+      defaultEnabled: true,
+      piApi: 'openai-responses',
+    });
+    expect(byokNativeConfigs([result])[0]?.runtimes.pi?.models[0]).toMatchObject({
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+    });
+  });
+
   it('can project an image-only enterprise Provider without chat engines', () => {
     const result = buildByokProvider({
       provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1, models: [imageModel] },

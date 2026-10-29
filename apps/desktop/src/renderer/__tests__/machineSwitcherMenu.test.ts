@@ -129,41 +129,25 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(featureContextSource).toContain('export function useOwnsTopNavScrollableRows');
   });
 
-  // 导航改为用户自定义顺序:内置入口与插件主视图按保存顺序排列,面板恢复入口
-  // 紧随其后,「更多」收尾;展开态与 rail 同一契约。
-  it('插件主视图与内置入口按保存顺序排列，面板恢复入口在其后、「更多」收尾', () => {
+  // 导航改为用户自定义顺序:内置入口与插件主视图按保存顺序排列,「更多」收尾;
+  // 展开态与 rail 同一契约。(插件停靠面板恢复入口已随停靠面板一起退场。)
+  it('插件主视图与内置入口按保存顺序排列，「更多」收尾', () => {
     expect(topNavSource).toContain('<GhostMainViewNavEntry item={app} variant="row" />');
     const scrollRowsIdx = topNavSource.indexOf('{orderedNavigationRows}');
-    const scrollRestoreIdx = topNavSource.indexOf('{restoreRow}', scrollRowsIdx);
-    const scrollMoreIdx = topNavSource.indexOf('{customizeRow}', scrollRestoreIdx);
+    const scrollMoreIdx = topNavSource.indexOf('{customizeRow}', scrollRowsIdx);
     expect(scrollRowsIdx).toBeGreaterThanOrEqual(0);
-    expect(scrollRestoreIdx).toBeGreaterThan(scrollRowsIdx);
-    expect(scrollMoreIdx).toBeGreaterThan(scrollRestoreIdx);
+    expect(scrollMoreIdx).toBeGreaterThan(scrollRowsIdx);
 
     const persistentRowsIdx = topNavSource.lastIndexOf('orderedNavigationRows');
-    const persistentRestoreIdx = topNavSource.indexOf(
-      '!customizing && restoreRow',
-      persistentRowsIdx,
-    );
-    const persistentMoreIdx = topNavSource.indexOf(
-      '!customizing && customizeRow',
-      persistentRestoreIdx,
-    );
-    expect(persistentRowsIdx).toBeGreaterThan(scrollRowsIdx);
-    expect(persistentRestoreIdx).toBeGreaterThan(persistentRowsIdx);
-    expect(persistentMoreIdx).toBeGreaterThan(persistentRestoreIdx);
+    const persistentMoreIdx = topNavSource.indexOf('!customizing && customizeRow', persistentRowsIdx);
+    expect(persistentMoreIdx).toBeGreaterThan(persistentRowsIdx);
 
     const railStart = topNavSource.indexOf('export function SidebarRailNavigation');
     const railTilesIdx = topNavSource.indexOf('variant="rail" />', railStart);
-    const railRestoreIdx = topNavSource.indexOf(
-      '<GhostPanelRestoreEntry variant="rail"',
-      railTilesIdx,
-    );
-    const railMoreIdx = topNavSource.indexOf('<SidebarNavigationMoreMenu', railRestoreIdx);
+    const railMoreIdx = topNavSource.indexOf('<SidebarNavigationMoreMenu', railTilesIdx);
     expect(railStart).toBeGreaterThanOrEqual(0);
     expect(railTilesIdx).toBeGreaterThan(railStart);
-    expect(railRestoreIdx).toBeGreaterThan(railTilesIdx);
-    expect(railMoreIdx).toBeGreaterThan(railRestoreIdx);
+    expect(railMoreIdx).toBeGreaterThan(railTilesIdx);
   });
 
   // 2026-08-12 用户反馈:滚动后首行紧贴固定的「新建」被硬切、露出半截字。

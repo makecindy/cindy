@@ -41,7 +41,6 @@ vi.mock('@/cindy-brain/ghostMainViews', () => ({
     sidebarVisible: mainViewsMock.sidebarVisible,
   }),
 }));
-vi.mock('@/cindy-brain/GhostPanelRestoreEntry', () => ({ GhostPanelRestoreEntry: () => null }));
 vi.mock('../GhostMainViewNavEntries', () => ({
   GhostMainViewNavEntry: ({ item, variant }: { item: { title: string }; variant: string }) =>
     <button aria-label={item.title} data-variant={variant} />,

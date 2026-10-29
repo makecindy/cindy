@@ -37,6 +37,7 @@ vi.mock('@/lib/toast', () => ({
 vi.mock('@/lib/customProviders', () => ({
   createCustomProvider: vi.fn(),
   updateCustomProvider: vi.fn(),
+  readCustomProviderKey: vi.fn(async () => "fake-stored-key"),
   deleteCustomProvider: vi.fn(async () => undefined),
   providerViewToCustomProviderConfig: (p: ProviderView) => ({ id: p.id, name: p.name, auth: p.auth, runtimes: Object.fromEntries(p.agents.map(a => [a, { baseUrl: p.routing[a]!.upstream, wireProtocol: p.routing[a]!.wireProtocol, models: p.models[a] }])) }),
 }));
@@ -55,7 +56,15 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
-import { createCustomProvider, updateCustomProvider, deleteCustomProvider } from '@/lib/customProviders';
+import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
+import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
+import { speechModels } from '../../main/voice-conversation/models';
+import { __resetForTest as resetVisibility, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
+import { createCustomProvider, updateCustomProvider, deleteCustomProvider, readCustomProviderKey } from '@/lib/customProviders';
+
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn() }),
+}));
 
 const anthropicProvider = {
   id: 'anthropic',
@@ -285,7 +294,7 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
     const row = hint.closest('button')!;
     expect(row).not.toBeNull();
     expect(within(row).queryByText('settings.providers.wizard.metaApiKey')).toBeNull();
-    expect(screen.getByText('settings.providers.wizard.metaApiKey')).toBeTruthy();
+    expect(within(screen.getByText('DeepSeek').closest('button')!).getByText('settings.providers.wizard.metaApiKey')).toBeTruthy();
     fireEvent.click(row);
     expect(await screen.findByRole('button', { name: id === 'openrouter' ? 'settings.providers.button.authorize' : 'settings.providers.wizard.authorizeWithDeviceCode' })).toBeTruthy();
     expect(screen.getByText('settings.providers.wizard.useApiKey')).toBeTruthy();
@@ -1492,4 +1501,512 @@ it('sets up Sub2API from one site address and retains discovered capabilities in
     expect(rt.models[0].discoveredMetadata).toMatchObject({ efforts: ['low', 'high'],
       contextWindow: 272000, contextWindowMax: 1050000, supportsFastMode: true, supportsImageInput: true });
   }
+});
+
+// Scheme-2 handoff must keep connection ownership and user choices; the managed-local
+// entry tests above do not cover an independently addressed LM Studio deployment.
+describe('identified provider handoff', () => {
+  const model = { id: 'private-alias', name: 'My model', contextWindow: 4096, route: { baseUrl: 'https://relay.example/team/v1', wireProtocol: 'openai-chat' as const } };
+  const detected = {
+    agent: 'pi' as const, apiKey: 'fake-key', keys: { pi: 'fake-key' },
+    preset: { id: 'lmstudio', name: 'LM Studio', runtimes: { pi: {
+      baseUrl: 'https://relay.example/team/v1', baseUrlEditable: true, wireProtocol: 'openai-chat' as const,
+      headers: { 'X-Project': 'test' }, models: [],
+    } } },
+    config: { id: 'draft', name: 'My remote server', runtimes: { pi: { baseUrl: 'https://relay.example/team/v1', models: [model] } } },
+    catalog: { ok: true, models: [{ id: 'private-alias', name: 'Upstream name' }, { id: 'unselected', name: 'Another' }] },
+  };
+  it.each([false, true])('saves an independent connection and retains overrides on its edited endpoint: %s', async edited => {
+    const managed = { ...anthropicProvider, id: 'cindy-local-lmstudio', name: 'LM Studio', source: 'user' } as ProviderView;
+    render(<AddProviderWizard providers={[managed]} detected={detected} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    const baseUrl = edited ? 'https://new-relay.example/team/v1' : detected.config.runtimes.pi.baseUrl;
+    if (edited) vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue(detected.catalog);
+    if (edited) fireEvent.change(await screen.findByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: baseUrl } });
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!edited) expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.id).not.toBe('cindy-local-lmstudio');
+    expect(config.runtimes.pi).toMatchObject({ baseUrl, wireProtocol: 'openai-chat', headers: { 'X-Project': 'test' } });
+    expect(config.runtimes.pi!.models.find(m => m.id === 'private-alias')).toMatchObject({ ...model, route: { ...model.route, baseUrl } });
+    expect(config.runtimes.pi!.models.find(m => m.id === 'unselected')?.defaultEnabled).toBe(false);
+    expect(keys).toEqual({ pi: 'fake-key' });
+  });
+  it.each([true, false])('current checkbox overrides an old disabled draft: checked=%s', async checked => {
+    const handoff = { ...detected, config: { ...detected.config, runtimes: { pi: {
+      ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
+    } } } };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!checked) fireEvent.click(screen.getByText('Upstream name'));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models.find(m => m.id === model.id)!;
+    expect(saved.defaultEnabled).toBe(checked ? undefined : false);
+    expect(saved).toMatchObject({ contextWindow: model.contextWindow, route: model.route });
+  });
+  it.each([true, false])('returns the current selection without reviving disabled flags: %s', async checked => {
+    const handoff = { ...detected, config: { ...detected.config, runtimes: { pi: {
+      ...detected.config.runtimes.pi, models: [{ ...model, defaultEnabled: false }, { id: 'keep', name: 'Keep' }],
+    } } } };
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    if (!checked) fireEvent.click(screen.getByText('Upstream name'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const models = onReturnCustom.mock.calls[0][0].config.runtimes.pi.models;
+    const returned = models.find((m: { id: string }) => m.id === model.id);
+    if (checked) {
+      expect(returned.defaultEnabled).toBeUndefined();
+      expect(returned).toMatchObject({ contextWindow: model.contextWindow, route: model.route });
+    } else expect(returned).toBeUndefined();
+    expect(models.some((m: { id: string }) => m.id === 'keep')).toBe(true);
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('saves the explicit native image option carried by a Codex handoff', async () => {
+    const runtime = { ...detected.preset.runtimes.pi, wireProtocol: 'openai-responses' as const, supportsImageGeneration: true };
+    const handoff = { ...detected, agent: 'codex' as const, keys: { codex: 'fake-key' },
+      preset: { ...detected.preset, runtimes: { codex: runtime } },
+      config: { ...detected.config, runtimes: { codex: { ...runtime, models: [{ id: 'private-alias', name: 'Model' }] } } },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex).toMatchObject({ supportsImageGeneration: true, wireProtocol: 'openai-responses' });
+  });
+  it('retains a hand-entered model when OpenRouter returns a complete public catalog', async () => {
+    const baseUrl = 'https://openrouter.ai/api/v1';
+    const handoff = { ...detected,
+      preset: { ...detected.preset, id: 'openrouter', name: 'OpenRouter', runtimes: { pi: { ...detected.preset.runtimes.pi, baseUrl } } },
+      config: { ...detected.config, runtimes: { pi: { baseUrl, models: [{ ...model, route: { ...model.route, baseUrl } }] } } },
+      catalog: { ok: true, models: [{ id: 'public-only', name: 'Public' }] },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    expect(screen.getByText('My model')).toBeTruthy();
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models.find(m => m.id === model.id)).toMatchObject({ id: model.id, contextWindow: 4096 });
+  });
+  it('preserves hand-entered models for every inherited engine and never fetches an independent draft', async () => {
+    const runtime = detected.preset.runtimes.pi;
+    const own = { baseUrl: 'https://independent.example/anthropic', models: [{ id: 'own-only', name: 'Own' }] };
+    const handoff = { ...detected,
+      preset: { ...detected.preset, runtimes: { pi: runtime, codex: { ...runtime } } },
+      keys: { pi: 'fake-key', codex: 'fake-key', 'claude-code': 'own-key' },
+      config: { ...detected.config, runtimes: { pi: detected.config.runtimes.pi, codex: { ...detected.config.runtimes.pi }, 'claude-code': own } },
+    };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'directory-only', name: 'Directory' }] });
+    render(<AddProviderWizard providers={[]} detected={handoff} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    const finish = await screen.findByRole('button', { name: 'settings.providers.wizard.finish' });
+    await waitFor(() => expect(finish.hasAttribute('disabled')).toBe(false));
+    fireEvent.click(finish);
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
+    expect(config.runtimes.codex!.models.some(m => m.id === 'private-alias')).toBe(true);
+    expect(config.runtimes['claude-code']).toEqual(own);
+    expect(keys['claude-code']).toBe('own-key');
+    expect(vi.mocked(window.electronAPI.maker.fetchProviderModels).mock.calls.every(([request]) => request.baseUrl !== own.baseUrl)).toBe(true);
+  });
+  it('returns selected models only to their own engine with its discovery metadata', async () => {
+    const onReturnCustom = vi.fn();
+    const runtime = detected.preset.runtimes.pi;
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { pi: runtime, codex: { ...runtime } } },
+      config: { ...detected.config, runtimes: { pi: detected.config.runtimes.pi, codex: { ...detected.config.runtimes.pi } } },
+    };
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+      { id: 'codex-exclusive', name: 'Only Codex', discoveredMetadata: { contextWindow: 50000 } },
+    ] });
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.wizard.next' }));
+    fireEvent.click(await screen.findByText('Only Codex'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const runtimes = onReturnCustom.mock.calls[0][0].config.runtimes;
+    expect(runtimes.pi.models.some((m: { id: string }) => m.id === 'codex-exclusive')).toBe(false);
+    expect(runtimes.codex.models.find((m: { id: string }) => m.id === 'codex-exclusive')).toMatchObject({ discoveredMetadata: { contextWindow: 50000 } });
+  });
+  it('retains a non-active engine URL edited inside the identified wizard when returning', async () => {
+    const onReturnCustom = vi.fn();
+    const codexUrl = 'https://relay.example/codex/v1';
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { ...detected.preset.runtimes,
+      codex: { ...detected.preset.runtimes.pi, baseUrl: codexUrl },
+    } }, config: { ...detected.config, runtimes: { ...detected.config.runtimes, codex: { ...detected.config.runtimes.pi } } } };
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByDisplayValue(codexUrl), { target: { value: 'https://edited.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes.codex.baseUrl).toBe('https://edited.example/v1');
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes.pi.baseUrl).toBe(detected.config.runtimes.pi.baseUrl);
+  });
+  it('returns shared URL/key edits without replacing an independent engine draft', async () => {
+    const onReturnCustom = vi.fn();
+    const shared = detected.config.runtimes.pi;
+    const handoff = { ...detected, preset: { ...detected.preset, runtimes: { ...detected.preset.runtimes, codex: { ...detected.preset.runtimes.pi, baseUrl: 'https://relay.example/codex/v1' } } }, keys: { pi: 'fake-key', codex: 'fake-key', 'claude-code': 'independent-key' },
+      config: { ...detected.config, runtimes: { pi: shared, codex: { ...shared },
+        'claude-code': { baseUrl: 'https://independent.example/anthropic', models: [{ id: 'own-model', name: 'Own' }] },
+      } },
+    };
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'edited-fake-key' } });
+    fireEvent.change(screen.getByDisplayValue(shared.baseUrl), { target: { value: 'https://new-relay.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    const returned = onReturnCustom.mock.calls[0][0];
+    expect(returned.keys).toEqual({ pi: 'edited-fake-key', codex: 'edited-fake-key', 'claude-code': 'independent-key' });
+    expect(returned.config.runtimes.codex.baseUrl).toBe('https://new-relay.example/v1');
+    expect(returned.config.runtimes['claude-code']).toEqual(handoff.config.runtimes['claude-code']);
+    expect(returned.catalog).toBeUndefined();
+  });
+  it.each([true, false])('keeps an excluded runtime unchanged even when its key and address overlap: %s', async sameAddress => {
+    const own = { ...detected.config.runtimes.pi,
+      baseUrl: sameAddress ? detected.config.runtimes.pi.baseUrl : 'https://independent.example/v1',
+      requestPath: '/independent/messages',
+    };
+    const handoff = { ...detected, keys: { pi: 'fake-key', 'claude-code': 'fake-key' },
+      config: { ...detected.config, runtimes: { ...detected.config.runtimes, 'claude-code': own } } };
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={handoff} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'new-shared-key' } });
+    fireEvent.change(screen.getByDisplayValue(detected.config.runtimes.pi.baseUrl), { target: { value: 'https://new.example/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom.mock.calls[0][0].keys['claude-code']).toBe('fake-key');
+    expect(onReturnCustom.mock.calls[0][0].config.runtimes['claude-code']).toEqual(own);
+  });
+  it('returns the draft instead of navigating to the provider gallery, keeping edited credentials', async () => {
+    const onReturnCustom = vi.fn();
+    render(<AddProviderWizard providers={[]} detected={detected} onReturnCustom={onReturnCustom} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'edited-fake-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
+    expect(onReturnCustom).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'edited-fake-key', config: expect.objectContaining({ name: 'My remote server' }) }));
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+});
+describe('speech models in the existing provider wizard', () => {
+  // PR #6768 unit regression: speech choices must be reached before a long chat
+  // catalog. Existing setup tests checked membership/defaults, never reading order.
+  it('puts Aliyun speech choices before the discovered general catalog and keeps the recommendation selected', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models:
+      Array.from({ length: 100 }, (_, index) => ({ id: `chat-${index}`, name: `Chat ${index}`, mode: 'chat' })),
+    });
+    await enter('aliyun-bailian-api-cn');
+    const speech = await screen.findByRole('checkbox', { name: /qwen3-tts-flash/ });
+    const firstChat = screen.getByText('Chat 0');
+    expect(speech.compareDocumentPosition(firstChat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(speech.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByRole('checkbox', { name: /cosyvoice/ })).toBeNull();
+  });
+  it('reuses server API presets instead of duplicating the same speech service entry', async () => {
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+      id: 'aliyun-model-studio-global', name: 'Server Model Studio', runtimes: {
+        codex: { baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', models: [] },
+      },
+    }] }));
+    render(<AddProviderWizard providers={[]} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    const serverPreset = await screen.findByRole('button', { name: /Server Model Studio/ });
+    expect(screen.queryByText('阿里云百炼 API')).toBeNull();
+    expect(screen.getByText('阿里云百炼 API（中国大陆）')).toBeTruthy();
+    fireEvent.click(serverPreset);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    expect((await screen.findByRole('checkbox', { name: /qwen3-tts-flash/ })).getAttribute('aria-checked')).toBe('true');
+  });
+  async function enter(presetId: string, speechOnly = false) {
+    render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId, speechOnly }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  }
+  it('defaults to one recommended speech model, allows speech-only and does not save unchecked references', async () => {
+    await enter('openai-api', true);
+    const recommended = await screen.findByRole('checkbox', { name: /gpt-4o-mini-tts/i });
+    expect(recommended.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('checkbox', { name: /tts-1(?!-hd)/i }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalled());
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    const enabled = Object.values(config.runtimes).flatMap(rt => rt?.models.filter(model => model.defaultEnabled !== false) ?? []);
+    expect(enabled.map(model => model.id)).toEqual(['gpt-4o-mini-tts']);
+    expect(config.runtimes.codex?.models.some(model => model.id === 'tts-1')).toBe(false);
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+  it('supports ElevenLabs discovery and explicit false revokes a recommended offline TTS model', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: parseModelsListResponse([
+      { model_id: 'eleven_flash_v2_5', can_do_text_to_speech: false },
+      { model_id: 'new-voice-model', name: 'New speech model', can_do_text_to_speech: true },
+    ])! });
+    await enter('elevenlabs-api');
+    expect(screen.queryByRole('checkbox', { name: /eleven_flash_v2_5/ })).toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.speechSetup.more'));
+    const discovered = screen.getByRole('checkbox', { name: /New speech model/ });
+    fireEvent.click(discovered);
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalled());
+    const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex!.models;
+    expect(models.find(model => model.id === 'new-voice-model')?.discoveredMetadata?.mode).toBe('audio_speech');
+    expect(models.find(model => model.id === 'eleven_flash_v2_5')?.defaultEnabled).toBe(false);
+  });
+  it('retains a user deselection and manual speech ID in the saved connection', async () => {
+    await enter('elevenlabs-api');
+    fireEvent.click(screen.getByRole('checkbox', { name: /eleven_flash_v2_5/i }));
+    fireEvent.click(screen.getByText('settings.providers.speechSetup.manual'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'settings.providers.speechSetup.modelId' }), { target: { value: 'my-private-speech-model' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalled());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
+      expect.objectContaining({ id: 'my-private-speech-model', mode: 'audio_speech' }),
+    ]);
+  });
+  // #6768 review regression (unit): the actual wizard saves an unchecked discovered
+  // TTS model, then the management switch must restore its companion picker entry.
+  // Existing tests stopped at defaultEnabled:false or disabled every saved addition.
+  it('can show a previously unchecked discovered speech model through model management', async () => {
+    const syncVisibility = vi.fn<(owner: string, generation: number, overrides: Record<string, boolean>) => Promise<void>>(async () => undefined);
+    Object.assign(window.electronAPI.maker, {
+      claimLegacyModelVisibilityOwner: () => ({ dataOwnerId: 'speech-review', ownerGeneration: 1,
+        canWriteOwnerScoped: true, claimed: true, claimedByOtherOwner: false,
+        canInitialize: true, profileOrigin: 'new' }),
+      syncModelVisibility: syncVisibility,
+    });
+    await setModelVisibilityOwner('speech-review', 1, 'cloud');
+    try {
+      vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+        { id: 'my-later-tts', name: 'Later speech', discoveredMetadata: { mode: 'audio_speech' } },
+      ] });
+      await enter('elevenlabs-api');
+      fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+      const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+      expect(config.runtimes.codex?.models.find(model => model.id === 'my-later-tts')?.defaultEnabled).toBe(false);
+      const provider = buildUserProvider(config);
+      const other = buildUserProvider({ ...config, id: 'another-connection' });
+      const deps = {
+        catalog: { ...BUNDLED_CATALOG, providers: [provider, other] },
+        gatewayAllowed: false, disabled: () => false, readKey: () => 'fake-key',
+        gatewayConnection: () => ({ baseUrl: '', apiKey: '' }),
+        visibilityOverride: (agent: string, providerId: string, modelId: string) =>
+          (syncVisibility.mock.lastCall?.[2] as Record<string, boolean> | undefined)?.[`${agent}:${providerId}:${modelId}`],
+      };
+      cleanup();
+      const view = { ...provider, connected: true,
+        availableMediaModelIds: speechModels(deps).filter(model => model.providerId === provider.id).map(model => model.id) };
+      render(<UnifiedModelList provider={view} focusModelId="my-later-tts" />);
+      const toggle = await screen.findByRole('switch', { name: 'Later speech' });
+      expect((toggle as HTMLButtonElement).disabled).toBe(false);
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(toggle);
+      await waitFor(() => expect(screen.getByRole('switch', { name: 'Later speech' }).getAttribute('aria-checked')).toBe('true'));
+      expect(speechModels(deps).filter(model => model.id === 'my-later-tts' && model.pickerVisible !== false).map(model => model.providerId)).toEqual([provider.id]);
+      cleanup();
+      render(<UnifiedModelList provider={view} focusModelId="my-later-tts" />);
+      expect((await screen.findByRole('switch', { name: 'Later speech' })).getAttribute('aria-checked')).toBe('true');
+      expect(config.runtimes.codex?.models.find(model => model.id === 'my-later-tts')?.defaultEnabled).toBe(false);
+    } finally {
+      cleanup();
+      resetVisibility();
+    }
+  });
+});
+
+// PR #6768 / #6660 integration regression (Renderer unit): the real wizard and
+// additions dialog must save defaults supported at the configured endpoint.
+// Previous tests asserted one brand-wide CosyVoice default; a public DashScope
+// URL is the smallest failing input. No live credentials or synthesis required.
+describe('Alibaba speech recommendations follow the actual endpoint', () => {
+  const endpoints = [
+    ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen3-tts-flash'],
+    ['https://dashscope-intl.aliyuncs.com/api/v1/', 'qwen3-tts-flash'],
+    ['https://ws-test.cn-beijing.maas.aliyuncs.com/api/v1', 'cosyvoice-v3-flash'],
+    ['https://work-unit.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', 'cosyvoice-v3-flash'],
+    ['https://ws-test.ap-southeast-1.maas.aliyuncs.com/api/v1', 'qwen-audio-3.0-tts-flash'],
+    ['https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', 'qwen-audio-3.0-tts-plus'],
+    ['https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', null],
+    ['https://dashscope-us.aliyuncs.com/compatible-mode/v1', null],
+  ] as const;
+  const publicUrl = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+  async function openWizard(baseUrl: string) {
+    renderWizard('aliyun-bailian-api-global');
+    fireEvent.change(await screen.findByDisplayValue(publicUrl), { target: { value: baseUrl } });
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  }
+  function expectRecommendation(id: string | null) {
+    const section = screen.getByRole('region', { name: 'settings.providers.speechSetup.title' });
+    const checked = within(section).queryAllByRole('checkbox').filter(row => row.getAttribute('aria-checked') === 'true');
+    expect(checked).toHaveLength(id ? 1 : 0);
+    if (id) {
+      expect(checked[0].textContent).toContain(id);
+      expect(within(checked[0]).getByText('settings.providers.wizard.recommended')).toBeTruthy();
+    } else {
+      expect(within(section).queryByText('settings.providers.wizard.recommended')).toBeNull();
+    }
+  }
+  it.each(endpoints)('new provider uses %s instead of the preset region', async (baseUrl, expected) => {
+    await openWizard(baseUrl);
+    expectRecommendation(expected);
+    if (!expected) return;
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const runtime = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex!;
+    expect(runtime.baseUrl).toBe(baseUrl);
+    const speech = runtime.models.filter(model => /tts|cosyvoice/.test(model.id));
+    expect(speech.map(model => model.id)).toEqual([expected]);
+    expect(speech[0].defaultEnabled).not.toBe(false);
+  });
+  it.each(endpoints)('existing provider uses the same recommendation for %s', async (baseUrl, expected) => {
+    const provider = { ...buildUserProvider({ id: 'my-ali', name: 'Alibaba connection', runtimes: {
+      codex: { baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'qwen-plus', name: 'My chat', defaultEnabled: false }] },
+    } }), connected: true } as ProviderView;
+    vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
+    render(<AddSpeechModelsDialog provider={provider} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    expectRecommendation(expected);
+    if (!expected) return;
+    fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(1));
+    expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({
+      runtimes: { codex: expect.objectContaining({ baseUrl, models: [expect.objectContaining({ id: expected, defaultEnabled: true })] }) },
+    }), {}, { appendSpeechModelsOnly: true });
+  });
+  it('recomputes recommendations after going back and editing the endpoint', async () => {
+    await openWizard(publicUrl);
+    expectRecommendation('qwen3-tts-flash');
+    fireEvent.click(screen.getByText('settings.providers.wizard.back'));
+    const workspace = 'https://ws-test.cn-beijing.maas.aliyuncs.com/api/v1';
+    fireEvent.change(await screen.findByDisplayValue(publicUrl), { target: { value: workspace } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    expectRecommendation('cosyvoice-v3-flash');
+    expect(screen.queryByRole('checkbox', { name: /qwen3-tts-flash/ })).toBeNull();
+  });
+  it('keeps US catalog models unselected and lets the user explicitly add one', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [
+      { id: 'cosyvoice-v3-flash', name: 'CosyVoice', discoveredMetadata: { mode: 'audio_speech' } },
+      { id: 'qwen3-tts-flash', name: 'Qwen3', discoveredMetadata: { mode: 'audio_speech' } },
+    ] });
+    await openWizard('https://dashscope-us.aliyuncs.com/compatible-mode/v1');
+    expectRecommendation(null);
+    fireEvent.click(screen.getByRole('checkbox', { name: /cosyvoice-v3-flash/ }));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex!.models;
+    expect(models.find(model => model.id === 'cosyvoice-v3-flash')).toBeDefined();
+    expect(models.find(model => model.id === 'cosyvoice-v3-flash')?.defaultEnabled).not.toBe(false);
+    expect(models.find(model => model.id === 'qwen3-tts-flash')?.defaultEnabled).toBe(false);
+  });
+  it('keeps a previously saved CosyVoice choice when recommending Qwen3 for an existing public connection', async () => {
+    const provider = { ...buildUserProvider({ id: 'my-ali', name: 'Alibaba connection', runtimes: {
+      codex: { baseUrl: publicUrl, wireProtocol: 'openai-chat', models: [
+        { id: 'cosyvoice-v3-flash', name: 'My saved voice', mode: 'audio_speech', defaultEnabled: false },
+      ] },
+    } }), connected: true } as ProviderView;
+    vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
+    render(<AddSpeechModelsDialog provider={provider} onClose={vi.fn()} onSaved={vi.fn()} />);
+    const saved = await screen.findByRole('checkbox', { name: /My saved voice/ });
+    expect((saved as HTMLButtonElement).disabled).toBe(true);
+    expect(within(saved).getByText('settings.providers.speechSetup.saved')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /qwen3-tts-flash/ }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
+      expect.objectContaining({ id: 'qwen3-tts-flash', defaultEnabled: true }),
+    ]);
+    expect(provider.models.codex).toEqual([
+      expect.objectContaining({ id: 'cosyvoice-v3-flash', name: 'My saved voice', defaultEnabled: false }),
+    ]);
+  });
+});
+
+describe('existing connection speech additions', () => {
+  const provider = { ...buildUserProvider({ id: 'my-minimax', name: 'My connection', runtimes: {
+    codex: { baseUrl: 'https://api.minimax.io/v1', wireProtocol: 'openai-chat', models: [
+      { id: 'MiniMax-M3', name: 'My chat', defaultEnabled: false },
+      { id: 'speech-2.8-hd', name: 'My saved voice', mode: 'audio_speech', defaultEnabled: false },
+    ] },
+  } }), connected: true } as ProviderView;
+  it('uses the saved key and submits only selected additions, leaving existing model switches alone', async () => {
+    vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
+    const saved = vi.fn();
+    render(<AddSpeechModelsDialog provider={provider} onClose={vi.fn()} onSaved={saved} />);
+    const recommended = await screen.findByRole('checkbox', { name: /speech-2.8-turbo/ });
+    expect(recommended.getAttribute('aria-checked')).toBe('true');
+    expect((screen.getByRole('checkbox', { name: /speech-2.8-hd/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(readCustomProviderKey).toHaveBeenCalledWith('my-minimax', 'codex');
+    expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({ savedProviderId: 'my-minimax', apiKey: 'fake-stored-key' }));
+    fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+    await waitFor(() => expect(saved).toHaveBeenCalled());
+    expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'my-minimax', runtimes: { codex: expect.objectContaining({ models: [expect.objectContaining({ id: 'speech-2.8-turbo', defaultEnabled: true })] }) },
+    }), {}, { appendSpeechModelsOnly: true });
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('does not write on cancel and ignores discovery after the dialog unmounts', async () => {
+    let resolve!: (value: { ok: true; models: [] }) => void;
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockReturnValue(new Promise(done => { resolve = done; }));
+    const closed = vi.fn();
+    const result = render(<AddSpeechModelsDialog provider={provider} onClose={closed} onSaved={vi.fn()} />);
+    await waitFor(() => expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    result.unmount();
+    resolve({ ok: true, models: [] });
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+});
+
+// Review regression: a mixed provider with no preset models and no directory must
+// retain the chat fallback alongside speech suggestions. Prior LiteLLM coverage
+// used a URL without speech support (Renderer unit, mock discovery, no requests).
+describe('general manual fallback beside speech suggestions', () => {
+  it.each([
+    ['OpenAI', 'https://api.openai.com/v1'],
+    ['MiniMax', 'https://api.minimax.io/v1'],
+    ['Bailian', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'],
+  ].flatMap(([name, baseUrl]) => [true, false].map(failed => ({ name, baseUrl, failed }))))(
+    'keeps manual chat entry for $name with failed=$failed directory', async ({ name, baseUrl, failed }) => {
+      window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+        id: 'empty-mixed-api', name, runtimes: { codex: { baseUrl, models: [] } },
+      }] }));
+      if (!failed) vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [] });
+      renderWizard('empty-mixed-api');
+      fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
+      fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+      const input = await screen.findByPlaceholderText('settings.providers.wizard.manualModelPlaceholder');
+      expect(screen.getByText('settings.providers.speechSetup.manual')).toBeTruthy();
+      fireEvent.change(input, { target: { value: 'my-new-chat-model' } });
+      fireEvent.click(screen.getByText('settings.providers.wizard.addManualModel'));
+      fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+      const saved = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex!.models;
+      expect(saved.find(model => model.id === 'my-new-chat-model')).toMatchObject({ name: 'my-new-chat-model' });
+      expect(saved.find(model => model.id === 'my-new-chat-model')?.mode).toBeUndefined();
+    },
+  );
+  it.each(['elevenlabs', 'speech-only'] as const)('does not offer a chat fallback in %s setup', async (kind) => {
+    window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [{
+      id: 'empty-api', name: 'Empty API', runtimes: { codex: {
+        baseUrl: kind === 'elevenlabs' ? 'https://api.elevenlabs.io/v1' : 'https://api.openai.com/v1', models: [],
+      } },
+    }] }));
+    render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'empty-api', speechOnly: kind === 'speech-only' }} onClose={vi.fn()} onDone={vi.fn()} onOpenCustomForm={vi.fn()} />);
+    fireEvent.change(await screen.findByPlaceholderText('sk-…'), { target: { value: 'fake-test-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await screen.findByText('settings.providers.speechSetup.manual');
+    await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+    expect(screen.queryByPlaceholderText('settings.providers.wizard.manualModelPlaceholder')).toBeNull();
+  });
 });

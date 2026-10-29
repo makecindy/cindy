@@ -74,7 +74,7 @@ function makeHarness(overrides: HarnessOverrides = {}) {
             ? 'pi'
             : null;
       return kind
-        ? { kind, role: 'task-host', instanceId: `start:${pid}` }
+        ? { kind, role: 'task-host', sessionId: null, instanceId: `start:${pid}` }
         : null;
     },
     selfPid: SELF_PID,
@@ -141,6 +141,7 @@ describe('createProcessMonitorSampler', () => {
         resolveAgentProcessRegistration: (pid) => ({
           kind: 'codex',
           role: pid === 701 ? 'task-host' : 'control-plane-service',
+          sessionId: null,
           instanceId: `instance:${pid}`,
         }),
       },
@@ -212,6 +213,131 @@ describe('createProcessMonitorSampler', () => {
       cpuPercent: 5,
       memoryKb: 120,
     });
+  });
+
+  it('任务标题后台解析:首帧不带,解析完成后下一帧生效;失败与无归属只丢标题', async () => {
+    const lookups: string[] = [];
+    const { sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({ pid: 901, ppid: SELF_PID, cmdLineLower: 'pi-marker one' }),
+        osRow({ pid: 902, ppid: SELF_PID, cmdLineLower: 'pi-marker two' }),
+        // 无归属(如 Codex 共享服务):不查询也不带标题。
+        osRow({ pid: 903, ppid: SELF_PID, cmdLineLower: 'pi-marker three' }),
+      ]),
+      deps: {
+        resolveAgentProcessRegistration: (pid) =>
+          pid === 901
+            ? { kind: 'pi', role: 'task-host', sessionId: 'session-1', instanceId: `i:${pid}` }
+            : pid === 902
+              ? { kind: 'pi', role: 'task-host', sessionId: 'session-2', instanceId: `i:${pid}` }
+              : { kind: 'pi', role: 'task-host', sessionId: null, instanceId: `i:${pid}` },
+        resolveSessionLabel: (sessionId) => {
+          lookups.push(sessionId);
+          if (sessionId === 'session-1') return Promise.resolve('修复登录页');
+          if (sessionId === 'session-2') return Promise.reject(new Error('db busy'));
+          return Promise.resolve(null);
+        },
+      },
+    });
+    // 首帧立即返回,不等标题查询(库慢不阻塞 CPU / 内存刷新)。
+    expect(entryByPid(await sampler.sample(), 901)?.sessionLabel).toBeUndefined();
+    expect(lookups).toEqual(['session-1', 'session-2']);
+    // 查询落定后,下一帧带上标题;失败/无归属的条目不带 sessionLabel 字段。
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(entryByPid(await sampler.sample(), 901)).toMatchObject({
+      sessionLabel: '修复登录页',
+    });
+    expect(entryByPid(await sampler.sample(), 902)?.sessionLabel).toBeUndefined();
+    expect(entryByPid(await sampler.sample(), 903)?.sessionLabel).toBeUndefined();
+    // 缓存未过期时不再重复查询。
+    expect(lookups).toEqual(['session-1', 'session-2']);
+  });
+
+  it('标题缓存按 TTL 后台刷新:刷新期间沿用旧值,不阻塞采样', async () => {
+    const { state, sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({ pid: 911, ppid: SELF_PID, cmdLineLower: 'pi-marker host' }),
+      ]),
+      deps: {
+        sessionLabelTtlMs: 5_000,
+        resolveSessionLabel: (sessionId) =>
+          Promise.resolve(sessionId === 'session-9' ? `标题@${state.nowMs}` : null),
+        resolveAgentProcessRegistration: () => ({
+          kind: 'pi',
+          role: 'task-host',
+          sessionId: 'session-9',
+          instanceId: 'inst:911',
+        }),
+      },
+    });
+    await sampler.sample();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(entryByPid(await sampler.sample(), 911)).toMatchObject({
+      sessionLabel: '标题@10000',
+    });
+    // TTL 未过期:沿用缓存,不重查。
+    state.nowMs += 4_000;
+    expect(entryByPid(await sampler.sample(), 911)).toMatchObject({
+      sessionLabel: '标题@10000',
+    });
+    // 过期后仍先返回旧值,刷新在后台落定,下一帧生效。
+    state.nowMs += 5_100;
+    expect(entryByPid(await sampler.sample(), 911)).toMatchObject({
+      sessionLabel: '标题@10000',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(entryByPid(await sampler.sample(), 911)).toMatchObject({
+      sessionLabel: '标题@19100',
+    });
+  });
+
+  it('进程退出后剪枝对应任务的标题缓存', async () => {
+    const lookups: string[] = [];
+    const { state, sampler } = makeHarness({
+      snapshot: snapshotOf([
+        osRow({ pid: 921, ppid: SELF_PID, cmdLineLower: 'pi-marker host' }),
+      ]),
+      deps: {
+        resolveAgentProcessRegistration: () => ({
+          kind: 'pi',
+          role: 'task-host',
+          sessionId: 'session-7',
+          instanceId: 'inst:921',
+        }),
+        resolveSessionLabel: (sessionId) => {
+          lookups.push(sessionId);
+          return Promise.resolve('任务七');
+        },
+      },
+    });
+    await sampler.sample();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(entryByPid(await sampler.sample(), 921)).toMatchObject({ sessionLabel: '任务七' });
+    expect(lookups).toEqual(['session-7']);
+
+    // 进程退出后,缓存被剪枝;进程重新出现时重新后台解析。
+    // (快照按 5s 周期缓存,先推进时钟让换入的快照生效。)
+    state.nowMs += 5_000;
+    state.snapshot = snapshotOf([]);
+    await sampler.sample();
+    state.nowMs += 5_000;
+    state.snapshot = snapshotOf([
+      osRow({ pid: 922, ppid: SELF_PID, cmdLineLower: 'pi-marker host' }),
+    ]);
+    await sampler.sample();
+    expect(lookups).toEqual(['session-7', 'session-7']);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(entryByPid(await sampler.sample(), 922)).toMatchObject({ sessionLabel: '任务七' });
   });
 
   it('OS 扫描按周期缓存:未过期不重扫,过期后重扫', async () => {

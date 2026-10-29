@@ -39,6 +39,8 @@ export const REMOTE_AGENT_MAX_POLL_RUNS = 64;
 export const REMOTE_AGENT_INVOKE_TIMEOUT_MS = 30_000;
 /** 同一控制端在一台被控端上同时运行的远程 Agent 任务上限。 */
 export const REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER = 16;
+/** 被控端设置的闲置收回时长上限(分钟，`caps.idleReclaimMinutes`)。 */
+export const REMOTE_AGENT_IDLE_RECLAIM_MAX_MINUTES = 1440;
 /** 一次 push 最多携带的 WebSocket 帧数。 */
 export const REMOTE_AGENT_MAX_PUSH_FRAMES = 64;
 
@@ -78,6 +80,7 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_INVALID',
   'REMOTE_AGENT_NOT_FOUND',
   'REMOTE_AGENT_UNSUPPORTED',
+  'REMOTE_AGENT_PEER_TOO_OLD',
   'REMOTE_AGENT_BUSY',
   'REMOTE_AGENT_EXPIRED',
   'REMOTE_AGENT_ACCOUNT_CHANGED',
@@ -86,6 +89,9 @@ export const REMOTE_AGENT_ERROR_CODES = [
   'REMOTE_AGENT_PROVIDER_NOT_ALLOWED',
   // 供应商组转来的受邀者任务：这台电脑的主人没有同意这个受邀者经组使用(只回给打开时带了 reshareKey 的组所在电脑)。
   'REMOTE_AGENT_RESHARE_NOT_ALLOWED',
+  // 那台电脑上的 Agent 分叉原生历史失败(电脑本身在线)。只回给分叉请求带了 acceptsForkFailed 的控制端，
+  // 旧控制端照旧收到 REMOTE_AGENT_UNAVAILABLE。
+  'REMOTE_AGENT_FORK_FAILED',
 ] as const;
 export type RemoteAgentErrorCode = (typeof REMOTE_AGENT_ERROR_CODES)[number];
 
@@ -103,6 +109,7 @@ export interface RemoteAgentErrorInfo {
 
 /** 被控端请控制端处理的反向请求。 */
 export type RemoteAgentReverseRequest =
+  | { type: 'model-access'; model?: string }
   | { type: 'interaction'; request: unknown }
   | {
       type: 'http';
@@ -145,6 +152,33 @@ export const REMOTE_AGENT_MAX_PUSH_CHARS = 3 * 1024 * 1024;
 
 export type RemoteAgentRequest =
   | { op: 'caps' }
+  /** Same-account native history transfer. The host validates commands before accessing storage. */
+  | { op: 'native-history'; sessionId: string; command: unknown }
+  /** G→O: durable task location only; every use still needs a fresh allocation. */
+  | { op: 'direct-locate'; sessionId: string }
+  /** A shared guest asks the group owner to choose a same-account executor for a short-lived direct route. */
+  | { op: 'allocate'; agentKind: RemoteAgentKind; model: string; sessionId: string;
+      /** Renewal and model changes must stay on the executor holding this task. */
+      preferredExecutorDeviceId?: string }
+  /** Content-free running state for the group's load balancer; expires if reports stop. */
+  | { op: 'direct-status'; sessionId: string; running: boolean }
+  /** G releases only the exact allocation whose direct open failed; a later generation is untouched. */
+  | { op: 'direct-release'; sessionId: string; generation: string }
+  /** A direct guest asks O for its one-use group failover token after a machine-scoped failure. */
+  | { op: 'direct-switch'; sessionId: string }
+  /** Executor reports content-free metering to the group owner with an idempotency key. */
+  | { op: 'direct-usage'; shareId: string; memberId: string; guestDeviceId: string;
+      sessionId: string; generation: string; usageId: string; agentKind: RemoteAgentKind; samples: RemoteAgentUsageSample[] }
+  /** Authenticated same-account group owner installs or removes a guest grant on the executor. */
+  | { op: 'delegate'; action: 'grant' | 'revoke'; shareId: string; memberId: string; guestDeviceId: string;
+      providerId: string; model: string; sessionId: string; generation?: string; cleanupEpoch?: number }
+  /** Authenticated group owner updates only its own task speed constraints, never model grants. */
+  | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
+  | ({ op: 'fork' } & RemoteAgentForkRequest)
+  /** Native image recovery is scoped to the caller's task; never accepts file paths. */
+  | { op: 'images'; sessionId: string; relay?: string; action: 'list'; offset: number }
+  | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
+  | { op: 'images'; sessionId: string; relay?: string; action: 'release'; imageId: string }
   | { op: 'upload'; uploadId: string; index: number; data: string }
   | { op: 'open'; runId: string; agentKind: RemoteAgentKind; payload: RemoteAgentPayload }
   | { op: 'call'; runId: string; callId: string; method: RemoteAgentMethod; payload: RemoteAgentPayload }
@@ -152,10 +186,13 @@ export type RemoteAgentRequest =
    * waitMs：没有新数据时最多挂起多久(缺省 READ_WAIT_MS)。控制端在已有一个长等待在途时，
    * 可以再发一个 waitMs=0 的短 poll 立刻取新任务或刚触发的数据；两个 poll 返回的数据可能重叠，
    * 控制端按 from 去重。
+   * hold：控制端这边还有这个任务的工作在进行、被控端看不到(如 Codex 经执行环境在控制端起的后台进程)，
+   * 被控端按有活动处理，不按闲置收回。旧被控端忽略。
    */
-  | { op: 'poll'; runs: Array<{ runId: string; cursor: number }>; waitMs?: number }
+  | { op: 'poll'; runs: Array<{ runId: string; cursor: number; hold?: true }>; waitMs?: number }
   | { op: 'reply'; runId: string; requestId: string; payload: RemoteAgentPayload }
-  | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[] }
+  /** hold: local work has started; protect it with the startup reply before the next poll batch. */
+  | { op: 'push'; runId: string; seq: number; frames: RemoteAgentPushFrame[]; hold?: true }
   | { op: 'close'; runId: string; mode: 'close' | 'detach'; reason: RemoteAgentTeardownReason }
   /**
    * 供应商组(组所在电脑 → 组内电脑)：组所在电脑删掉某个受邀者后，请组内电脑清掉替这个受邀者
@@ -163,6 +200,9 @@ export type RemoteAgentRequest =
    * 只作用于调用方自己的 relay。旧版组内电脑回 REMOTE_AGENT_INVALID(它从没接过被中转的任务)。
    */
   | { op: 'forget'; relay: string }
+  /** O asks M to purge a direct G→M guest only when M has persisted O's verified delegation. */
+  | { op: 'forget'; directGuest: { shareId: string; memberId: string; guestDeviceId: string;
+      forgetId: string; cleanupEpoch: number } }
   /**
    * 供应商组转分享(组所在电脑 → 分享来的组内电脑，调用方是那台的受邀者)：组所在电脑把自己分享的人
    * 经组使用这台电脑的请求整体报上来(整体替换调用方上一份)，那台的主人逐人同意。回包是每一项此刻的结果
@@ -170,6 +210,16 @@ export type RemoteAgentRequest =
    * reshareBatch，分片在最后一片到达前不会替换审批名单。
    */
   | { op: 'reshare'; entries: RemoteAgentReshareEntry[]; batch?: RemoteAgentReshareBatch };
+
+export interface RemoteAgentFastPolicy {
+  group: string;
+  revision: number;
+  allowFast: boolean;
+  /** Registration precedes opening the task; omitted for a group policy update. */
+  binding?: { sessionId: string; controllerDeviceId?: string; relay?: string;
+    /** Owner-approved direct guest task. The executor verifies its delegation before binding. */
+    providerShareGuest?: { shareId: string; memberId: string; guestDeviceId: string } };
+}
 
 /** 供应商组为受邀者取的不透明键(组所在电脑按受邀者派生，不含身份信息)；「需要换一台」凭证同一格式。 */
 export const REMOTE_AGENT_RELAY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
@@ -218,7 +268,41 @@ export const REMOTE_AGENT_GROUP_SWITCH_STATE_KEY = 'providerGroupSwitch';
 export const REMOTE_AGENT_TEARDOWN_REASONS = ['navigation', 'account-boundary', 'app-quit'] as const;
 export type RemoteAgentTeardownReason = (typeof REMOTE_AGENT_TEARDOWN_REASONS)[number];
 
+/** Native fork control plane. Paths and guest storage are resolved by the host, never the caller. */
+export interface RemoteAgentForkRequest {
+  sourceSessionId: string;
+  newSessionId: string;
+  agentKind: RemoteAgentKind;
+  sourceSdkSessionId: string;
+  model: string;
+  providerId?: string | null;
+  upToMessageId?: string;
+  lastTurnId?: string;
+  tailTurnsToDrop?: number;
+  forkAtTimestampMs?: number;
+  relay?: string;
+  reshareKey?: string;
+  /** 控制端认识 REMOTE_AGENT_FORK_FAILED。组所在电脑转发时原样带上受邀者的声明；旧被控端忽略。 */
+  acceptsForkFailed?: true;
+}
+
+export interface RemoteAgentForkResult {
+  newSdkSessionId: string;
+  uuidMap: Array<[string, string]>;
+  initialContextTokens?: number;
+  usedNativeForkAnchor?: boolean;
+}
+
 export interface RemoteAgentCaps {
+  /** Preserves external-application tools and runtime storage across every relay. */
+  localApplication?: boolean;
+  nativeHistoryTransfer?: boolean;
+  /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
+  directGuestExecution?: boolean;
+  subscriptionFastPolicy?: true;
+  nativeFork?: boolean;
+  imageRecovery?: boolean;
+  imageRecoveryRelay?: boolean;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
@@ -231,6 +315,8 @@ export interface RemoteAgentCaps {
    * 不声明的电脑，组所在电脑不给它分受邀者的任务(否则受邀者会拿到主人级权限)。
    */
   guestRelay?: boolean;
+  /** Group relays can query the original member's live model grants before dispatch. */
+  relayModelAccess?: boolean;
   /**
    * 供应商组转分享：受邀者(组所在电脑)可以报上它分享的人、由这台的主人逐人同意(op `reshare`)，组转来的受邀者任务
    * 只在同意过的人上运行。不声明的电脑给不出同意，组所在电脑不把受邀者的任务分给它。
@@ -238,6 +324,11 @@ export interface RemoteAgentCaps {
   reshareConsent?: boolean;
   /** 是否支持带 batch 的转分享请求；未声明时只能使用单片旧协议。 */
   reshareBatch?: boolean;
+  /**
+   * 这台电脑的主人设置的闲置收回时长(分钟，0 = 不收回)：任务不忙且闲置满这么久，这台就结束它的 Agent 进程
+   * (事件流 `closed` 带 `idleReclaimed`)。旧版电脑不声明，也不收回。
+   */
+  idleReclaimMinutes?: number;
 }
 
 export interface RemoteAgentReadResult {
@@ -268,7 +359,12 @@ export type RemoteAgentStreamItem =
   /** 被控端放弃了一个尚未回包的反向请求(如 Agent 取消了工具调用)，控制端应中止对应执行。 */
   | { t: 'cancel'; requestId: string }
   | { t: 'ws'; connId: string; kind: 'open' | 'message' | 'close'; path?: string; data?: string }
-  | { t: 'closed'; reason: string; error?: RemoteAgentErrorInfo };
+  /**
+   * idleReclaimed：被控端按主人设置的时长收回了这个闲置任务(reason 写 `ended`)。新控制端只断开对方的 Agent
+   * 进程、保留本机部分，下次要它干活时带原来的会话 id 连回；旧控制端不认识这个字段，按 `ended` 静默收起，
+   * 下次发消息时重建任务并接回原来的对话。
+   */
+  | { t: 'closed'; reason: string; error?: RemoteAgentErrorInfo; idleReclaimed?: true };
 
 const ID = /^[0-9a-f-]{36}$/;
 const CONN_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -290,6 +386,21 @@ function record(value: unknown): Record<string, unknown> {
 
 function id(value: unknown): string {
   if (typeof value !== 'string' || !ID.test(value)) invalid();
+  return value;
+}
+
+export interface RemoteAgentUsageSample {
+  model: string; turns: number; inputTokens: number; outputTokens: number;
+  cacheReadTokens: number; cacheCreateTokens: number; sdkCostUsd: number;
+}
+
+function providerShareId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) invalid();
+  return value;
+}
+
+function deviceId(value: unknown): string {
+  if (typeof value !== 'string' || !value || value.length > 128) invalid();
   return value;
 }
 
@@ -375,6 +486,137 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
   switch (v.op) {
     case 'caps':
       return { op: 'caps' };
+    case 'native-history': {
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      return { op: 'native-history', sessionId: v.sessionId as string, command: record(v.command) };
+    }
+    case 'direct-locate':
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      return { op: 'direct-locate', sessionId: v.sessionId };
+    case 'allocate':
+      if (typeof v.model !== 'string' || !v.model || v.model.length > 512 || v.model.includes('\0')) invalid();
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      return { op: 'allocate', agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS), model: v.model, sessionId: v.sessionId,
+        ...(v.preferredExecutorDeviceId === undefined ? {} : { preferredExecutorDeviceId: deviceId(v.preferredExecutorDeviceId) }) };
+    case 'direct-status':
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || typeof v.running !== 'boolean') invalid();
+      return { op: 'direct-status', sessionId: v.sessionId, running: v.running };
+    case 'direct-release':
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || typeof v.generation !== 'string' || !ID.test(v.generation)) invalid();
+      return { op: 'direct-release', sessionId: v.sessionId, generation: v.generation };
+    case 'direct-switch':
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      return { op: 'direct-switch', sessionId: v.sessionId };
+    case 'direct-usage': {
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || typeof v.generation !== 'string' || !ID.test(v.generation)
+        || typeof v.usageId !== 'string' || !ID.test(v.usageId)
+        || !Array.isArray(v.samples) || !v.samples.length || v.samples.length > 64) invalid();
+      const samples = v.samples.map((item): RemoteAgentUsageSample => {
+        const sample = record(item);
+        if (typeof sample.model !== 'string' || !sample.model || sample.model.length > 512) invalid();
+        const counters = ['turns', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens', 'sdkCostUsd'] as const;
+        for (const key of counters) if (typeof sample[key] !== 'number' || !Number.isFinite(sample[key])
+          || (sample[key] as number) < 0 || (sample[key] as number) > 1e15) invalid();
+        return { model: sample.model, turns: sample.turns as number, inputTokens: sample.inputTokens as number,
+          outputTokens: sample.outputTokens as number, cacheReadTokens: sample.cacheReadTokens as number,
+          cacheCreateTokens: sample.cacheCreateTokens as number, sdkCostUsd: sample.sdkCostUsd as number };
+      });
+      return { op: 'direct-usage', shareId: providerShareId(v.shareId), memberId: providerShareId(v.memberId),
+        guestDeviceId: deviceId(v.guestDeviceId), sessionId: v.sessionId, generation: v.generation,
+        usageId: v.usageId, agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS), samples };
+    }
+    case 'delegate': {
+      const shareId = providerShareId(v.shareId);
+      const memberId = providerShareId(v.memberId);
+      const guestDeviceId = deviceId(v.guestDeviceId);
+      if (typeof v.providerId !== 'string' || !v.providerId || v.providerId.length > 256 || v.providerId.includes('\0')) invalid();
+      if (typeof v.model !== 'string' || !v.model || v.model.length > 512 || v.model.includes('\0')) invalid();
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
+      if (v.action === 'grant' && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
+      if (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation))) invalid();
+      if (v.cleanupEpoch !== undefined) count(v.cleanupEpoch, Number.MAX_SAFE_INTEGER);
+      return { op: 'delegate', action: oneOf(v.action, ['grant', 'revoke'] as const), shareId, memberId, guestDeviceId,
+        providerId: v.providerId, model: v.model, sessionId: v.sessionId,
+        ...(typeof v.generation === 'string' ? { generation: v.generation } : {}),
+        ...(v.cleanupEpoch !== undefined ? { cleanupEpoch: v.cleanupEpoch as number } : {}) };
+    }
+    case 'fast-policy': {
+      if (typeof v.group !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(v.group)
+        || typeof v.allowFast !== 'boolean') invalid();
+      let binding: RemoteAgentFastPolicy['binding'];
+      if (v.binding !== undefined) {
+        const b = record(v.binding);
+        if (typeof b.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(b.sessionId)) invalid();
+        if (b.controllerDeviceId !== undefined && (typeof b.controllerDeviceId !== 'string'
+          || !/^[A-Za-z0-9_.-]{1,128}$/.test(b.controllerDeviceId))) invalid();
+        if (b.relay !== undefined && (typeof b.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(b.relay))) invalid();
+        let providerShareGuest: { shareId: string; memberId: string; guestDeviceId: string } | undefined;
+        if (b.providerShareGuest !== undefined) {
+          const guest = record(b.providerShareGuest);
+          if (b.controllerDeviceId !== undefined || b.relay !== undefined
+            || typeof guest.shareId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guest.shareId)
+            || typeof guest.memberId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(guest.memberId)
+            || typeof guest.guestDeviceId !== 'string' || guest.guestDeviceId.length < 1
+            || guest.guestDeviceId.length > 128) invalid();
+          providerShareGuest = { shareId: guest.shareId, memberId: guest.memberId, guestDeviceId: guest.guestDeviceId };
+        }
+        binding = { sessionId: b.sessionId as string,
+          ...(typeof b.controllerDeviceId === 'string' ? { controllerDeviceId: b.controllerDeviceId } : {}),
+          ...(typeof b.relay === 'string' ? { relay: b.relay } : {}),
+          ...(providerShareGuest ? { providerShareGuest } : {}) };
+      }
+      return { op: 'fast-policy', group: v.group as string, allowFast: v.allowFast as boolean,
+        revision: count(v.revision, Number.MAX_SAFE_INTEGER), ...(binding ? { binding } : {}) };
+    }
+    case 'fork': {
+      const text = (value: unknown, max = 4096): string => {
+        if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
+        return value as string;
+      };
+      const sessionId = (value: unknown): string => {
+        const valueText = text(value, 128);
+        if (!/^[A-Za-z0-9_-]+$/.test(valueText)) invalid();
+        return valueText;
+      };
+      const result: RemoteAgentForkRequest = {
+        sourceSessionId: sessionId(v.sourceSessionId),
+        newSessionId: sessionId(v.newSessionId),
+        agentKind: oneOf(v.agentKind, REMOTE_AGENT_KINDS),
+        sourceSdkSessionId: text(v.sourceSdkSessionId),
+        model: text(v.model, 512),
+      };
+      for (const key of ['upToMessageId', 'lastTurnId'] as const) {
+        if (v[key] !== undefined) result[key] = text(v[key], 256);
+      }
+      if (v.providerId !== undefined) result.providerId = v.providerId === null ? null : text(v.providerId, 512);
+      for (const key of ['relay', 'reshareKey'] as const) {
+        if (v[key] !== undefined) {
+          const value = text(v[key], 64);
+          if (!REMOTE_AGENT_RELAY_KEY_PATTERN.test(value)) invalid();
+          result[key] = value;
+        }
+      }
+      if (v.tailTurnsToDrop !== undefined) result.tailTurnsToDrop = count(v.tailTurnsToDrop, Number.MAX_SAFE_INTEGER);
+      if (v.forkAtTimestampMs !== undefined) result.forkAtTimestampMs = count(v.forkAtTimestampMs, Number.MAX_SAFE_INTEGER);
+      if (v.acceptsForkFailed === true) result.acceptsForkFailed = true;
+      if (result.sourceSessionId === result.newSessionId) invalid();
+      return { op: 'fork', ...result };
+    }
+    case 'images': {
+      // Same task-id contract as the open payload, including non-UUID internal tasks.
+      const sessionId = v.sessionId;
+      if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) invalid();
+      if (v.relay !== undefined && (typeof v.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(v.relay))) invalid();
+      const relay = typeof v.relay === 'string' ? { relay: v.relay } : {};
+      const action = oneOf(v.action, ['list', 'read', 'release'] as const);
+      if (action === 'list') return { op: 'images', sessionId, ...relay, action, offset: count(v.offset ?? 0, Number.MAX_SAFE_INTEGER) };
+      if (typeof v.imageId !== 'string' || !/^[a-f0-9]{64}$/.test(v.imageId)) invalid();
+      if (action === 'release') return { op: 'images', sessionId, ...relay, action, imageId: v.imageId as string };
+      return { op: 'images', sessionId, ...relay, action, imageId: v.imageId as string, offset: count(v.offset, Number.MAX_SAFE_INTEGER) };
+    }
     case 'upload':
       return {
         op: 'upload',
@@ -401,7 +643,11 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (!Array.isArray(v.runs) || v.runs.length === 0 || v.runs.length > REMOTE_AGENT_MAX_POLL_RUNS) invalid();
       const runs = v.runs.map((item) => {
         const entry = record(item);
-        return { runId: id(entry.runId), cursor: count(entry.cursor, Number.MAX_SAFE_INTEGER) };
+        return {
+          runId: id(entry.runId),
+          cursor: count(entry.cursor, Number.MAX_SAFE_INTEGER),
+          ...(entry.hold === true ? { hold: true as const } : {}),
+        };
       });
       if (new Set(runs.map((run) => run.runId)).size !== runs.length) invalid();
       return {
@@ -413,7 +659,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
     case 'reply':
       return { op: 'reply', runId: id(v.runId), requestId: id(v.requestId), payload: payload(v.payload) };
     case 'push':
-      return { op: 'push', runId: id(v.runId), seq: count(v.seq, Number.MAX_SAFE_INTEGER), frames: pushFrames(v.frames) };
+      return {
+        op: 'push', runId: id(v.runId), seq: count(v.seq, Number.MAX_SAFE_INTEGER), frames: pushFrames(v.frames),
+        ...(v.hold === true ? { hold: true as const } : {}),
+      };
     case 'close':
       return {
         op: 'close',
@@ -422,6 +671,15 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         reason: oneOf(v.reason, REMOTE_AGENT_TEARDOWN_REASONS),
       };
     case 'forget':
+      if (v.directGuest !== undefined) {
+        if (v.relay !== undefined) invalid();
+        const guest = record(v.directGuest);
+        return { op: 'forget', directGuest: {
+          shareId: providerShareId(guest.shareId), memberId: providerShareId(guest.memberId),
+          guestDeviceId: deviceId(guest.guestDeviceId), forgetId: id(guest.forgetId),
+          cleanupEpoch: count(guest.cleanupEpoch, Number.MAX_SAFE_INTEGER),
+        } };
+      }
       if (typeof v.relay !== 'string' || !REMOTE_AGENT_RELAY_KEY_PATTERN.test(v.relay)) invalid();
       return { op: 'forget', relay: v.relay };
     case 'reshare': {
@@ -492,6 +750,23 @@ export function isRemoteAgentReadInvoke(channel: string, args: unknown[] | undef
 /** 控制端接受的单次 read 数据上限：高于本版本的 READ_MAX_BYTES，给新版被控端留余量。 */
 const READ_RESULT_ACCEPT_BYTES = 2 * 1024 * 1024;
 
+export function parseRemoteAgentForkResult(value: unknown): RemoteAgentForkResult {
+  const v = record(value);
+  const text = (value: unknown): value is string =>
+    typeof value === 'string' && value.length > 0 && value.length <= 4096 && !value.includes('\0');
+  if (!text(v.newSdkSessionId) || !Array.isArray(v.uuidMap) || v.uuidMap.length > 100_000) invalid();
+  const uuidMap: Array<[string, string]> = (v.uuidMap as unknown[]).map((pair) => {
+    if (!Array.isArray(pair) || pair.length !== 2 || !text(pair[0]) || !text(pair[1])) invalid();
+    return [pair[0], pair[1]];
+  });
+  return {
+    newSdkSessionId: v.newSdkSessionId as string,
+    uuidMap,
+    ...(v.initialContextTokens !== undefined ? { initialContextTokens: count(v.initialContextTokens, Number.MAX_SAFE_INTEGER) } : {}),
+    ...(v.usedNativeForkAnchor === true ? { usedNativeForkAnchor: true } : {}),
+  };
+}
+
 export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
   const v = record(value);
   const agents = Array.isArray(v.agents)
@@ -508,9 +783,21 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     uploadChunkBytes: count(v.uploadChunkBytes, REMOTE_AGENT_UPLOAD_CHUNK_BYTES),
     maxPayloadBytes: count(v.maxPayloadBytes, Number.MAX_SAFE_INTEGER),
     ...(v.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
+    ...(v.localApplication === true ? { localApplication: true } : {}),
+    ...(v.nativeFork === true ? { nativeFork: true } : {}),
+    ...(v.nativeHistoryTransfer === true ? { nativeHistoryTransfer: true } : {}),
+    ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
+    ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
+    ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
+    ...(v.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(v.reshareConsent === true ? { reshareConsent: true } : {}),
     ...(v.reshareBatch === true ? { reshareBatch: true } : {}),
+    // 可选能力：不合法时当作没声明，不让整个 caps 作废。
+    ...(Number.isSafeInteger(v.idleReclaimMinutes) && (v.idleReclaimMinutes as number) >= 0
+      && (v.idleReclaimMinutes as number) <= REMOTE_AGENT_IDLE_RECLAIM_MAX_MINUTES
+      ? { idleReclaimMinutes: v.idleReclaimMinutes as number } : {}),
+    ...(v.subscriptionFastPolicy === true ? { subscriptionFastPolicy: true as const } : {}),
   };
   if (caps.version < 1 || caps.maxRuns < 1 || caps.uploadChunkBytes < 1) invalid();
   return caps;
@@ -569,6 +856,9 @@ function headerList(value: unknown): Array<[string, string]> {
 function reverseRequest(value: unknown): RemoteAgentReverseRequest {
   const v = record(value);
   switch (v.type) {
+    case 'model-access':
+      if (v.model !== undefined && (typeof v.model !== 'string' || !v.model || v.model.length > 512)) invalid();
+      return { type: 'model-access', ...(typeof v.model === 'string' ? { model: v.model } : {}) };
     case 'interaction':
       return { type: 'interaction', request: v.request };
     case 'http': {
@@ -638,6 +928,7 @@ export function parseRemoteAgentStreamItem(line: string): RemoteAgentStreamItem 
         t: 'closed',
         reason: typeof v.reason === 'string' ? v.reason.slice(0, 128) : 'unknown',
         ...(v.error !== undefined ? { error: errorInfo(v.error) } : {}),
+        ...(v.idleReclaimed === true ? { idleReclaimed: true as const } : {}),
       };
     default:
       return null;

@@ -1,14 +1,11 @@
-import { diagnosticUploadConfigured, uploadMobileDiagnostics } from '@/debug/mobileDiagnosticUpload';
-import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnostics, setDiagnosticsEnabled } from '@/debug/localDiagnostics';
 import Constants from 'expo-constants';
-import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
 import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Alert,
-  DevSettings,
+  AppState,
   Linking,
   Platform,
   Pressable,
@@ -19,7 +16,6 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ellipsis } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { loginText } from '@/auth/loginMessages';
@@ -36,7 +32,6 @@ import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
-  MainWindowActionButton,
   MainWindowActionGroup,
   StatusDot,
 } from '@/components/MobilePrimitives';
@@ -58,33 +53,27 @@ import {
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
 } from '@/config/env';
-import {
-  DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED,
-  switchDevServerEnvironmentAndReload,
-  type DevServerEnvironment,
-} from '@/config/devServerEnvironment';
-import { useDevServerEnvironment } from '@/config/useDevServerEnvironment';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
-import {
-  buildMobileSettingsOverview,
-  type MobileSettingsRow,
-} from '@/settings/mobileSettings';
+import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
   readPushEnabled,
   syncPushRegistration,
   writePushEnabled,
+  readPushPreviewEnabled,
+  writePushPreviewEnabled,
 } from '@/notifications/pushNotifications';
+import { isChatBackgroundSupported, readChatBackgroundEnabled, writeChatBackgroundEnabled } from '@/notifications/chatBackground';
 import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
-import { buildMobileUpdateInfoRows, currentMobileOtaVersion } from '@/settings/updateInfo';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
@@ -97,9 +86,7 @@ import { runSelfHostedOtaRequest } from '@/update/otaRequestCoordinator';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useUpdateChannelGate } from '@/update/useUpdateChannelGate';
 import { useBetaChannel } from '@/update/useBetaChannel';
-import { probeBetaChannel } from '@/update/fetchLatestRelease';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
-import { DisclosureItem, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -108,9 +95,9 @@ import {
   ActionInfoRow,
   ChoicePickerRow,
   InfoRow,
-  SettingsDisclosureRow,
   SettingsGroup,
   SettingsSwitchRow,
+  useSettingsRowStyles,
 } from '@/session/SettingsGroupRows';
 import {
   getMobileSpeakerFilterSnapshot,
@@ -120,7 +107,7 @@ import {
 import { useSettingsDeviceDirectory } from '@/session/settingsDeviceDirectory';
 import { confirmLogout } from '@/session/confirmLogout';
 import { THEME_PREFERENCES, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 
@@ -137,12 +124,15 @@ function hasRunningRemoteTasks(): boolean {
 }
 
 /**
- * 设置页。二级页(语音词典、本机名称)是独立 stack 路由(app/settings/*),
+ * 设置页。二级页(语音词典、本机名称、开发者等)是独立 stack 路由(app/settings/*),
  * 系统返回只退回这里。
+ *
+ * 卡片里只放「名称 + 取值 / 开关 / 箭头」;成句说明与操作结果写在分组下方的 footer。
  */
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
-  const { colors, preference: themePreference, setPreference: setThemePreference } = useTheme();
+  const rowStyles = useSettingsRowStyles();
+  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const push = useGuardedPush();
   const auth = useAuth();
@@ -150,54 +140,14 @@ export default function SettingsScreen() {
   const { locale, setLocale } = useLocale();
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const { status } = useDeviceLink();
-  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+  const { status, connectionIssue } = useDeviceLink();
+  // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
+  const selfHostedRelay = useSelfHostedRelay();
+  const [relaySwitching, setRelaySwitching] = useState(false);
+  const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [localLogsEnabled, setLocalLogsEnabled] = useState(false);
-  const [localLogsReady, setLocalLogsReady] = useState(false);
-  const [localLogsBusy, setLocalLogsBusy] = useState(false);
-  const [localLogsConsent, setLocalLogsConsent] = useState(false);
-  const [localLogUploadMessage, setLocalLogUploadMessage] = useState<string | null>(null);
-  const localLogsLock = useRef(false);
-  useEffect(() => {
-    let mounted = true;
-    void hydrateDiagnostics().then(() => {
-      if (mounted) {
-        setLocalLogsEnabled(diagnosticsEnabled());
-        setLocalLogsReady(true);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-  const runLocalLogAction = async (action: () => Promise<void>) => {
-    if (localLogsLock.current) return;
-    localLogsLock.current = true;
-    setLocalLogsBusy(true);
-    try {
-      await action();
-    } catch {
-      Alert.alert(
-        t('settings.localLogs.title'),
-        t('settings.localLogs.failed'),
-      );
-    } finally {
-      setLocalLogsEnabled(diagnosticsEnabled());
-      setLocalLogsBusy(false);
-      localLogsLock.current = false;
-    }
-  };
-  const handleLocalLogOption = (id: string) => {
-    if (!localLogsReady || localLogsBusy) return;
-    if (id === 'clear') Alert.alert(t('settings.localLogs.clear'), t('settings.localLogs.clearHint'), [
-      { text: t('settings.localLogs.cancel'), style: 'cancel' },
-      { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => void runLocalLogAction(clearDiagnostics) },
-    ]);
-  };
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
-  const [debugExpanded, setDebugExpanded] = useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
   const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
@@ -205,6 +155,8 @@ export default function SettingsScreen() {
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushPreview, setPushPreview] = useState(true);
+  const [chatBackground, setChatBackground] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
@@ -215,17 +167,9 @@ export default function SettingsScreen() {
   // 相反;放行点击会让 toggleAnalytics 对着真值取反,做出与所见相反的动作。
   const [analyticsReady, setAnalyticsReady] = useState(false);
   const [analyticsMessage, setAnalyticsMessage] = useState<string | null>(null);
-  // beta 测试渠道(设备级)开关。真相在 betaChannelStore;hydrate 完成前禁用,避免对陈旧值取反。
-  const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
-  const [betaBusy, setBetaBusy] = useState(false);
+  // beta 测试渠道(设备级)开关在二级页「开发者」;这里只读状态,显示版本旁的徽标。
+  const { enabled: betaEnabled, ready: betaReady } = useBetaChannel();
   const showBetaBadge = betaReady && betaEnabled;
-  const {
-    environment: devServerEnvironment,
-    ready: devServerEnvironmentReady,
-    setEnvironment: setDevServerEnvironment,
-  } = useDevServerEnvironment();
-  const [devServerEnvironmentBusy, setDevServerEnvironmentBusy] =
-    useState(false);
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。查看页是独立路由。
   const { desktopDevices, selfDeviceName } = useSettingsDeviceDirectory();
@@ -259,11 +203,8 @@ export default function SettingsScreen() {
   // APP_BINARY_VERSION 优先取原生层、热更后不漂移(与 mobileTapdb / env 上报同口径)。
   const appVersion = APP_BINARY_VERSION || '0.0.0';
   const updatesEnabled = Updates.isEnabled;
-  // 当前运行的 OTA bundle 信息(只读),折进「调试」分组,用于核验热更是否生效。
+  // 当前运行的 OTA bundle 信息:检查更新时判断应急启动;版本细节展示在二级页「开发者」。
   const { currentlyRunning } = useUpdates();
-  // t 依赖同 overview:行构造走 i18n.t,语言切换时重算。
-  const updateInfoRows = useMemo(() => buildMobileUpdateInfoRows(currentlyRunning), [currentlyRunning, t]);
-  const otaVersion = useMemo(() => currentMobileOtaVersion(currentlyRunning), [currentlyRunning, t]);
   const updateChannel = useUpdateChannelGate(IS_OTA_SELFHOST);
   // 允许整包分发时统一入口先查整包;TestFlight 等禁用整包的环境直接进入 JS OTA。
   const { checkNow: checkBundleUpdate } = useBundleUpdatePrompt({
@@ -289,7 +230,6 @@ export default function SettingsScreen() {
   );
 
   const aboutSection = overview.sections.find((section) => section.id === 'about');
-  const debugSection = overview.sections.find((section) => section.id === 'debug');
   const languagePickerOptions = useMemo<readonly MobileChoiceOption[]>(
     () => LANGUAGE_OPTIONS.map((option) => ({
       id: option,
@@ -357,12 +297,6 @@ export default function SettingsScreen() {
       cancelled = true;
     };
   }, [auth.getAccountDeletionAvailability, auth.isAuthenticated]);
-
-  const copyRow = useCallback(async (row: MobileSettingsRow) => {
-    if (!row.copyValue) return;
-    await Clipboard.setStringAsync(row.copyValue);
-    setCopiedRowId(row.id);
-  }, []);
 
   const openPrivacyPolicy = useCallback(() => {
     void Linking.openURL(LEGAL_LINKS.privacyPolicy).catch(() => undefined);
@@ -444,99 +378,53 @@ export default function SettingsScreen() {
     }
   }, [auth, loggingOut, router, t]);
 
-  // 退出登录先确认(与首页抽屉、伙伴页同一套 confirmLogout 文案):运行中任务要额外说明。
+  // 退出登录先确认(与首页抽屉同一套 confirmLogout 文案):运行中任务要额外说明。
   const requestLogout = useCallback(() => {
     if (loggingOut) return;
     confirmLogout(t, hasRunningRemoteTasks(), () => void logout());
   }, [loggingOut, logout, t]);
 
 
-  const switchDevServerEnvironment = useCallback(
-    async (next: DevServerEnvironment) => {
-      if (
-        !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
-        devServerEnvironmentBusy ||
-        !devServerEnvironmentReady ||
-        next === devServerEnvironment
-      ) {
-        return;
-      }
-      const reload = __DEV__
-        ? () => DevSettings.reload()
-        : Updates.isEnabled
-          ? () => Updates.reloadAsync()
-          : null;
-      if (!reload) {
-        Alert.alert(
-          t('settings.devServerEnvironment.title'),
-          t('settings.devServerEnvironment.switchFailed'),
-        );
-        return;
-      }
-      setDevServerEnvironmentBusy(true);
-      try {
-        // 旧环境的 push 注销、token 与账号缓存必须先在旧端点仍生效时清理。
-        await auth.logout();
-        await switchDevServerEnvironmentAndReload({
-          current: devServerEnvironment,
-          next,
-          reload,
-          setEnvironment: setDevServerEnvironment,
-        });
-      } catch {
-        Alert.alert(
-          t('settings.devServerEnvironment.title'),
-          t('settings.devServerEnvironment.switchFailed'),
-        );
-      } finally {
-        setDevServerEnvironmentBusy(false);
-      }
-    },
-    [
-      auth,
-      devServerEnvironment,
-      devServerEnvironmentBusy,
-      devServerEnvironmentReady,
-      setDevServerEnvironment,
-      t,
-    ],
-  );
-
-  const confirmDevServerEnvironmentSwitch = useCallback(() => {
-    if (
-      !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
-      devServerEnvironmentBusy ||
-      !devServerEnvironmentReady
-    ) {
-      return;
-    }
-    const next: DevServerEnvironment =
-      devServerEnvironment === 'dev' ? 'release' : 'dev';
-    Alert.alert(
-      t('settings.devServerEnvironment.confirmTitle', {
-        environment: t(`settings.devServerEnvironment.options.${next}`),
-      }),
-      t('settings.devServerEnvironment.confirmBody'),
-      [
-        { text: t('settings.devServerEnvironment.cancel'), style: 'cancel' },
-        {
-          text: t('settings.devServerEnvironment.switchAction'),
-          style: 'destructive',
-          onPress: () => void switchDevServerEnvironment(next),
-        },
-      ],
-    );
-  }, [
-    devServerEnvironment,
-    devServerEnvironmentBusy,
-    devServerEnvironmentReady,
-    switchDevServerEnvironment,
-    t,
-  ]);
-
   const openAccountDeletion = useCallback(() => {
     router.push('/account-deletion');
   }, [router]);
+
+  // 切回官方中转:先确认(之后要再用这个中转得在电脑上重新加入);删掉本机设置与凭证,
+  // 连接随路由变化重建。不会自动切回,只在用户确认后执行。
+  const switchToOfficialRelay = useCallback(async () => {
+    if (relaySwitching) return;
+    setRelaySwitching(true);
+    setRelayMessage(null);
+    try {
+      await clearSelfHostedRelay();
+    } catch {
+      setRelayMessage(t('relay.settings.switchFailed'));
+    } finally {
+      setRelaySwitching(false);
+    }
+  }, [relaySwitching, t]);
+
+  const requestSwitchToOfficialRelay = useCallback(() => {
+    if (!selfHostedRelay || relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.confirmTitle'),
+      t('relay.settings.confirmBody', { name: selfHostedRelay.name }),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        { text: t('relay.settings.confirmAction'), style: 'destructive', onPress: () => void switchToOfficialRelay() },
+      ],
+    );
+  }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
+
+  // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
+  // 都要在这里给出原因,并配「切回官方中转」。
+  const relayIssueMessage = !selfHostedRelay
+    ? null
+    : selfHostedRelay.credential === null
+      ? t('relay.settings.credentialMissingHint')
+      : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
+        ? t('relay.settings.removedHint')
+        : null;
 
   // 任务完成通知开关:开 → 请求系统权限 + 注册 APNs token 到 device-link server;
   // 关 → 注销 token。开关状态本机持久化,server 注册表是唯一发送依据。
@@ -545,8 +433,13 @@ export default function SettingsScreen() {
     void readPushEnabled().then((enabled) => {
       if (!cancelled) setPushEnabled(enabled);
     });
+    void readPushPreviewEnabled().then(value => { if (!cancelled) setPushPreview(value); });
+    const refreshBackground = () => { void readChatBackgroundEnabled().then(value => { if (!cancelled) setChatBackground(value); }); };
+    refreshBackground();
+    const foreground = AppState.addEventListener('change', state => { if (state === 'active') refreshBackground(); });
     return () => {
       cancelled = true;
+      foreground.remove();
     };
   }, []);
 
@@ -556,7 +449,6 @@ export default function SettingsScreen() {
     const sync = () => {
       if (cancelled) return;
       const snapshot = getAnalyticsConsentState();
-      setLocalLogsConsent(snapshot.consent);
       setAnalyticsEnabledState(snapshot.enabled);
       setAnalyticsCustomized(snapshot.enabledCustomized);
     };
@@ -600,57 +492,13 @@ export default function SettingsScreen() {
       }
       await writePushEnabled(true);
       setPushEnabled(true);
+      if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));
     } finally {
       setPushBusy(false);
     }
   }, [auth.apiFetch, pushBusy, pushEnabled, t]);
-
-  // Android 10 上快速反向切换这组父卡片 layout + 多行 exiting 时会出现重叠 / 空白。
-  // 设置页在 Android 上同步重排,避免退出视图参与后续布局;保留 iOS 动画与原状态逻辑。
-  const debugDisclosureMotionEnabled = Platform.OS !== 'android';
-  const debugDisclosure = useListDisclosureTransition({
-    motionEnabled: debugDisclosureMotionEnabled,
-  });
-  const runDebugDisclosure = debugDisclosure.run;
-  const toggleDebug = useCallback(() => {
-    runDebugDisclosure(() => setDebugExpanded((value) => !value));
-  }, [runDebugDisclosure]);
-
-  // beta 测试渠道开关:落盘即时生效,但 manifest 通道只在下次冷启动/后台轮询切换。
-  // 打开后引导用户手动重启,让下次启动的更新检查前就切到 beta。
-  const toggleBeta = useCallback(async () => {
-    if (betaBusy) return;
-    setBetaBusy(true);
-    const next = !betaEnabled;
-    try {
-      if (next) {
-        // 打开 beta 前预检(与桌面端 probeBetaManifest 对称):探测 /latest?channel=beta
-        // 是否可达。服务端未部署 beta 时拒绝开启,避免设备静默收不到 OTA/整包/强更记录。
-        const available = await probeBetaChannel(
-          Platform.OS === 'android' ? 'android' : 'ios',
-        );
-        if (!available) {
-          Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.unavailable'));
-          return; // 不落盘,开关保持关闭
-        }
-      }
-      await setBetaEnabled(next);
-      if (next) {
-        Alert.alert(
-          t('settings.betaChannel.title'),
-          t('settings.betaChannel.restartHint'),
-          [{ text: t('settings.betaChannel.ok'), style: 'default' }],
-        );
-      }
-    } catch {
-      // 只可能是本机存储异常;store 会回推真值,这里仅提示未保存成功。
-      Alert.alert(t('settings.betaChannel.title'), t('settings.betaChannel.saveFailed'));
-    } finally {
-      setBetaBusy(false);
-    }
-  }, [betaBusy, betaEnabled, setBetaEnabled, t]);
 
   /* ── 使用统计(TapDB)开关 ──
      语义是 opt-out:用户在登录页同意《隐私政策》后默认开启,这里随时可关。
@@ -753,18 +601,23 @@ export default function SettingsScreen() {
       ? 'settings.version.testFlightCheckAction'
       : 'settings.version.checkAction',
   );
-  // 面向用户的更新方式说明;OTA 版本号、运行来源等技术细节在「调试 / 开发者」里。
-  const updateMethodHint = REVIEW_MODE
-    ? null
-    : IS_TESTFLIGHT_BUILD
-      ? (updatesEnabled ? null : t('settings.version.testFlightContentUpdateUnavailable'))
-      : playManagedUpdates
-        ? (updatesEnabled ? null : t('settings.version.googlePlayContentUpdateUnavailable'))
+  // 「版本」分组下方的说明:TestFlight / Google Play 由商店管理安装包;其余说明 App 内的更新方式。
+  // 检查不了时直接不显示「检查更新」行,原因就写在这里。OTA 版本号等技术细节在「开发者」里。
+  const updateMethodHint = IS_TESTFLIGHT_BUILD
+    ? t('settings.version.testFlightUpdateManaged')
+    : playManagedUpdates
+      ? t('settings.version.googlePlayUpdateManaged')
+      : REVIEW_MODE
+        ? null
         : updatesEnabled
           ? t('settings.version.updateMethodInApp')
           : bundleCheckEnabled
             ? t('settings.version.updateMethodPackage')
             : t('settings.version.updateMethodUnavailable');
+  const showUpdateCheck = !REVIEW_MODE && updateCheckEnabled;
+  const openDeveloperSettings = useCallback(() => {
+    push('/settings/developer');
+  }, [push]);
 
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
@@ -777,435 +630,363 @@ export default function SettingsScreen() {
       />
 
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={styles.content} testID="settings.scroll">
-        <ListDisclosureScope
-          controller={debugDisclosure.controller}
-          motionEnabled={debugDisclosureMotionEnabled}
-        >
-          {/* 账号头部:身份 + 连接状态一次性呈现,下面分组不再重复 */}
-          <View style={styles.headerCard} testID="settings.accountHeader">
-            <MobileUserAvatar imageUrl={auth.user?.avatar} name={overview.header.name} size="large" />
-            <View style={styles.headerTexts}>
-              <Text style={styles.headerName} numberOfLines={1}>{overview.header.name}</Text>
-              {overview.header.email ? (
-                <Text style={styles.headerEmail} numberOfLines={1}>{overview.header.email}</Text>
-              ) : null}
-              <View style={styles.headerStatusRow}>
-                <StatusDot tone={overview.header.relayTone} pulsing={status === 'connecting'} />
-                <Text style={styles.headerStatusText} numberOfLines={1}>
-                  {`${overview.header.relayLabel} · ${overview.header.relayDetail}`}
-                </Text>
-              </View>
+        {/* 账号头部:身份 + 连接状态一次性呈现,下面分组不再重复 */}
+        <View style={styles.headerCard} testID="settings.accountHeader">
+          <MobileUserAvatar imageUrl={auth.user?.avatar} name={overview.header.name} size="large" />
+          <View style={styles.headerTexts}>
+            <Text style={styles.headerName} numberOfLines={1}>{overview.header.name}</Text>
+            {overview.header.email ? (
+              <Text style={styles.headerEmail} numberOfLines={1}>{overview.header.email}</Text>
+            ) : null}
+            <View style={styles.headerStatusRow}>
+              <StatusDot tone={overview.header.relayTone} pulsing={status === 'connecting'} />
+              <Text style={styles.headerStatusText} numberOfLines={1}>
+                {`${overview.header.relayLabel} · ${overview.header.relayDetail}`}
+              </Text>
             </View>
           </View>
+        </View>
 
-          {/* 版本:只保留统一检查入口;允许整包分发时先查整包,否则直接查热更。 */}
-          <SettingsGroup title={t('settings.version.sectionTitle')}>
-            {[
-              <View key="version" style={styles.versionRow} testID="settings.version">
-                <View style={styles.versionTexts}>
-                  <View style={styles.versionValueRow}>
-                    <Text style={styles.versionLabel} testID="settings.appVersion">{t('settings.version.appVersion', { version: appVersion })}</Text>
-                    {showBetaBadge ? (
-                      <View style={styles.betaChannelBadge} testID="settings.betaChannelBadge">
-                        <Text style={styles.betaChannelBadgeText}>{t('settings.betaChannel.badge')}</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
-                  {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
-                    <Text style={styles.versionDetail} testID="settings.desktopVersion">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
-                  ) : null}
-                  {IS_TESTFLIGHT_BUILD ? (
-                    <Text style={styles.versionDetail} testID="settings.testFlightUpdateHint">
-                      {t('settings.version.testFlightUpdateManaged')}
-                    </Text>
-                  ) : null}
-                  {playManagedUpdates ? (
-                    <Text style={styles.versionDetail} testID="settings.googlePlayUpdateHint">
-                      {t('settings.version.googlePlayUpdateManaged')}
-                    </Text>
-                  ) : null}
-                  {updateMessage ? (
-                    <Text style={styles.versionDetail} testID="settings.updateMessage">{updateMessage}</Text>
-                  ) : updateMethodHint ? (
-                    <Text style={styles.versionDetail} testID="settings.updateMethod">{updateMethodHint}</Text>
-                  ) : null}
+        {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
+            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+        <SettingsGroup
+          footer={selfHostedRelay
+            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+            : t('relay.settings.officialHint')}
+          messages={[
+            relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
+            relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
+          ]}
+          testID="settings.relay"
+          title={t('relay.settings.sectionTitle')}
+        >
+          <InfoRow
+            key="relay-current"
+            label={t('relay.settings.currentLabel')}
+            testID="settings.relay.current"
+            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+          />
+          {selfHostedRelay ? (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.switchToOfficial')}
+              chevron={false}
+              disabled={relaySwitching}
+              key="relay-switch-official"
+              label={t('relay.settings.switchToOfficial')}
+              onPress={requestSwitchToOfficialRelay}
+              testID="settings.relay.switchToOfficial"
+            />
+          ) : null}
+        </SettingsGroup>
+
+        {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
+            更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}
+        <SettingsGroup
+          footer={updateMethodHint}
+          footerTestID="settings.updateMethod"
+          messages={[updateMessage ? { text: updateMessage, testID: 'settings.updateMessage' } : null]}
+          testID="settings.version"
+          title={t('settings.version.sectionTitle')}
+        >
+          <View key="current-version" style={rowStyles.row}>
+            <View style={rowStyles.rowLine}>
+              <Text style={rowStyles.rowLabel}>{t('settings.version.currentLabel')}</Text>
+              {showBetaBadge ? (
+                <View style={styles.betaChannelBadge} testID="settings.betaChannelBadge">
+                  <Text style={styles.betaChannelBadgeText}>{t('settings.betaChannel.badge')}</Text>
                 </View>
-                {/* 审核模式(清单 review 命中当前二进制版本):隐藏检查更新入口,版本号照常展示。
-                    次级按钮(描边 + 正文色),避免灰底读成禁用;加载时只转圈。 */}
-                {!REVIEW_MODE ? (
-                  <MainWindowActionButton
-                    action={{
-                      accessibilityLabel: updateBusy
-                        ? t(
-                          IS_TESTFLIGHT_BUILD || playManagedUpdates
-                            ? 'settings.version.testFlightCheckingAccessibility'
-                            : 'settings.version.checkingAccessibility',
-                        )
-                        : updateActionLabel,
-                      busy: updateBusy,
-                      disabled: !updateCheckEnabled,
-                      label: updateActionLabel,
-                      onPress: () => void checkForUpdate(),
-                      testID: 'settings.checkUpdateButton',
-                      tone: 'secondary',
-                    }}
-                    density="compact"
-                    numberOfLines={0}
-                    style={styles.versionButton}
-                    textStyle={styles.versionButtonText}
-                  />
-                ) : null}
-              </View>,
-            ]}
-          </SettingsGroup>
-
-          {/* 通知:任务完成推送(仅 iOS;Android 待 FCM/厂商通道) */}
-          {isPushSupported() ? (
-            <SettingsGroup title={t('settings.notifications.sectionTitle')}>
-              <SettingsSwitchRow
-                accessibilityLabel={t('settings.notifications.taskDone')}
-                disabled={pushBusy}
-                hint={t('settings.notifications.taskDoneHint')}
-                key="push-toggle"
-                label={t('settings.notifications.taskDone')}
-                messages={[pushMessage ? { text: pushMessage, testID: 'settings.pushMessage' } : null]}
-                onValueChange={() => void togglePushNotifications()}
-                switchTestID="settings.pushToggle"
-                testID="settings.pushToggleRow"
-                value={pushEnabled}
-              />
-            </SettingsGroup>
-          ) : null}
-
-          {/* 语音词典:只读查看电脑上的词典(正本在电脑,增删改回电脑做) */}
-          <SettingsGroup
-            footer={t('settings.voiceDictionary.hint')}
-            title={t('settings.voiceDictionary.sectionTitle')}
-          >
-            <ActionInfoRow
-              accessibilityLabel={t('settings.voiceDictionary.openAccessibility')}
-              key="voice-dictionary"
-              label={t('settings.voiceDictionary.label')}
-              onPress={openVoiceDictionary}
-              testID="settings.voiceDictionary.row"
-              value={t('settings.voiceDictionary.entryCount', { count: dictionaryEntries.length })}
+              ) : null}
+              <Text style={rowStyles.rowValue} numberOfLines={1} testID="settings.appVersion">{appVersion}</Text>
+            </View>
+          </View>
+          {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
+          {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
+            <InfoRow
+              key="desktop-version"
+              label={t('settings.version.pairedDesktopLabel')}
+              testID="settings.desktopVersion"
+              value={DESKTOP_PACKAGE_VERSION}
             />
-          </SettingsGroup>
-
-          {/* 识别我的声音:声纹只在本机;老安装包缺原生推理模块时不显示入口 */}
-          {speakerFilter.supported ? (
-            <SettingsGroup
-              footer={t('settings.voiceSpeakerFilter.entryHint')}
-              title={t('settings.voiceSpeakerFilter.sectionTitle')}
-            >
-              <ActionInfoRow
-                accessibilityLabel={t('settings.voiceSpeakerFilter.openAccessibility')}
-                key="voice-speaker-filter"
-                label={t('settings.voiceSpeakerFilter.label')}
-                onPress={openVoiceSpeakerFilter}
-                testID="settings.voiceSpeakerFilter.row"
-                value={t(speakerFilter.enabled ? 'settings.voiceSpeakerFilter.on' : 'settings.voiceSpeakerFilter.off')}
-              />
-            </SettingsGroup>
           ) : null}
-
-          <SettingsGroup title={t('sharedTask.title')}>
+          {showUpdateCheck ? (
             <ActionInfoRow
-              accessibilityLabel={t('sharedTask.manageSharing')}
-              label={t('sharedTask.manageSharing')}
-              value=""
-              onPress={() => router.push({ pathname: '/shared-session', params: { mode: 'manage' } })}
-              testID="settings.sharedTasks.row"
-            />
-          </SettingsGroup>
-
-          {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
-          <SettingsGroup title={t('settings.appearance.title')}>
-            <NativePullDownMenu
-              actions={THEME_PREFERENCES.map((option) => ({
-                id: option,
-                state: option === themePreference ? 'on' : 'off',
-                title: t(`settings.appearance.options.${option}`),
-              }))}
-              onAction={selectAppearance}
-            >
-              <ChoicePickerRow
-                expanded={appearancePickerOpen}
-                label={t('settings.appearance.modeLabel')}
-                onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}
-                testID="settings.appearance.picker"
-                value={t(`settings.appearance.options.${themePreference}`)}
-              />
-            </NativePullDownMenu>
-            <UserBubbleSettings />
-          </SettingsGroup>
-
-          {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
-          <SettingsGroup
-            footer={t('settings.language.hint')}
-            title={t('settings.language.title')}
-          >
-            <NativePullDownMenu
-              actions={LANGUAGE_OPTIONS.map((option) => ({
-                id: option,
-                state: option === locale ? 'on' : 'off',
-                title: t(`settings.language.options.${option}`),
-              }))}
-              onAction={selectLanguage}
-            >
-              <ChoicePickerRow
-                expanded={languagePickerOpen}
-                label={t('settings.language.title')}
-                onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
-                testID="settings.language.picker"
-                value={t(`settings.language.options.${locale}`)}
-              />
-            </NativePullDownMenu>
-          </SettingsGroup>
-
-          {/* 关于这台手机 */}
-          {aboutSection ? (
-            <SettingsGroup title={aboutSection.title}>
-              {aboutSection.rows.map((row) => (
-                row.id === 'about.deviceName' ? (
-                  <ActionInfoRow
-                    accessibilityLabel={t('settings.about.editAccessibility', { label: row.label })}
-                    detail={row.detail}
-                    key={row.id}
-                    label={row.label}
-                    onPress={openSelfDeviceNameEditor}
-                    testID="settings.selfDeviceNameRow"
-                    value={row.value}
-                  />
-                ) : (
-                  <InfoRow key={row.id} detail={row.detail} label={row.label} testID={`settings.row.${row.id}`} value={row.value} />
+              accessibilityLabel={updateBusy
+                ? t(
+                  IS_TESTFLIGHT_BUILD || playManagedUpdates
+                    ? 'settings.version.testFlightCheckingAccessibility'
+                    : 'settings.version.checkingAccessibility',
                 )
-              ))}
-            </SettingsGroup>
+                : updateActionLabel}
+              chevron={false}
+              disabled={updateBusy}
+              key="check-update"
+              label={updateActionLabel}
+              onPress={() => void checkForUpdate()}
+              testID="settings.checkUpdateButton"
+              value={updateBusy ? t('settings.version.checking') : ''}
+            />
           ) : null}
+        </SettingsGroup>
 
-          {/* 调试 / 开发者:默认折叠;折叠开关是卡片里的第一行,展开的行接在同一张卡片里。 */}
-          {debugSection ? (
-            <SettingsGroup testID="settings.debugGroup">
-              <SettingsDisclosureRow
-                expanded={debugExpanded}
-                key="debug-toggle"
-                label={debugSection.title}
-                onPress={toggleDebug}
-                testID="settings.debugToggle"
-              />
-              {debugExpanded
-                ? [
-                    <SettingsSwitchRow
-                      accessibilityLabel={t('settings.localLogs.record')}
-                      accessory={(
-                        <NativePullDownMenu
-                          actions={[
-                            { id: 'clear', title: t('settings.localLogs.clear'), destructive: true, disabled: !localLogsReady || localLogsBusy },
-                          ]}
-                          onAction={handleLocalLogOption}
-                        >
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={t('settings.localLogs.options')}
-                            disabled={!localLogsReady || localLogsBusy}
-                            style={({ pressed }) => [styles.localLogOptions, pressed && styles.pressed]}
-                            onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options'), undefined, [
-                              { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => handleLocalLogOption('clear') },
-                              { text: t('settings.localLogs.cancel'), style: 'cancel' },
-                            ])}
-                          >
-                            <Ellipsis color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-                          </Pressable>
-                        </NativePullDownMenu>
-                      )}
-                      disabled={!localLogsReady || localLogsBusy}
-                      hint={t('settings.localLogs.hint')}
-                      key="local-logs-toggle"
-                      label={t('settings.localLogs.title')}
-                      onValueChange={(value) =>
-                        void runLocalLogAction(() =>
-                          setDiagnosticsEnabled(value),
-                        )
-                      }
-                      testID="settings.localLogs"
-                      value={localLogsEnabled}
-                    />,
-                    <ActionInfoRow
-                      key="local-logs-export"
-                      accessibilityLabel={t('settings.localLogs.export')}
-                      label={t('settings.localLogs.export')}
-                      detail={t('settings.localLogs.exportHint')}
-                      disabled={!localLogsReady || localLogsBusy}
-                      value={localLogsBusy ? t('settings.localLogs.busy') : ''}
-                      onPress={() => void runLocalLogAction(exportDiagnostics)}
-                    />,
-                    <ActionInfoRow
-                      key="local-logs-upload"
-                      accessibilityLabel={t('settings.localLogs.upload')}
-                      label={t('settings.localLogs.upload')}
-                      disabled={!localLogsReady || localLogsBusy || !diagnosticUploadConfigured() || !localLogsConsent}
-                      detail={!diagnosticUploadConfigured()
-                        ? t('settings.localLogs.uploadResult.unavailable')
-                        : !localLogsConsent ? t('settings.localLogs.uploadResult.consentRequired')
-                        : localLogUploadMessage ?? t('settings.localLogs.uploadHint')}
-                      value={
-                        localLogsBusy ? t('settings.localLogs.busy') : ''
-                      }
-                      onPress={() =>
-                        void runLocalLogAction(async () => {
-                          const result = await uploadMobileDiagnostics();
-                          if (result.kind === 'uploaded') {
-                            let copied = false;
-                            try { await Clipboard.setStringAsync(result.uploadCode); copied = true; } catch { /* upload already succeeded */ }
-                            setLocalLogUploadMessage(t(copied ? 'settings.localLogs.uploadCopied' : 'settings.localLogs.uploadSucceeded', { code: result.uploadCode }));
-                          } else setLocalLogUploadMessage(t(`settings.localLogs.uploadResult.${result.kind}`));
-                        })
-                      }
-                    />,
-                  ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
-                    ? [
-                        <ActionInfoRow
-                          accessibilityLabel={t('settings.devServerEnvironment.accessibility')}
-                          detail={t('settings.devServerEnvironment.description')}
-                          key="dev-server-environment"
-                          label={t('settings.devServerEnvironment.title')}
-                          onPress={confirmDevServerEnvironmentSwitch}
-                          testID="settings.devServerEnvironment"
-                          value={
-                            devServerEnvironmentBusy
-                              ? t('settings.devServerEnvironment.switching')
-                              : t(
-                                  `settings.devServerEnvironment.options.${devServerEnvironment}`,
-                                )
-                          }
-                        />,
-                      ]
-                    : []),
-                  ...debugSection.rows.map((row) => (
-                    row.copyValue ? (
-                      <CopyRow copied={copiedRowId === row.id} key={row.id} onCopy={copyRow} row={row} />
-                    ) : (
-                      <InfoRow key={row.id} detail={row.detail} label={row.label} testID={`settings.row.${row.id}`} value={row.value} />
-                    )
-                  )),
-                  <SettingsSwitchRow
-                    accessibilityLabel={t('settings.betaChannel.title')}
-                    disabled={betaBusy || !betaReady}
-                    hint={t('settings.betaChannel.description')}
-                    key="beta-channel-toggle"
-                    label={t('settings.betaChannel.title')}
-                    onValueChange={() => void toggleBeta()}
-                    switchTestID="settings.betaChannelToggle"
-                    testID="settings.betaChannelToggleRow"
-                    value={betaEnabled}
-                  />,
-                  // 技术版本细节:当前运行的热更 bundle(从版本卡片移到这里)。
-                  <InfoRow
-                    key="ota-version"
-                    label={t('settings.updateInfo.otaVersion')}
-                    testID="settings.otaVersion"
-                    value={otaVersion}
-                  />,
-                  ...updateInfoRows.map((row) => (
-                    <InfoRow key={row.id} label={row.label} testID={`settings.updateInfo.${row.id}`} value={row.value} />
-                  )),
-                ]
-                : null}
-            </SettingsGroup>
-          ) : null}
-
-          {/* 法律信息:隐私政策/用户协议始终显示(链接区域分流走 legalLinks 单点);
-              使用统计开关与它们同组(合规要求关闭途径可被找到);
-              App 备案号仅国内版显示。 */}
-          <SettingsGroup title={t('settings.legal.sectionTitle')}>
+        {/* Notification permission and preview preferences belong to this installation. */}
+        {isPushSupported() ? (
+          <SettingsGroup
+            footer={t('settings.notifications.taskDoneHint')
+              + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')
+              + (selfHostedRelay ? ` ${t('relay.settings.pushUnavailable')}` : '')}
+            messages={[pushMessage ? { text: pushMessage, testID: 'settings.pushMessage' } : null]}
+            title={t('settings.notifications.sectionTitle')}
+          >
             <SettingsSwitchRow
-              accessibilityLabel={t('settings.legal.analytics')}
-              disabled={analyticsBusy || !analyticsReady}
-              hint={t('settings.legal.analyticsHint')}
-              key="analytics-toggle"
-              label={t('settings.legal.analytics')}
-              messages={[analyticsMessage ? { text: analyticsMessage, testID: 'settings.analyticsMessage' } : null]}
-              onValueChange={() => void toggleAnalytics()}
-              switchTestID="settings.analyticsToggle"
-              testID="settings.analyticsToggleRow"
-              value={analyticsEnabled}
+              accessibilityLabel={t('settings.notifications.taskDone')}
+              disabled={pushBusy}
+              key="push-toggle"
+              label={t('settings.notifications.taskDone')}
+              onValueChange={() => void togglePushNotifications()}
+              switchTestID="settings.pushToggle"
+              testID="settings.pushToggleRow"
+              value={pushEnabled}
             />
-            {analyticsCustomized ? (
-              <ActionInfoRow
-                accessibilityLabel={t('settings.legal.analyticsReset')}
-                key="analytics-reset"
-                label={t('settings.legal.analyticsReset')}
-                onPress={() => void resetAnalytics()}
-                testID="settings.analyticsReset"
-                value={t('settings.legal.analyticsResetAction')}
-              />
-            ) : null}
-            <ActionInfoRow
-              accessibilityLabel={t('settings.legal.openPrivacyPolicy')}
-              accessibilityRole="link"
-              key="privacy-policy"
-              label={t('settings.legal.privacyPolicy')}
-              onPress={openPrivacyPolicy}
-              testID="settings.privacyPolicy"
-              value={t('settings.legal.view')}
+            <SettingsSwitchRow
+              accessibilityLabel={t('settings.notifications.preview')}
+              label={t('settings.notifications.preview')}
+              value={pushPreview}
+              disabled={pushBusy || !pushEnabled}
+              onValueChange={() => {
+                const next = !pushPreview;
+                setPushBusy(true);
+                void writePushPreviewEnabled(next).then(() => {
+                  setPushPreview(next);
+                  return syncPushRegistration({ enabled: pushEnabled, apiFetch: auth.apiFetch });
+                }).catch(error => setPushMessage(formatRemoteError(error))).finally(() => setPushBusy(false));
+              }}
             />
-            <ActionInfoRow
-              accessibilityLabel={t('settings.legal.openUserAgreement')}
-              accessibilityRole="link"
-              key="user-agreement"
-              label={t('settings.legal.userAgreement')}
-              onPress={openUserAgreement}
-              testID="settings.userAgreement"
-              value={t('settings.legal.view')}
-            />
-            {AUTH_REGION === 'cn' ? (
-              <InfoRow
-                key="app-filing-number"
-                label={t('settings.legal.appFilingNumber')}
-                testID="settings.appFilingNumber"
-                value="沪ICP备11033765号-89A"
-              />
-            ) : null}
+            {isChatBackgroundSupported() ? <SettingsSwitchRow
+              accessibilityLabel={t('settings.notifications.background')}
+              label={t('settings.notifications.background')}
+              value={chatBackground}
+              disabled={pushBusy || !pushEnabled}
+              onValueChange={() => {
+                const next = !chatBackground;
+                void writeChatBackgroundEnabled(next).then(() => setChatBackground(next))
+                  .catch(error => setPushMessage(formatRemoteError(error)));
+              }}
+            /> : null}
           </SettingsGroup>
+        ) : null}
 
-          {/* 账号操作:退出保持明确(先确认);注销账号仅保留低调的次要文字入口。 */}
-          <DisclosureItem style={styles.dangerArea} testID="settings.accountActions">
-            <Text style={styles.dangerHint}>
-              {t('settings.account.logoutHint')}
-            </Text>
-            <MainWindowActionGroup
-              dangerActions={[
-                {
-                  accessibilityLabel: loggingOut ? t('settings.account.loggingOutAccessibility') : t('settings.account.logout'),
-                  busy: loggingOut,
-                  label: t('settings.account.logout'),
-                  onPress: requestLogout,
-                  testID: 'settings.logoutButton',
-                  tone: 'danger',
-                },
-              ]}
-              testID="settings.logoutActions"
+        {/* 语音词典:只读查看电脑上的词典(正本在电脑,增删改回电脑做) */}
+        <SettingsGroup
+          footer={t('settings.voiceDictionary.hint')}
+          title={t('settings.voiceDictionary.sectionTitle')}
+        >
+          <ActionInfoRow
+            accessibilityLabel={t('settings.voiceDictionary.openAccessibility')}
+            key="voice-dictionary"
+            label={t('settings.voiceDictionary.label')}
+            onPress={openVoiceDictionary}
+            testID="settings.voiceDictionary.row"
+            value={t('settings.voiceDictionary.entryCount', { count: dictionaryEntries.length })}
+          />
+        </SettingsGroup>
+
+        {/* 识别我的声音:声纹只在本机;老安装包缺原生推理模块时不显示入口 */}
+        {speakerFilter.supported ? (
+          <SettingsGroup
+            footer={t('settings.voiceSpeakerFilter.entryHint')}
+            title={t('settings.voiceSpeakerFilter.sectionTitle')}
+          >
+            <ActionInfoRow
+              accessibilityLabel={t('settings.voiceSpeakerFilter.openAccessibility')}
+              key="voice-speaker-filter"
+              label={t('settings.voiceSpeakerFilter.label')}
+              onPress={openVoiceSpeakerFilter}
+              testID="settings.voiceSpeakerFilter.row"
+              value={t(speakerFilter.enabled ? 'settings.voiceSpeakerFilter.on' : 'settings.voiceSpeakerFilter.off')}
             />
-            {accountDeletionAvailable ? (
-              <Pressable
-                accessibilityLabel={loginText('accountDeletionSettingsAction')}
-                accessibilityRole="button"
-                onPress={openAccountDeletion}
-                style={({ pressed }) => [
-                  styles.accountDeletionLink,
-                  pressed && styles.pressed,
-                ]}
-                testID="settings.deleteAccountButton"
-              >
-                <Text style={styles.accountDeletionLinkText}>
-                  {loginText('accountDeletionSettingsAction')}
-                </Text>
-              </Pressable>
-            ) : null}
-          </DisclosureItem>
-        </ListDisclosureScope>
+          </SettingsGroup>
+        ) : null}
+
+        <SettingsGroup title={t('sharedTask.title')}>
+          <ActionInfoRow
+            accessibilityLabel={t('sharedTask.manageSharing')}
+            label={t('sharedTask.manageSharing')}
+            value=""
+            onPress={() => router.push({ pathname: '/shared-session', params: { mode: 'manage' } })}
+            testID="settings.sharedTasks.row"
+          />
+        </SettingsGroup>
+
+        {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
+        <SettingsGroup title={t('settings.appearance.title')}>
+          <NativePullDownMenu
+            actions={THEME_PREFERENCES.map((option) => ({
+              id: option,
+              state: option === themePreference ? 'on' : 'off',
+              title: t(`settings.appearance.options.${option}`),
+            }))}
+            onAction={selectAppearance}
+          >
+            <ChoicePickerRow
+              expanded={appearancePickerOpen}
+              label={t('settings.appearance.modeLabel')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}
+              testID="settings.appearance.picker"
+              value={t(`settings.appearance.options.${themePreference}`)}
+            />
+          </NativePullDownMenu>
+          <UserBubbleSettings />
+        </SettingsGroup>
+
+        {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
+        <SettingsGroup
+          footer={t('settings.language.hint')}
+          title={t('settings.language.title')}
+        >
+          <NativePullDownMenu
+            actions={LANGUAGE_OPTIONS.map((option) => ({
+              id: option,
+              state: option === locale ? 'on' : 'off',
+              title: t(`settings.language.options.${option}`),
+            }))}
+            onAction={selectLanguage}
+          >
+            <ChoicePickerRow
+              expanded={languagePickerOpen}
+              label={t('settings.language.title')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
+              testID="settings.language.picker"
+              value={t(`settings.language.options.${locale}`)}
+            />
+          </NativePullDownMenu>
+        </SettingsGroup>
+
+        {/* 关于这台手机 */}
+        {aboutSection ? (
+          <SettingsGroup footer={aboutSection.footer} title={aboutSection.title}>
+            {aboutSection.rows.map((row) => (
+              row.id === 'about.deviceName' ? (
+                <ActionInfoRow
+                  accessibilityLabel={t('settings.about.editAccessibility', { label: row.label })}
+                  key={row.id}
+                  label={row.label}
+                  onPress={openSelfDeviceNameEditor}
+                  testID="settings.selfDeviceNameRow"
+                  value={row.value}
+                />
+              ) : (
+                <InfoRow key={row.id} label={row.label} testID={`settings.row.${row.id}`} value={row.value} />
+              )
+            ))}
+          </SettingsGroup>
+        ) : null}
+
+        {/* 法律信息:隐私政策/用户协议始终显示(链接区域分流走 legalLinks 单点);App 备案号仅国内版显示。
+            使用统计开关(合规要求关闭途径可被找到)单独成组,说明与保存失败紧接在开关下方的 footer;
+            「恢复默认」再单独成组,避免 footer 被夹在开关和它之间。 */}
+        <SettingsGroup title={t('settings.legal.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('settings.legal.openPrivacyPolicy')}
+            accessibilityRole="link"
+            key="privacy-policy"
+            label={t('settings.legal.privacyPolicy')}
+            onPress={openPrivacyPolicy}
+            testID="settings.privacyPolicy"
+            value={t('settings.legal.view')}
+          />
+          <ActionInfoRow
+            accessibilityLabel={t('settings.legal.openUserAgreement')}
+            accessibilityRole="link"
+            key="user-agreement"
+            label={t('settings.legal.userAgreement')}
+            onPress={openUserAgreement}
+            testID="settings.userAgreement"
+            value={t('settings.legal.view')}
+          />
+          {AUTH_REGION === 'cn' ? (
+            <InfoRow
+              key="app-filing-number"
+              label={t('settings.legal.appFilingNumber')}
+              testID="settings.appFilingNumber"
+              value="沪ICP备11033765号-89A"
+            />
+          ) : null}
+        </SettingsGroup>
+
+        <SettingsGroup
+          footer={t('settings.legal.analyticsHint')}
+          messages={[analyticsMessage ? { text: analyticsMessage, testID: 'settings.analyticsMessage' } : null]}
+        >
+          <SettingsSwitchRow
+            accessibilityLabel={t('settings.legal.analytics')}
+            disabled={analyticsBusy || !analyticsReady}
+            key="analytics-toggle"
+            label={t('settings.legal.analytics')}
+            onValueChange={() => void toggleAnalytics()}
+            switchTestID="settings.analyticsToggle"
+            testID="settings.analyticsToggleRow"
+            value={analyticsEnabled}
+          />
+        </SettingsGroup>
+        {analyticsCustomized ? (
+          <SettingsGroup>
+            <ActionInfoRow
+              accessibilityLabel={t('settings.legal.analyticsReset')}
+              chevron={false}
+              onPress={() => void resetAnalytics()}
+              label={t('settings.legal.analyticsReset')}
+              testID="settings.analyticsReset"
+              value={t('settings.legal.analyticsResetAction')}
+            />
+          </SettingsGroup>
+        ) : null}
+
+        {/* 开发者:Debug 日志、Beta 渠道、标识与更新信息在二级页,按用途分组。 */}
+        <SettingsGroup testID="settings.debugGroup">
+          <ActionInfoRow
+            accessibilityLabel={t('settings.developer.title')}
+            key="developer"
+            label={t('settings.developer.title')}
+            onPress={openDeveloperSettings}
+            testID="settings.developerRow"
+          />
+        </SettingsGroup>
+
+        {/* 账号操作:退出保持明确(先确认),说明写在按钮下方;注销账号仅保留低调的次要文字入口。 */}
+        <View style={styles.dangerArea} testID="settings.accountActions">
+          <MainWindowActionGroup
+            dangerActions={[
+              {
+                accessibilityLabel: loggingOut ? t('settings.account.loggingOutAccessibility') : t('settings.account.logout'),
+                busy: loggingOut,
+                label: t('settings.account.logout'),
+                onPress: requestLogout,
+                testID: 'settings.logoutButton',
+                tone: 'danger',
+              },
+            ]}
+            testID="settings.logoutActions"
+          />
+          <Text style={styles.dangerHint}>
+            {t('settings.account.logoutHint')}
+          </Text>
+          {accountDeletionAvailable ? (
+            <Pressable
+              accessibilityLabel={loginText('accountDeletionSettingsAction')}
+              accessibilityRole="button"
+              onPress={openAccountDeletion}
+              style={({ pressed }) => [
+                styles.accountDeletionLink,
+                pressed && styles.pressed,
+              ]}
+              testID="settings.deleteAccountButton"
+            >
+              <Text style={styles.accountDeletionLinkText}>
+                {loginText('accountDeletionSettingsAction')}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       </ScrollView>
       <SheetModal
         backdropTestID="settings.appearancePicker.backdrop"
@@ -1259,42 +1040,6 @@ export default function SettingsScreen() {
   );
 }
 
-/** 可复制行(长 ID / URL):标签 + 值堆叠在左,复制按钮在右。 */
-function CopyRow({
-  copied,
-  onCopy,
-  row,
-}: {
-  copied: boolean;
-  onCopy(row: MobileSettingsRow): void;
-  row: MobileSettingsRow;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const { t } = useTranslation();
-  return (
-    <View style={styles.copyRow} testID={`settings.row.${row.id}`}>
-      <View style={styles.copyText}>
-        <Text style={styles.copyLabel}>{row.label}</Text>
-        <Text selectable style={styles.copyValue} numberOfLines={2}>{row.value}</Text>
-      </View>
-      {row.copyValue ? (
-        // 自守卫:没有 copyValue 就不渲染复制按钮,避免出现"按了没反应"的死按钮
-        // (调用方虽已先判断,但组件自身也要自洽)。
-        <MainWindowActionButton
-          action={{
-            accessibilityLabel: t('settings.copyRow.accessibility', { label: row.label }),
-            label: copied ? t('settings.copyRow.done') : t('settings.copyRow.action'),
-            onPress: () => onCopy(row),
-            testID: `settings.copy.${row.id}`,
-          }}
-          density="compact"
-          style={styles.copyButton}
-        />
-      ) : null}
-    </View>
-  );
-}
-
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { backgroundColor: colors.surface, flex: 1 },
   content: {
@@ -1316,20 +1061,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   headerEmail: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   headerStatusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   headerStatusText: { color: colors.textSecondary, flex: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, minWidth: 0 },
-  localLogOptions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
-  // —— 版本行 ——
-  versionRow: {
-    alignItems: 'stretch',
-    flexDirection: 'column',
-    gap: spacing.md,
-    minHeight: 60,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  versionTexts: { gap: spacing.xs, minWidth: 0 },
-  versionValueRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  versionLabel: { color: colors.textPrimary, flexShrink: 1, fontSize: typeScale.body, fontWeight: fontWeight.medium, lineHeight: lineHeight.body },
-  versionDetail: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
+  // —— 版本 ——
   betaChannelBadge: {
     backgroundColor: colors.betaChannelBadgeBackground,
     borderRadius: radius.pill,
@@ -1342,21 +1074,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.micro,
     fontWeight: fontWeight.semibold,
   },
-  versionButton: { alignSelf: 'flex-start', flexShrink: 0, maxWidth: '100%', paddingVertical: spacing.xs },
-  versionButtonText: { textAlign: 'center' },
-  // —— 可复制行 ——
-  copyRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.md,
-    minHeight: 60,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  copyText: { flex: 1, gap: spacing.xs, minWidth: 0 },
-  copyLabel: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
-  copyValue: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
-  copyButton: { flexShrink: 0, minWidth: 60 },
   // —— 退出 ——
   dangerArea: { gap: spacing.md, paddingTop: spacing.sm },
   dangerHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingHorizontal: spacing.md },

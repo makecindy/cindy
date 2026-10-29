@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 import { ErrorBanner } from './ErrorBanner';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 
@@ -111,6 +112,7 @@ export function ErrorTailErrorBanner({
   silentEncryptedRetryEnabled,
   onForkStripEncrypted,
   forkStripEncryptedRunning,
+  onDiagnose,
   errorReason,
   toolLoop,
   onSilentStopContinue,
@@ -138,6 +140,7 @@ export function ErrorTailErrorBanner({
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
   toolLoop?: ToolLoopErrorDetails;
   onSilentStopContinue?: () => void;
@@ -173,6 +176,7 @@ export function ErrorTailErrorBanner({
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}
+      onDiagnose={onDiagnose}
       sessionSource={sessionSource}
       className={className}
       style={style}

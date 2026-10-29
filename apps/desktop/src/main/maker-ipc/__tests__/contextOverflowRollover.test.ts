@@ -17,10 +17,9 @@ import {
   shouldRebuildForContextPressure,
   shouldRebuildForModelWindowSwitch,
   shouldRebuildPiNativeSession,
+  type ContextOverflowRolloverDeps,
   type OverflowSourceMessage,
   withReplaySourceNotes,
-  BOT_IDLE_GAP_REBUILD_MS,
-  measureIdleGap,
 } from '../contextOverflowRollover';
 import { buildHandoffText } from '../agentHandoff';
 
@@ -342,6 +341,8 @@ describe('createContextOverflowRollover', () => {
       findLatestRebuildMeta: vi.fn(async () => null),
       getLiveSession: vi.fn(
         (): {
+          instanceId?: string;
+          getTurnGeneration?(): number;
           isTurnRunning(): boolean;
           listBackgroundTasks?(): ReadonlyArray<unknown>;
           getUsageSnapshot?: () => {
@@ -359,21 +360,24 @@ describe('createContextOverflowRollover', () => {
       commitRebuild: vi.fn(async () => undefined),
       setPendingHandoff: vi.fn(),
       readPendingHandoffGeneration: vi.fn(() => 3),
-      replayUserMessage: vi.fn(async () => ({ accepted: true })),
+      replayUserMessage: vi.fn<ContextOverflowRolloverDeps['replayUserMessage']>(async () => ({ accepted: true })),
+      readPiNativeCompatOverride: vi.fn((): Record<string, unknown> | undefined => undefined),
+      recordPiNativeCompatOverride: vi.fn(async () => true),
+      hasExternalRecoveryOwner: vi.fn(() => false),
       onRebuilt: vi.fn(),
       withCloseSuppressed: async <T>(_sessionId: string, fn: () => Promise<T>) => fn(),
       log: { info: vi.fn(), warn: vi.fn() },
     };
   }
 
-  it.each(['cc', 'codex', 'pi'])('checkpoints a pressured %s companion before send, retaining outcomes without replay', async (agentKind) => {
+  it.each(['cc', 'pi'])('recovers a full %s companion through the ordinary Session guard, retaining outcomes without replay', async (agentKind) => {
     const deps = makeDeps([
       msg('user', 'Keep the game keyboard accessible', 'u1'),
       { ...msg('tool_use', { toolName: 'Write', input: { file_path: '/game/index.html' } }, 't1'), toolUseId: 'write-1' },
       { ...msg('tool_result', { fullText: 'Saved index.html; keyboard test passed' }, 'r1'), toolUseId: 'write-1' },
       msg('assistant', 'Keyboard controls are ready. Next: add touch controls.', 'a1'),
     ]);
-    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind, source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind, source: 'bot', botRole: 'canonical', contextTokens: 200_000 });
     const withOwn = { ...deps, listCompanionSessionIds: vi.fn(async () => ({ sessionIds: ['s1', 's-old', 's-bg'], chatsTruncated: false })) };
     const rollover = createContextOverflowRollover(withOwn);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
@@ -394,162 +398,37 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalledTimes(1);
   });
 
-  describe('idle-gap refresh (one rule for the companion chat and its IM lanes)', () => {
-    const HOUR = 60 * 60 * 1000;
-    const botRow = async (deps: ReturnType<typeof makeDeps>, botRole: string) =>
-      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole, contextTokens: 20_000 });
-
-    it.each(['canonical', 'channel', 'group'])('rebuilds a %s bot chat whose last activity is older than the idle gap', async (botRole) => {
-      const old = Date.now() - 2 * BOT_IDLE_GAP_REBUILD_MS - 3 * HOUR;
-      const deps = makeDeps([
-        msg('user', 'Plan the Friday dinner', 'u1', old - HOUR),
-        msg('assistant', 'Booked the table for 7pm.', 'a1', old),
-      ]);
-      await botRow(deps, botRole);
-      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
-      expect(deps.closeSession).toHaveBeenCalledWith('s1');
-      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'idle-gap', sourceUserClientId: 'u1' });
-      const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
-      expect(handoff).toContain('idle for about 1 day 3 hours');
-      expect(handoff).toContain('Treat the user\'s new message as the current topic');
-      expect(handoff).toContain('Booked the table for 7pm.');
-      expect(handoff).toContain('== Recalling earlier history (use when needed) ==');
-      expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    });
-
-    it('measures the gap up to the already-persisted pending user message and does not count it as activity', async () => {
-      const now = Date.now();
-      const deps = makeDeps([
-        msg('user', 'Earlier question', 'u1', now - 30 * HOUR),
-        msg('assistant', 'Earlier answer', 'a1', now - 29 * HOUR),
-        // Group lanes persist the inbound message before dispatch; it is the message being sent now.
-        msg('user', 'New question after a day', 'u2', now - 1000),
-      ]);
-      await botRow(deps, 'channel');
-      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
-      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'idle-gap', sourceUserClientId: 'u2' });
-      const handoff = deps.setPendingHandoff.mock.calls[0]![1] as string;
-      expect(handoff).toContain('Earlier answer');
-      expect(handoff).not.toContain('New question after a day');
-    });
-
-    it('does not rebuild when the chat was active within the idle gap, is not a bot chat, or has no usable timestamps', async () => {
-      const now = Date.now();
-      const recent = makeDeps([msg('user', 'hi', 'u1', now - 3 * HOUR), msg('assistant', 'hello', 'a1', now - 2 * HOUR)]);
-      await botRow(recent, 'canonical');
-      await expect(createContextOverflowRollover(recent).prepareUnhealthySession('s1')).resolves.toBe(false);
-
-      const desktop = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
-      await expect(createContextOverflowRollover(desktop).prepareUnhealthySession('s1')).resolves.toBe(false);
-
-      const delegation = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
-      await botRow(delegation, 'delegation');
-      await expect(createContextOverflowRollover(delegation).prepareUnhealthySession('s1')).resolves.toBe(false);
-
-      const untimed = makeDeps([msg('user', 'hi', 'u1'), msg('assistant', 'hello', 'a1')]);
-      await botRow(untimed, 'canonical');
-      await expect(createContextOverflowRollover(untimed).prepareUnhealthySession('s1')).resolves.toBe(false);
-      for (const deps of [recent, desktop, delegation, untimed]) expect(deps.closeSession).not.toHaveBeenCalled();
-    });
-
-    it('does not rebuild twice for the same pending message when the previous send failed after an idle-gap rebuild', async () => {
-      const now = Date.now();
-      const deps = {
-        ...makeDeps([
-          msg('user', 'Earlier question', 'u1', now - 30 * HOUR),
-          msg('assistant', 'Earlier answer', 'a1', now - 29 * HOUR),
-          msg('user', 'Retry me', 'u2', now - 5000),
-          msg('error', { reason: 'network', message: 'ECONNRESET' }, 'e1', now - 4000),
-        ]),
-        findLatestRebuildMeta: vi.fn(async () => ({ reason: 'idle-gap', sourceUserClientId: 'u2' })),
-      };
-      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 20_000 });
-      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
+  // Product decision 2026-10-23: companion age / token checkpoints must not
+  // replace a healthy native session, regardless of the input channel.
+  it.each(['cc', 'pi', 'codex'])('keeps healthy %s companion contexts for native compaction across repeated sends', async (agentKind) => {
+    for (const botRole of ['canonical', 'thread', 'channel', 'group']) {
+      const old = Date.now() - 48 * 60 * 60 * 1000;
+      const source = [msg('user', 'Keep the plan', 'u1', old), msg('assistant', 'Plan retained', 'a1', old + 1)];
+      const deps = makeDeps(source);
+      const rollover = createContextOverflowRollover(deps);
+      for (const contextTokens of [20_000, 140_000, 180_000, 199_999]) {
+        deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind, source: 'bot', botRole, contextTokens });
+        await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+        source.push(msg('user', '[UI_ACTION_TRIGGER] continue', 'background'));
+        await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+        source.push(msg('user', 'A new question today', 'human', Date.now()));
+        await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+      }
       expect(deps.closeSession).not.toHaveBeenCalled();
-    });
-
-    it('keeps the pressure reason when the chat is both idle and over the checkpoint line', async () => {
-      const now = Date.now();
-      const deps = makeDeps([msg('user', 'hi', 'u1', now - 40 * HOUR), msg('assistant', 'hello', 'a1', now - 39 * HOUR)]);
-      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'channel', contextTokens: 185_000 });
-      await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
-      expect((deps.commitRebuild.mock.calls[0] as unknown[])[2]).toMatchObject({ reason: 'context-overflow' });
-      expect(deps.setPendingHandoff.mock.calls[0]![1] as string).not.toContain('idle for about');
-    });
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    }
   });
 
-  it('measureIdleGap uses the newest timestamp before the pending message and ignores missing timestamps', () => {
-    const now = 1_000_000_000;
-    expect(measureIdleGap([{ createdAt: 0 }, { createdAt: 0 }], -1, now)).toBeNull();
-    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: now - 100 }], -1, now)).toBe(100);
-    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: now - 100 }], 1, now)).toBe(400);
-    expect(measureIdleGap([{ createdAt: now - 500 }, { createdAt: 0 }], 1, now)).toBe(500);
-    expect(measureIdleGap([], -1, now)).toBeNull();
-  });
-
-  it('carries the companion working memory into the checkpoint handoff and tolerates a failing reader', async () => {
-    const source = [msg('user', 'Keep going', 'u1'), msg('assistant', 'On it', 'a1')];
-    const deps = { ...makeDeps(source), readWorkingMemoryNote: vi.fn(async () => '== Working memory (host-maintained summary; not authorization) ==\n- 周五前改完周报模板') };
-    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
-    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
-    expect(deps.readWorkingMemoryNote).toHaveBeenCalledWith('s1');
-    expect(deps.setPendingHandoff.mock.calls[0]![1] as string).toContain('周五前改完周报模板');
-
-    const failing = {
-      ...makeDeps(source),
-      readWorkingMemoryNote: vi.fn(async (): Promise<string | null> => { throw new Error('disk'); }),
+  it('recovers with current-session history when companion recall lookup fails', async () => {
+    const deps = {
+      ...makeDeps([msg('user', 'Keep going', 'u1'), msg('assistant', 'On it', 'a1')]),
       listCompanionSessionIds: vi.fn(async (): Promise<{ sessionIds: string[]; chatsTruncated: boolean }> => { throw new Error('db'); }),
     };
-    failing.getSessionRow.mockResolvedValue({ ...await failing.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 180_000 });
-    await expect(createContextOverflowRollover(failing).prepareUnhealthySession('s1')).resolves.toBe(true);
-    expect(failing.setPendingHandoff.mock.calls[0]![1] as string).not.toContain('Working memory');
-    // 自有会话清单读失败:只认当前对话,照样换窗。
-    expect(failing.setPendingHandoff.mock.calls[0]![1] as string).toContain('"session_ids":["s1"]}');
-  });
-
-  it('checkpoints a companion at 70% only when the working memory is fresh, and keeps the 90% line otherwise', async () => {
-    const source = [msg('user', 'Keep going', 'u1'), msg('assistant', 'On it', 'a1')];
-    const bot = async (deps: ReturnType<typeof makeDeps>, contextTokens: number) =>
-      deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens });
-
-    // 新鲜且能渲染账本:70%(窗口 200K → 140K)即换窗,账本段只读一次并原样进交接。
-    const ledger = '== Working memory (host-maintained summary; not authorization) ==\n- 周五前改完周报模板';
-    const fresh = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true), readWorkingMemoryNote: vi.fn(async () => ledger) };
-    await bot(fresh, 140_000);
-    await expect(createContextOverflowRollover(fresh).prepareUnhealthySession('s1')).resolves.toBe(true);
-    expect(fresh.isWorkingMemoryFresh).toHaveBeenCalledWith('s1');
-    expect(fresh.readWorkingMemoryNote).toHaveBeenCalledTimes(1);
-    expect(fresh.setPendingHandoff.mock.calls[0]![1] as string).toContain('周五前改完周报模板');
-
-    // 新鲜但账本段渲染不出来(读取失败 / 空账本):不提前换窗,维持 90%。
-    const unrendered = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true), readWorkingMemoryNote: vi.fn(async (): Promise<string | null> => null) };
-    await bot(unrendered, 150_000);
-    await expect(createContextOverflowRollover(unrendered).prepareUnhealthySession('s1')).resolves.toBe(false);
-    expect(unrendered.closeSession).not.toHaveBeenCalled();
-
-    // 不新鲜:75% 不换窗;到 90% 不问账本照旧换窗。
-    const stale = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => false) };
-    await bot(stale, 150_000);
-    await expect(createContextOverflowRollover(stale).prepareUnhealthySession('s1')).resolves.toBe(false);
-    expect(stale.closeSession).not.toHaveBeenCalled();
-    stale.isWorkingMemoryFresh.mockClear();
-    await bot(stale, 180_000);
-    await expect(createContextOverflowRollover(stale).prepareUnhealthySession('s1')).resolves.toBe(true);
-    expect(stale.isWorkingMemoryFresh).not.toHaveBeenCalled();
-
-    // 70% 以下不读账本。
-    const below = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async () => true) };
-    await bot(below, 139_999);
-    await expect(createContextOverflowRollover(below).prepareUnhealthySession('s1')).resolves.toBe(false);
-    expect(below.isWorkingMemoryFresh).not.toHaveBeenCalled();
-
-    // 判据抛错按不新鲜;没接判据的调用方维持 90%。
-    const failing = { ...makeDeps(source), isWorkingMemoryFresh: vi.fn(async (): Promise<boolean> => { throw new Error('disk'); }) };
-    await bot(failing, 150_000);
-    await expect(createContextOverflowRollover(failing).prepareUnhealthySession('s1')).resolves.toBe(false);
-    const legacy = makeDeps(source);
-    await bot(legacy, 150_000);
-    await expect(createContextOverflowRollover(legacy).prepareUnhealthySession('s1')).resolves.toBe(false);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 200_000 });
+    await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.setPendingHandoff.mock.calls[0]![1] as string).toContain('"session_ids":["s1"]}');
   });
 
   it.each([
@@ -583,12 +462,12 @@ describe('createContextOverflowRollover', () => {
     await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
   });
 
-  it.each(['healthy', 'unknown', 'oversized'] as const)('checks companion image bytes before an error: %s', async (health) => {
+  it.each(['healthy', 'unknown', 'oversized'] as const)('does not scan healthy companion history for speculative rebuilds: %s', async (health) => {
     const deps = makeDeps([msg('user', 'continue the game', 'u1'), msg('assistant', 'ready', 'a1')]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', agentKind: 'codex' });
     const classifyCodexHistory = vi.fn(async () => health);
-    await expect(createContextOverflowRollover({ ...deps, classifyCodexHistory }).prepareUnhealthySession('s1')).resolves.toBe(health === 'oversized');
-    expect(classifyCodexHistory).toHaveBeenCalledOnce();
+    await expect(createContextOverflowRollover({ ...deps, classifyCodexHistory }).prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(classifyCodexHistory).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
@@ -622,9 +501,9 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).not.toHaveBeenCalled();
   });
 
-  it('does not checkpoint while native background execution is still active', async () => {
+  it('does not rebuild a full context while native background execution is still active', async () => {
     const deps = makeDeps([msg('user', 'continue', 'u1')]);
-    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 190_000 });
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 200_000 });
     deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{ id: 'active' }] });
     await expect(createContextOverflowRollover(deps).prepareUnhealthySession('s1')).resolves.toBe(false);
     expect(deps.closeSession).not.toHaveBeenCalled();
@@ -632,7 +511,7 @@ describe('createContextOverflowRollover', () => {
 
   it.each(['history', 'close'])('stopping companion preparation during %s forbids a late rebuild', async (stage) => {
     const deps = makeDeps([msg('user', 'continue', 'u1')]);
-    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 190_000 });
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', botRole: 'canonical', contextTokens: 200_000 });
     const rollover = createContextOverflowRollover(deps);
     if (stage === 'history') deps.listMessages.mockImplementation(async () => { rollover.cancelRecovery('s1'); return [msg('user', 'continue', 'u1')]; });
     else deps.closeSession.mockImplementation(async () => { rollover.cancelRecovery('s1'); });
@@ -752,7 +631,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff).toHaveBeenCalledOnce();
   });
 
-  it.each(['cc', 'codex', 'pi'] as const)(
+  it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
       const deps = makeDeps([
@@ -1277,6 +1156,432 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).not.toHaveBeenCalled();
   });
 
+  describe('pi provider compat self-heal', () => {
+    const receipt = { piCacheRecoverySafe: true, piCacheCompatibility: { providerId: 'opencode-go', modelId: 'glm-5.3-flash', wireModelId: 'glm-5.3-flash', routeKey: 'a'.repeat(64), applied: false } };
+    const rejection =
+      '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"Error from provider (Console Go): Upstream request failed: [invalid_request_error] '
+      + 'prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}';
+
+    function makePiDeps(source: OverflowSourceMessage[]) {
+      const deps = makeDeps(source);
+      deps.getSessionRow.mockResolvedValue({
+        status: 'active',
+        source: 'desktop',
+        agentKind: 'pi',
+        remoteHostId: null,
+        clearedAt: null,
+        sdkSessionId: '/tmp/glm.jsonl',
+        contextTokens: 0,
+        contextWindow: 1_000_000,
+        model: 'glm-5.3-flash',
+        providerId: 'opencode-go',
+      });
+      return deps;
+    }
+
+    it.each([
+      rejection,
+      ...['prompt_cache_key', 'prompt_cache_retention'].map(field => '400: ' + JSON.stringify({
+        code: null, message: `Validation: Unsupported parameter(s): \`${field}\``, param: null, type: 'invalid_request_error',
+      })),
+    ])('learns the per-model compat fix once and replays the failed turn: %s', async (rejection) => {
+      const deps = makePiDeps([
+        msg('user', '继续修这个 bug', 'u1', 1),
+        msg('assistant', '改完了，正在跑测试', 'a1', 2),
+        msg('user', '再跑一遍', 'u2', 3),
+      ]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(true);
+
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+        'a'.repeat(64),
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      // 重建用的 models.json 已去掉被拒收字段，重放同一轮用户消息即重试。
+      expect(deps.replayUserMessage).toHaveBeenCalledWith(
+        's1',
+        '再跑一遍',
+        undefined,
+        expect.objectContaining({
+          continueFromHistory: true,
+          sourceUserContent: '再跑一遍',
+          sourceUserClientId: 'u2',
+        }),
+      );
+      expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+      // 不发布 context-overflow 式的手递手重建文案。
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
+    it('preserves shared-member and device source notes on cache recovery', async () => {
+      const source = msg('user', 'original text', 'u1', 1);
+      source.agentMeta = { sharedTaskAuthor: { memberId: 'm-1', displayName: '张三' }, sourceDevice: { deviceId: 'phone-1', name: 'iPhone', platform: 'mobile' } };
+      const deps = makePiDeps([source]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      expect(await rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection })).toBe(true);
+      const call = deps.replayUserMessage.mock.calls[0];
+      expect(call?.[1]).toBe('original text');
+      expect(JSON.stringify(call?.[2])).toContain('本条由共享任务成员「张三」');
+      expect(JSON.stringify(call?.[2])).toContain('[客户端说明]');
+      expect(JSON.stringify(call?.[2])).toContain('phone-1');
+      expect(call?.[3]).toMatchObject({ continueFromHistory: true, sourceCapabilitySelectionText: 'original text' });
+    });
+
+    it.each([{ instanceId: 'i2', generation: 1 }, { instanceId: 'i1', generation: 2 }])('keeps a fast replay failure after a new terminal aborts old recovery: %j', async next => {
+      const deps = makePiDeps([msg('user', 'original', 'u1', 1)]);
+      deps.getLiveSession.mockReturnValue({ instanceId: 'i1', getTurnGeneration: () => 1, isTurnRunning: () => false });
+      const rollover = createContextOverflowRollover(deps);
+      const old = { instanceId: 'i1', generation: 1 };
+      deps.replayUserMessage.mockImplementation(async () => {
+        expect(rollover.claim('s1', old)).toBe('in-flight');
+        expect(rollover.claim('s1', next)).toBe('idle');
+        return { accepted: true };
+      });
+      expect(rollover.claim('s1', old)).toBe('claimed');
+      expect(await rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }, old)).toBe(true);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+      expect(rollover.claim('s1', next)).toBe('claimed');
+    });
+
+    it('leaves non-target 400s to the normal error surface', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', {
+          message: '400: {"type":"invalid_request_error","message":"prompt_cache_retention conflicts with prompt_cache_options"}',
+        }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it.each(['late-instance', 'late-generation', 'changed-instance', 'changed-generation', 'new-input', 'cancel'])('does not retire or replay a changed source: %s', async (scenario) => {
+      const source = [msg('user', 'original', 'u1', 1)];
+      const deps = makePiDeps(source);
+      let instanceId = 'i1';
+      let generation = 1;
+      deps.getLiveSession.mockImplementation(() => ({ instanceId, getTurnGeneration: () => generation, isTurnRunning: () => false }));
+      deps.recordPiNativeCompatOverride.mockImplementation(async () => {
+        if (scenario === 'changed-instance') instanceId = 'i2';
+        if (scenario === 'changed-generation') generation = 2;
+        if (scenario === 'new-input') source.push(msg('user', 'new input', 'u2', 2));
+        if (scenario === 'cancel') rollover.cancelRecovery('s1');
+        return true;
+      });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      const result = rollover.tryRecover('s1', { ...receipt, message: rejection }, {
+        instanceId: scenario === 'late-instance' ? 'old' : 'i1',
+        generation: scenario === 'late-generation' ? 0 : 1,
+      });
+      // Cancellation is consumed by the existing recovery abort handler.
+      await expect(result).resolves.toBe(scenario === 'cancel');
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      if (scenario.startsWith('late')) expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+    });
+
+    it.each(['missing-receipt', 'already-applied', 'wrong-provider', 'wrong-model'])('does not learn from an unverified route: %s', async (scenario) => {
+      const deps = makePiDeps([msg('user', 'original', 'u1', 1)]);
+      const route = { ...receipt.piCacheCompatibility };
+      if (scenario === 'already-applied') route.applied = true;
+      if (scenario === 'wrong-provider') route.providerId = 'another-connection';
+      if (scenario === 'wrong-model') route.modelId = 'another-model';
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(rollover.tryRecover('s1', { message: rejection, piCacheCompatibility: scenario === 'missing-receipt' ? undefined : route, piCacheRecoverySafe: true })).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('learns but never replays output that has not reached persisted history', async () => {
+      const deps = makePiDeps([msg('user', 'original', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(rollover.tryRecover('s1', { ...receipt, message: rejection, piCacheRecoverySafe: false })).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledOnce();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('applies an already-learned override to a runtime that never had it', async () => {
+      // 同一 provider/model 的另一个会话先学到并重建；本会话启动时的 models.json 还没
+      // 有该覆盖，普通发送也不会刷新模型配置 —— 这里必须让它应用覆盖并重建一次。
+      const deps = makePiDeps([
+        msg('user', '继续修这个 bug', 'u1', 1),
+        msg('assistant', '改完了，正在跑测试', 'a1', 2),
+        msg('user', '再跑一遍', 'u2', 3),
+      ]);
+      deps.readPiNativeCompatOverride.mockReturnValue({ supportsLongCacheRetention: false });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(true);
+
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).toHaveBeenCalledWith(
+        's1',
+        '再跑一遍',
+        undefined,
+        expect.objectContaining({ continueFromHistory: true, sourceUserClientId: 'u2' }),
+      );
+      expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+    });
+
+    it('does not rebuild a runtime that already rebuilt with the learned fix', async () => {
+      const deps = makePiDeps([
+        msg('user', '继续修这个 bug', 'u1', 1),
+        msg('assistant', '改完了，正在跑测试', 'a1', 2),
+        msg('user', '再跑一遍', 'u2', 3),
+      ]);
+      deps.readPiNativeCompatOverride.mockReturnValue({ supportsLongCacheRetention: false });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      const failure = { ...receipt, reason: 'unsupported-request-option', message: rejection };
+
+      // 第一次：旧 runtime 应用磁盘上的覆盖并重建、重放。
+      await expect(
+        rollover.tryRecover('s1', failure, { instanceId: 'i1', generation: 1 }),
+      ).resolves.toBe(true);
+      expect(deps.closeSession).toHaveBeenCalledTimes(1);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+
+      // 重建后的新一轮仍然收到同一类 400：覆盖没解决问题，直接交常规错误面，
+      // 绝不再次 close/重放（否则同一条 400 会无限重建）。
+      await expect(
+        rollover.tryRecover('s1', failure, { instanceId: 'i2', generation: 2 }),
+      ).resolves.toBe(false);
+      expect(deps.closeSession).toHaveBeenCalledTimes(1);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+      expect(deps.onRebuilt).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not let one model rebuild block self-heal after a model switch', async () => {
+      const row = {
+        status: 'active',
+        source: 'desktop',
+        agentKind: 'pi',
+        remoteHostId: null,
+        clearedAt: null,
+        sdkSessionId: '/tmp/glm.jsonl',
+        contextTokens: 0,
+        contextWindow: 1_000_000,
+        model: 'glm-5.3-flash',
+        providerId: 'opencode-go',
+      };
+      const deps = makePiDeps([
+        msg('user', '继续修这个 bug', 'u1', 1),
+        msg('assistant', '改完了，正在跑测试', 'a1', 2),
+        msg('user', '再跑一遍', 'u2', 3),
+      ]);
+      deps.getSessionRow.mockResolvedValue(row);
+      // 两个 pair 的覆盖都已被学到（另一个会话先学到的），唯一差别是本会话的重建历史。
+      deps.readPiNativeCompatOverride.mockReturnValue({ supportsLongCacheRetention: false });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      const failure = { ...receipt, reason: 'unsupported-request-option', message: rejection };
+
+      await expect(
+        rollover.tryRecover('s1', failure, { instanceId: 'i1', generation: 1 }),
+      ).resolves.toBe(true);
+      expect(deps.closeSession).toHaveBeenCalledTimes(1);
+
+      // 用户切到同 provider 的另一个模型：它的覆盖是别的会话后来学到的，本会话的
+      // runtime 还没应用过 —— 不能被 glm 那次重建的记录挡住。
+      row.model = 'other-model';
+      failure.piCacheCompatibility = { ...receipt.piCacheCompatibility, modelId: 'other-model', wireModelId: 'other-model' };
+      deps.listMessages.mockResolvedValue([msg('user', 'new input', 'u3', 4)]);
+      await expect(
+        rollover.tryRecover('s1', failure, { instanceId: 'i2', generation: 2 }),
+      ).resolves.toBe(true);
+      expect(deps.closeSession).toHaveBeenCalledTimes(2);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it('learns the fix but does not replay when the plan cannot replay', async () => {
+      // 零产出守卫（无用户消息/已有副作用）不阻止学习：关掉旧 runtime 并把修正落盘，
+      // 下一次发送重建时就生效。
+      const deps = makePiDeps([
+        msg('assistant', '已经改了文件', 'a1', 1),
+        msg('error', { ...receipt, reason: 'unsupported-request-option', message: rejection }, 'e1', 2),
+      ]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+        'a'.repeat(64),
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('learns the fix but leaves replay to an external dispatcher turn', async () => {
+      // Orca/scheduler 派单轮次：正文经 wire 投影可能退化，且 owner 有自己的重试语义，
+      // 不能代它重放（会双跑或空转）；仍要学习并关掉旧 runtime。
+      const dispatched = { ...msg('user', '{"orcaSource":"lead","content":"do it"}', 'u1', 1),
+        agentMeta: { origin: { kind: 'orca' } } };
+      const deps = makePiDeps([dispatched]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledWith(
+        'opencode-go',
+        'glm-5.3-flash',
+        { supportsLongCacheRetention: false },
+        'a'.repeat(64),
+      );
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+      // Persist before retiring the runtime: failed writes must leave it intact.
+      expect(deps.recordPiNativeCompatOverride.mock.invocationCallOrder[0]).toBeLessThan(
+        deps.closeSession.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('learns the fix but leaves replay to a headless/bound owner', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      deps.hasExternalRecoveryOwner.mockReturnValue(true);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledOnce();
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('preserves external ownership released during terminal processing', async () => {
+      const deps = makePiDeps([msg('user', '继续', 'u1', 1)]);
+      deps.hasExternalRecoveryOwner.mockReturnValue(true);
+      deps.drainPersistQueue.mockImplementation(async () => {
+        deps.hasExternalRecoveryOwner.mockReturnValue(false);
+      });
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(rollover.tryRecover('s1', {
+        ...receipt, reason: 'unsupported-request-option', message: rejection,
+      })).resolves.toBe(false);
+      expect(deps.recordPiNativeCompatOverride).toHaveBeenCalledOnce();
+      expect(deps.closeSession).toHaveBeenCalledWith('s1');
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not replay when the learned override never reached disk', async () => {
+      // 存储返回 false（键不合法/磁盘失败）时不能重放：闩锁永远为假，会无限重试同一个 400。
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      deps.recordPiNativeCompatOverride.mockResolvedValue(false);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+      expect(deps.onRebuilt).not.toHaveBeenCalled();
+    });
+
+    it('does not replay when persisting the learned override throws', async () => {
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      deps.recordPiNativeCompatOverride.mockRejectedValue(new Error('disk full'));
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+
+      await expect(
+        rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection }),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('drops a repeated terminal error after the self-heal already replayed the turn', async () => {
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { ...receipt, reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+
+      // 同一轮重复终态 error（此时历史里已有重放产出的 assistant）：直接丢弃，
+      // 不再 surface —— 否则已自动续跑的任务里会挂一张 400 错误卡。
+      deps.listMessages.mockResolvedValue([
+        msg('user', '再跑一遍', 'u2', 1),
+        msg('assistant', '已经回复过了', 'a1', 2),
+      ]);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { ...receipt, reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+      expect(deps.onRebuilt).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces a same-signature failure from the replayed turn (new turn identity)', async () => {
+      // 重放产生的新一轮失败必须如实上报：不能因为 clientId 相同就被当成旧终态的重复投递。
+      const deps = makePiDeps([msg('user', '再跑一遍', 'u2', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { ...receipt, reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-1', generation: 1 },
+        ),
+      ).resolves.toBe(true);
+
+      deps.listMessages.mockResolvedValue([
+        msg('user', '再跑一遍', 'u2', 1),
+        msg('assistant', '重放又失败了', 'a1', 2),
+      ]);
+      rollover.claim('s1');
+      await expect(
+        rollover.tryRecover(
+          's1',
+          { ...receipt, reason: 'unsupported-request-option', message: rejection },
+          { instanceId: 'inst-2', generation: 2 },
+        ),
+      ).resolves.toBe(false);
+      expect(deps.replayUserMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('rebuilds scheduler/IM turns without generic replay so the owner retries', async () => {
     const deps = makeDeps([
       {
@@ -1476,7 +1781,7 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
-  it('uses the same full-window pressure guard for Claude Code and Codex before send', async () => {
+  it('lets Codex handle full-window pressure natively while keeping the Claude guard', async () => {
     for (const agentKind of ['cc', 'codex'] as const) {
       const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
       deps.getSessionRow.mockResolvedValue({
@@ -1492,14 +1797,30 @@ describe('createContextOverflowRollover', () => {
       });
       const rollover = createContextOverflowRollover(deps);
 
-      await expect(rollover.prepareUnhealthySession(`session-${agentKind}`)).resolves.toBe(true);
-      expect(deps.commitRebuild).toHaveBeenCalled();
+      await expect(rollover.prepareUnhealthySession(`session-${agentKind}`)).resolves.toBe(agentKind === 'cc');
+      expect(deps.commitRebuild).toHaveBeenCalledTimes(agentKind === 'cc' ? 1 : 0);
       deps.commitRebuild.mockClear();
     }
   });
 
+  // Unit: the direct/Orca switch path must not bypass the native-first gate.
+  // Both persisted and live usage can exceed the target without any native error.
+  it.each([false, true])('preserves Codex history through shrink and send preflight (companion=%s)', async (companion) => {
+    const deps = makeDeps([msg('user', 'Continue the task', 'u1'), msg('assistant', 'Progress', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), agentKind: 'codex',
+      ...(companion ? { source: 'bot', botRole: 'canonical' } : {}),
+      contextTokens: 480_000, contextWindow: 500_000 });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareModelWindowSwitch('s1', { contextWindow: 272_000 })).resolves.toBe('not-needed');
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('fails closed when a pre-send rebuild cannot commit', async () => {
-    const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
+    const deps = makeDeps([msg('user', '继续', 'u1'),
+      msg('error', { reason: 'context-overflow', message: 'Context window exceeded' }, 'e1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
       source: 'desktop',
@@ -1844,7 +2165,7 @@ describe('createContextOverflowRollover', () => {
           cancelAt('commit');
         },
         replayUserMessage: async (...args) => {
-          await deps.replayUserMessage();
+          await deps.replayUserMessage(...args);
           cancelAt('dispatch');
           expect(args[3]?.signal?.aborted).toBe(true);
           throw new Error('dispatch cancelled');
@@ -2029,7 +2350,7 @@ describe('persistedUserContentToWireMessage', () => {
         files: [],
       }),
     ).toBe(
-      '请处理 [Referenced project]\nName: src\nWorking directory: /repos/cindy\n[/Referenced project]',
+      '请处理 [Referenced project]\nName: "src"\nWorking directory: "/repos/cindy"\n[/Referenced project]',
     );
   });
 });
@@ -2068,3 +2389,9 @@ describe('withReplaySourceNotes', () => {
   });
 });
 
+it.each([undefined, { instanceId: 'i1', generation: 1 }])('keeps ordinary errors visible during recovery without starting a second claim: %j', identity => {
+  const rollover = createContextOverflowRollover({} as never);
+  expect(rollover.claim('s1', identity)).toBe('claimed');
+  expect(rollover.claim('s1', identity, false)).toBe('idle');
+  expect(rollover.claim('s1', identity)).toBe('in-flight');
+});

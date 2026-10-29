@@ -55,6 +55,8 @@ import {
   findInstalledGhostByInstanceId,
   installedGhostLogicalIdentity,
   parsePluginInstanceId,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
   pluginStoragePart,
 } from '../../../shared/pluginIdentity';
 
@@ -67,6 +69,19 @@ import {
 export const GhostFulfillmentContext = createContext<ReadonlyMap<string, ReadonlySet<string>>>(
   new Map(),
 );
+
+/** Match call status only; legacy bare directives must not acquire a live install's identity. */
+export function hasGhostSummonFulfillment(
+  fulfilledIds: ReadonlySet<string> | undefined,
+  ghostId: string,
+): boolean {
+  if (!fulfilledIds) return false;
+  if (fulfilledIds.has(ghostId)) return true;
+  return (
+    isValidGhostId(ghostId) &&
+    fulfilledIds.has(pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId })))
+  );
+}
 
 /**
  * 召唤标注展示数据:发送期追加段解析出的 command / mention 之外,再加一种
@@ -282,12 +297,20 @@ export function GhostSummonCard({
     const identity = parsePluginInstanceId(ghostId);
     return identity ? findInstalledGhostByIdentity(installedGhosts, identity) : undefined;
   };
-  const commandIdentity = directive.kind === 'command' &&
-    typeof commandNamespace === 'string' &&
-    (commandNamespace === '@root' || isValidPluginNamespace(commandNamespace)) &&
+  const directiveNamespace =
+    directive.kind === 'command' && directive.namespace !== undefined
+      ? directive.namespace
+      : commandNamespace === '@root'
+        ? null
+        : commandNamespace;
+  const commandIdentity =
+    directive.kind === 'command' &&
+    (directiveNamespace === null ||
+      (typeof directiveNamespace === 'string' && isValidPluginNamespace(directiveNamespace))) &&
     isValidGhostId(directive.ghostId)
-    ? { namespace: commandNamespace === '@root' ? null : commandNamespace, ghostId: directive.ghostId }
-    : null;
+      ? { namespace: directiveNamespace, ghostId: directive.ghostId }
+      : null;
+
   const commandInstanceId = commandIdentity ? pluginStoragePart(commandIdentity) : null;
   const ghostForDirective = (ghostId: string) => commandIdentity && ghostId === commandIdentity.ghostId
     ? findInstalledGhostByIdentity(installedGhosts, commandIdentity)
@@ -301,19 +324,20 @@ export function GhostSummonCard({
     if (!fulfilledIds) return false;
     if (commandIdentity && commandInstanceId) {
       if (fulfilledIds.has(commandInstanceId)) return true;
+      if (fulfilledIds.has(pluginInstallStoragePart(pluginNewInstallRelId(commandIdentity)))) return true;
       const matches = installedGhosts.filter((ghost) => ghost.manifest.id === commandIdentity.ghostId);
       const match = matches.length === 1 ? matches[0] : undefined;
       return Boolean(match && fulfilledIds.has(commandIdentity.ghostId) &&
         installedGhostLogicalIdentity(match).namespace === commandIdentity.namespace);
     }
-    if (fulfilledIds.has(ghostId)) return true;
+    if (hasGhostSummonFulfillment(fulfilledIds, ghostId)) return true;
     const ghost = ghostForDirective(ghostId);
     return ghost ? fulfilledIds.has(pluginStoragePart(installedGhostLogicalIdentity(ghost))) : false;
   };
   // 软提示的兑现子集(方案 2):AI 真调了才算,只提及没调的不升级(不撒谎)。
   const fulfilled =
     directive.kind === 'mention' && fulfilledIds
-      ? directive.ghosts.filter((g) => fulfilledIds.has(g.ghostId))
+      ? directive.ghosts.filter((g) => hasGhostSummonFulfillment(fulfilledIds, g.ghostId))
       : [];
 
   if (directive.kind === 'mention' && fulfilled.length === 0) {

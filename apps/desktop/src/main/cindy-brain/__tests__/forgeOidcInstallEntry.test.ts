@@ -56,7 +56,7 @@ describe('Forge OIDC install entry wiring', () => {
     expect(body).toContain('mutationOwner: ActiveAppSession');
     expect(body).not.toContain('const mutationOwner = captureGhostMutationOwner();');
     const lock = body.indexOf('return withGhostInstallLock');
-    const lease = body.indexOf('beginGhostMutation(expected.mutationOwner)');
+    const lease = body.lastIndexOf('beginGhostMutation(expected.mutationOwner)');
     expect(lock).toBeGreaterThanOrEqual(0);
     expect(lease).toBeGreaterThan(lock);
   });
@@ -82,13 +82,15 @@ describe('Forge OIDC install entry wiring', () => {
     expect(source).not.toContain('function pickTrustedAppWindow');
   });
 
-  it('只把同一 namespace 的已装实例当成更新', () => {
+  it('resolves an explicit target before consent and pins its receiver', () => {
     const body = forgeInstallBody();
     const check = body.indexOf('if (!existingForForge && !isValidNewGhostId(inspected.manifest.id))');
-    const existing = body.indexOf('const existingForForge = findInstalledGhostForDeliveryTarget');
+    const existing = body.indexOf('const target = resolveForgeInstallTarget(');
     expect(existing).toBeGreaterThanOrEqual(0);
     expect(check).toBeGreaterThan(existing);
     expect(body).not.toContain('ghost.manifest.id === inspected.manifest.id');
+    expect(body).toContain('const existingForForge = target.installed');
+    expect(body).toContain('!== receiverApproval');
   });
 
 });

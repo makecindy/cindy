@@ -5,9 +5,10 @@ import { BotModelChainEditor } from './BotModelChainEditor';
 import { useBotTranslation } from './botPronounContext';
 
 /** A purpose-specific override using the same complete-route picker as the primary model. */
-export function BotTaskModelEditor({ value, inheritedRoute, onChange, disabled, hiddenVendors, deviceId }: {
+export function BotTaskModelEditor({ value, inheritedRoute, onChange, disabled, hiddenVendors, deviceId, inheritanceHint }: {
   value: BotModelRoute | null;
   inheritedRoute?: BotModelRoute;
+  inheritanceHint?: string;
   onChange(value: BotModelRoute | null): void;
   disabled?: boolean;
   hiddenVendors?: MakerVendor[];
@@ -21,6 +22,6 @@ export function BotTaskModelEditor({ value, inheritedRoute, onChange, disabled, 
       onChange={routes => { if (routes[0]) onChange(routes[0]); }} />
     {value ? <Button variant="secondary" tone="quiet" size="sm" compact disabled={disabled}
       onClick={() => onChange(null)}>{t('bots.model.inheritPrimary')}</Button>
-      : <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{t('bots.model.inheritingPrimary')}</p>}
+      : <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{inheritanceHint ?? t('bots.model.inheritingPrimary')}</p>}
   </div>;
 }

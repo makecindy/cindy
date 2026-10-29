@@ -32,6 +32,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from '@/components/AppText';
+import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
 import { MessageSquarePlus, Pen, Share as ShareIcon, Undo2, X } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import { fontWeight, iconSize, iconStroke, lineHeight, motionDuration, radius, typeScale } from '@/theme';
@@ -114,9 +115,9 @@ const LIGHTBOX_SETTLE_SPRING = { damping: 30, stiffness: 260, mass: 1 } as const
 // 下载那一段(见 lightboxImageLayers),挂进 loading 分支会在取件完成的瞬间
 // 结构性丢失,把第二段空档裸露成纯黑。垫底地址单独存 previewMap。
 type PageResolveState =
-  | { status: 'loading' }
+  | { status: 'loading'; media?: MobileResolvedRemoteMedia }
   | { status: 'ready'; media: MobileResolvedRemoteMedia }
-  | { status: 'error'; error?: unknown };
+  | { status: 'error'; error?: unknown; media?: MobileResolvedRemoteMedia };
 
 /** 宿主注入的底部操作(文件浏览器:复制路径/发送到会话);回调收当前活跃页。 */
 export interface ImageLightboxAction {
@@ -268,6 +269,8 @@ export const ImageLightbox = memo(function ImageLightbox({
   /** 捏合/平移进行中 chrome 不接收触摸,避免底栏抢走双指。 */
   const [chromeInteractive, setChromeInteractive] = useState(true);
   const [resolveMap, setResolveMap] = useState<Record<string, PageResolveState>>({});
+  // 跟随逻辑图片身份:上传地址转成正式消息地址时,已解码的同图仍可继续操作。
+  const [loadedImageKeys, setLoadedImageKeys] = useState<ReadonlySet<string>>(new Set());
   /**
    * trimmed url → 列表缩略图地址(渐进出图的垫底层)。独立于 resolveMap:
    * 一旦拿到就长期有效,取件态怎么流转都不丢,直到原图 onLoad 才停止使用。
@@ -471,6 +474,9 @@ export const ImageLightbox = memo(function ImageLightbox({
   // 每 url 只自动强制重取一次(Image 加载失败自愈),防 onError↔重取死循环;
   // 重试按钮的显式 forceRefresh 不受此限制。
   const imageErrorRetryUsedRef = useRef<Set<string>>(new Set());
+  const resolvingImagesRef = useRef(new Set<string>());
+  const resolveMapRef = useRef(resolveMap);
+  resolveMapRef.current = resolveMap;
   const listRef = useRef<FlatList<MobileMessageGalleryImage>>(null);
 
   // 旋转或图集变动导致页码变化时重锚，保持画面、页码和分享目标一致。
@@ -490,11 +496,23 @@ export const ImageLightbox = memo(function ImageLightbox({
     // 带空白时会和 renderItem / handleShare 的查键错位。取件请求仍传原始 media.url,
     // 与缩略图路径的队列缓存键保持一致(不产生重复上传)。
     const key = image.url;
+    const current = resolveMapRef.current[key];
+    if (resolvingImagesRef.current.has(key)) {
+      if (front && !forceRefresh) {
+        // 翻到预取页时仍须提升已有取件;cachedOnly 保证不会新建下载,
+        // 不带队列的文件浏览解析器也只读缓存。结果仍由首次请求回填。
+        void onResolveRemoteMedia(
+          { kind: media.kind, url: media.url, previewable: media.previewable },
+          { front: true, cachedOnly: true },
+        ).catch(() => undefined);
+      }
+      return;
+    }
+    if (!forceRefresh && current && current.status !== 'error') return;
+    resolvingImagesRef.current.add(key);
     setResolveMap((prev) => {
-      const state = prev[key];
-      if (!forceRefresh && state && state.status !== 'error') return prev;
-      if (state?.status === 'ready') return prev; // 强制重取期间保留旧图帧,新结果到达后整体替换
-      return { ...prev, [key]: { status: 'loading' } };
+      // 显示副本与取件状态分开:刷新失败不撤掉仍可读的原图,也不假装刷新成功。
+      return { ...prev, [key]: { status: 'loading', media: prev[key]?.media } };
     });
     void onResolveRemoteMedia(
       { kind: media.kind, url: media.url, previewable: media.previewable },
@@ -504,8 +522,9 @@ export const ImageLightbox = memo(function ImageLightbox({
         setResolveMap((prev) => ({ ...prev, [key]: { status: 'ready', media: resolved } }));
       })
       .catch((error: unknown) => {
-        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error } }));
-      });
+        setResolveMap((prev) => ({ ...prev, [key]: { status: 'error', error, media: prev[key]?.media } }));
+      })
+      .finally(() => resolvingImagesRef.current.delete(key));
     // 垫底缩略图:列表里这张图已经解码好了,拿来从打开那一刻接住画面,一直垫到
     // 原图 onLoad(见 lightboxImageLayers)。写入**不看取件态** —— 原图可能在同
     // 一批微任务里就从内存/磁盘缓存返回,旧实现要求"当前必须是 loading"才写垫底,
@@ -525,7 +544,7 @@ export const ImageLightbox = memo(function ImageLightbox({
         })
         .catch(() => undefined);
     }
-    // setResolveMap 的 loading 守卫已防重复取件;error 态由重试按钮显式再调
+    // 在途请求按图片合并;error 态由重试按钮显式再调。
   }, [onResolveRemoteMedia]);
 
   // 重试按钮:显式 forceRefresh 穿透负缓存。稳定引用(带 image 参数)让
@@ -538,6 +557,12 @@ export const ImageLightbox = memo(function ImageLightbox({
   // presign 下载 404)→ 一次性 forceRefresh 重取自愈,再失败落错误态给重试按钮。
   const handleImageLoadError = useCallback((image: MobileMessageGalleryImage) => {
     const key = image.url; // resolveMap / 重试集统一用 trimmed gallery 键
+    setLoadedImageKeys((prev) => {
+      if (!prev.has(image.key)) return prev;
+      const next = new Set(prev);
+      next.delete(image.key);
+      return next;
+    });
     if (imageErrorRetryUsedRef.current.has(key)) {
       setResolveMap((prev) => ({ ...prev, [key]: { status: 'error' } }));
       return;
@@ -545,6 +570,12 @@ export const ImageLightbox = memo(function ImageLightbox({
     imageErrorRetryUsedRef.current.add(key);
     resolveImage(image, true, true);
   }, [resolveImage]);
+
+  const handleImageLoaded = useCallback((image: MobileMessageGalleryImage, media?: MobileResolvedRemoteMedia) => {
+    if (media && resolveMapRef.current[image.url]?.media !== media) return;
+    if (!media && !image.payload.media.previewable) return;
+    setLoadedImageKeys((prev) => prev.has(image.key) ? prev : new Set(prev).add(image.key));
+  }, []);
 
   // 活跃页插队取件,相邻图片页顺队预取(翻页即无缝)。视频体积大,只在翻到
   // 它时才取,不为「可能会看」预先整段搬运。
@@ -559,8 +590,6 @@ export const ImageLightbox = memo(function ImageLightbox({
 
   // 关闭时逐出本次取过的视频(与通用查看器同一口径:只逐出 JS 缓存,
   // 远端对象由会话页统一回收);图片缩略图常驻列表,不逐出。
-  const resolveMapRef = useRef(resolveMap);
-  resolveMapRef.current = resolveMap;
   const onReleaseRemoteMediaRef = useRef(onReleaseRemoteMedia);
   onReleaseRemoteMediaRef.current = onReleaseRemoteMedia;
   useEffect(() => () => {
@@ -568,7 +597,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     if (!release) return;
     for (const image of imagesRef.current) {
       const state = resolveMapRef.current[image.url];
-      if (image.payload.media.kind === 'video' && state?.status === 'ready') {
+      if (image.payload.media.kind === 'video' && state?.media) {
         release(image.payload.media.url, state.media);
       }
     }
@@ -578,7 +607,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     const media = image.payload.media;
     if (media.previewable && media.url) return media.url;
     const state = resolveMap[image.url];
-    if (state?.status === 'ready' && state.media.previewable) return state.media.url;
+    if (state?.media?.previewable) return state.media.url;
     return null;
   }, [resolveMap]);
 
@@ -614,9 +643,12 @@ export const ImageLightbox = memo(function ImageLightbox({
   }));
 
   const activeUri = activeImage ? displayUriFor(activeImage) : null;
+  const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
   // Expo can display library handles, but sharing/annotation need the file or remote
   // original supplied later by the existing upload pipeline. Do not enable dead-end actions.
-  const activeActionsReady = !!activeUri && !/^(?:ph|content|assets-library):\/\//.test(activeUri);
+  const activeActionsReady = !!activeUri && !/^(?:ph|content|assets-library):\/\//.test(activeUri)
+    && (activeImage?.payload.media.previewable
+      || (activeResolveState?.status === 'ready' && !!activeImage && loadedImageKeys.has(activeImage.key)));
   const pageLabel = lightboxPageLabel(activeIndex, images.length);
   // 工具栏从打开那一刻就在:原图还在取件时先置灰,就绪即可用,不让工具「晚到」。
   // 取件结果是 data: 等不可分享地址时才收起分享。
@@ -646,7 +678,6 @@ export const ImageLightbox = memo(function ImageLightbox({
   }, [activeImage, activeUri, activeActionsReady, onShareImage, resolveMap]);
 
   // 活跃页 MIME:取件结果优先,保留附件已知类型,最后兜底 URI 后缀。
-  const activeResolveState = activeImage ? resolveMap[activeImage.url] : undefined;
   const activeMimeType = ((activeResolveState?.status === 'ready'
     ? activeResolveState.media.mimeType
     : undefined) ?? activeImage?.payload.media.mimeType)?.split(';', 1)[0].trim().toLowerCase();
@@ -793,6 +824,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                 ? strokes
                 : annotation?.initialStrokesFor?.(item) ?? EMPTY_STROKES}
               chromeHidden={chromeHidden}
+              chromeVisible={chromeShown && chromeInteractive}
               dismissY={dismissY}
               height={height}
               image={item}
@@ -801,6 +833,7 @@ export const ImageLightbox = memo(function ImageLightbox({
               onChromeBusy={handleChromeBusy}
               onDrawPoint={handleDrawPoint}
               onImageError={handleImageLoadError}
+              onImageLoaded={handleImageLoaded}
               onNaturalSize={handleNaturalSize}
               onRequestClose={handleRequestClose}
               onRetry={handleRetryPage}
@@ -1093,6 +1126,7 @@ const LightboxPage = memo(function LightboxPage({
   annotationDraftStroke,
   annotationStrokes,
   chromeHidden,
+  chromeVisible,
   dismissY,
   height,
   image,
@@ -1101,6 +1135,7 @@ const LightboxPage = memo(function LightboxPage({
   onChromeBusy,
   onDrawPoint,
   onImageError,
+  onImageLoaded,
   onNaturalSize,
   onRequestClose,
   onRetry,
@@ -1120,6 +1155,7 @@ const LightboxPage = memo(function LightboxPage({
   /** 已落笔迹(活跃页=编辑态;其它页=各自的既有笔迹,只读叠加显示)。 */
   annotationStrokes: readonly AnnotationStroke[];
   chromeHidden: SharedValue<number>;
+  chromeVisible: boolean;
   dismissY: SharedValue<number>;
   height: number;
   image: MobileMessageGalleryImage;
@@ -1141,6 +1177,7 @@ const LightboxPage = memo(function LightboxPage({
   /** 原生 Image 加载失败(悬空 key 404 等)→ 上抛做一次性 forceRefresh 自愈。
    *  带 image 参数的稳定引用;是否接线由本页按 retryable 判定。 */
   onImageError?: (image: MobileMessageGalleryImage) => void;
+  onImageLoaded(image: MobileMessageGalleryImage, media?: MobileResolvedRemoteMedia): void;
   onNaturalSize(imageKey: string, size: { width: number; height: number }): void;
   onRequestClose(): void;
   onRetry(image: MobileMessageGalleryImage): void;
@@ -1201,6 +1238,10 @@ const LightboxPage = memo(function LightboxPage({
    * 直连 http 图在本页落失败态,用户重试时清除此标记并重新挂载 Image。
    */
   const [failedFullUri, setFailedFullUri] = useState<string | null>(null);
+  // 同一个本地路径重取后可能已有新字节:失败只属于当次取件结果,不能永久封锁 URI。
+  const [failedFullMedia, setFailedFullMedia] = useState<MobileResolvedRemoteMedia | undefined>();
+  const [retryRequested, setRetryRequested] = useState(false);
+  const insets = useSafeAreaInsets();
   /**
    * 垫底缩略图的像素尺寸:原图未到时用它的宽高比算 contain 显示尺寸,
    * 让缩放 / 平移的边界从打开起就对(缩略图与原图同比例)。
@@ -1210,21 +1251,30 @@ const LightboxPage = memo(function LightboxPage({
   const media = image.payload.media;
   // 桌面取件图可 forceRefresh;直连图重试只重新挂载原 URI,不走桌面取件。
   const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
+  const fullFailed = !!uri && failedFullUri === uri
+    && (!retryable || failedFullMedia === resolveState?.media);
+  const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
+  const originalFailed = resolveState?.status === 'error' || resolvedUnsupported
+    || (!retryable && fullFailed) || (!uri && !retryable && !media.previewable);
   const layers = lightboxImageLayers({
     fullUri: uri,
     previewUri,
-    fullLoaded: !!uri && loadedUri === uri,
+    fullLoaded: !!uri && loadedUri === uri && !fullFailed,
     previewFailed: !!previewUri && failedPreviewUri === previewUri,
-    fullFailedTerminally: !retryable && !!uri && failedFullUri === uri,
+    fullFailedTerminally: originalFailed,
   });
-
-  // 取件成功但 mime 非图片(unsupported)时 displayUriFor 恒为 null,若只认
-  // status==='error' 会永远停在 spinner —— 一并视为失败,给到重试按钮。
-  const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
-  // 没有原图地址、也不会再有(取件失败 / 不支持 / 无取件途径):给失败文案与重试。
-  const pageFailed = layers.showFailure || (!uri && (
-    resolveState?.status === 'error' || resolvedUnsupported || (!retryable && !media.previewable)
-  ));
+  // 所有失败统一经图层模型裁决:可用预览优先,没有任何可显示内容才整页报错。
+  const pageFailed = layers.showFailure;
+  const showOriginalNotice = active && chromeVisible && layers.showPreview && (originalFailed || retryRequested);
+  const retryOriginal = () => {
+    if (retryRequested && !originalFailed) return;
+    setRetryRequested(true);
+    if (retryable) onRetry(image);
+    else {
+      setFailedFullUri(null);
+      setLoadedUri(null);
+    }
+  };
 
   const reportZoomed = useCallback((value: boolean) => {
     onZoomChange(value);
@@ -1850,17 +1900,20 @@ const LightboxPage = memo(function LightboxPage({
                 testID="message.imageLightboxPreviewLayer"
               />
             ) : null}
-            {uri ? <AnimatedImage
+            {uri && !fullFailed ? <AnimatedImage
               // 两条失败路径都要接:可重取的图交父层做一次 forceRefresh 自愈(再失败
               // 落父层 error 态给重试按钮);直连图在本页落失败态,提供原地重试。
               onError={() => {
                 setFailedFullUri(uri);
+                setFailedFullMedia(resolveState?.media);
+                setLoadedUri(null);
                 if (onImageError && retryable) onImageError(image);
               }}
               onLoad={(event) => {
                 // 撤垫底的唯一依据:原图真的有像素了。早于此撤(例如取件一完成
                 // 就撤)就会把下载窗口裸露成黑屏,正是本次修复的起因。
                 setLoadedUri(uri);
+                onImageLoaded(image, resolveState?.status === 'ready' ? resolveState.media : undefined);
                 const source = event.source;
                 if (source && source.width > 0 && source.height > 0) {
                   onNaturalSize(image.key, { width: source.width, height: source.height });
@@ -1938,7 +1991,7 @@ const LightboxPage = memo(function LightboxPage({
           <Text style={styles.stateText}>
             {t(mediaLoadFailureKey(resolveState?.status === 'error' ? resolveState.error : undefined))}
           </Text>
-          {retryable || layers.showFailure ? (
+          {retryable || fullFailed ? (
             <Pressable
               accessibilityLabel={t('message.lightbox.retryLoadImage')}
               accessibilityRole="button"
@@ -1961,6 +2014,26 @@ const LightboxPage = memo(function LightboxPage({
           ) : null}
         </Pressable>
       )}
+      {showOriginalNotice ? (
+        <View pointerEvents="box-none" style={[styles.originalNotice, {
+          top: insets.top + 64, left: insets.left + 16, right: insets.right + 16,
+        }]}>
+          <ErrorNotice
+            message={t(originalFailed ? 'message.lightbox.originalUnavailable' : 'message.lightbox.loadingOriginal')}
+            description={originalFailed ? t(mediaLoadFailureKey(resolveState?.status === 'error' ? resolveState.error : undefined)) : undefined}
+            testID="message.imageLightboxOriginalNotice"
+            actions={retryable || fullFailed ? (
+              <ErrorNoticeAction
+                label={t('message.lightbox.retryOriginal')}
+                busy={!originalFailed}
+                disabled={!originalFailed}
+                onPress={retryOriginal}
+                testID="message.imageLightboxRetryButton"
+              />
+            ) : undefined}
+          />
+        </View>
+      ) : null}
     </View>
   );
 });
@@ -2103,6 +2176,7 @@ const styles = StyleSheet.create({
   // 垫底缩略图 / 转圈都脱离 flex 流:与原图同为 flex 子节点会被各分一半高度。
   pagePreviewLayer: { ...absoluteFill },
   pageSpinnerLayer: { ...absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  originalNotice: { position: 'absolute' },
   pageLabel: {
     color: 'rgba(255, 255, 255, 0.85)',
     fontSize: typeScale.footnote,

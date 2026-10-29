@@ -18,6 +18,25 @@ afterEach(async () => {
   await i18n.changeLanguage('en');
 });
 
+it('shows a model-only boundary without inventing a Harness change', () => {
+  render(<SystemCard cardType="agent-switch" data={{
+    fromModel: 'owner-model', toModel: 'automation-model', modelOnly: true,
+  }} />);
+  expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('owner-model → automation-model');
+  expect(screen.getAllByText('owner-model → automation-model')).toHaveLength(1);
+  expect(screen.queryByText(/Claude Code/)).toBeNull();
+});
+
+// provider-groups.md §6.2：用户确认为了先用那台的配额换号时，分隔条在位置后写明原因(手机端同一句)。
+it('says why the task moved when the user switched accounts to use quota first', async () => {
+  await i18n.changeLanguage('zh-CN');
+  render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'cc', toAgentKind: 'cc', toModel: 'claude-opus-5-5',
+    fromAgentDeviceId: null, toAgentDeviceId: 'office-pc', toAgentDeviceName: 'Office PC', switchReason: 'quota-rebalance',
+  }} />);
+  expect(screen.getByRole('separator').getAttribute('aria-label')).toBe('Agent 已改到 Office PC 上运行 · 这个账号的配额更该先用');
+});
+
 describe('command card localization boundaries', () => {
   it.each(SUPPORTED_LOCALES)('localizes card labels while preserving command data: %s', async (locale) => {
     await i18n.changeLanguage(locale);
@@ -85,4 +104,19 @@ describe('command card localization boundaries', () => {
     expect([...container.querySelectorAll('pre')].map(node => node.textContent))
       .toEqual([cmdLine, spawnError, stdout, stderr]);
   });
+});
+
+
+it.each(SUPPORTED_LOCALES)('distinguishes a summary fallback from native resume: %s', async locale => {
+  await i18n.changeLanguage(locale);
+  const { rerender } = render(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'fallback', resumed: false,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeNull();
+  rerender(<SystemCard cardType="agent-switch" data={{
+    fromAgentKind: 'codex', toAgentKind: 'codex', toAgentDeviceId: 'mini', nativeHistory: 'restored', resumed: true,
+  }} />);
+  expect(screen.getByText(i18n.t('chat.systemCard.agentSwitch.resumedBadge'))).toBeTruthy();
+  expect(screen.queryByText(i18n.t('chat.systemCard.agentSwitch.fallbackBadge'))).toBeNull();
 });

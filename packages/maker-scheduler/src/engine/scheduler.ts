@@ -56,12 +56,37 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'model'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  // A bound agent run only overrides its task's location with an explicit model
+  // selection. Reject a local-only patch instead of silently inheriting remote.
+  if (schedule.modelAgentDeviceId === '' && (schedule.targetSessionId || schedule.persistentSession) &&
+    (schedule.executionMode ?? 'agent') === 'agent' &&
+    (!schedule.modelAgentKind || !schedule.model?.trim())) {
+    throw new Error('Explicit scheduled Agent location for a bound task requires a Harness and model');
+  }
+  if (schedule.modelAgentDeviceId !== undefined && (
+    typeof schedule.modelAgentDeviceId !== 'string' ||
+    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+      !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
+  )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
     if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
+  if (schedule.agentDeviceId !== undefined) {
+    // 运行位置只配显式模型:那台电脑的默认模型无法在本机解析。
+    // 与创建任务时 agentDeviceId 的校验同一口径。
+    if (typeof schedule.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.agentDeviceId)) {
+      throw new Error('agentDeviceId must be a valid device id');
+    }
+    if (schedule.modelAgentDeviceId === undefined && (schedule.executionMode ?? 'agent') === 'script') {
+      throw new Error('script execution does not support agentDeviceId');
+    }
+    if (schedule.modelAgentDeviceId === undefined && !schedule.model?.trim()) {
+      throw new Error('agentDeviceId requires an explicit model');
     }
   }
   if ((schedule.executionMode ?? 'agent') !== 'script') {
@@ -73,6 +98,9 @@ function validateScheduleExecutionShape(
       throw new Error('invalid schedule: prompt is required for agent execution mode');
     }
     return;
+  }
+  if (schedule.modelAgentDeviceId) {
+    throw new Error('script execution does not support remote model sources; select a local model before switching modes');
   }
   if (!schedule.scriptConfig?.command.trim()) {
     throw new Error('script execution requires a non-empty command');
@@ -111,7 +139,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -1317,6 +1345,7 @@ export class Scheduler extends EventEmitter {
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
       preRunHook: input.preRunHook ?? undefined,
+      agentDeviceId: input.agentDeviceId ?? undefined,
       executionMode: input.executionMode ?? 'agent',
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
@@ -1384,6 +1413,13 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    // Old clients can rename an automation without losing its route. A model edit,
+    // however, must carry the location once one has been explicitly selected.
+    if (existing.modelAgentDeviceId !== undefined && patch.modelAgentDeviceId === undefined &&
+      !Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId', 'agentDeviceId'] as const).some(
+        (key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== existing[key],
+      )) throw new Error('Editing this scheduled model route requires a newer client');
     // Agent-only quiet reporting does not apply when changing to script mode.
     // Keep explicit invalid combinations subject to the existing validation.
     if (patch.executionMode === 'script' && existing.executionMode !== 'script'
@@ -1404,6 +1440,19 @@ export class Scheduler extends EventEmitter {
         if (!Object.prototype.hasOwnProperty.call(patch, key)) updates[key] = undefined;
       }
       if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
+    }
+    // 运行位置与来源/模型成对:来源属于那台电脑的目录。改了路由却没带运行位置的
+    // 调用方(旧版手机端 / 旧版桌面远程编辑不认识这个字段)选的是本机目录,
+    // 沿用旧位置会把本机来源派到另一台电脑上,所以回到本机。路由原样回传不算改。
+    if (
+      !Object.prototype.hasOwnProperty.call(patch, 'agentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId'] as const).some((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key) &&
+        (patch[key] || undefined) !== (existing[key] || undefined))
+    ) {
+      updates.agentDeviceId = undefined;
+    } else if ((patch as { agentDeviceId?: string | null }).agentDeviceId === null) {
+      updates.agentDeviceId = undefined;
     }
     const candidate: Schedule = { ...existing, ...updates };
     validateScheduleExecutionShape(
@@ -1594,7 +1643,7 @@ export class Scheduler extends EventEmitter {
 
   private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
     const schedule = await this.storage.get(id);
-    if (schedule?.source === 'bot' && !opts?.internalRoutine)
+    if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
     // 先中断 in-flight,等它们 settle,再删 schedule 行。否则被删 schedule 名下的
     // in-flight run 会继续跑到底(原行为),用户点删除后看到的是"还在跑"。

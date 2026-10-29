@@ -82,6 +82,53 @@ function makeHarness(opts: {
 
 const CALL = { ghostId: 'art', tool: 'gen_image', args: { prompt: '一只猫' } };
 
+// #6404: wrapper-only tests did not exercise ordinary ghost_call arguments.
+// Unit: dispatch real tool payloads; only Host opening + literal opt-in may mark read.
+describe('mail reader opening intent', () => {
+  it.each([
+    { opened: undefined, optIn: true, tool: 'read_mail', expected: false },
+    { opened: true, optIn: true, tool: 'read_mail', expected: true },
+    { opened: true, optIn: undefined, tool: 'read_mail', expected: false },
+    { opened: true, optIn: 'true', tool: 'read_mail', expected: false },
+    { opened: true, optIn: false, tool: 'read_mail', expected: false },
+    { opened: undefined, optIn: true, tool: 'set_read', expected: true },
+  ] as const)('dispatches $tool with opening=$opened, opt-in=$optIn', async ({ opened, optIn, tool, expected }) => {
+    const ghost = fakeGhost();
+    Object.assign(ghost.manifest, { mail: true, mailReader: { tool: 'read_mail', hosts: ['mail.example.test'], markRead: optIn } });
+    ghost.manifest.tools = ['read_mail', 'set_read'].map(name => ({ name, description: name }));
+    const h = makeHarness({ ghost });
+    const args = { url: 'https://mail.example.test/message/one', markRead: !opened, openDraft: true, mailReaderOpened: true };
+    const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool, args, ...(opened ? { mailReaderOpened: true as const } : {}) });
+    expect(h.sent[0].args).toEqual(tool === 'set_read' ? args : {
+      url: args.url, mailReaderOpened: true, ...(opened ? { openDraft: true } : {}), ...(expected ? { markRead: true } : {}),
+    });
+    expect(args.markRead).toBe(!opened); // Never mutate the caller's data.
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'mail' });
+    expect(await pending).toEqual({ ok: true, result: 'mail' });
+  });
+});
+
+describe('images shown to the model', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).toString('base64');
+
+  it('accepts top-level images next to result and drops invalid ones', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG }, { data: 'nope!' }] });
+    expect(await pending).toEqual({ ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG, mimeType: 'image/png' }] });
+  });
+
+  it('a result without images, or a failure, is unchanged', async () => {
+    const h = makeHarness();
+    const plain = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'r' });
+    expect(await plain).toEqual({ ok: true, result: 'r' });
+    const failed = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[1].callId, ok: false, errorCode: 'INVALID_ARGS', message: 'bad', images: [{ data: PNG }] });
+    expect(await failed).toEqual({ ok: false, errorCode: 'INVALID_ARGS', message: 'bad' });
+  });
+});
+
 describe('caller cancellation', () => {
   it('Host Stop affects only opted-in calls in that session, preserving legacy calls', async () => {
     const h = makeHarness();
@@ -396,7 +443,9 @@ describe('配对交卷', () => {
     await expect(p).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL', message: '画布爆炸' });
   });
 
-  it('透传合法插件业务错误码，但不允许覆盖主机错误码', async () => {
+  // PR #6434: a plugin has already executed when it submits its result, so it
+  // cannot claim the host's pre-dispatch namespace failure and trigger a retry.
+  it.each(['GHOST_CRASHED', 'GHOST_NAMESPACE_MISMATCH'])('不允许插件覆盖主机错误码 %s', async (hostErrorCode) => {
     const h = makeHarness();
     const business = h.dispatcher.callGhostTool(CALL);
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
@@ -415,7 +464,7 @@ describe('配对交卷', () => {
       type: 'tool-result',
       callId: h.sent[1].callId,
       ok: false,
-      errorCode: 'GHOST_CRASHED',
+      errorCode: hostErrorCode,
       message: '伪造主机错误',
     });
     await expect(reserved).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });

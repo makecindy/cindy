@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING } from '@cindy/maker-shared/message-presentation';
 import { DEFAULT_AGENT_ISLAND_STRINGS } from '../../../shared/agentIsland.js';
+import { buildMenubarActivities } from '../../menubar/activity.js';
 
 import {
   acknowledgeAgentIslandSessionRead,
@@ -9,12 +10,15 @@ import {
   applyAgentIslandInteractionDismissed,
   applyAgentIslandInteractionRequest,
   applyAgentIslandMetadata,
+  syncAgentIslandGroupChat,
+  revealAgentIslandGroupChat,
   applyAgentIslandUserPrompt,
   AGENT_ISLAND_COMPLETION_DWELL_MS,
   AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
+  buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completedReplySummary,
@@ -32,10 +36,164 @@ import {
   setAgentIslandHovered,
   setAgentIslandLayoutDragActive,
   setAgentIslandPointerZones,
+  setAgentIslandSessionDisplaySuppressed,
   setAgentIslandVisibleSession,
+  type AgentIslandCompanionChatProjection,
 } from '../state.js';
 
+// Unit regression: the menu re-sorted the island overview on every output event.
+// Existing island ordering tests did not exercise the menu adapter. Two running
+// tasks with an older task emitting newer output are the minimal failure input.
+describe('menu bar task ordering', () => {
+  it('updates previews without reordering output, but promotes new prompts and waiting tasks', () => {
+    const state = createAgentIslandState();
+    const a = { sessionId: 'a', title: 'A' };
+    const b = { sessionId: 'b', title: 'B' };
+    const rows = (now: number) => buildMenubarActivities(
+      buildAgentIslandTaskOverview(state, now), false, key => key,
+    );
+    applyAgentIslandUserPrompt(state, a, 'First task', 1_000);
+    applyAgentIslandUserPrompt(state, b, 'Second task', 2_000);
+    expect(rows(3_000).map(row => row.sessionId)).toEqual(['b', 'a']);
+
+    applyAgentIslandEvent(state, a, { type: 'text', data: { text: 'Progress from A' } }, 10_000);
+    const updated = rows(10_001);
+    expect(updated.map(row => row.sessionId)).toEqual(['b', 'a']);
+    expect(updated.find(row => row.sessionId === 'a')?.preview).toBe('Progress from A');
+
+    applyAgentIslandUserPrompt(state, a, 'Continue A', 20_000);
+    expect(rows(20_001).map(row => row.sessionId)).toEqual(['a', 'b']);
+    applyAgentIslandInteractionRequest(state, b, {
+      kind: 'ask_user_question', requestId: 'question', questions: [],
+    }, 21_000);
+    expect(rows(21_001).map(row => row.sessionId)).toEqual(['b', 'a']);
+  });
+});
+
+// Regression: a chat can be unread after runtime expiry/restart; existing tests only supplied
+// runtime events. Exercise the public display builder with one old unread chat (unit tier).
+describe('companion chat unread projection', () => {
+  const chat: AgentIslandCompanionChatProjection = {
+    sessionId: 'companion-chat', deviceId: null, visible: true, unread: true,
+    lastMessageAt: 1, preview: 'Reply waiting to be read', token: 'chat-token',
+    companion: { name: 'Cindy', hue: 'blue', glyph: 'C', glyphIsInitial: true },
+  };
+  // Unit: a blocking card clips the island surface but must not clip the menu's badge candidates.
+  it('keeps the full counted overview while an interaction card occupies the island', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandUserPrompt(state, { sessionId: 'waiting' }, 'question', 100);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'waiting' }, { kind: 'ask_user_question', requestId: 'q', questions: [] }, 101);
+    applyAgentIslandUserPrompt(state, { sessionId: 'working' }, 'work', 102);
+    const display = buildAgentIslandDisplayState(state, 103, [chat]);
+    const overview = buildAgentIslandTaskOverview(state, 103, [chat]);
+    expect(overview.map(row => row.sessionId).sort()).toEqual(['companion-chat', 'waiting', 'working']);
+    expect(overview.filter(row => row.attention)).toHaveLength(display.pillSnapshot.attentionCount);
+    expect(overview.find(row => row.sessionId === chat.sessionId)).toMatchObject({ companion: { name: 'Cindy' }, attention: true });
+    expect(buildAgentIslandTaskOverview(state, 104, [{ ...chat, unread: false }]).some(row => row.sessionId === chat.sessionId)).toBe(false);
+  });
+  it.each([null, 'offline-home'])('restores old unread without runtime activity or notifications (%s)', deviceId => {
+    const state = createAgentIslandState();
+    const now = AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS * 2;
+    const display = buildAgentIslandDisplayState(state, now, [{ ...chat, deviceId }]);
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(display.mode).toBe('compact');
+    expect(display.sessions[0]).toMatchObject({ phase: 'completed', attention: true,
+      completionToken: 'chat-token', completionNotification: 'silent', companion: { name: 'Cindy' } });
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, now, [{ ...chat, unread: false }]).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, now, [{ ...chat, visible: false }]).sessions).toEqual([]);
+  });
+
+  it('deduplicates live activity, retains running and waiting, and removes a read completion immediately', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: chat.sessionId };
+    applyAgentIslandUserPrompt(state, meta, 'continue', 100);
+    let display = buildAgentIslandDisplayState(state, 101, [chat]);
+    expect(display.sessions).toHaveLength(1);
+    expect(display.sessions[0].phase).toBe('running');
+    expect(display.pillSnapshot).toMatchObject({ attentionCount: 1, runningSessionCount: 0 });
+    // Hiding restored chat unread must leave genuine runtime work observable (unit regression #7134).
+    const hidden = { ...chat, visible: false };
+    expect(buildAgentIslandDisplayState(state, 101, [hidden]).pillSnapshot)
+      .toMatchObject({ attentionCount: 0, runningSessionCount: 1 });
+    display = buildAgentIslandDisplayState(state, 102, [{ ...chat, unread: false }]);
+    expect(display.pillSnapshot).toMatchObject({ attentionCount: 0, runningSessionCount: 1 });
+    applyAgentIslandInteractionRequest(state, meta, { kind: 'ask_user_question', requestId: 'question', questions: [] }, 103);
+    display = buildAgentIslandDisplayState(state, 104, [{ ...chat, unread: false }]);
+    expect(display.sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
+    expect(buildAgentIslandDisplayState(state, 104, [hidden]).sessions[0])
+      .toMatchObject({ phase: 'needs-interaction', attention: true });
+    applyAgentIslandInteractionDismissed(state, chat.sessionId, 'question', 105);
+    applyAgentIslandEvent(state, meta, doneEvent(), 106);
+    display = buildAgentIslandDisplayState(state, 107, [chat]);
+    expect(display.sessions[0].completionToken).toBe('chat-token');
+    expect(buildAgentIslandDisplayState(state, 108, [{ ...chat, unread: false }]).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, 108, [hidden]).sessions).toEqual([]);
+    // Reading chat replies must not suppress an independent terminal error.
+    applyAgentIslandEvent(state, meta, terminalErrorEvent('failed'), 109);
+    expect(buildAgentIslandDisplayState(state, 110, [{ ...chat, unread: false }]).sessions[0])
+      .toMatchObject({ phase: 'error', attention: true });
+    expect(buildAgentIslandDisplayState(state, 110, [hidden]).sessions[0])
+      .toMatchObject({ phase: 'error', attention: true });
+  });
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
+
+// Unit: group unread has no task lifecycle. Cover restore/live/read transitions at the real
+// display builder, which the existing companion projection and task-only tests cannot exercise.
+describe('group message cards', () => {
+  const input = { groupId: 'group', name: 'Product', messageId: 'message', mentioned: false,
+    preview: 'Chris: hello', lastMessageAt: 1, members: [] };
+  const sync = (state: ReturnType<typeof createAgentIslandState>, extra = {}, now = 100) =>
+    syncAgentIslandGroupChat(state, input.groupId, { ...input, ...extra }, [], '@you', now);
+
+  it('restores one persistent unread card silently, without task actions or relay activity', () => {
+    const state = createAgentIslandState();
+    const now = AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS * 2;
+    sync(state, {}, now);
+    const display = buildAgentIslandDisplayState(state, now);
+    expect(display.mode).toBe('compact');
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(display.sessions[0]).toMatchObject({ title: 'Product', compactDetail: 'Chris: hello', attention: true, groupChat: { avatars: [] } });
+    expect(display.sessions[0].completionToken).toBeUndefined();
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
+    expect(state.remoteUnreadTerminals.size).toBe(0);
+    syncAgentIslandGroupChat(state, input.groupId, null, [], '@you', now + 1);
+    expect(buildAgentIslandDisplayState(state, now + 1).pillSnapshot.attentionCount).toBe(0);
+  });
+
+  it.each([false, true])('coalesces a burst without extending its dwell (mention during dwell: %s)', mentionDuringDwell => {
+    const state = createAgentIslandState();
+    sync(state);
+    revealAgentIslandGroupChat(state, input.groupId, 100);
+    expect(buildAgentIslandDisplayState(state, 100).displayPolicy).toBe('transient');
+    const until = state.sessions.get('chat-group:group')!.revealUntil!;
+    sync(state, { messageId: 'next', preview: 'Sam: next', mentioned: mentionDuringDwell }, 200);
+    revealAgentIslandGroupChat(state, input.groupId, 200);
+    expect(state.sessions.get('chat-group:group')!.revealUntil).toBe(until);
+    expect(buildAgentIslandDisplayState(state, 200).sessions).toHaveLength(1);
+    expect(buildAgentIslandDisplayState(state, until + 1).mode).toBe('compact');
+    sync(state, { mentioned: true }, until + 2);
+    revealAgentIslandGroupChat(state, input.groupId, until + 2);
+    expect(buildAgentIslandDisplayState(state, until + 2).sessions[0].groupChat?.mentionLabel).toBe('@you');
+    expect(buildAgentIslandDisplayState(state, until + 2).mode).toBe(mentionDuringDwell ? 'compact' : 'expanded');
+  });
+
+  it('keeps a pending approval above mentions, and pins existing rows under the pointer', () => {
+    const state = createAgentIslandState();
+    sync(state);
+    revealAgentIslandGroupChat(state, input.groupId, 100);
+    syncAgentIslandGroupChat(state, 'other', { ...input, groupId: 'other', mentioned: true }, [], '@you', 100);
+    requestAgentIslandManualExpand(state, 101);
+    const order = buildAgentIslandDisplayState(state, 101).sessions.map(s => s.sessionId);
+    expect(order[0]).toBe('chat-group:other');
+    sync(state, { mentioned: true, lastMessageAt: 200 }, 200);
+    expect(buildAgentIslandDisplayState(state, 200).sessions.map(s => s.sessionId)).toEqual(order);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'approval' }, { kind: 'ask_user_question', requestId: 'q', questions: [] }, 201);
+    expect(buildAgentIslandDisplayState(state, 201).sessions[0].sessionId).toBe('approval');
+  });
+});
 
 type PermissionInteractionRequest = Extract<InteractionRequest, { kind: 'permission' }>;
 
@@ -116,6 +274,110 @@ function askUserQuestionRequest(requestId: string): InteractionRequest {
 }
 
 describe('Agent Island display state', () => {
+  it('「消息免打扰」只把任务从岛面拿掉，侧栏活动快照照旧保留', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-task', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, toolUseEvent('tool-1'), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-task',
+    ]);
+
+    expect(setAgentIslandSessionDisplaySuppressed(state, 'muted-task', true)).toBe(true);
+    // 岛面（含菜单栏/提示音）不再有它。
+    expect(buildAgentIslandDisplayState(state, 1_300).sessions).toEqual([]);
+    // 但状态机照常记账：侧栏卡片的实时活动与等待交互态从这份快照来。
+    expect(state.sessions.has('muted-task')).toBe(true);
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-task', phase: 'running' }),
+    ]);
+
+    // 取消静音后回到岛面，状态没有丢。
+    expect(setAgentIslandSessionDisplaySuppressed(state, 'muted-task', false)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_400).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-task',
+    ]);
+  });
+
+  it('a muted task stays off the island even after its entry is recreated', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-task', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-task', true);
+    // 岛面 TTL / 进程收尾把条目删掉后，新事件重建条目也不得把静音任务放回来。
+    state.sessions.delete('muted-task');
+
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working again'), 2_000);
+
+    expect(buildAgentIslandDisplayState(state, 2_100).sessions).toEqual([]);
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-task', phase: 'running' }),
+    ]);
+  });
+
+  it('静音任务的完成卡不回到岛面，也不占 active transient / 揭示队列', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-done', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-done', true);
+
+    applyAgentIslandEvent(state, meta, doneEvent(), 2_000);
+
+    const display = buildAgentIslandDisplayState(state, 2_100);
+    expect(display.sessions).toEqual([]);
+    expect(display.currentSessionId).toBeNull();
+    expect(state.activeTransientSessionId).toBeNull();
+    expect(state.transientRevealQueue).toEqual([]);
+    // 侧栏活动照旧看得到它已经完成。
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'muted-done', phase: 'completed' }),
+    ]);
+  });
+
+  it('完成卡已经在岛上时再静音，下一次展示面就不再包含它', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'muted-live', title: 'Muted', agentKind: 'codex' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Working'), 1_000);
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions.map((s) => s.sessionId)).toEqual([
+      'muted-live',
+    ]);
+
+    setAgentIslandSessionDisplaySuppressed(state, 'muted-live', true);
+
+    expect(buildAgentIslandDisplayState(state, 1_300).sessions).toEqual([]);
+    expect(buildAgentIslandDisplayState(state, 1_300).currentSessionId).toBeNull();
+  });
+
+  it('静音任务的待交互态不参与阻塞态仲裁，不再挡住其它任务的完成卡', () => {
+    const state = createAgentIslandState();
+
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Done' }, doneEvent(), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_100);
+    // 静音任务自己不上岛面，也不能继续按阻塞态按住队列里的完成卡。
+    setAgentIslandSessionDisplaySuppressed(state, 'ask', true);
+
+    const display = buildAgentIslandDisplayState(state, 1_200);
+
+    expect(display.sessions.map((session) => session.sessionId)).toEqual(['done']);
+    expect(display.displayPolicy).toBe('transient');
+    expect(display.displaySurface).toBe('completionCard');
+    expect(display.currentSessionId).toBe('done');
+    expect(display.pillSnapshot.deferredRevealCount).toBe(0);
+  });
+
+  it('静音任务的待交互态不再禁用灵动岛的悬停展开', () => {
+    const state = createAgentIslandState();
+
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_100);
+    setAgentIslandSessionDisplaySuppressed(state, 'ask', true);
+
+    setAgentIslandHovered(state, true, 1_200);
+
+    expect(buildAgentIslandDisplayState(state, 1_750).mode).toBe('expanded');
+  });
+
   it('does not complete the island on claimed SDK boundary events', () => {
     const state = createAgentIslandState();
     const meta = { sessionId: 'continuing', title: 'Continuing', agentKind: 'codex' };
@@ -183,7 +445,7 @@ describe('Agent Island display state', () => {
       priorityMicroTitle: '',
       priorityCompactTitle: '',
       sessionCount: 0,
-      activeSessionCount: 0,
+      runningSessionCount: 0,
       pendingInteractionCount: 0,
       unreadCompletedCount: 0,
       deferredRevealCount: 0,
@@ -213,7 +475,7 @@ describe('Agent Island display state', () => {
     expect(display.currentSessionId).toBe('b');
     expect(display.pillSnapshot.priorityId).toBe('b');
     expect(display.pillSnapshot.priorityCompactTitle).toBe('B');
-    expect(display.pillSnapshot.activeSessionCount).toBe(2);
+    expect(display.pillSnapshot.runningSessionCount).toBe(2);
     expect(display.sessions.map((session) => session.sessionId)).toEqual(['b', 'a']);
     expect(display.totalCount).toBe(2);
     expect(display.shadowVisible).toBe(false);
@@ -230,7 +492,7 @@ describe('Agent Island display state', () => {
     expect(firstDisplay.currentSessionId).toBe('b');
     expect(firstDisplay.pillSnapshot).toMatchObject({
       priorityId: 'b',
-      activeSessionCount: 2,
+      runningSessionCount: 2,
       sessionCount: 2,
     });
     expect(getNextAgentIslandTimerAt(state, 1_200)).toBeNull();
@@ -351,7 +613,7 @@ describe('Agent Island display state', () => {
     expect(display.sessions[0]).toMatchObject({
       sessionId: 's1',
       projectName: 'xdt-maker',
-      detail: 'imagegen',
+      detail: '正在调用工具…',
       activityLines: [
         { id: '1', kind: 'user', text: '正在执行绘画命令 请生成一张图' },
         { id: '2', kind: 'assistant', text: '我会开始生成图片。' },
@@ -556,6 +818,24 @@ describe('Agent Island display state', () => {
       detail: '运行测试',
       phase: 'running',
     });
+  });
+
+  // #7474, unit: the public event -> display/activity snapshot path must not
+  // fall back to an internal tool name when a real event has no input payload.
+  it('publishes readable tool activity even when input is absent', () => {
+    const state = createAgentIslandState();
+    setAgentIslandToolWording(state, {
+      ...DEFAULT_TOOL_ROW_WORDING,
+      toolCallLabel: () => 'Calling a tool…',
+    });
+    applyAgentIslandEvent(state, { sessionId: 's1', title: 'Task', agentKind: 'codex' }, {
+      type: 'tool_use',
+      source: 'codex',
+      data: { toolUseId: 'tool-1', toolName: 'mcp:server:read_by_url' },
+    }, 1_000);
+
+    expect(buildAgentIslandDisplayState(state, 1_050).sessions[0]?.detail).toBe('Calling a tool…');
+    expect(buildAllSessionActivitySnapshots(state)[0]?.detail).toBe('Calling a tool…');
   });
 
   it('keeps the raw shell command when no intent rule classifies it', () => {
@@ -814,6 +1094,133 @@ describe('Agent Island display state', () => {
     expect(display.sessions[0]?.compactDetail).toBe('我已经完成了第一步，并且正在继续处理后续内容。');
   });
 
+  // Unit regression: the real display builder must use readable rich-answer activity
+  // both during output and after done, not expose the component transport in the island.
+  it('shows readable rich answers in running and completed companion cards', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1', companion: { name: '电脑管家', hue: 'blue' as const, glyph: '电', glyphIsInitial: true } };
+    const source = '```cindy-ui\n'
+      + '{"version":1,"seq":1,"op":"create","id":"answer","kind":"text","props":{"text":"网络检查完成"}}\n```';
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 1_000);
+    for (const character of source) {
+      applyAgentIslandEvent(state, meta, textDeltaEvent(character), 1_050);
+      const preview = buildAgentIslandDisplayState(state, 1_060).sessions[0]?.compactDetail ?? '';
+      expect(preview).not.toMatch(/cindy|version|seq|create|props|`/);
+    }
+    applyAgentIslandEvent(state, meta, finalTextEvent(source), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions[0])
+      .toMatchObject({ compactDetail: '网络检查完成', phase: 'running' });
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_300);
+    expect(buildAgentIslandDisplayState(state, 1_400).sessions[0])
+      .toMatchObject({ compactDetail: '网络检查完成', phase: 'completed' });
+  });
+
+  // Local screenshot regression, including the native messagePreview/activityLines
+  // fields: compactDetail alone does not cover the expanded native row.
+  it('projects Markdown once for both native preview fields and completed cards', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'markdown' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 1_000);
+    const text = '分两部分：**更新已完成**；`foo_bar **literal**`';
+    const expected = '分两部分：更新已完成；foo_bar **literal**';
+    applyAgentIslandEvent(state, meta, finalTextEvent(text), 1_100);
+    const running = buildAgentIslandDisplayState(state, 1_200).sessions[0];
+    expect(running?.messagePreview?.text).toBe(expected);
+    expect(running?.activityLines.at(-1)?.text).toBe(expected);
+    expect(running?.compactDetail).toBe(expected);
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_300);
+    const completed = buildAgentIslandDisplayState(state, 4_000).sessions[0];
+    expect(completed?.activityLines.at(-1)?.text).toBe(expected);
+    expect(completed?.compactDetail).toBe(expected);
+    const userState = createAgentIslandState();
+    applyAgentIslandUserPrompt(userState, { sessionId: 'user-code' }, '`foo_bar **literal**`', 5_000);
+    const user = buildAgentIslandDisplayState(userState, 5_000).sessions[0];
+    expect(user?.messagePreview?.text).toBe('foo_bar **literal**');
+    expect(user?.compactDetail).toBe('foo_bar **literal**');
+  });
+
+  // #7566 review, unit: a long destination must not consume the visible budget;
+  // cover both terminal entrances without relying on an independent final text.
+  it.each(['done', 'status'] as const)('completes a delta-only long-link reply through %s', terminal => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'delta-link' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 1_000);
+    for (const delta of ['[文档](', 'https://example.com/' + 'x'.repeat(500), ') 测试已通过']) {
+      applyAgentIslandEvent(state, meta, textDeltaEvent(delta), 1_100);
+    }
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions[0]?.messagePreview?.text)
+      .toBe('文档 测试已通过');
+    applyAgentIslandEvent(state, meta, terminal === 'done' ? doneEvent() : statusEvent(false, 'Done'), 1_300);
+    const completed = buildAgentIslandDisplayState(state, 1_400).sessions[0];
+    expect(completed).toMatchObject({ phase: 'completed', compactDetail: '文档 测试已通过' });
+    expect(completed?.activityLines.at(-1)?.text).toBe('文档 测试已通过');
+  });
+
+  // #7566 review, unit: whitespace-only deltas commit rich lines without a
+  // final-text repair. Exercise create, patch, closing fence and both terminals.
+  it.each([
+    { newline: '\n', terminal: 'done' },
+    { newline: '\r\n', terminal: 'status' },
+  ])('commits rich lines across standalone newlines (%j)', ({ newline, terminal }) => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'rich-lines' };
+    applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 1_000);
+    const create = JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'a', kind: 'text', props: { text: '初步结果' } });
+    const patch = JSON.stringify({ seq: 2, op: 'patch', id: 'a', props: { text: '检查完成' } });
+    const send = (delta: string) => applyAgentIslandEvent(state, meta, textDeltaEvent(delta), 1_100);
+    send('```cindy-ui' + newline + create.slice(0, 40));
+    send(create.slice(40));
+    send(newline);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions[0]?.activityLines.at(-1)?.text).toBe('初步结果');
+    send(patch.slice(0, 20));
+    send(patch.slice(20));
+    // Complete JSON may project immediately; a separate newline must preserve it.
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions[0]?.activityLines.at(-1)?.text).toBe('检查完成');
+    send(newline);
+    expect(buildAgentIslandDisplayState(state, 1_200).sessions[0]?.messagePreview?.text).toBe('检查完成');
+    send('```');
+    send(newline + '后续说明');
+    applyAgentIslandEvent(state, meta, terminal === 'done' ? doneEvent() : statusEvent(false, 'Done'), 1_300);
+    const completed = buildAgentIslandDisplayState(state, 1_400).sessions[0];
+    expect(completed).toMatchObject({ phase: 'completed', compactDetail: '检查完成 后续说明' });
+    expect(completed?.activityLines.at(-1)?.text).toBe('检查完成 后续说明');
+  });
+
+  // Review regression: a removed/emptied rich node must retract this message's
+  // streamed line from both the activity log and active/queued preview (unit tier).
+  it.each([
+    { operation: 'remove', queued: false, streamed: true },
+    { operation: 'remove', queued: true, streamed: false },
+    { operation: 'patch', queued: false, streamed: false },
+    { operation: 'patch', queued: true, streamed: true },
+  ])('retracts an empty rich preview (%j)', ({ operation, queued, streamed }) => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 's1' };
+    if (queued) applyAgentIslandUserPrompt(state, meta, '检查网络', 1_000);
+    else applyAgentIslandEvent(state, meta, statusEvent(true, 'Generating...'), 1_000);
+    const prefix = '```cindy-ui\n'
+      + '{"version":1,"seq":1,"op":"create","id":"a","kind":"text","props":{"text":"临时结果"}}\n';
+    applyAgentIslandEvent(state, meta, textDeltaEvent(prefix), 1_100);
+    expect(buildAgentIslandDisplayState(state, 1_150).sessions[0]?.activityLines)
+      .toContainEqual(expect.objectContaining({ text: '临时结果' }));
+    const update = JSON.stringify({ seq: 2, op: operation, id: 'a',
+      ...(operation === 'patch' ? { props: { text: '' } } : {}) }) + '\n```';
+    if (streamed) {
+      applyAgentIslandEvent(state, meta, textDeltaEvent(update), 1_200);
+      const during = buildAgentIslandDisplayState(state, 1_250).sessions[0];
+      expect(JSON.stringify(during)).not.toContain('临时结果');
+    }
+    applyAgentIslandEvent(state, meta, finalTextEvent(prefix + update), 1_300);
+    applyAgentIslandEvent(state, meta, doneEvent(), 1_400);
+    for (const time of [1_450, 4_000]) {
+      const completed = buildAgentIslandDisplayState(state, time).sessions[0];
+      expect(JSON.stringify(completed)).not.toContain('临时结果');
+      expect(completed?.activityLines).toContainEqual(expect.objectContaining({
+        kind: 'status', text: DEFAULT_AGENT_ISLAND_STRINGS.done,
+      }));
+    }
+  });
+
   it('keeps generic running status behind assistant text in compact detail', () => {
     const state = createAgentIslandState();
 
@@ -893,6 +1300,7 @@ describe('Agent Island display state', () => {
     applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'run it', start);
     applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start + 200);
 
+    requestAgentIslandManualExpand(state);
     const sessions = buildAgentIslandDisplayState(state, start + 300).sessions;
     const reply = sessions.find((session) => session.sessionId === 'reply');
     const silent = sessions.find((session) => session.sessionId === 'silent');
@@ -933,6 +1341,33 @@ describe('Agent Island display state', () => {
     expect(display.pillSnapshot.priorityCompactTitle).toBe('目标模式测试');
   });
 
+  // Companion Sessions run in the companion's private home: before companion identity the
+  // island titled them by a filtered task title and labelled the home folder "workspace".
+  it.each([
+    { name: 'own chat', groupName: undefined, projectName: null },
+    { name: 'group line', groupName: 'Cindy开发', projectName: 'Cindy开发' },
+  ])('shows a companion Session by its companion, not its home folder ($name)', ({ groupName, projectName }) => {
+    const state = createAgentIslandState();
+    const companion = {
+      name: 'Claude',
+      ...(groupName ? { groupName } : {}),
+      hue: 'teal' as const,
+      glyph: 'C',
+      glyphIsInitial: true,
+    };
+    const workingDir = '/Users/alice/Library/Application Support/Cindy/owners/o1/bots/b1/workspace';
+
+    applyAgentIslandUserPrompt(state, { sessionId: 's1', agentKind: 'claude-code', workingDir }, 'hi', 1_000);
+    applyAgentIslandMetadata(state, { sessionId: 's1', title: 'Group title', workingDir, companion }, 1_100);
+    // Later events keep re-sending the home folder; the companion context must win.
+    applyAgentIslandEvent(state, { sessionId: 's1', workingDir }, finalTextEvent('你好'), 1_200);
+
+    const display = buildAgentIslandDisplayState(state, 1_250);
+
+    expect(display.sessions[0]).toMatchObject({ title: 'Claude', projectName, companion });
+    expect(display.pillSnapshot.priorityCompactTitle).toBe('Claude');
+  });
+
   it('keeps only the latest three activity preview lines', () => {
     const state = createAgentIslandState();
 
@@ -967,7 +1402,8 @@ describe('Agent Island display state', () => {
     expect(display.pillSnapshot).toMatchObject({
       priorityId: 'ask',
       priorityStatus: 'needs-interaction',
-      activeSessionCount: 2,
+      // 等回答的 ask 只算需要关注,不再重复计入运行中。
+      runningSessionCount: 1,
       pendingInteractionCount: 1,
       unreadCompletedCount: 2,
       sessionCount: 4,
@@ -1133,6 +1569,8 @@ describe('Agent Island display state', () => {
     expect(firstDisplay.mode).toBe('expanded');
     expect(firstDisplay.displayPolicy).toBe('transient');
     expect(firstDisplay.currentSessionId).toBe('first');
+    expect(firstDisplay.displaySurface).toBe('completionCard');
+    expect(firstDisplay.sessions.map((session) => session.sessionId)).toEqual(['first']);
     expect(firstDisplay.pillSnapshot.deferredRevealCount).toBe(1);
 
     const stillFirstDisplay = buildAgentIslandDisplayState(state, 6_100);
@@ -1144,7 +1582,9 @@ describe('Agent Island display state', () => {
     expect(secondDisplay.mode).toBe('expanded');
     expect(secondDisplay.displayPolicy).toBe('transient');
     expect(secondDisplay.currentSessionId).toBe('second');
-    expect(secondDisplay.sessions.map((session) => session.sessionId)).toEqual(['second', 'first']);
+    expect(secondDisplay.displaySurface).toBe('completionCard');
+    expect(secondDisplay.sessions.map((session) => session.sessionId)).toEqual(['second']);
+    expect(secondDisplay.pillSnapshot.unreadCompletedCount).toBe(2);
   });
 
   it('keeps blocking interaction cards ahead of queued completion reveals', () => {
@@ -1461,6 +1901,29 @@ describe('Agent Island display state', () => {
     expect(restoredOlder.currentSessionId).toBe('older');
   });
 
+  it('keeps a muted pending task out of the blocking-card arbitration so outside clicks still dismiss the visible card', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(state, { sessionId: 'visible', title: 'Visible' }, permissionRequest('r1'), 1_000);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'muted', title: 'Muted' }, permissionRequest('r2'), 1_100);
+    setAgentIslandSessionDisplaySuppressed(state, 'muted', true);
+
+    const display = buildAgentIslandDisplayState(state, 1_200);
+    expect(display.mode).toBe('expanded');
+    expect(display.displaySurface).toBe('interactionCard');
+    expect(display.currentSessionId).toBe('visible');
+
+    // 静音任务更新、排序靠前，但不上岛面：点岛外必须落实到那张真的可见的确认卡上。
+    expect(dismissAgentIslandActiveReveal(state, 2_300)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 2_350).mode).toBe('compact');
+    expect(dismissAgentIslandActiveReveal(state, 2_360)).toBe(false);
+
+    // 静音任务自己的确认卡不受影响，取消静音后照旧上岛。
+    expect(setAgentIslandSessionDisplaySuppressed(state, 'muted', false)).toBe(true);
+    const unmuted = buildAgentIslandDisplayState(state, 2_400);
+    expect(unmuted.mode).toBe('expanded');
+    expect(unmuted.currentSessionId).toBe('muted');
+  });
+
   it('keeps completion reminders on their card when the pointer hovers the expanded panel', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Working'), 1_000);
@@ -1690,10 +2153,11 @@ describe('Agent Island display state', () => {
     expect(buildAgentIslandDisplayState(state, 3_350).mode).toBe('compact');
   });
 
-  it('keeps a clicked completion stack collapsed and unread when navigation never arrives', () => {
+  it('keeps a clicked manual completion list collapsed and unread when navigation never arrives', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'first' }, doneEvent(), 1_000);
     applyAgentIslandEvent(state, { sessionId: 'second' }, doneEvent(), 1_050);
+    requestAgentIslandManualExpand(state);
     expect(buildAgentIslandDisplayState(state, 1_100).displaySurface).toBe('sessionList');
     setAgentIslandPointerZones(state, { menuBar: false, panel: true }, 1_110);
 
@@ -1869,7 +2333,7 @@ describe('Agent Island display state', () => {
     expect(stillCompletion.displaySurface).toBe('completionCard');
     expect(stillCompletion.currentSessionId).toBe('done');
     expect(stillCompletion.sessions.map((session) => session.sessionId)).toEqual(['done']);
-    expect(stillCompletion.pillSnapshot.activeSessionCount).toBe(1);
+    expect(stillCompletion.pillSnapshot.runningSessionCount).toBe(1);
 
     const display = buildAgentIslandDisplayState(state, 14_200);
 
@@ -1891,7 +2355,7 @@ describe('Agent Island display state', () => {
     expect(stillCompletion.displaySurface).toBe('completionCard');
     expect(stillCompletion.currentSessionId).toBe('done');
     expect(stillCompletion.sessions.map((session) => session.sessionId)).toEqual(['done']);
-    expect(stillCompletion.pillSnapshot.activeSessionCount).toBe(1);
+    expect(stillCompletion.pillSnapshot.runningSessionCount).toBe(1);
   });
 
   it('shows running sessions only for manual hover expansion, not completion auto expansion', () => {
@@ -1904,7 +2368,7 @@ describe('Agent Island display state', () => {
     expect(autoExpanded.displayPolicy).toBe('transient');
     expect(autoExpanded.displaySurface).toBe('completionCard');
     expect(autoExpanded.sessions.map((session) => session.sessionId)).toEqual(['done']);
-    expect(autoExpanded.pillSnapshot.activeSessionCount).toBe(1);
+    expect(autoExpanded.pillSnapshot.runningSessionCount).toBe(1);
 
     setAgentIslandHovered(state, true, 14_100);
     const manualExpanded = buildAgentIslandDisplayState(state, 14_700);
@@ -1914,20 +2378,28 @@ describe('Agent Island display state', () => {
     expect(manualExpanded.sessions.map((session) => session.sessionId)).toEqual(['done', 'running']);
   });
 
-  it('stacks newer completion reveals without displacing the active completion', () => {
+  it.each(['completed', 'error'] as const)('keeps an old unread %s out of a new completion reveal but in the manual list', (phase) => {
     const state = createAgentIslandState();
-    applyAgentIslandEvent(state, { sessionId: 'first', title: 'First' }, doneEvent(), 2_000);
-    expect(buildAgentIslandDisplayState(state, 2_100).currentSessionId).toBe('first');
+    applyAgentIslandEvent(state, { sessionId: 'old' }, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_100).currentSessionId).toBe('old');
+    expect(buildAgentIslandDisplayState(state, 20_000).mode).toBe('compact');
 
-    applyAgentIslandEvent(state, { sessionId: 'second', title: 'Second' }, doneEvent(), 2_300);
-    const stacked = buildAgentIslandDisplayState(state, 2_500);
+    applyAgentIslandEvent(state, { sessionId: 'new' }, doneEvent(), 21_000);
+    const automatic = buildAgentIslandDisplayState(state, 21_100);
 
-    expect(stacked.mode).toBe('expanded');
-    expect(stacked.displayPolicy).toBe('transient');
-    expect(stacked.displaySurface).toBe('sessionList');
-    expect(stacked.currentSessionId).toBe('first');
-    expect(stacked.sessions.map((session) => session.sessionId)).toEqual(['first', 'second']);
-    expect(stacked.pillSnapshot.unreadCompletedCount).toBe(2);
+    expect(automatic.mode).toBe('expanded');
+    expect(automatic.displayPolicy).toBe('transient');
+    expect(automatic.displaySurface).toBe('completionCard');
+    expect(automatic.currentSessionId).toBe('new');
+    expect(automatic.sessions.map((session) => session.sessionId)).toEqual(['new']);
+    expect(automatic.totalCount).toBe(1);
+    expect(state.sessions.get('old')?.unread).toBe(true);
+    expect(buildAllSessionActivitySnapshots(state).map((session) => session.sessionId)).toEqual(['old', 'new']);
+
+    requestAgentIslandManualExpand(state);
+    const manual = buildAgentIslandDisplayState(state, 21_200);
+    expect(manual.displaySurface).toBe('sessionList');
+    expect(manual.sessions.map((session) => session.sessionId).sort()).toEqual(['new', 'old']);
   });
 
   it('orders completed sessions first in the expanded session list', () => {
@@ -2038,7 +2510,7 @@ describe('Agent Island display state', () => {
     expect(display.pillSnapshot.unreadCompletedCount).toBe(1);
   });
 
-  it('protects stacked completion reveals briefly before outside click can collapse them', () => {
+  it('protects the active completion before outside click advances to the queued reminder', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'first', title: 'First' }, doneEvent(), 2_000);
     applyAgentIslandEvent(state, { sessionId: 'second', title: 'Second' }, doneEvent(), 2_100);
@@ -2047,15 +2519,36 @@ describe('Agent Island display state', () => {
     expect(dismissAgentIslandActiveReveal(state, 2_250)).toBe(false);
     const protectedDisplay = buildAgentIslandDisplayState(state, 2_300);
     expect(protectedDisplay.mode).toBe('expanded');
-    expect(protectedDisplay.displaySurface).toBe('sessionList');
+    expect(protectedDisplay.displaySurface).toBe('completionCard');
 
     expect(dismissAgentIslandActiveReveal(state, 3_300)).toBe(true);
     const display = buildAgentIslandDisplayState(state, 3_350);
 
-    expect(display.mode).toBe('compact');
+    expect(display.mode).toBe('expanded');
     expect(display.displayPolicy).toBe('transient');
-    expect(display.sessions.map((session) => session.sessionId)).toEqual(['second', 'first']);
+    expect(display.displaySurface).toBe('completionCard');
+    expect(display.sessions.map((session) => session.sessionId)).toEqual(['second']);
     expect(display.pillSnapshot.unreadCompletedCount).toBe(2);
+  });
+
+  it.each(['completed', 'error'] as const)('keeps queued reminders after opening the current %s card', (phase) => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'first' }, phase === 'completed' ? doneEvent() : terminalErrorEvent('Failed'), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'second' }, doneEvent(), 1_050);
+    expect(buildAgentIslandDisplayState(state, 1_100).sessions.map((session) => session.sessionId)).toEqual(['first']);
+
+    requestAgentIslandSessionFocus(state, 'first', 1_200);
+    // Errors keep the existing navigation-ack behavior; completion closes immediately.
+    if (phase === 'error') setAgentIslandVisibleSession(state, 'first', 1_250);
+    const next = buildAgentIslandDisplayState(state, 1_300);
+    expect(next.displaySurface).toBe('completionCard');
+    expect(next.sessions.map((session) => session.sessionId)).toEqual(['second']);
+    expect(state.sessions.get('first')?.unread).toBe(true);
+
+    // A late route report for the previous card must not close the new one.
+    setAgentIslandVisibleSession(state, 'first', 1_400);
+    expect(buildAgentIslandDisplayState(state, 1_450).sessions.map((session) => session.sessionId)).toEqual(['second']);
+    expect(buildAgentIslandDisplayState(state, 20_000).mode).toBe('compact');
   });
 
   it('collapses hover-expanded unread completion lists without clearing automatic reveals', () => {

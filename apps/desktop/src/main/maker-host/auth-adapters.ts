@@ -39,7 +39,11 @@ import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
-import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
+import {
+  prepareSharedGlobalSkillLinks,
+  SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
+  sharedGlobalSkillLinksFingerprint,
+} from './shared-global-skills.js';
 import { PreparationCache } from './preparation-cache.js';
 import {
   prepareBuiltInSkills,
@@ -53,6 +57,7 @@ import {
   resolveWindowsAclPrincipal,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
+import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
 
 export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import {
@@ -195,12 +200,7 @@ async function readCodexAccountId(authPath: string): Promise<string | null> {
 function codexAccountIdFromAuthJson(raw: string): string | null {
   try {
     const obj = JSON.parse(raw) as { tokens?: { account_id?: unknown; id_token?: unknown } };
-    if (typeof obj.tokens?.account_id === 'string' && obj.tokens.account_id.length > 0) {
-      return obj.tokens.account_id;
-    }
-    if (typeof obj.tokens?.id_token === 'string') {
-      return chatgptWorkspaceIdFromIdToken(obj.tokens.id_token);
-    }
+    return codexWorkspaceIdFromTokens(obj.tokens);
   } catch {
     /* 解析失败 → null */
   }
@@ -231,39 +231,13 @@ function readCodexRecoveryCredentialProof(
   }
 }
 
-interface ChatgptIdTokenClaims {
-  chatgpt_account_id?: unknown;
-  sub?: unknown;
-  'https://api.openai.com/auth'?: { chatgpt_account_id?: unknown };
-}
-
-function readChatgptIdTokenClaims(idToken: string): ChatgptIdTokenClaims | null {
-  try {
-    const part = idToken.split('.')[1];
-    if (!part) return null;
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(Buffer.from(b64, 'base64').toString('utf-8')) as ChatgptIdTokenClaims;
-  } catch {
-    return null;
-  }
-}
-
-/** Strict workspace identity; unlike header compatibility it never falls back to JWT sub. */
-function chatgptWorkspaceIdFromIdToken(idToken: string): string | null {
-  const claims = readChatgptIdTokenClaims(idToken);
-  const nested = claims?.['https://api.openai.com/auth']?.chatgpt_account_id;
-  if (typeof nested === 'string' && nested.length > 0) return nested;
-  const topLevel = claims?.chatgpt_account_id;
-  return typeof topLevel === 'string' && topLevel.length > 0 ? topLevel : null;
-}
-
 /**
  * 从 id_token JWT 提取 ChatGPT 账号 id（chatgpt-account-id 头用）。
  * 优先 `https://api.openai.com/auth`.chatgpt_account_id，回落顶层 chatgpt_account_id / sub。
  * export 供 anthropic-responses-bridge-host 复用(同一 auth.json、同一 claim 布局,单点维护)。
  */
 export function chatgptAccountIdFromIdToken(idToken: string): string | null {
-  const workspaceId = chatgptWorkspaceIdFromIdToken(idToken);
+  const workspaceId = codexWorkspaceIdFromTokens({ id_token: idToken });
   if (workspaceId) return workspaceId;
   const sub = readChatgptIdTokenClaims(idToken)?.sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
@@ -582,6 +556,8 @@ function claudeSubscriptionServesModel(model: string | undefined): boolean {
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
   private readonly sharedSkillsPreparation = new PreparationCache(30_000);
+  /** Last reported set of persistent projection warnings; each set is logged once. */
+  private reportedPersistentSkillWarnings = '[]';
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
@@ -610,7 +586,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
 
   async ensureSharedGlobalSkills(): Promise<void> {
     const scope = preparationScope();
-    await this.sharedSkillsPreparation.ensure(scope.key, async () => {
+    // The opt-in setting and root listings are part of the key so a cached completion
+    // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
+    const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
+    await this.sharedSkillsPreparation.ensure(key, async () => {
       const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
       return success && scope.current();
     });
@@ -637,16 +616,31 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
         });
+        const persistent = new Set(sharedProjection.persistentWarnings);
         return {
           warnings: [
             ...preparedBuiltIns.warnings,
             ...migrationWarnings,
-            ...sharedProjection.warnings,
+            ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
           ],
+          persistentWarnings: sharedProjection.persistentWarnings,
         };
       });
       for (const warning of result.warnings) {
         assetPrepLog.warn('shared global skill warning', { warning });
+      }
+      // The sync opt-out and user-owned conflicting paths are stable state, not failures:
+      // report each distinct set once and let the completion cache hold past them.
+      const persistentSignature = JSON.stringify([...result.persistentWarnings].sort());
+      if (persistentSignature !== this.reportedPersistentSkillWarnings) {
+        this.reportedPersistentSkillWarnings = persistentSignature;
+        for (const warning of result.persistentWarnings) {
+          if (warning === SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE) {
+            assetPrepLog.info('shared global skill notice', { warning });
+          } else {
+            assetPrepLog.warn('shared global skill warning', { warning });
+          }
+        }
       }
       return result.warnings.length === 0;
     } catch (error) {
@@ -1370,16 +1364,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async runEnsureGlobalCodexSkills(ownerId: string | null): Promise<boolean> {
-    // Prepare the private built-in roots before Codex snapshots discovery.
+    // Load-bearing order: prepare the private built-in roots and the ~/.agents/skills
+    // projection before Codex snapshots discovery. That shared pass (same call, same
+    // owner guard) runs inside ensureSharedGlobalSkills and reports its own warnings, so
+    // Codex does not repeat it; per-launch freshness of the approved catalog comes from
+    // prepareCodexGlobalSkillsLinks below.
     await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
-    const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-      prepareSharedGlobalSkillLinks({
-        assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-      }),
-    ).then(
-      (r) => ({ ok: true as const, label: 'shared-skills' as const, warnings: r.warnings }),
-      (err: Error) => ({ ok: false as const, label: 'shared-skills' as const, err }),
-    );
 
     const [skillsOutcome, rulesOutcome] = await Promise.all([
       withSharedGlobalSkillProjectionMutation(ownerId, async () =>
@@ -1394,7 +1384,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       ),
     ]);
 
-    const outcomes = [sharedOutcome, skillsOutcome, rulesOutcome];
+    const outcomes = [skillsOutcome, rulesOutcome];
     // A failed verified catalog must not fall back to yesterday's projections.
     if (!skillsOutcome.ok) throw skillsOutcome.err;
     for (const outcome of outcomes) {

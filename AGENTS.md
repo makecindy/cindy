@@ -20,36 +20,34 @@
 - 目录或模块专属规则优先放到对应目录的嵌套 `AGENTS.md`；需要跨目录复用的
   专题说明放在 `docs/`，并由本文件写明触发条件。
 
+## 按模块进入
+
+开发、启动、调试或验证对应模块前，先读下表入口，再按改动触发条件读专题；根级规则始终适用。
+跨模块行为先从[仓库地图的行为导航](docs/dev-rules/repo-map.md#按用户行为定位)查找公共入口与测试，
+不要只修改最先找到的页面或渠道。
+
+| 修改范围 | 模块规则入口 | 开发与架构正本 |
+| --- | --- | --- |
+| Desktop：main、renderer、preload、数据库、个人 IM / 官方 hook | [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) | [Desktop 开发](docs/dev-rules/desktop-development.md) |
+| Mobile：Expo 页面、远程调用、原生配置与模块 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
+| maker-core：Agent 编排、prompt、工具、translator、用量 | [packages/maker-core/AGENTS.md](packages/maker-core/AGENTS.md) | [Agent 行为](docs/dev-rules/maker-core-and-agent-behavior.md) |
+
 ## 当前规则索引
 
 - 首次接触本仓、需要定位功能代码位置或判断新代码归属模块时，先读仓库地图
   `docs/dev-rules/repo-map.md`。
+- 只为检查界面而需要启动 Desktop 或 Mobile 模拟器、且不需要真实账号时，用 `--mock`
+  免登录模拟数据启动；新增或修改模拟任务、`--mock` 行为前先读 `docs/dev-rules/ui-mock-data.md`。
 - 首次安装、修复依赖或准备新 worktree 时，必须先读
   `docs/dev-rules/environment-setup.md`。
 - 首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
   或排查目录下发与显示错误前，必须先读 `docs/dev-rules/model-catalog-maintenance.md`：
   先看结构、覆盖顺序与修改位置，再按其中导航读取专题规则和实际代码；Server 正本与客户端
   离线副本需协调更新，客户端已支持、Server 已实现和生产已部署必须分别核验。
-- 启动、调试或验证 Desktop 时，必须先读 `docs/dev-rules/desktop-development.md`。
-- 修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、导航或 Electron
-  特权能力前，必须先读 `docs/dev-rules/electron-security-and-process-boundaries.md`。
-- 新增或修改 Desktop 独立窗口、辅助窗口或弹出型 `BrowserWindow` 前，必须遵守
-  `docs/dev-rules/electron-security-and-process-boundaries.md` 的「独立辅助窗口统一生命周期
-  基线」：复用既有控制器／基础设施，不得另造平行的预热、就绪握手、隐藏复用与崩溃恢复
-  状态机。
 - 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件或测试目录前，必须
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读
   `docs/dev-rules/media-storage-and-protocols.md`。
-- 修改 Desktop 数据库 schema、migration、companion script 或运行期数据库访问前，必须
-  先读 `docs/dev-rules/database-and-migrations.md`。
-- 开发、调试或验证 Mobile 时，必须先读 `docs/dev-rules/mobile-development.md`。
-- 修改 `apps/mobile` 的原生配置、原生依赖、config plugin 或原生模块（`app.json`、
-  `app.config.js`、`eas.json`、`apps/mobile/package.json`、`plugins/`、`modules/` 等会
-  进入 runtime fingerprint 的输入）前，必须先读 `docs/dev-rules/mobile-development.md`
-  的「冷更边界」：**除非必要，不得提交会改变指纹的改动**；会触发冷更的 PR 与技术框架
-  变动同级，必须由仓库指定的把关人针对冷更明确确认后才能合并——不看改动大小，也不看谁
-  提的，提交者身份不构成例外。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
@@ -70,6 +68,8 @@
   `docs/product-rules/message-source.md`：界面标签与模型说明同源，两侧一起改。
 - 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
   委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
+- 修改伙伴调用任务写工具的身份判定（主人代办 / 受托 / 自主）、自主轮可做的范围、转达主人原话的
+  核实凭证，或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
 - 修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传，或
   `apps/desktop/src/main/companion-cloud/`、Chat Server 的伙伴 actor／1:1 房间合同前，必须先读
   `docs/product-rules/cloud-companions.md`。
@@ -92,10 +92,6 @@
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。
-- 新增或修改 Mobile（`apps/mobile`）界面上的文字前，必须先查
-  `apps/mobile/docs/mobile-design-guide.md` §3「文字规范速查」：先定角色，再整行照抄字号、
-  行高、字重、字色；五档中性字色、浅色字不配粗字重、11 档字号、必须配行高四条由
-  `typographyTokenDiscipline.test.ts` 守护，角色是否选对靠 review。
 - 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
   `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
@@ -106,9 +102,6 @@
   的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
   `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见
   `docs/dev-rules/engineering-conventions.md` §5.1。
-- 修改个人 IM 渠道（`apps/desktop/src/main/im/**`）或官方 hook（`hook-control/**`）的
-  找/建任务、命令、排队与插话、输入拼装、事件观察、交互、收尾或停止逻辑前，必须先读
-  `docs/dev-rules/im-turn-flow.md`（入口账本、状态清单、不变量与迁移批次）。
 - 新增或修改**任一 Telegram bot 的用户可见行为**（命令、消息呈现、收口策略、群行为、
   权限口径、附件与表情）前，必须先读能力台账 `docs/product-rules/telegram-bot-parity.md`：
   两个 bot 是两套架构，差异可以有但必须登记在表里；表里标「有意不同」的行**不要去
@@ -124,8 +117,7 @@
   为准。
 - 修改 Orca 多 Agent 协同时，必须先读
   `docs/dev-rules/orca-team-architecture.md`。
-- 修改 `packages/maker-core` 的 Agent 编排、prompt 组装、tool／MCP 暴露、translator、
-  model 映射、usage 计量，或任何进入模型 system 段的提示词前，必须先读
+- 修改任何进入模型 system 段的提示词前（无论文件位于哪个模块），必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
   `piEnvironment.ts`）、PI 会话权限／配置／system prompt／桥接，或 PI 相关的上线判断前，
@@ -175,6 +167,9 @@
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
+  `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
+  必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider

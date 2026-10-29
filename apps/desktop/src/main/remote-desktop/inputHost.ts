@@ -227,6 +227,10 @@ export class DesktopInputHost {
       spawn: (binary: string, args: string[] = []) =>
         spawn(binary, args, { stdio: 'pipe', windowsHide: true }),
     },
+    /** The whole-display pointer positions (global DIP) of one batch, reported as that
+     * batch starts its native injection, i.e. after every earlier batch has finished.
+     * The returned callback runs once the batch has finished (or failed) injecting. */
+    private readonly onPointer?: (points: { x: number; y: number }[]) => (() => void) | void,
   ) {}
   async start(displayId: string, window?: { windowId: number; pid: number }): Promise<void> {
     this.stop();
@@ -379,20 +383,30 @@ export class DesktopInputHost {
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     if (events.length === 0) return;
     const batch = this.activity!.begin(events);
+    const points: { x: number; y: number }[] = [];
+    const native = events.map((event) => {
+      if (event.kind !== 'move' && event.kind !== 'button') return event;
+      const point = {
+        x: Math.round(display.bounds.x + event.x * (display.bounds.width - 1)),
+        y: Math.round(display.bounds.y + event.y * (display.bounds.height - 1)),
+      };
+      points.push(point);
+      const mapped = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
+      return { ...event, ...mapped };
+    });
     this.write(
-      events.map((event) => {
-        if (event.kind !== 'move' && event.kind !== 'button') return event;
-        const point = {
-          x: Math.round(display.bounds.x + event.x * (display.bounds.width - 1)),
-          y: Math.round(display.bounds.y + event.y * (display.bounds.height - 1)),
-        };
-        const native = process.platform === 'win32' ? screen.dipToScreenPoint(point) : point;
-        return { ...event, ...native };
-      }),
+      native,
       batch,
+      points,
+      events.some((event) => event.kind === 'scroll'),
     );
   }
-  private write(events: unknown[], batch?: { ready: Promise<void>; complete: () => void }): void {
+  private write(
+    events: unknown[],
+    batch?: { ready: Promise<void>; complete: () => void },
+    points: { x: number; y: number }[] = [],
+    wheel = false,
+  ): void {
     const child = this.child;
     const line = `${JSON.stringify(events)}\n`;
     const connection = this.windows;
@@ -407,25 +421,37 @@ export class DesktopInputHost {
       if (generation !== this.generation) return;
       this.writing = this.writing.then(async () => {
         if (generation !== this.generation) return;
-        if (connection) {
-          if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
-            throw new Error('DESKTOP_INPUT_UNAVAILABLE');
-        } else {
-          // stdin.write completion only proves bytes were queued. Hold ownership
-          // until the helper has finished posting the entire native batch.
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => finish(new Error('DESKTOP_INPUT_TIMEOUT')), 10_000);
-            const finish = (error?: Error) => {
-              clearTimeout(timer);
-              if (this.acknowledge === finish) this.acknowledge = null;
-              if (error) reject(error);
-              else resolve();
-            };
-            this.acknowledge = finish;
-            child!.stdin.write(line, (error) => {
-              if (error) finish(error);
+        // Local-only windows must pass this batch's pointer through for as long as it is
+        // being injected, not from when it was queued nor after a fixed delay.
+        // A wheel carries no position: it lands on the system cursor as it is when this
+        // batch starts, which the local user may have moved since the viewer last did.
+        const settled =
+          points.length || wheel
+            ? this.onPointer?.(wheel ? [screen.getCursorScreenPoint(), ...points] : points)
+            : undefined;
+        try {
+          if (connection) {
+            if ((await connection.request(line.slice(0, -1))) !== 'ok\n')
+              throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+          } else {
+            // stdin.write completion only proves bytes were queued. Hold ownership
+            // until the helper has finished posting the entire native batch.
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => finish(new Error('DESKTOP_INPUT_TIMEOUT')), 10_000);
+              const finish = (error?: Error) => {
+                clearTimeout(timer);
+                if (this.acknowledge === finish) this.acknowledge = null;
+                if (error) reject(error);
+                else resolve();
+              };
+              this.acknowledge = finish;
+              child!.stdin.write(line, (error) => {
+                if (error) finish(error);
+              });
             });
-          });
+          }
+        } finally {
+          settled?.();
         }
       });
       await this.writing;

@@ -153,6 +153,8 @@ export async function commitChatImageUrls(
     urls: string[];
     /** 出生来源:用户消息附件 'user'(默认);assistant/tool 消息里的生成产物 'tool'。 */
     originKind?: 'user' | 'tool';
+    /** Native delivery must recheck the task after acquiring its media-reference lock. */
+    assertStillValid?: () => Promise<void>;
   },
   db?: LedgerDb,
 ): Promise<{ committed: number; skipped: number; failed: number }> {
@@ -169,6 +171,7 @@ async function commitChatImageUrlsUnlocked(
   params: Parameters<typeof commitChatImageUrls>[0],
   db: LedgerDb,
 ): Promise<{ committed: number; skipped: number; failed: number }> {
+  await params.assertStillValid?.();
   let committed = 0;
   let skipped = 0;
   let failed = 0;
@@ -189,6 +192,7 @@ async function commitChatImageUrlsUnlocked(
         skipped += 1;
         continue;
       }
+      await params.assertStillValid?.();
       await ledger.addRef(
         {
           hash: parsed.hash,

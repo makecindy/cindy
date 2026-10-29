@@ -151,6 +151,11 @@ export function parseModelsListResponse(
     const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
     const contextWindowMax = pickModelMetadata({ contextWindowMax: record.max_context_window ?? record.contextWindowMax }).contextWindowMax;
     const serviceTiers = record.service_tiers;
+    const additionalSpeedTiers = record.additional_speed_tiers;
+    const declaredSpeedTiers = [
+      ...(Array.isArray(serviceTiers) ? serviceTiers.map(tier => tier?.id) : []),
+      ...(Array.isArray(additionalSpeedTiers) ? additionalSpeedTiers : []),
+    ];
     const isVercel = sourceUrl !== undefined && (() => {
       try { const url = new URL(sourceUrl); return url.origin === 'https://ai-gateway.vercel.sh'
         && url.pathname.replace(/\/+$/, '') === '/v1/models'; } catch { return false; }
@@ -164,6 +169,11 @@ export function parseModelsListResponse(
     const elevenLabsMode = record.model_id === id && typeof record.can_do_text_to_speech === 'boolean'
       ? record.can_do_text_to_speech ? 'audio_speech' : 'other'
       : undefined;
+    // OpenRouter separates TTS (`speech`) from audio-capable chat (`audio`).
+    // This is its catalog contract, not a generic inference from model names.
+    const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
+      && Array.isArray(architecture?.output_modalities)
+      && architecture.output_modalities.includes('speech');
     const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
       nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
@@ -171,7 +181,7 @@ export function parseModelsListResponse(
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? elevenLabsMode ??
+      mode: record.mode ?? info.mode ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
         (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
       modalities,
       officialDocs: record.officialDocs,
@@ -211,7 +221,9 @@ export function parseModelsListResponse(
       supportsFastMode: record.supports_fast_mode ?? record.supportsServiceTier ??
         (Array.isArray(serviceTiers) && serviceTiers.every(tier =>
           tier && typeof tier === 'object' && typeof tier.id === 'string')
-          ? serviceTiers.some(tier => tier.id === 'priority') : undefined),
+          ? declaredSpeedTiers.some(tier => tier === 'priority' || tier === 'fast')
+          : Array.isArray(additionalSpeedTiers)
+            ? additionalSpeedTiers.includes('fast') : undefined),
       supportsImageInput:
         record.supports_image_input ?? info.supports_vision ?? capabilities.vision ??
         (Array.isArray(inputModalities) && inputModalities.every(value => typeof value === 'string')
@@ -225,9 +237,11 @@ export function parseModelsListResponse(
       discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
       delete discoveredMetadata.contextWindowMax;
     }
-    // OpenRouter and Vercel document USD per token. Never apply these units to arbitrary proxies.
+    // OpenRouter speech pricing is per character or generated second, not per token.
+    // Do not project it into the chat cost fields. Other OpenRouter/Vercel entries
+    // document USD per token; never apply those units to arbitrary proxies.
     const prices =
-      sourceUrl && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
+      sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
         ? (record.pricing as Record<string, unknown> | undefined)
         : undefined;
     const discoveredCost = Object.fromEntries(
@@ -252,6 +266,8 @@ export function parseModelsListResponse(
     );
     out.push({
       id,
+      ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
+        ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),
       discoveredMetadata,
       ...(Object.keys(discoveredCost).length ? { discoveredCost } : {}),
       name,

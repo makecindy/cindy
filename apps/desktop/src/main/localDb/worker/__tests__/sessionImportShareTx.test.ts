@@ -15,6 +15,7 @@ function createTables(db: Database.Database): void {
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       worktree_path TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       provider_id TEXT,

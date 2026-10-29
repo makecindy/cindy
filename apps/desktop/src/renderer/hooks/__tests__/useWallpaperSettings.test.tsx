@@ -12,7 +12,7 @@ function Controls() {
   return (
     <>
       <button onClick={() => settings.setWallpaper('cindy-window')}>Choose</button>
-      <button onClick={() => settings.setWallpaper('cindy-whisper')}>Choose Still</button>
+      <button onClick={() => settings.setWallpaper('night-launch')}>Choose Still</button>
       <button onClick={settings.resetWallpaper}>Reset</button>
       <button onClick={() => settings.setMotion('dynamic')}>Animate</button>
       <button onClick={() => settings.setMotion('static')}>Static</button>
@@ -41,11 +41,9 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
-  // User request 2026-10-17: static originals now load asynchronously too.
-  // Preserve the selected preview when the previous scene completes late, then
-  // show the selected CDN still. This extends the former offline-only case;
-  // minimum input: scene -> still with out-of-order completion; unit tier.
-  it('switches from a pending scene to a CDN still without using the late scene download', async () => {
+  // Regression: changing static wallpaper must retain the displayed canvas
+  // until the selected original is decoded, including out-of-order downloads.
+  it('retains the background until the selected original is ready, ignoring late downloads', async () => {
     const finishes = new Map<string, (url: string) => void>();
     const ensureImage = vi.fn(
       (id: string) =>
@@ -77,19 +75,29 @@ describe('application wallpaper lifecycle', () => {
       </WallpaperSettingsProvider>,
     );
     await waitFor(() => expect(ensureImage).toHaveBeenCalledExactlyOnceWith('cindy-window'));
-    fireEvent.click(screen.getByText('Choose Still'));
-    await waitFor(() =>
-      expect(setPatch).toHaveBeenCalledExactlyOnceWith({ wallpaperId: 'cindy-whisper' }),
-    );
     const background = () =>
       document.documentElement.style.getPropertyValue('--app-wallpaper-image');
-    expect(background()).toContain('cindy-whisper.webp');
+    const originalBackground = background();
+    fireEvent.click(screen.getByText('Choose Still'));
+    await waitFor(() =>
+      expect(setPatch).toHaveBeenCalledExactlyOnceWith({ wallpaperId: 'night-launch' }),
+    );
+    expect(background()).toBe(originalBackground);
     await act(async () =>
       finishes.get('cindy-window')!(`cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`),
     );
-    expect(background()).toContain('cindy-whisper.webp');
+    expect(background()).toBe(originalBackground);
     const stillUrl = `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`;
-    await act(async () => finishes.get('cindy-whisper')!(stillUrl));
+    await act(async () => finishes.get('night-launch')!(stillUrl));
+    expect(background()).toContain(stillUrl);
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--app-wallpaper-previous-image')).toBe(originalBackground);
+    expect(root.dataset.wallpaperTransition).toBe('true');
+    const finished = new Event('animationend', { bubbles: true });
+    Object.defineProperty(finished, 'animationName', { value: 'app-wallpaper-image-out' });
+    fireEvent(document.body, finished);
+    expect(root.dataset.wallpaperTransition).toBeUndefined();
+    expect(root.style.getPropertyValue('--app-wallpaper-previous-image')).toBe('');
     expect(background()).toContain(stillUrl);
     expect(ensureImage).toHaveBeenCalledTimes(2);
     expect(ensureVideo).not.toHaveBeenCalled();

@@ -186,6 +186,19 @@ describe('message write paths avoid large-content readback', () => {
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
   });
 
+  // #6420: native delivery commits refs under its own task guard; the generic async hook must not race it.
+  it('defers automatic attachment refs only for the Host writer that owns their guarded commit', async () => {
+    const content = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    await createMessage('s1', { clientId: 'native-image', role: 'tool_result', content }, {
+      beforePublish: async () => {}, deferMediaRefs: true,
+    });
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(h.sqlite!.prepare('SELECT content FROM messages WHERE client_id = ?').pluck().get('native-image'))
+      .toBe(content);
+    await createMessage('s1', { clientId: 'ordinary-image', role: 'tool_result', content });
+    expect(h.mediaRefCalls).toEqual([{ sessionId: 's1', role: 'tool_result', content }]);
+  });
+
   it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');

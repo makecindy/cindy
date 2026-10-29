@@ -787,6 +787,91 @@ describe('ToolLoopGuard pacing and final limits', () => {
     expect(captured.nested).toEqual({ a: [1, { b: 'c' }] });
     expect(captured).not.toBe(input);
   });
+
+  // 2026-10-18 误报:脚本里同一调用在突发里重复(0.8s 一次)不是模型逐次重复;
+  // 隔着采样时间的重复仍须计数。
+  it('ignores a call repeated in a burst but counts it once sampling gaps separate it', () => {
+    const { guard, advance } = clockGuard({ burstRepeatGapMs: 2_000 });
+    for (let i = 0; i < 30; i++) {
+      expect(feed(guard, `burst-${i}`, 'browser', { action: 'snapshot' }, 'saving').kind).toBe('ok');
+      advance(800);
+    }
+    let last: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 4; i++) {
+      advance(3_000);
+      last = feed(guard, `model-${i}`, 'browser', { action: 'snapshot' }, 'saving');
+    }
+    expect(last).toMatchObject({ kind: 'hard', reason: 'consecutive' });
+  });
+
+  // codex P1(#6388):判据只看该调用自己的开始时间。后台脚本以其它调用持续快速返回结果,
+  // 不能让隔着采样时间的模型重复被当作突发而永远不计数;完成顺序、并发也不影响。
+  it('counts model repeats even while a script keeps returning unrelated results quickly', () => {
+    const { guard, advance } = clockGuard({ burstRepeatGapMs: 2_000 });
+    let last: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let round = 0; round < 6; round++) {
+      guard.onToolUse(`model-${round}`, 'read', { path: 'a' });
+      guard.onToolUse(`script-a-${round}`, 'read', { path: 'b' });
+      advance(500);
+      guard.onToolResult(`script-a-${round}`, 'same');
+      guard.onToolUse(`script-b-${round}`, 'read', { path: 'b' });
+      advance(500);
+      last = guard.onToolResult(`model-${round}`, 'same');
+      guard.onToolResult(`script-b-${round}`, 'same');
+      advance(8_500);
+    }
+    expect(last).toMatchObject({ kind: 'hard', reason: 'pingpong', count: 12 });
+  });
+
+  // codex P1/P2(#6388):突发关系在调用开始时确定,并发的相邻调用无论按什么顺序返回都不影响;
+  // 结果到达时才看会漏掉尚未返回的邻居,或被迟到的旧调用覆盖。
+  it('decides burst repeats at call start, whatever order overlapping calls complete in', () => {
+    const { guard, advance } = clockGuard({ burstRepeatGapMs: 2_000 });
+    const verdicts: ToolLoopGuardVerdict[] = [];
+    for (let group = 0; group < 6; group++) {
+      guard.onToolUse(`a-${group}`, 'browser', { action: 'snapshot' });
+      advance(1_500);
+      guard.onToolUse(`b-${group}`, 'browser', { action: 'snapshot' });
+      advance(1_500);
+      guard.onToolUse(`c-${group}`, 'browser', { action: 'snapshot' });
+      advance(100);
+      for (const id of ['a', 'c', 'b']) verdicts.push(guard.onToolResult(`${id}-${group}`, 'saving'));
+      advance(1_400);
+    }
+    expect(verdicts.filter((verdict) => verdict.kind === 'hard')).toEqual([]);
+  });
+
+  // codex P2(#6388):突发结果不参与判定,也不能消耗复核放行额度。
+  it('does not spend the review grace window on burst repeats', () => {
+    const { guard, advance } = clockGuard({ burstRepeatGapMs: 2_000 });
+    guard.acceptCurrentPattern(4);
+    for (let i = 0; i < 10; i++) {
+      feed(guard, `burst-${i}`, 'browser', { action: 'snapshot' }, 'same');
+      advance(500);
+    }
+    let last: ToolLoopGuardVerdict = { kind: 'ok' };
+    for (let i = 0; i < 3; i++) {
+      advance(3_000);
+      last = feed(guard, `model-${i}`, 'browser', { action: 'snapshot' }, 'same');
+    }
+    expect(last.kind).toBe('ok');
+  });
+
+  // codex P1(#6388):突发重复只有续接了当前连续段才评估时长上限,
+  // 否则早已陈旧的连续段会被算到无关的突发调用头上。
+  it('does not apply the duration cap of a stale streak to an unrelated burst result', () => {
+    const { guard, advance } = clockGuard({ burstRepeatGapMs: 2_000, finalStreakMs: 20_000 });
+    const verdicts: ToolLoopGuardVerdict[] = [];
+    for (let tick = 0; tick < 40; tick++) {
+      advance(1_000);
+      // A script polls once a second (a burst after the first), with a different result each time.
+      guard.onToolUse(`x-${tick}`, 'browser', { action: 'poll' });
+      verdicts.push(guard.onToolResult(`x-${tick}`, `busy ${tick}`));
+      // The model repeats one call four times, three seconds apart, then stops.
+      if (tick % 3 === 0 && tick < 12) verdicts.push(feed(guard, `a-${tick}`, 'browser', { action: 'snapshot' }, 'same'));
+    }
+    expect(verdicts.filter((verdict) => verdict.kind === 'hard' && verdict.final)).toEqual([]);
+  });
 });
 
 describe('classifyToolContractError', () => {

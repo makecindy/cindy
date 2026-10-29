@@ -114,6 +114,27 @@ describe('AppShortcutStore', () => {
     expect(winStore.setOverride('new-maker', combo('IntlYen', { ctrl: true }))).toBeNull();
   });
 
+  it('guards the system-wide screenshot shortcut', () => {
+    const store = makeStore('win32');
+    // 全局键在所有应用里截走按键: 占用 Ctrl+C 会让别的应用无法复制
+    expect(store.setOverride('region-screenshot', combo('KeyC', { ctrl: true }))).toBe(
+      'global-unusable',
+    );
+    // globalShortcut 只认 accelerator: NumpadAdd 表达不了, 绑定后永远不会触发
+    expect(
+      store.setOverride('region-screenshot', combo('NumpadAdd', { ctrl: true, alt: true })),
+    ).toBe('global-unusable');
+    expect(store.setOverride('region-screenshot', combo('KeyA', { ctrl: true, alt: true }))).toBeNull();
+    // Cindy 在前台时全局键同样先截走按键, 浏览器域的应用内快捷键也不能与它同键
+    expect(
+      store.setOverride('browser-focus-url', combo('KeyA', { ctrl: true, alt: true })),
+    ).toBe('conflict');
+    // 暂不支持 Linux
+    expect(
+      makeStore('linux').setOverride('region-screenshot', combo('KeyA', { ctrl: true, alt: true })),
+    ).toBe('platform-unavailable');
+  });
+
   it('setOverride(null) deletes the binding: effective combos become empty', () => {
     const store = makeStore('darwin');
     expect(store.setOverride('find-in-page', null)).toBeNull();

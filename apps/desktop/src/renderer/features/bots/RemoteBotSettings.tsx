@@ -1,3 +1,4 @@
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -464,6 +465,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
         void save();
       }}
     >
+      {(item.id === 'follow-up' || item.id === 'project') ? <p className="text-12 leading-5 text-[var(--text-secondary)]">{item.text}</p> : null}
       {item.id === 'avatar' ? (
         <BotPortraitPicker
           disabled={disabled}
@@ -550,7 +552,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
             if (!disabled && !revisionPendingRef.current)
               setDraft((previous) => ({
                 ...previous,
-                modelChain: JSON.stringify(chain),
+                modelChain: serializeModelRoutes(chain),
                 followsDefault: false,
               }));
           }}
@@ -562,7 +564,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
             onChange={route => {
               if (!disabled && !revisionPendingRef.current) setDraft(previous => ({ ...previous,
                 taskFollowsPrimary: route === null,
-                taskModel: JSON.stringify(route ? [route] : readRemoteBotModelChain(previous.modelChain).slice(0, 1)),
+                taskModel: serializeModelRoutes(route ? [route] : readRemoteBotModelChain(previous.modelChain).slice(0, 1)),
               }));
             }} />}
         </>
@@ -601,6 +603,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
               resourceId === bot.id
                 ? bot.id
                 : resourceId.includes('/connections/') ||
+                    resourceId.includes('/projects/') ||
                     resourceId.includes('/skills/') ||
                     resourceId.includes('/memory/')
                   ? resourceId.slice(0, resourceId.lastIndexOf('/'))

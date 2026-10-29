@@ -1,4 +1,6 @@
-import { promises as fs } from 'node:fs';
+import { promises as nativeFs } from 'node:fs';
+import { operationFileSystem } from '../utils/operationFileSystem';
+import { operationCheckpoint, operationYield } from '../utils/operationBudget';
 import path from 'node:path';
 
 import { detectSensitivePath } from '../security/sensitivePath';
@@ -6,6 +8,7 @@ import { GitExecError } from '../worktree/gitExec';
 import { isolatedGitExec } from './isolatedGitExec';
 
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const fs = operationFileSystem(nativeFs);
 const DEFAULT_MAX_CONTENT_SCAN_BYTES = DEFAULT_MAX_FILE_BYTES;
 
 /** Reason a dirty file is excluded from an automatic snapshot commit. */
@@ -133,6 +136,7 @@ export function parseStatusPorcelainZ(output: string): SnapshotStatusEntry[] {
   const parts = output.split('\0').filter((part) => part.length > 0);
   const entries: SnapshotStatusEntry[] = [];
   for (let i = 0; i < parts.length; i += 1) {
+    if (i % 256 === 0) operationCheckpoint();
     const part = parts[i];
     if (part.length < 4) continue;
 
@@ -174,14 +178,18 @@ function isGitStatusOutputTooLargeError(err: unknown): boolean {
   return err.cause?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test(err.message);
 }
 
-async function hasGitMarker(dir: string): Promise<boolean> {
-  return fs.lstat(path.join(dir, '.git')).then(
+async function hasGitMarker(dir: string, markers: Map<string, boolean>): Promise<boolean> {
+  const cached = markers.get(dir);
+  if (cached !== undefined) return cached;
+  const exists = await fs.lstat(path.join(dir, '.git')).then(
     () => true,
     () => false,
   );
+  markers.set(dir, exists);
+  return exists;
 }
 
-async function isInsideNestedGitRepo(repoPath: string, gitPath: string): Promise<boolean> {
+async function isInsideNestedGitRepo(repoPath: string, gitPath: string, markers: Map<string, boolean>): Promise<boolean> {
   const abs = resolveSnapshotGitPath(repoPath, gitPath);
   if (!abs) return false;
 
@@ -197,7 +205,7 @@ async function isInsideNestedGitRepo(repoPath: string, gitPath: string): Promise
   while (path.resolve(cur) !== repoRoot) {
     const rel = path.relative(repoRoot, cur);
     if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
-    if (await hasGitMarker(cur)) return true;
+    if (await hasGitMarker(cur, markers)) return true;
 
     const parent = path.dirname(cur);
     if (parent === cur) return false;
@@ -236,6 +244,7 @@ async function classifyEntry(
   repoPath: string,
   entry: SnapshotStatusEntry,
   opts: SnapshotFileFilterOptions,
+  markers: Map<string, boolean>,
 ): Promise<SnapshotSkippedFile | null> {
   if (hasConflictStatus(entry.code)) return { path: entry.path, reason: 'conflict' };
 
@@ -257,7 +266,7 @@ async function classifyEntry(
   }
 
   for (const gitPath of rawPathsFor(entry)) {
-    if (await isInsideNestedGitRepo(repoPath, gitPath)) {
+    if (await isInsideNestedGitRepo(repoPath, gitPath, markers)) {
       return { path: entry.path, reason: 'nested-git-repo' };
     }
   }
@@ -274,11 +283,16 @@ export async function buildSnapshotFilePlanFromEntries(
   const options = withDefaults(opts);
   const includedFiles: SnapshotIncludedFile[] = [];
   const skippedFiles: SnapshotSkippedFile[] = [];
+  // Siblings share ancestor probes, but later scans must see new/removed .git markers.
+  // File stats and content safety checks remain live and are never cached here.
+  const markers = new Map<string, boolean>();
 
+  let scanIndex = 0;
   for (const entry of entries) {
+    await operationYield(scanIndex++);
     const pathsForPathspec = pathspecPathsFor(entry);
     const oldPath = entry.oldPath && entry.code[0] === 'R' ? { oldPath: entry.oldPath } : {};
-    const skip = await classifyEntry(repoPath, entry, options);
+    const skip = await classifyEntry(repoPath, entry, options, markers);
     if (skip) {
       skippedFiles.push({ ...skip, ...oldPath, pathsForPathspec });
       continue;

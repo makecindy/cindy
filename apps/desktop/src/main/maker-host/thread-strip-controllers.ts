@@ -19,6 +19,9 @@ export const responsesItemIdStripController = createThreadStripController();
 // id 切 OpenAI 后被 64 上限拒绝)—— always-on; 恢复一次后该 thread 发送前预改写。
 export const responsesItemIdLengthStripController = createThreadStripController();
 
+// Raw reasoning content rejected after a provider switch; marked only by its own recovery rule.
+export const responsesReasoningContentStripController = createThreadStripController();
+
 // 空 thinking 块主动剥离 —— always-on(删空块零成本)。必须与上面是独立实例。
 export const emptyThinkingStripController = createThreadStripController();
 

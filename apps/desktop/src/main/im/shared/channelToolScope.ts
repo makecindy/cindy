@@ -91,7 +91,7 @@ export interface FeishuToolScope {
  * 「当前在哪个对话、这一轮是不是主人触发」(伙伴技能读写按它授权)。
  */
 export interface LaneTurnScope {
-  channel: 'wecom' | 'dingtalk' | 'discord';
+  channel: 'wecom' | 'dingtalk' | 'discord' | 'wechat' | 'x';
   /** 连接的 botContextId。 */
   botId: string;
   laneUserId: string;
@@ -105,10 +105,13 @@ export interface LaneTurnScope {
 export type LaneTurnScopeChannel = LaneTurnScope['channel'];
 
 export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScopeChannel {
-  return channel === 'wecom' || channel === 'dingtalk' || channel === 'discord';
+  return channel === 'wecom' || channel === 'dingtalk' || channel === 'discord' || channel === 'wechat' || channel === 'x';
 }
 
-export type ChannelToolScope = TelegramToolScope | FeishuToolScope | LaneTurnScope;
+export type ChannelToolScope = (TelegramToolScope | FeishuToolScope | LaneTurnScope) & {
+  /** Local durable input, stamped by the IM runner after persistence succeeds. */
+  inputClientId?: string;
+};
 
 interface ActiveScope {
   sessionInstanceId: string;

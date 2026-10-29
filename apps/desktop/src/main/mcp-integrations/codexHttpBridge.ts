@@ -30,6 +30,7 @@ import {
 } from './codexMcpThreadContextStore.js';
 import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from './codexBuiltinToolPolicy.js';
 import { appServerIds } from '../mcp-apps/runtime.js';
+import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
@@ -237,7 +238,7 @@ export async function startCodexHttpBridge(
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
 
-  const httpServer = http.createServer(async (req, res) => {
+  const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
 
     try {
@@ -419,7 +420,7 @@ export async function startCodexHttpBridge(
         res.end(err instanceof Error ? err.message : 'Internal server error');
       }
     }
-  });
+  }));
 
   // streamable-http 是长连接 SSE 流；默认 5s keep-alive 会切断 codex 连接。
   httpServer.keepAliveTimeout = 0;

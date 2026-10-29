@@ -11,7 +11,9 @@
  *  - 消息里的图片 → 字节随载荷带过去，被控端写到本次任务的附件目录再引用。
  * 被控端解码时按最小合同校验类型，不认识的字段丢弃。
  */
+import { createHash } from 'node:crypto';
 import {
+  LOCAL_AGENT_CLIENT,
   AUTO_REVIEW_DELEGATED_CONTINUATION,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -98,10 +100,12 @@ export interface RemoteAgentWireFile {
 }
 
 export interface RemoteAgentWireStartOptions {
+  /** Negotiated external-application isolation. No controller URL, token or path. */
+  localApplication?: { mcpName: string; hostToolsOnly: boolean; storageKey: string };
   model: string;
   providerId?: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   thinkingEnabled?: boolean;
   userPrompt?: string;
   botProfilePrompt?: string;
@@ -125,6 +129,18 @@ export interface RemoteAgentWireAncestorFile {
   up: number;
   name: string;
   data: string;
+}
+
+/**
+ * 项目各级上级目录里有没有 Codex 沿上级目录查找的那几个名字(`.git`、插件清单目录等)，打开任务时一次带过去：
+ * 被控端对不存在的直接回答「不存在」，不再逐个经设备互联往返。只报这几个名字存不存在，Agent 本来就能逐个
+ * 查到，不多泄露上级目录里的其它内容。
+ */
+export interface RemoteAgentWireAncestorMarkers {
+  /** 控制端检查过的名字：新旧版本的名单可能不同，被控端只按这里列出的判断。 */
+  names: string[];
+  /** 各级上级目录(up 从 1 起，到根目录为止)里存在的名字；没列出的级别按不知道处理。 */
+  levels: Array<{ up: number; present: string[] }>;
 }
 
 /**
@@ -154,6 +170,10 @@ export interface RemoteAgentWirePersonal {
 }
 
 export interface RemoteAgentOpenPayload {
+  /** Controller can acknowledge durable image delivery; absent on legacy controllers. */
+  acceptsImageDeliveryReceipts?: boolean;
+  /** Task Host clear generation, preserved through provider-group relays. */
+  imageDeliveryEpoch?: number;
   /** 控制端任务 id。 */
   sessionId: string;
   /** 能力增量：Agent 使用本机虚拟工作区；新控制端在 open 前必须确认对端 caps 支持。 */
@@ -168,6 +188,8 @@ export interface RemoteAgentOpenPayload {
    * 隔离运行，会话记录与目录按(控制端, relay)分开。只发给 caps 声明了 guestRelay 的电脑。
    */
   relay?: string;
+  /** Capability-negotiated reverse checks against the original sharing member. */
+  relayModelAccess?: boolean;
   /**
    * 供应商组转分享：组所在电脑把受邀者的任务转给分享来的组内电脑时，带上这个受邀者(按账号)的转分享键，
    * 与组所在电脑经 op `reshare` 报上去的键相同。那台的主人同意过这个人才运行；没同意或没带时拒绝。
@@ -187,6 +209,8 @@ export interface RemoteAgentOpenPayload {
   projectFiles: RemoteAgentWireFile[];
   /** 项目上级目录里的说明文件。 */
   ancestorFiles: RemoteAgentWireAncestorFile[];
+  /** 项目上级目录里有没有 Codex 要找的那几个名字；旧控制端不带，旧被控端解码时丢弃。 */
+  ancestorMarkers?: RemoteAgentWireAncestorMarkers;
   /** 说明文件里 `@` 导入的文件；旧被控端不认识，按没有处理。 */
   importFiles?: RemoteAgentWireImportFile[];
   /** 你这台的个人配置。 */
@@ -198,6 +222,15 @@ export interface RemoteAgentOpenPayload {
 /** 上级目录说明文件只认这几个名字，最多向上这么多级。 */
 export const ANCESTOR_INSTRUCTION_FILES = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'] as const;
 export const MAX_ANCESTOR_LEVELS = 24;
+/**
+ * Codex 建线程时在各级上级目录里查找的名字(固定 Codex 0.159.2 实测：每级 `.git` 与三种插件清单目录；
+ * 项目根在上级时还会查 `.agents`、`.codex` 与说明文件)。控制端按它报告各级有没有。
+ */
+export const ANCESTOR_MARKER_NAMES = [
+  '.git', '.agents', '.codex', '.codex-plugin', '.claude-plugin', '.cursor-plugin', 'AGENTS.md', 'AGENTS.override.md',
+] as const;
+/** 解码时接受的名字个数上限(给新版本加名字留余量)。 */
+const MAX_ANCESTOR_MARKER_NAMES = 32;
 /**
  * 同步到影子目录的项目文件白名单(控制端按它收集；被控端对不受信任的控制端按它复核)：
  * 工作目录根上的说明文件、Claude Code 项目设置(只保留权限规则)，以及这些目录下的
@@ -232,6 +265,11 @@ const VENDOR_OPTION_KEYS = new Set(['source', 'resumeSessionAt', 'forkSession'])
 export function encodeStartOptions(opts: StartSessionOptions): RemoteAgentWireStartOptions {
   const record = opts as unknown as Record<string, unknown>;
   const wire: RemoteAgentWireStartOptions = { model: opts.model };
+  const client = opts[LOCAL_AGENT_CLIENT];
+  if (client) wire.localApplication = {
+    mcpName: client.mcpName ?? 'client', hostToolsOnly: client.hostToolsOnly,
+    storageKey: createHash('sha256').update(client.storageDirectory ?? opts.sessionId!).digest('hex'),
+  };
   if (opts.providerId !== undefined) wire.providerId = opts.providerId;
   for (const key of START_STRING_FIELDS) {
     const value = record[key];
@@ -257,6 +295,13 @@ export function decodeStartOptions(value: unknown): RemoteAgentWireStartOptions 
     throw new Error('REMOTE_AGENT_INVALID');
   }
   const wire: RemoteAgentWireStartOptions = { model: value.model };
+  if (value.localApplication !== undefined) {
+    const client = value.localApplication;
+    if (!isRecord(client) || typeof client.mcpName !== 'string' || !/^[a-z0-9_-]{1,64}$/i.test(client.mcpName)
+      || client.mcpName === 'cindy_exec' || typeof client.hostToolsOnly !== 'boolean'
+      || typeof client.storageKey !== 'string' || !/^[a-f0-9]{64}$/.test(client.storageKey)) throw new Error('REMOTE_AGENT_INVALID');
+    wire.localApplication = { mcpName: client.mcpName, hostToolsOnly: client.hostToolsOnly, storageKey: client.storageKey };
+  }
   if (value.providerId === null || typeof value.providerId === 'string') wire.providerId = value.providerId as string | null;
   for (const key of START_STRING_FIELDS) {
     const item = optString(value[key]);
@@ -325,9 +370,13 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   });
   return {
     sessionId,
+    ...(value.acceptsImageDeliveryReceipts === true ? { acceptsImageDeliveryReceipts: true } : {}),
+    ...(typeof value.imageDeliveryEpoch === 'number' && Number.isSafeInteger(value.imageDeliveryEpoch) && value.imageDeliveryEpoch >= 0
+      ? { imageDeliveryEpoch: value.imageDeliveryEpoch } : {}),
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
     ...(value.groupAssigned === true ? { groupAssigned: true } : {}),
     ...(typeof value.relay === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.relay) ? { relay: value.relay } : {}),
+    ...(value.relayModelAccess === true ? { relayModelAccess: true } : {}),
     ...(typeof value.reshareKey === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.reshareKey)
       ? { reshareKey: value.reshareKey }
       : {}),
@@ -339,6 +388,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     workspace: decodeWorkspace(value.workspace),
     projectFiles,
     ancestorFiles,
+    ...decodeAncestorMarkers(value.ancestorMarkers),
     ...decodeImportFiles(value.importFiles),
     personal: decodePersonal(value.personal),
     mcpServers: (stringArray(value.mcpServers, 128) ?? []).filter((name) => /^[a-z0-9_-]{1,64}$/i.test(name)),
@@ -350,6 +400,33 @@ export function isSafeImportPath(relative: string): boolean {
   if (!relative || relative.length > 1024 || relative.includes('\0') || relative.includes('\\')) return false;
   if (relative.startsWith('/') || /^[A-Za-z]:/.test(relative)) return false;
   return relative.split('/').every((part) => part !== '' && part !== '.');
+}
+
+/** 上级目录标记名只能是单个路径段。 */
+function isMarkerName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 64 && value !== '.' && value !== '..'
+    && !/[\\/\0:]/.test(value);
+}
+
+/**
+ * 格式不对的整段丢掉(按没带处理，被控端照常转发每次查询)：宁可慢，不能把存在的路径答成不存在。
+ */
+function decodeAncestorMarkers(value: unknown): { ancestorMarkers?: RemoteAgentWireAncestorMarkers } {
+  if (!isRecord(value) || !Array.isArray(value.names) || !Array.isArray(value.levels)) return {};
+  if (value.names.length > MAX_ANCESTOR_MARKER_NAMES || value.levels.length > MAX_ANCESTOR_LEVELS) return {};
+  if (!value.names.every(isMarkerName)) return {};
+  const names = [...new Set(value.names)];
+  const seen = new Set<number>();
+  const levels: RemoteAgentWireAncestorMarkers['levels'] = [];
+  for (const item of value.levels) {
+    if (!isRecord(item) || !Array.isArray(item.present)) return {};
+    const { up } = item;
+    if (typeof up !== 'number' || !Number.isInteger(up) || up < 1 || up > MAX_ANCESTOR_LEVELS || seen.has(up)) return {};
+    if (!item.present.every((name) => isMarkerName(name) && names.includes(name))) return {};
+    seen.add(up);
+    levels.push({ up, present: [...new Set(item.present as string[])] });
+  }
+  return names.length && levels.length ? { ancestorMarkers: { names, levels } } : {};
 }
 
 function decodeImportFiles(value: unknown): { importFiles?: RemoteAgentWireImportFile[] } {

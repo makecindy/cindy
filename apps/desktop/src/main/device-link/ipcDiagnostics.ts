@@ -51,13 +51,21 @@ interface Bucket {
   completed: number;
 }
 
+export type DeviceLinkIpcDiagnosticsLevel = 'info' | 'debug';
+
+/** Successful channels listed in the combined line; the rest are counted only. */
+const MAX_OK_CHANNELS = 8;
+
 /** Local diagnostics for completed transport calls originating at renderer IPC.
  * Counts before IPC error remapping; not wire sends or all main background work.
- * First failure per bucket is immediate; 30s summaries include that first event
- * and successes for a baseline. Bounded cardinality and no payloads/peer IDs.
+ * First failure per bucket is immediate; each 30s summary lists every failing
+ * bucket (including that first event) and folds all successful buckets into one
+ * baseline line. The baseline stays at debug unless the interval has failures,
+ * so a healthy multi-peer link no longer writes one INFO line per bucket.
+ * Bounded cardinality and no payloads/peer IDs.
  */
 export function createDeviceLinkIpcDiagnostics(
-  emit: (event: string, fields: Record<string, unknown>) => void,
+  emit: (event: string, fields: Record<string, unknown>, level?: DeviceLinkIpcDiagnosticsLevel) => void,
 ) {
   const salt = randomBytes(32);
   const buckets = new Map<string, Bucket>();
@@ -67,9 +75,13 @@ export function createDeviceLinkIpcDiagnostics(
   let startedAt = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  function safeEmit(event: string, fields: Record<string, unknown>): void {
+  function safeEmit(
+    event: string, fields: Record<string, unknown>, level: DeviceLinkIpcDiagnosticsLevel = 'info',
+  ): void {
     try {
-      emit(event, fields);
+      // INFO stays the two-argument default; only demoted lines carry a level.
+      if (level === 'debug') emit(event, fields, 'debug');
+      else emit(event, fields);
     } catch {
       /* Diagnostics cannot change request behavior. */
     }
@@ -79,9 +91,33 @@ export function createDeviceLinkIpcDiagnostics(
     if (timer) clearTimeout(timer);
     timer = undefined;
     const elapsedMs = Date.now() - startedAt;
-    for (const bucket of buckets.values()) safeEmit('transport summary', { ...bucket, elapsedMs });
+    let failingBuckets = 0;
+    let okBuckets = 0;
+    let okCompleted = 0;
+    const okChannels = new Map<string, number>();
+    for (const bucket of buckets.values()) {
+      if (bucket.code !== 'OK') {
+        failingBuckets++;
+        safeEmit('transport summary', { ...bucket, elapsedMs });
+        continue;
+      }
+      okBuckets++;
+      okCompleted += bucket.completed;
+      okChannels.set(bucket.channel, (okChannels.get(bucket.channel) ?? 0) + bucket.completed);
+    }
+    if (okBuckets) {
+      const ranked = [...okChannels].sort((a, b) => b[1] - a[1]);
+      safeEmit('transport summary ok', {
+        buckets: okBuckets,
+        completed: okCompleted,
+        channels: Object.fromEntries(ranked.slice(0, MAX_OK_CHANNELS)),
+        ...(ranked.length > MAX_OK_CHANNELS ? { channelsOmitted: ranked.length - MAX_OK_CHANNELS } : {}),
+        elapsedMs,
+      }, failingBuckets || overflowFailures ? 'info' : 'debug');
+    }
     if (overflowCompleted)
-      safeEmit('transport summary overflow', { overflowCompleted, overflowFailures, elapsedMs });
+      safeEmit('transport summary overflow', { overflowCompleted, overflowFailures, elapsedMs },
+        overflowFailures ? 'info' : 'debug');
     buckets.clear();
     overflowCompleted = 0;
     overflowFailures = 0;

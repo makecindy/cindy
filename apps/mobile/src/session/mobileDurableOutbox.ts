@@ -117,6 +117,7 @@ export function durableOutboxDisplayItem(
           ? "dispatching"
           : "uploading",
     enqueueError: record.error ?? null,
+    ...(record.failedUploadSlot !== undefined ? { failedUploadSlot: record.failedUploadSlot } : {}),
     slotMeta: record.item.slotMeta.map((meta, slot) => {
       const upload = record.uploads.find((u) => u.slot === slot);
       return upload

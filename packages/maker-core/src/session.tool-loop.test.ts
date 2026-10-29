@@ -3,7 +3,7 @@ import { Session, MANUAL_ABORT_RECOVERY_GRACE_MS } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import { createPiTranslateContext, translatePiEvent } from './agents/pi/translator.js';
 import { newCodexRuntimeState, translateItemNotification } from './agents/codex/translator.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { AUTO_REVIEW_USER_INTENT, type AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionResolver } from './types/events.js';
 import type { Logger } from './interfaces/logger.js';
 import type { ToolLoopReviewer } from './agents/shared/tool-loop-review.js';
@@ -14,7 +14,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: ToolLoopReviewer) {
+function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer: ToolLoopReviewer = async () => 'stop') {
   vi.useFakeTimers();
   const queue = createAsyncQueue<AgentEvent>();
   let running = false;
@@ -23,6 +23,7 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
     id: 'native-session', agentKind, model: 'test-model',
     events: () => queue,
     send: vi.fn(async () => { running = true; }),
+    steer: vi.fn(async () => {}),
     abort: vi.fn(async () => {
       if (hangAbort) return new Promise<void>(() => {});
       running = false;
@@ -34,19 +35,22 @@ function setup(agentKind: 'pi' | 'codex', hangAbort = false, toolLoopReviewer?: 
   } as unknown as AgentSessionHandle;
   const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
   const session = new Session({
-    id: 'test-session', agentKind, handle, workDir: '/test', capabilities: {} as never, logger, toolLoopReviewer,
+    id: 'test-session', agentKind, handle, workDir: '/test',
+    capabilities: { sameTurnSteer: { supported: true } } as never, logger, toolLoopReviewer,
   });
   sessions.push(session);
   const seen: AgentEvent[] = [];
   session.onEvent((event) => seen.push(event));
+  // Each call follows a model sampling (seconds), unlike one script issuing calls back to back.
   const tool = async (id: string, extra: Partial<AgentEvent> = {}, name = 'read', input: unknown = { path: 'same.ts' }) => {
+    await vi.advanceTimersByTimeAsync(3_000);
     queue.push({ type: 'tool_use', data: { toolUseId: id, toolName: name, input }, source: agentKind, ...extra });
     queue.push({ type: 'tool_result_full', data: { toolUseId: id, fullText: 'same result' }, source: agentKind, ...extra });
     queue.push({ type: 'tool_result', data: { toolUseIds: [id], summary: 'done' }, source: agentKind, ...extra });
     await vi.advanceTimersByTimeAsync(0);
   };
   const errors = () => seen.filter((event) => event.type === 'error');
-  return { queue, session, seen, handle, tool, errors,
+  return { queue, session, seen, handle, tool, errors, logger,
     ask: (delivery?: 'async') => resolveInteraction({ kind: 'ask_user_question', requestId: 'question',
       questions: [{ question: 'Scope?' }], ...(delivery ? { delivery } : {}) }),
     end: async () => {
@@ -83,6 +87,9 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     } });
     for (const i of [2, 0, 4, 1, 3]) t.queue.push({ type: 'tool_result_full', source: agentKind, data: {
       toolUseId: `invalid-${i}`, fullText: 'InputValidationError: Missing required parameter file_path', isError: true,
+    } });
+    t.queue.push({ type: 'tool_result', source: agentKind, data: {
+      toolUseIds: [0, 1, 2, 3, 4].map((i) => `invalid-${i}`), summary: 'invalid parameters',
     } });
     await vi.advanceTimersByTimeAsync(0);
     expect(t.errors()).toHaveLength(0);
@@ -128,6 +135,7 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     await t.session.send('first');
     const generation = t.session.getTurnGeneration();
     for (let i = 0; i < 3; i++) await t.tool(String(i));
+    await vi.advanceTimersByTimeAsync(3_000);
     t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
     t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
     t.queue.push({ type: 'tool_result', source: agentKind, data: { toolUseIds: ['unrelated'], summary: 'done' } });
@@ -213,18 +221,63 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.abort).not.toHaveBeenCalled();
   });
 
-  it('lets the reviewer keep a suspected loop running', async () => {
+  // 游戏截图误停：16 次四种调用轮转不等于空转；三次放行后仍需继续，且不增加复核调用。
+  it('reviews phone operation with user goals and explanations, then keeps running within the review budget', async () => {
     const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
     const t = setup(agentKind, false, reviewer);
-    await t.session.send('investigate');
-    for (let i = 0; i < 6; i++) await t.tool(String(i));
+    const userIntent = { earlierUserMessages: ['Play the phone game using screenshots.'], currentUserMessage: 'Continue until the level ends.' };
+    await t.session.send('Continue until the level ends.', { [AUTO_REVIEW_USER_INTENT]: userIntent });
+    // PR #7404 review: delta + final 全文不能重复，避免 2000 字符发送预算挤掉最新理由。
+    const prefix = 'Observing the animation. '.repeat(50);
+    const explanation = `${prefix}The target moves; I will observe its new position before tapping.`;
+    if (agentKind === 'pi') {
+      const context = createPiTranslateContext(t.logger);
+      translatePiEvent({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: prefix,
+      } }, t.queue, context);
+      translatePiEvent({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: explanation }], stopReason: 'toolUse',
+      } }, t.queue, context);
+    } else {
+      const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+      const item = { type: 'agentMessage', id: 'explanation', text: prefix };
+      translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+      translateItemNotification('completed', {
+        threadId: 'thread', turnId: 'turn', item: { ...item, text: explanation },
+      }, t.queue, context);
+    }
+    t.queue.push({ type: 'thinking', data: { text: 'private reasoning must not be sent' }, source: agentKind });
+    t.queue.push({ type: 'text', data: { text: 'unrelated background task' }, source: agentKind, turnScope: 'background' });
+    const operations = ['screenshot', 'tap', 'swipe', 'Read'];
+    for (let i = 0; i < 16; i++) await t.tool(String(i), {}, operations[i % 4]);
     expect(reviewer).toHaveBeenCalledOnce();
     expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
       sessionId: 'test-session', agentKind, model: 'test-model',
-      verdict: { reason: 'consecutive', count: 4, toolName: 'read' },
+      userIntent,
+      assistantExplanation: explanation,
+      verdict: { reason: 'rotation', count: 16, toolName: 'Read' },
     });
+    for (let i = 16; i < 100; i++) await t.tool(String(i), {}, operations[i % 4]);
+    expect(reviewer).toHaveBeenCalledTimes(3);
     expect(t.errors()).toHaveLength(0);
     expect(t.handle.abort).not.toHaveBeenCalled();
+  });
+
+  it('includes accepted steering and discards a stop based on the previous user goal', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('Read the current screen.');
+    for (let i = 0; i < 4; i++) await t.tool(String(i));
+    await t.session.steer('Keep observing until the animation ends.');
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.handle.abort).not.toHaveBeenCalled();
+    await t.tool('after-steer');
+    expect(reviewer.mock.calls[1]?.[0].userIntent).toEqual({
+      earlierUserMessages: ['Read the current screen.'],
+      currentUserMessage: 'Keep observing until the animation ends.',
+    });
   });
 
   it('interrupts after the reviewer confirms a loop, once and only for the reviewed turn', async () => {
@@ -258,6 +311,7 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     const t = setup(agentKind, false, reviewer);
     await t.session.send('investigate');
     for (let i = 0; i < 3; i++) await t.tool(String(i));
+    await vi.advanceTimersByTimeAsync(3_000);
     t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
     t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
     await vi.advanceTimersByTimeAsync(0);
@@ -304,6 +358,37 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.close).toHaveBeenCalledOnce();
     expect(t.session.getStatus()).toBe('closed');
   });
+});
+
+// 2026-10-18 误报:code mode 脚本在后台连着发起调用(点保存后反复截快照等页面更新),
+// app-server 不标注调用属于哪段脚本。同一调用的突发重复(无模型采样间隔)不计数,模型逐次重复仍须中断。
+it('does not count a Codex call repeated in a script burst, but still stops a model repeating itself', async () => {
+  const t = setup('codex');
+  const context = { rt: newCodexRuntimeState(), log: { info() {}, warn() {}, error() {}, debug() {} } };
+  let n = 0;
+  const call = async (action: string, text: string, ref?: string) => {
+    const item = {
+      type: 'mcpToolCall', id: `exec-${n++}`, server: 'cindy_browser', tool: 'call_tool',
+      arguments: { name: 'browser', args: { action, ...(ref ? { ref } : {}) } }, status: 'completed',
+      result: { content: [{ type: 'text', text }] },
+    };
+    translateItemNotification('started', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+    translateItemNotification('completed', { threadId: 'thread', turnId: 'turn', item }, t.queue, context);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+  await t.session.send('upload the icons');
+  await vi.advanceTimersByTimeAsync(3_000);
+  for (let i = 0; i < 30; i++) {
+    await call(i % 7 === 0 ? 'click' : 'snapshot', i % 7 === 0 ? `clicked e${i}` : 'saving', i % 7 === 0 ? `e${i}` : undefined);
+    await vi.advanceTimersByTimeAsync(800);
+  }
+  expect(t.errors()).toHaveLength(0);
+  for (let i = 0; i < 4; i++) {
+    await vi.advanceTimersByTimeAsync(3_000);
+    await call('snapshot', 'saving');
+  }
+  expect(t.errors()).toHaveLength(1);
+  expect(t.errors()[0]).toMatchObject({ data: { toolLoop: { kind: 'consecutive', count: 4 } } });
 });
 
 it.each([false, true])('keeps translated Codex waits alive with agent states=%s', async (hasAgentStates) => {

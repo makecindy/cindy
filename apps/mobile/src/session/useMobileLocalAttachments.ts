@@ -94,6 +94,7 @@ async function deleteLocalUris(uris: readonly string[]): Promise<void> {
 
 export interface UseMobileLocalAttachmentsResult {
   beginOutboxAttachmentHandoff: () => Promise<ReturnType<MobileLocalAttachmentUploadController['beginHandoff']>>;
+  insertUploadedAttachment: (current: RemoteSerializedAttachment[], attachment: RemoteSerializedAttachment) => RemoteSerializedAttachment[];
   getUploadedSource: (id: string) => MobileLocalAttachmentUploadCandidate | undefined;
   /** Resolve a tray upload to its delivered attachment without retaining temporary URIs. */
   getUploadedAttachmentId: (localId: string) => string | undefined;
@@ -133,8 +134,11 @@ export interface UseMobileLocalAttachmentsResult {
   discardAllPendingUploads: () => void;
   /** 切换 attachmentScopeKey 前封住旧作用域；迟到 picker / 粘贴结果也会被拒绝。 */
   discardAllPendingUploadsForScopeChange: () => void;
-  /** 等全部在途上传落定;返回期间失败个数(>0 时调用方应中止发送)。 */
-  waitForPendingUploads: () => Promise<{ failedCount: number }>;
+  /**
+   * 等全部在途上传落定;返回期间失败个数(>0 时调用方应中止发送)。
+   * abandoned:等待期间 composer 已卸载、在途上传已被丢弃,调用方必须放弃发送。
+   */
+  waitForPendingUploads: () => Promise<{ failedCount: number; abandoned: boolean }>;
   /**
    * 把当前全部未 claim 上传任务(active + 失败卡)划归一条乐观消息并返回快照
    * (顺序 = 入队序):任务离开托盘 / 限额 / waitForPendingUploads,产物经
@@ -173,6 +177,7 @@ export function useMobileLocalAttachments(
   const { t } = useTranslation();
   const [pendingUploads, setPendingUploads] = useState<readonly PendingLocalAttachmentUpload[]>([]);
   const pickerBusyRef = useRef(false);
+  const disposedRef = useRef(false);
   /** 本 hook 拥有的 WebView 粘贴缓存；注册持久缩略图后或卸载时统一回收。 */
   const pastedImageLocalUrisRef = useRef(new Set<string>());
   const cleanupPastedImageLocalUris = async (uris: readonly string[]): Promise<void> => {
@@ -335,13 +340,10 @@ export function useMobileLocalAttachments(
         onAbandoned: undefined, onConsumed: undefined,
       });
       optionsRef.current.onUploaded(attachment, deliveredCandidate, localId);
-      if (candidate.cleanupLocalUris) {
-        // 只有持久缩略图已经接管 composer / sent-message 预览后才删源文件；
-        // 注册失败时保留到页面卸载，不能让已上传附件立刻变成坏图。
-        if (deliveredCandidate.uri !== candidate.uri) {
-          // 附件已交给 composer/outbox，清理失败不能再把成功翻成上传失败。
-          void candidate.cleanupLocalUris(localUris).catch(() => undefined);
-        }
+      if (candidate.cleanupLocalUris && (candidate.kind === 'file' || deliveredCandidate.uri !== candidate.uri)) {
+        // Staging owns retry/send bytes. Images additionally require a replacement
+        // preview before deleting their source; ordinary files have no URI preview.
+        void candidate.cleanupLocalUris(localUris).catch(() => undefined);
       }
     },
     onFailed: (err, localId, candidate) => {
@@ -407,6 +409,7 @@ export function useMobileLocalAttachments(
   };
 
   useEffect(() => () => {
+    disposedRef.current = true;
     controller.dispose();
     const pastedUris = [...pastedImageLocalUrisRef.current].filter((uri) => !controller.isRetainingUri(uri));
     void deleteLocalUris([...stagingUrisRef.current]);
@@ -421,6 +424,14 @@ export function useMobileLocalAttachments(
     // 卸载放行滞留的发送等待者,防 waitForPendingUploads 永久悬挂。
     flushPastePlaceholderWaiters();
   }, [controller]);
+
+  const waitForPendingUploadsInScope = async (): Promise<{ failedCount: number }> => {
+    if (!isAttachmentScopeActive()) return { failedCount: 0 };
+    await waitForPastePlaceholders();
+    if (!isAttachmentScopeActive()) return { failedCount: 0 };
+    const result = await controller.waitForIdle();
+    return isAttachmentScopeActive() ? result : { failedCount: 0 };
+  };
 
   /** 限额口径的在途占坑数(见接口 doc):上传中任务 + 粘贴占位。 */
   const getPendingSlotCount = () => controller.pendingCount() + getPastePlaceholderTotal();
@@ -618,6 +629,18 @@ export function useMobileLocalAttachments(
         }
       }
     },
+    insertUploadedAttachment: (current, attachment) => {
+      const order = uploadedSourcesRef.current.get(attachment.id)?.incomingShareOrder;
+      if (!order) return [...current, attachment];
+      let position = current.length;
+      for (let i = 0; i < current.length; i++) {
+        const other = uploadedSourcesRef.current.get(current[i].id)?.incomingShareOrder;
+        if (other?.batchId !== order.batchId) continue;
+        position = i + 1;
+        if (other.index > order.index) { position = i; break; }
+      }
+      return [...current.slice(0, position), attachment, ...current.slice(position)];
+    },
     getUploadedSource: (id) => uploadedSourcesRef.current.get(id),
     getUploadedAttachmentId: (localId) => [...uploadedSourcesRef.current].find(([, source]) => source.localId === localId)?.[0],
     releaseUploadedSources: (ids) => {
@@ -651,13 +674,12 @@ export function useMobileLocalAttachments(
     // 再等 controller 队列——否则占位窗口内抢发会把刚粘贴的图漏在消息外
     //(review P2)。占位失败不计入 failedCount:那张图从未成为附件,语义等同
     // 用户手动移除,不应中止发送。
-    waitForPendingUploads: async () => {
-      if (!isAttachmentScopeActive()) return { failedCount: 0 };
-      await waitForPastePlaceholders();
-      if (!isAttachmentScopeActive()) return { failedCount: 0 };
-      const result = await controller.waitForIdle();
-      return isAttachmentScopeActive() ? result : { failedCount: 0 };
-    },
+    // 卸载会把在途任务标记丢弃,waitForIdle 不把丢弃计入失败;必须单独报出 abandoned,
+    // 否则调用方会带着缺图的附件列表照常发送(上传中点返回,发出无图消息)。
+    waitForPendingUploads: async () => ({
+      ...await waitForPendingUploadsInScope(),
+      abandoned: disposedRef.current,
+    }),
     claimActiveUploads: () => {
       if (!isAttachmentScopeActive()) return [];
       const snapshot = controller.claimableTasks();

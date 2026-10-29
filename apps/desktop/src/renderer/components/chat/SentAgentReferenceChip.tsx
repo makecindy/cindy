@@ -1,4 +1,4 @@
-import { Bot, CornerDownRight, FolderOpen, Globe2, Monitor, Plug } from 'lucide-react';
+import { Bot, CornerDownRight, FolderOpen, Globe2, ListTodo, Monitor, Plug } from 'lucide-react';
 
 import { i18n } from '@/i18n';
 
@@ -32,6 +32,7 @@ export function sentAgentReferenceDisplayLabel(reference: AgentInputReference): 
     return oneLine(reference.title ?? '') || oneLine(reference.appName);
   }
   if (reference.kind === 'bot') return oneLine(reference.name) || reference.botId;
+  if (reference.kind === 'todo') return oneLine(reference.title) || reference.todoId;
   return oneLine(reference.label) || reference.resourceId;
 }
 
@@ -63,6 +64,8 @@ export function SentAgentReferenceChip({
         <Monitor aria-hidden />
       ) : reference.kind === 'bot' ? (
         <Bot aria-hidden />
+      ) : reference.kind === 'todo' ? (
+        <ListTodo aria-hidden />
       ) : (
         <Plug aria-hidden />
       );
@@ -106,6 +109,8 @@ export function SentAgentReferenceChip({
       <Monitor aria-hidden />
     ) : reference.kind === 'bot' ? (
       <Bot aria-hidden />
+    ) : reference.kind === 'todo' ? (
+      <ListTodo aria-hidden />
     ) : (
       <Plug aria-hidden />
     );

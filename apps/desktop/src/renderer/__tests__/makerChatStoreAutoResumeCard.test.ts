@@ -227,6 +227,23 @@ describe('mapServerMessages auto-resume 分隔线', () => {
     expect(row?.content).toBe('');
   });
 
+  // Unit / PR #6611: the first queued input resumes without a hidden clone.
+  // Previously only autoResume=true rows carried an activity, losing this record on reload.
+  it('keeps a quota-resumed first input visible with its activity metadata', async () => {
+    const info = { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 0 };
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'original', role: 'user', content: 'original task',
+        agentMeta: { autoResumeInfo: info } as Message['agentMeta'] }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+    const row = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'original');
+    expect(row).toMatchObject({ content: 'original task', usageLimitAutoResumeInfo: info });
+    expect(row?.isSyntheticTrigger).not.toBe(true);
+    expect(row?.systemCardType).toBeUndefined();
+  });
+
   it('人工发的合成指令(无 autoResume)不渲染分隔线,只静默占位', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([
       serverMessage({
@@ -667,6 +684,116 @@ describe('Codex 原生重连进行态与终态接管交棒', () => {
     expect(
       withRootTool.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
     ).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：handleStreamEvent；可见 thinking 出现时不再同时显示过期的重连行。
+  // - Bug／规则依据：Codex/Pi 原生重连期间思考流仍可继续，UI 不应让用户看到相互矛盾的状态。
+  // - 现有覆盖缺口：原有用例只覆盖正文、工具和 done，未覆盖 thinking 与重连行交错。
+  // - 最小失败输入：Reconnecting 1/5 → thinking start/delta → 下一次 Reconnecting 2/5。
+  // - tier：unit；只调用 renderer reducer，不依赖网络或真实进程。
+  // - 实测耗时：文件级 vitest 约 2s。
+  it.each(['codex', 'pi'] as const)(
+    '%s 可见 thinking 会撤掉旧重连提示,后续重连仍可正常显示',
+    (source) => {
+      const reconnecting = handleStreamEvent(
+        EMPTY_SESSION_STATE,
+        reconnectEvent('Reconnecting... 1/5', false),
+      );
+      const thinkingStarted = handleStreamEvent(reconnecting, {
+        sessionId: SID,
+        type: 'thinking',
+        source,
+        data: { stage: 'start', blockId: 'thinking-1', startedAt: 1 },
+      });
+      const withThinking = handleStreamEvent(thinkingStarted, {
+        sessionId: SID,
+        type: 'thinking',
+        source,
+        data: { stage: 'delta', blockId: 'thinking-1', text: '正在分析下一步' },
+      });
+
+      expect(withThinking.messages.some((m) => m.clientId === '__codex_reconnect_pending__')).toBe(
+        false,
+      );
+      expect(
+        withThinking.messages.some((m) => m.role === 'thinking' && m.content === '正在分析下一步'),
+      ).toBe(true);
+
+      const retrying = handleStreamEvent(
+        withThinking,
+        reconnectEvent('Reconnecting... 2/5', false),
+      );
+      expect(
+        retrying.messages.find((m) => m.clientId === '__codex_reconnect_pending__')?.systemCardData,
+      ).toMatchObject({ attempt: 2, maxAttempts: 5 });
+
+      const repeatedFinal = handleStreamEvent(retrying, {
+        sessionId: SID,
+        type: 'thinking',
+        source,
+        data: { stage: 'final', blockId: 'thinking-1', text: '正在分析下一步', durationMs: 10 },
+      });
+      expect(composerReconnect(repeatedFinal)).toMatchObject({ attempt: 2, maxAttempts: 5 });
+
+      const freshFinal = handleStreamEvent(repeatedFinal, {
+        sessionId: SID,
+        type: 'thinking',
+        source,
+        data: {
+          stage: 'final',
+          blockId: 'thinking-1',
+          text: '正在分析下一步，已找到原因',
+          durationMs: 20,
+        },
+      });
+      expect(composerReconnect(freshFinal)).toBeNull();
+
+      const finalOnly = handleStreamEvent(retrying, {
+        sessionId: SID,
+        type: 'thinking',
+        source,
+        data: { stage: 'final', blockId: 'thinking-2', text: '仅收到最终思考内容', durationMs: 30 },
+      });
+      expect(composerReconnect(finalOnly)).toBeNull();
+      expect(finalOnly.messages.find((m) => m.clientId === 'thinking-2')?.content).toBe(
+        '仅收到最终思考内容',
+      );
+    },
+  );
+
+  it('后台或空白 thinking 不会撤掉原生活动行', () => {
+    const reconnecting = handleStreamEvent(
+      EMPTY_SESSION_STATE,
+      reconnectEvent('Reconnecting... 1/5', false),
+    );
+    const thinkingStarted = handleStreamEvent(reconnecting, {
+      sessionId: SID,
+      type: 'thinking',
+      source: 'codex',
+      data: { stage: 'start', blockId: 'thinking-bg', startedAt: 1 },
+    });
+    expect(composerReconnect(thinkingStarted)).not.toBeNull();
+    const backgroundThinking = handleStreamEvent(thinkingStarted, {
+      sessionId: SID,
+      type: 'thinking',
+      source: 'codex',
+      turnScope: 'background',
+      data: { stage: 'delta', blockId: 'thinking-bg', text: '后台协作' },
+    });
+    expect(
+      backgroundThinking.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
+
+    const whitespaceThinking = handleStreamEvent(backgroundThinking, {
+      sessionId: SID,
+      type: 'thinking',
+      source: 'codex',
+      data: { stage: 'delta', blockId: 'thinking-bg', text: ' ​\n ' },
+    });
+    expect(
+      whitespaceThinking.messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
   });
 
   it('带 turnContinuationId 的 done 不会清除原生活动行', () => {

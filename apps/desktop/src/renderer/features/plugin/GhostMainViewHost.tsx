@@ -9,6 +9,7 @@ import {
   useIsContentHeaderHidden,
 } from '@/components/layout/ContentHeader';
 import { WINDOW_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { useSingleInstanceViewGuard } from '@/features/right-sidebar/pluginPlacement';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
@@ -23,6 +24,8 @@ export function GhostMainViewHost() {
   );
   const isContentHeaderHidden = useIsContentHeaderHidden();
   const { isFullscreen } = useMacFullscreen();
+  // 单实例视图:整页与侧栏页签 / 独立窗口互斥(见 pluginPlacement)。
+  useSingleInstanceViewGuard(item?.installedGhost ?? null);
 
   useEffect(() => {
     if (!item) navigate('/plugins', { replace: true });

@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from "expo-file-system";
+import { sniffImageMimeFromBase64 } from "@/session/imageAnnotationModel";
 import {
   CryptoDigestAlgorithm,
   digestStringAsync,
@@ -6,7 +7,7 @@ import {
 } from "expo-crypto";
 import { FILE_INLINE_MAX_BYTES, validFileVersion, type DeviceFileResult } from "@cindy/device-link";
 import { createRemoteMediaDiskCache } from "@/session/remoteMediaDiskCache";
-import { createExpoRemoteMediaDiskCacheIO, downloadRemoteMediaShareTemp } from "@/session/remoteMediaDiskCacheExpo";
+import { createExpoRemoteMediaDiskCacheIO, downloadRemoteMediaShareTemp, withDownloadedRemoteMediaFile } from "@/session/remoteMediaDiskCacheExpo";
 import {
   PEER_FILE_DISK_RESERVE_BYTES,
   recordPeerMedia,
@@ -41,6 +42,25 @@ async function openPeerFileCache(owner: string) {
     },
   );
   const api = {
+    // Blob and public companion avatar URLs change with the image content. Reuse
+    // the account/realm's existing disk cache, independent of device presence.
+    lookupAvatar: (identity: string) => cache.lookup(`companion-avatar:${identity}`),
+    storeAvatar: async (identity: string, uri: string, mime: string, active: () => boolean) => {
+      // A peer file is still owned by its visible consumer. Do not release that
+      // source if persistence fails; the regular staging lifetime remains intact.
+      if (uri.startsWith('file://')) {
+        const file = new File(uri);
+        return active() && file.exists && file.size > 0 && file.size <= 5 * 1024 * 1024
+          ? cache.store(`companion-avatar:${identity}`, uri, mime, file.size) : false;
+      }
+      return withDownloadedRemoteMediaFile(uri, mime, 5 * 1024 * 1024, async file => {
+        const { readAsStringAsync, EncodingType } = await import('expo-file-system/legacy');
+        const head = await readAsStringAsync(file.uri, { encoding: EncodingType.Base64, position: 0, length: 16 });
+        const actualMime = sniffImageMimeFromBase64(head);
+        return active() && actualMime ? cache.store(`companion-avatar:${identity}`, file.uri, actualMime, file.size) : false;
+      },
+      new AbortController().signal);
+    },
     async readLatest(device: string, url: string, active: () => boolean): Promise<DeviceFileResult | null> {
       const hit = await cache.lookup(JSON.stringify([device, url]));
       if (!active() || !hit || !validFileVersion(hit.version)) return null;

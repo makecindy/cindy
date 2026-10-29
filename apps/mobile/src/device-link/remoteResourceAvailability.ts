@@ -1,5 +1,8 @@
 import type { HostedRemoteCollectionItem } from './remoteResources';
 
+/** Give a cold relay a bounded window before falling back to cached remote rows. */
+export const REMOTE_RESOURCE_STARTUP_TIMEOUT_MS = 10_000;
+
 /** A host reply is evidence only for the connection in which it arrived. */
 export function isRemoteResourceHostOnline(
   relayStatus: string,
@@ -30,6 +33,11 @@ export function writeRemoteCollectionCache(owner: string, collectionId: string, 
 
 /** Connection evidence is independent of whether a resource/API request succeeded. */
 export function remoteResourceConnectionState(relayStatus: string, presence: boolean | null): boolean | null {
-  if (presence === false || relayStatus === 'stopped') return false;
-  return relayStatus === 'online' && presence === true ? true : null;
+  // `stopped` / `connecting` are the relay startup window, not evidence that
+  // the hosted computer is offline.  Keep that distinction visible to list
+  // consumers so a cold launch can stay in its loading state until the first
+  // live reply establishes the host status.
+  if (relayStatus !== 'online') return null;
+  if (presence === false) return false;
+  return presence === true ? true : null;
 }

@@ -19,6 +19,7 @@ import {
   useChatSessionFile,
 } from '@/components/chat/ChatSessionFileContext';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
@@ -194,10 +195,13 @@ export function BotTaskCard({
   card,
   sessionId,
   attached = false,
+  inset = false,
 }: {
   card: BotCollaborationMeta;
   sessionId?: string;
   attached?: boolean;
+  /** Inside a message bubble (group chat): a flat inset instead of a bordered card. */
+  inset?: boolean;
 }) {
   const { t } = useTranslation();
   const fileContext = useChatSessionFile();
@@ -413,7 +417,9 @@ export function BotTaskCard({
     <div
       ref={observeCard}
       data-bot-task-card={state}
-      className="my-2 w-full min-w-0 max-w-[560px] rounded-xl border border-[var(--msg-tool-card-border)] bg-[var(--msg-tool-card-bg)] px-3 py-2.5"
+      className={inset
+        ? 'w-full min-w-0 rounded-lg bg-[var(--surface)] px-3 py-2.5'
+        : 'my-2 w-full min-w-0 max-w-[560px] rounded-xl border border-[var(--msg-tool-card-border)] bg-[var(--msg-tool-card-bg)] px-3 py-2.5'}
     >
       <div className="flex min-w-0 items-center gap-2">
         <StatusGlyph state={state} />
@@ -463,7 +469,7 @@ export function BotTaskCard({
             }}
             aria-label={t('bots.collab.addNote')}
             placeholder={t('bots.collab.addNotePlaceholder')}
-            className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+            className="h-8 w-full rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
           />
         </form>
       ) : null}
@@ -472,34 +478,38 @@ export function BotTaskCard({
           id={resultId}
           className="mt-2 space-y-2 border-t border-[var(--border-default)] pt-2 text-13 text-[var(--text-primary)]"
         >
-          <ChatSessionFileProvider
-            value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
-          >
-            {resultText ? (
-              <MarkdownRenderer
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                content={resultText}
-              />
-            ) : (
-              <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
-                {t('bots.collab.noWrittenResult')}
-              </p>
-            )}
-            {files.map((path) => (
-              <MarkdownRenderer
-                key={path}
-                workingDir={workingDir}
-                currentSessionId={childSessionId ?? undefined}
-                content={`[${
-                  path
-                    .split(/[\\/]/)
-                    .pop()
-                    ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
-                }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
-              />
-            ))}
-          </ChatSessionFileProvider>
+          <SessionQuickSendProvider value={null}>
+            <ChatSessionFileProvider
+              value={{ ...fileContext, workingDir, sessionId: childSessionId ?? undefined }}
+            >
+              {resultText ? (
+                <MarkdownRenderer
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  renderRichAnswers
+                  streamFadeKey={`bot-result:${childSessionId ?? parentSessionId}:${card.delegationId}`}
+                  content={resultText}
+                />
+              ) : (
+                <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
+                  {t('bots.collab.noWrittenResult')}
+                </p>
+              )}
+              {files.map((path) => (
+                <MarkdownRenderer
+                  key={path}
+                  workingDir={workingDir}
+                  currentSessionId={childSessionId ?? undefined}
+                  content={`[${
+                    path
+                      .split(/[\\/]/)
+                      .pop()
+                      ?.replace(/[[\]\\]/g, '\\$&') ?? t('bots.collab.viewResult')
+                  }](<${encodeURI(path).replace(/[<>?#]/g, encodeURIComponent)}>)`}
+                />
+              ))}
+            </ChatSessionFileProvider>
+          </SessionQuickSendProvider>
           {errorText ? (
             <details>
               <summary className="flex min-h-8 cursor-pointer items-center rounded-lg text-12 text-[var(--text-secondary)] focus-visible:outline focus-visible:outline-2">

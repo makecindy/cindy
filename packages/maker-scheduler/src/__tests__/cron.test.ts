@@ -219,6 +219,35 @@ describe('nextRun', () => {
     expect(next).toBeGreaterThan(from);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：nextRun 返回下一个 cron 壁钟槽位；scheduler 会用它重排 nextFireAt。
+  // - Bug／规则依据：#5924；亚小时 DST 回拨时 nextRun 必须严格晚于 from。
+  // - 现有覆盖缺口：既有纽约整小时回拨只覆盖重复段内的单个分钟，未覆盖 Lord Howe 的 30 分钟回拨与分钟 wrap。
+  // - 最小失败输入：2026-04-05 Australia/Lord_Howe 回拨日，from 位于重复 01:xx 壁钟小时。
+  // - tier：unit；直接调用公开 nextRun，无外部 I/O。
+  // - 实测耗时：随现有 cron.test.ts 定向运行记录在 PR 验证项。
+  it('Lord Howe 亚小时回拨：分钟 wrap 保留未来重复段并严格向前', () => {
+    const tz = 'Australia/Lord_Howe';
+    const cases = [
+      ['23 1 * * *', Date.UTC(2026, 3, 4, 14, 23, 13), Date.UTC(2026, 3, 5, 14, 53, 0)],
+      ['0 * * * *', Date.UTC(2026, 3, 4, 14, 0, 21), Date.UTC(2026, 3, 4, 15, 30, 0)],
+      ['0,45 1 * * *', Date.UTC(2026, 3, 4, 14, 50, 30), Date.UTC(2026, 3, 4, 15, 15, 0)],
+      ['45 1 * * *', Date.UTC(2026, 3, 4, 14, 50, 30), Date.UTC(2026, 3, 4, 15, 15, 0)],
+    ] as const;
+    for (const [expr, from, expected] of cases) {
+      const next = nextRun(expr, from, tz);
+      expect(next, expr).toBe(expected);
+      expect(next, expr).toBeGreaterThan(from);
+    }
+  });
+
+  it('Lord Howe 亚小时跳时：不存在的整点直接前进到下一合法小时', () => {
+    const from = Date.UTC(2026, 9, 3, 15, 29, 0); // local 2026-10-04 01:59, next is 02:30
+    const next = nextRun('0 * * * *', from, 'Australia/Lord_Howe');
+    expect(next).toBe(Date.UTC(2026, 9, 3, 16, 0, 0)); // local 03:00 after the 30m gap
+    expect(next).toBeGreaterThan(from);
+  });
+
   it('DST fall-back overlap: ambiguous wall time resolves to the later occurrence', () => {
     // 01:00 on 2026-11-01 in NY exists twice (05:00Z EDT and 06:00Z EST).
     expect(fromWallClock(2026, 11, 1, 1, 0, 'America/New_York'))

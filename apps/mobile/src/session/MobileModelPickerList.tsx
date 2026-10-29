@@ -70,7 +70,7 @@ export interface MobileModelPickerListProps {
   /** 选中行 live effort(草稿 = draft.effort / 会话 = session.effort)。 */
   selectedEffort?: string;
   /** 选中行 live fast(草稿 = draft.fastMode / 会话 = session.fastMode)。 */
-  selectedFastMode?: boolean;
+  selectedFastMode?: boolean | 'ultrafast';
   /** 非选中行 effort/fast 记忆读取器(草稿 = draftModelMemory / 会话 = sessionModelMirror)。 */
   modelMemory?: MobileModelMemoryAccessors;
   /** 被控端网关 key presence('absent' 才置灰折扣版,缺省 'unknown' 不置灰)。 */
@@ -270,7 +270,7 @@ export function MobileModelPickerList({
           const metaLine = [
             isSubscription ? t('models.picker.subscriptionBadge') : null,
             fullEffortLabel,
-            fastOn ? t('models.options.fastMode') : null,
+            fastOn ? t(fastOn === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : null,
           ]
             .filter(Boolean)
             .join(' · ');
@@ -283,7 +283,7 @@ export function MobileModelPickerList({
             effortLabel: fullEffortLabel
               ? t('models.options.reasoningEffortAccessibility', { label: fullEffortLabel })
               : null,
-            fastLabel: fastOn ? t('models.options.fastMode') : null,
+            fastLabel: fastOn ? t(fastOn === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : null,
           });
           // 行内配置入口:置灰行不给;有 effort 档或 fast 可编辑才有意义;非选中行还要有记忆可写
           // (无记忆场景写不进任何地方 → 不显示,避免假开关)。
@@ -398,7 +398,7 @@ export function MobileModelPickerList({
             ? effortLabelFor(option, rowEffort, capabilities ?? null)
             : null;
           const fastOn = fastEditable && selected && selectedFastMode;
-          const metaLine = [fullEffortLabel, fastOn ? t('models.options.fastMode') : null]
+          const metaLine = [fullEffortLabel, fastOn ? t(fastOn === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : null]
             .filter(Boolean)
             .join(' · ');
           const rowAccessibilityLabel = modelRowAccessibilityLabel({
@@ -406,7 +406,7 @@ export function MobileModelPickerList({
             effortLabel: fullEffortLabel
               ? t('models.options.reasoningEffortAccessibility', { label: fullEffortLabel })
               : null,
-            fastLabel: fastOn ? t('models.options.fastMode') : null,
+            fastLabel: fastOn ? t(fastOn === 'ultrafast' ? 'models.options.speed.ultrafast' : 'models.options.fastMode') : null,
           });
           return (
             <View

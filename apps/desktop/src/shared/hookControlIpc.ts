@@ -38,6 +38,7 @@ export const HOOK_CONTROL_INVOKE = {
    * 进程内通道, 没有跨版本兼容问题 —— 原 set-x-default-workspace 直接改名。
    */
   SET_PROVIDER_DEFAULT_WORKSPACE: 'maker:hook-control:set-provider-default-workspace',
+  SET_X_COMPANION: 'maker:hook-control:set-x-companion',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
@@ -140,6 +141,8 @@ export interface ProviderBindingView {
 
 /** provider-neutral(Telegram / X)的独立设置与绑定视图。 */
 export interface ProviderHookView {
+  /** Local companion assignment, currently only used by the official X provider. */
+  companionBotId?: string | null;
   enabled: boolean;
   /** 该 provider 平级 hook 服务的运行期端点；空值表示当前环境尚未部署。 */
   url: string;

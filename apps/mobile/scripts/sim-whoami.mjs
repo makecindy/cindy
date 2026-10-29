@@ -13,43 +13,70 @@
 //   pnpm mobile:sim:whoami                     # Global(默认)
 //   pnpm mobile:sim:whoami -- --region=cn      # 中国大陆版
 //   pnpm mobile:sim:whoami -- --json           # Skill 可消费的结构化状态
+//   pnpm mobile:sim:whoami -- --mock           # 核对的是 --mock 启动的模拟数据 Metro
+//
+// 模拟器默认先找 Cindy 模拟器(Baguette 插件的独立设备目录)，没有再找系统模拟器；
+// CINDY_MOBILE_SIMULATOR=cindy|system|<设备目录绝对路径> 可固定其一。
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectSimulatorViewer } from "./lib/simulator-viewer.mjs";
 import { inspectSimulatorNativeIdentity } from "./lib/sim-native-identity.mjs";
 import { mobileClientBundleEnv } from "../../../scripts/shared/client-endpoint-build-env.mjs";
-import { readSimEnvironment } from "./lib/sim-environment.mjs";
+import { applySimMockArg, readSimEnvironment } from "./lib/sim-environment.mjs";
 import { withLocalMobileRegionConfig, extractMobileDevRegionArgs } from "./lib/mobile-dev-region.mjs";
 import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from "./lib/mobile-local-config.mjs";
 import {
-  classifySimMetroListener,
-  validateSimMetroIdentity,
-  bootedSimulatorLinesForTarget,
+  inspectSimMetroIdentity,
   extractSimMetroPortArgs,
   extractSimWhoamiUdidArgs,
   getSimulatorAppContainer,
   resolveMobileSimulatorBundleId,
+  resolveSimulatorDeviceSets,
+  selectBootedSimulator,
+  simctlArgs,
 } from "./lib/sim-whoami.mjs";
-import {
-  gitSourceIdentity,
-  probeMetroOwnership,
-} from "./sim-metro.mjs";
+import { gitSourceIdentity } from "./sim-metro.mjs";
 
 const PORTS = [8081, 8082, 8083, 8084, 8085, 8086];
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const worktreeRoot = resolve(mobileDir, "../..");
 
-const jsonOutput = process.argv.slice(2).includes("--json");
-const requireViewer = process.argv.slice(2).includes("--viewer");
+const cliArgs = applySimMockArg(process.argv.slice(2));
+const jsonOutput = cliArgs.includes("--json");
+const requireViewer = cliArgs.includes("--viewer");
+const startedAt = Date.now();
+const checks = [];
+const probeErrors = [];
+
+// Progress goes to stderr even in --json mode; stdout keeps one result object.
+function timedCheck(stage, run) {
+  const start = Date.now();
+  console.error(`[whoami] ${stage}…`);
+  try {
+    const result = run();
+    const elapsedMs = Date.now() - start;
+    checks.push({ stage, elapsedMs });
+    console.error(`[whoami] ${stage}: ${elapsedMs}ms`);
+    return result;
+  } catch (error) {
+    checks.push({ stage, elapsedMs: Date.now() - start });
+    const failure = { healthy: false, pageVerified: false, stage,
+      code: error.code ?? 'CHECK_FAILED', checks, elapsedMs: Date.now() - startedAt,
+      error: `${stage} 检查失败：${error.message ?? 'unknown error'}；检查该阶段的工具/当前 worktree 依赖后重试，不要将检查失败当作未安装 App。` };
+    if (jsonOutput) console.log(JSON.stringify(failure));
+    else console.error(`✗ ${failure.code}: ${failure.error}`);
+    process.exit(1);
+  }
+}
 
 function resolveTarget() {
   const { region, passthrough } = extractMobileDevRegionArgs(
-    process.argv.slice(2).filter((arg) => arg !== "--json" && arg !== "--viewer"),
+    cliArgs.filter((arg) => arg !== "--json" && arg !== "--viewer"),
   );
   const udidArgs = extractSimWhoamiUdidArgs(passthrough);
   const portArgs = extractSimMetroPortArgs(udidArgs.passthrough);
@@ -63,11 +90,11 @@ function resolveTarget() {
     port: portArgs.port,
     simulatorUdid: udidArgs.simulatorUdid,
     bundleId: resolveMobileSimulatorBundleId(region),
+    deviceSets: resolveSimulatorDeviceSets(),
   };
 }
 
-let target;
-try {
+const target = timedCheck('configuration', () => {
   const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
   if (!jsonOutput) {
     const localConfigStatus = formatMobileLocalConfigStatus(
@@ -76,46 +103,41 @@ try {
     );
     if (localConfigStatus) console.log(localConfigStatus);
   }
-  target = resolveTarget();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(jsonOutput ? JSON.stringify({ healthy: false, error: message }) : `✗ ${message}`);
-  process.exit(1);
-}
-const { region, port: expectedPort, simulatorUdid, bundleId } = target;
+  return resolveTarget();
+});
+const { region, port: expectedPort, simulatorUdid, bundleId, deviceSets } = target;
+const { envFingerprint, uiMock } = timedCheck('environment', () => readSimEnvironment(mobileDir,
+  withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region }))));
 const ports = [...new Set([...PORTS, expectedPort])].sort((a, b) => a - b);
-const expectedSource = gitSourceIdentity(worktreeRoot);
+const expectedSource = timedCheck('source-identity', () => gitSourceIdentity(worktreeRoot));
 let healthy = true;
-
-function sh(cmd) {
-  try {
-    return execSync(cmd, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return "";
-  }
-}
 
 function shFile(command, args) {
   try {
     return execFileSync(command, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 15_000,
+      killSignal: "SIGKILL",
     }).trim();
-  } catch {
+  } catch (error) {
+    if (error.code === 'ETIMEDOUT') {
+      probeErrors.push({ command, code: 'PROBE_TIMEOUT', timeoutMs: 15_000 });
+      console.error(`[whoami] ${command}: PROBE_TIMEOUT (15s)`);
+    }
     return "";
   }
 }
 
 if (!jsonOutput) {
   console.log(`==> Mobile dev region: ${region}`);
-  console.log("==== booted 模拟器 ====");
 }
-const allBooted = sh("xcrun simctl list devices booted").split("\n");
-const booted = bootedSimulatorLinesForTarget(allBooted, null);
-const targetBooted = bootedSimulatorLinesForTarget(allBooted, simulatorUdid);
+const { deviceSet, booted, targetBooted } = timedCheck('simulator', () => selectBootedSimulator(
+  deviceSets,
+  (set) => shFile("xcrun", simctlArgs(set, ["list", "devices", "booted"])),
+  simulatorUdid,
+));
+if (!jsonOutput) console.log(`==== booted 模拟器(${deviceSet.name})====`);
 if (booted.length === 0) {
   if (!jsonOutput) console.log("  (没有 booted 模拟器)");
   healthy = false;
@@ -126,7 +148,7 @@ if (targetBooted.length !== 1) {
 }
 
 if (!jsonOutput) console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
-const container = targetBooted.length === 1 ? getSimulatorAppContainer(shFile, simulatorUdid, bundleId) : "";
+const container = timedCheck('installed-app', () => targetBooted.length === 1 ? getSimulatorAppContainer(shFile, simulatorUdid, bundleId, deviceSet) : "");
 let installed = null;
 if (!container) {
   if (!jsonOutput) {
@@ -154,48 +176,55 @@ if (!container) {
   }
 }
 
-const native = inspectSimulatorNativeIdentity({
+const native = timedCheck('native-fingerprint', () => probeErrors.length > 0
+  ? { healthy: false, code: 'native-unknown', reason: 'probe-timeout', installedFingerprint: null, expectedFingerprint: null }
+  : inspectSimulatorNativeIdentity({
   appPath: container, projectDir: mobileDir,
   env: { ...process.env, ...withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })) },
-});
+}));
 if (!native.healthy) healthy = false;
 if (!jsonOutput) {
   console.log(`  native: ${native.code}`);
-  if (!native.healthy) console.log(`  请运行 pnpm mobile:sim:rebuild -- --region=${region}${simulatorUdid ? ` --udid ${simulatorUdid}` : ''}，再检查原生兼容性。`);
+  if (!native.healthy) {
+    if (probeErrors.length > 0 || native.reason === 'native-fingerprint-timeout' || native.reason === 'native-fingerprint-unavailable') {
+      console.log(`  原生身份检查未完成（${native.reason}）；先修复探测/指纹计算，再决定是否需要 rebuild。`);
+    } else {
+      const mock = uiMock ? ' --mock' : '';
+      console.log(`  请运行 pnpm mobile:sim:rebuild -- --region=${region}${simulatorUdid ? ` --udid ${simulatorUdid}` : ''}${mock}，先查询匹配缓存，再检查原生兼容性。`);
+    }
+  }
 }
 
 if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====");
-let anyMetro = false;
-let currentSourceOnExpectedPort = false;
-const metros = [];
-const { envFingerprint } = readSimEnvironment(mobileDir,
-  withLocalMobileRegionConfig(mobileClientBundleEnv({ authRegion: region })));
-for (const port of ports) {
-  const ownership = probeMetroOwnership(port);
-  if (!ownership) continue;
-  const listener = classifySimMetroListener({
-    cwd: ownership.cwd, source: ownership.source, targetWorktree: worktreeRoot,
-  });
-  const verdict = validateSimMetroIdentity({
-    listener, currentSource: expectedSource, runningSource: ownership.source,
-    currentRegion: region, runningRegion: ownership.region,
-    currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership.envFingerprint,
-  });
-  anyMetro ||= listener.confirmed;
-  metros.push({ port, ...ownership, pid: Number(ownership.pid), worktree: listener.worktree,
-    isMetro: listener.confirmed, identity: verdict });
-  if (!jsonOutput) console.log(`  :${port} pid ${ownership.pid} → ${listener.worktree || '(unknown)'}: ${verdict.code}`);
-  if (port === expectedPort) currentSourceOnExpectedPort = verdict.healthy;
+const metro = inspectSimMetroIdentity({
+  ports, expectedPort, worktreeRoot, expectedSource, region, envFingerprint,
+}, { timedCheck });
+const { anyMetro, currentSourceOnExpectedPort, metros } = metro;
+probeErrors.push(...metro.probeErrors);
+for (const error of metro.probeErrors) {
+  console.error(error.stage === "metro-listeners"
+    ? `[whoami] ${error.code}；端口归属尚未确认，不能当作没有 Metro。`
+    : `[whoami] :${error.port} ${error.stage}: ${error.code}；进程身份检查未完成，请先排查该查询。`);
 }
-
-if (!anyMetro && !jsonOutput)
+if (!jsonOutput) for (const entry of metros)
+  console.log(`  :${entry.port} pid ${entry.pid} → ${entry.worktree || '(unknown)'}: ${entry.identity.code}`);
+if (metro.canSuggestStart && !jsonOutput)
   console.log(
     `  (检查的端口上没发现 Metro;用 \`pnpm mobile:sim:start -- --port ${expectedPort}\` 启一个)`,
   );
-if (!currentSourceOnExpectedPort) healthy = false;
+if (!metro.healthy) healthy = false;
 
-const viewer = await inspectSimulatorViewer();
+// Devices outside the system set are not shown by Device Hub; Cindy's appear in its sidebar.
+const viewerStartedAt = Date.now();
+console.error('[whoami] viewer…');
+const viewer = deviceSet.path
+  ? { available: false, running: false, status: `${deviceSet.name}-managed`, windowVerified: false,
+      error: "该设备不在系统模拟器中，没有外部窗口；Cindy 模拟器请在 Cindy 侧边栏查看" }
+  : await inspectSimulatorViewer();
+checks.push({ stage: 'viewer', elapsedMs: Date.now() - viewerStartedAt });
+console.error(`[whoami] viewer: ${Date.now() - viewerStartedAt}ms`);
 if (requireViewer && !viewer.running) healthy = false;
+if (probeErrors.length > 0) healthy = false;
 if (!jsonOutput) {
   console.log(`\nSimulator viewer: ${viewer.status} (${viewer.appPath ?? viewer.error ?? 'not available'})`);
   console.log('Viewer process status does not verify a visible device window.');
@@ -219,10 +248,14 @@ if (!jsonOutput) {
   console.log(
     JSON.stringify({
       healthy,
+      checks,
+      probeErrors,
+      elapsedMs: Date.now() - startedAt,
       pageVerified: false,
       viewerRequired: requireViewer,
       viewer,
       region,
+      uiMock,
       bundleId,
       worktree: worktreeRoot,
       source: expectedSource,
@@ -230,6 +263,7 @@ if (!jsonOutput) {
       expectedPort,
       currentSourceOnExpectedPort,
       anyMetro,
+      simulator: deviceSet.name,
       booted: booted.map((line) => line.trim()),
       installed,
       native,

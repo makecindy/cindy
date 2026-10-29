@@ -71,6 +71,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     // Companion receipt behavior is covered by the mounted MessageRenderer tests.
     acknowledgeCompanionReadRef: ref(vi.fn()),
     shareSelectionActiveRef: ref(false),
+    itemsForStructureRef: ref([]),
     scrollMetricsRef: ref({ contentHeight: 2000, offsetY: 1200, viewportHeight: 800 }),
   };
   const tailScroll = vi.fn((_options: { animated: boolean }) => {
@@ -79,6 +80,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
   });
   const environment = {
     richContent,
+    remoteDeviceId: 'remote-device', scrollResetKey: 'session',
     readingPosition: { write: vi.fn() }, reopeningPosition: undefined,
     captureCurrentHistoryAnchor: vi.fn((): { key: string; viewportOffset: number } | null => null),
     getCurrentHistoryTopOffsetAdjustment: vi.fn(() => 0),

@@ -8,7 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./computer": "./src/computer/index.ts"
+    "./computer": "./src/computer/index.ts",
+    "./inline-images": "./src/shared/inlineImages.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -30,6 +31,7 @@
     "@googleapis/drive": "^20.2.0",
     "@googleapis/gmail": "^17.0.0",
     "@googleapis/sheets": "^13.0.1",
+    "@jackwener/opencli": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "docx": "^9.7.1",
     "entities": "^6.0.1",
@@ -45,6 +47,7 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "typescript": "^5.7.0",
+    "undici": "^8.3.0",
     "vitest": "^3.2.4"
   }
 }

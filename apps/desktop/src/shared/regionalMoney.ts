@@ -4,7 +4,7 @@ import { CURRENT_CINDY_REGION } from './brandRegion.js';
 
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
-export type PriceVariant = 'standard' | 'priority' | 'fast' | 'batch';
+export type PriceVariant = 'standard' | 'priority' | 'fast' | 'batch' | 'ultrafast';
 export type MoneyEstimateReason =
   'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency';
 

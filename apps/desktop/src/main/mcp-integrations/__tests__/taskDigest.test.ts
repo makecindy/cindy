@@ -2,7 +2,8 @@
  * 测试价值
  * - 生产入口与可观察结果:createTaskDigestReader 交给 get_task_digest 的摘要(本机 / 另一台电脑 / 不存在)。
  * - 规则依据:摘要优先用观察层状态行(与工作台、事件同一口径),缺行时保守推断;子项失败不拖垮整份;
- *   跨电脑不给换模型建议(set_session_runtime 只支持本机);离线电脑明确报 REMOTE_UNAVAILABLE。
+ *   跨电脑不给换模型建议(set_session_runtime 只支持本机);只有出错 / 用量上限才要换模型建议,并带上这次失败;
+ *   离线电脑明确报 REMOTE_UNAVAILABLE。
  * - 现有覆盖缺口:新模块。
  * - 最小失败输入:有 / 无观察层状态行的本机任务;PR 读取抛错;离线电脑;已删除任务;状态行带 / 不带
  *   toolInFlight(不知道时摘要里不出现 tool_in_flight,伙伴不能把「没有字段」当成「没有工具在跑」)。
@@ -64,11 +65,30 @@ describe('task digest assembly', () => {
         session_id: 'local-1', device: null, title: '修登录', phase: 'waiting-permission', elapsed_minutes: 9, idle_minutes: 9,
         last_user_ask: '修登录', last_assistant_line: '要删旧表吗?', pending_question: null, error: null,
         current_route: route, runtime_generation: 4,
-        suggested_route: { ...route, harness: 'claude-code', model: 'claude-opus-5-5' },
+        // 等权限不是换模型能解决的:不给建议。
+        suggested_route: null,
         pr_status: null, queued_count: 2, follower_bot_id: null, creator_bot_id: null,
       },
     });
-    expect(deps.local.suggestRoute).toHaveBeenCalledWith({ callerSessionId: 'bot-main', targetSessionId: 'local-1', current: route });
+    expect(deps.local.suggestRoute).not.toHaveBeenCalled();
+  });
+
+  // 依据:换模型建议要按这次失败的原因判断(工具循环换了也没用),摘要须把观察层记下的错误交过去。
+  it('asks for a route suggestion only for an errored or usage-limited task, passing the failure along', async () => {
+    const row = {
+      sessionId: 'local-1', deviceId: null, deviceName: null, online: true, title: '修登录', workingDir: null,
+      phase: 'errored', phaseSince: NOW - 5 * 60_000, lastActivityAt: NOW - 5 * 60_000, startedAt: null,
+      pendingQuestion: null, error: '重复工具调用', errorReason: 'tool_use_loop_detected',
+      creatorBotId: null, followerBotId: 'bot', source: 'user',
+    } satisfies WatchedSession;
+    const { read, deps } = setup({ 'local-1': row });
+    expect(await read({ sessionId: 'local-1', callerSessionId: 'bot-main' })).toMatchObject({
+      ok: true, digest: { phase: 'errored', suggested_route: { model: 'claude-opus-5-5' } },
+    });
+    expect(deps.local.suggestRoute).toHaveBeenCalledWith({
+      callerSessionId: 'bot-main', targetSessionId: 'local-1', current: route,
+      failure: { phase: 'errored', error: '重复工具调用', errorReason: 'tool_use_loop_detected' },
+    });
   });
 
   it('prefers the watcher row for phase, question, error and who follows', async () => {

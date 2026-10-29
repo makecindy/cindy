@@ -18,6 +18,7 @@ import {
   requestRemoteSessionStatus,
   setRemoteReseedImpl,
   setRemoteSessionBootstrapRetryImpl,
+  subscribeRemoteSessionRemoval,
 } from '@/features/device-link/remoteProjectsStore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -53,6 +54,87 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('remoteProjectsStore', () => {
+  // Unit, #7469: a two-row snapshot changing one task must not invalidate the
+  // other sidebar row's memo. Existing tests cover whole-snapshot no-ops, not
+  // per-row UI identity or its separation from in-flight detail-read fences.
+  it('reuses unchanged visible rows without reusing authoritative snapshot identities', () => {
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [mk('same'), mk('changed')]);
+    remoteProjectsStore.setDeviceSessions('other', 'Other', [mk('same')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    const rawBefore = remoteProjectsStore.getDeviceSessions('host');
+    const read = remoteProjectsStore.captureSessionRead('host', 'same');
+
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      mk('changed', { title: 'Updated title' }), mk('same'),
+    ]);
+
+    const visible = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(visible.map(row => [row.deviceLinkDeviceId, row.id, row.title])).toEqual([
+      ['host', 'changed', 'Updated title'], ['host', 'same', 'same'], ['other', 'same', 'same'],
+    ]);
+    expect(visible[0]).not.toBe(before[1]);
+    expect(visible[1]).toBe(before[0]);
+    expect(visible[2]).toBe(before[2]);
+    expect(remoteProjectsStore.getDeviceSessions('host')[1]).not.toBe(rawBefore[0]);
+    expect(read()).toBe(false);
+    const freshRead = remoteProjectsStore.captureSessionRead('host', 'same');
+    expect(freshRead()).toBe(true);
+    remoteProjectsStore.applyPatch('host', 'same', { lastActivityAt: '2026-01-02T00:00:00.000Z' });
+    expect(freshRead()).toBe(true);
+    expect(freshRead.mergeActivity(mk('same')).lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  // Unit, #7469: structural sharing must compare nested payloads too, and must
+  // not resurrect removed rows or hide connection changes behind a UI cache.
+  it('updates nested visible data and retires rows on disconnect, deletion and clear', () => {
+    const row = { ...mk('a'), extraDirs: ['/first'] };
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row, mk('b')]);
+    const before = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [
+      { ...row, extraDirs: ['/second'] }, mk('b'),
+    ]);
+    const changed = remoteProjectsStore.getVisibleMergedRemoteSessions();
+    expect(changed[0]?.extraDirs).toEqual(['/second']);
+    expect(changed[0]).not.toBe(before[0]);
+    expect(changed[1]).toBe(before[1]);
+    remoteProjectsStore.markDeviceDisconnected('host');
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions().map(s => s.deviceLinkConnectionStatus))
+      .toEqual(['disconnected', 'disconnected']);
+    remoteProjectsStore.setDeviceSessions('host', 'Renamed host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toMatchObject([
+      { id: 'a', deviceLinkDeviceName: 'Renamed host', deviceLinkConnectionStatus: 'connected' },
+    ]);
+    remoteProjectsStore.applyPatch('host', 'a', { status: 'deleted' });
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [row]);
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()[0]).not.toBe(before[0]);
+    remoteProjectsStore.clear();
+    expect(remoteProjectsStore.getVisibleMergedRemoteSessions()).toEqual([]);
+  });
+
+  it('preserves an activity push while accepting an in-flight detail read', () => {
+    const session = mk('handoff');
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [session]);
+    const read = remoteProjectsStore.captureSessionRead('host', session.id);
+    const lastActivityAt = '2026-01-02T00:00:00.000Z';
+    remoteProjectsStore.applyPatch('host', session.id, { lastActivityAt });
+    expect(read()).toBe(true);
+    expect(read.mergeActivity(session)).toMatchObject({
+      lastActivityAt,
+      userSendAt: session.userSendAt,
+    });
+  });
+  // Unit, #6529: ordinary lists deliberately omit side chats; a list refresh
+  // must not erase detail loaded for an opened full-page follow-up.
+  it('retains a hidden side chat across ordinary snapshots until an explicit deletion', () => {
+    remoteProjectsStore.mergeDeviceSessions('host', 'Host', [mk('parent'), mk('child', { source: 'side-chat', parentSessionId: 'parent' })]);
+    remoteProjectsStore.setDeviceSessions('host', 'Host', [mk('parent')]);
+    expect(remoteProjectsStore.getDeviceSessions('host').map(row => row.id)).toEqual(['parent', 'child']);
+    remoteProjectsStore.applyPatch('host', 'child', { model: 'new-model' });
+    expect(remoteProjectsStore.getDeviceSessions('host').find(row => row.id === 'child')?.model).toBe('new-model');
+    remoteProjectsStore.applyPatch('host', 'child', { status: 'deleted' });
+    expect(remoteProjectsStore.getDeviceSessions('host').map(row => row.id)).toEqual(['parent']);
+  });
   it('hides Make tasks from visible snapshots while preserving raw mirrors and origins', () => {
     remoteProjectsStore.clear();
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [
@@ -131,6 +213,29 @@ describe('remoteProjectsStore', () => {
   });
 
   describe('origin 钉子(pinSessionOrigin)', () => {
+    // #7115: a copied task can exist on multiple computers with the same id.
+    // A link's explicit origin must survive both existing and later snapshots.
+    it('keeps an explicit origin ahead of same-id snapshots from another computer', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('same', { title: 'B task' })]);
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C task' })]);
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('B task');
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C changed' })]);
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('B task');
+      remoteProjectsStore.pinSessionOrigin('dev-C', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-C');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBe('C changed');
+    });
+
+    it('does not borrow another computer\'s title while the pinned snapshot is unavailable', () => {
+      remoteProjectsStore.setDeviceSessions('dev-C', 'C', [mk('same', { title: 'C task' })]);
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'same');
+      expect(getSessionDeviceId('same')).toBe('dev-B');
+      expect(remoteProjectsStore.getSessionTitle('same')).toBeNull();
+    });
+
     it('远程新建会话后 origin 立刻可判定,即使权威快照还没到', () => {
       remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
       // 传输层据此走隧道 —— 没有钉子时它返回 undefined,首条消息就发给本机 maker。
@@ -355,6 +460,22 @@ describe('remoteProjectsStore', () => {
       ]);
       expect(getSessionDeviceId('s1')).toBeUndefined();
       expect(getSessionDeviceId('s2')).toBe('dev-B');
+    });
+
+    it('通知只在意 sessionId 的旁路状态，包含不在任何分片里的会话', () => {
+      const removed: string[] = [];
+      const off = subscribeRemoteSessionRemoval((id) => removed.push(id));
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
+
+      remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });
+      // 不在任何分片里的会话(分片有界/设备早已移除)也得报:窗口里可能还挂着它的路由。
+      remoteProjectsStore.applyPatch('dev-gone', 's9', { status: 'deleted' });
+      // 非删除的 patch 不是消失。
+      remoteProjectsStore.applyPatch('dev-B', 's2', { status: 'archived' });
+
+      off();
+      remoteProjectsStore.applyPatch('dev-B', 's3', { status: 'deleted' });
+      expect(removed).toEqual(['s1', 's9']);
     });
 
     it('unpin 后触发 reseed,让仅因 includePinned 补入的旧会话被后续 snapshot 剔除', () => {

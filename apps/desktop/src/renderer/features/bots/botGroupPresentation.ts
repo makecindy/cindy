@@ -15,6 +15,7 @@ import { botGroupErrorVariant, botGroupNoticeVariant } from '@cindy/maker-shared
 
 export {
   botGroupComposerPlanState,
+  botGroupNewMessageCount,
   botGroupMemberNames,
   botGroupPathBasename,
   botGroupPlanFilePath,
@@ -30,7 +31,7 @@ export {
   projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
-  sortBotGroups,
+  botGroupActivityAt,
   type BotGroupComposerPlanState,
   type BotGroupPlanFollowUp,
   type BotGroupSidebarPlanPreview,

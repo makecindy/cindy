@@ -1,3 +1,4 @@
+import type { WorkerOwnedWorktree } from '../../shared/orca-worker-project';
 import type { AgentKind } from '@cindy/maker-core';
 
 export interface OrcaDiagnosticTeamSnapshot {
@@ -41,6 +42,7 @@ export interface OrcaDiagnosticsDeps {
     queuePaused: boolean;
   }>;
   readLatestAssistantMessage(workerSessionId: string): Promise<string>;
+  getWorkerWorktree?(sessionId: string): WorkerOwnedWorktree | undefined;
 }
 
 export type OrcaDiagnosticResult<T extends object> =
@@ -56,6 +58,7 @@ function idleMs(worker: OrcaDiagnosticWorkerSnapshot): number | null {
 }
 
 async function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnosticWorkerSnapshot) {
+  const worktree = worker.executionDevice ? undefined : deps.getWorkerWorktree?.(worker.sessionId);
   const sessionStatus = deps.getSessionStatus(worker.sessionId);
   const flow = await deps.getWorkerFlowStatus(worker.sessionId);
   return {
@@ -77,6 +80,8 @@ async function toWorkerSummary(deps: OrcaDiagnosticsDeps, worker: OrcaDiagnostic
     focused: worker.focused,
     // 远端 Worker 的本机代理行没有目录；展示运行设备上的目录。
     working_dir: worker.executionDevice?.workingDir ?? worker.session.workingDir,
+    owns_worktree: !!worktree,
+    ...(worktree ? { worktree } : {}),
     ...(worker.executionDevice
       ? {
           execution_device: {

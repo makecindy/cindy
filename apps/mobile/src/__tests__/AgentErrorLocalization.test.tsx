@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
-import { unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { remoteActionErrorI18nKey, unclassifiedAgentErrorI18nKey, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -13,6 +13,7 @@ import { AgentErrorDetails } from '@/session/AgentErrorDetails';
 import { resolveSessionTailBanner } from '@/session/sessionTailBannerModel';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { InputProjection, RemoteMessage } from '@/session/types';
+import { buildErrorDiagnosisPrompt } from '@/session/errorDiagnosisPrompt';
 
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
@@ -23,7 +24,7 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: unknown) => s, hairlineWidth: 1 } };
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
-vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null }));
+vi.mock('lucide-react-native', () => ({ Pause: () => null, Play: () => null, CircleAlert: () => null, Split: () => null, X: () => null, ChevronRight: () => null, ChevronDown: () => null, Stethoscope: () => null }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
@@ -42,6 +43,25 @@ const clickText = (text: string) => {
   const button = [...host.querySelectorAll('button')].find(b => b.textContent === text);
   expect(button).toBeTruthy(); button!.click();
 };
+
+// 诊断入口只在展开详情后出现；预填给新任务的提示带出错任务链接，且与详情同样脱敏。
+it('offers diagnosis after expanding details with a redacted prompt for the failed session', async () => {
+  await i18n.changeLanguage('en');
+  const onDiagnose = vi.fn();
+  const error = 'Unexpected provider failure; api_key=private-test-value';
+  await act(async () => root.render(<SessionTailBanner
+    state={{ kind: 'error-tail', text: 'Reply failed', rawError: error, reason: 'tool_use_loop_detected', clientId: 'e', continueKind: 'error', retryable: true }}
+    onContinue={vi.fn()} onDismiss={vi.fn()} onDiagnose={onDiagnose} />));
+  expect(host.querySelector('[data-testid="agentError.diagnose"]')).toBeNull();
+  await act(async () => clickText(i18n.t('session.tail.showErrorDetails')));
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agentError.diagnose"]')!.click());
+  const prompt = buildErrorDiagnosisPrompt(i18n.t, 'cindy://session/s1', { ...onDiagnose.mock.calls[0][0], reason: 'unexpected api_key=private-reason-value' });
+  expect(prompt).toContain('cindy://session/s1');
+  expect(prompt).toContain('Reply failed');
+  expect(prompt).toContain('reason: unexpected');
+  expect(prompt).not.toContain('private-test-value');
+  expect(prompt).not.toContain('private-reason-value');
+});
 
 describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
   it.each(['live', 'tail'] as const)('offers explicit %s recovery without automatically retrying', async surface => {
@@ -118,6 +138,18 @@ describe.each(SUPPORTED_LOCALES)('mobile errors in %s', locale => {
 
 
 describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
+  // New member-budget refusal can be wrapped by the proxy; old cases only cover top-level codes.
+  // Minimal input is a 403 wrapper. Verify the production history projection in every locale; unit.
+  it('keeps a wrapped member budget pause understandable in history and action errors', async () => {
+    await i18n.changeLanguage(locale);
+    const message = '403 proxy: [REMOTE_AGENT_MEMBER_BUDGET_PAUSED] technical fallback';
+    const key = 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
+    expect(requiresAgentErrorConfigurationChange(message)).toBe(true);
+    expect(remoteActionErrorI18nKey(message)).toBe(key);
+    const [normalized] = normalizeRemoteMessages([row(message)]);
+    expect(normalized.body).toBe(i18n.t(key));
+    expect(normalized.body).not.toContain('technical fallback');
+  });
   it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('recognizes wrapped %s errors from the remote computer', async reason => {
     await i18n.changeLanguage(locale);
     const message = `LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [${reason}] upstream diagnostic`;
@@ -127,6 +159,26 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(normalized.body).toBe(i18n.t(key));
     expect(normalized.body).not.toContain('upstream diagnostic');
     expect(unclassifiedAgentErrorI18nKey('[REMOTE_AGENT_BUSY] too many tasks')).toBe('session.remoteError.REMOTE_AGENT_BUSY');
+  });
+
+  it('explains a remote conversation that could not be resumed instead of a generic reply failure', async () => {
+    await i18n.changeLanguage(locale);
+    const message = '[REMOTE_AGENT_RESUME_LOST] The earlier conversation on the other computer could not be resumed, so the agent continues without it.';
+    const key = 'session.remoteError.REMOTE_AGENT_RESUME_LOST';
+    expect(unclassifiedAgentErrorI18nKey(message)).toBe(key);
+    expect(i18n.t(key)).not.toBe(i18n.t('session.tail.replyFailed'));
+    const [normalized] = normalizeRemoteMessages([row(message)]);
+    expect(normalized.body).toBe(i18n.t(key));
+  });
+
+  // The fork action showed the raw "[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] …" string; it must use
+  // the localized remote copy, while unknown codes keep the caller's own fallback.
+  it('localizes a remote fork failure in one-shot action errors', async () => {
+    await i18n.changeLanguage(locale);
+    expect(remoteActionErrorI18nKey('[IPC_ERROR] [REMOTE_AGENT_FORK_FAILED] the conversation could not be forked'))
+      .toBe('session.remoteError.REMOTE_AGENT_FORK_FAILED');
+    expect(remoteActionErrorI18nKey('[REMOTE_FUTURE] private diagnostic')).toBeNull();
+    expect(remoteActionErrorI18nKey('[NOT_FOUND] message missing')).toBeNull();
   });
 
   it('has every desktop bracket-code translation without relying on fallback languages', async () => {
@@ -145,7 +197,7 @@ describe.each(SUPPORTED_LOCALES)('known mobile remote errors in %s', locale => {
     expect(unclassifiedAgentErrorI18nKey('[CUSTOM_ERROR] private diagnostic')).toBe('session.tail.replyFailed');
   });
 
-  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT'])(
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'preserves %s guidance across history, live and tail, including language changes', async code => {
       await i18n.changeLanguage(locale);
       const message = `Error invoking remote method 'maker:send': Error: [${code}] upstream diagnostic; api_key=private-test-value`;
@@ -198,7 +250,7 @@ it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'REMOTE_COMPAT_MODE_UNSUPPORTED', 'REMOTE
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(true);
   },
 );
-it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
+it.each(['REMOTE_DAEMON_CLOSED', 'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'REMOTE_FUTURE'])(
   'preserves retry for recoverable or unclassified %s', code => {
     expect(requiresAgentErrorConfigurationChange(`[${code}] diagnostic`)).toBe(false);
   },

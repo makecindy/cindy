@@ -20,6 +20,21 @@ beforeAll(async () => {
 });
 
 describe('remoteStatus', () => {
+  // A switch refusal reaches mobile inside the device-link IPC_ERROR envelope.
+  // Verify the real alert/toast formatter, which differs from chat rendering.
+  it('localizes nested Harness errors without exposing the technical fallback', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+        await i18n.changeLanguage(locale);
+        const error = new DeviceLinkError('IPC_ERROR' as never, '[SSH_HARNESS_SWITCH_UNSUPPORTED] SSH diagnostic');
+        expect(humanizeRemoteError(error)).toBe(i18n.t('session.remoteError.SSH_HARNESS_SWITCH_UNSUPPORTED'));
+        expect(formatRemoteError(error)).toContain('SSH diagnostic');
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
   it('backs repeated connection recovery syncs off and caps the delay', () => {
     expect([0, 1, 2, 3, 4, 5, 6].map(connectionRecoverySyncRetryDelayMs))
       .toEqual([900, 1_800, 3_600, 7_200, 14_400, 28_800, 30_000]);

@@ -27,28 +27,34 @@ describe('account-scoped home navigation overrides', () => {
   it('serializes overlapping patches and isolates accounts even when resource ids match', async () => {
     await Promise.all([
       saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) }),
-      saveHomeNavigationPreferences('account-a', { mode: 'teammates' }),
-      saveHomeNavigationPreferences('account-b', { mode: 'tasks' }),
+      saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true }),
+      saveHomeNavigationPreferences('account-b', { teammatesCollapsed: false }),
     ]);
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates', lastTeammate: teammateIdentity(row()) });
-    expect(await readHomeNavigationPreferences('account-b')).toEqual({ mode: 'tasks' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true, lastTeammate: teammateIdentity(row()) });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({ teammatesCollapsed: false });
     await saveHomeNavigationPreferences('account-a', { lastTeammate: null });
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true });
   });
   it('does not overwrite preferences after a failed read; a failed write does not poison later saves', async () => {
-    await saveHomeNavigationPreferences('account-a', { mode: 'teammates' });
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
     vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error('disk unavailable'));
     await expect(saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) })).rejects.toThrow('disk unavailable');
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true });
     vi.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error('write failed'));
-    await expect(saveHomeNavigationPreferences('account-b', { mode: 'tasks' })).rejects.toThrow('write failed');
+    await expect(saveHomeNavigationPreferences('account-b', { teammatesCollapsed: true })).rejects.toThrow('write failed');
     await saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) });
     expect((await readHomeNavigationPreferences('account-a')).lastTeammate).toEqual(teammateIdentity(row()));
   });
   it('rejects malformed identities and never saves extra Session/profile fields', () => {
-    expect(normalizeHomeNavigationPreferences({ mode: 'unknown', lastTeammate: { resourceId: 'id' } })).toEqual({});
-    expect(normalizeHomeNavigationPreferences({ mode: 'teammates', lastTeammate: { ...teammateIdentity(row()), sessionId: 'cached', name: 'Cindy' } }))
-      .toEqual({ mode: 'teammates', lastTeammate: teammateIdentity(row()) });
+    expect(normalizeHomeNavigationPreferences({ teammatesCollapsed: 'yes', lastTeammate: { resourceId: 'id' } })).toEqual({});
+    expect(normalizeHomeNavigationPreferences({ lastTeammate: { ...teammateIdentity(row()), sessionId: 'cached', name: 'Cindy' } }))
+      .toEqual({ lastTeammate: teammateIdentity(row()) });
+  });
+  it('drops the retired tasks/teammates mode from stored data on the next write, keeping the rest', async () => {
+    disk.set(__testing.navigationPrefix + 'account-a', JSON.stringify({ mode: 'teammates', lastTeammate: teammateIdentity(row()) }));
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ lastTeammate: teammateIdentity(row()) });
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
+    expect(JSON.parse(disk.get(__testing.navigationPrefix + 'account-a')!)).toEqual({ teammatesCollapsed: true, lastTeammate: teammateIdentity(row()) });
   });
 });
 describe('teammate identity navigation', () => {

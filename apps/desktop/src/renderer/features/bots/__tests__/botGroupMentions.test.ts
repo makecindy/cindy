@@ -7,13 +7,13 @@ import {
   resolveBotGroupMentions,
   retainBotGroupTrackedMentions,
   splitBotGroupMentionSegments,
+  splitBotGroupRelaySteps,
 } from '../botGroupMentions';
 import {
   continuableRoundEndId,
   mergeBotGroupMessages,
-  sortBotGroups,
 } from '../botGroupPresentation';
-import type { BotGroupMessageView, BotGroupSummary } from '../../../../shared/botGroupChat';
+import type { BotGroupMessageView } from '../../../../shared/botGroupChat';
 
 const members = [
   { botId: 'mimi', name: '咪咪' },
@@ -179,6 +179,36 @@ describe('mention picker helpers', () => {
   });
 });
 
+// bot-group-chat.md §7.0: a 分工 request that writes out its steps becomes the card as written;
+// anything else must stay with the organizer, so a mention inside a sentence never splits work.
+describe('splitBotGroupRelaySteps', () => {
+  const split = (text: string) => splitBotGroupRelaySteps(text, { members, allLabels: ['所有人'] });
+
+  it.each([
+    ['one line per step', '@阿布 出方案\n@小满 按方案实现', [['abu', '出方案'], ['xiaoman', '按方案实现']]],
+    ['punctuation and connectors', '做登录页：@阿布 出方案，然后 @小满 实现；最后 @咪咪 测一遍。',
+      [['abu', '出方案'], ['xiaoman', '实现'], ['mimi', '测一遍']]],
+    ['one teammate', '@Ann review the diff', [['ann', 'review the diff']]],
+    // A connector only leads into the next step: the last step keeps it, and words merely ending in one keep theirs.
+    ['a last step ending like a connector', '@阿布 出方案，then @Ann decide what to do next', [['abu', '出方案'], ['ann', 'decide what to do next']]],
+    ['a word ending like a connector', '@Ann add context\n@阿布 实现', [['ann', 'add context'], ['abu', '实现']]],
+  ] as const)('reads %s', (_label, text, expected) => {
+    expect(split(text)).toEqual(expected.map(([botId, task]) => ({ botId, task })));
+  });
+
+  it.each([
+    ['a mention inside a sentence', '@阿布 和 @小满 一起做登录页'],
+    ['a step without a task', '@阿布，@小满 实现'],
+    ['everyone', '@所有人 出方案，@小满 实现'],
+    ['no mention', '做一个登录页'],
+    // A teammate renamed after being picked no longer reads as one: its step must not vanish.
+    ['an @ that is no longer a teammate', '@Old 出方案，@小满 实现，@阿布 测一遍'],
+    ['an @ inside a task', '@小满 实现，@Old 测一遍'],
+  ])('leaves %s to the organizer', (_label, text) => {
+    expect(split(text)).toBeNull();
+  });
+});
+
 function message(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
   return {
     id: 'm',
@@ -210,32 +240,11 @@ describe('group presentation', () => {
     expect(continuableRoundEndId(messages, { status: 'running', canContinue: true })).toBeNull();
   });
 
-  it('merges pages by sequence and sorts groups by latest activity', () => {
+  it('merges pages by sequence', () => {
     const merged = mergeBotGroupMessages(
       [message({ id: 'a', sequence: 1 }), message({ id: 'b', sequence: 2 })],
       [message({ id: 'b2', sequence: 2 }), message({ id: 'c', sequence: 3 })],
     );
     expect(merged.map((item) => item.id)).toEqual(['a', 'b2', 'c']);
-
-    const group = (id: string, updatedAt: number, lastAt?: number): BotGroupSummary => ({
-      id,
-      name: id,
-      replyMode: 'all',
-      speakingMode: 'auto',
-      members: [],
-      organizerBotId: null,
-      projectDir: null,
-      lastMessage: lastAt ? { authorKind: 'user', authorName: '', preview: '', createdAt: lastAt } : null,
-      speakingBotIds: [],
-      planningBotId: null,
-      openPlan: null,
-      createdAt: 0,
-      updatedAt,
-    });
-    expect(sortBotGroups([group('old', 1), group('new', 1, 9), group('mid', 5)]).map((item) => item.id)).toEqual([
-      'new',
-      'mid',
-      'old',
-    ]);
   });
 });

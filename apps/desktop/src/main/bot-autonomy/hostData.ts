@@ -90,21 +90,33 @@ export async function readLocalSessionMetas(ids: readonly string[]): Promise<Loc
 }
 
 /** 启动兜底：最近被打断（开始了一轮但没有正常收尾）的在用任务。 */
-export async function readInterruptedSessionMetas(sinceMs: number, limit: number): Promise<LocalSessionMeta[]> {
+export async function readInterruptedSessionMetas(
+  sinceMs: number, limit: number, sessionIds?: readonly string[],
+): Promise<LocalSessionMeta[]> {
   const db = getDbClient().drizzle;
-  const rows = await db.select(metaSelection).from(sessions)
-    .where(and(
-      sql`${sessions.status} = 'active'`,
-      isNull(sessions.hiddenAt),
-      isNotNull(sessions.activeTurnStartedAt),
-      gte(sessions.activeTurnStartedAt, sinceMs),
-      sql`${sessions.activeTurnStartedAt} > coalesce(${sessions.lastTurnEndedAt}, 0)`,
-      sql`${sessions.activeTurnStartedAt} > coalesce(${sessions.clearedAt}, 0)`,
-    ))
-    .orderBy(desc(sessions.activeTurnStartedAt))
-    .limit(limit);
-  const roles = await laneRoles(rows.map((row) => row.id));
-  return rows.map((row) => toMeta(row, roles.get(row.id) ?? null));
+  // An explicit empty scope means no query, never the whole account.
+  const ids = sessionIds === undefined ? undefined : [...new Set(sessionIds)];
+  const batches = ids === undefined ? [undefined] : Array.from(
+    { length: Math.ceil(ids.length / SESSION_BATCH) }, (_, index) => ids.slice(index * SESSION_BATCH, (index + 1) * SESSION_BATCH),
+  );
+  const rows: Array<Parameters<typeof toMeta>[0]> = [];
+  for (const batch of batches) {
+    rows.push(...await db.select(metaSelection).from(sessions)
+      .where(and(
+        sql`${sessions.status} = 'active'`,
+        isNull(sessions.hiddenAt),
+        isNotNull(sessions.activeTurnStartedAt),
+        gte(sessions.activeTurnStartedAt, sinceMs),
+        sql`${sessions.activeTurnStartedAt} > coalesce(${sessions.lastTurnEndedAt}, 0)`,
+        sql`${sessions.activeTurnStartedAt} > coalesce(${sessions.clearedAt}, 0)`,
+        batch === undefined ? undefined : inArray(sessions.id, batch),
+      ))
+      .orderBy(desc(sessions.activeTurnStartedAt))
+      .limit(limit));
+  }
+  const selected = rows.sort((a, b) => (b.activeTurnStartedAt ?? 0) - (a.activeTurnStartedAt ?? 0)).slice(0, limit);
+  const roles = await laneRoles(selected.map(row => row.id));
+  return selected.map(row => toMeta(row, roles.get(row.id) ?? null));
 }
 
 /** 伙伴目录：状态、能力位 allowSchedulerFollow、是否在别的电脑运行（云端伙伴）。 */

@@ -49,6 +49,18 @@ async function loadModule() {
 }
 
 describe('providerModelMemory store', () => {
+  // Standard tier: speed presets must survive persistence without collapsing Ultrafast to true.
+  it('preserves Ultrafast in saved model presets and host snapshots', async () => {
+    const m = await loadModule();
+    m.setProviderModelFast('codex', 'openai', 'gpt-6-astra', 'ultrafast');
+    expect(m.getProviderModelFast('codex', 'openai', 'gpt-6-astra')).toBe('ultrafast');
+    expect(m.snapshotForSeed()['codex:*']?.fastByModel['gpt-6-astra']).toBe('ultrafast');
+    const saved = memStorage.getItem(m.__STORAGE_KEY)!;
+    m.__resetForTest();
+    memStorage.setItem(m.__STORAGE_KEY, saved);
+    expect(m.getProviderModelFast('codex', 'openai', 'gpt-6-astra')).toBe('ultrafast');
+  });
+
   it('默认无记录:getProviderModelChoice 返回 undefined', async () => {
     const { getProviderModelChoice, hasAnyProviderModelOverride } = await loadModule();
     expect(getProviderModelChoice('claude-code', 'xd')).toBeUndefined();

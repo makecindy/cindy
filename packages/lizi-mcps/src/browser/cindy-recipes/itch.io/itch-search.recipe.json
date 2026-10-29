@@ -1,0 +1,26 @@
+{
+  "id": "itch-search",
+  "match": ["itch.io"],
+  "description": "搜索 itch.io 游戏和项目，返回标题、作者和链接；支持确认后的空结果。Search games and projects.",
+  "access": "read",
+  "inputs": {
+    "query": { "required": true, "type": "string", "description": "搜索词" },
+    "limit": { "required": true, "type": "number", "description": "返回数量，1–20 整数" }
+  },
+  "steps": [
+    { "action": "navigate", "url": "https://itch.io/search?q={{query|url}}" },
+    {
+      "action": "wait",
+      "fn": "() => document.querySelector('.search_header') && (document.querySelector('.game_cell_data') || document.body.innerText.includes('No results found'))",
+      "timeoutMs": 10000
+    },
+    {
+      "action": "evaluate",
+      "guard": { "url": "https://itch.io/search?q={{query|url}}", "selector": ".search_header" },
+      "fn": "() => { const query='{{query|js}}', limit=Number('{{limit|js}}'); if(!Number.isInteger(limit)||limit<1||limit>20)throw new Error('limit must be an integer from 1 to 20'); const rows=[...document.querySelectorAll('.game_cell_data')].slice(0,limit).map(c=>({title:c.querySelector('.game_title > a.title')?.textContent.trim(),url:c.querySelector('.game_title > a.title')?.href,author:c.querySelector('.game_author')?.textContent.trim()})); const empty=rows.length===0 && document.body.innerText.includes('No results found'); return {query,rows,count:rows.length,empty,matched:new URL(location.href).searchParams.get('q')===query && document.querySelector('.search_header h2')?.textContent===`Search results for '${query}'` && (empty || (rows.length>0 && rows.every(r=>r.title&&r.url&&r.author)))}; }",
+      "as": "result",
+      "expect": { "equals": { "matched": true } }
+    }
+  ],
+  "output": "{{result}}"
+}

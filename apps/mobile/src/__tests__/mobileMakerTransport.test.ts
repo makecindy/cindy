@@ -39,6 +39,29 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  // Unit: validate the real transport's versioned Host protocol, including an
+  // older Host rejection. Creating a side chat is never retried as a new task.
+  it('uses versioned side-chat channels and surfaces unsupported hosts without fallback', async () => {
+    const calls: string[] = [];
+    const maker = createMobileMakerTransport({ deviceId: 'side-host', invoke: (async (_device, channel, args) => {
+      calls.push(channel);
+      expect(args).toEqual(['main']);
+      if (channel === 'maker:side-chat:list:v1') return [{ id: 'child' }];
+      throw new Error('CHANNEL_NOT_ALLOWED');
+    }) as RemoteInvoke });
+    expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
+    await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+  });
+  it('writes reset preferences to the execution device and rejects a different account response', async () => {
+    const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
+    const maker = createMobileMakerTransport({ deviceId: 'execution-device', invoke: invoke as RemoteInvoke });
+    await maker.setCodexResetAutoUse({ minimumDays: 7 }, 'bound-account', 'openai-b');
+    expect(invoke).toHaveBeenCalledWith('execution-device', 'maker:usage:codex-reset-auto-use', [{ minimumDays: 7 }, 'bound-account', 'openai-b']);
+    invoke.mockResolvedValueOnce({ providerId: 'openai-b', autoUse: { accountKey: 'changed-account' } });
+    await expect(maker.setCodexResetAutoUse({ enabled: true }, 'bound-account', 'openai-b')).rejects.toThrow('Account scope changed');
+  });
+
   // Unit: a visible text snapshot is already cached by the reader. Its refresh
   // must await the Host, while retaining the existing confirmed-version cache.
   it('revalidates text without returning stale bytes or invalidating a confirmed version', async () => {
@@ -442,6 +465,7 @@ describe("mobile maker transport", () => {
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
       "maker:usage:codex-rate-limit-reset",
+      "maker:usage:codex-reset-auto-use",
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",
       "maker:claude-session-route:get",
@@ -463,6 +487,8 @@ describe("mobile maker transport", () => {
       "maker:goal:resume",
       "maker:goal:update",
       "maker:fork",
+      "maker:side-chat:v1",
+      "maker:side-chat:list:v1",
       "maker:fork-strip-encrypted",
       "maker:get-session-tree",
       "maker:navigate-session-tree",
@@ -1330,4 +1356,10 @@ describe("mobile maker transport", () => {
     );
     expect(invokeMock).not.toHaveBeenCalled();
   });
+});
+
+it('retries an existing image artifact on the task Host without sending a new prompt', async () => {
+  const { calls, maker } = harness();
+  await maker.input.retryImageDelivery('task', 'a'.repeat(64));
+  expect(calls).toEqual([{ deviceId: 'dev-1', channel: 'maker:images:retry', args: ['task', 'a'.repeat(64)] }]);
 });

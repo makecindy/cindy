@@ -23,10 +23,16 @@ vi.mock('react-i18next', () => ({
 const catalog = vi.hoisted(() => ({
   refresh: vi.fn<(deviceId: string) => Promise<void>>(async () => undefined),
   cached: new Set<string>(),
+  subscriptions: new Set<string>(),
+  stale: new Set<string>(),
 }));
 vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: catalog.refresh }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? { providers: [] } : null),
+  getCachedDeviceProviders: (deviceId: string) => (catalog.cached.has(deviceId) ? {
+    providers: catalog.subscriptions.has(deviceId) ? [{ subscriptionFastPolicy: { allowFast: false } }] : [],
+  } : null),
+  isSubscriptionShareCatalogStale: (deviceId: string) => catalog.stale.has(deviceId),
+  hasSubscriptionShareCatalog: (deviceId: string) => catalog.subscriptions.has(deviceId),
 }));
 
 function share(partial: Partial<ProviderShareReceived>): ProviderShareReceived {
@@ -46,6 +52,7 @@ function share(partial: Partial<ProviderShareReceived>): ProviderShareReceived {
 }
 
 let push: ((list: ProviderShareReceived[]) => void) | null = null;
+let catalogPush: ((event: { deviceId: string; channel: string; payload: unknown }) => void) | null = null;
 let initial: ProviderShareReceived[] = [];
 let linkStatus: ((payload: { status: 'online' | 'connecting' | 'stopped' }) => void) | null = null;
 let linkPresence: ((payload: { deviceId: string; online: boolean; remoteControlEnabled: boolean }) => void) | null = null;
@@ -67,6 +74,9 @@ beforeEach(() => {
   resetProviderShareStoreForTests();
   catalog.refresh.mockClear();
   catalog.cached.clear();
+  catalog.subscriptions.clear();
+  catalog.stale.clear();
+  catalogPush = null;
   push = null;
   initial = [];
   linkStatus = null;
@@ -79,6 +89,7 @@ beforeEach(() => {
     electronAPI: {
       deviceLink: {
         invoke,
+        onRemotePush: (callback: typeof catalogPush) => { catalogPush = callback; return () => { catalogPush = null; }; },
         onStatusChanged: (callback: typeof linkStatus) => {
           linkStatus = callback;
           return () => { linkStatus = null; };
@@ -110,6 +121,38 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('useProviderShareAgentDevices', () => {
+  it('refreshes an authorized subscription share on catalog invalidation and ignores custom API shares and unrelated peers', async () => {
+    initial = [share({ shareId: 'subscription', providerId: 'openai' }), share({ shareId: 'api' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear();
+    catalog.cached.add('share:subscription'); catalog.cached.add('share:api');
+    catalog.subscriptions.add('share:subscription');
+    act(() => {
+      catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:api', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:unknown', channel: 'maker:provider:changed', payload: {} });
+      catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:event', payload: {} });
+    });
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+    // A failed soft refresh leaves no authoritative cache, but another push
+    // must still retry the previously recognized subscription (never API peers).
+    catalog.cached.delete('share:subscription');
+    act(() => catalogPush?.({ deviceId: 'share:subscription', channel: 'maker:provider:changed', payload: {} }));
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription'], ['share:subscription']]);
+  });
+
+  it('refreshes stale subscription catalogs even when a membership snapshot has no changes', async () => {
+    initial = [share({ shareId: 'subscription', providerId: 'openai' }), share({ shareId: 'api' })];
+    const { result } = renderHook(() => useProviderShareAgentDevices());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    catalog.refresh.mockClear();
+    catalog.cached.add('share:subscription');
+    catalog.subscriptions.add('share:subscription');
+    catalog.stale.add('share:subscription');
+    act(() => push?.(initial));
+    expect(catalog.refresh.mock.calls).toEqual([['share:subscription']]);
+  });
   it('only offers new shares that the controlled host has loaded, even if the controller has more cross-region shares', async () => {
     initial = [share({ shareId: 'both' }), share({ shareId: 'controller-only' })];
     invoke.mockResolvedValue(hostShares({ shareId: 'both' }, { shareId: 'host-only' }));

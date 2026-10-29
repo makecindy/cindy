@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError, type InvokeResultPayload } from '@cindy/device-link';
 import { createRemoteSessionsStatusSetter } from '../sessionStatusRemote.js';
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker.js';
+import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
 const request = { deviceId: 'studio', sessionIds: ['s1', 's2', 's3'], status: 'active' as const };
 const row = (id: string) => ({ ok: true as const, result: { id, status: 'active', title: 'remote title', workingDir: null } });
@@ -14,6 +15,55 @@ function setup(outcome: InvokeResultPayload | Error) {
 }
 
 describe('remote session archive status', () => {
+  // #6399, unit: invocation admission precedes transport queue/connection waits.
+  // Exercise its actual preSend callback, preserving earlier receipts on rejection.
+  it.each(['active', 'archived'] as const)('rechecks %s action at the final transport send', async status => {
+    let current = true;
+    const check = () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', tool: status === 'active' ? 'unarchive_sessions' : 'archive_sessions', sessionId: 'caller', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => check(), assertCurrentSync: check },
+    );
+    if (!decision.ok || !decision.run) throw new Error('Expected admission');
+    const send = vi.fn();
+    const setStatus = createRemoteSessionsStatusSetter({
+      captureAccess: () => () => {},
+      invoke: async (_device, _channel, args, options) => {
+        if (args[0] === 's2') current = false; // connection wait completed after input replacement
+        options?.preSend?.();
+        send(args[0]);
+        return { ok: true, result: { id: args[0], status, title: 'private title' } };
+      },
+    });
+    expect(await decision.run(() => setStatus({ ...request, status }))).toMatchObject({
+      ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+      changed: [{ sessionId: 's1', status, title: null }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    });
+    expect(send.mock.calls).toEqual([['s1']]);
+  });
+
+  // #6399, unit: account-only guards missed input replacement between remote
+  // batch items. Preserve the first receipt while refusing later invocations.
+  it('stops a batch when input authorization expires after the first receipt', async () => {
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', tool: 'unarchive_sessions', sessionId: 'caller', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('Expected admission');
+    const s = setup(row('s2'));
+    s.invoke.mockImplementationOnce(async () => { current = false; return row('s1'); });
+    expect(await decision.run(() => s.setStatus(request))).toMatchObject({
+      ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED',
+      changed: [{ sessionId: 's1', status: 'active' }],
+      failedSessionId: 's2', remainingSessionIds: ['s3'],
+    });
+    expect(s.invoke).toHaveBeenCalledOnce();
+  });
+
   it('uses only the existing patch-meta channel with the stripped id and status', async () => {
     const s = setup(row('s1'));
     expect(await s.setStatus({ ...request, sessionIds: ['s1'] })).toEqual({ ok: true, changed: [

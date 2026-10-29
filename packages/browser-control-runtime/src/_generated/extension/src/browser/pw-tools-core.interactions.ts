@@ -1760,7 +1760,16 @@ export async function waitForViaPlaywright(opts: {
     if (opts.fn) {
       const fn = normalizeOptionalString(opts.fn) ?? "";
       if (fn) {
-        await waitForStep(page.waitForFunction(fn, { timeout }));
+        // Pass a real function so Playwright caches its compilation between
+        // polls (string expressions re-eval and can fail under Trusted Types).
+        // Compile only on the host; execution stays in the page context.
+        const predicate = new Function(
+          "const value = (" + normalizeBrowserEvaluateFunctionSource(fn) + ")(); " +
+            "if (value && typeof value.then === 'function') { " +
+            "Promise.resolve(value).catch(() => {}); throw new Error('wait.fn requires a synchronous predicate'); } " +
+            "return value;",
+        ) as () => unknown;
+        await waitForStep(page.waitForFunction(predicate, undefined, { timeout }));
       }
     }
       },

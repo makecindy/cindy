@@ -1365,9 +1365,23 @@ struct AgentIslandPermissionAction: Codable, Equatable {
   let canAllowForSession: Bool
 }
 
+/// The companion a Bot Session speaks for; drawn instead of the agent mark.
+struct AgentIslandCompanion: Codable, Equatable {
+  let name: String
+  let groupName: String?
+  let hue: String
+  let imageJpeg: String?
+  let glyph: String
+  let glyphIsInitial: Bool
+}
+
 struct AgentIslandSession: Codable, Equatable, Identifiable {
+  var groupChat: AgentIslandGroupChat? = nil
   let sessionId: String
+  var completionToken: String? = nil
   let title: String
+  // Older main-process payloads have no companion field.
+  var companion: AgentIslandCompanion? = nil
   let projectName: String?
   let detail: String
   let compactDetail: String
@@ -1386,13 +1400,18 @@ struct AgentIslandSession: Codable, Equatable, Identifiable {
   var subtitle: String { compactDetail }
 }
 
+struct AgentIslandGroupChat: Codable, Equatable {
+  let avatars: [AgentIslandCompanion]
+  let mentionLabel: String?
+}
+
 struct AgentIslandPillSnapshot: Codable {
   let priorityId: String?
   let priorityStatus: String
   let priorityMicroTitle: String
   let priorityCompactTitle: String
   let sessionCount: Int
-  let activeSessionCount: Int
+  let runningSessionCount: Int
   let pendingInteractionCount: Int
   let unreadCompletedCount: Int
   let deferredRevealCount: Int
@@ -1404,7 +1423,7 @@ struct AgentIslandPillSnapshot: Codable {
     priorityMicroTitle: "",
     priorityCompactTitle: "",
     sessionCount: 0,
-    activeSessionCount: 0,
+    runningSessionCount: 0,
     pendingInteractionCount: 0,
     unreadCompletedCount: 0,
     deferredRevealCount: 0,
@@ -1435,6 +1454,8 @@ struct AgentIslandStrings: Codable, Equatable {
   let allowOnce: String
   let alwaysAllowForSession: String
   let deny: String
+  var markRead: String? = nil
+  var archive: String? = nil
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
@@ -1596,6 +1617,8 @@ struct AgentIslandDisplayState: Codable {
 
 struct IncomingMessage: Codable {
   let type: String
+  let requestId: String?
+  let success: Bool?
   let state: AgentIslandDisplayState?
   let frame: AgentIslandCarrierFrame?
   let frames: [AgentIslandCarrierFrame]?
@@ -1633,7 +1656,6 @@ private let expandedIslandBodySpacing: CGFloat = 4
 private let expandedIslandBottomPadding: CGFloat = 16
 private let compactIslandBaseWidth: CGFloat = 210
 private let compactIslandMinContentWidth: CGFloat = 80
-private let compactCollapseLeadingReservedWidth: CGFloat = 80
 private let compactCollapseTrailingReservedWidth: CGFloat = 100
 private let compactIslandBadgeCollapseContentThreshold: CGFloat = 152
 private let compactIslandDetailCollapseContentThreshold: CGFloat = 190
@@ -1645,7 +1667,7 @@ private let compactIslandStatusIconWidth: CGFloat = 18
 private let compactIslandCarrierInset: CGFloat = 20
 private let expandedIslandCarrierExpandedInset: CGFloat = 80
 private let expandedIslandMinContentWidth: CGFloat = 360
-private let expandedIslandDefaultContentWidth: CGFloat = 640
+private let expandedIslandDefaultContentWidth: CGFloat = 440
 private let expandedIslandMaxContentWidth: CGFloat = 920
 private let expandedIslandHardwareNotchSideWidth: CGFloat = 96
 private let expandedIslandHardwareNotchHorizontalPadding: CGFloat = 36
@@ -1679,6 +1701,8 @@ private let agentIslandDebugLoggingEnabled =
 private let agentIslandOrange = Color(red: 1.0, green: 0.4, blue: 0.0)
 private let agentIslandBlue = Color(red: 0.0, green: 0.851, blue: 0.773)
 private let agentIslandErrorRed = Color(red: 0.937, green: 0.267, blue: 0.267)
+// 滑动归档沿用手机版 swipeActionArchive 的蓝色（2026-10-24 用户裁决）。
+private let agentIslandArchiveBlue = Color(red: 59.0 / 255, green: 130.0 / 255, blue: 246.0 / 255)
 private let agentIslandUnreadGreen = Color(red: 0.133, green: 0.773, blue: 0.369)
 private let runningAgentGifFileName = "running-agent.gif"
 private let tararaMascotFileName = "tarara.png"
@@ -3051,7 +3075,7 @@ struct PillBadge: View {
   let pillSnapshot: AgentIslandPillSnapshot
   var compact: Bool = false
 
-  /// Text runs and minimum capsule width for the badge variant a snapshot renders.
+  /// Text runs and minimum width for the badge variant a snapshot renders.
   /// Shared by `body` and `intrinsicWidth` so reserved layout width can never
   /// drift away from what actually gets drawn.
   struct Metrics {
@@ -3061,23 +3085,48 @@ struct PillBadge: View {
     let fontSize: CGFloat
   }
 
+  /// One colored text run of the badge.
+  struct Run {
+    let text: String
+    let color: Color
+  }
+
+  /// Mirrors `getAgentIslandCompactBadgeSegments` in `shared/agentIsland.ts`:
+  /// running only → `running`; attention + running → `attention · running`;
+  /// attention only → `attention`; neither → session count.
+  static func runs(pillSnapshot: AgentIslandPillSnapshot) -> [Run] {
+    let attention = pillSnapshot.attentionCount
+    let running = pillSnapshot.runningSessionCount
+    // 等用户操作(提问 / 授权)优先于完成未读,与列表里的状态点同色。
+    let attentionColor = pillSnapshot.pendingInteractionCount > 0 ? agentIslandBlue : agentIslandUnreadGreen
+    if attention > 0 && running > 0 {
+      return [
+        Run(text: "\(attention)", color: attentionColor),
+        Run(text: "·", color: Color.white.opacity(0.42)),
+        Run(text: "\(running)", color: agentIslandOrange),
+      ]
+    }
+    if attention > 0 {
+      return [Run(text: "\(attention)", color: attentionColor)]
+    }
+    if running > 0 {
+      return [Run(text: "\(running)", color: agentIslandOrange)]
+    }
+    return [Run(text: "\(max(1, pillSnapshot.sessionCount))", color: Color.white.opacity(0.92))]
+  }
+
   static func metrics(pillSnapshot: AgentIslandPillSnapshot, compact: Bool) -> Metrics {
     let fontSize: CGFloat = compact ? 10 : 11
-    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
-      return Metrics(
-        segments: ["\(pillSnapshot.activeSessionCount)", "/", "\(pillSnapshot.sessionCount)"],
-        minWidth: compact ? 30 : 34,
-        fontSize: fontSize
-      )
-    }
+    let segments = runs(pillSnapshot: pillSnapshot).map(\.text)
+    let isPair = segments.count > 1
     return Metrics(
-      segments: ["\(max(1, pillSnapshot.sessionCount))"],
-      minWidth: compact ? 22 : 24,
+      segments: segments,
+      minWidth: isPair ? (compact ? 30 : 34) : (compact ? 22 : 24),
       fontSize: fontSize
     )
   }
 
-  /// Width the hardware-notch layout reserves for the capsule so a multi-digit count is
+  /// Width the hardware-notch layout reserves for the badge so a multi-digit count is
   /// never clipped.
   ///
   /// This is deliberately a *nominal* width computed from digit counts, not an `NSFont`
@@ -3092,11 +3141,11 @@ struct PillBadge: View {
     let segmentsWidth = metrics.segments.reduce(CGFloat(0)) { total, segment in
       total + CGFloat(segment.count) * nominalCharWidth + segmentRoundingSlack
     }
-    let spacing = activeTotalSpacing * CGFloat(max(0, metrics.segments.count - 1))
+    let spacing = runSpacing * CGFloat(max(0, metrics.segments.count - 1))
     return max(metrics.minWidth, segmentsWidth + spacing + contentInset * 2)
   }
 
-  private static let activeTotalSpacing: CGFloat = 1
+  private static let runSpacing: CGFloat = 1
   private static let contentInset: CGFloat = 2
   /// Upper bound for one monospaced 10pt digit (real advance is ~6pt). Mirrors
   /// `AGENT_ISLAND_COMPACT_BADGE_CHAR_WIDTH_BOUND` on the TS side.
@@ -3106,47 +3155,19 @@ struct PillBadge: View {
   private static let segmentRoundingSlack: CGFloat = 1
 
   var body: some View {
-    if pillSnapshot.activeSessionCount > 0 && pillSnapshot.sessionCount > 1 {
-      activeTotalBadge(
-        active: pillSnapshot.activeSessionCount,
-        total: pillSnapshot.sessionCount,
-        emphasized: isEmphasized
-      )
-    } else {
-      badge("\(max(1, pillSnapshot.sessionCount))", emphasized: isEmphasized)
-    }
-  }
-
-  private func badge(_ text: String, emphasized: Bool) -> some View {
-    Text(text)
-      .font(badgeFont)
-      .foregroundColor(Color.white.opacity(0.92))
-      // Multi-digit counts must widen the capsule instead of wrapping into two lines.
-      .lineLimit(1)
-      .fixedSize(horizontal: true, vertical: false)
-      .padding(.horizontal, Self.contentInset)
-      .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
-      .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
-      .clipShape(Capsule())
-  }
-
-  private func activeTotalBadge(active: Int, total: Int, emphasized: Bool) -> some View {
-    HStack(spacing: Self.activeTotalSpacing) {
-      Text("\(active)")
-        .foregroundColor(emphasized ? agentIslandBlue : agentIslandOrange)
-      Text("/")
-        .foregroundColor(Color.white.opacity(0.42))
-      Text("\(total)")
-        .foregroundColor(Color.white.opacity(0.92))
+    HStack(spacing: Self.runSpacing) {
+      ForEach(Array(Self.runs(pillSnapshot: pillSnapshot).enumerated()), id: \.offset) { _, run in
+        Text(run.text)
+          .foregroundColor(run.color)
+      }
     }
     .font(badgeFont)
-    // Multi-digit counts must widen the capsule instead of wrapping into two lines.
     .lineLimit(1)
-    .fixedSize(horizontal: true, vertical: false)
     .padding(.horizontal, Self.contentInset)
     .frame(minWidth: metrics.minWidth, minHeight: compact ? 18 : 20)
-    .background(Color.white.opacity(emphasized ? 0.11 : 0.065))
-    .clipShape(Capsule())
+    // Keep the full reserved width (mirrored on the TS side) instead of letting a
+    // squeezed `minWidth` frame truncate multi-digit text.
+    .fixedSize(horizontal: true, vertical: false)
   }
 
   private var metrics: Metrics {
@@ -3155,10 +3176,6 @@ struct PillBadge: View {
 
   private var badgeFont: Font {
     .system(size: metrics.fontSize, weight: .semibold, design: .monospaced)
-  }
-
-  private var isEmphasized: Bool {
-    pillSnapshot.pendingInteractionCount > 0 || pillSnapshot.attentionCount > 0
   }
 }
 
@@ -3325,7 +3342,10 @@ struct ExpandedSessionsView: View {
         onFocus: {
           eventSink(["type": "focus-session", "sessionId": current.sessionId])
         },
-        onPermissionAction: emitPermissionAction
+        onPermissionAction: emitPermissionAction,
+        onCompletionAction: { action, requestId in
+          eventSink(["type": "completion-action", "sessionId": current.sessionId, "action": action, "requestId": requestId, "completionToken": current.completionToken ?? ""])
+        }
       )
       .equatable()
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -3365,7 +3385,10 @@ struct ExpandedSessionsView: View {
           onFocus: {
             eventSink(["type": "focus-session", "sessionId": session.sessionId])
           },
-          onPermissionAction: emitPermissionAction
+          onPermissionAction: emitPermissionAction,
+          onCompletionAction: { action, requestId in
+            eventSink(["type": "completion-action", "sessionId": session.sessionId, "action": action, "requestId": requestId, "completionToken": session.completionToken ?? ""])
+          }
         )
         .equatable()
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3390,6 +3413,7 @@ struct ExpandedSessionRow: View, Equatable {
   let mascotSkin: String
   let onFocus: () -> Void
   let onPermissionAction: (AgentIslandPermissionAction, String) -> Void
+  let onCompletionAction: (String, String) -> Void
   @State private var isHovered = false
 
   static func == (lhs: ExpandedSessionRow, rhs: ExpandedSessionRow) -> Bool {
@@ -3402,6 +3426,18 @@ struct ExpandedSessionRow: View, Equatable {
   }
 
   var body: some View {
+    if session.phase == "completed", let completionToken = session.completionToken {
+      CompletedSessionSwipeRow(strings: strings, canArchive: session.companion == nil,
+        onFocus: onFocus, onAction: onCompletionAction) {
+        card
+      }
+      .id("\(session.sessionId):\(completionToken)")
+    } else {
+      card
+    }
+  }
+
+  @ViewBuilder private var card: some View {
     let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
     VStack(alignment: .leading, spacing: rowSpacing) {
       if session.permissionAction == nil {
@@ -3451,21 +3487,254 @@ struct ExpandedSessionRow: View, Equatable {
     4
   }
 
+  /// Every row shares one leading column, so titles and summaries line up whether the
+  /// row speaks as a companion (avatar) or reports a task (agent mark / status icon).
   private var rowMainContent: some View {
-    VStack(alignment: .leading, spacing: rowSpacing) {
-      ExpandedSessionHeaderLine(
-        session: session,
-        strings: strings,
-        titleFontSize: 13,
-        mascotSkin: mascotSkin,
-        onFocus: onFocus
-      )
-      ExpandedRowSummaryLine(session: session, strings: strings)
-        .padding(.leading, 28)
+    HStack(alignment: .center, spacing: 10) {
+      Group {
+        if let group = session.groupChat {
+          AgentIslandGroupAvatar(group: group, size: expandedRowLeadingSize)
+        } else if let companion = session.companion {
+          AgentIslandCompanionStatusAvatar(session: session, companion: companion, size: expandedRowLeadingSize)
+        } else {
+          StatusDot(
+            session: session,
+            compact: false,
+            showsRunningAnimation: showsRunningIcon,
+            mascotSkin: mascotSkin,
+            size: 26
+          )
+        }
+      }
+      .frame(width: expandedRowLeadingSize, height: expandedRowLeadingSize)
+      VStack(alignment: .leading, spacing: rowSpacing) {
+        ExpandedSessionHeaderLine(
+          session: session,
+          strings: strings,
+          titleFontSize: 13,
+          onFocus: onFocus
+        )
+        ExpandedRowSummaryLine(session: session, strings: strings)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
+
+  private var showsRunningIcon: Bool {
+    switch session.phase {
+    case "needs-interaction", "completed":
+      return false
+    default:
+      return true
+    }
+  }
 }
+
+/// One displacement shared by mouse dragging and AppKit's phased trackpad events.
+/// Momentum never commits an action: only the user's release can do that.
+struct CompletedSessionSwipeRow<Content: View>: View {
+  let strings: AgentIslandStrings
+  let canArchive: Bool
+  let onFocus: () -> Void
+  let onAction: (String, String) -> Void
+  @ViewBuilder let content: () -> Content
+  @State private var offset: CGFloat = 0
+  @State private var armed = false
+  @State private var commitRequestId: String?
+  @State private var collapsed = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private let reveal: CGFloat = 80
+  private var settleAnimation: Animation? { reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.86) }
+
+  var body: some View {
+    content()
+      .offset(x: offset)
+      .background(GeometryReader { geometry in
+        let right = offset >= 0
+        Button { commit(width: geometry.size.width) } label: {
+          VStack(spacing: 5) {
+            Image(systemName: right ? "checkmark" : "archivebox")
+              .font(.system(size: 18, weight: .medium))
+            Text(right ? (strings.markRead ?? "Mark as read") : (strings.archive ?? "Archive"))
+              .font(.system(size: 11, weight: .medium))
+              .lineLimit(1)
+          }
+          .foregroundColor(.white.opacity(0.95))
+          .fixedSize(horizontal: true, vertical: false)
+          .frame(width: reveal, height: geometry.size.height)
+          // Lay out the label once behind the card. The opening clips it; it never reflows.
+          .frame(width: geometry.size.width, alignment: right ? .leading : .trailing)
+          .background((right ? agentIslandBlue : agentIslandArchiveBlue).opacity(armed ? 1 : 0.8))
+          .mask(alignment: right ? .leading : .trailing) {
+            Rectangle().frame(width: abs(offset))
+          }
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: right ? .leading : .trailing)
+        .opacity(offset == 0 ? 0 : 1)
+        .accessibilityHidden(offset == 0)
+      })
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay(GeometryReader { geometry in
+        CompletionSwipeInput(offset: offset,
+          onChange: { proposed in
+            guard commitRequestId == nil else { return }
+            offset = min(geometry.size.width, max(canArchive ? -geometry.size.width : 0, proposed))
+            let nextArmed = abs(offset) >= max(140, geometry.size.width * 0.72)
+            if nextArmed && !armed {
+              NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+            armed = nextArmed
+          },
+          onEnd: { cancelled in
+            guard commitRequestId == nil else { return }
+            if armed && !cancelled {
+              commit(width: geometry.size.width)
+              return
+            }
+            withAnimation(settleAnimation) {
+              offset = !cancelled && abs(offset) >= 24 ? (offset > 0 ? reveal : -reveal) : 0
+              armed = false
+            }
+          },
+          onClick: { x in
+            guard commitRequestId == nil else { return }
+            if (offset > 0 && x < offset) || (offset < 0 && x > geometry.size.width + offset) {
+              commit(width: geometry.size.width)
+            }
+            else if offset != 0 {
+              withAnimation(settleAnimation) { offset = 0 }
+            } else { onFocus() }
+          })
+      })
+      .frame(height: collapsed ? 0 : nil)
+      .clipped()
+      .allowsHitTesting(commitRequestId == nil)
+      .task(id: commitRequestId) {
+        guard commitRequestId != nil else { return }
+        // Fill first, then collapse locally. Neither animation waits for disk or the remote host.
+        do {
+          if !reduceMotion { try await Task.sleep(nanoseconds: 120_000_000) }
+          withAnimation(reduceMotion ? nil : .easeOut(duration: 0.10)) { collapsed = true }
+        } catch { /* View disappeared or a newer completion replaced it. */ }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .islandCompletionActionResult)) { notification in
+        guard notification.userInfo?["requestId"] as? String == commitRequestId,
+          notification.userInfo?["success"] as? Bool == false else { return }
+        offset = 0
+        armed = false
+        commitRequestId = nil
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { collapsed = false }
+      }
+  }
+
+  private func commit(width: CGFloat) {
+    guard commitRequestId == nil else { return }
+    let requestId = UUID().uuidString
+    let action = offset >= 0 ? "mark-read" : "archive"
+    commitRequestId = requestId
+    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+      offset = offset >= 0 ? width : -width
+      armed = true
+    }
+    // A committed user action survives the island closing during its brief animation.
+    let send = onAction
+    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : 0.22)) {
+      send(action, requestId)
+    }
+  }
+}
+
+extension Notification.Name {
+  static let islandCompletionActionResult = Notification.Name("islandCompletionActionResult")
+}
+
+struct CompletionSwipeInput: NSViewRepresentable {
+  let offset: CGFloat
+  let onChange: (CGFloat) -> Void
+  let onEnd: (Bool) -> Void
+  let onClick: (CGFloat) -> Void
+
+  func makeNSView(context: Context) -> CompletionSwipeInputView { CompletionSwipeInputView() }
+  func updateNSView(_ view: CompletionSwipeInputView, context: Context) {
+    view.input = self
+  }
+}
+
+final class CompletionSwipeInputView: NSView {
+  var input: CompletionSwipeInput?
+  private var origin: NSPoint?
+  private var startOffset: CGFloat = 0
+  private var translation = NSPoint.zero
+  private var axis = 0 // 0 undecided, 1 horizontal, 2 vertical
+  private var wheelActive = false
+  private var suppressWheelMomentum = false
+  private var wheelEnd: DispatchWorkItem?
+  override var acceptsFirstResponder: Bool { true }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func mouseDown(with event: NSEvent) {
+    origin = event.locationInWindow
+    startOffset = input?.offset ?? 0
+    axis = 0
+  }
+  override func mouseDragged(with event: NSEvent) {
+    guard let origin else { return }
+    update(x: event.locationInWindow.x - origin.x, y: event.locationInWindow.y - origin.y)
+  }
+  override func mouseUp(with event: NSEvent) {
+    guard origin != nil else { return }
+    origin = nil
+    if axis == 1 { input?.onEnd(false) }
+    else if axis == 0 { input?.onClick(convert(event.locationInWindow, from: nil).x) }
+    axis = 0
+  }
+  private func update(x: CGFloat, y: CGFloat) {
+    if axis == 0 && max(abs(x), abs(y)) >= 6 { axis = abs(x) > abs(y) ? 1 : 2 }
+    if axis == 1 { input?.onChange(startOffset + x) }
+  }
+  override func scrollWheel(with event: NSEvent) {
+    // Vertical inertia belongs to the list; horizontal inertia cannot commit another row.
+    if !event.momentumPhase.isEmpty {
+      if !suppressWheelMomentum { super.scrollWheel(with: event) }
+      return
+    }
+    if !wheelActive || event.phase.contains(.began) {
+      wheelActive = true
+      suppressWheelMomentum = false
+      startOffset = input?.offset ?? 0
+      translation = .zero
+      axis = 0
+    }
+    translation.x += event.scrollingDeltaX
+    translation.y += event.scrollingDeltaY
+    update(x: translation.x, y: translation.y)
+    if axis != 1 { super.scrollWheel(with: event) }
+    wheelEnd?.cancel()
+    if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+      finishWheel(cancelled: event.phase.contains(.cancelled))
+    } else if event.phase.isEmpty {
+      let work = DispatchWorkItem { [weak self] in self?.finishWheel(cancelled: false) }
+      wheelEnd = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+  }
+  private func finishWheel(cancelled: Bool) {
+    suppressWheelMomentum = axis == 1
+    if axis == 1 { input?.onEnd(cancelled) }
+    wheelActive = false
+    axis = 0
+  }
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 53 { input?.onEnd(true) }
+    else { super.keyDown(with: event) }
+  }
+  override func viewDidMoveToWindow() {
+    if window == nil { wheelEnd?.cancel() }
+  }
+}
+
+private let expandedRowLeadingSize: CGFloat = 32
 
 func expandedCardFillOpacity(session: AgentIslandSession, hovered: Bool) -> Double {
   let base = session.phase == "needs-interaction" ? 0.065 : 0.035
@@ -3481,40 +3750,50 @@ struct ExpandedSessionHeaderLine: View {
   let session: AgentIslandSession
   let strings: AgentIslandStrings
   let titleFontSize: CGFloat
-  let mascotSkin: String
   let onFocus: () -> Void
 
-  private var showsMascot: Bool {
-    switch session.phase {
-    case "needs-interaction", "completed":
-      return false
-    default:
-      return true
+  /// A finished companion turn reads as a message: the reply is the content, no "Done" tag.
+  private var isCompanionReply: Bool {
+    (session.companion != nil || session.groupChat != nil) && session.phase == "completed"
+  }
+
+  private var titleText: Text {
+    let title = Text(expandedPrimaryTitle(for: session, strings: strings))
+      .foregroundColor(Color.white.opacity(0.92))
+    if let mention = session.groupChat?.mentionLabel {
+      return title + Text(" · \(mention)").foregroundColor(Color.white.opacity(0.65))
     }
+    guard let group = companionGroupName else { return title }
+    // The group yields first when the line is too narrow: the speaker stays readable.
+    return title + Text(" · \(group)").foregroundColor(Color.white.opacity(0.42))
+  }
+
+  private var titleHelp: String {
+    let title = expandedPrimaryTitle(for: session, strings: strings)
+    guard let group = companionGroupName else { return title }
+    return "\(title) · \(group)"
+  }
+
+  private var companionGroupName: String? {
+    let group = session.companion?.groupName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return group.isEmpty ? nil : group
   }
 
   var body: some View {
     HStack(alignment: .center, spacing: 8) {
-      StatusDot(
-        session: session,
-        compact: false,
-        showsRunningAnimation: showsMascot,
-        mascotSkin: mascotSkin
-      )
 
-      Text(expandedPrimaryTitle(for: session, strings: strings))
+      titleText
         .font(.system(size: titleFontSize, weight: .medium))
-        .foregroundColor(Color.white.opacity(0.92))
         .lineLimit(1)
         .truncationMode(.tail)
         .layoutPriority(1)
-        .help(expandedPrimaryTitle(for: session, strings: strings))
+        .help(titleHelp)
 
       Spacer(minLength: 8)
 
       if session.phase == "needs-interaction", session.permissionAction == nil {
         InteractionInlineButton(label: strings.review, action: onFocus)
-      } else {
+      } else if !isCompanionReply {
         SessionStatusLabel(session: session, strings: strings)
       }
     }
@@ -3680,6 +3959,10 @@ struct ExpandedRowSummary {
 }
 
 func expandedPrimaryTitle(for session: AgentIslandSession, strings: AgentIslandStrings) -> String {
+  // A companion is named by its owner; never filter it like a generic agent title.
+  if let name = session.companion?.name.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+    return name
+  }
   let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
   if isMeaningfulExpandedTitle(title) {
     return title
@@ -3957,27 +4240,41 @@ struct StatusDot: View {
   var showsRunningAnimation = true
   var mascotSkin = defaultAgentIslandMascotSkin
   var runningMascotNamespace: Namespace.ID?
+  /// Overrides the default 18pt (compact) / 20pt slot; glyphs scale with it.
+  var size: CGFloat? = nil
+
+  private var side: CGFloat { size ?? (compact ? 18 : 20) }
+  private var glyphScale: CGFloat { side / 20 }
 
   var body: some View {
     let accent = statusAccentColor(for: session)
     ZStack {
-      if usesExpandedVendorStatusIcon {
+      if let group = session.groupChat {
+        AgentIslandGroupAvatar(group: group, size: side)
+      } else if let companion = session.companion {
+        AgentIslandCompanionStatusAvatar(
+          session: session,
+          companion: companion,
+          size: side
+        )
+      } else if usesExpandedVendorStatusIcon {
         AgentIslandSessionVendorIcon(
           session: session,
           running: isRunningSession(session),
-          highlighted: session.phase == "completed" && session.attention
+          highlighted: session.phase == "completed" && session.attention,
+          size: side
         )
       } else if let mascotState = mascotAnimationState(for: session), showsRunningAnimation {
         if let runningMascotNamespace {
           RunningMascotIcon(
             skin: mascotSkin,
             state: mascotState,
-            size: compact ? 18 : 20,
+            size: side,
             namespace: runningMascotNamespace
           )
         } else {
-          AgentIslandMascotView(skin: mascotSkin, state: mascotState, size: compact ? 18 : 20)
-            .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
+          AgentIslandMascotView(skin: mascotSkin, state: mascotState, size: side)
+            .frame(width: side, height: side)
         }
       } else {
         Circle().fill(accent.opacity(session.phase == "completed" ? 0.08 : 0.13))
@@ -3985,7 +4282,7 @@ struct StatusDot: View {
           .foregroundColor(accent.opacity(session.phase == "completed" ? 0.78 : 0.96))
       }
     }
-    .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
+    .frame(width: side, height: side)
   }
 
   private var usesExpandedVendorStatusIcon: Bool {
@@ -3998,13 +4295,13 @@ struct StatusDot: View {
     switch session.phase {
     case "needs-interaction":
       Image(systemName: "questionmark.bubble")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 11 * glyphScale, weight: .semibold))
     case "completed":
       Image(systemName: "checkmark")
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 11 * glyphScale, weight: .semibold))
     case "error":
       Image(systemName: "exclamationmark.triangle")
-        .font(.system(size: 10, weight: .semibold))
+        .font(.system(size: 10 * glyphScale, weight: .semibold))
     default:
       EmptyView()
     }
@@ -4053,6 +4350,7 @@ struct AgentIslandSessionVendorIcon: View {
   let session: AgentIslandSession
   let running: Bool
   let highlighted: Bool
+  var size: CGFloat = 20
   @State private var isBreathing = false
   @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
 
@@ -4061,7 +4359,7 @@ struct AgentIslandSessionVendorIcon: View {
   }
 
   private var markSize: CGFloat {
-    vendor == .cc ? 13 : 12
+    (vendor == .cc ? 13 : 12) * size / 20
   }
 
   var body: some View {
@@ -4094,7 +4392,7 @@ struct AgentIslandSessionVendorIcon: View {
     .onChange(of: running) { _, isRunning in
       isBreathing = isRunning && animationsActive
     }
-    .frame(width: 20, height: 20)
+    .frame(width: size, height: size)
   }
 
   @ViewBuilder
@@ -4106,6 +4404,157 @@ struct AgentIslandSessionVendorIcon: View {
       Text("XD")
         .font(.system(size: 8.5, weight: .bold, design: .rounded))
     }
+  }
+}
+
+/// Dark tints of the BotAvatar hue family (`--bot-avatar-*-bg`, dark); the island is always dark.
+func agentIslandCompanionHueColor(_ hue: String) -> Color {
+  let rgb: (Double, Double, Double)
+  switch hue {
+  case "red": rgb = (0x4a, 0x2e, 0x2a)
+  case "orange": rgb = (0x4a, 0x35, 0x27)
+  case "amber": rgb = (0x47, 0x3a, 0x22)
+  case "green": rgb = (0x26, 0x40, 0x2a)
+  case "teal": rgb = (0x21, 0x40, 0x3e)
+  case "blue": rgb = (0x26, 0x34, 0x49)
+  case "pink": rgb = (0x45, 0x2b, 0x39)
+  case "graphite": rgb = (0x3c, 0x3c, 0x3a)
+  default: rgb = (0x32, 0x2b, 0x48)
+  }
+  return Color(red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+}
+
+final class AgentIslandCompanionAvatarStore {
+  static let shared = AgentIslandCompanionAvatarStore()
+
+  // Keyed by the thumbnail itself: a changed avatar arrives as different bytes.
+  private var cache: [String: NSImage?] = [:]
+
+  func image(forJpegBase64 base64: String) -> NSImage? {
+    if let cached = cache[base64] { return cached }
+    let image = Data(base64Encoded: base64).flatMap { NSImage(data: $0) }
+    if cache.count >= 16 { cache.removeAll() }
+    cache[base64] = image
+    return image
+  }
+}
+
+/// Same first-five, first-member-in-front geometry as the teammate sidebar.
+struct AgentIslandGroupAvatar: View {
+  let group: AgentIslandGroupChat
+  let size: CGFloat
+
+  var body: some View {
+    let members = Array(group.avatars.prefix(5))
+    ZStack(alignment: .topLeading) {
+      if members.isEmpty {
+        Image(systemName: "person.2.fill")
+          .font(.system(size: size * 0.6))
+          .foregroundColor(.white.opacity(0.7))
+          .frame(width: size, height: size)
+      } else if members.count == 1 {
+        AgentIslandCompanionAvatar(companion: members[0], size: size)
+      } else {
+        let diameter = size * (members.count <= 3 ? 0.6 : members.count == 4 ? 0.55 : 0.5)
+        let radius = (size - diameter) / 2
+        ForEach(Array(members.indices.reversed()), id: \.self) { index in
+          let position = members.count - 1 - index
+          let angle = -3 * Double.pi / 4 + Double(position) * 2 * Double.pi / Double(members.count)
+          let x = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(cos(angle)))
+          let y = members.count == 2 ? (index == 0 ? size - diameter : 0) : radius * (1 + CGFloat(sin(angle)))
+          AgentIslandCompanionAvatar(companion: members[index], size: diameter)
+            .overlay(Circle().stroke(Color.black, lineWidth: max(1, size / 20)))
+            .offset(x: x, y: y)
+        }
+      }
+    }
+    .frame(width: size, height: size)
+  }
+}
+
+struct AgentIslandCompanionAvatar: View {
+  let companion: AgentIslandCompanion
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      Circle().fill(agentIslandCompanionHueColor(companion.hue))
+      if let base64 = companion.imageJpeg,
+         let image = AgentIslandCompanionAvatarStore.shared.image(forJpegBase64: base64) {
+        Image(nsImage: image)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fill)
+      } else if companion.glyphIsInitial {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.5, weight: .medium))
+          .foregroundColor(Color.white.opacity(0.92))
+      } else {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.58))
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(Circle())
+    .accessibilityLabel(companion.name)
+  }
+}
+
+/// Companion avatar plus the session state the agent mark would otherwise carry:
+/// a breathing ring while it works, a corner dot when it waits, failed or replied unread.
+struct AgentIslandCompanionStatusAvatar: View {
+  let session: AgentIslandSession
+  let companion: AgentIslandCompanion
+  let size: CGFloat
+  @State private var isBreathing = false
+  @Environment(\.agentIslandMascotAnimationsActive) private var animationsActive
+
+  private var running: Bool { isRunningSession(session) }
+
+  private var badgeSize: CGFloat { max(6, min(size * 0.3, 10)) }
+
+  private var badgeColor: Color? {
+    switch session.phase {
+    case "needs-interaction":
+      return agentIslandBlue
+    case "error":
+      return agentIslandErrorRed
+    case "completed":
+      return session.attention ? agentIslandUnreadGreen : nil
+    default:
+      return nil
+    }
+  }
+
+  var body: some View {
+    AgentIslandCompanionAvatar(companion: companion, size: size)
+      .overlay(
+        Circle()
+          .strokeBorder(agentIslandOrange, lineWidth: size >= 28 ? 2 : 1.5)
+          .opacity(running ? (animationsActive ? (isBreathing ? 0.95 : 0.3) : 0.85) : 0)
+          .animation(
+            running && animationsActive ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true) : .default,
+            value: isBreathing
+          )
+      )
+      .overlay(alignment: .bottomTrailing) {
+        if let badgeColor {
+          Circle()
+            .fill(badgeColor)
+            .frame(width: badgeSize, height: badgeSize)
+            .overlay(Circle().strokeBorder(Color.black, lineWidth: size >= 28 ? 1.5 : 1.2))
+        }
+      }
+      .frame(width: size, height: size)
+      .onAppear {
+        isBreathing = running && animationsActive
+      }
+      .onChange(of: animationsActive) { _, active in
+        isBreathing = running && active
+      }
+      .onChange(of: running) { _, isRunning in
+        isBreathing = isRunning && animationsActive
+      }
   }
 }
 
@@ -5419,9 +5868,8 @@ final class AgentIslandController {
       && abs(screenPoint.y - interaction.startMouseY) <= agentIslandClickDragTolerance
   }
 
-  /// The screen rectangle where the collapsed island sat. After expand, that
-  /// center strip is blank (hardware-notch Color.clear, or the top-bar spacer).
-  /// Clicking it should fold the island back; toolbar / title live outside it.
+  /// Keep the full compact footprint clickable, including its notch-side wings.
+  /// The leading title/mascot is passive; only the trailing toolbar owns clicks.
   private func isCompactFootprintClick(interaction: PanelDragInteraction) -> Bool {
     let layout = interaction.startLayout
     let footprintWidth = compactCollapseFootprintWidth(layout: layout)
@@ -5430,15 +5878,8 @@ final class AgentIslandController {
     guard clickX >= centerX - footprintWidth / 2 && clickX <= centerX + footprintWidth / 2 else {
       return false
     }
-    let visualMinX = centerX - layout.width / 2
     let visualMaxX = centerX + layout.width / 2
-    let sideChrome = layout.hasHardwareNotch
-      ? max(0, (layout.width - layout.notchWidth) / 2)
-      : 0
-    let leadingReserved = max(compactCollapseLeadingReservedWidth, sideChrome)
-    let trailingReserved = max(compactCollapseTrailingReservedWidth, sideChrome)
-    return clickX > visualMinX + leadingReserved
-      && clickX < visualMaxX - trailingReserved
+    return clickX < visualMaxX - compactCollapseTrailingReservedWidth
   }
 
   private func compactCollapseFootprintWidth(layout: AgentIslandLayout) -> CGFloat {
@@ -6287,7 +6728,7 @@ enum AgentIslandDebugHarness {
     now: Double
   ) -> AgentIslandDisplayState {
     let current = sessions.first { $0.sessionId == currentSessionId } ?? sessions[0]
-    let activeCount = sessions.filter { $0.phase == "running" || $0.phase == "needs-interaction" }.count
+    let runningCount = sessions.filter { $0.phase == "running" }.count
     let pendingCount = sessions.filter { $0.phase == "needs-interaction" }.count
     let unreadDoneCount = sessions.filter { $0.phase == "completed" || $0.phase == "error" }.count
     return AgentIslandDisplayState(
@@ -6308,7 +6749,7 @@ enum AgentIslandDebugHarness {
         priorityMicroTitle: current.displayTitle,
         priorityCompactTitle: current.displayTitle,
         sessionCount: sessions.count,
-        activeSessionCount: activeCount,
+        runningSessionCount: runningCount,
         pendingInteractionCount: pendingCount,
         unreadCompletedCount: unreadDoneCount,
         deferredRevealCount: 1,
@@ -6719,6 +7160,13 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
     guard let data = line.data(using: .utf8) else { return }
     do {
       let message = try decoder.decode(IncomingMessage.self, from: data)
+      if message.type == "completion-action-result", let requestId = message.requestId {
+        DispatchQueue.main.async {
+          NotificationCenter.default.post(name: .islandCompletionActionResult, object: nil,
+            userInfo: ["requestId": requestId, "success": message.success == true])
+        }
+        return
+      }
       if message.type == "shutdown" {
         DispatchQueue.main.async { [controllerManager] in
           controllerManager.closeAll()

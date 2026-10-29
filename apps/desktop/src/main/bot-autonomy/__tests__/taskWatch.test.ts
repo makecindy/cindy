@@ -10,14 +10,14 @@
  *   被当成做完；同一条挂起交互在重启后得到新的事件 id；远程 list-active 连续失败；远程任务两次轮询之间从权限请求
  *   A 换到 B，仍显示 A；本机任务在同一相位里从请求 A 换到 B（权限或回答），沿用 A 的等待时刻；读任务元数据失败一次后，
  *   这批任务被丢掉，之后再无活动就永远不进表；启动兜底读失败一次后再不重试；启动时归属读失败，上一轮被打断的任务按空归属判给总调度、工作台把空表当成「没事」；伙伴刚开的任务在上次归属读取
- *   几秒内出现，被当成「没人开」落到总调度。
+ *   几秒内出现，被当成「没人开」落到总调度；出错只留横幅文案、丢了工具循环等稳定原因。
  * - tier：unit（全部 IO 经注入的内存 fake，时间由 now() 推进，无真实等待）。
  */
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AUTONOMY_THRESHOLDS } from '../../../shared/botAutonomy.js';
-import { AutonomyEventLedger } from '../events.js';
+import { AutonomyEventLedger, toRoutineEvent } from '../events.js';
 import {
   REMOTE_BACKOFF_MAX_MS,
   TaskWatch,
@@ -41,12 +41,14 @@ function activity(sessionId: string, phase: string, extra: Partial<SessionActivi
 }
 
 function harness(options: {
+  readSessionExecution?: TaskWatchDeps['readSessionExecution'];
   metas?: LocalSessionMeta[];
   snapshots?: SessionActivitySnapshot[];
   devices?: RemoteDeviceTarget[] | null;
   invokeRemote?: TaskWatchDeps['invokeRemote'];
   creators?: Record<string, string>;
   now?: number;
+  schedulerOff?: boolean;
 } = {}) {
   let now = options.now ?? 10_000;
   const toolsInFlight = new Set<string>();
@@ -58,26 +60,31 @@ function harness(options: {
   let ownershipReadFailures = 0;
   const creators = new Map(Object.entries(options.creators ?? {}));
   const invokeRemote = vi.fn(options.invokeRemote ?? (async () => { throw new Error('offline'); }));
+  const readLocalSessions = vi.fn(async (ids: readonly string[]) => {
+    if (metaReadFailures > 0) {
+      metaReadFailures -= 1;
+      throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
+    }
+    return ids.flatMap((id) => (metas.has(id) ? [metas.get(id)!] : []));
+  });
+  const readInterruptedSessions = vi.fn(async (_since: number, _limit: number, ids?: readonly string[]) => {
+    if (interruptedReadFailures > 0) {
+      interruptedReadFailures -= 1;
+      throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
+    }
+    return [...metas.values()].filter((m) => m.interrupted && (ids === undefined || ids.includes(m.id)));
+  });
+  let schedulerOff = options.schedulerOff ?? false;
+  const listRemoteDevices = vi.fn(async () => options.devices ?? null);
   const watch = new TaskWatch({
     now: () => now,
     log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     getActivitySnapshots: () => options.snapshots ?? [],
+    readSessionExecution: options.readSessionExecution,
     isToolCallInFlight: (id) => toolsInFlight.has(id),
     getPendingInteractions: (id) => pending.get(id) ?? [],
-    readLocalSessions: async (ids) => {
-      if (metaReadFailures > 0) {
-        metaReadFailures -= 1;
-        throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
-      }
-      return ids.flatMap((id) => (metas.has(id) ? [metas.get(id)!] : []));
-    },
-    readInterruptedSessions: async () => {
-      if (interruptedReadFailures > 0) {
-        interruptedReadFailures -= 1;
-        throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
-      }
-      return [...metas.values()].filter((m) => m.interrupted);
-    },
+    readLocalSessions,
+    readInterruptedSessions,
     readOwnership: async () => {
       if (ownershipReadFailures > 0) {
         ownershipReadFailures -= 1;
@@ -89,13 +96,14 @@ function harness(options: {
       responsibleByBot: new Map(),
       };
     },
-    readSchedulerOverride: () => ({ customized: true, schedulerBotId: 'sched' }),
-    listRemoteDevices: async () => options.devices ?? null,
+    readSchedulerOverride: () => ({ customized: true, schedulerBotId: schedulerOff ? null : 'sched' }),
+    listRemoteDevices,
     invokeRemote,
     onChange,
   });
   return {
-    watch, metas, pending, onChange, invokeRemote, toolsInFlight,
+    watch, metas, pending, onChange, invokeRemote, toolsInFlight, readLocalSessions, readInterruptedSessions, listRemoteDevices,
+    setSchedulerOff(value: boolean) { schedulerOff = value; },
     advance: (ms: number) => { now += ms; },
     failMetaReads: (count: number) => { metaReadFailures = count; },
     failInterruptedReads: (count: number) => { interruptedReadFailures = count; },
@@ -164,6 +172,20 @@ describe('TaskWatch local observation', () => {
     await h.watch.settled();
     expect(h.watch.get('user')).toMatchObject({ phase: 'finished', phaseSince: 9_000 });
     expect(h.watch.finished().map((f) => f.sessionId)).toEqual(['user']);
+  });
+
+  // 依据:伙伴跟进要分清工具循环(换模型没用)与供应商失败;只有横幅文案时分不清,会把循环的任务也换模型。
+  // 最小失败输入:带 errorReason 的出错投影;旧被控端只给 toolLoop 详情、不给 errorReason。
+  it('keeps the stable reason behind an error so follow-up can tell a tool loop apart', async () => {
+    const h = harness({ metas: [meta('looped'), meta('legacy-loop'), meta('plain')] });
+    await h.watch.start();
+    h.watch.applyInputProjection({ sessionId: 'looped', error: '重复工具调用', errorReason: 'tool_use_loop_detected' });
+    h.watch.applyInputProjection({ sessionId: 'legacy-loop', error: '重复工具调用', toolLoop: { toolName: 'Bash', count: 5 } });
+    h.watch.applyInputProjection({ sessionId: 'plain', error: 'server error' });
+    await h.watch.settled();
+    expect(h.watch.get('looped')).toMatchObject({ phase: 'errored', errorReason: 'tool_use_loop_detected' });
+    expect(h.watch.get('legacy-loop')).toMatchObject({ phase: 'errored', errorReason: 'tool_use_loop_detected' });
+    expect(h.watch.get('plain')).toMatchObject({ phase: 'errored', errorReason: null });
   });
 
   it('gives the same pending interaction the same event id after a restart', async () => {
@@ -249,7 +271,11 @@ describe('TaskWatch ownership and startup retries', () => {
   });
 
   it('does not add interrupted tasks with an empty ownership table; it waits until ownership loads', async () => {
-    const h = harness({ metas: [meta('crashed', { interrupted: true, activeTurnStartedAt: 5_000 })], creators: { crashed: 'a' } });
+    const h = harness({
+      metas: [meta('crashed', { interrupted: true, activeTurnStartedAt: 5_000 }), meta('active')],
+      snapshots: [activity('active', 'running')],
+      creators: { crashed: 'a', active: 'a' }, schedulerOff: true,
+    });
     h.failOwnershipReads(1);
     await h.watch.start();
     expect(h.watch.get('crashed')).toBeUndefined();
@@ -257,8 +283,10 @@ describe('TaskWatch ownership and startup retries', () => {
     expect(h.watch.isReady()).toBe(false);
     h.advance(10 * 60_000);
     await h.watch.sweep();
+    await h.watch.settled();
     expect(h.watch.isReady()).toBe(true);
     expect(h.watch.get('crashed')).toMatchObject({ phase: 'errored', creatorBotId: 'a', followerBotId: 'a' });
+    expect(h.watch.get('active')).toMatchObject({ phase: 'running', creatorBotId: 'a', followerBotId: 'a' });
   });
 
   it('re-reads ownership before judging a newly seen task unowned, even right after the last read', async () => {
@@ -289,12 +317,12 @@ describe('TaskWatch remote polling', () => {
       },
     });
     await h.watch.start();
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.watch.get('dev-1::r1')).toMatchObject({ phase: 'running', title: 'Old host build', online: true });
 
     shape = 'garbage';
     h.advance(AUTONOMY_THRESHOLDS.remotePollMs);
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.watch.get('dev-1::r1')).toMatchObject({ online: false });
     expect(h.watch.offlineDevices()).toEqual(['Studio']);
   });
@@ -325,7 +353,7 @@ describe('TaskWatch remote polling', () => {
       },
     });
     await h.watch.start();
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.watch.list().map((r) => [r.sessionId, r.deviceName, r.phase, r.followerBotId, r.online])).toEqual([
       // 另一台电脑上的任务只进工作台：跟进者恒为 null，由那台电脑上的伙伴跟，避免同名伙伴各跟一遍。
       ['dev-1::r1', 'Studio', 'running', null, true],
@@ -334,17 +362,17 @@ describe('TaskWatch remote polling', () => {
 
     fail = true;
     h.advance(AUTONOMY_THRESHOLDS.remotePollMs);
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.watch.get('dev-1::r1')?.online).toBe(false);
     expect(h.watch.offlineDevices()).toEqual(['Studio']);
 
     // 退避期内不再请求那台电脑；退避有上限。
     const calls = h.invokeRemote.mock.calls.length;
     h.advance(AUTONOMY_THRESHOLDS.remotePollMs);
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.invokeRemote.mock.calls.length).toBe(calls);
     h.advance(REMOTE_BACKOFF_MAX_MS);
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     expect(h.invokeRemote.mock.calls.length).toBe(calls + 1);
   });
 
@@ -369,12 +397,12 @@ describe('TaskWatch remote polling', () => {
       },
     });
     await h.watch.start();
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     const first = h.watch.get('dev-1::r1');
     expect(first).toMatchObject({ phase: 'waiting-permission', pendingRequestId: 'req-A', pendingQuestion: 'Bash' });
 
     h.advance(AUTONOMY_THRESHOLDS.remotePollMs);
-    await h.watch.sweep();
+    await h.watch.refreshRemote();
     // 新请求是新的等待：「允许」对准 B，等待时刻从这次观察算起。
     expect(h.watch.get('dev-1::r1')).toMatchObject({
       phase: 'waiting-permission', pendingRequestId: 'req-B', pendingQuestion: 'Write', phaseSince: h.now(),
@@ -383,3 +411,127 @@ describe('TaskWatch remote polling', () => {
   });
 });
 
+
+// Unit: §6.3 demand-driven observation. Previous coverage checked model dispatch,
+// but not reads made with follow-up off. Minimal input: one unrelated active task.
+it('does no task reads or remote polling when off, and wakes only for a new explicit delegation', async () => {
+  const h = harness({ schedulerOff: true, metas: [meta('mine'), meta('child')],
+    snapshots: [activity('mine', 'running')] });
+  await h.watch.start();
+  h.watch.applyActivity('mine', activity('mine', 'needs-interaction'));
+  await h.watch.settled();
+  h.advance(120_000);
+  await h.watch.sweep();
+  expect(h.watch.needsSweep()).toBe(false);
+  expect(h.watch.list()).toEqual([]);
+  expect(h.readLocalSessions).not.toHaveBeenCalled();
+  expect(h.readInterruptedSessions).not.toHaveBeenCalled();
+  expect(h.listRemoteDevices).not.toHaveBeenCalled();
+
+  h.creators.set('child', 'a');
+  h.watch.applyActivity('child', activity('child', 'running'));
+  // Durable delegation change uses the same refresh as the production signal.
+  await h.watch.refreshFollowers();
+  expect(h.watch.list().map(row => row.sessionId)).toEqual(['child']);
+  expect(h.watch.needsSweep()).toBe(true);
+  expect(h.readLocalSessions.mock.calls.flatMap(([ids]) => ids)).toEqual(['child']);
+  expect(h.readInterruptedSessions.mock.calls[0]?.[2]).toEqual(['child']);
+  h.watch.applyActivity('child', activity('child', 'completed'));
+  await h.watch.settled();
+  expect(h.watch.needsSweep()).toBe(false);
+  expect(h.watch.finished().map(row => row.sessionId)).toEqual(['child']);
+});
+
+it('stops global observation on opt-out and rehydrates current activity on opt-in without polling peers', async () => {
+  const h = harness({ schedulerOff: true, metas: [meta('mine')], snapshots: [activity('mine', 'running')] });
+  await h.watch.start();
+  h.setSchedulerOff(false);
+  await h.watch.refreshFollowers();
+  expect(h.watch.get('mine')?.followerBotId).toBe('sched');
+  h.setSchedulerOff(true);
+  await h.watch.refreshFollowers();
+  expect(h.watch.get('mine')).toBeUndefined();
+  expect(h.watch.needsSweep()).toBe(false);
+  h.readLocalSessions.mockClear();
+  h.advance(120_000);
+  await h.watch.sweep();
+  expect(h.readLocalSessions).not.toHaveBeenCalled();
+  expect(h.listRemoteDevices).not.toHaveBeenCalled();
+});
+
+// Unit #6675: after returning cached glance, the visible view needs a change signal
+// carrying updated rows. Previously only the awaited read saw the remote result.
+it('keeps remote IO out of scheduled sweeps and notifies coalesced view reads of new rows', async () => {
+  const h = harness({ devices: [{ deviceId: 'dev-1', name: 'Studio', online: true, eligible: true }],
+    invokeRemote: async (_device, channel) => channel === 'maker:list-active'
+      ? [{ sessionId: 'r1', isTurnRunning: true, activityPhase: 'running' }]
+      : [{ id: 'r1', title: 'Remote task', source: 'desktop', status: 'active' }] });
+  await h.watch.start();
+  await h.watch.sweep();
+  expect(h.listRemoteDevices).not.toHaveBeenCalled();
+  h.onChange.mockClear();
+  const displayed: string[][] = [];
+  h.onChange.mockImplementation(() => { displayed.push(h.watch.list().map(row => row.title)); });
+  await Promise.all([h.watch.refreshRemote(), h.watch.refreshRemote()]);
+  expect(h.invokeRemote).toHaveBeenCalledTimes(2);
+  expect(displayed).toEqual([['Remote task']]);
+  // The notification's reread stays inside the existing remote throttle.
+  await h.watch.refreshRemote();
+  expect(h.invokeRemote).toHaveBeenCalledTimes(2);
+  h.advance(120_000);
+  await h.watch.sweep();
+  expect(h.invokeRemote).toHaveBeenCalledTimes(2);
+});
+
+// #6737 review / unit: metadata IO can outlive the terminal boundary. The event
+// saved to the routine queue must retain the original native execution.
+it('captures completion execution before asynchronous reads or a later turn', async () => {
+  let execution = { instanceId: 'native-1', generation: 1 };
+  const h = harness({ metas: [meta('child')], creators: { child: 'a' }, readSessionExecution: () => execution });
+  await h.watch.start();
+  h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: null }));
+  await h.watch.settled();
+  expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+  h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: null }));
+  execution = { instanceId: 'native-2', generation: 2 };
+  await h.watch.settled();
+  const [candidate] = new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due;
+  expect(candidate).toBeDefined();
+  const saved = JSON.parse(JSON.stringify(toRoutineEvent(candidate, h.now())));
+  expect(saved.data).toMatchObject({ executionInstanceId: 'native-1', executionGeneration: 1 });
+  h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 2 }));
+  await h.watch.settled();
+  expect(h.watch.get('child')?.execution).toEqual(execution);
+  expect(saved.data).toMatchObject({ executionInstanceId: 'native-1', executionGeneration: 1 });
+  h.watch.stop();
+});
+
+// Unit / #7253: a model report must not survive a different native execution,
+// nor turn stopped/error activity into delivery. Existing identity coverage only
+// freezes event attribution. Minimal input: true in generation 1, completion in 2.
+it('binds delivery reports to the live execution and permits correcting a report before completion', async () => {
+  let execution = { instanceId: 'native', generation: 1 };
+  const h = harness({ metas: [meta('child')], creators: { child: 'a' }, readSessionExecution: () => execution });
+  await h.watch.start();
+  try {
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 1 }));
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    expect(h.watch.reportDelivery('child', execution, false)).toBe(true);
+    await h.watch.settled();
+    expect(h.watch.get('child')?.finalDelivery).toBe(false);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    execution = { instanceId: 'native', generation: 2 };
+    expect(h.watch.reportDelivery('child', { ...execution, generation: 1 }, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 2 }));
+    h.watch.applyActivity('child', activity('child', 'completed', { turnGeneration: 2 }));
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(false);
+    h.watch.applyActivity('child', activity('child', 'running', { turnGeneration: 3 }));
+    execution = { instanceId: 'native', generation: 3 };
+    expect(h.watch.reportDelivery('child', execution, true)).toBe(true);
+    h.watch.applyActivity('child', null);
+    await h.watch.settled();
+    expect(new AutonomyEventLedger().evaluate(h.watch.list(), h.now()).due).toEqual([]);
+  } finally { h.watch.stop(); }
+});

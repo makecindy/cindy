@@ -68,10 +68,10 @@ describe('prepareCindyMakeWorkspace', () => {
     expect(phases).toEqual(['checking', 'creating', 'installing']);
   });
 
-  /** Windows without Developer Mode cannot create symlinks; Git stores plain files there. */
+  /** Directory junctions exercise real links on Windows without requiring Developer Mode. */
   const linkIfPossible = async (target: string, link: string): Promise<boolean> => {
     try {
-      await symlink(target, link, 'dir');
+      await symlink(target, link, process.platform === 'win32' ? 'junction' : 'dir');
       return true;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;

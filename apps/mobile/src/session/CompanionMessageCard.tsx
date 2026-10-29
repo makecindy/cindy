@@ -1,7 +1,6 @@
 import { formatLocalizedSeconds } from './sessionDurationFormat';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { Component, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { useLocalSearchParams } from 'expo-router';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 import { Animated, Easing, Linking, Pressable, StyleSheet, View } from 'react-native';
 import {
@@ -52,6 +51,7 @@ const TRACE_HIT_SLOP = { top: 6, bottom: 6 } as const;
 const AUX_HIT_SLOP = { top: 6, bottom: 6 } as const;
 import { useRemoteCompanionQuery } from './useRemoteCompanionQuery';
 import { prStatusVisual } from './prStatusVisual';
+import { useCompanionTaskSession } from './useCompanionTaskSession';
 
 class CompanionRenderBoundary extends Component<
   { children: ReactNode; fallback: ReactNode; resetKey: string },
@@ -72,8 +72,9 @@ class CompanionRenderBoundary extends Component<
   }
 }
 
-export function CompanionMessageCard({ message, renderMarkdown }: {
+export function CompanionMessageCard({ message, deviceId, renderMarkdown }: {
   message: NormalizedRemoteMessage;
+  deviceId: string;
   /** The conversation's Markdown renderer for frozen task results. */
   renderMarkdown?: (text: string) => ReactNode;
 }) {
@@ -84,18 +85,17 @@ export function CompanionMessageCard({ message, renderMarkdown }: {
       fallback={<Text style={styles.note}>{t('devices.companions.actionFailed')}</Text>}
       resetKey={message.key}
     >
-      <CompanionMessageCardContent message={message} renderMarkdown={renderMarkdown} />
+      <CompanionMessageCardContent message={message} deviceId={deviceId} renderMarkdown={renderMarkdown} />
     </CompanionRenderBoundary>
   );
 }
 
-function CompanionMessageCardContent({ message, renderMarkdown }: {
+function CompanionMessageCardContent({ message, deviceId, renderMarkdown }: {
   message: NormalizedRemoteMessage;
+  deviceId: string;
   renderMarkdown?: (text: string) => ReactNode;
 }) {
   const { t } = useTranslation();
-  const params = useLocalSearchParams<{ deviceId?: string }>();
-  const deviceId = typeof params.deviceId === 'string' ? params.deviceId : '';
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const card = message.companion;
@@ -194,19 +194,24 @@ export function CompanionTaskCard({
     value?.ok && Array.isArray(value.delegations)
       ? (value.delegations.find((item) => item.id === meta.delegationId) ?? null)
       : null;
-  // Desktop parity: until the first read settles the task is still starting;
-  // a settled read without this row, or a host that cannot be read, is unverifiable.
+  const childSessionId = row?.childSessionId || meta.childSessionId;
+  const task = useCompanionTaskSession(deviceId, childSessionId);
+  // Like Desktop, the original task can still be running after the delegation settled.
+  // Without either live evidence or a delegation snapshot, keep the unknown/loading state.
   const resolved = value !== null || error || !online;
   const status =
-    row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
+    task.activity?.phase === 'error' ? 'failed'
+    : task.waiting || task.activity?.phase === 'needs-interaction' || row?.status === 'waiting' ? 'waiting'
+    : task.running || row?.status === 'running' ? 'running'
+    : task.activity?.phase === 'completed' ? 'completed'
+    : row && (BOT_DELEGATION_STATUSES as readonly string[]).includes(row.status)
       ? row.status
       : resolved ? 'unknown' : 'queued';
-  const title = row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
+  const title = task.session?.title || row?.title || meta.objective.trim().split('\n')[0] || t('devices.companions.backgroundTask');
   const [pending, setPending] = useState(false);
   const [actionFailed, setActionFailed] = useState(false);
   const [showPrs, setShowPrs] = useState(false);
   const [now, setNow] = useState(Date.now);
-  const childSessionId = row?.childSessionId || meta.childSessionId;
   const active = Boolean(row && ['queued', 'running', 'waiting'].includes(row.status));
   useEffect(() => {
     if (!active) return;
@@ -289,12 +294,12 @@ export function CompanionTaskCard({
       setPending(false);
     }
   };
-  const openTask = childSessionId ? () => push({
+  const openTask = childSessionId && deviceId && !task.originConflict ? () => push({
     pathname: '/sessions/[sessionId]',
     params: { deviceId, sessionId: childSessionId },
   }) : undefined;
   const stale = (!online || error || associated.error || prStatuses.error
-    || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && row;
+    || (Array.isArray(prStatuses.value) && prStatuses.value.some((result) => !result.ok))) && (row || task.session);
   const facts = [
     duration,
     Array.isArray(row?.artifacts) && row.artifacts.length > 0 ? t('devices.companions.artifactCount', { count: row.artifacts.length }) : null,
@@ -363,7 +368,7 @@ export function CompanionTaskCard({
           </Pressable>
         ) : null}
         {error ? (
-          <Pressable accessibilityRole="button" hitSlop={AUX_HIT_SLOP} style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]} onPress={refresh}>
+          <Pressable accessibilityRole="button" hitSlop={AUX_HIT_SLOP} style={({ pressed }) => [styles.action, pressed && mobileInteractionStyles.pressed]} onPress={() => { refresh(); task.refresh(); }}>
             <Text style={styles.actionLabel}>{t('devices.resources.retry')}</Text>
           </Pressable>
         ) : null}

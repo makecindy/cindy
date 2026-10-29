@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 
 import {
   beginInteractionRoute,
@@ -10,6 +10,8 @@ import {
   noteInteractionRouteSteer,
   type InteractionHandler,
 } from '../interactionRouter';
+import { beginUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
+import { takeUnattendedPlanReviewDeclines } from '../../mcp-integrations/unattendedTurn';
 
 function permission(requestId: string): InteractionRequest {
   return {
@@ -29,8 +31,8 @@ function ask(requestId: string): InteractionRequest {
 }
 
 function makeSession() {
-  let listener: InteractionHandler | null = null;
-  const setInteractionListener = vi.fn((next: InteractionHandler | null) => {
+  let listener: InteractionResolver | null = null;
+  const setInteractionListener = vi.fn((next: InteractionResolver | null) => {
     listener = next;
   });
   return {
@@ -44,6 +46,36 @@ function makeSession() {
 }
 
 describe('session interaction router', () => {
+  it('resolves questions and plan reviews for an unattended scheduled turn instead of opening a card', async () => {
+    const host = makeSession();
+    const desktop = vi.fn<InteractionHandler>(async (): Promise<InteractionDecision> => ({
+      kind: 'permission', behavior: 'allow',
+    }));
+    installDesktopInteractionHandler(host.session, desktop);
+    const release = beginUnattendedTurn(host.session.id);
+    try {
+      await expect(requestHostInteraction(host.session, ask('ask-1'), new AbortController().signal))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      await expect(requestHostInteraction(
+        host.session,
+        { kind: 'plan_review', requestId: 'plan-1', plan: 'do it' } as InteractionRequest,
+        new AbortController().signal,
+      )).resolves.toEqual({
+        kind: 'plan_review', behavior: 'deny', dismissed: true, reason: 'unattended_scheduled_run',
+      });
+      // 拒绝要能被 run 结果引用，否则 plan 模式的定时任务看起来就像“什么也没做”。
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(1);
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(0);
+      expect(desktop).not.toHaveBeenCalled();
+      // Permissions keep their own card and timeout semantics.
+      await expect(requestHostInteraction(host.session, permission('perm-1'), new AbortController().signal))
+        .resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
+      expect(desktop).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
+
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
     const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);

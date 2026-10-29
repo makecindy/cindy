@@ -34,6 +34,8 @@ const DEFAULT_ROTATION_DISTINCT_LIMIT = 4;
 const STABLE_READ_WINDOW_SIZE = 128;
 const STABLE_READ_DISTINCT_LIMIT = 32;
 const STABLE_READ_MIN_REPEATS = 4;
+/** 突发重复判据最多记住多少种调用的开始时间。 */
+const MAX_TRACKED_CALL_STARTS = 256;
 const READ_ONLY_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'read', 'grep', 'find', 'ls']);
 /**
  * 节奏判据:本次普通调用距上一次普通调用开始至少这么久,或本次结果距上一次普通结果
@@ -179,6 +181,9 @@ interface PendingToolUse {
   name: string;
   input: unknown;
   startedAt: number;
+  /** 突发重复判据启用时,调用开始当下确定的指纹与是否突发重复;未启用时为 undefined。 */
+  callFingerprint?: string;
+  burstRepeat?: boolean;
 }
 
 /**
@@ -214,6 +219,14 @@ export interface ToolLoopGuardOptions {
   contractConsecutiveLimit?: number;
   /** 两次普通调用开始间隔或结果到达间隔达到此值即视为节奏轮询,不计入重复判据。 */
   pacedIntervalMs?: number;
+  /**
+   * 突发重复判据(缺省关闭):同一调用(name+input 相同)距它上一次开始不足此值,是一阵突发,
+   * 不是一次新的模型回应——两次模型回应之间必有数秒采样。Codex code mode 下脚本在后台运行,
+   * app-server 只上报脚本内部的调用,不标注归属,脚本里点保存后反复截快照等页面更新的有界轮询
+   * (2026-10-18 误报)只能靠这个间隔与模型逐次重复区分。只看该调用自己的开始时间,
+   * 与其它调用、完成顺序、并发无关。突发重复不计入重复判据,也不取消进行中的复核。
+   */
+  burstRepeatGapMs?: number;
   /** 快速完全相同调用的最终上限(不经复核)。 */
   finalConsecutiveLimit?: number;
   /** 完全相同结果持续时长的最终上限(不经复核)。 */
@@ -271,6 +284,7 @@ export class ToolLoopGuard {
   readonly rotationDistinctLimit: number;
   readonly contractConsecutiveLimit: number;
   readonly pacedIntervalMs: number;
+  readonly burstRepeatGapMs: number | undefined;
   readonly finalConsecutiveLimit: number;
   readonly finalStreakMs: number;
   private readonly now: () => number;
@@ -299,6 +313,8 @@ export class ToolLoopGuard {
   // 第 2/3 层共用状态: 最近 max(windowSize, rotationWindowSize) 个 name+input 指纹
   private callWindow: string[] = [];
   private stableReadWindow: string[] = [];
+  // 每种调用(name+input)最近一次开始的时间,供突发重复判据使用;有界,淘汰最久未出现的。
+  private lastStartByCall = new Map<string, number>();
 
   // 第 4 层无批次兼容状态: 最近一次契约错误的 name+类别键与连续计数
   private lastContractKey: string | null = null;
@@ -320,6 +336,7 @@ export class ToolLoopGuard {
     this.rotationDistinctLimit = options.rotationDistinctLimit ?? DEFAULT_ROTATION_DISTINCT_LIMIT;
     this.contractConsecutiveLimit = options.contractConsecutiveLimit ?? DEFAULT_CONTRACT_CONSECUTIVE_LIMIT;
     this.pacedIntervalMs = options.pacedIntervalMs ?? DEFAULT_PACED_INTERVAL_MS;
+    this.burstRepeatGapMs = options.burstRepeatGapMs;
     this.finalConsecutiveLimit = options.finalConsecutiveLimit ?? DEFAULT_FINAL_CONSECUTIVE_LIMIT;
     this.finalStreakMs = options.finalStreakMs ?? DEFAULT_FINAL_STREAK_MS;
     this.now = options.now ?? Date.now;
@@ -333,8 +350,25 @@ export class ToolLoopGuard {
   onToolUse(toolUseId: string, toolName: unknown, input: unknown): void {
     if (toolUseId.length === 0) return;
     if (typeof toolName !== 'string' || toolName.length === 0) return;
-    const startedAt = this.pendingToolUses.get(toolUseId)?.startedAt ?? this.now();
-    this.pendingToolUses.set(toolUseId, { name: toolName, input, startedAt });
+    const previous = this.pendingToolUses.get(toolUseId);
+    const startedAt = previous?.startedAt ?? this.now();
+    const pending: PendingToolUse = { name: toolName, input, startedAt };
+    if (this.burstRepeatGapMs !== undefined) {
+      // 突发关系在调用开始时就确定:并发的相邻调用可能乱序返回,结果到达时再看会漏掉尚未返回的邻居。
+      const callFingerprint = fingerprintToolCall(toolName, input, null);
+      if (previous?.callFingerprint === callFingerprint) {
+        pending.burstRepeat = previous.burstRepeat;
+      } else {
+        // 补齐后参数变了:撤销按半信息登记的开始时间,再按完整参数登记。
+        if (previous?.callFingerprint !== undefined
+          && this.lastStartByCall.get(previous.callFingerprint) === startedAt) {
+          this.lastStartByCall.delete(previous.callFingerprint);
+        }
+        pending.burstRepeat = this.noteCallStart(callFingerprint, startedAt);
+      }
+      pending.callFingerprint = callFingerprint;
+    }
+    this.pendingToolUses.set(toolUseId, pending);
   }
 
   /** 最近一次结果是否被纳入判定;为 true 且判定为 ok 说明此前的疑似模式已被打破。 */
@@ -370,7 +404,7 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 复核认定当前模式是在等外部进度:接下来 graceResults 次普通结果不再报疑似,
+   * 当前模式放行(有合理理由或证据不足):接下来 graceResults 次普通结果不再报疑似,
    * 之后若模式仍在则重新报。最终上限不受影响。
    */
   acceptCurrentPattern(graceResults: number): void {
@@ -405,15 +439,25 @@ export class ToolLoopGuard {
     this.lastOrdinaryFinishedAt = finishedAt;
     this.recordEvidence(toolUse, output, isError);
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
-    const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
+    const callFingerprint = toolUse.callFingerprint ?? fingerprintToolCall(toolUse.name, toolUse.input, null);
     this.lastResultCallFingerprintValue = callFingerprint;
-    // 复核放行额度按普通结果计,节奏轮询同样消耗。
+    const burstRepeat = toolUse.burstRepeat === true;
+    // 复核放行额度按普通结果计,节奏轮询同样消耗;突发重复不参与判定,也不消耗。
     const inGrace = this.suspicionGraceResults > 0;
-    if (inGrace) this.suspicionGraceResults -= 1;
+    if (inGrace && !burstRepeat) this.suspicionGraceResults -= 1;
     // 节奏轮询只参与完全相同 streak 的续接与最终时长上限,不计入任何疑似判据。
     if (paced) {
       // 写入或命令照常打断长只读窗口,节奏本身不改变这一点。
       if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
+      this.observeStreak(fullFingerprint, false);
+      return this.finalVerdict(toolUse.name);
+    }
+    // 突发重复:不计入任何疑似判据,也不算参与判定(不打破模式,进行中的复核不被它取消)。
+    // 只续接完全相同结果的时长上限;写入或命令照常打断长只读窗口,其余调用走原有判据。
+    if (burstRepeat) {
+      this.lastResultObservedValue = false;
+      if (!READ_ONLY_TOOL_NAMES.has(toolUse.name)) this.stableReadWindow = [];
+      if (fullFingerprint !== this.lastFullFingerprint) return { kind: 'ok' };
       this.observeStreak(fullFingerprint, false);
       return this.finalVerdict(toolUse.name);
     }
@@ -557,6 +601,19 @@ export class ToolLoopGuard {
     this.resetPatternState();
   }
 
+  /** 调用开始时登记其开始时间,返回它是否是距上一次同一调用不足 burstRepeatGapMs 的突发重复。 */
+  private noteCallStart(callFingerprint: string, startedAt: number): boolean {
+    const previous = this.lastStartByCall.get(callFingerprint);
+    this.lastStartByCall.delete(callFingerprint);
+    this.lastStartByCall.set(callFingerprint, previous === undefined ? startedAt : Math.max(previous, startedAt));
+    if (this.lastStartByCall.size > MAX_TRACKED_CALL_STARTS) {
+      const oldest = this.lastStartByCall.keys().next().value;
+      if (oldest !== undefined) this.lastStartByCall.delete(oldest);
+    }
+    return this.burstRepeatGapMs !== undefined && previous !== undefined
+      && startedAt - previous < this.burstRepeatGapMs;
+  }
+
   /** 续接或重开完全相同 streak;counted=false 的节奏结果只续接不计数。 */
   private observeStreak(fingerprint: string, counted: boolean): void {
     if (fingerprint === this.lastFullFingerprint) {
@@ -604,6 +661,7 @@ export class ToolLoopGuard {
     this.suspicionGraceResults = 0;
     this.callWindow = [];
     this.stableReadWindow = [];
+    this.lastStartByCall.clear();
     this.lastContractKey = null;
     this.contractStreak = 0;
     this.resetContractBatchState();
@@ -658,7 +716,7 @@ const TRAILING_TOKEN_FRAGMENT_RE = /[A-Za-z0-9_\-+/=.:@%~]+$/;
  * 有换行时丢掉被截断的整行(凭证以行为界:赋值、参数、引号串);没有换行时丢掉末尾
  * 连续串,若还剩未闭合的引号,从该引号起全部丢掉。
  */
-function captureEvidence(text: string): string {
+export function captureEvidence(text: string): string {
   if (text.length <= EVIDENCE_CAPTURE_LIMIT) return text;
   const cut = text.slice(0, EVIDENCE_CAPTURE_LIMIT);
   const lastNewline = cut.lastIndexOf('\n');

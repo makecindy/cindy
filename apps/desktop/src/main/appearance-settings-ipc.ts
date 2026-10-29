@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { extractIpcError } from '../shared/ipcError.js';
 
 import {
@@ -9,6 +9,7 @@ import {
   clampAppearanceWallpaperVisibility,
   clampAppearanceWallpaperBlur,
   clampAppearanceCodeSize,
+  clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
   type AppearanceOverrides,
@@ -39,6 +40,17 @@ let registered = false;
 export function registerAppearanceSettingsIpc(): void {
   if (registered) return;
   registered = true;
+  // The saved scale can survive while the native window displays a different
+  // zoom (#7486). Restore it on activation without rewriting the preference or
+  // repeatedly applying an already matching scale. Only app-content windows
+  // participate; embedded webpages and utility windows keep their own zoom.
+  app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
+    if (!isAppContentWindow(win) || win.webContents.isDestroyed()) return;
+    const settings = readAppearanceSettings();
+    if (Math.abs(win.webContents.getZoomFactor() - settings.windowZoom) > 0.000001) {
+      applyAppearanceToWindow(win, settings);
+    }
+  });
 
   // Must be registered before BrowserWindow creation: preload reads this on
   // the first synchronous bootstrap frame.
@@ -184,6 +196,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'codeFamily',
     'uiSize',
     'codeSize',
+    'terminalFamily',
+    'terminalSize',
     'windowZoom',
     'wallpaperId',
     'wallpaperOverlay',
@@ -197,6 +211,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
   const patch: AppearanceOverrides = {};
   if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
   if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
+  if ('terminalFamily' in raw)
+    patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
     patch.uiSize = parseNumber(
       raw.uiSize,
@@ -210,6 +226,13 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
       'codeSize',
       clampAppearanceCodeSize,
       APPEARANCE_LIMITS.codeSize,
+    );
+  if ('terminalSize' in raw)
+    patch.terminalSize = parseNumber(
+      raw.terminalSize,
+      'terminalSize',
+      clampAppearanceTerminalSize,
+      APPEARANCE_LIMITS.terminalSize,
     );
   if ('windowZoom' in raw) {
     patch.windowZoom = parseNumber(

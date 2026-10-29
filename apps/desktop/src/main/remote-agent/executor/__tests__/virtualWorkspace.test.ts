@@ -5,9 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { createComputerMcpServer, registerGetCurrentSessionIdTool, XdtHelperToolRegistry } from '@cindy/mcps';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { AgentEvent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
+import { RemoteEventProjection } from '../../controller/eventProjection';
 import { mapExecServerParams, mapExecServerResult, execServerActions } from '../../controller/execServerRelay';
 import { RemoteExecutor } from '../executor';
 import { ExecutorGate } from '../gate';
@@ -22,10 +24,17 @@ afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 /** Agent 写进文件的路径还原到本机时沿用它的分隔符，源码字符串里不会冒出 `\f`、`\b` 这类转义。 */
 function written(local: string, virtual: string): string { return virtual.startsWith('C:') ? local : local.replace(/\\/g, '/'); }
 
-/** 转发给 exec-server 的 Codex 请求里与沙箱有关的字段。 */
+/** managed fixture 的结果投影；原始 wire 字段由下方断言核实，不是外部输入校验。 */
 interface MappedSandboxRequest {
   cwd?: string;
-  sandbox: { cwd?: string; userHomeDir?: string; permissions: { file_system: { entries: unknown[] } } };
+  sandbox: {
+    cwd?: string;
+    userHomeDir?: string;
+    windowsSandboxLevel?: unknown;
+    permissions: {
+      file_system: { entries: unknown[] };
+    };
+  };
 }
 
 function setup(virtual: string) {
@@ -387,18 +396,109 @@ describe('virtual workspace', () => {
     expect(workspace.mapOutputForAgent(Buffer.from(pathExpected))).toEqual(Buffer.from(pathValue));
   });
 
+  // 测试价值：生产入口 mapExecServerParams 必须给原生 exec-server 传递未经过 Shell
+  // 引用的 argv[0]。#6743 在 Windows 上因含空格的程序别名被加引号而报 os error 123；
+  // 现有覆盖只验证参数和命令文本映射。unit tier 的最小失败输入是一个含空格的程序目录别名。
+  it.each(['/home/agent/bin', 'C:\\Agent\\bin'])('maps executable aliases without shell quoting from %s', (virtual) => {
+    const programs = path.join(root, "Program Files 100% O'Brien");
+    const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: virtual, to: programs }] });
+    const native = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const params = mapExecServerParams({
+      argv: [native.join(virtual, 'tool.exe'), '--version'],
+      cwd: pathToFileURL(root).href,
+    }, workspace, 'process/start');
+    expect(params).toEqual({
+      argv: [path.join(programs, 'tool.exe'), '--version'],
+      cwd: pathToFileURL(root).href,
+    });
+  });
+
+  it('preserves native executable paths, PATH names, relative names and literal quote characters', () => {
+    const workspace = new ExecutorWorkspace({
+      workingDir: root,
+      aliases: [{ from: '/agent/bin', to: path.join(root, 'Program Files') }],
+    });
+    for (const executable of ['pwsh', path.join(root, 'Program Files', 'pwsh.exe'), './tool', '"/agent/bin/pwsh.exe"']) {
+      expect(mapExecServerParams({ argv: [executable] }, workspace, 'process/start')).toEqual({ argv: [executable] });
+    }
+  });
+
   it('maps Codex request paths and commands before permission checks and projects text file bytes', async () => {
     const { workspace, project, executor } = setup('/Users/agent/workspace');
     const params = mapExecServerParams({ path: 'file:///Users/agent/workspace/a.txt', dataBase64: Buffer.from(project).toString('base64') }, workspace);
     expect(params).toEqual({ path: pathToFileURL(path.join(project, 'a.txt')).href, dataBase64: Buffer.from(project).toString('base64') });
     expect(execServerActions('fs/writeFile', params, project)).toEqual([{ kind: 'write', path: path.join(project, 'a.txt') }]);
-    const result = mapExecServerResult({ result: { cwd: pathToFileURL(project).href } }, workspace);
+    const result = await mapExecServerResult({ result: { cwd: pathToFileURL(project).href } }, workspace);
     expect(JSON.stringify(result)).toContain('file:///Users/agent/workspace');
-    const output = mapExecServerResult({ method: 'process/output', params: { chunk: Buffer.from(project).toString('base64') } }, workspace) as any;
+    const output = await mapExecServerResult({ method: 'process/output', params: { chunk: Buffer.from(project).toString('base64') } }, workspace) as any;
     expect(Buffer.from(output.params.chunk, 'base64').toString()).toBe('/Users/agent/workspace');
     const fileData = { result: { dataBase64: Buffer.from(project).toString('base64') } };
-    expect(Buffer.from((mapExecServerResult(fileData, workspace) as any).result.dataBase64, 'base64').toString()).toBe(project);
+    expect(Buffer.from((await mapExecServerResult(fileData, workspace) as any).result.dataBase64, 'base64').toString()).toBe(project);
     await executor.close();
+  });
+
+  // 测试价值：2026-10-21 实测 exec-server 输出逐字段同步 realpath 拖住主进程；旧路径测试只检查文本。
+  // 生产入口 mapExecServerResult：最小多字段结果应异步解析、每条结果复用，下一条刷新；unit，无真实等待。
+  it('shares asynchronous canonical paths across one reply and refreshes them for the next reply', async () => {
+    vi.stubEnv('PATH', '');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: '/agent/workspace', to: project }] });
+    workspace.setVirtualRoot('/agent');
+    const native = vi.spyOn(fs.realpathSync, 'native');
+    const realpath = vi.spyOn(fs.promises, 'realpath');
+    try {
+      const first = await mapExecServerResult({ result: { path: project } }, workspace);
+      expect(first).toEqual({ result: { path: '/agent/workspace' } });
+      expect(native).not.toHaveBeenCalled();
+      const reads = realpath.mock.calls.length;
+      expect(reads).toBeGreaterThan(0);
+      realpath.mockClear();
+      const fields = { a: project, b: project, nested: [project, project] };
+      expect(await mapExecServerResult({ result: fields }, workspace)).toEqual({
+        result: { a: '/agent/workspace', b: '/agent/workspace', nested: ['/agent/workspace', '/agent/workspace'] },
+      });
+      expect(realpath).toHaveBeenCalledTimes(reads);
+      expect(native).not.toHaveBeenCalled();
+    } finally {
+      native.mockRestore();
+      realpath.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refreshes a retargeted directory link and resolves newly announced environment directories asynchronously', async ({ skip }) => {
+    vi.stubEnv('PATH', '');
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    const link = path.join(root, 'link');
+    fs.mkdirSync(first);
+    fs.mkdirSync(second);
+    try {
+      try { fs.symlinkSync(first, link, process.platform === 'win32' ? 'junction' : 'dir'); }
+      catch { return skip(); }
+      const workspace = new ExecutorWorkspace({ workingDir: root, aliases: [{ from: '/agent/workspace', to: link }] });
+      workspace.setVirtualRoot('/agent');
+      expect(await mapExecServerResult({ result: first }, workspace)).toEqual({ result: '/agent/workspace' });
+      fs.unlinkSync(link);
+      fs.symlinkSync(second, link, process.platform === 'win32' ? 'junction' : 'dir');
+      const native = vi.spyOn(fs.realpathSync, 'native');
+      try {
+        expect(await mapExecServerResult({ result: { text: second, path: pathToFileURL(second).href } }, workspace))
+          .toEqual({ result: { text: '/agent/workspace', path: 'file:///agent/workspace' } });
+        const temp = path.join(root, 'announced temp');
+        fs.mkdirSync(temp);
+        const value = await mapExecServerResult({ result: { environmentInfo: { tempDir: pathToFileURL(temp).href } } }, workspace) as {
+          result: { environmentInfo: { tempDir: string } };
+        };
+        expect(value.result.environmentInfo.tempDir).toMatch(/^file:\/\/\/agent\/additional\/runtime-/);
+        expect(native).not.toHaveBeenCalled();
+      } finally {
+        native.mockRestore();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.skipIf(process.platform === 'win32')('maps Codex sandbox permissions from a Windows agent and drops paths that only exist on the agent computer', () => {
@@ -497,6 +597,7 @@ describe('virtual workspace', () => {
       ] } },
       cwd: 'file:///home/agent/workspace',
       userHomeDir: 'file:///home/agent',
+      windowsSandboxLevel: 'disabled',
     };
     const params = mapExecServerParams({ path: 'file:///home/agent/workspace/a.txt', sandbox }, workspace, 'fs/readFile') as MappedSandboxRequest;
     expect(params.sandbox.permissions.file_system.entries).toEqual([
@@ -513,6 +614,12 @@ describe('virtual workspace', () => {
     ]);
     expect(params.sandbox.cwd).toBe(pathToFileURL(project).href);
     expect(params.sandbox.userHomeDir).toBe(pathToFileURL(os.homedir()).href);
+    expect(params.sandbox.windowsSandboxLevel).toBe(process.platform === 'win32' ? 'restricted-token' : 'disabled');
+    const explicit = mapExecServerParams({ sandbox: { ...sandbox, windowsSandboxLevel: 'mxc' } }, workspace) as MappedSandboxRequest;
+    expect(explicit.sandbox.windowsSandboxLevel).toBe('mxc');
+    const unrestricted = mapExecServerParams({ sandbox: { ...sandbox, permissions: { type: 'unrestricted' } } }, workspace) as { sandbox: { windowsSandboxLevel?: unknown } };
+    expect(unrestricted).toMatchObject({ sandbox: { permissions: { type: 'unrestricted' } } });
+    expect(unrestricted.sandbox.windowsSandboxLevel).toBe('disabled');
     // 没有虚拟工作区(旧版对端)时沙箱原样转发，与之前一致。
     const plain = new ExecutorWorkspace({ workingDir: project });
     expect((mapExecServerParams({ sandbox }, plain) as MappedSandboxRequest).sandbox).toBe(sandbox);
@@ -828,5 +935,198 @@ describe('virtual workspace', () => {
     } finally {
       await executor.close();
     }
+  });
+});
+
+/**
+ * #7710：远程会话里每个事件、每段输出都要做路径投影，别名多时按「别名数 × 字符串数」重复排序、重建
+ * 正则、同步 realpath，把主窗口卡住。这里经生产入口(mapTextFromAgent / mapTextForAgent /
+ * RemoteEventProjection.project)断言工作量只随文本增长，并保证投影结果与别名变化的语义不变。
+ * 失败输入：338 条别名 + 1000 个不含路径的短字符串。tier：unit(内存与临时目录，无真实等待)。
+ */
+describe('path projection cost with many aliases', () => {
+  const VIRTUAL = '/Users/agent/Library/Application Support/Cindy/remote-agent/workspaces/0123456789abcdef/run/fs';
+
+  let workspaces = 0;
+  /**
+   * 每条别名各自独立，但只指向几个真实目录；建立时同一路径只 realpath 一次。逐个创建、解析几百个
+   * 目录在 Windows CI 上要几十秒，会让 vitest worker 通信超时，而这部分不是被测的投影。
+   */
+  function manyAliasWorkspace(count = 338) {
+    const base = path.join(root, 'many-' + (workspaces += 1));
+    const project = path.join(base, 'work');
+    const targets = Array.from({ length: 4 }, (_, index) => path.join(base, 'dirs', 'd' + index));
+    for (const dir of [project, ...targets]) fs.mkdirSync(dir, { recursive: true });
+    const aliases = [{ from: VIRTUAL + '/workspace', to: project },
+      ...Array.from({ length: count }, (_, index) => ({ from: VIRTUAL + '/additional/runtime-' + index, to: targets[index % targets.length] }))];
+    const realpath = fs.realpathSync;
+    const memoize = <F extends (target: fs.PathLike) => string>(resolve: F) => {
+      const resolved = new Map<string, string>();
+      return ((target: fs.PathLike) => {
+        const key = String(target);
+        if (!resolved.has(key)) resolved.set(key, resolve(target));
+        return resolved.get(key)!;
+      }) as unknown as F;
+    };
+    fs.realpathSync = Object.assign(memoize(realpath as (target: fs.PathLike) => string), {
+      native: memoize(realpath.native as (target: fs.PathLike) => string),
+    }) as unknown as typeof realpath;
+    try {
+      const workspace = new ExecutorWorkspace({ workingDir: project, aliases });
+      workspace.setVirtualRoot(VIRTUAL);
+      return { project, workspace };
+    } finally {
+      fs.realpathSync = realpath;
+    }
+  }
+
+  /** 统计 run 期间的别名排序次数、RegExp 构造次数与同步 realpath 次数(含 native)。 */
+  function measure<T>(run: () => T) {
+    const counts = { sorts: 0, regexps: 0, realpaths: 0 };
+    const sort = Array.prototype.sort;
+    const realpath = fs.realpathSync;
+    const native = realpath.native;
+    const RegExpOriginal = globalThis.RegExp;
+    Array.prototype.sort = function (this: unknown[], ...args: Parameters<typeof sort>) {
+      if (this.length >= 100 && typeof (this[0] as { from?: unknown } | undefined)?.from === 'string') counts.sorts += 1;
+      return sort.apply(this, args);
+    } as typeof sort;
+    fs.realpathSync = Object.assign(((...args: Parameters<typeof realpath>) => { counts.realpaths += 1; return realpath(...args); }) as typeof realpath,
+      { native: ((...args: Parameters<typeof native>) => { counts.realpaths += 1; return native(...args); }) as typeof native });
+    vi.stubGlobal('RegExp', new Proxy(RegExpOriginal, { construct(target, args) { counts.regexps += 1; return Reflect.construct(target, args); } }));
+    const started = performance.now();
+    try {
+      const value = run();
+      return { value, ...counts, elapsed: performance.now() - started };
+    } finally {
+      vi.unstubAllGlobals();
+      fs.realpathSync = realpath;
+      Array.prototype.sort = sort;
+    }
+  }
+
+  const tick = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+
+  it('sorts aliases and builds prefix patterns once however many short strings are projected', () => {
+    const texts = (count: number) => Array.from({ length: count }, (_, index) => '第 ' + index + ' 条输出：ok');
+    const single = manyAliasWorkspace().workspace;
+    const one = measure(() => single.mapTextFromAgent(texts(1)[0]));
+    const { workspace } = manyAliasWorkspace();
+    const many = measure(() => texts(1000).map((text) => workspace.mapTextFromAgent(text)));
+    expect(many.value).toEqual(texts(1000));
+    expect(many.sorts).toBe(1);
+    expect(many.regexps).toBe(one.regexps);
+    expect(many.elapsed).toBeLessThan(400);
+  });
+
+  it('resolves canonical alias targets once per batch instead of once per string', async () => {
+    const { workspace } = manyAliasWorkspace();
+    const aliases = workspace.agentPathPrefixes().length;
+    const toolOutputs = (count: number) => Array.from({ length: count }, (_, index) => 'line ' + index + ' of tool output');
+    const batch = async (count: number) => {
+      await tick();
+      return measure(() => toolOutputs(count).map((text) => workspace.mapTextForAgent(text)));
+    };
+    const few = await batch(50);
+    const many = await batch(500);
+    expect(many.value).toEqual(toolOutputs(500));
+    expect(many.realpaths).toBe(few.realpaths);
+    expect(many.realpaths).toBeLessThanOrEqual(aliases * 2);
+    expect(many.sorts).toBe(1);
+  });
+
+  it('projects streamed remote events without per-delta alias work', () => {
+    const { workspace } = manyAliasWorkspace();
+    const projection = new RemoteEventProjection(workspace);
+    const deltas = Array.from({ length: 500 }, (_, index) => ({
+      type: 'text', source: 'claude-code', data: { text: '第' + index + '段 ', isFinal: false, agentMessageId: 'm1' },
+    }) as AgentEvent);
+    const work = measure(() => deltas.flatMap((event) => projection.project(event)));
+    expect(work.value.map((event) => (event.data as { text: string }).text).join('') + projection.flush().map((event) => (event.data as { text: string }).text).join(''))
+      .toBe(deltas.map((event) => (event.data as { text: string }).text).join(''));
+    expect(work.sorts).toBeLessThanOrEqual(1);
+    expect(work.realpaths).toBe(0);
+  });
+
+  const SETS = [
+    { name: 'posix', virtual: '/Users/agent/workspace/p' },
+    { name: 'windows', virtual: 'C:\\Agent\\工作 目录' },
+  ];
+  const inputs = (virtual: string) => {
+    const url = 'file://' + (virtual.startsWith('/') ? virtual : '/' + virtual.replace(/\\/g, '/')) + '/src/a.ts';
+    const escaped = virtual.replace(/\\/g, '\\\\') + '\\\\src\\\\a.ts';
+    return {
+      plain: '编辑了 ' + virtual + '/src/a.ts 然后运行 ' + virtual + '/package.json。',
+      chinese: '文件在 ' + virtual + '/中文 目录/报告.md，已保存',
+      json: JSON.stringify({ file: virtual + '/src/a.ts', list: [virtual + '/b', 'plain'] }),
+      fileUri: '打开 ' + url + ' 看看',
+      code: '`' + virtual + '/src/a.ts` 和 <' + virtual + '/src/b.ts> 与 [x](<' + virtual + '/c.md>)',
+      escaped: '"' + escaped + '"',
+      noPath: '/api/v1 与 relative/path 不是影子路径',
+    };
+  };
+
+  it.each(SETS)('projects the same text with a reused or fresh alias array ($name paths)', ({ virtual }) => {
+    const local = path.join(root, 'real 目录');
+    fs.mkdirSync(local);
+    const aliases = [{ from: virtual, to: local }, { from: virtual + '/deep', to: path.join(root, 'deep') }];
+    for (const [kind, text] of Object.entries(inputs(virtual))) {
+      for (const options of [{ escapedSeparators: true, separators: 'source' as const }, {}]) {
+        const fresh = () => projectPathText(text, [...aliases], 'text', undefined, options);
+        const reused = [projectPathText(text, aliases, 'text', undefined, options), projectPathText(text, aliases, 'text', undefined, options)];
+        expect([kind, reused[0]]).toEqual([kind, fresh()]);
+        expect([kind, reused[1]]).toEqual([kind, fresh()]);
+        if (kind !== 'noPath' && kind !== 'escaped' && kind !== 'fileUri') expect([kind, reused[0] === text]).toEqual([kind, false]);
+      }
+    }
+    expect(projectPathText(inputs(virtual).noPath, aliases)).toBe(inputs(virtual).noPath);
+  });
+
+  it('reflects aliases added after a projection on the very next call', () => {
+    const { project, workspace } = manyAliasWorkspace(5);
+    const later = path.join(root, 'later');
+    const runtime = path.join(root, 'runtime-dir');
+    const added = path.join(root, 'added');
+    fs.mkdirSync(later);
+    fs.mkdirSync(runtime);
+    fs.mkdirSync(added);
+    const virtualOf = (dir: string) => workspace.mapTextForAgent(path.join(dir, 'f.txt'));
+    expect(virtualOf(later)).toBe(path.join(later, 'f.txt'));
+    expect(workspace.mapTextFromAgent(VIRTUAL + '/extra/f.txt')).toBe(VIRTUAL + '/extra/f.txt');
+
+    workspace.setAliases([{ from: VIRTUAL + '/workspace', to: project }, { from: VIRTUAL + '/extra', to: later }]);
+    expect(virtualOf(later)).toBe(VIRTUAL + '/extra/f.txt');
+    // 正文沿用 Agent 的分隔符；Windows 上比较本机写法。
+    const localOf = (virtual: string) => path.normalize(workspace.mapTextFromAgent(virtual));
+    expect(localOf(VIRTUAL + '/extra/f.txt')).toBe(path.join(later, 'f.txt'));
+
+    workspace.addAliases([{ from: VIRTUAL + '/added', to: added }]);
+    expect(virtualOf(added)).toBe(VIRTUAL + '/added/f.txt');
+    expect(localOf(VIRTUAL + '/added/f.txt')).toBe(path.join(added, 'f.txt'));
+
+    const [virtual] = workspace.virtualizeDirs([runtime]);
+    expect(virtualOf(runtime)).toBe(virtual + '/f.txt');
+    expect(localOf(virtual + '/f.txt')).toBe(path.join(runtime, 'f.txt'));
+    expect(workspace.agentPathPrefixes()).toContain(virtual);
+  });
+
+  it('follows a symlinked alias target that is retargeted between batches', async ({ skip }) => {
+    const project = path.join(root, 'work');
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    const link = path.join(root, 'link');
+    const type = process.platform === 'win32' ? 'junction' : 'dir';
+    for (const dir of [project, first, second]) fs.mkdirSync(dir);
+    try { fs.symlinkSync(first, link, type); }
+    catch { return skip(); }
+    const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: VIRTUAL + '/workspace', to: project }, { from: VIRTUAL + '/link', to: link }] });
+    workspace.setVirtualRoot(VIRTUAL);
+    // 按链接当前指向的真实路径(Windows 上为长文件名)写入，与 native realpath 的结果一致。
+    const real = (dir: string) => path.join(fs.realpathSync.native(dir), 'f.txt');
+    expect(workspace.mapTextForAgent(real(first))).toBe(VIRTUAL + '/link/f.txt');
+    fs.unlinkSync(link);
+    fs.symlinkSync(second, link, type);
+    await tick();
+    expect(workspace.mapTextForAgent(real(second))).toBe(VIRTUAL + '/link/f.txt');
   });
 });

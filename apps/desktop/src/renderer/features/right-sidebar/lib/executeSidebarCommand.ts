@@ -1,5 +1,6 @@
+import { openPluginTaskTab } from './openPluginTaskTab';
 import { openRoutinesTab } from './openRoutinesTab';
-import { ensureBotWorkbenchTab, openBotWorkbenchTab } from './openBotWorkbenchTab';
+import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
 import type { RsbWindowCommand } from '../../../../shared/rightSidebarWindow';
@@ -20,13 +21,22 @@ import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
 export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
-  if (command.type === 'open-routines-tab') {
-    await openRoutinesTab(command.sessionId, command.botId);
+  if (command.type === 'open-mail-card') {
+    await openMailCard(command.sessionId, command.callId);
     return;
   }
-  if (command.type === 'open-bot-workbench-tab') {
-    if (command.focusTab === true) await openBotWorkbenchTab(command.sessionId, command.botId);
-    else await ensureBotWorkbenchTab(command.sessionId, command.botId);
+  if (command.type === 'open-mail-preview') {
+    await openMailPreview(command.sessionId, command.url);
+    return;
+  }
+  if (command.type === 'open-plugin-task') {
+    await openPluginTaskTab(command.sessionId, command.instanceId, {
+      userInitiated: command.userInitiated === true,
+    });
+    return;
+  }
+  if (command.type === 'open-routines-tab') {
+    await openRoutinesTab(command.sessionId, command.botId);
     return;
   }
   if (command.type === 'open-web-browser') {

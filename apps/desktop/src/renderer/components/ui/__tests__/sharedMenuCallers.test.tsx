@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VersionDropdown } from '@/components/UpdateNoticeDialog';
 import { TabStrip } from '@/features/right-sidebar/TabBar';
+import { FolderTree } from 'lucide-react';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -94,7 +95,10 @@ describe('right sidebar · add tab', () => {
         onActivate={vi.fn()}
         onClose={vi.fn()}
         onReorder={vi.fn()}
-        onAdd={onAdd}
+        creationMenu={{ select: onAdd, items: [
+          { kind: 'file-browser', labelKey: 'rightSidebar.tabs.kinds.fileBrowser', icon: FolderTree, order: 1, enabled: true, disabled: false, busy: false },
+          { kind: 'review', labelKey: 'rightSidebar.tabs.kinds.review', icon: FolderTree, order: 2, enabled: true, disabled: false, busy: false },
+        ] }}
       />,
       container ? { container: container.appendChild(document.createElement('div')) } : undefined,
     );

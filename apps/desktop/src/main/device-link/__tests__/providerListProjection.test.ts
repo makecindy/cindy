@@ -58,13 +58,20 @@ describe('schedule binding list projection', () => {
     const full = [
       { ...fields, prompt: 'x'.repeat(5 * 1024 * 1024), script: { code: 'private' } },
       { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
     );
-    expect(projected).toEqual([fields, { ...fields, id: 'second', recurring: false }]);
+    expect(projected).toEqual([
+      fields,
+      { ...fields, id: 'second', recurring: false },
+      { ...fields, id: 'persistent', persistentSession: true },
+      { ...fields, id: 'explicit-off' },
+    ]);
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });
@@ -126,6 +133,13 @@ function xdProviderWithFullRouting() {
 }
 
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  it('keeps the source account name for mobile and desktop controllers', () => {
+    for (const name of ['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio']) {
+      const input = { providers: [{ ...xdProviderWithFullRouting(), name }] };
+      expect(project(input).providers[0]?.name).toBe(name);
+      expect(projectForCurrentController(input).providers[0]?.name).toBe(name);
+    }
+  });
   it('applies owner visibility per provider and runtime before transport, preserving enabled model options', () => {
     const models = [
       { id: 'default-on', defaultEnabled: true, supportsFastMode: true },

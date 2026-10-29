@@ -58,7 +58,7 @@ test('DS-8: every desktop globals.css surface includes its generated token style
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   const consumers = surfaces.filter(surface => surface.platform === 'desktop'
     && surface.styleSources.includes('apps/desktop/src/renderer/styles/globals.css'));
-  assert.equal(consumers.length, 6);
+  assert.equal(consumers.length, 9);
   for (const surface of consumers) {
     assert.ok(surface.styleSources.includes('apps/desktop/src/renderer/styles/generated/tokens.css'), surface.id);
   }
@@ -119,7 +119,10 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/:botId/session/:sessionId BotSessionView',
     '/bots/groups/:groupId BotGroupChatView',
     '/bots/list BotsListView',
+    '/bots/market/:packageId? BotMarketRoute',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
+    '/bots/remote/:deviceId/:botId/history/:sessionId BotHistorySessionView',
+    '/bots/remote/:deviceId/:botId/session/:sessionId RemoteBotSessionView',
     '/bots/roster BotRosterView',
     '/cc-agent/:sessionId CCAgentSessionView',
     '/cc-agent/boot SecondaryWindowBootGate',
@@ -127,7 +130,6 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/cc-agent/new NewMakerDraftRoute',
     '/cc-agent/orca/:sessionId OrcaWorkflowRoute',
     '/cc-agent/scheduled SchedulerPage',
-    '/ghost-panel-window GhostPanelWindowLayout',
     '/issues IssueTrackerFeatureLayout',
     '/login LoginPage',
     '/maker-experimental MakerExperimentalView',
@@ -809,6 +811,8 @@ test('skillhub.local 纳入保留列表布局及直接渲染子组件的样式�
   const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.local');
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubLocalLayout.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubHomeView.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('skillhub-home.css')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SkillCategoryFilterBar.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('PluginManagementLayout.tsx')));
   assert.ok(generated.tokenCount > 33, `子组件并入后 token 数应高于只扫路由组件(实际 ${generated.tokenCount})`);
 });
@@ -820,7 +824,7 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
   for (const component of [
     'PluginManagementLayout',
     'MarketPluginDetailView',
-    'PluginScopePicker',
+    'PluginProjectMenu',
     'MyPublishesSection',
     'AddMarketplaceDialog',
     'UpdateAllDialog',
@@ -929,15 +933,13 @@ test('设置页纳入 sortable.css（providers tab 拖拽行样式）', () => {
 });
 
 test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
-  // resource-usage-entry.tsx:9 / sidebar-window-entry.tsx:19 /
-  // ghost-panel-window-entry.tsx:21 都直接导入 globals.css,body/#root 基础
+  // resource-usage-entry.tsx / sidebar-window-entry.tsx 都直接导入 globals.css,body/#root 基础
   // 样式与窗口专用规则在这些窗口实际生效。
   const globalsPath = 'apps/desktop/src/renderer/styles/globals.css';
   const catalog = catalogSurfaces();
   for (const surfaceId of [
     'desktop.window.resource-usage',
     'desktop.window.sidebar',
-    'desktop.window.ghost-panel',
   ]) {
     const surface = catalog.find((entry) => entry.id === surfaceId);
     assert.ok(surface, surfaceId);
@@ -950,7 +952,6 @@ test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
   for (const surfaceId of [
     'desktop.window.resource-usage',
     'desktop.window.sidebar',
-    'desktop.window.ghost-panel',
   ]) {
     const generated = surfaces.find((entry) => entry.id === surfaceId);
     assert.ok(
@@ -1010,12 +1011,15 @@ test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () =>
 
 test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块映射必须与 catalog 一致', () => {
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
-  // 与源码实况钉死:当前 3 个参数各自加载的入口模块。
+  // 治理合同 §2.1：独立编辑／回放窗口也必须登记，避免入口扫描错位或遗漏样式。
   assert.deepEqual(Object.fromEntries(actualEntries), {
+    recordingPreview: './recording-preview-entry',
     remoteDesktopViewer: './remote-desktop-viewer-entry',
     resourceUsageWindow: './resource-usage-entry',
     sidebarWindow: './sidebar-window-entry',
-    ghostPanelWindow: './ghost-panel-window-entry',
+    regionScreenshot: './region-screenshot-entry',
+    regionScreenshotEditor: './region-screenshot-entry',
+    regionScreenshotPin: './region-screenshot-pin-entry',
   });
   const covered = new Map(
     catalogSurfaces().flatMap((surface) =>
@@ -1281,6 +1285,11 @@ test('Mobile new, removed, renamed routes and missing dev gates cannot silently 
   assert.deepEqual(mobileRouteCoverage(temp,catalog).stale,['resources/[id].tsx']);
   fs.writeFileSync(path.join(app,'listperf.tsx'),'export default function LiveScreen() { return <View />; }');
   assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/listperf.tsx'));
+  const pluginPreview = path.join(app, 'plugin-management-preview.tsx');
+  fs.writeFileSync(pluginPreview, 'export default function Preview() { return <View />; }');
+  assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'));
+  fs.writeFileSync(pluginPreview, 'const demosEnabled = __DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"; export default function Preview() { if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled) return <Redirect href="/" />; return <View />; }');
+  assert.equal(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'), false);
 });
 
 test('Mobile reexports, embedded viewer HTML, platform variants and codepoint ordering survive closure', async (t) => {

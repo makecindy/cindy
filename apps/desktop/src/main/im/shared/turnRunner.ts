@@ -59,6 +59,7 @@ const GROUP_APPROVAL_OWNER_DM_NOTE =
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
@@ -77,6 +78,7 @@ import { hydrateSessionProvider } from '../../maker-host/session-provider-store'
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
+import { t } from '../../i18n';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -159,7 +161,8 @@ import {
   generateImSessionTitleText,
   persistGeneratedSessionTitle,
 } from './fbotTitle';
-import { materializeLocalMarkdownImages } from './localMarkdownImages';
+import { localTaskImagePath, rewriteTaskImageReferences, taskImageReferences } from '../../cindy-media/taskImageMarkdown';
+import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } from './localMarkdownImages';
 import {
   applyStatusTokenRate,
   clearRunningIndicators,
@@ -292,9 +295,8 @@ interface TurnState {
   interactionRouteLease: InteractionRouteLease | null;
   /**
    * Host turn lease held for the duration of a per-turn permission policy turn.
-   * While held, session.setPermissionMode() blocks any switch into a mode the
-   * agent lists as turnPermissionPolicy-unsupported (e.g. Pi Full Access),
-   * closing the hot-switch bypass window. Released on every terminal / requeue /
+   * Keeps new sends and retirement behind this turn's background continuations;
+   * the owner's live permission changes remain immediate. Released on every terminal / requeue /
    * cleanup path via releaseTurnInteractionRoute. Null when the turn has no policy.
    */
   hostTurnLeaseRelease: (() => void) | null;
@@ -515,6 +517,8 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** Opt in to native permissions only for a resolved companion route and verified owner. */
+  inheritCompanionOwnerPermissions?: boolean;
   /**
    * The triggering message passed the channel's owner check (DM owner gate or
    * group speaker.isOwner). Only this unlocks owner-only Host actions; omitted = not owner.
@@ -713,8 +717,8 @@ export interface ImTurnRunnerDeps {
   /** 连接交给伙伴后的路由(只对实现了 adapter.companionLane 的渠道生效)。 */
   companion?: ImCompanionRouteDeps;
   /**
-   * 与桌面直发同源的发送前上下文体检(`register.prepareUnhealthySessionForSend`):到线换窗、
-   * 空闲间隔刷新、已知坏历史重建。伙伴主对话与 IM 专线同一条规则,不为 IM 单设一套。
+   * 与桌面直发同源的发送前故障恢复(`register.prepareUnhealthySessionForSend`)。
+   * 健康伙伴主对话与 IM 专线均沿用 Session 原生压缩,不按空闲时长或伙伴阈值换窗。
    * 体检重建时会以 'runtime-refresh' 关掉当前 live handle,新 handle 由
    * `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建。
    */
@@ -1339,7 +1343,11 @@ export function createTurnRunner(
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
-      ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      // Binding presence is insufficient: unavailable companions fall back to
+      // channel-owned sessions, which must retain the mandatory policy.
+      ...(args.turnPermissionPolicy && !(args.inheritCompanionOwnerPermissions === true
+        && args.requesterIsOwner === true && target.botOwned)
+        ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
@@ -1508,8 +1516,8 @@ export function createTurnRunner(
           return { kind: 'rejected', reason: 'companion_unavailable' };
         }
       }
-      // 发送前上下文体检(与桌面直发、官方 hook 同一个入口): 伙伴对话隔了半天再开口、
-      // 占用到线、已知坏历史都在这里换干净的原生会话。关闭原因是 'runtime-refresh',
+      // 发送前故障恢复(与桌面直发、官方 hook 同一个入口): 仅在真实满窗或已知
+      // 压缩失败、坏历史等恢复条件下重建原生会话。关闭原因是 'runtime-refresh',
       // 上面的 close 监听在有 acquirePendingAgentSwitch 时会保住本任务; 新 live session
       // 由下面的 refreshSessionAfterPendingAgentSwitch 按最新 DB 行(sdkSessionId 已清空)
       // 重建并换绑。体检失败按直发同一口径让这条消息失败, 不带着过期的 resume 选项发送。
@@ -1669,10 +1677,8 @@ export function createTurnRunner(
             if (sessionStates.get(rowId)?.makerSession !== noticeSession) return false;
             return im.sendText(userId, text, { threadTs: noticeScope });
           });
-          // 策略轮持一张 host turn lease:期间 setPermissionMode 切到 agent 声明为
-          // turnPermissionPolicy-unsupported 的档位(如 Pi Full Access)会被阻塞到本轮
-          // 终态,堵死"热切到 bypass 让 bridge 直接放行、策略连冒泡机会都没有"的绕过。
-          // 两个 surface 都需要:channel 与 desktop 的策略同样必须扛住热切。
+          // 策略轮保留逻辑占用直到后台续跑和收尾结束；新输入仍须等待，
+          // 主人在 Cindy 中切换权限则立即沿用普通任务的运行时切换。
           if (effectiveTurnPolicy) {
             item.turn.hostTurnLeaseRelease = state.makerSession.acquireTurnLease();
           }
@@ -1684,6 +1690,8 @@ export function createTurnRunner(
             });
           }
           if (item.channelToolScope) {
+            // A retried dispatch must not reuse an earlier input receipt.
+            delete item.channelToolScope.inputClientId;
             item.turn.channelToolScopeRelease = beginChannelToolScope({
               sessionId: rowId,
               sessionInstanceId: state.makerSession.instanceId,
@@ -1793,6 +1801,7 @@ export function createTurnRunner(
           });
           if (persisted) {
             item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
+            if (item.channelToolScope) item.channelToolScope.inputClientId = persisted.clientId;
             await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
             turnChangeSetStarted = true;
           }
@@ -1963,7 +1972,7 @@ export function createTurnRunner(
       const agentKind = toCoreAgentKind(row.agentKind);
       hydrateSessionProvider(sessionId, row.providerId ?? null);
       if (row.effort) setSessionEffort(sessionId, row.effort);
-      setSessionFastMode(sessionId, !!row.fastMode);
+      setSessionFastMode(sessionId, (row.fastMode ?? false));
       current = await maker.createSession({
         id: sessionId,
         agentKind,
@@ -2216,7 +2225,7 @@ export function createTurnRunner(
     // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
     // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
     if (row.effort) setSessionEffort(row.id, row.effort);
-    setSessionFastMode(row.id, !!row.fastMode);
+    setSessionFastMode(row.id, (row.fastMode ?? false));
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2922,17 +2931,32 @@ export function createTurnRunner(
    * 消息只留干净正文(error 收口不置 done — 保留过程区, 用户能看到死在哪步)。
    * 纯文本快答没有 tool_use, renderActivity 返回空串, 视图与旧行为逐字一致。
    */
-  function composeStreamingView(turn: TurnState): string {
+  function composeStreamingView(turn: TurnState, final = turn.done): string {
     const rawBody = turn.outputCardPrefix
       ? turn.outputCardPrefix + turn.presenter.wholeText()
       : turn.presenter.wholeText();
-    // External-channel safeguard: maker-core normally strips these tokens,
-    // while this boundary also protects old continuations and future adapters.
-    const body = stripInternalWebCitations(rawBody);
+    const body = composeOutboundBody(rawBody, final);
     if (turn.done) return body;
     // 过程区在上、正文在下的合成骨架与官方 bot 共用(presenter.composeRunning →
     // composeProgressView); 纯文本快答无 tool_use 时过程区为空, 视图与旧行为逐字一致。
     return turn.presenter.composeRunning(body);
+  }
+
+  /** Project only the outbound copy; persistence keeps the original component events. */
+  function composeOutboundBody(source: string, final: boolean): string {
+    let body = stripInternalWebCitations(richAnswerText(source));
+    // Card channels patch the live body; a machine-local image path must not show before finalize imports it.
+    if (!final && output.kind === 'rich-card' && body.includes('![')) {
+      const local = new Map(
+        taskImageReferences(body)
+          .filter((ref) => localTaskImagePath(ref.url))
+          .map((ref) => [ref.url, ref.url] as const),
+      );
+      if (local.size > 0) body = rewriteTaskImageReferences(body, local, 'alt');
+    }
+    // A partial component can legitimately project to nothing. Never fall back
+    // to its protocol source; wait while streaming and explain an unreadable final.
+    return final && !body.trim() && hasRichAnswer(source) ? t('richAnswer.incomplete') : body;
   }
 
   /** tool_use → 过程区时间线推进 + 卡片刷新(渠道 handle 自带节流兜底)。 */
@@ -2987,7 +3011,7 @@ export function createTurnRunner(
   /** 转播卡正文:运行中 = 头 + 步骤时间线 + 正文;收口 = 头 + 正文(去步骤)。 */
   function composeTranspondView(state: SessionState, t: ScheduledTranspond, final: boolean): string {
     const header = t.header;
-    const publicBody = stripInternalWebCitations(t.buffer);
+    const publicBody = composeOutboundBody(t.buffer, final);
     // Rich transports resolve managed refs themselves. A remote session's refs
     // must stay text, never reach those host-local file/media resolvers.
     const body = state.makerSession.remoteHostId
@@ -3188,15 +3212,21 @@ export function createTurnRunner(
         return;
       }
       if (silenced && !t.streamingHandlePromise) return;
-      if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && t.buffer.includes('![')) {
+      // Component images become Markdown only after projection. Collect from the
+      // outbound copy so the text channel cannot strip an uncollected image.
+      const projectedBody = composeOutboundBody(t.buffer, true);
+      if (output.kind === 'chunked-text' && !state.makerSession.remoteHostId && projectedBody.includes('![')) {
         const materialized = await materializeLocalMarkdownImages({
-          text: t.buffer, workingDir: state.workingDir, sessionId: state.makerSession.id,
+          text: projectedBody, workingDir: state.workingDir, sessionId: state.makerSession.id,
           maxImages: 4, existingAbsPaths: t.mediaAbsPaths,
         });
         t.buffer = materialized.text;
         for (const absPath of materialized.absPaths) {
           if (!t.mediaAbsPaths.includes(absPath)) t.mediaAbsPaths.push(absPath);
         }
+      } else if (output.kind === 'rich-card' && !state.makerSession.remoteHostId && projectedBody.includes('![')) {
+        t.buffer = await materializeLocalMarkdownImageRefs({ text: projectedBody, sessionId: state.makerSession.id })
+          .catch(() => projectedBody);
       }
       if (sessionStates.get(state.makerSession.id) !== state) return;
       const base = composeTranspondView(state, t, true);
@@ -3858,7 +3888,7 @@ export function createTurnRunner(
       } : undefined,
     );
     if (turn?.streamingHandle) {
-      const view = composeStreamingView(turn);
+      const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
     } else {
@@ -3895,16 +3925,19 @@ export function createTurnRunner(
   }
 
   async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
-    if (
-      output.kind !== 'chunked-text' ||
-      turn.allowedFileRoots.length === 0 ||
-      !turn.presenter.wholeText().includes('![')
-    ) {
-      return;
-    }
+    if (turn.allowedFileRoots.length === 0) return;
+    const projectedBody = composeOutboundBody(turn.presenter.wholeText(), true);
+    if (!projectedBody.includes('![')) return;
     try {
+      if (output.kind === 'rich-card') {
+        // Card channels upload managed references in place, keeping images beside their text.
+        turn.presenter.replaceBody(
+          await materializeLocalMarkdownImageRefs({ text: projectedBody, sessionId: state.makerSession.id }),
+        );
+        return;
+      }
       const materialized = await materializeLocalMarkdownImages({
-        text: turn.presenter.wholeText(),
+        text: projectedBody,
         workingDir: state.workingDir,
         sessionId: state.makerSession.id,
         maxImages: 4,

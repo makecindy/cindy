@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { encodeInvokeResultTransfer, InvokeResultCache } from '@cindy/device-link';
-import { desktopTransferCodec } from '../transferCodec';
+import { createCompressionStatsLog, desktopTransferCodec } from '../transferCodec';
 import { decodeGzipBase64TextBounded } from '../../../../../mobile/src/utils/gzipBase64';
 
 describe('desktop device-link transfer codec', () => {
@@ -32,5 +32,25 @@ describe('desktop device-link transfer codec', () => {
     const cjk = desktopTransferCodec.gzipBase64!('弱'.repeat(1_000));
     expect(desktopTransferCodec.gunzipBase64!(cjk, 1_000)).toHaveLength(1_000);
     expect(() => desktopTransferCodec.gunzipBase64!(cjk, 999)).toThrow();
+  });
+
+  // Log-noise regression: one DEBUG line per compressed reply (~16k/day) becomes one
+  // windowed summary; a slow synchronous compression is still reported on its own.
+  it('aggregates compression stats per window and reports slow calls immediately', () => {
+    const emit = vi.fn();
+    let now = 0;
+    const record = createCompressionStatsLog(emit, () => now, 1_000);
+    const stats = { originalBytes: 10_000, gzipBytes: 1_000, wireBytes: 1_336, compressionMs: 2 };
+    for (let i = 0; i < 100; i++) record(stats);
+    expect(emit).not.toHaveBeenCalled();
+    record({ ...stats, compressionMs: 150 });
+    expect(emit).toHaveBeenCalledExactlyOnceWith('gzip slow candidate', { ...stats, compressionMs: 150 });
+    now = 1_000;
+    record(stats);
+    expect(emit).toHaveBeenLastCalledWith('gzip summary', {
+      count: 101, originalBytes: 1_010_000, gzipBytes: 101_000, wireBytes: 134_936,
+      compressionMs: 350, maxCompressionMs: 150, elapsedMs: 1_000,
+    });
+    expect(emit).toHaveBeenCalledTimes(2);
   });
 });

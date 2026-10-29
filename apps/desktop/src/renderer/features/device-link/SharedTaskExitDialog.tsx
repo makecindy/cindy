@@ -8,6 +8,7 @@ import { toast } from '@/lib/toast';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { sharedTaskErrorKey } from './sharedTaskCompatibility';
 import { closeOwnedSharedTask } from './closeOwnedSharedTask';
+import { notifySharedTaskMembershipChanged } from './useSharedTaskTasks';
 
 export type SharedTaskExitTarget =
   | { kind: 'close'; sharedTaskId: string; title: string; hostDeviceId?: string }
@@ -41,6 +42,8 @@ export function SharedTaskExitDialog({ target, onDismiss, onComplete }: {
     try {
       if (target.kind === 'leave') {
         await window.electronAPI.sharedTask.account({ action: 'leave', sharedTaskId: target.sharedTaskId });
+        // A directory read already in flight may still list it; reread after.
+        notifySharedTaskMembershipChanged();
       } else {
         const closed = await closeOwnedSharedTask(target.sharedTaskId, target.hostDeviceId, current);
         if (!current()) return;

@@ -1138,11 +1138,11 @@ export function LoginScreen({
           y={LOGIN_LOADING_RING.yBrowser}
         />
         <LoginPrimaryButton
-          disabled={auth.isBusy}
           label={loginText('cancel')}
           onPress={reset}
           testID="login.cancelBrowserButton"
         />
+        {errorNode}
       </LoginPanel>
     );
   };

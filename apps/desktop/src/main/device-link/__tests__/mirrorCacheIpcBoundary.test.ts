@@ -10,10 +10,15 @@
  * 之后,拦住就再也清不掉上一个账号的缓存。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
+  ownerGeneration: 1,
+  invalidations: new Set<() => void>(),
+  senderDestroyed: false,
+  selectFile: vi.fn(),
   canUseDeviceLink: true,
   diagnosticsInfo: vi.fn(),
   quitHandlers: new Map<string, { fn: () => void; phase: string }>(),
@@ -37,6 +42,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  BrowserWindow: { fromWebContents: () => ({ isDestroyed: () => false }) },
+  dialog: { showOpenDialog: h.selectFile },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
@@ -53,9 +60,13 @@ vi.mock('../../lifecycle', () => ({
 }));
 // 读路径要比对 owner 作用域路径(账号边界复核),这里给个稳定值即可。
 vi.mock('../../appSessionState', () => ({
+  onAppSessionInvalidated: (cancel: () => void) => { h.invalidations.add(cancel); return () => h.invalidations.delete(cancel); },
+  getActiveAppSession: () => ({ dataOwnerId: 'owner-x', generation: h.ownerGeneration, mode: 'cloud' }),
+  isAppSessionBoundaryPending: () => false,
   activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
+vi.mock('../../i18n', () => ({ t: (key: string) => key }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
@@ -158,6 +169,8 @@ vi.mock('../subscriptionRefcount', () => ({
 
 import { DEVICE_LINK_INVOKE } from '../../../shared/deviceLinkIpc';
 import { registerDeviceLinkIpc } from '../ipc';
+import { readWithSourceFileAccessRecovery, sourceFileAccessTransferOptions, onSourceFileAccessDiscard } from '../sourceFileAccessRecovery';
+import { rewriteOutboundMedia } from '../outboundMedia';
 import { DeviceLinkError, REMOTE_INVOKE_ALLOWLIST } from '@cindy/device-link';
 import { DESKTOP_LOCAL } from '../../../shared/remoteDesktop';
 import {
@@ -169,7 +182,12 @@ import {
 } from '../index';
 import { setDeviceControlEnabled } from '../settings-store';
 
-const EVENT = { sender: { id: 42 } } as Electron.IpcMainInvokeEvent;
+const senderEvents = new EventEmitter();
+const FRAME = { detached: false };
+const EVENT = {
+  sender: Object.assign(senderEvents, { id: 42, isDestroyed: () => h.senderDestroyed, mainFrame: FRAME }),
+  senderFrame: FRAME,
+} as unknown as Electron.IpcMainInvokeEvent;
 
 /** 五个 channel 与一份能过运行期校验的最小 payload。 */
 const MIRROR_CACHE_CALLS: Array<[string, unknown]> = [
@@ -195,11 +213,139 @@ async function call(channel: string, payload: unknown): Promise<unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(remoteInvoke).mockReset();
+  vi.mocked(rewriteOutboundMedia).mockReset().mockImplementation(async (_channel, args) => args);
+  h.selectFile.mockReset();
+  senderEvents.removeAllListeners();
+  h.invalidations.clear();
   h.handlers.clear();
   h.quitHandlers.clear();
   h.trusted = true;
+  h.ownerGeneration = 1;
+  h.senderDestroyed = false;
   h.canUseDeviceLink = true;
   registerDeviceLinkIpc();
+});
+
+// #6530 native recovery is installed only by the trusted foreground send adapter.
+// The real rewrite/read boundary is covered in outboundMedia.test.ts; here the
+// observable contract is exactly one final message, or none on cancellation/staleness.
+describe('attachment access confirmation IPC', () => {
+  const source = '/private/wechat/test.pdf';
+  const payload = { deviceId: 'receiver', channel: 'maker:send', args: ['session', { content: [] }] };
+  const denied = () => Object.assign(new Error('source denied'), { code: 'EPERM', syscall: 'open', path: source });
+  function installReadFailure() {
+    const read = vi.fn().mockRejectedValueOnce(denied()).mockResolvedValue('uploaded-ref');
+    vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async (_channel, args) => {
+      const ref = await readWithSourceFileAccessRecovery(source, read);
+      return [args[0], { content: [{ type: 'file', path: ref }] }];
+    });
+    return read;
+  }
+
+  it('continues the original send exactly once after selecting its source', async () => {
+    const read = installReadFailure();
+    h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
+    vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: 'accepted' });
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).resolves.toBe('accepted');
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(h.selectFile).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ defaultPath: source, properties: ['openFile'] }));
+    expect(remoteInvoke).toHaveBeenCalledOnce();
+    expect(vi.mocked(remoteInvoke).mock.calls[0][2]).toEqual(['session', { content: [{ type: 'file', path: 'uploaded-ref' }] }]);
+  });
+
+  it('keeps uploaded bytes when a dispatched message has an uncertain result', async () => {
+    const discard = vi.fn();
+    vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async (_channel, args) => {
+      onSourceFileAccessDiscard(discard);
+      return args;
+    });
+    vi.mocked(remoteInvoke).mockRejectedValueOnce(new DeviceLinkError('INVOKE_TIMEOUT', 'uncertain'));
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow();
+    expect(remoteInvoke).toHaveBeenCalledOnce();
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('queue content edits recover only in the foreground (background=%s)', async background => {
+    const read = installReadFailure();
+    h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
+    vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: { sessionId: 'session', pendingQueue: [{ clientId: 'queued', files: [] }] } });
+    vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: 'updated' });
+    const edited = { ...payload, channel: 'maker:input:update-content', args: ['session', 'queued', { files: [{ path: source }] }], scheduling: { background } };
+    if (background) {
+      await expect(call(DEVICE_LINK_INVOKE.INVOKE, edited)).rejects.toThrow();
+      expect(h.selectFile).not.toHaveBeenCalled();
+      expect(read).toHaveBeenCalledOnce();
+      expect(remoteInvoke).toHaveBeenCalledOnce();
+    } else {
+      await expect(call(DEVICE_LINK_INVOKE.INVOKE, edited)).resolves.toBe('updated');
+      expect(h.selectFile).toHaveBeenCalledOnce();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(remoteInvoke).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(remoteInvoke).mock.calls[1][1]).toBe('maker:input:update-content');
+    }
+  });
+
+  it.each(['owner', 'window', 'navigation'])('cancels the confirmed upload immediately on %s invalidation', async invalidation => {
+    let attempts = 0;
+    const read = vi.fn(async () => {
+      if (++attempts === 1) throw denied();
+      const { signal } = sourceFileAccessTransferOptions();
+      expect(signal).toBeDefined();
+      const cancelled = new Promise<never>((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('UPLOAD_CANCELLED')), { once: true }));
+      if (invalidation === 'owner') {
+        h.ownerGeneration++;
+        for (const cancel of h.invalidations) cancel();
+      } else if (invalidation === 'window') senderEvents.emit('destroyed');
+      else senderEvents.emit('did-start-navigation', {}, 'https://other.test', false, true);
+      expect(signal!.aborted).toBe(true);
+      return cancelled;
+    });
+    vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async () => { await readWithSourceFileAccessRecovery(source, read); return []; });
+    h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('PERMISSION_DENIED');
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(remoteInvoke).not.toHaveBeenCalled();
+    expect(h.invalidations.size).toBe(0);
+    expect(senderEvents.listenerCount('destroyed')).toBe(0);
+    expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+  });
+
+  it.each(['cancel', 'wrong-file', 'owner-change', 'window-closed', 'page-changed'])('does not dispatch after %s', async outcome => {
+    const read = installReadFailure();
+    h.selectFile.mockImplementationOnce(async () => {
+      if (outcome === 'owner-change') h.ownerGeneration++;
+      if (outcome === 'window-closed') h.senderDestroyed = true;
+      if (outcome === 'page-changed') h.trusted = false;
+      return { canceled: outcome === 'cancel', filePaths: [outcome === 'wrong-file' ? '/private/other.pdf' : source] };
+    });
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow();
+    expect(read).toHaveBeenCalledOnce();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects an untrusted sender before opening a picker or forwarding', async () => {
+    h.trusted = false;
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('PERMISSION_DENIED');
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps background sends noninteractive', async () => {
+    const read = installReadFailure();
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, { ...payload, scheduling: { background: true } })).rejects.toThrow();
+    expect(read).toHaveBeenCalledOnce();
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+});
+
+it('rejects Renderer-supplied remote Skill approval before forwarding any request', async () => {
+  await expect(call(DEVICE_LINK_INVOKE.INVOKE, {
+    deviceId: 'private-peer', channel: 'maker:remote-resources:invoke',
+    args: [{ collectionId: 'skills', actionId: 'management:answer', input: { accepted: true } }],
+  })).rejects.toThrow('PERMISSION_DENIED');
+  expect(remoteInvoke).not.toHaveBeenCalled();
 });
 
 it.each([1_000, 30_000])('flushes completed calls on quit after %i ms without duplicate summaries', async (elapsed) => {
@@ -214,10 +360,10 @@ it.each([1_000, 30_000])('flushes completed calls on quit after %i ms without du
     const quit = h.quitHandlers.get('device-link-ipc-diagnostics');
     expect(quit?.phase).toBe('sync');
     quit!.fn();
-    const summaries = h.diagnosticsInfo.mock.calls.filter(([event]) => event === 'transport summary');
-    expect(summaries).toHaveLength(2);
-    expect(summaries.map(([, fields]) => [fields.code, fields.completed])).toEqual([
-      ['OK', 1], ['NOT_CONNECTED', 1],
+    const summaries = h.diagnosticsInfo.mock.calls.filter(([event]) => event.startsWith('transport summary'));
+    // Failing buckets stay per bucket; successes fold into one baseline line.
+    expect(summaries.map(([event, fields]) => [event, fields.code, fields.completed])).toEqual([
+      ['transport summary', 'NOT_CONNECTED', 1], ['transport summary ok', undefined, 1],
     ]);
     const count = h.diagnosticsInfo.mock.calls.length;
     quit!.fn();

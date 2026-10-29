@@ -40,7 +40,7 @@ export interface CodexRateLimitResetServiceDeps {
 /** Read/consume façade exposed to IPC; one instance owns the bounded offer registry. */
 export interface CodexRateLimitResetService {
   read(): Promise<MobileCodexRateLimitsResult>;
-  consume(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
+  consume(idempotencyKey: string, stillAuthorized?: () => boolean): Promise<MobileCodexRateLimitResetResult>;
 }
 
 export type CodexRateLimitResetRejection = 'OFFER_EXPIRED' | 'ACCOUNT_CHANGED' | 'RESET_IN_PROGRESS';
@@ -344,7 +344,7 @@ export function createCodexRateLimitResetService(
     };
   };
 
-  const consume = async (idempotencyKey: string): Promise<MobileCodexRateLimitResetResult> => {
+  const consume = async (idempotencyKey: string, stillAuthorized?: () => boolean): Promise<MobileCodexRateLimitResetResult> => {
     pruneOffers();
     const offer = offers.get(idempotencyKey);
     if (!offer) {
@@ -383,6 +383,9 @@ export function createCodexRateLimitResetService(
       }
       // From this point a transport failure is ambiguous: the backend may have consumed the
       // credit. Every later read/retry must keep this exact key + credit selection.
+      if (stillAuthorized && !stillAuthorized()) {
+        throw new CodexRateLimitResetRejectedError('OFFER_EXPIRED', 'Automatic reset settings changed');
+      }
       offer.attempted = true;
       const response = await deps.consumeResetCredit({
         idempotencyKey,

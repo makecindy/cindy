@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { PROVIDER_TITLE_KEY } from '@/lib/providerDisplayName';
+import { PROVIDER_TITLE_KEY, providerDisplayName } from '@/lib/providerDisplayName';
 import { decodeCatalogModelPin } from '../../shared/catalogModelPin';
 
 /** 主侧下发的目录钉条目(与 TextOneshotPinOption 同形;系统辅助模型设置使用)。 */
@@ -93,8 +93,9 @@ export function OneshotModelPinPicker({
   const route = current ?? (decoded ? { ...decoded, modelId: decoded.model } : null);
   const providers = useMemo(() => oneshotPickerProviders(options).map((provider) => ({
     ...provider,
-    name: groupByProvider && PROVIDER_TITLE_KEY[provider.id]
-      ? t(PROVIDER_TITLE_KEY[provider.id]!) : provider.name,
+    name: provider.id === 'xd' ? providerDisplayName(provider, t)
+      : groupByProvider && PROVIDER_TITLE_KEY[provider.id]
+        ? t(PROVIDER_TITLE_KEY[provider.id]!) : provider.name,
   })), [options, groupByProvider, t]);
   const currentAgent = route && knownAgent(route.agentKind) ? route.agentKind : undefined;
   const vendor = currentAgent === 'claude-code' ? 'cc' : currentAgent;

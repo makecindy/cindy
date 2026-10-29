@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Stethoscope } from 'lucide-react-native';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { Text } from '@/components/AppText';
+import { ErrorNoticeAction } from '@/components/ErrorNotice';
 import {
   iconSize,
   iconStroke,
@@ -18,9 +19,12 @@ import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 export function AgentErrorDetails({
   message,
   actions,
+  onDiagnose,
 }: {
   message: string;
   actions?: ReactNode;
+  /** Offered only after the user expands details; the caller decides where diagnosis happens. */
+  onDiagnose?: () => void;
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -63,6 +67,21 @@ export function AgentErrorDetails({
             )}
           </Text>
         </Pressable>
+        {expanded && onDiagnose ? (
+          <ErrorNoticeAction
+            label={t('session.tail.diagnose')}
+            hint={t('session.tail.diagnoseHint')}
+            icon={
+              <Stethoscope
+                color={colors.textPrimary}
+                size={iconSize.sm}
+                strokeWidth={iconStroke.regular}
+              />
+            }
+            onPress={onDiagnose}
+            testID="agentError.diagnose"
+          />
+        ) : null}
       </View>
       {expanded ? (
         <Text selectable style={styles.detail}>

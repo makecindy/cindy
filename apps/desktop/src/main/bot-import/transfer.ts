@@ -11,6 +11,8 @@ import { resolveImportEnvironmentDependencies, selectedImportEnvironment } from 
 import type { ImportBotRecord } from './botTakeover.js';
 
 export interface ImportReceipt {
+  nativePackage?: import('../../shared/botMarket.js').BotPackageIdentity & { locale?: string;
+    opening?: import('../../shared/botMarket.js').BotPackageOpening };
   selectionHash: string;
   /** Present on receipts whose identity includes the original setup choice. */
   deferSetup?: boolean;
@@ -46,7 +48,7 @@ export interface TransferDeps {
   importItem(botId: string, item: ImportItem, snapshot: ImportSnapshot): Promise<void>;
   saveEnvironment(botId: string, items: ImportItem[]): Promise<void>;
   saveCheckpoint(botId: string, items: ImportItem[]): Promise<void>;
-  createConversation(botId: string): Promise<string>;
+  createConversation(botId: string): Promise<string | undefined>;
   createRoutine(botId: string, input: RoutineInput, creationId: string, item: ImportItem): Promise<string>;
   /** Success requires actual read evidence from the target environment, not just presence of keys. */
   verifyAutomation(botId: string, item: ImportItem): Promise<{ verified: boolean; reason?: string }>;
@@ -154,6 +156,8 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   const receipt: ImportReceipt = existing ?? { selectionHash, handoverMarkers: true, copied: [], routines: {}, result: {
     requestId: selection.requestId, botId: `import_${fingerprint(selection.requestId).slice(0, 24)}`, status: 'running', checks: [],
   } };
+  // A checkpoint resumes its original package; a pre-checkpoint restart adopts the package it will actually save.
+  if (snapshot.nativePackage) receipt.nativePackage = snapshot.nativePackage;
   receipt.selectionHash = selectionHash;
   receipt.deferSetup = selection.deferSetup === true;
   const botId = receipt.result.botId;

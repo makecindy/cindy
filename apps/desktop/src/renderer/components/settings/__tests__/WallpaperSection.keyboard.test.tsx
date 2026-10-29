@@ -102,13 +102,29 @@ describe('wallpaper keyboard navigation', () => {
     expect(document.activeElement).toBe(tile('dune-dawn'));
   });
 
-  it('offers the first tile for a hidden saved selection without rewriting that preference', async () => {
-    saved.wallpaperId = 'blue-gaze';
+  it('shows a retired saved selection as the second tile without rewriting that preference', async () => {
+    saved.wallpaperId = 'cindy-window';
     view();
-    expect(tabStops()).toEqual([tile('none')]);
-    act(() => tile('none').focus());
-    expect(saved.wallpaperId).toBe('blue-gaze');
+    expect(options().map((o) => o.getAttribute('aria-label')).slice(0, 3)).toEqual([
+      'settings.appearance.wallpaper.options.none',
+      'settings.appearance.wallpaper.options.cindy-window',
+      'settings.appearance.wallpaper.options.cindy-whisper',
+    ]);
+    expect(tabStops()).toEqual([tile('cindy-window')]);
+    expect(tile('cindy-window').getAttribute('aria-checked')).toBe('true');
     expect(setPatch).not.toHaveBeenCalled();
+  });
+
+  it('drops the retired tile once the user switches away from it', async () => {
+    const user = userEvent.setup();
+    saved.wallpaperId = 'cindy-window';
+    view();
+    act(() => tile('cindy-window').focus());
+    await user.keyboard('{ArrowRight}');
+    await expectSelected('cindy-whisper');
+    expect(screen.queryByRole('radio', { name: /cindy-window$/ })).toBeNull();
+    expect(document.activeElement).toBe(tile('cindy-whisper'));
+    expect(tabStops()).toEqual([tile('cindy-whisper')]);
   });
 
   it('moves focus and selection with all four arrows and Home', async () => {
@@ -116,11 +132,11 @@ describe('wallpaper keyboard navigation', () => {
     view();
     act(() => tile('none').focus());
     await user.keyboard('{ArrowRight}');
-    await expectSelected('cindy-window');
+    await expectSelected('cindy-whisper');
     await user.keyboard('{ArrowDown}');
-    await expectSelected('cindy-studio');
+    await expectSelected('cindy-night-glance');
     await user.keyboard('{ArrowLeft}');
-    await expectSelected('cindy-window');
+    await expectSelected('cindy-whisper');
     await user.keyboard('{ArrowUp}');
     await expectSelected('none');
     await user.keyboard('{ArrowRight}{Home}');
@@ -175,16 +191,16 @@ describe('wallpaper keyboard navigation', () => {
 
   it('honors RTL for horizontal keys without reversing vertical navigation', async () => {
     const user = userEvent.setup();
-    saved.wallpaperId = 'cindy-window';
+    saved.wallpaperId = 'cindy-whisper';
     view();
     for (const button of options()) button.style.direction = 'rtl';
-    act(() => tile('cindy-window').focus());
+    act(() => tile('cindy-whisper').focus());
     await user.keyboard('{ArrowRight}');
     await expectSelected('none');
     await user.keyboard('{ArrowLeft}');
-    await expectSelected('cindy-window');
+    await expectSelected('cindy-whisper');
     await user.keyboard('{ArrowDown}');
-    await expectSelected('cindy-studio');
+    await expectSelected('cindy-night-glance');
   });
 
   it('keeps busy options out of the Tab order and ignores key presses while importing', async () => {

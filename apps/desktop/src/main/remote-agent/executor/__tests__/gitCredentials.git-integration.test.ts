@@ -61,7 +61,7 @@ async function requiresCredentialConfirmation(history: GitCredentialHistory, com
   try {
     expect(gate.authorize(action).ok, command).toBe(false);
     expect(await executor.confirm(action), command).toBe(false);
-    expect(confirm, command).toHaveBeenCalledExactlyOnceWith(action);
+    expect(confirm, command).toHaveBeenCalledExactlyOnceWith(action, expect.any(AbortSignal));
     expect(gate.authorize(action).ok, command).toBe(false);
   } finally {
     await executor.close();

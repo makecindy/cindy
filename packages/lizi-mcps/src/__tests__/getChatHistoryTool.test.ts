@@ -109,4 +109,30 @@ describe('get_chat_history role defaults', () => {
       rolesDefaulted: false,
     }));
   });
+
+  it('unwraps XML-style {item:[...]} folded session_ids and roles arrays', async () => {
+    // glm 兼容层把数组参数序列化成 <item> 重复标签(同 #6369/images 病),不得报 INVALID_ARGS。
+    const getMessages = vi.fn(async () => ({
+      ok: true as const,
+      page: { items: [], nextCursor: null, hasMore: false },
+    }));
+    const history = {
+      listWorkdirs: vi.fn(),
+      listSessions: vi.fn(),
+      getMessages,
+      searchChatHistory: vi.fn(),
+    } satisfies XdtHelperHistoryDeps;
+    const registry = new XdtHelperToolRegistry();
+    registerGetChatHistoryTool(registry, { history });
+
+    const result = await registry.call('get_chat_history', {
+      session_ids: { item: ['device-a::session-1'] },
+      roles: { item: ['ask_user'] },
+    });
+    expect(result.isError).toBeUndefined();
+    expect(getMessages).toHaveBeenLastCalledWith(expect.objectContaining({
+      roles: ['ask_user'],
+      rolesDefaulted: false,
+    }));
+  });
 });

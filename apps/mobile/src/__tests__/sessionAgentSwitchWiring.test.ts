@@ -11,7 +11,7 @@ describe('new task remote Agent wiring', () => {
     const source = readSource('app/sessions/new.tsx');
     // 被控电脑支持远程 Agent 时,模型列表接上其他电脑与分享的供应商;被控电脑支持给 Worker 选 Agent
     // 位置时协同草稿与之不互斥,旧被控电脑仍互斥。
-    expect(source).toContain('const remoteAgentCatalogs = useRemoteAgentCatalogs({');
+    expect(source).toContain('const { catalogs: remoteAgentCatalogs, settled: remoteAgentCatalogsSettled } = useRemoteAgentCatalogsWithStatus({');
     expect(source).toContain('...(remoteAgentSupported && (!collabDraft || workerAgentLocationSupported)');
     expect(source).toContain('catalogs: remoteAgentCatalogs,\n                selectedDeviceId: remoteAgentPick?.deviceId ?? null,');
     // 供应商组:组里其他电脑收进组那一项(按被控电脑的目录比)。
@@ -28,8 +28,9 @@ describe('new task remote Agent wiring', () => {
     expect(source.split('const runGuard = () => effectiveDraft.agentDeviceId ? Promise.resolve({')).toHaveLength(3);
     expect(source).toContain('confirmUnauthenticated: effectiveDraft.agentDeviceId');
     expect(source).toContain("agentAuthVerdict === 'unauthenticated' || remoteAgentPick");
-    // 恢复草稿时把 Agent 所在电脑拆回远程选择。
-    expect(source).toContain('const { agentDeviceId, ...recovered } = saved;');
+    // 恢复的远程位置拆分行为由 newSessionDraftRecovery.test.ts 直接调用生产
+    // restoreNewSessionDraft 覆盖；这里保留页面接入，防止恢复时漏掉被控电脑身份。
+    expect(source).toMatch(/restoreNewSessionDraft\(\s*\{\s*setRemoteAgentChoice,/);
   });
 });
 

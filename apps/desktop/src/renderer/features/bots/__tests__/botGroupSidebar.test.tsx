@@ -351,7 +351,7 @@ describe('TeammatesSection group chats', () => {
 
   it('lists groups alongside teammates with an author preview and opens them', async () => {
     mocks.groups = [group(), group({ id: 'g2', name: '读书会', lastMessage: null, updatedAt: 1 })];
-    mocks.params = { groupId: 'g1' };
+    mocks.pathname = '/bots/groups/g1';
     await renderSidebar();
     expect(screen.queryByText('bots.groupChat.sidebar.title')).toBeNull();
     const rows = screen.getAllByRole('button', { current: 'page' });
@@ -375,7 +375,7 @@ describe('TeammatesSection group chats', () => {
     expect(screen.queryByRole('button', { name: 'bots.groupChat.server.join' })).toBeNull();
     fireEvent.keyDown(screen.getByRole('button', { name: 'bots.list.createMenu' }), { key: 'Enter' });
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
+      'bots.market.heading', 'bots.list.createTeammate', 'bots.groupChat.create.title', 'bots.list.joinWithLink',
     ]);
     expect(screen.getAllByRole('separator')).toHaveLength(1);
     fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.joinWithLink' }));

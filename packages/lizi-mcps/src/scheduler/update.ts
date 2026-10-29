@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
+import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { stabilizePreRunHookForUpdate, type UpdateScheduleInput } from '@cindy/maker-scheduler';
@@ -23,7 +24,7 @@ export function registerScheduleUpdateTool(
     name: 'schedule_update',
     category: 'scheduler',
     description:
-      '修改一条定时任务的部分字段（patch 形态）。默认改本机的；其它电脑上的任务传 device（此时不支持 bindToCurrentSession，也不支持用 null 清空 intervalMs 以外的字段；改 preRunHook 必须显式带 timeoutMs（数值，或 null 表示不限时）；targetSessionId 可传该电脑的 deviceId::sessionId 或其本机 id，不能指向别的电脑）。改 cronExpr / timezone 时 nextFireAt 会自动重算。要暂停 / 恢复请用 schedule_pause / schedule_resume，不要直接 patch status。把任务改成跟进**当前对话**的 heartbeat 请传 bindToCurrentSession=true（代码自动绑定本会话,无需也不要自己查 / 传 session id）。' +
+      '修改一条定时任务的部分字段（patch 形态）。默认改本机的；其它电脑上的任务传 device（此时不支持 bindToCurrentSession；null 可清空 intervalMs，以及支持模型位置选择的目标电脑上的 modelAgentDeviceId / modelAgentKind / model / providerId / effort，其它字段暂不支持；改 preRunHook 必须显式带 timeoutMs（数值，或 null 表示不限时）；targetSessionId 可传该电脑的 deviceId::sessionId 或其本机 id，不能指向别的电脑）。改 cronExpr / timezone 时 nextFireAt 会自动重算。要暂停 / 恢复请用 schedule_pause / schedule_resume，不要直接 patch status。把任务改成跟进**当前对话**的 heartbeat 请传 bindToCurrentSession=true（代码自动绑定本会话,无需也不要自己查 / 传 session id）。' +
       '**目标值缺失时先问用户，禁止盲猜**：用户指令模糊（如"改一下时间"没说改到几点、"换个模型"没说换哪个）时，先用 AskUserQuestion（或一句话追问）确认目标值再 patch；只改用户点名的字段，不要顺手"优化"其它字段。',
     inputShape: {
       id: z.string().min(1).describe('Schedule id'),
@@ -40,6 +41,9 @@ export function registerScheduleUpdateTool(
       timezone: z.string().min(1).optional(),
       recurring: z.boolean().optional(),
       agentKind: z.enum(AGENT_KIND).optional(),
+      modelAgentKind: z.enum(AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖'),
+      fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；省略不修改'),
+      modelAgentDeviceId: z.string().nullable().optional().describe('模型运行位置：远程或分享供应商的 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），null=恢复沿用绑定任务及首次新建的 agentDeviceId 默认位置，省略=不修改。远程选择须同时指定 modelAgentKind、model、providerId；绑定任务或持续模式切回本机也须有 modelAgentKind 和 model，可沿用已保存的完整选择'),
       kind: z.literal('cron').optional(),
       model: z
         .string()
@@ -51,6 +55,12 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('传 null = 清空(同 model 一起回到默认路由);省略 = 不修改。'),
+      agentDeviceId: z
+        .string()
+        .min(1)
+        .nullable()
+        .optional()
+        .describe('每次新建任务时 Agent 的运行位置，语义见 schedule_create 同名字段（schedule_list_models 查位置与模型）。传 null 或 "local" = 回到本机；省略 = 不修改，但本次改了 agentKind / model / providerId 时会回到本机（来源与位置成对），要留在原处须一并重传。仅本机定时任务可设。'),
       effort: z
         .enum(EFFORT)
         .nullable()
@@ -138,8 +148,11 @@ export function registerScheduleUpdateTool(
             // 语义相反;先读后写又会覆盖别处同时改的超时。要求调用方显式给出:数值或
             // null(不限时),由一次写入完成。
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
-          : Object.entries(patch).some(([key, value]) => value === null && key !== 'intervalMs')
-            ? '其它电脑上的定时任务暂不支持用 null 清空 intervalMs 以外的字段'
+          : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
+            ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
+          : Object.entries(patch).some(([key, value]) => value === null
+              && !['intervalMs', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+            ? '其它电脑上的定时任务只支持用 null 清空间隔和模型选择字段'
             : null;
         if (unsupported) {
           return buildJsonResult(
@@ -157,6 +170,7 @@ export function registerScheduleUpdateTool(
         }
         const hook = patch.preRunHook as { command: string; timeoutMs?: number | null } | undefined;
         // 不限时在对方入口的表达就是不带 timeoutMs 的整对象。
+        // Model-selection nulls must survive JSON; the receiving IPC clears them.
         const remotePatch = hook?.timeoutMs === null
           ? { ...patch, preRunHook: { command: hook.command } }
           : patch;
@@ -184,7 +198,11 @@ export function registerScheduleUpdateTool(
         // undefined(storage 按 hasOwnProperty 判定 → 清列 NULL)。此前 schema 只收
         // string,agent 想把任务从一个引擎的模型路由上摘下来(如伙伴接管期用 Codex
         // 模型跑过、再改回 Claude Code)只能报 INVALID_ARGS,陈旧路由永远清不掉。
-        for (const key of ['model', 'providerId', 'effort', 'workingDir'] as const) {
+        const agentDeviceId = (patch as { agentDeviceId?: string | null }).agentDeviceId;
+        if (agentDeviceId === null || agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
+          input = { ...input, agentDeviceId: undefined };
+        }
+        for (const key of ['model', 'providerId', 'effort', 'workingDir', 'modelAgentKind', 'modelAgentDeviceId'] as const) {
           if ((patch as Record<string, unknown>)[key] === null) {
             input = { ...input, [key]: undefined };
           }

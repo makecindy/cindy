@@ -1,13 +1,23 @@
 {
   "id": "jd-item",
-  "match": ["jd.com"],
-  "description": "读取京东某个商品的详情(标题、价格、店铺、规格参数、商品主图)。京东商品页要登录态才完整展示、且价格/详情图是滚动懒加载的,所以先 navigate 到商品页、滚动触发加载,再在页面内抓 DOM。sku 是商品 SKU id(商品 URL item.jd.com/<sku>.html 里的数字)。需要先在持久浏览器登录京东。",
-  "inputs": { "sku": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://item.jd.com/{{sku}}.html" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "evaluate", "as": "scroll", "fn": "async () => { for (let i = 1; i <= 6; i++) { window.scrollTo(0, i * 2500); await new Promise(r => setTimeout(r, 700)); } window.scrollTo(0, document.body.scrollHeight); await new Promise(r => setTimeout(r, 1200)); return true; }" },
-    { "action": "evaluate", "as": "item", "fn": "() => { const m = location.pathname.match(/(\\d+)\\.html/); const sku = m ? m[1] : ''; const txt = el => (el && el.textContent ? el.textContent.trim() : ''); const priceEl = document.querySelector('.J-p-' + sku) || document.querySelector('.p-price strong') || document.querySelector('[class*=\"price\"] [class*=\"num\"]'); const price = txt(priceEl) || '未获取到价格(可能需登录或未触发加载)'; const title = txt(document.querySelector('.sku-name')) || txt(document.querySelector('.product-title')) || (document.title.split('-')[0] || '').trim(); const shop = txt(document.querySelector('.J-shop-name')) || txt(document.querySelector('[class*=\"shop\"] a')) || '京东自营'; const imgs = Array.from(document.querySelectorAll('img[src*=\"360buyimg.com\"]')).map(im => im.src).filter(Boolean); const images = [...new Set(imgs)].slice(0, 10); const specs = {}; const text = document.body.innerText || ''; const sm = text.match(/商品编号[\\s\\S]*?(?=包装清单|售后保障|$)/); if (sm) { const lines = sm[0].split('\\n').map(l => l.trim()).filter(Boolean); for (let i = 0; i < lines.length - 1; i += 2) { const k = lines[i]; const v = lines[i + 1]; if (k && v && k !== '商品编号') specs[k] = v; } } return { sku, title, price, shop, specs, images, totalImages: [...new Set(imgs)].length }; }" }
+  "match": [
+    "jd.com"
   ],
-  "output": "{{item}}"
+  "description": "京东商品详情（价格、店铺、规格参数、主图、详情图）",
+  "access": "read",
+  "adapter": "jd/item",
+  "inputs": {
+    "sku": {
+      "required": true,
+      "type": "str",
+      "description": "商品 SKU ID（如 100291143898）"
+    },
+    "images": {
+      "required": false,
+      "type": "int",
+      "default": 200,
+      "description": "图片数量上限（默认200）"
+    }
+  },
+  "steps": []
 }

@@ -43,6 +43,17 @@ describe('capToolResultTextForPersist', () => {
     expect(capped.length).toBeLessThanOrEqual(100);
     expect(capped.endsWith(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)).toBe(true);
   });
+
+  // Long HTML draft read-backs used to lose their trailing card ID at 8KB.
+  // Check the actual persistence entry point, including phone byte budgets.
+  it('preserves card references as valid bounded JSON when the body is oversized', () => {
+    const input = JSON.stringify({ ok: true, result: { bodyHtml: '你好\\"😀'.repeat(4000) },
+      xdt_card_id: 'draft-card', xdt_anchor_card_id: 'original-card' });
+    const stored = capToolResultTextForPersist(input);
+    expect(JSON.parse(stored)).toMatchObject({ ok: true, xdt_card_id: 'draft-card', xdt_anchor_card_id: 'original-card' });
+    expect(new TextEncoder().encode(stored).length).toBeLessThanOrEqual(8192);
+    expect(capToolResultTextForPersist(stored)).toBe(stored);
+  });
 });
 
 describe('capImportedToolResultContent', () => {

@@ -352,6 +352,72 @@ describe("native media overlay", () => {
 });
 
 describe("remote desktop viewport", () => {
+  // Unit: Duo folded-pad jitter (2026-10-23). Existing nativeTouchpad coverage
+  // sends no host cursor feedback. Interleave delayed native cursor packets with
+  // a held lower-screen gesture, including its first cursor packet and a pause.
+  it.each(['touch', 'pointer'])('keeps folded-pad motion local across delayed host feedback in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const hostCursor = (x: number) => v.send({ type: 'nativeCursor', epoch: 'fold', cursor: {
+      x, y: 0.5, visible: true, width: 16, height: 16, hotX: 0, hotY: 0, png: 'iVBORw0KGgo=',
+    } });
+    const moves = () => v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move');
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.7, y: 0.5 });
+    // A resting finger still owns the gesture beyond the 200ms echo grace.
+    v.frame(1000); hostCursor(0.3);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.8), y: 0.5 });
+    // Lifting after a long pause gets a fresh echo grace, not the last move's.
+    v.frame(1000);
+    v.send({ type: 'nativeTouchpad', phase: 'end' });
+    v.frame(199);
+    hostCursor(0.3);
+    expect(parseFloat(v.elements.cursor.style.left)).toBeCloseTo(640);
+    v.frame(2); hostCursor(0.4);
+    v.send({ type: 'nativeTouchpad', phase: 'start' });
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush(); v.ack();
+    expect(moves().at(-1)).toMatchObject({ x: 0.5, y: 0.5 });
+    v.send({ type: 'releaseInput' }); v.ack();
+    v.frame(201); hostCursor(0.2);
+    v.send({ type: 'nativeTouchpad', dx: 80, dy: 0 });
+    v.flush();
+    expect(moves().at(-1)).toMatchObject({ x: expect.closeTo(0.3), y: 0.5 });
+  });
+  // Unit: PR #6902 edge drift. Existing motion tests stay in the viewport center;
+  // a second contact at the desktop edge must apply only its relative delta.
+  it.each(['touch', 'pointer'])('keeps repeated folded-pad strokes at the desktop edge in %s mode', (mode) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: 'init', epoch: 'fold', width: 1600, height: 800 });
+    v.send({ type: 'mode', mode });
+    v.send({ type: 'control', enabled: true });
+    v.send({ type: 'mouseButtons', native: true, enabled: true });
+    const move = (dx: number) => {
+      v.send({ type: 'nativeTouchpad', phase: 'start' });
+      v.send({ type: 'nativeTouchpad', dx, dy: 0 });
+      v.flush(); v.ack();
+      v.send({ type: 'nativeTouchpad', phase: 'end' });
+      return v.messages.flatMap(m => m.events ?? []).filter(e => e.kind === 'move').at(-1);
+    };
+    expect(move(-400)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(-1)).toMatchObject({ x: 0, y: 0.5 });
+    expect(move(800)).toMatchObject({ x: 1, y: 0.5 });
+    expect(move(1)).toMatchObject({ x: 1, y: 0.5 });
+  });
   it('maps lower-pane relative motion against the upper video viewport and rejects invalid input', () => {
     const v = viewer();
     v.elements.stage.clientWidth = 800;

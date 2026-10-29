@@ -27,8 +27,9 @@ import { Text } from '@/components/AppText';
 import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
+import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { describeNonRetryableAgentError, localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -48,9 +49,13 @@ export interface InlineQueueSectionProps {
   readOnlyReason?: string | null;
   onResume(): void;
   onRetryError(): void;
+  /** 无重发记录时，沿用隐藏续跑指令；有记录仍优先按原记录重试。 */
+  onContinueAfterError?(): void;
   onClearError(): void;
   /** 取消账号限额重置后的自动继续(只在投影带 usageLimitWait 时出现)。 */
   onCancelUsageLimitWait?(): void;
+  /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
+  onDiagnose?(error: ErrorDiagnosisSource): void;
 }
 
 export function InlineQueueSection({
@@ -61,8 +66,10 @@ export function InlineQueueSection({
   readOnlyReason,
   onResume,
   onRetryError,
+  onContinueAfterError,
   onClearError,
   onCancelUsageLimitWait,
+  onDiagnose,
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -77,9 +84,12 @@ export function InlineQueueSection({
   const controlsDisabled = busy || !!readOnlyReason;
   const errorDisabledReason = readOnlyReason
     || (busy ? t('message.queuePresentation.row.busy') : null);
-  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '');
+  // Keep token-based retries on their existing path; hidden continuation uses
+  // the same exclusions as the persisted-tail continuation action.
+  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '')
+    && (!!projection.errorRetryText || describeNonRetryableAgentError(projection.error ?? '') === null);
   const retryDisabledReason = errorDisabledReason
-    || (!projection.errorRetryText ? t('message.queue.noRetryContent') : null);
+    || (!projection.errorRetryText && !onContinueAfterError ? t('message.queue.noRetryContent') : null);
   const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
@@ -112,14 +122,20 @@ export function InlineQueueSection({
           dismissBusy={busy}
           dismissHint={errorDisabledReason ?? undefined}
         >
-          <AgentErrorDetails message={projection.error} actions={<>
+          <AgentErrorDetails message={projection.error} onDiagnose={onDiagnose
+            ? () => onDiagnose({
+              message: projectionError ?? '',
+              details: projection.error ?? '',
+              reason: projection.errorReason,
+            })
+            : undefined} actions={<>
             {retryable ? <ErrorNoticeAction
               primary
               disabled={!!retryDisabledReason}
               busy={busy}
               hint={retryDisabledReason ?? undefined}
               label={t('message.queue.retrySend')}
-              onPress={onRetryError}
+              onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
             /> : null}
             {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={busy} disabled={controlsDisabled} /> : null}

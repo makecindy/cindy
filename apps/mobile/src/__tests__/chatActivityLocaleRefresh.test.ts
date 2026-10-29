@@ -83,7 +83,7 @@ describe('message activity wording refreshes with app language', () => {
     const Text = ({ children }: { children?: ReactNode }) => createElement('span', null, children);
     const Block = memo(({ render }: { render: (block: unknown, leadingGap: boolean) => ReturnType<typeof createElement> }) => createElement('output', null, render(block, false)));
     const code = component('renderInline').getText(source) + '; return function Harness() {'
-      + statements('MarkdownBody', ['renderInlines', 'renderTextRunBlock'])
+      + statements('MarkdownBodyBase', ['renderInlines', 'renderTextRunBlock'])
       + '; return createElement(Block, { render: renderTextRunBlock }); };';
     const Markdown = compile(code, { ...bindings, Block, i18n, Text, MessageBodyText: Text,
       styles: {}, layout: { markdownBodyGap: 0 }, selectable: false, spanFor: () => undefined,

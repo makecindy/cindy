@@ -23,19 +23,33 @@ export function isSilencedSchedulerTurn(origin: SendOrigin | undefined): boolean
 
 /** Ordinary tasks keep their transcript even when completion notifications are silent. */
 export function hidesScheduledTranscript(
-  schedule: Pick<Schedule, 'source' | 'silentWhenIdle'>,
+  schedule: Pick<Schedule, 'source' | 'silentWhenIdle'> & Partial<Pick<Schedule, 'id'>>,
 ): boolean {
-  return schedule.source === 'bot' && schedule.silentWhenIdle === true;
+  // Routine backing schedules now run in independent lanes: keep their full inspectable transcript.
+  // Legacy non-routine Bot schedules may still target the main timeline.
+  return schedule.source === 'bot' && schedule.silentWhenIdle === true && !schedule.id?.startsWith('routine-');
 }
 
 /** Run-scoped presentation gate. Raw provider events still reach the scheduler and usage ledger. */
 const quietRuns = new Map<string, string>();
+const visibleRuns = new Set<string>();
 
 export function beginQuietScheduledOutput(scheduleId: string, runId: string): () => void {
   quietRuns.set(runId, scheduleId);
   return () => {
     if (quietRuns.get(runId) === scheduleId) quietRuns.delete(runId);
+    visibleRuns.delete(runId);
   };
+}
+
+/** Presentation only: keep the scheduler origin and its execution authority intact. */
+export function revealScheduledOutput(origin: SendOrigin | undefined): void {
+  if (origin?.kind === 'scheduler' && origin.runId
+    && quietRuns.get(origin.runId) === origin.scheduleId) visibleRuns.add(origin.runId);
+}
+
+export function hasVisibleScheduledOutput(runId: string): boolean {
+  return visibleRuns.has(runId);
 }
 
 export function isQuietScheduledOutput(event: AgentEvent): boolean {
@@ -43,6 +57,7 @@ export function isQuietScheduledOutput(event: AgentEvent): boolean {
   return (
     origin?.kind === 'scheduler' &&
     typeof origin.runId === 'string' &&
+    !visibleRuns.has(origin.runId) &&
     quietRuns.get(origin.runId) === origin.scheduleId
   );
 }

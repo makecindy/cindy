@@ -222,6 +222,27 @@ describe("home chrome menus", () => {
     expect(find(build({ taskInfoFields: [] }), "taskInfo")?.subtitle).toBe("devices.list.menu.summaryNone");
   });
 
+  it("selects multiple teammates and explicitly returns to any source", () => {
+    const options = [{ key: "cindy", title: "Cindy" }, { key: "filo", title: "Filo" }];
+    let state = { ...displayState };
+    for (const key of ["cindy", "filo"]) state = { ...state, ...homeDisplayActionPatch(`filter.teammate:${key}`, state) };
+    const actions = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(state.teammateFilter).toEqual(["cindy", "filo"]);
+    expect(find(actions, "filter.teammates.all")?.state).toBe("off");
+    expect(find(actions, "filter.teammate:cindy")).toMatchObject({ state: "on", keepPresented: true });
+    expect(find(actions, "filter.teammate:filo")?.state).toBe("on");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:cindy", state) };
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:filo", state) };
+    expect(state.teammateFilter).toBe("all");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammates.none", state) };
+    expect(state.teammateFilter).toBe("none");
+    const hidden = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(find(hidden, "filter.teammates.none")?.state).toBe("on");
+    expect(find(hidden, "filter.teammate:cindy")?.state).toBe("off");
+    expect(homeDisplayActionPatch("filter.teammate:cindy", state)).toEqual({ teammateFilter: ["cindy"] });
+    expect(homeDisplayActionPatch("filter.teammates.all", { ...state, teammateFilter: ["cindy"] })).toEqual({ teammateFilter: "all" });
+  });
+
   it("maps menu actions to preference patches", () => {
     expect(homeDisplayActionPatch("group.dialogue", displayState)).toEqual({ groupDialogue: true });
     expect(homeDisplayActionPatch("group.project", displayState)).toEqual({ groupByProject: false });
@@ -238,6 +259,7 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("filter.reset", displayState)).toEqual({
       lastActivityFilter: "all",
       projectFilter: "all",
+      teammateFilter: "all",
       vendorFilter: "all",
     });
     expect(homeDisplayActionPatch("view.text", displayState)).toEqual({ viewMode: "text" });

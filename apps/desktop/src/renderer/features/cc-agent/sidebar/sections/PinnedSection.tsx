@@ -21,7 +21,7 @@
  * 受控组件——entries 为空时返回 null（不渲染段）。
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlignJustify,
   ChevronDown,
@@ -29,6 +29,7 @@ import {
   LayoutGrid,
   LayoutList,
   Check,
+  Pin,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +56,19 @@ import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
+import { aggregateSessionLamps } from '../../lib/sessionLampAggregation';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+  subscribeRemoteSessionActivity,
+  useRemoteSessionActivityRevision,
+} from '@/features/device-link/remoteSessionActivityStore';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+
+// This header consumes only running state; unread tones remain on task rows.
+const EMPTY_ATTENTION_KINDS = new Map<string, never>();
+const EMPTY_SESSION_IDS = new Set<string>();
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -192,6 +206,44 @@ export function PinnedSection({
   const [collapsed, setCollapsed] = useState(false);
 
   const visibleEntries = entries;
+  // 聚合不受段级折叠影响；远程状态与 rail 入口复用同一设备隔离的灯语。
+  const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const pinnedSessions = useMemo(
+    () =>
+      visibleEntries.flatMap((entry) =>
+        entry.kind === 'session' ? [entry.session] : entry.displaySessions,
+      ),
+    [visibleEntries],
+  );
+  // Pinned rows are absent from ProjectsSection's starting settlement.
+  // Settle only the activity being pushed, never an old waiting phase on rerender.
+  useEffect(
+    () =>
+      subscribeRemoteSessionActivity((deviceId, sessionId) => {
+        if (!deviceId || !sessionId || getSessionDeviceId(sessionId) !== deviceId) return;
+        if (
+          !pinnedSessions.some(
+            (session) => session.id === sessionId && session.deviceLinkDeviceId === deviceId,
+          )
+        )
+          return;
+        if (isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId))) {
+          absorbSessionStarting([sessionId]);
+        }
+      }),
+    [pinnedSessions],
+  );
+  const hasRunningSession = useMemo(
+    () =>
+      aggregateSessionLamps(pinnedSessions, {
+        runningSessionIds,
+        notifications: EMPTY_SESSION_IDS,
+        attentionKinds: EMPTY_ATTENTION_KINDS,
+        urgentSessionIds: EMPTY_SESSION_IDS,
+      }).running,
+    // revision tracks the shared aggregate's remote store reads.
+    [pinnedSessions, runningSessionIds, remoteActivityRevision],
+  );
   const visibleSessions = useMemo(
     () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),
     [visibleEntries],
@@ -306,7 +358,18 @@ export function PinnedSection({
           右侧固定的"显示样式"切换钮(justify-between 推到最右,与 DialogueSection
           等对话列表段头的右侧动作同款 hover 行为)。cardMode 只影响菜单里的勾选项,
           不改变段头文字样式或按钮位置。 */}
-      <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
+      <div className="group/sidebar-header relative flex h-6 items-center justify-between pr-3 pl-6">
+        <span
+          aria-hidden
+          className={cn(
+            'absolute left-1.5 inline-flex shrink-0',
+            collapsed && hasRunningSession
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <Pin size={13} strokeWidth={2} />
+        </span>
         <div className="flex min-w-0 items-center gap-1">
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button

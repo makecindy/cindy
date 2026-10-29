@@ -24,13 +24,16 @@ import * as taskImages from '../../cindy-media/taskImageDelivery';
 import { rewriteTaskImageReferences } from '../../cindy-media/taskImageMarkdown';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings';
 
 const h = vi.hoisted(() => {
   /** 跨模块调用顺序记录: 'touch:<id>' / 'created:<id>' */
   const calls: string[] = [];
   return {
     calls,
+    bridgeHandle: vi.fn(async (_args: unknown) => undefined),
     followPolicy: vi.fn(),
+    prepareBot: vi.fn(async (): Promise<string | null> => null),
     syncDefaultRoute: vi.fn(async () => false),
     writeDefaultRecord: vi.fn(async (_id: string, _fingerprint: string) => undefined),
     acquirePendingAgentSwitch: vi.fn(async (_id: string, _sync: () => Promise<boolean>): Promise<() => void> => () => {}),
@@ -74,6 +77,7 @@ const h = vi.hoisted(() => {
     getWorkspaceProviderSource: vi.fn((..._args: unknown[]): string | null => null),
     agentDeviceId: null as string | null,
     readRemoteRoute: vi.fn(),
+    readRemoteAutomaticDefaults: vi.fn(),
     readRemotePermissionModes: vi.fn(async () => ['ask', 'bypassPermissions']),
     getWorkspacePref: vi.fn((): unknown => null),
     isWorkspacePrefsMigrated: vi.fn(() => true),
@@ -137,6 +141,9 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     Session: actual.Session,
     hasSessionPermissionUpdates: actual.hasSessionPermissionUpdates,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
+    isAutoReviewUnavailableMetadata: actual.isAutoReviewUnavailableMetadata,
+    autoReviewReasonFromMetadata: actual.autoReviewReasonFromMetadata,
+    AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT: actual.AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
@@ -153,6 +160,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   acquirePendingAgentSwitchForImSend: h.acquirePendingAgentSwitch,
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
+  prepareBotSessionForImSend: h.prepareBot,
   prepareUnhealthySessionForSend: vi.fn(async () => undefined),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: () => false,
@@ -188,9 +196,28 @@ vi.mock('../../localDb/ipc/sessions.js', () => ({
   setWorktreePathInDb: vi.fn(async () => undefined),
   touchUserSendInDb: h.touchUserSendInDb,
 }));
-vi.mock('../../maker-host/session-provider-store.js', () => ({
+vi.mock('../../maker-host/session-provider-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../maker-host/session-provider-store.js')>(),
+  getSessionProvider: () => null,
   setSessionProvider: h.setSessionProvider,
   hydrateSessionProvider: h.hydrateSessionProvider,
+}));
+vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
+  getResponsesBridgeHandler: () => ({ handle: h.bridgeHandle }),
+  getPiNativeSubscriptionHandler: vi.fn(),
+}));
+// The bridge preferences fixture uses the default allowing policy and must not
+// read Electron's owner/config files. Restriction behavior is exercised through
+// the real policy and async handler in subscription-fast-policy/Bridge tests.
+vi.mock('../../maker-host/subscription-fast-policy.js', () => ({
+  createSubscriptionFastPolicy: () => ({ isAllowed: () => true, isRequestAllowed: () => true }),
+}));
+vi.mock('../../maker-host/claude-fast-mode-log.js', () => ({
+  createClaudeFastModeRequestTransform: () => () => null,
+  createClaudeFastModeResponseObserver: () => () => undefined,
+}));
+vi.mock('../../maker-host/runtime-configs.js', () => ({
+  claudeUpstreamEndpoint: () => 'http://127.0.0.1:1',
 }));
 vi.mock('../../maker-host/session-storage.js', () => ({
   desktopSessionStorage: { create: h.createSessionRow },
@@ -251,6 +278,7 @@ vi.mock('../workspaceProviderSourceStore.js', () => ({
 }));
 vi.mock('../../im/remoteProviderRoute.js', () => ({
   readImRemoteProviderRoute: h.readRemoteRoute,
+  readImRemoteAutomaticDefaults: h.readRemoteAutomaticDefaults,
   readImRemotePermissionModes: h.readRemotePermissionModes,
 }));
 vi.mock('../workspacePrefsStore.js', async (importOriginal) => ({
@@ -263,6 +291,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../maker-host/model-visibility-mirror.js', () => ({
   getModelVisibilityOverride: h.getModelVisibilityOverride,
+  waitForModelVisibilityMirror: vi.fn(async () => {}),
 }));
 vi.mock('../defaults.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../defaults.js')>();
@@ -318,6 +347,7 @@ function makeFakeSession(id: string) {
   const permission = makePermissionModeFake();
   return {
     id,
+    ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
     get permissionModeState() {
       return permission.permissionModeState;
@@ -368,6 +398,7 @@ const fakeMaker = {
   getSessionMeta: vi.fn(async () => ({
     workDir: 'D:/repo',
     model: 'meta-model',
+    ...({ effort: 'high', fastMode: true } as { effort?: Effort; fastMode?: boolean }),
     sdkSessionId: 'sdk-1',
     agentKind: 'claude-code' as const,
     permissionMode: undefined as 'ask' | 'bypassPermissions' | undefined,
@@ -394,7 +425,7 @@ vi.mock('../../im/shared/sessionProviderLabel.js', () => ({
   resolveSessionErrorContext: vi.fn(async () => ({ providerLabel: 'OpenAI', modelLabel: 'GPT-6 Astra', taskLabel: '测试任务（sess-new）' })),
 }));
 
-import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
+import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
@@ -402,6 +433,8 @@ import { getResolvedMainLocale } from '../../i18n.js';
 import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
+import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
+import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
@@ -461,6 +494,8 @@ function baseReq(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearAllSessionRuntimeAxes();
+  setClaudeProxySessionIdResolver(() => null);
   h.acquirePendingAgentSwitch.mockReset();
   h.acquirePendingAgentSwitch.mockResolvedValue(() => {});
   h.calls.length = 0;
@@ -478,6 +513,7 @@ beforeEach(() => {
   h.getWorkspaceProviderSource.mockReturnValue(null);
   h.agentDeviceId = null;
   h.readRemoteRoute.mockReset();
+  h.readRemoteAutomaticDefaults.mockReset();
   h.readRemotePermissionModes.mockReset();
   h.readRemotePermissionModes.mockResolvedValue(['ask', 'bypassPermissions']);
   h.readImDefaultSettings.mockReturnValue({ agentKind: 'claude-code', agents: {
@@ -493,6 +529,98 @@ beforeEach(() => {
 });
 
 describe('hook task model selection on next send', () => {
+  // PR #7291 unit: automatic selection must use the execution location and still
+  // reach the existing stale-source rule; previous coverage used pinned defaults.
+  it('creates an automatic remote workspace task and follows its resolved route', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    h.getWorkspaceProviderSource.mockReturnValue('remote-provider');
+    h.agentDeviceId = 'share:owner';
+    const resolved = { ...IM_DEFAULT_SETTINGS, agentKind: 'codex', agents: { ...IM_DEFAULT_SETTINGS.agents,
+      codex: { model: 'remote-model', providerId: 'remote-provider', effort: 'high', agentDeviceId: 'share:owner' },
+    } };
+    h.readRemoteAutomaticDefaults.mockResolvedValue(resolved);
+    h.readRemoteRoute.mockResolvedValue({ model: catalogModel('remote-model') });
+    const req = baseReq({ createOnly: true, workspaceAlias: 'repo', source: { im: 'telegram' } });
+    expect((await createMakerHookSessionRunner({ log }).run(req)).status).toBe('ok');
+    expect(h.readRemoteAutomaticDefaults).toHaveBeenCalledWith(IM_DEFAULT_SETTINGS, {
+      agentDeviceId: 'share:owner', agentKind: undefined, providerId: 'remote-provider',
+    });
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'remote-model', agentDeviceId: 'share:owner' }));
+    expect(h.writeDefaultRecord.mock.calls[0][1]).toContain('remote-model');
+    h.readRemoteAutomaticDefaults.mockResolvedValue(null);
+    await expect(createMakerHookSessionRunner({ log }).run(req)).rejects.toThrow('no available default model');
+  });
+
+  it.each([true, false])('applies stale workspace source checks after automatic selection (connected=%s)', async (connected) => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    h.getWorkspaceProviderSource.mockReturnValue('old-claude');
+    h.getWorkspacePref.mockReturnValue({ workspace: 'repo', agentKind: 'codex', model: null, effort: null, permissionMode: null });
+    h.listProviders.mockResolvedValue([
+      { ...connectedProvider('old-claude', [catalogModel('old-claude')]), connected },
+      { ...connectedProvider('openai', [catalogModel('gpt-6.1-sol')], 'codex'), access: { kind: 'subscription' } },
+    ]);
+    const run = () => createMakerHookSessionRunner({ log }).run(baseReq({ createOnly: true, workspaceAlias: 'repo', source: { im: 'telegram' } }));
+    if (connected) {
+      expect((await run()).status).toBe('ok');
+      expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'gpt-6.1-sol' }));
+      expect(h.setSessionProviderIdInDb).toHaveBeenCalledWith('sess-new', 'openai');
+    } else {
+      await expect(run()).rejects.toThrow('selected provider "old-claude"');
+      expect(h.createSessionRow).not.toHaveBeenCalled();
+    }
+  });
+  // Regression #6493: createSession options do not hydrate Claude's bridge.
+  // Exercise the production runner + routing transform at provider startup,
+  // with no profile switch, both after restart and when clearing old axes (unit).
+  it.each([
+    { model: 'chatgpt/gpt-5.4', effort: 'high' as const, fastMode: true, stale: false },
+    { model: 'xai/grok-4.6', effort: undefined, fastMode: false, stale: true },
+  ])('hydrates X companion bridge preferences for $model', async ({ model, effort, fastMode, stale }) => {
+    const req = baseReq({ isNew: false, companionBotId: 'bot-one', source: { im: 'x' } });
+    if (stale) {
+      setSessionEffort(req.sessionId, 'high');
+      setSessionFastMode(req.sessionId, true);
+    }
+    const meta = await fakeMaker.getSessionMeta();
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({ ...meta, model, effort, fastMode });
+    setClaudeProxySessionIdResolver(() => req.sessionId);
+    fakeMaker.createSession.mockImplementationOnce(async (opts) => {
+      const parsedBody = { model, messages: [{ role: 'user', content: 'hello' }] };
+      const route = await createModelRoutingTransform()(parsedBody, {
+        reqId: 1, method: 'POST', url: '/v1/messages',
+        headers: { 'x-claude-code-session-id': 'sdk-fixture' },
+      });
+      expect(route?.localHandler).toBeTypeOf('function');
+      await route!.localHandler!({ parsedBody } as Parameters<NonNullable<NonNullable<typeof route>['localHandler']>>[0]);
+      expect(h.bridgeHandle).toHaveBeenCalledWith(expect.objectContaining({
+        prefs: { reasoningEffort: effort, fast: fastMode },
+      }));
+      return makeFakeSession(opts.id ?? req.sessionId);
+    });
+    const outcome = await createMakerHookSessionRunner({ log }).run(req);
+    expect(outcome.status, outcome.errorMessage ?? undefined).toBe('ok');
+    expect(h.bridgeHandle).toHaveBeenCalledOnce();
+  });
+
+  // A companion lane inherits its current profile route and owner tool scope;
+  // a paused profile must never reach the provider (unit, production runner).
+  it('preserves X companion model options and blocks unavailable companions', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const req = baseReq({ isNew: false, companionBotId: 'bot-one', source: { im: 'x' } });
+    expect((await runner.run(req)).status).toBe('ok');
+    expect(h.prepareBot).toHaveBeenCalledWith(req.sessionId);
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'meta-model', effort: 'high', fastMode: true,
+      vendorOptions: expect.objectContaining({ source: 'x' }),
+    }));
+    fakeMaker.createSession.mockClear();
+    h.prepareBot.mockResolvedValueOnce('Companion paused');
+    expect(await runner.run(req)).toMatchObject({ status: 'error', errorMessage: 'Companion paused' });
+    expect(fakeMaker.createSession).not.toHaveBeenCalled();
+  });
+
   it('runs default following under the send lock before reading metadata', async () => {
     const readMeta = fakeMaker.getSessionMeta.getMockImplementation()!;
     h.acquirePendingAgentSwitch.mockImplementationOnce(async (id, sync) => {
@@ -526,6 +654,25 @@ describe('hook task model selection on next send', () => {
     expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
   });
 
+  it.each(['telegram', 'slack', 'x'])('resolves automatic %s defaults and follows catalog changes', async (channel) => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue(IM_DEFAULT_SETTINGS);
+    const provider = { ...connectedProvider('openai', [catalogModel('current-recommendation')], 'codex'), access: { kind: 'subscription' as const } };
+    h.listProviders.mockResolvedValue([provider]);
+    const req = baseReq({ workspaceAlias: 'repo', source: { im: channel, userText: 'hello' } });
+    const runner = createMakerHookSessionRunner({ log });
+    expect((await runner.run({ ...req, createOnly: true })).status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'current-recommendation' }));
+    const creationFingerprint = h.writeDefaultRecord.mock.calls[0][1];
+    await runner.run({ ...req, isNew: false });
+    const policy = h.followPolicy.mock.calls[0][0];
+    expect(policy.fingerprint()).not.toBe(creationFingerprint);
+    provider.models.codex = [catalogModel('next-recommendation')];
+    const next = await policy.resolveTarget([provider]);
+    expect(next).toMatchObject({ agentKind: 'codex', model: 'next-recommendation', providerId: 'openai' });
+    expect(next.fingerprint).not.toBe(creationFingerprint);
+  });
+
   it.each([false, true])('records new official tasks with their creation defaults (createOnly=%s)', async (createOnly) => {
     const outcome = await createMakerHookSessionRunner({ log }).run(baseReq({
       createOnly, source: { im: 'telegram', userText: 'hello' },
@@ -533,6 +680,20 @@ describe('hook task model selection on next send', () => {
     expect(outcome.status).toBe('ok');
     expect(h.writeDefaultRecord).toHaveBeenCalledWith('sess-new', expect.stringContaining('hook'));
     expect(h.acquirePendingAgentSwitch).not.toHaveBeenCalled();
+  });
+
+  it('uses the common automatic policy for a workspace with only an explicit engine', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({ ...IM_DEFAULT_SETTINGS, agents: { ...IM_DEFAULT_SETTINGS.agents,
+      'claude-code': { providerId: 'xd', model: 'pinned-claude', effort: 'high' },
+    } });
+    h.getWorkspacePref.mockReturnValue({ channel: 'telegram', teamId: null, workspace: 'repo',
+      agentKind: 'codex', model: null, effort: null, permissionMode: null });
+    h.listProviders.mockResolvedValue([{ ...connectedProvider('openai', [catalogModel('automatic-codex')], 'codex'), access: { kind: 'subscription' } }]);
+    expect((await createMakerHookSessionRunner({ log }).run(baseReq({ createOnly: true,
+      workspaceAlias: 'repo', source: { im: 'telegram', userText: 'hello' },
+    }))).status).toBe('ok');
+    expect(h.createSessionRow).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', model: 'automatic-codex' }));
   });
 
   it.each(['telegram', 'slack', 'x'])('preserves %s dispatch defaults until workspace migration completes', async (channel) => {
@@ -3712,23 +3873,40 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
   });
 });
 
-describe('extractToolResultImageUrls 的兜底账本回落(xdt_media_produced)', () => {
+describe('extractToolResultMediaUrls 的兜底账本回落(xdt_media_produced)', () => {
+  // #6447: declared video fields suppress the fallback ledger; no caption is required.
+  // Unit: exercise the same extractor used by tool-result events.
+  it.each(['xdt_video_url', 'xdt_video_urls'])('collects declared %s only for X', (field) => {
+    const video = `cindy-media://blobs/${'a'.repeat(64)}.mp4`;
+    const payload = { [field]: field.endsWith('urls') ? [video, video, 42, '/tmp/clip.mp4'] : video };
+    expect(extractToolResultMediaUrls(JSON.stringify(payload), 'x')).toEqual([video]);
+    expect(extractToolResultMediaUrls(JSON.stringify(payload), 'telegram')).toEqual([]);
+    expect(extractToolResultMediaUrls(JSON.stringify({ ...payload, _xdt_render_image: false }), 'x')).toEqual([]);
+  });
+
+  it('X receives generated video URLs while other channels retain image-only behavior', () => {
+    const video = `cindy-media://blobs/${'a'.repeat(64)}.mp4`;
+    const text = JSON.stringify({ xdt_media_produced: [video] });
+    expect(extractToolResultMediaUrls(text, 'x')).toEqual([video]);
+    expect(extractToolResultMediaUrls(text, 'telegram')).toEqual([]);
+  });
+
   const IMG = `cindy-media://blobs/${'d'.repeat(64)}.png`;
   const MP3 = `cindy-media://blobs/${'e'.repeat(64)}.mp3`;
 
   it('意识未声明媒体字段时,从 xdt_media_produced 接走图片(过滤非图)', () => {
     const text = JSON.stringify({ ok: true, xdt_media_produced: [IMG, MP3] });
-    expect(extractToolResultImageUrls(text)).toEqual([IMG]);
+    expect(extractToolResultMediaUrls(text)).toEqual([IMG]);
   });
 
   it('声明字段与账本并存时合并去重', () => {
     const text = JSON.stringify({ ok: true, xdt_image_urls: [IMG], xdt_media_produced: [IMG] });
-    expect(extractToolResultImageUrls(text)).toEqual([IMG]);
+    expect(extractToolResultMediaUrls(text)).toEqual([IMG]);
   });
 
   it('_xdt_render_image:false 哨兵优先,全部不外发', () => {
     const text = JSON.stringify({ ok: true, xdt_media_produced: [IMG], _xdt_render_image: false });
-    expect(extractToolResultImageUrls(text)).toEqual([]);
+    expect(extractToolResultMediaUrls(text)).toEqual([]);
   });
 });
 

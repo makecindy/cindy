@@ -4,11 +4,14 @@
  * ---------------------------------------------------------------------------
  * 范围跟侧栏「任务范围」走:只同步当前范围内、侧栏会展示的远程任务;断线设备的快照
  * 可能停在旧状态,不同步。状态跃迁的判定(何时弹出 / 响铃 / 发通知)在 main 的岛状态机。
+ * 伙伴属于账号、不受任务范围限制:主力电脑在那台设备上的伙伴,聊天活动也同步过来。
  */
 
 import { useEffect, useRef } from 'react';
-import type { AgentIslandRemoteSessionInput } from '../../../shared/agentIsland';
+import { AGENT_ISLAND_REMOTE_SESSIONS_MAX, type AgentIslandRemoteSessionInput } from '../../../shared/agentIsland';
 import type { Session } from '@/lib/ccAgent.types';
+import type { RemoteBot } from '@/features/bots/remoteBotRoster';
+import { useRemoteBots } from '@/features/bots/useRemoteBots';
 import { useRemoteProjectSessions } from './remoteProjectsStore';
 import {
   getRemoteSessionActivity,
@@ -22,11 +25,36 @@ export function buildAgentIslandRemoteSessionInputs(
   remoteSessions: Session[],
   selection: MachineSelection,
   readActivity: (sessionId: string, deviceId: string) => RemoteSessionActivity | undefined,
+  remoteBots: readonly RemoteBot[] = [],
 ): AgentIslandRemoteSessionInput[] {
   const inputs: AgentIslandRemoteSessionInput[] = [];
+  // Companions belong to the account, not to a task scope: a companion whose main computer is
+  // another device reports its chat here whatever machine the sidebar is scoped to. Its chat is
+  // a hidden Session, so it is never also in the remote task list.
+  for (const bot of remoteBots) {
+    if (inputs.length >= AGENT_ISLAND_REMOTE_SESSIONS_MAX) break;
+    if (!bot.sessionId || !bot.online) continue;
+    const activity = readActivity(bot.sessionId, bot.deviceId);
+    if (!activity) continue;
+    inputs.push({
+      ...remoteActivityInput(activity),
+      sessionId: bot.sessionId,
+      deviceId: bot.deviceId,
+      deviceName: bot.deviceName || null,
+      title: bot.name,
+      workingDir: null,
+      workspaceKind: null,
+      agentKind: null,
+      companion: { name: bot.name, avatar: bot.avatar, avatarColor: bot.avatarColor },
+    });
+  }
+  const companionSessionIds = new Set(inputs.map((input) => input.sessionId));
   for (const session of selectVisibleSessions([], remoteSessions, selection)) {
     const deviceId = session.deviceLinkDeviceId;
     if (!deviceId || session.deviceLinkConnectionStatus === 'disconnected') continue;
+    if (companionSessionIds.has(session.id)) continue;
+    // Companions were added first, so the cap trims tasks, never a companion.
+    if (inputs.length >= AGENT_ISLAND_REMOTE_SESSIONS_MAX) break;
     const activity = readActivity(session.id, deviceId);
     if (!activity) continue;
     inputs.push({
@@ -37,24 +65,36 @@ export function buildAgentIslandRemoteSessionInputs(
       workingDir: session.workingDir,
       workspaceKind: session.workspaceKind,
       agentKind: session.agentKind,
-      phase: activity.phase,
-      detail: activity.compactDetail,
-      ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
-      ...(activity.workingPhase ? { workingPhase: activity.workingPhase } : {}),
-      ...(activity.interactionKind
-        ? {
-            interactionKind:
-              activity.interactionKind as AgentIslandRemoteSessionInput['interactionKind'],
-          }
-        : {}),
+      ...remoteActivityInput(activity),
     });
   }
   return inputs;
 }
 
+function remoteActivityInput(activity: RemoteSessionActivity): Pick<
+  AgentIslandRemoteSessionInput,
+  'phase' | 'detail' | 'summaryFormat' | 'completionNotification' | 'completionToken' | 'workingPhase' | 'interactionKind'
+> {
+  return {
+    phase: activity.phase,
+    ...(activity.completionToken ? { completionToken: activity.completionToken } : {}),
+    detail: activity.compactDetail,
+    ...(activity.summaryFormat ? { summaryFormat: activity.summaryFormat } : {}),
+    ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
+    ...(activity.workingPhase ? { workingPhase: activity.workingPhase } : {}),
+    ...(activity.interactionKind
+      ? {
+          interactionKind:
+            activity.interactionKind as AgentIslandRemoteSessionInput['interactionKind'],
+        }
+      : {}),
+  };
+}
+
 /** 主窗常驻挂载一次(MainLayout)。内容未变时不发 IPC。 */
 export function useAgentIslandRemoteSessionsSync(): void {
   const remoteSessions = useRemoteProjectSessions();
+  const remoteBots = useRemoteBots();
   const selection = useEffectiveSelectedMachineId();
   const activityRevision = useRemoteSessionActivityRevision();
   const lastSignatureRef = useRef<string | null>(null);
@@ -66,6 +106,7 @@ export function useAgentIslandRemoteSessionsSync(): void {
       remoteSessions,
       selection,
       getRemoteSessionActivity,
+      remoteBots,
     );
     const signature = JSON.stringify(inputs);
     if (signature === lastSignatureRef.current) return;
@@ -74,5 +115,5 @@ export function useAgentIslandRemoteSessionsSync(): void {
       // 下一次变化时重发完整列表。
       lastSignatureRef.current = null;
     });
-  }, [remoteSessions, selection, activityRevision]);
+  }, [remoteSessions, remoteBots, selection, activityRevision]);
 }

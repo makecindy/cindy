@@ -1,3 +1,5 @@
+import { navigationChrome, spacing } from '@/theme/tokens';
+
 /** Geometry is local to the observed window container, in points, never pixels. */
 export interface LayoutRect { x: number; y: number; width: number; height: number }
 export interface ReservedRegion extends LayoutRect { kind: 'division' | 'occlusion' }
@@ -71,4 +73,15 @@ export function keyboardControlRegion(g: WindowGeometry, keyboardBottom: number)
     regions: g.regions.filter(r => r.kind !== 'division') });
   const alternative = clip(upper);
   return alternative.height > controls.height ? alternative : controls;
+}
+
+/**
+ * Top padding for the temporary task-list drawer when the native top bar shares the status row
+ * (Duo portrait), so the drawer header lands where the hidden bar's buttons were. Duo (iOS 27.1)
+ * centers toolbar items `spacing.md` above the row's bottom; the drawer header adds `spacing.lg`
+ * itself. Undefined keeps the safe-area top for ordinary bars below the status area.
+ */
+export function sharedStatusRowDrawerTop(nativeHeaderHeight: number, safeAreaTop: number): number | undefined {
+  if (!(nativeHeaderHeight > 0) || nativeHeaderHeight >= safeAreaTop + navigationChrome.target) return undefined;
+  return Math.max(0, nativeHeaderHeight - navigationChrome.target - spacing.md - spacing.lg);
 }

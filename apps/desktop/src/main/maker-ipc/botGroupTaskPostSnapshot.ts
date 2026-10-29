@@ -13,11 +13,13 @@ const post = z.object({
     operationId: z.string(),
     content: z.array(z.object({ type: z.string() }).passthrough()),
     mentions: z.array(z.string()),
+    threadRootId: z.string().optional(),
   })).min(1),
 });
 export interface BotGroupTaskPostSnapshot {
   actorId: string;
-  messages: Array<{ operationId: string; content: Array<BotGroupTaskCard | ChatContentBlock>; mentions: string[] }>;
+  /** `threadRootId` puts every part in the Thread the task was started from. */
+  messages: Array<{ operationId: string; content: Array<BotGroupTaskCard | ChatContentBlock>; mentions: string[]; threadRootId?: string }>;
 }
 
 export async function prepareBotGroupTaskPost(

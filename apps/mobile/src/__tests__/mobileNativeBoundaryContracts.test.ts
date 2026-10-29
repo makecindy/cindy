@@ -31,10 +31,10 @@ it('bounds native export and preserves the hidden document and system share boun
   const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
   const share = route.indexOf("await sharing.shareAsync(localUri, { mimeType: 'image/png' });");
   const completed = route.indexOf('shareCompleted = true;', share);
-  const inactive = route.indexOf('if (!isShareOperationActive()) return;', share);
   expect(share).toBeGreaterThanOrEqual(0);
   expect(completed).toBeGreaterThan(share);
-  expect(inactive).toBeGreaterThan(completed);
+  // Selection now closes before opening the sheet. File lifetime still follows
+  // the native promise, independent of that UI state.
   expect(route).toContain('if (!shareCompleted && localUri)');
 });
 
@@ -276,7 +276,7 @@ const settings = readFileSync(resolve(process.cwd(), 'app/settings.tsx'), 'utf8'
 expect(settings).toContain('isGooglePlayInstallation: playManagedUpdates,');
 expect(settings).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,');
 expect(settings).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;');
-expect(settings).toContain("t('settings.version.googlePlayContentUpdateUnavailable')");
+expect(settings).toContain("t('settings.version.googlePlayUpdateManaged')");
 });
 
 // guard: native persistent history hosts must wrap routes and replace route prefetch ownership.
@@ -308,7 +308,10 @@ describe('persistent native history ownership', () => {
     expect(home).toContain('{residentList.enabled ? (');
     expect(home).not.toContain('residentList.enabled && !embedded');
     const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    expect(route).toContain('<MessageHistoryOverlay enabled={!paneLayout.persistent || sessionListDrawerOverlayMounted}>');
+    const layout = readFileSync(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
+    expect(route).toContain('<SessionTaskLayout>');
+    expect(layout).toContain('<MessageHistoryOverlay enabled={false}>');
+    expect(layout).toContain('persistent={paneLayout.persistent}');
   });
   it('does not keep the old route preloading mechanism alongside the resident host', () => {
     const home = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');

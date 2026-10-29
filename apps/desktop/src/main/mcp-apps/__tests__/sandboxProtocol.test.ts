@@ -186,6 +186,41 @@ describe('MCP App local protocol isolation', () => {
     contents.emit('before-input-event', event, { type: 'keyDown', key: 'Escape' });
     expect(sandbox.executeJavaScript).toHaveBeenCalledOnce();
   });
+  it('keeps a disposed render frame from escaping WebContents callbacks and quitting the app', () => {
+    registerMcpAppProtocol();
+    const disposed = () => {
+      throw new Error('Render frame was disposed before WebFrameMain could be accessed');
+    };
+    const contents = new EventEmitter();
+    app.emit('web-contents-created', {}, contents);
+    const input = { preventDefault: vi.fn() };
+    const escape = { type: 'keyDown', key: 'Escape' };
+    Object.defineProperty(contents, 'focusedFrame', { configurable: true, get: disposed });
+    expect(() => contents.emit('before-input-event', input, escape)).not.toThrow();
+    Object.defineProperty(contents, 'focusedFrame', {
+      configurable: true,
+      value: { get url() { return disposed(); }, parent: null },
+    });
+    expect(() => contents.emit('before-input-event', input, escape)).not.toThrow();
+    expect(input.preventDefault).not.toHaveBeenCalled();
+    // A frame that disappears cannot be authorised, so its navigation is refused.
+    const gone = { get frame() { return disposed(); }, url: 'https://example.org', preventDefault: vi.fn() };
+    expect(() => contents.emit('will-frame-navigate', gone)).not.toThrow();
+    expect(gone.preventDefault).toHaveBeenCalledOnce();
+    const ancestorGone = {
+      frame: { url: 'cindy-mcp-app://example-view/resource', get parent() { return disposed(); } },
+      url: 'https://example.org',
+      preventDefault: vi.fn(),
+    };
+    expect(() => contents.emit('will-frame-navigate', ancestorGone)).not.toThrow();
+    expect(ancestorGone.preventDefault).toHaveBeenCalledOnce();
+    // Failures that are not a disposed frame are still reported.
+    Object.defineProperty(contents, 'focusedFrame', {
+      configurable: true,
+      get() { throw new Error('boom'); },
+    });
+    expect(() => contents.emit('before-input-event', input, escape)).toThrow('boom');
+  });
   it('rebuilds remote CSP and serves only the current owner through distinct origins', async () => {
     let handler!: (request: Request) => Promise<Response> | Response;
     vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => {

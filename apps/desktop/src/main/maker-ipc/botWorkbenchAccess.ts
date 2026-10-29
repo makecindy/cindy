@@ -12,6 +12,7 @@
  *  - 其它伙伴:只能碰自己开的后台任务(读)或明确接手的任务(读 + 继续),本机。
  * 目录不再授予任何权限;旧 workbench.json 里的项目与判断原样留在磁盘上,不读作授权。
  *
+ * 上述关系只界定观察和候选范围，所有继续还须独立的 Host 行动授权；身份本身不授权写入。
  * 每次调用都在 main 里确定性校验:
  *  1. 调用方 session → 伙伴:只认本机、在用的伙伴主任务(canonical);
  *  2. 本机目标:存在、未删除;不是任何伙伴自己的专线;不是 Orca worker;来源是主人会跟进的那几类;
@@ -70,6 +71,8 @@ export function parseWorkbenchTaskRef(taskId: unknown): WorkbenchTaskRef | null 
 export type WorkbenchAccessMode = 'read' | 'continue';
 
 export interface WorkbenchGrant {
+  /** Separate Host-confirmed action. Observation/creator/responsibility never supplies this. */
+  actionAuthorized?: boolean;
   /** 调用方是总调度伙伴。 */
   scheduler: boolean;
   /** 调用方明确接手过这件任务(task-responsibility)。 */
@@ -147,6 +150,7 @@ export function authorizeWorkbenchTarget(
       message: '这是你开的后台任务,请用 message_session_task / stop_session_task',
     };
   }
+  if (!grant.actionAuthorized) return actionAuthorizationRequired;
   if (grant.responsible) return { ok: true };
   if (grant.scheduler) {
     return grant.followedByOtherBot ? followedByOtherBotFailure(grant.followedByOtherBot) : { ok: true };
@@ -155,6 +159,7 @@ export function authorizeWorkbenchTarget(
 }
 
 export interface BotWorkbenchAccessDeps {
+  hasActionAuthorization?(callerSessionId: string): boolean;
   resolveCaller(callerSessionId: string): Promise<WorkbenchCallerResult>;
   /** 当前总调度伙伴 id;观察层未就绪时返回 null(按不是总调度处理)。 */
   schedulerBotId(): Promise<string | null>;
@@ -186,6 +191,7 @@ export interface BotWorkbenchAccessDeps {
 }
 
 const scopeChanged: Failure = { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: '账号已切换,请重试' };
+const actionAuthorizationRequired: Failure = { ok: false, errorCode: 'TASK_ACTION_AUTHORIZATION_REQUIRED', message: '跟进关系只授予观察责任；请先向主人展示目标任务、动作和具体内容并取得授权。' };
 const badId: Failure = { ok: false, errorCode: 'INVALID_ARGS', message: '任务 id 格式不对:本机写 id,另一台电脑写 deviceId::sessionId' };
 const remoteNotAllowed: Failure = {
   ok: false,
@@ -212,7 +218,7 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
     | Failure;
 
   /** 统一入口:解析 id,远程只认总调度,本机按任务事实与关系判定。 */
-  const authorize = async (botId: string, taskId: string, mode: WorkbenchAccessMode): Promise<Resolved> => {
+  const authorize = async (botId: string, taskId: string, mode: WorkbenchAccessMode, actionAuthorized = false): Promise<Resolved> => {
     const ref = parseWorkbenchTaskRef(taskId);
     if (!ref) return badId;
     const scheduler = await isScheduler(botId);
@@ -226,6 +232,7 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
     if (ref.kind === 'remote') {
       if (!scheduler) return remoteNotAllowed;
       if (mode === 'continue' && watched()?.shared) return sharedTaskNotContinuable;
+      if (mode === 'continue' && !actionAuthorized) return actionAuthorizationRequired;
       if (mode === 'continue') {
         const other = followedByOtherBot(botId, watched(), { remote: true, delegationChild: false });
         if (other) return followedByOtherBotFailure(other);
@@ -235,6 +242,7 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
     const target = await deps.readTarget(ref.sessionId);
     if (mode === 'continue' && target?.source === 'shared') return sharedTaskNotContinuable;
     const grant = await grantFor(botId, ref.sessionId, scheduler);
+    grant.actionAuthorized = actionAuthorized;
     if (scheduler && mode === 'continue' && target) {
       grant.followedByOtherBot = followedByOtherBot(botId, watched(), {
         remote: false,
@@ -300,6 +308,13 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       return read(caller.botId, params.taskId);
     },
 
+    /** Whether this task is handed to the caller (the same scope `continueTask` enforces). */
+    async canContinue(params: { callerSessionId: string; taskId: string }): Promise<boolean> {
+      const caller = await deps.resolveCaller(params.callerSessionId);
+      if (!caller.ok) return false;
+      return (await authorize(caller.botId, params.taskId, 'continue', true)).ok;
+    },
+
     async continueTask(params: { callerSessionId: string; taskId: string; message: string }) {
       const message = params.message.trim();
       if (!message || message.length > WORKBENCH_TOOL_MAX_MESSAGE_CHARS) {
@@ -307,7 +322,7 @@ export function createBotWorkbenchAccess(deps: BotWorkbenchAccessDeps) {
       }
       const caller = await deps.resolveCaller(params.callerSessionId);
       if (!caller.ok) return caller;
-      const allowed = await authorize(caller.botId, params.taskId, 'continue');
+      const allowed = await authorize(caller.botId, params.taskId, 'continue', deps.hasActionAuthorization?.(params.callerSessionId) === true);
       if (!allowed.ok) return allowed;
       if (!scopeCurrent()) return scopeChanged;
       if (allowed.ref.kind === 'remote') {

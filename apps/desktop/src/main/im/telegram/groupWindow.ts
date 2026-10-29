@@ -87,13 +87,14 @@ const neutralizeFenceTags = createFenceNeutralizer(['group_chat_context', 'reply
  * 引用注入对齐, 私聊与群聊都生效。
  */
 export function buildTelegramReplyContextBlock(reply: {
+  messageId?: string;
   author: string;
   text: string;
   isBot?: boolean;
   attachmentCount?: number;
 }): string {
   const line = neutralizeFenceTags(
-    `[${reply.author}${reply.isBot ? ' (bot)' : ''}] ${reply.text.slice(
+    `[${reply.author}${reply.isBot ? ' (bot)' : ''}]${reply.messageId ? ` #${reply.messageId}` : ''} ${reply.text.slice(
       0,
       GROUP_WINDOW_ENTRY_TEXT_MAX_CHARS,
     )}`,

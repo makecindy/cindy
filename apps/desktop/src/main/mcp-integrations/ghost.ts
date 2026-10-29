@@ -1,3 +1,5 @@
+import * as community from '../plugin-contributions/host.js';
+import { contributionOwnerKey, assertContributionOwner, getPreparedContribution } from '../plugin-contributions/prepared.js';
 import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
 import type { GhostInstallConsentPrompt } from '../cindy-brain/ghostInstallConsent.js';
 import {
@@ -82,6 +84,7 @@ import {
   deriveGhostSessionContext,
   ghostInstallApprovalToken,
   type GhostSessionContextInjected,
+  type GhostToolCallResult,
   type GhostSetupAssessment,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -94,6 +97,8 @@ import {
   resolveInstalledGhost,
 } from '../../shared/pluginIdentity.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
+import { fitGhostModelImages } from '../cindy-brain/ghostModelImages.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
   getGhostCardService,
@@ -107,6 +112,7 @@ import {
   isGhostAvailableForActiveSession,
 } from '../cindy-brain/index.js';
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
+import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarget.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
@@ -294,6 +300,7 @@ async function authorizeForgeOutsideWorkdir(params: {
     sessionId: live.sessionId,
     sessionInstanceId: live.sessionInstanceId,
     lane: 'forge_source',
+    requiresResolvedPathReview: path.relative(path.resolve(params.dir), authorizedDir) !== '',
     items: [{
       name: path.basename(authorizedDir) || authorizedDir,
       absPath: authorizedDir,
@@ -362,6 +369,9 @@ export async function authorizeDesktopSessionPath(
     sessionId: live.sessionId,
     sessionInstanceId: live.sessionInstanceId,
     lane: 'outside_workdir',
+    // This Host callback receives only a canonical path, without the original
+    // harness arguments. Native ownership cannot prove it reviewed this target.
+    requiresResolvedPathReview: true,
     items: [{
       name: path.basename(request.path) || request.path,
       absPath: request.path,
@@ -452,7 +462,7 @@ async function packForgeSource(
  * workdir 外过户 / Forge 源码确认:
  *   - 对象在会话 workdir 内 → 自动放行;
  *   - 本地活跃会话当前为 Full Access(bypassPermissions) → Host 自动放行;
- *   - Auto → 当前会话统一审阅器(allow 继续 / block 返回原因 / ask 才弹卡);
+ *   - Auto → 原生已接管则不复审，否则当前会话审阅器(allow / block / ask);
  *   - 其余(Ask、无会话、远程、查询失败)→ 弹确认卡,用户点允许才继续。
  * 禁止在 Host 已按当前档位放行后再因目录边界悄悄硬断。
  * Full Access 只替代本处确认,不扩大插件 manifest slot、网络、
@@ -460,11 +470,15 @@ async function packForgeSource(
  * ──────────────────────────────────────────────────────────────────────── */
 
 export interface GhostGrantLiveSessionState {
+  /** Rechecks accepted account input and the existing plugin-managed helper surface. */
+  contributionAccountAllowed?: (acceptedOperation?: boolean) => Promise<boolean>;
   permissionMode: PermissionMode | null;
   remoteHostId: string | null;
   /** Includes the captured permission/Plan generations and forbids active or unknown Plan. */
   isCurrent?: () => boolean;
   reviewAction?: (action: ReviewableAction) => Promise<AutoReviewDecision>;
+  /** Supplied by the live harness; absent means Cindy owns review. */
+  autoReviewOwner?: 'native' | 'cindy';
 }
 
 /**
@@ -682,6 +696,8 @@ async function requestGrantConfirm(params: {
   sessionInstanceId: string | null;
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
+  /** Native approval of an alias does not authorize a newly resolved target. */
+  requiresResolvedPathReview?: boolean;
   toolName?: string;
   operation?: 'read' | 'write';
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
@@ -714,6 +730,13 @@ async function requestGrantConfirm(params: {
         return { ok: true, approvalSource: 'full-access', isCurrent };
       }
       if (live?.permissionMode === 'auto' && live.reviewAction) {
+        // The harness already owns this MCP invocation. Keep live authority and
+        // path/slot checks, but do not ask a second model to reinterpret its intent.
+        // A remote task cannot extend approval to controller-local files.
+        if (!params.requiresResolvedPathReview && live.autoReviewOwner === 'native' && !live.remoteHostId && live.isCurrent?.() === true && isCurrent?.() === true) {
+          log.debug('ghost grant: native reviewer owns handoff', { lane: params.lane });
+          return { ok: true, approvalSource: 'auto-review', isCurrent };
+        }
         const decision = await live.reviewAction(toolAutoReviewAction('plugin_file_handoff', {
           ghostId: params.ghostId,
           lane: params.lane,
@@ -807,6 +830,10 @@ async function requestMediaPathRevealConfirm(params: {
         return { ok: true, isCurrent };
       }
       if (live?.permissionMode === 'auto' && live.reviewAction) {
+        if (live.autoReviewOwner === 'native' && !live.remoteHostId && live.isCurrent?.() === true && isCurrent?.() === true) {
+          log.debug('ghost media: native reviewer owns path reveal');
+          return { ok: true, isCurrent };
+        }
         const decision = await live.reviewAction(toolAutoReviewAction('cindy_media.resolve_local_path', {
           path: params.absPath, mimeType: params.mimeType,
         }, 'Return the controller local path of this managed media to the agent.'));
@@ -1014,6 +1041,7 @@ async function prepareLocalPathAttachments(params: {
         sessionInstanceId: params.sessionInstanceId,
         lane: 'attachments',
         items,
+        requiresResolvedPathReview: needConfirm.some((item) => path.relative(path.resolve(item.url), item.absPath) !== ''),
         getLiveSessionGrantState: params.getLiveSessionGrantState,
       });
       if (!confirm.ok) return confirm;
@@ -1127,6 +1155,7 @@ async function confirmDepositOutsideWorkdir(params: {
     sessionInstanceId: params.sessionInstanceId,
     lane: params.lane,
     items: [item],
+    requiresResolvedPathReview: path.relative(path.resolve(params.dirAbs), real) !== '',
     getLiveSessionGrantState: params.getLiveSessionGrantState,
   });
   if (!confirm.ok) return confirm;
@@ -1763,11 +1792,99 @@ export function getCindyGhostsMcpDeps(
       return { assertCurrent, release: () => undefined, consentPrompt: installConsentPrompt() };
     },
   });
+  const contributionAuthority = async (write: boolean) => {
+    const context = resolveSessionContext();
+    const owner = contributionOwnerKey();
+    const live = context?.sessionId && context.sessionInstanceId
+      ? hostDeps.getLiveSessionGrantState?.(context.sessionId, context.sessionInstanceId) : null;
+    const assert = async (acceptedOperation = false) => {
+      assertContributionOwner(owner);
+      if (!live || await live.contributionAccountAllowed?.(acceptedOperation) !== true || (write && (live.isCurrent?.() !== true || !live.permissionMode || workdirWriteVerdict(live.permissionMode, false) === 'deny'))) {
+        throwIpcError('PERMISSION_DENIED', 'Community contributions require a current account task; shared-task guests cannot borrow the Host account');
+      }
+      assertContributionOwner(owner);
+    };
+    await assert();
+    return { context: context!, assert: () => assert(), assertAccepted: () => assert(true) };
+  };
   return {
     ...(marketTools ? {
       searchMarket: (query: string) => marketTools.search(query),
       installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),
     } : {}),
+    async communityContribution(input) {
+      try {
+        const authority = await contributionAuthority(['prepare', 'submit', 'cancel', 'cancel-review'].includes(input.action));
+        let result: unknown;
+        if (input.action === 'prepare') {
+          const resolved = resolveInstalledGhost(getGhostManager().list(), input.ghostId, input.namespace);
+          if (resolved.status !== 'unique') return { ok: false, errorCode: resolved.status === 'ambiguous' ? 'GHOST_AMBIGUOUS' : 'GHOST_NOT_FOUND' };
+          result = await community.prepareContribution(installedGhostStoragePart(resolved.ghost), 'ai');
+        } else if (input.action === 'submit' || input.action === 'cancel-review') {
+          const cancelTarget = input.action === 'cancel-review' ? await community.myPluginReviewTarget(input.pluginId, input.release.releaseId) : null;
+          if (input.action === 'cancel-review' && (!cancelTarget || cancelTarget.release.sha256 !== input.release.sha256 || cancelTarget.release.revision !== input.release.revision)) throwIpcError('CONTRIBUTION_REVISION_STALE', 'Refresh this version before cancelling its review');
+          if (input.action === 'cancel-review' && cancelTarget && ['approved', 'rejected', 'cancelled'].includes(cancelTarget.release.reviewStatus ?? '')) {
+            await authority.assert();
+            return { ok: true, result: cancelTarget.release };
+          }
+          const toolName = input.action === 'cancel-review' ? 'ghost_cancel_plugin_review' : 'ghost_contribution_submit';
+          const prepared = input.action === 'cancel-review' && cancelTarget ? { preparedId: cancelTarget.release.releaseId, ghostId: input.pluginId, version: cancelTarget.release.version, sha256: cancelTarget.release.sha256, name: cancelTarget.name, description: t('settings.ghosts.contribution.cancelReviewDescription').replaceAll('{{version}}', cancelTarget.release.version) } : input.action === 'submit' ? getPreparedContribution(input.id).summary : undefined;
+          if (!prepared) throwIpcError('PRECONDITION_FAILED', 'Contribution preparation is unavailable');
+          const context = authority.context;
+          const live = hostDeps.getLiveSessionGrantState!(context.sessionId!, context.sessionInstanceId!);
+          let allowed = live?.permissionMode === 'bypassPermissions';
+          if (!allowed && live?.permissionMode === 'auto' && live.reviewAction) {
+            const decision = await live.reviewAction(toolAutoReviewAction(toolName, {
+              prepared_id: prepared.preparedId, ghost_id: prepared.ghostId, version: prepared.version, sha256: prepared.sha256, public: true,
+            }));
+            await authority.assert();
+            if (decision.verdict === 'block') return {
+              ok: false,
+              errorCode: 'PERMISSION_DENIED',
+              message: decision.reason ?? 'Automatic review denied this action; no publishing or cancellation request was sent.',
+            };
+            allowed = decision.verdict === 'allow';
+          }
+          if (!allowed) {
+            if (!hostDeps.requestHostPermission) throwIpcError('PRECONDITION_FAILED', 'Contribution confirmation is unavailable');
+            const decision = await hostDeps.requestHostPermission(context.sessionId!, context.sessionInstanceId!, {
+              kind: 'permission', requestId: randomUUID(), toolName,
+              input: { prepared_id: prepared.preparedId, ghost_id: prepared.ghostId, version: prepared.version, sha256: prepared.sha256 },
+              title: t(input.action === 'cancel-review' ? 'settings.ghosts.contribution.cancelReview' : 'settings.ghosts.contribution.confirmSubmit'),
+              description: [
+                input.action === 'cancel-review' ? '' : t('settings.ghosts.contribution.confirmPublic'),
+                `${prepared.name} · ${prepared.version}`,
+                prepared.description,
+                ...('releaseNotes' in prepared && typeof prepared.releaseNotes === 'string' && prepared.releaseNotes.trim()
+                  ? [t('settings.ghosts.contribution.releaseNotes'), prepared.releaseNotes] : []),
+                input.action === 'cancel-review' ? '' : t('settings.ghosts.contribution.versionConsumedHint'),
+              ].filter(Boolean).join('\n'),
+              metadata: { hostOwnedConfirmation: 'plugin_contribution' },
+            }, AbortSignal.timeout(10 * 60_000));
+            allowed = decision?.kind === 'permission' && decision.behavior === 'allow';
+          }
+          await authority.assert();
+          if (!allowed) return { ok: false, errorCode: 'MUTATION_CANCELLED' };
+          result = input.action === 'cancel-review' ? await community.cancelPluginReview(input.pluginId, input.release, authority.assert) : await community.submitContribution(input.id, authority.assertAccepted);
+        } else if (input.action === 'status') result = await community.contributionTransferStatus(input.id);
+        else if (input.action === 'cancel') result = community.cancelContribution(input.id);
+        else if (input.action === 'list') result = await community.listMyPlugins({ query: input.query ?? '', filter: input.filter ?? 'all', cursor: input.cursor });
+        else if (input.action === 'submission') result = await community.myPluginSubmission(input.pluginId, input.submissionId);
+        else if (input.action === 'detail') result = await community.myPluginDetail(input.pluginId, input.cursor);
+        await authority.assert();
+        return { ok: true, result };
+      } catch (error) {
+        try { community.mapContributionError(error); } catch (safe) {
+          return {
+            ok: false,
+            errorCode: isIpcError(safe) ? safe.code : 'INTERNAL',
+            message: isIpcError(safe) && safe.code !== 'INTERNAL'
+              ? safe.message
+              : 'Community contribution action could not complete; query the original operation before retrying.',
+          };
+        }
+      }
+    },
     connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);
@@ -1847,7 +1964,7 @@ export function getCindyGhostsMcpDeps(
         : undefined;
       let result: Record<string, unknown>;
       try {
-        result = await callCindyMedia(request, downloadContext);
+        result = await callCindyMedia(request, downloadContext, sessionId);
       } finally {
         downloadContext?.dispose?.();
       }
@@ -2385,13 +2502,23 @@ export function getCindyGhostsMcpDeps(
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
       const producedMedia = drainGhostCallMedia(instanceId, callId);
-      const finalized = withCardToken(result, cardService.finalizeCall(callId), callId);
+      // Images the plugin shows the model stay out of the card and media-ledger
+      // path (never stored, never sent to IM): fit them into the inline budget
+      // and let ghost_call return them as image content (ghostModelImages.ts).
+      const requestedImages = result.ok ? result.images : undefined;
+      const plainResult: GhostToolCallResult = result.ok && result.images ? { ok: true, result: result.result } : result;
+      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId);
       if (!finalized.ok) return finalized;
+      const fitted = requestedImages?.length ? await fitGhostModelImages(requestedImages, compressInlineImage) : null;
+      const modelImages = {
+        ...(fitted?.images.length ? { images: fitted.images } : {}),
+        ...(fitted?.omitted ? { imagesOmitted: fitted.omitted } : {}),
+      };
       // 附最后一道 gate(postCtx)的快照:它是派发前最新的 ready 判定。
       const advisory = postCtxAssessment.reauthSuggest ? { setup: postCtxAssessment } : {};
       const base = producedMedia.length > 0
-        ? { ...finalized, ...advisory, producedMedia }
-        : { ...finalized, ...advisory };
+        ? { ...finalized, ...advisory, producedMedia, ...modelImages }
+        : { ...finalized, ...advisory, ...modelImages };
       // 视觉桥工具结果图片描述(最佳努力,不阻塞):把工具返回的 cindy-media://
       // 图片 URL 转成文字描述,附加为 xdt_media_descriptions——纯文本模型
       // (deepseek 等)拿不到 image block,只能看到 URL 文本,易幻觉编造图片
@@ -2550,7 +2677,7 @@ export function getCindyGhostsMcpDeps(
         };
       });
     },
-    async forgeInstall({ dir, iconSource }): Promise<CindyForgeInstallResult> {
+    async forgeInstall({ dir, iconSource, targetInstanceId, installCopy, namespace }): Promise<CindyForgeInstallResult> {
       const sessionContext = resolveSessionContext();
       const packedAttempt = await withForgeOwnerLease(async (mutationOwner) => {
         const gate = await getForgeSessionFsGate(sessionContext);
@@ -2589,6 +2716,9 @@ export function getCindyGhostsMcpDeps(
             packageSha256: createHash('sha256').update(packedAttempt.packed.buf).digest('hex'),
             consentPrompt: installConsentPrompt(),
             mutationOwner: packedAttempt.mutationOwner,
+            ...(targetInstanceId !== undefined ? { targetInstanceId } : {}),
+            ...(installCopy !== undefined ? { installCopy } : {}),
+            ...(namespace !== undefined ? { namespace } : {}),
             ...(packedAttempt.isCurrent ? { isCurrent: packedAttempt.isCurrent } : {}),
           },
         );
@@ -2605,12 +2735,20 @@ export function getCindyGhostsMcpDeps(
           name: installed.ghost.manifest.name,
           version: installed.ghost.manifest.version,
           enabled: installed.ghost.enabled,
+          instanceId: installedGhostStoragePart(installed.ghost),
+          namespace: installed.ghost.namespace ?? null,
           note:
             installed.action === 'installed'
               ? `${packedAttempt.iconNote}插件已完成校验、打包和安装，并已启用。`
-              : `${packedAttempt.iconNote}插件已完成校验、打包和原位更新；原有启用状态、配置与数据保持不变。`,
+              : installed.sourceChanged
+                ? `${packedAttempt.iconNote}插件已换为本地来源；旧账号与数据已隔离保存，需要在当前插件中重新连接账号。`
+                : `${packedAttempt.iconNote}插件已完成校验、打包和原位更新；原有启用状态、配置与数据保持不变。`,
         };
       } catch (err) {
+        if (err instanceof GhostInstallTargetRequiredError) return {
+          ok: false, errorCode: 'INSTALL_TARGET_REQUIRED', message: err.message,
+          targets: err.targets, copyNamespace: err.copyNamespace,
+        };
         if (isIpcError(err) && err.code === 'MUTATION_CANCELLED') {
           return {
             ok: false,

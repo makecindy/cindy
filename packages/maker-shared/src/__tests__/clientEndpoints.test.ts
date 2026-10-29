@@ -27,6 +27,7 @@ const VALID_MANIFEST = {
   skillhubApiBaseUrl: 'https://skillhub.example.com',
   cindySkillHubApiBaseUrl: 'https://cindy-skillhub.example.com',
   pluginApiBaseUrl: 'https://plugin.example.com',
+  shareBaseUrl: 'https://share.example.com',
   cdnBaseUrl: 'https://cdn.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update.example.com',
 };

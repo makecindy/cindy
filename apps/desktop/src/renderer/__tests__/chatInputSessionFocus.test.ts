@@ -81,9 +81,9 @@ describe('ChatInput session switch focus contract', () => {
     expect(sessionViewSource).toContain(
       'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
-    expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
+    expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}');
     expect(sessionViewSource).toContain(
-      'ownsHardwareComposerActions={ownsHardwareTaskActions}',
+      'ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}',
     );
     expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
     expect(sessionViewSource).toContain(
@@ -251,7 +251,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(unlockAfterClear).not.toContain('setSendDispatchInFlight(false);');
     expect(chatInputSource).toContain(
-      'disabled || (sendDispatchInFlight && !allowTypeDuringSend)',
+      'disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend)',
     );
     expect(chatInputSource).toContain('sendDispatchInFlight ||');
     expect(chatInputSource).toContain('setSendDispatchInFlight(nextSendInFlight);');

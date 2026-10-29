@@ -150,6 +150,32 @@ function createControllableHandle(opts?: {
 }
 
 describe('dispatch authorization refresh', () => {
+  // Permission can change during preparation or even in the caller's final
+  // callback. The Host lifecycle check must still prevent any provider send.
+  it('runs the Host dispatch authorization last and unwinds a rejected reservation', async () => {
+    const h = createControllableHandle();
+    const send = vi.spyOn(h.handle, 'send');
+    const session = makeSession(h.handle);
+    let allowed = true;
+    const undispatched = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onDispatching() { if (!allowed) throw new Error('permission changed'); },
+      onUndispatched: undispatched,
+      onTerminal() {},
+    });
+    try {
+      await expect(session.send('prepared under old permission', {
+        onDispatching() { allowed = false; },
+      })).rejects.toThrow('permission changed');
+      expect(send).not.toHaveBeenCalled();
+      expect(undispatched).toHaveBeenCalledOnce();
+      allowed = true;
+      await expect(session.send('fresh permission')).resolves.toEqual({ accepted: true });
+      expect(send).toHaveBeenCalledOnce();
+    } finally { await session.close(); }
+  });
+
   it.each([undefined, 'Earlier owner restriction'] as const)(
     'preserves existing authorization when the final guard has no replacement: %s',
     async (earlierIntent) => {
