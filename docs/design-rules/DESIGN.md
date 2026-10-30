@@ -554,6 +554,16 @@ input/text
 
 Ordinary confirmations opt into standard buttons with `presentation="standard"` on the shared `ConfirmDialog` / provider. DS-6 selects only custom-provider and custom-MCP deletion. Standard confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Unselected callers, Permission, Full Access and plugin authorization keep their existing presentation.
 
+### Desktop composer voice teaching (2026-10-30)
+
+长按语音教学只在已有任务空闲、输入框无正文/附件、用户主动点击或键盘进入输入框并停留
+2 秒时展示。等待推荐生成结束；Tab 推荐、建议预览、待回答/授权、运行中与实际输入均优先。
+自动聚焦、鼠标经过或移出不触发/切换教学。教学放在工具栏现有空隙、靠近右侧语音操作区，
+使用次级小字、轻淡入淡出，不替换占位文字、不增加高度、不移动按钮；空间不足则不显示。
+出现后最多停留 5 秒，输入、失焦或业务状态接替即收起。教学历史在本机跨任务持久保留：
+每天最多一次、累计最多三次，长按录音成功准备好麦克风后永久停止自动教学；拒绝授权不算学会。
+实际录音中的「松开结束」等反馈保持清楚可见，不受教学频控影响。
+
 ### Typography roles and control pairing (DS-11)
 
 - Preserve the accepted hierarchy: ordinary ConfirmDialog title 18/500; provider/MCP form title 18/600; compact prompt title 15/600 where already specified. Different roles are not interchangeable merely because their font size matches.

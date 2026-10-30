@@ -38,6 +38,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   atPanel: null as ComponentProps<typeof AtMentionPanel> | null,
   documentChanged: vi.fn(),
   voiceState: null as UseVoiceInputResult['state'] | null,
+  captureReady: false,
   draftText: '',
   draftSource: null as UseVoiceInputResult['draftSource'],
   draftRange: null as UseVoiceInputResult['draftRange'],
@@ -105,7 +106,7 @@ vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor |
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
   h.editor = editor;
   const state = h.voiceState ?? (h.listening ? 'listening' : 'idle');
-  return { state, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
+  return { state, isCaptureReady: h.captureReady, prepare: h.prepare, getState: () => h.voiceState ?? (h.listening ? 'listening' : 'idle'), isListening: state === 'listening', isBusy: state === 'listening' || state === 'submitting' || state === 'refining', draftText: h.draftText, draftSource: h.draftSource, draftRange: h.draftRange, start: () => { h.listening = true; return true; }, stop: h.stop, cancel: h.cancel };
 } }));
 vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: h.localProviders, providerOrder: [], loading: false }) }));
 vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }) }));
@@ -151,6 +152,8 @@ beforeEach(() => {
   h.editor = null;
   h.documentChanged.mockClear();
   h.listening = false;
+  h.captureReady = false;
+  localStorage.removeItem('cindy.composer-voice-guidance.v1');
   h.voiceState = null;
   h.draftText = '';
   h.draftSource = null;
@@ -289,7 +292,8 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
     await act(async () => { await vi.advanceTimersByTimeAsync(499); });
     expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.holdComposer');
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    expect(screen.getByTestId('composer-voice-guidance').getAttribute('data-visible')).toBe('false');
     fireEvent.pointerLeave(area);
     expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
     fireEvent.pointerEnter(area);
@@ -310,6 +314,10 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
     expect(h.prepare).toHaveBeenCalledOnce();
     view.rerender(<ChatInput {...view.props} />);
     expect(screen.getByTestId('composer-voice-hint').textContent).toBe('newChat.chatInput.voiceInput.speakRelease');
+    expect(localStorage.getItem('cindy.composer-voice-guidance.v1')).toBeNull();
+    h.captureReady = true;
+    view.rerender(<ChatInput {...view.props} />);
+    expect(JSON.parse(localStorage.getItem('cindy.composer-voice-guidance.v1')!).learned).toBe(true);
     for (const type of ['selectstart', 'dragstart', 'mousemove']) {
       const event = new Event(type, { bubbles: true, cancelable: true });
       h.editor!.view.dom.dispatchEvent(event);

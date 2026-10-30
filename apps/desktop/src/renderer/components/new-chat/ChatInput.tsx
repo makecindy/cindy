@@ -422,6 +422,8 @@ import {
   type VoiceInputShortcut,
 } from '@/voice-input/shortcut';
 import { VoiceInputPointerHintLayer } from '@/voice-input/VoiceInputPointerHintLayer';
+import { ComposerVoiceGuidance } from '@/voice-input/ComposerVoiceGuidance';
+import { markComposerVoiceGuidanceLearned } from '@/voice-input/composerVoiceGuidanceHistory';
 import {
   createComposerLongPressVoiceGesture,
   type ComposerLongPressVoiceGesture,
@@ -3746,14 +3748,17 @@ export function ChatInput({
   // detail 才能排除双击);移动/松开挂在 window 上。真正开始录音后再指针捕获,
   // 拖出窗口松开也能停;等待期间不捕获,免得打断选字。
   const composerLongPressVoiceInputEnabled = voiceInputSettings.composerLongPressEnabled;
-  const [composerVoiceHovered, setComposerVoiceHovered] = useState(false);
-  const [composerVoiceHoverHintReady, setComposerVoiceHoverHintReady] = useState(false);
+  const composerVoiceLearningAttemptRef = useRef(false);
   useEffect(() => {
-    setComposerVoiceHoverHintReady(false);
-    if (!composerVoiceHovered) return;
-    const timer = setTimeout(() => setComposerVoiceHoverHintReady(true), 500);
-    return () => clearTimeout(timer);
-  }, [composerVoiceHovered]);
+    // start() claims synchronously, before permission/device preparation. Only a
+    // genuinely ready capture teaches the gesture; denied permission does not.
+    if (composerVoiceLearningAttemptRef.current && voiceInput.isCaptureReady) {
+      markComposerVoiceGuidanceLearned();
+      composerVoiceLearningAttemptRef.current = false;
+    } else if (voiceInput.state !== 'listening') {
+      composerVoiceLearningAttemptRef.current = false;
+    }
+  }, [voiceInput.isCaptureReady, voiceInput.state]);
   const [composerVoiceHolding, setComposerVoiceHolding] = useState(false);
   const [voiceButtonHolding, setVoiceButtonHolding] = useState(false);
   const composerLongPressGestureRef = useRef<ComposerLongPressVoiceGesture | null>(null);
@@ -3807,7 +3812,11 @@ export function ChatInput({
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       prepare: () => voiceInputPrepareRef.current?.(),
-      start: () => handleVoiceInputStartRef.current(),
+      start: () => {
+        const started = handleVoiceInputStartRef.current();
+        composerVoiceLearningAttemptRef.current = started;
+        return started;
+      },
       stop: () => voiceInputStopRef.current(),
       onHoldStart: () => {
         setComposerVoiceHolding(true);
@@ -9105,7 +9114,7 @@ export function ChatInput({
     !!previewPrompt && previewPrompt !== dismissedPreviewPrompt && !composerMutationLocked;
   const voiceHintEmpty =
     !!editor && !editor.isDestroyed && composerDocIsEmpty(editor.state.doc) && !hasVoiceDraftText;
-  // 已有推荐或建议预览优先于语音入门提示；实际录音仍由输入框锁定状态切换为录音指引。
+  // 编辑区只显示实际录音指引；入门教学独立放在工具栏空隙，不替换占位文字。
   const voiceHint = voiceHintEmpty
     ? voiceBusyOnCurrentComposer && voiceInput.state === 'listening'
       ? t(
@@ -9113,14 +9122,7 @@ export function ChatInput({
             ? 'newChat.chatInput.voiceInput.speakRelease'
             : 'newChat.chatInput.voiceInput.speakPressAgain',
         )
-      : !showRecommendationOverlay &&
-          !showPromptPreview &&
-          composerVoiceHovered &&
-          composerVoiceHoverHintReady &&
-          composerLongPressVoiceInputEnabled &&
-          !composerTypingLocked
-        ? t('newChat.chatInput.voiceInput.holdComposer')
-        : null
+      : null
     : null;
   promptPreviewInputGuardRef.current = () => {
     if (!showPromptPreview) return false;
@@ -9391,14 +9393,6 @@ export function ChatInput({
             )}
             data-split-group-composer-drop-target
             onPointerDown={handleComposerLongPressPointerDown}
-            onPointerOver={(event) => {
-              const editorDom = editor && !editor.isDestroyed ? editor.view.dom : null;
-              setComposerVoiceHovered(
-                (event.target instanceof Element && !!editorDom?.contains(event.target)) ||
-                isComposerBlankPointerTarget(event.target, event.currentTarget, editorDom, event),
-              );
-            }}
-            onPointerLeave={() => setComposerVoiceHovered(false)}
             // 卡片里的空白(文字行下方的空隙、工具栏两组按钮之间的空档、四周
             // padding)没有元素承接点击:浏览器默认会把焦点从 contenteditable 撤到
             // <body>,正在输入的光标凭空消失;而点空白又该能进入输入态。所以先
@@ -9763,7 +9757,7 @@ export function ChatInput({
                 // select-none 挂容器而非逐按钮:Chromium 的 user-select:none 只挡
                 // "在元素上起选",从相邻可选区起拖再划入时按钮文字仍会被刷蓝
                 // (同 sortable.css 侧栏行修过的 selection bleed),容器级禁选才挡得住。
-                'mt-[2px] flex select-none items-center',
+                'relative mt-[2px] flex select-none items-center',
                 useNarrowToolbar
                   ? 'min-w-0 flex-nowrap justify-between gap-2 overflow-hidden'
                   : effectiveCompactToolbar
@@ -9871,6 +9865,17 @@ export function ChatInput({
                 />
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
+              <ComposerVoiceGuidance
+                editor={editor}
+                sessionId={sessionId}
+                eligible={composerLongPressVoiceInputEnabled &&
+                  recommendationComposerState.hydrated && !hasComposerPayload && !hasVoiceDraftText &&
+                  !composerMutationLocked && !showStopButton && !showPromptPreview &&
+                  !queueEditActive &&
+                  !voiceConversationActive && !atOpen && !slashOpen}
+                recommendationPending={recommendationEnabled && !!recommendation}
+                text={t('newChat.chatInput.voiceInput.holdComposer')}
+              />
               <div
                 className={cn(
                   useNarrowToolbar

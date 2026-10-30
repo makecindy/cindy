@@ -36,6 +36,13 @@ export default {
       data: { recommendation: '帮我整理下一步计划' },
       viewport: { width: 360, height: 400 },
     },
+    'voice-guidance': {
+      about: 'Idle intentional focus teaches once without replacing placeholder or moving controls',
+    },
+    'voice-guidance-narrow': {
+      about: 'Insufficient toolbar space suppresses teaching without consuming its budget',
+      viewport: { width: 240, height: 400 },
+    },
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
@@ -53,6 +60,37 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case.startsWith('voice-guidance')) {
+      const editor = page.locator('.ProseMirror');
+      const guidance = page.getByTestId('composer-voice-guidance');
+      const mic = page.locator('button[aria-pressed]');
+      const before = await mic.boundingBox();
+      await editor.hover();
+      await page.waitForTimeout(2100);
+      assert.equal(await guidance.getAttribute('data-visible'), 'false');
+      await editor.click();
+      if (ui.case.endsWith('narrow')) {
+        await page.waitForTimeout(2300);
+        assert.equal(await guidance.getAttribute('data-visible'), 'false');
+        assert.equal(await page.evaluate(() => localStorage.getItem('cindy.composer-voice-guidance.v1')), null);
+        await ui.capture('narrow-no-guidance');
+        return;
+      }
+      await page.waitForFunction(() => document.querySelector('[data-testid="composer-voice-guidance"]')?.dataset.visible === 'true');
+      await page.mouse.move(1, 1);
+      assert.equal(await guidance.getAttribute('data-visible'), 'true');
+      assert.deepEqual(await mic.boundingBox(), before);
+      assert.equal(await page.getByTestId('composer-voice-hint').count(), 0);
+      await ui.capture('idle-guidance');
+      await page.waitForFunction(() => document.querySelector('[data-testid="composer-voice-guidance"]')?.dataset.visible === 'false');
+      await editor.click();
+      await page.waitForTimeout(2300);
+      assert.equal(await guidance.getAttribute('data-visible'), 'false');
+      await editor.pressSequentially('Continue with the implementation');
+      assert.equal(await guidance.getAttribute('data-visible'), 'false');
+      await ui.capture('typing');
+      return;
+    }
     if (ui.data.recommendation) {
       const editor = page.locator('[contenteditable]');
       const call = page.getByRole('button', { name: await ui.t('bots.voiceMode.startConversation'), exact: true });
@@ -108,8 +146,8 @@ export default {
       const cardBox = await card.boundingBox();
       // Start in the card's padding, outside the single text line.
       await page.mouse.move(cardBox.x + 4, cardBox.y + 4);
-      await hintText('holdComposer');
-      await ui.capture('hover');
+      assert.equal(await hint.count(), 0);
+      await ui.capture('idle');
       await page.mouse.down();
       await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
       await hintText('speakRelease');
