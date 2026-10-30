@@ -2428,11 +2428,11 @@ export function ProviderConnectionDialog({
                 !editing && onSelectProvider ? (
                   <ProviderNameSearch {...control} surface="ivory" value={name} onChange={setName}
                     placeholder={t('settings.providers.custom.fields.namePlaceholder')}
-                    choices={providerChoices} open={childLayer?.kind === 'provider-search'}
+                    choices={providerChoices} disabled={saving} open={!saving && childLayer?.kind === 'provider-search'}
                     onOpenChange={open => setChildLayer(current => open
                       ? (current?.kind === 'model-picker' ? current : { kind: 'provider-search' })
                       : current?.kind === 'provider-search' ? null : current)}
-                    onSelect={onSelectProvider} />
+                    onSelect={target => { if (!savingRef.current) onSelectProvider(target); }} />
                 ) : (
                 <SettingsTextInput
                   {...control}
