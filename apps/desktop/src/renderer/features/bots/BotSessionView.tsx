@@ -37,9 +37,10 @@ type BotSessionGate =
   | { kind: 'error'; reason: ReturnType<typeof sessionEntryFailure> };
 
 function readBotChatIdentity(bot: unknown, botId: string): BotChatIdentity {
-  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown; templateId?: unknown };
+  const candidate = (bot ?? {}) as { name?: unknown; avatar?: unknown; avatarColor?: unknown; templateId?: unknown; sourceTask?: { title?: string } };
   return {
     id: botId,
+    sourceTaskTitle: candidate.sourceTask?.title,
     templateId: typeof candidate.templateId === 'string' ? candidate.templateId : undefined,
     name: typeof candidate.name === 'string' ? candidate.name : '',
     avatar: typeof candidate.avatar === 'string' ? candidate.avatar : null,

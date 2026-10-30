@@ -663,6 +663,7 @@ export interface ImDeleteBindingsArgs {
 }
 
 export interface BotsCreateProfileArgs {
+  sourceSessionId?: string;
   id: string;
   displayName: string;
   description: string;

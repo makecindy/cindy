@@ -322,6 +322,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // —— 读模型(被控端本地 DB 是数据真相)——
   'local-db:sessions:list',
   'local-db:task-tags:execute',
+  // Owner-only creation on the controlled computer, with capability probing and source validation.
+  'maker:task-companion',
   'local-db:sessions:get',
   // Bounded metadata reconciliation. Old hosts reject this; controllers fall back to GET.
   'local-db:sessions:get-many',

@@ -8,11 +8,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryError } from '@cindy/maker-core';
 
 const h = vi.hoisted(() => ({
   root: '',
+  sourceDb: null as Database.Database | null,
   rows: [] as any[],
   memories: new Map<string, any>(),
   skills: new Map<string, { source: string; enabled: boolean }>(),
@@ -28,7 +30,7 @@ vi.mock('../../localDb/client/current.js', () => {
   const db = {
     // 按真实查询的水位区间与条数上限返回（参数：botId, after, until）。
     query: vi.fn(async (sql: string, params: unknown[]) => (sql.includes('nightly-learning-turns')
-      ? h.rows.filter((r) => r.createdAt > (params[1] as number) && r.createdAt <= (params[2] as number)).slice(0, 401)
+      ? h.sourceDb ? h.sourceDb.prepare(sql).all(...params) : h.rows.filter((r) => r.createdAt > (params[2] as number) && r.createdAt <= (params[3] as number)).slice(0, 401)
       : [])),
     queryOne: vi.fn(async () => ({ canonicalSessionId: 'main', capabilities: JSON.stringify({ memory: true }) })),
   };
@@ -75,7 +77,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { revertNightlyLearningItem, runNightlyLearning } from '../botNightlyLearning.js';
-import { readNightlyLearningState, recordNightlyLearningTurn } from '../botNightlyLearningState.js';
+import { readNightlyLearningState, recordNightlyLearningTurn, updateNightlyLearningState } from '../botNightlyLearningState.js';
 
 const turn = (n: number, text: string, createdAt: number) => ({
   sessionId: 'main', id: `reply${n}`, content: 'Done.', meta: JSON.stringify({ turnCompleted: true }), createdAt, role: 'canonical',
@@ -92,6 +94,7 @@ const memory = (name: string, title: string, body: string) => {
 const roots: string[] = [];
 
 beforeEach(async () => {
+  h.sourceDb?.close(); h.sourceDb = null;
   vi.clearAllMocks();
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'nightly-learning-'));
   roots.push(h.root);
@@ -100,7 +103,44 @@ beforeEach(async () => {
   h.skills.clear();
 });
 afterAll(async () => {
+  h.sourceDb?.close();
   await Promise.all(roots.map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+// Design §6: real learning entry and SQL must admit captured source turns only.
+// Existing tests supplied already-filtered rows. Minimal input is one captured pair
+// plus a later pair and a withdrawn reply. Unit; SQLite and files are isolated.
+it('learns captured source history through the existing pipeline without later or withdrawn turns', async () => {
+  const db = h.sourceDb = new Database(':memory:');
+  db.exec(`CREATE TABLE sessions (id TEXT, source TEXT, status TEXT, remote_host_id TEXT, cleared_at INTEGER);
+    CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT, archived_at INTEGER);
+    CREATE TABLE bot_task_origins (bot_id TEXT, source_session_id TEXT);
+    CREATE TABLE bot_task_origin_messages (bot_id TEXT, message_id TEXT);
+    CREATE TABLE messages (id TEXT, client_id TEXT, session_id TEXT, role TEXT, content TEXT, agent_meta TEXT, created_at INTEGER, rewind_at INTEGER);
+    INSERT INTO sessions VALUES ('source','desktop','active',NULL,NULL);
+    INSERT INTO bot_task_origins VALUES ('bot','source');
+    INSERT INTO messages VALUES
+      ('u','u','source','user','Keep the narrator in first person.','{}',1000,NULL),
+      ('a','a','source','assistant','Agreed.','{"turnCompleted":true,"replyToClientId":"u"}',2000,NULL),
+      ('late-u','late-u','source','user','Later unrelated instruction.','{}',3000,NULL),
+      ('late-a','late-a','source','assistant','Later.','{"turnCompleted":true}',4000,NULL),
+      ('withdrawn','withdrawn','source','assistant','Gone.','{"turnCompleted":true}',5000,6000);
+    INSERT INTO bot_task_origin_messages VALUES ('bot','u'),('bot','a'),('bot','withdrawn');`);
+  // Persisted creation frontier (also asserted through creation IPC): a new turn must not move it.
+  await updateNightlyLearningState(h.root, 'bot', state => {
+    state.pending = { turns: 1, sessions: {}, firstAt: 2000 }; state.throughAt = 1999; return state;
+  });
+  db.exec(`INSERT INTO sessions VALUES ('main','bot','active',NULL,NULL);
+    INSERT INTO bot_session_links VALUES ('main','bot','canonical',NULL);
+    INSERT INTO messages VALUES ('new-u','new-u','main','user','New discussion.','{}',7000,NULL),
+      ('new-a','new-a','main','assistant','Understood.','{"turnCompleted":true}',8000,NULL);`);
+  await recordNightlyLearningTurn(h.root, 'bot', 'main', 8000);
+  reply({});
+  await runNightlyLearning('bot', { manual: false });
+  expect(sentIds(0)).toEqual(['u', 'a', 'new-u', 'new-a']);
+  expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(0);
+  await runNightlyLearning('bot', { manual: false });
+  expect(h.model).toHaveBeenCalledOnce();
 });
 
 it('skips a scheduled run without calling the model when there is no new owner conversation', async () => {

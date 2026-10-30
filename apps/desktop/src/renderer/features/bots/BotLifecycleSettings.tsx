@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { BotDeleteDialog } from './BotDeleteDialog';
 import { withoutBotHiddenLanes } from './botGroupLane';
+import { BotTaskOriginHistory } from './BotTaskOriginHistory';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -245,6 +246,7 @@ export function BotLifecycleSettings({
           </div>
 
           <div className="mt-4 px-3">
+            {bot.sourceTask && <BotTaskOriginHistory bot={bot} onOpenSession={onOpenSession} />}
             <div className="flex items-center justify-between gap-3">
               <p className="text-13 font-medium text-[var(--text-primary)]">
                 {t('bots.historyTitle')}

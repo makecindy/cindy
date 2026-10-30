@@ -142,6 +142,7 @@ export interface ListSessionsArgs {
 }
 
 export interface GetMessagesArgs {
+  teammateId?: string;
   sessionIds: string[] | null;
   workdir: string | null;
   fromMs: number | null;

@@ -9960,6 +9960,7 @@
     }
   },
   "bots": {
+    "fromTask": {"create":"建立為夥伴","explanation":"保留「{{title}}」的既有對話，在夥伴中繼續。專案檔案仍在原位置。","role":"職責（選填）","history":"來源任務：{{title}}","openSource":"開啟原任務","loadMore":"讀取更多歷史"},
     "avatarStatus": {
       "awaiting": "待你確認",
       "error": "需要注意",

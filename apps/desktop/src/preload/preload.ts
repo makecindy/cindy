@@ -6171,7 +6171,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:messages:work-details', sessionId, ref, opts),
       list: (
         sessionId: string,
-        opts?: { limit?: number; before?: string; beforeTs?: number },
+        opts?: { limit?: number; before?: string; beforeTs?: number; originBotId?: string },
       ): Promise<unknown> => ipcRenderer.invoke('local-db:messages:list', sessionId, opts),
       estimatedSessionValue: (sessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:messages:estimatedSessionValue', sessionId),

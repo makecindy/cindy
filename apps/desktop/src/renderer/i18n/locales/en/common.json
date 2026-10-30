@@ -9993,6 +9993,7 @@
     }
   },
   "bots": {
+    "fromTask": {"create":"Create companion","explanation":"Keep the existing chat from “{{title}}” and continue with a companion. Project files stay where they are.","role":"Role (optional)","history":"Source session: {{title}}","openSource":"Open source session","loadMore":"Load more history"},
     "avatarStatus": {
       "awaiting": "Needs your confirmation",
       "error": "Needs attention",

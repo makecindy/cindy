@@ -37,6 +37,7 @@ import {
 import { TaskMigrationDialog } from './TaskMigrationDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+import { BotRosterView } from '@/features/bots/BotRosterView';
 
 interface Props {
   session: Session;
@@ -57,6 +58,7 @@ interface Props {
 }
 
 type SharingDialog =
+  | { kind: 'companion' }
   | { kind: 'manage' }
   | { kind: 'migration'; destination?: TaskMoveDestination }
   | { kind: 'browse-project' }
@@ -98,6 +100,17 @@ function ActiveSessionTaskMenu({
   const peer = parseSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const guest = peer?.role === 'host';
   const [sharing, setSharing] = useState<SharedTaskHostState | null>(null);
+  const [canCreateCompanionRemotely, setCanCreateCompanionRemotely] = useState(false);
+  useEffect(() => {
+    let current = true;
+    setCanCreateCompanionRemotely(false);
+    if (open && session.deviceLinkDeviceId && !guest) {
+      void window.electronAPI.deviceLink.invoke(session.deviceLinkDeviceId, 'maker:task-companion', [{ action: 'capabilities' }])
+        .then(result => { if (current) setCanCreateCompanionRemotely((result as { version?: number })?.version === 2); })
+        .catch(() => {});
+    }
+    return () => { current = false; };
+  }, [open, session.deviceLinkDeviceId, guest]);
   const [copying, setCopying] = useState(false);
   const copyPending = useRef(false);
   const copyEpoch = useRef(0);
@@ -230,6 +243,10 @@ function ActiveSessionTaskMenu({
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
             {item('rename', onRename, ownerActionsBlocked)}
+            {(!session.deviceLinkDeviceId || canCreateCompanionRemotely) && !session.remoteHostId && !session.agentDeviceId && !session.orcaRole && (session.source === 'desktop' || session.source === 'shared') && !empty && !hosted && (
+              <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={ownerActionsBlocked}
+                onSelect={() => setDialog({ kind: 'companion' })}>{t('bots.fromTask.create')}</DropdownMenuItem>
+            )}
             {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
             {!archived && !empty && !session.deviceLinkDeviceId && (
               <DropdownMenuItem
@@ -327,6 +344,7 @@ function ActiveSessionTaskMenu({
           </>
         )}
       </DropdownMenuContent>
+      {dialog?.kind === 'companion' && <BotRosterView sourceTask={session} onClose={dismissSharing} restoreFocus={returnFocus} />}
       {dialog?.kind === 'manage' && (
         <SharedTaskButton
           session={session}
@@ -364,6 +382,7 @@ function ActiveSessionTaskMenu({
       {dialog &&
         dialog.kind !== 'browse-project' &&
         dialog.kind !== 'manage' &&
+        dialog.kind !== 'companion' &&
         dialog.kind !== 'migration' && (
           <SharedTaskExitDialog
             target={dialog}

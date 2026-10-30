@@ -24,6 +24,8 @@ import {
   markLatestAgentHandoffConsumed,
 } from '../localDb/ipc/messages.js';
 import { createLogger } from '../logger.js';
+import { pendingBotTaskOriginHandoff, consumeBotTaskOriginHandoff } from '../localDb/botTaskOrigin.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import {
   buildForkOriginHandoff,
   composeForkOriginHandoff,
@@ -40,7 +42,7 @@ const log = createLogger('agent-handoff-pending');
  *    永远查不到 DB 里那条被 fork 事务 re-arm 成 `consumed: false` 的 agent_switch
  *    边界,把跨引擎交接整段吞掉。两者在这里组合,谁都不丢。
  */
-export const agentHandoffPending = createAgentHandoffPendingRegistry(async (sessionId) => {
+const sessionHandoffPending = createAgentHandoffPendingRegistry(async (sessionId) => {
   // 两个查询互不依赖,并行发出——这是 send 路径上的一跳,不该串成两个 RTT。
   // 失败时**独立降级**,两者重要性并不对等:
   //  - 交接查询失败照旧上抛,由 peek 的 catch 处理(返回 null 且**不缓存**,下次
@@ -90,3 +92,27 @@ export const agentHandoffPending = createAgentHandoffPendingRegistry(async (sess
       : handoff;
   },
 );
+
+// A source task can still be edited or cleared. Read it at send time rather than caching
+// its text in the canonical task's registry; an engine-switch note must not replace it.
+const sourceInjected = new Set<string>();
+export const agentHandoffPending = {
+  ...sessionHandoffPending,
+  async peek(sessionId: string) {
+    const key = `${activeOwnerScopeKey()}:${sessionId}`;
+    const generation = sessionHandoffPending.readGeneration(sessionId);
+    sourceInjected.delete(key);
+    const [pending, source] = await Promise.all([
+      sessionHandoffPending.peek(sessionId), pendingBotTaskOriginHandoff(sessionId),
+    ]);
+    if (key !== `${activeOwnerScopeKey()}:${sessionId}` || generation !== sessionHandoffPending.readGeneration(sessionId)) return null;
+    if (source) sourceInjected.add(key);
+    return [pending, source].filter(Boolean).join('\n\n') || null;
+  },
+  consume(sessionId: string) {
+    sessionHandoffPending.consume(sessionId);
+    if (sourceInjected.delete(`${activeOwnerScopeKey()}:${sessionId}`)) {
+      void consumeBotTaskOriginHandoff(sessionId).catch(() => log.warn('Source context consumption could not be saved', { sessionId }));
+    }
+  },
+};

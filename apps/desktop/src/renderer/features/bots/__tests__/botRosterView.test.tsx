@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   onboarding: false,
   availableVendors: new Set(['cc', 'codex', 'pi']),
-  profiles: [] as Array<{ id: string; name: string; invitation: { stage: string } }>,
+  profiles: [] as Array<{ id: string; name: string; invitation: { stage: string }; sourceTask?: { sourceSessionId: string } }>,
 }));
 vi.mock('@/state/newMakerDraft', () => ({
   getDraftForPreferenceSync: () => ({
@@ -150,16 +150,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('name-only creation', () => {
-  it.each([false, true])('restores the provider-setup draft after unmount (inline=%s), then discards it on cancel', async inline => {
-    const first = render(<BotRosterView inline={inline} />);
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep me' } });
+  it.each([{ inline: false, fromSource: false }, { inline: true, fromSource: false }, { inline: false, fromSource: true }])('restores the provider-setup draft after unmount (%j), then discards it on cancel', async ({ inline, fromSource }) => {
+    const sourceTask = fromSource ? { id: 'source', title: 'Novel', agentKind: 'cc', model: 'original' } as import('@/lib/ccAgent.types').Session : undefined;
+    const first = render(<BotRosterView inline={inline} sourceTask={sourceTask} />);
+    fireEvent.change(screen.getByLabelText('bots.creationName'), { target: { value: 'Keep me' } });
     fireEvent.click(screen.getByTestId('portrait'));
     fireEvent.click(screen.getByRole('button', { name: 'choose-custom-model' }));
     fireEvent.click(screen.getByRole('button', { name: 'connect-source' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=providers');
     first.unmount();
-    const returned = render(<BotRosterView />);
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Keep me');
+    const returned = render(<BotRosterView sourceTask={sourceTask} />);
+    expect((screen.getByLabelText('bots.creationName') as HTMLInputElement).value).toBe('Keep me');
     expect(screen.getByTestId('portrait').textContent).toBe('data:image/png;base64,bWFudWFs');
     expect(screen.getByTestId('selected-engine').textContent).toBe('pi');
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
@@ -213,6 +214,33 @@ describe('name-only creation', () => {
     expect(mocks.generateDraft).not.toHaveBeenCalled();
   });
 
+  // User decision: multiple companions per source, one per submission. Unit UI regression:
+  // failed receipt + double click must retain the request; reopening must start a new one.
+  it('reuses a submission request on retry and creates a new request after reopening', async () => {
+    const sourceTask = { id: 'source', title: 'Novel' } as import('@/lib/ccAgent.types').Session;
+    mocks.addBotProfileAndWait.mockRejectedValueOnce(new Error('Lost receipt'));
+    const view = render(<BotRosterView sourceTask={sourceTask} />);
+    const button = await screen.findByRole('button', { name: 'bots.guided.generate' });
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(button); fireEvent.click(button);
+    await screen.findByRole('alert');
+    expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1);
+    const firstRequest = mocks.addBotProfileAndWait.mock.calls[0][0].requestId;
+    expect(firstRequest).toBeTruthy();
+    mocks.profiles = [{ id: 'existing', name: 'Novel', invitation: { stage: 'ready' }, sourceTask: { sourceSessionId: 'source' } }];
+    view.rerender(<BotRosterView sourceTask={sourceTask} />);
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(2));
+    expect(mocks.addBotProfileAndWait.mock.calls[1][0].requestId).toBe(firstRequest);
+    view.unmount();
+    render(<BotRosterView sourceTask={sourceTask} />);
+    fireEvent.change(screen.getByLabelText('bots.creationName'), { target: { value: 'Second editor' } });
+    await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(3));
+    expect(mocks.addBotProfileAndWait.mock.calls[2][0].requestId).not.toBe(firstRequest);
+  });
+
   it.each([false, true])('keeps default-chain inheritance but saves only the visible explicit model: selected=%s', async selected => {
     mocks.withDefaultBackup = true;
     render(<BotRosterView />);
@@ -230,13 +258,16 @@ describe('name-only creation', () => {
     } else expect(input.capabilities).toBeUndefined();
   });
 
-  it('preserves the name when the configured model is unavailable', async () => {
-    mocks.addBotProfileAndWait.mockRejectedValueOnce(new mocks.BotModelSelectionRequiredError());
+  it.each(['missing', 'unavailable'])('preserves the name and explains a %s configured model', async failure => {
+    mocks.addBotProfileAndWait.mockRejectedValueOnce(failure === 'missing'
+      ? new mocks.BotModelSelectionRequiredError()
+      : new Error("Error invoking remote method 'local-db:bots:create': Error: [MODEL_SELECTION_UNAVAILABLE] unavailable"));
     render(<BotRosterView />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });
     await waitFor(() => expect((screen.getByRole('button', { name: 'bots.guided.generate' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
-    await screen.findByRole('alert');
+    expect((await screen.findByRole('alert')).textContent).toBe(failure === 'missing'
+      ? 'bots.guided.modelRequired' : 'ipcError.MODEL_SELECTION_UNAVAILABLE');
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Mika');
     expect(mocks.navigate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'choose-custom-codex-model' }));

@@ -40,6 +40,7 @@ import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider
 import type { McpProvider } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../../shared/customMcp';
 import { Session } from '@cindy/maker-core';
+import { agentHandoffPending } from '../../../maker-ipc/agentHandoffPendingSingleton';
 import { withSessionPermissionChange } from '../../../maker-ipc/sessionPermissionChange';
 import { getMaker, getPluginRegistry, isBotToolsetAvailable } from '../../../maker-host/index';
 import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry';
@@ -167,7 +168,11 @@ vi.mock('../../client/current', () => ({
       return current;
     };
   })(),
-  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  getDbClient: () => ({ drizzle: h.db, tx: h.tx,
+    queryOne: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).get(...args),
+    query: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).all(...args),
+    exec: async (sql: string, args: unknown[] = []) => h.sqlite!.prepare(sql).run(...args),
+  }),
   tryGetDbClient: () => ({ drizzle: h.db, tx: h.tx }),
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
@@ -273,6 +278,7 @@ import {
 } from '../../../maker-ipc/botDelegationDispatchOutcome';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../../../shared/accountProviderReadiness';
 import { configureBotCanonicalReplacementCoordinator } from '../../../maker-ipc/botCanonicalReplacementCoordinator';
+import { readNightlyLearningState, recordNightlyLearningTurn } from '../../../maker-ipc/botNightlyLearningState';
 import type { MakerSessionCreateOpts } from '../../../maker-ipc/sessionRequest';
 import { parseBotDelegationPlanSnapshot } from '../../../../shared/botDelegation';
 import { readBotCollaborationMeta } from '../../../../shared/botCollaboration';
@@ -493,6 +499,10 @@ function createDb(filename = ':memory:'): void {
     );
   `);
   sqlite.exec(readFileSync(resolve(__dirname, '../../../../../drizzle/0070_woozy_harpoon.sql'), 'utf8'));
+  sqlite.exec(`CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY, source_session_id TEXT, request_id TEXT UNIQUE, created_at INTEGER, handoff_consumed_at INTEGER, prepared_at INTEGER);
+    CREATE TABLE bot_task_origin_messages (bot_id TEXT, message_id TEXT, PRIMARY KEY(bot_id,message_id));
+    CREATE TABLE IF NOT EXISTS shared_task_events (session_id TEXT);
+    CREATE TABLE IF NOT EXISTS agent_input_queue_snapshots (session_id TEXT, payload TEXT);`);
   h.sqlite = sqlite;
   const rawDb = drizzle(sqlite, {
     schema: {
@@ -1538,6 +1548,68 @@ describe('Bot canonical Session lifecycle', () => {
     } finally { queued.mockRestore(); }
   });
 
+  // Design §6: creation IPC -> real worker transaction -> profile read -> canonical creation.
+  // Prior integration tests only created empty companions. Minimal source includes a saved
+  // completed exchange. Unit fixture owns its in-memory DB and temporary Home; no real account.
+  // Imported local tasks carry source=shared; they must retain history without restoring old authorization.
+  it.each(['desktop', 'shared'])('creates from a %s source task through the shared service and retries into the same companion', async (source) => {
+    const before = h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get() as number;
+    h.sqlite!.prepare(`INSERT INTO sessions (id,title,model,effort,permission_mode,source,agent_kind,provider_id,created_at,updated_at)
+      VALUES ('novel-source','Novel','z-ai/glm-5.3-flash','high','ask',?,'pi','xd',1,1)`).run(source);
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('novel-u','novel-u','novel-source','user','"Use first person."',2)`).run();
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('novel-a','novel-a','novel-source','assistant','"Agreed."',3)`).run();
+    // The installed coordinator protects the source send lock and rejects a running source.
+    configureBotCanonicalReplacementCoordinator(async (sessionId, operation) => {
+      if (sessionId === 'novel-source') throw new Error('Source is running');
+      return operation();
+    });
+    await expect(invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'busy-request', name: 'Editor', avatar: 'E' }))
+      .rejects.toThrow('Source is running');
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before);
+    configureBotCanonicalReplacementCoordinator(async (_sessionId, operation) => operation());
+    const created = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: ' request-1 ', name: 'Editor', description: 'Review prose', avatar: 'E' });
+    expect(created.sourceTask).toMatchObject({ sourceSessionId: 'novel-source', title: 'Novel' });
+    expect(created.invitation).toBeUndefined();
+    const retry = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'request-1', name: 'Another name', avatar: 'E' });
+    expect(retry.id).toBe(created.id);
+    const canonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: created.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(canonical.canonicalSessionId).not.toBe('novel-source');
+    expect(await invoke('maker:task-companion', { action: 'capabilities' })).toEqual({ version: 2 });
+    expect(await invoke('maker:task-companion', { action: 'create', sourceSessionId: 'novel-source', requestId: 'request-1', name: 'Editor' }))
+      .toMatchObject({ version: 2, botId: created.id, sessionId: canonical.canonicalSessionId });
+    expect(h.sqlite!.prepare("SELECT source,permission_mode FROM sessions WHERE id='novel-source'").get())
+      .toEqual({ source, permission_mode: 'ask' });
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages ORDER BY message_id').pluck().all()).toEqual(['novel-a', 'novel-u']);
+    const learningRoot = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'));
+    await recordNightlyLearningTurn(learningRoot, created.id, canonical.canonicalSessionId, 1000);
+    expect((await readNightlyLearningState(learningRoot, created.id))?.throughAt).toBe(2);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 1);
+    agentHandoffPending.set(canonical.canonicalSessionId, 'Existing engine-switch context');
+    const handoff = await agentHandoffPending.peek(canonical.canonicalSessionId);
+    expect(handoff).toContain('Existing engine-switch context');
+    expect(handoff).toContain('Use first person.');
+    h.sqlite!.prepare("UPDATE messages SET rewind_at=10 WHERE id='novel-u'").run();
+    expect(await agentHandoffPending.peek(canonical.canonicalSessionId)).not.toContain('Use first person.');
+    agentHandoffPending.consume(canonical.canonicalSessionId);
+    await vi.waitFor(() => expect(h.sqlite!.prepare('SELECT handoff_consumed_at FROM bot_task_origins').pluck().get()).toBeTypeOf('number'));
+    h.sqlite!.prepare(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('later-u','later-u','novel-source','user','"Choose a chapter title."',11)`).run();
+    const second = await invoke('local-db:bots:create', { sourceSessionId: 'novel-source', requestId: 'request-2', name: 'Second editor', avatar: 'E' });
+    expect(second.id).not.toBe(created.id);
+    const secondCanonical = await invoke('local-db:bots:create-canonical-session', {
+      botId: second.id, expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    expect(secondCanonical.canonicalSessionId).not.toBe(canonical.canonicalSessionId);
+    expect(secondCanonical.session.workingDir).not.toBe(canonical.session.workingDir);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=? ORDER BY message_id').pluck().all(created.id)).toEqual(['novel-a', 'novel-u']);
+    expect(h.sqlite!.prepare('SELECT message_id FROM bot_task_origin_messages WHERE bot_id=? ORDER BY message_id').pluck().all(second.id)).toEqual(['later-u', 'novel-a']);
+    expect(h.sqlite!.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(before + 2);
+  });
+
   // #6897 (existing SQLite integration fixture): sync bookkeeping cannot be the only guard against
   // publishing a fallback. Existing avatar tests never persisted this provenance.
   it('persists cloud fallback provenance with the avatar and only releases it for a real image', async () => {
@@ -2125,7 +2197,7 @@ describe('Bot canonical Session lifecycle', () => {
         limit: 12,
         filters: expect.objectContaining({ sessionIds: [created.session.id] }),
       }),
-      { sessionSources: null },
+      { sessionSources: null, teammateId: 'bot-1' },
     );
   });
 
@@ -2186,7 +2258,7 @@ describe('Bot canonical Session lifecycle', () => {
     await invoke('local-db:bots:search-history', { botId: 'bot-1', query: 'release', limit: 5 });
     expect(h.searchConversations).toHaveBeenLastCalledWith(
       expect.objectContaining({ filters: expect.objectContaining({ sessionIds: [created.session.id] }) }),
-      { sessionSources: null },
+      { sessionSources: null, teammateId: 'bot-1' },
     );
 
     await expect(archiveBotChannelLanes({ routeKeyPrefix: 'im:telegram:777:' }))

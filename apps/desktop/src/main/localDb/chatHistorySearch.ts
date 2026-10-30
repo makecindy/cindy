@@ -230,7 +230,7 @@ export async function searchChatHistoryHybrid(
   });
   const batchedContexts =
     args.contextRadius > 0 && !pageBudget
-      ? await fetchContextWindowsBatched(pageAnchors, args.roles, args.contextRadius)
+      ? await fetchContextWindowsBatched(pageAnchors, args.roles, args.contextRadius, args.teammateId)
       : null;
 
   // 5) 按命中顺序组装上下文窗口
@@ -252,6 +252,7 @@ export async function searchChatHistoryHybrid(
           ),
           args.roles,
           args.contextRadius,
+          args.teammateId,
         )
       : null;
 
@@ -513,10 +514,10 @@ function buildFilterClause(
   if (args.remoteVisibleOnly) conds.push(remoteVisibleSessionSql('s'));
   const params: unknown[] = [];
   if (args.teammateId) {
-    conds.push(
-      'EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)',
-    );
-    params.push(args.teammateId);
+    conds.push(`(EXISTS (SELECT 1 FROM bot_session_links hcf WHERE hcf.session_id = s.id AND hcf.bot_id = ?)
+      OR (EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.message_id=m.id AND om.bot_id=?)
+        AND s.status != 'deleted' AND m.created_at > COALESCE(s.cleared_at,0)))`);
+    params.push(args.teammateId, args.teammateId);
   }
   if (args.source) {
     conds.push('s.source = ?');
@@ -591,14 +592,20 @@ type ContextBatchRow = MessageRow & {
   _side: 0 | 1 | 2;
 };
 
-function contextBranchSql(side: 'before' | 'anchor' | 'after', roleCount: number): string {
+function contextBranchSql(side: 'before' | 'anchor' | 'after', roleCount: number, teammateId?: string): string {
+  const originClause = teammateId
+    ? ` AND (EXISTS (SELECT 1 FROM bot_session_links b WHERE b.session_id=m.session_id AND b.bot_id=?)
+        OR (EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.message_id=m.id AND om.bot_id=?)
+          AND EXISTS (SELECT 1 FROM sessions source WHERE source.id=m.session_id
+            AND source.status != 'deleted' AND m.created_at > COALESCE(source.cleared_at,0))))`
+    : '';
   const sideOrder = side === 'before' ? 0 : side === 'anchor' ? 1 : 2;
   const projection = `? AS _anchorOrder, ${sideOrder} AS _side,
     m.id AS id, m.client_id AS clientId, m.session_id AS sessionId, m.role AS role,
     m.content AS content, m.tool_use_id AS toolUseId, m.agent_meta AS agentMeta,
     m.agent_kind AS agentKind, m.created_at AS createdAt, m.rewind_at AS rewindAt`;
   if (side === 'anchor') {
-    return `SELECT ${projection} FROM messages m WHERE m.id = ? LIMIT 1`;
+    return `SELECT ${projection} FROM messages m WHERE m.id = ?${originClause} LIMIT 1`;
   }
   const comparison =
     side === 'before'
@@ -610,7 +617,7 @@ function contextBranchSql(side: 'before' | 'anchor' | 'after', roleCount: number
       ? ` AND m.role IN (${Array.from({ length: roleCount }, () => '?').join(',')})`
       : '';
   return `SELECT ${projection} FROM messages m
-    WHERE m.session_id = ? AND m.rewind_at IS NULL${roleClause} AND ${comparison}
+    WHERE m.session_id = ? AND m.rewind_at IS NULL${originClause}${roleClause} AND ${comparison}
     ORDER BY m.created_at ${order}, m.id ${order} LIMIT ?`;
 }
 
@@ -623,10 +630,12 @@ async function fetchContextWindowsBatched(
   anchors: readonly ContextAnchor[],
   roles: HistoryRole[] | null,
   radius: number,
+  teammateId?: string,
 ): Promise<Map<number, SearchChatHistoryContextMessage[]>> {
   const contexts = new Map<number, SearchChatHistoryContextMessage[]>();
   if (anchors.length === 0) return contexts;
   const uniqueRoles = roles ? [...new Set(roles)] : [];
+  const originParams = teammateId ? [teammateId, teammateId] : [];
 
   for (let start = 0; start < anchors.length; start += CONTEXT_BATCH_SIZE) {
     const batch = anchors.slice(start, start + CONTEXT_BATCH_SIZE);
@@ -634,10 +643,11 @@ async function fetchContextWindowsBatched(
     const params: unknown[] = [];
     for (const anchor of batch) {
       if (radius > 0) {
-        parts.push(`SELECT * FROM (${contextBranchSql('before', uniqueRoles.length)})`);
+        parts.push(`SELECT * FROM (${contextBranchSql('before', uniqueRoles.length, teammateId)})`);
         params.push(
           anchor.pageIndex,
           anchor.sessionId,
+          ...originParams,
           ...uniqueRoles,
           anchor.createdAt,
           anchor.createdAt,
@@ -645,13 +655,14 @@ async function fetchContextWindowsBatched(
           radius,
         );
       }
-      parts.push(`SELECT * FROM (${contextBranchSql('anchor', uniqueRoles.length)})`);
-      params.push(anchor.pageIndex, anchor.anchorId);
+      parts.push(`SELECT * FROM (${contextBranchSql('anchor', uniqueRoles.length, teammateId)})`);
+      params.push(anchor.pageIndex, anchor.anchorId, ...originParams);
       if (radius > 0) {
-        parts.push(`SELECT * FROM (${contextBranchSql('after', uniqueRoles.length)})`);
+        parts.push(`SELECT * FROM (${contextBranchSql('after', uniqueRoles.length, teammateId)})`);
         params.push(
           anchor.pageIndex,
           anchor.sessionId,
+          ...originParams,
           ...uniqueRoles,
           anchor.createdAt,
           anchor.createdAt,

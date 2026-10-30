@@ -344,6 +344,7 @@ export type HistoryRole =
   | 'error';
 
 export interface GetMessagesParams {
+  teammateId?: string;
   sessionIds: string[] | null;
   workdir: string | null;
   fromMs: number | null;
@@ -432,6 +433,11 @@ export async function getMessagesForHistory(
 
   const conds = [];
   if (!params.includeRewound) conds.push(isNull(messages.rewindAt));
+  if (params.teammateId) conds.push(sql`(EXISTS (SELECT 1 FROM bot_session_links b
+    WHERE b.session_id=${messages.sessionId} AND b.bot_id=${params.teammateId}) OR
+    (EXISTS (SELECT 1 FROM bot_task_origin_messages om WHERE om.message_id=${messages.id} AND om.bot_id=${params.teammateId})
+      AND ${messages.rewindAt} IS NULL AND ${sessions.status} != 'deleted'
+      AND ${messages.createdAt} > COALESCE(${sessions.clearedAt},0)))`);
   if (sessionIdsToFilter !== null && sessionIdsToFilter.length > 0) {
     conds.push(inArray(messages.sessionId, sessionIdsToFilter));
   }

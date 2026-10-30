@@ -2,7 +2,8 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getMessagesForHistory, listSessionsForHistory } from '../chatHistoryReader';
+import { listSessionsForHistory, getMessagesForHistory } from '../chatHistoryReader';
+import { pendingBotTaskOriginHandoff } from '../botTaskOrigin';
 import { XdtHelperToolRegistry, registerGetChatHistoryTool, registerSearchChatHistoryTool, historyPayload } from '@cindy/mcps';
 import { searchChatHistoryHybrid } from '../chatHistorySearch';
 import { readRemoteBotSessionAccessBatch } from '../ipc/botRemoteSessionAccess';
@@ -46,12 +47,14 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT DEFAULT '', working_dir TEXT,
       agent_kind TEXT DEFAULT 'codex', workspace_kind TEXT DEFAULT 'project', model TEXT DEFAULT '',
       status TEXT DEFAULT 'active', source TEXT DEFAULT 'desktop', orca_role TEXT, orca_remote_lead TEXT,
-      parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER, hidden_at INTEGER);
+      parent_session_id TEXT, created_at INTEGER, updated_at INTEGER, user_send_at INTEGER, hidden_at INTEGER, cleared_at INTEGER);
     CREATE TABLE messages (id TEXT PRIMARY KEY, client_id TEXT, session_id TEXT, role TEXT,
       content TEXT, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER, rewind_at INTEGER);
     CREATE VIRTUAL TABLE messages_fts USING fts5(message_id UNINDEXED, content);
     CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, hidden_at INTEGER, status TEXT);
     CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT DEFAULT 'canonical', route_key TEXT);
+    CREATE TABLE bot_task_origins (bot_id TEXT, source_session_id TEXT, created_at INTEGER, handoff_consumed_at INTEGER);
+    CREATE TABLE bot_task_origin_messages (bot_id TEXT, message_id TEXT);
     CREATE TABLE embedding_jobs (source_id TEXT);
     CREATE TABLE chat_messages_vec_v1 (distance REAL);
     INSERT INTO bot_profiles VALUES ('visible', NULL, 'active'), ('zero', 0, 'active'),
@@ -277,6 +280,36 @@ describe.each(modes)('%s remote history visibility', (mode) => {
     const legacy = await invokeHistory('search_chat_history', { query: 'needle', source: 'telegram' });
     expect(legacy).toMatchObject({ ok: true, sessions: { ordinary: { source: 'telegram', companion: null } } });
     expect((legacy as any).hits.map((hit: any) => hit.sessionId)).toEqual(['ordinary']);
+  });
+
+  // Design task-to-companion §6: snapshot search/read/context must agree; an owner can
+  // still read the ordinary source independently. Existing fixtures had no source associations.
+  // Merge regression: both internal and byte-budgeted tool pages must constrain batched neighbors.
+  it.each([false, true])('reads source snapshot messages and excludes later, withdrawn and cleared content (tool budget: %s)', async (historyToolPageBudget) => {
+    db.exec(`INSERT INTO bot_task_origins VALUES ('visible','ordinary',1000,NULL);
+      INSERT INTO bot_task_origin_messages VALUES ('visible','ordinary');
+      INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+        VALUES ('later','later','ordinary','assistant','"needle later"',1);
+      INSERT INTO messages_fts VALUES ('later','needle later');`);
+    const search = await searchChatHistoryHybrid({ ...searchArgs, historyToolPageBudget, teammateId: 'visible', sessionIds: ['ordinary'], contextRadius: 3, skipVector: true });
+    expect(search.hits.map(hit => hit.messageId)).toEqual(['ordinary']);
+    expect(search.hits[0]!.context.map(message => message.id)).toEqual(['ordinary']);
+    const args = { sessionIds: ['ordinary'], teammateId: 'visible', workdir: null, fromMs: null, toMs: null,
+      agentKind: null, roles: null, includeRewound: true, limit: 100, cursor: null, order: 'asc' as const };
+    expect((await getMessagesForHistory(args)).items.map(row => row.id)).toEqual(['ordinary']);
+    expect(await pendingBotTaskOriginHandoff('visible')).toContain('needle');
+    expect(await pendingBotTaskOriginHandoff('visible')).not.toContain('needle later');
+    db.exec("UPDATE messages SET rewind_at=2000 WHERE id='ordinary'");
+    expect((await getMessagesForHistory(args)).items).toEqual([]);
+    db.exec("UPDATE messages SET rewind_at=NULL WHERE id='ordinary'; UPDATE sessions SET cleared_at=2000 WHERE id='ordinary'");
+    expect((await searchChatHistoryHybrid({ ...searchArgs, historyToolPageBudget, teammateId: 'visible', sessionIds: ['ordinary'], skipVector: true })).hits).toEqual([]);
+    expect((await getMessagesForHistory(args)).items).toEqual([]);
+    db.exec(`INSERT INTO messages (id,client_id,session_id,role,content,created_at)
+      VALUES ('surviving','surviving','ordinary','assistant','"needle surviving"',2500);
+      INSERT INTO messages_fts VALUES ('surviving','needle surviving');
+      INSERT INTO bot_task_origin_messages VALUES ('visible','surviving');`);
+    const surviving = await searchChatHistoryHybrid({ ...searchArgs, historyToolPageBudget, teammateId: 'visible', sessionIds: ['ordinary'], contextRadius: 3, skipVector: true });
+    expect(surviving.hits[0]!.context.map(message => message.id)).toEqual(['surviving']);
   });
 
   // #6779: local semantic-only hits were starved by 300 closer vectors from other

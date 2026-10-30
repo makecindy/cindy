@@ -9960,6 +9960,7 @@
     }
   },
   "bots": {
+    "fromTask": {"create":"创建为伙伴","explanation":"保留「{{title}}」的已有对话，在伙伴中继续。项目文件仍在原位置。","role":"职责（可选）","history":"来源任务：{{title}}","openSource":"打开原任务","loadMore":"读取更多历史"},
     "avatarStatus": {
       "awaiting": "待你确认",
       "error": "需要关注",

@@ -113,6 +113,7 @@ export function registerGetChatHistoryTool(
     category: 'history',
     description: DESCRIPTION,
     inputShape: {
+      teammate_id: z.string().min(1).max(128).optional().describe('Limit to this companion and the visible source messages captured when it was created from a task.'),
       // device-link hosts may use one `deviceId::sessionId`; the host enforces the trusted route.
       session_ids: stringArrayParam(z.array(z.string().min(1)).max(50))
         .optional()
@@ -162,6 +163,7 @@ export function registerGetChatHistoryTool(
         .describe('按 (messages.createdAt, messages.id) 排序; desc = 最新在前(默认)。'),
     },
     handler: async ({
+      teammate_id,
       session_ids,
       workdir,
       from,
@@ -235,6 +237,7 @@ export function registerGetChatHistoryTool(
         : fromMs;
 
       const result = await deps.history.getMessages({
+        teammateId: teammate_id,
         sessionIds: scope.sessionIds,
         workdir: workdir ?? null,
         fromMs: effectiveFromMs,

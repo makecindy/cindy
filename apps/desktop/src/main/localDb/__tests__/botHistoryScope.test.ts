@@ -18,6 +18,7 @@ beforeEach(() => {
     CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT);
     CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, created_at INTEGER, role TEXT NOT NULL DEFAULT 'canonical', route_key TEXT);
     CREATE TABLE bot_delegations (requesting_bot_id TEXT, child_session_id TEXT, created_at INTEGER, target_bot_id TEXT);
+    CREATE TABLE bot_task_origins (bot_id TEXT, source_session_id TEXT, created_at INTEGER);
     INSERT INTO sessions VALUES ('bot-main', 'bot'), ('owner-task', 'desktop'), ('child-1', 'desktop');
     INSERT INTO bot_session_links (session_id, bot_id, created_at) VALUES ('bot-main', 'bot-1', 1), ('other-bot-main', 'bot-2', 2);
     INSERT INTO bot_delegations (requesting_bot_id, child_session_id, created_at) VALUES ('bot-1', 'child-1', 3), ('bot-1', NULL, 4), ('bot-2', 'child-2', 5);

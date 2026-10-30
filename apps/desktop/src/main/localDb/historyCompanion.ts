@@ -20,6 +20,8 @@ export function parseHistoryCompanion(value: string | null | undefined): History
 
 /** A query filter only: callers' existing authorization/remote visibility still applies. */
 export function teammateHistoryFilter(sessionId: SQL, teammateId: string): SQL {
-  return sql`EXISTS (SELECT 1 FROM bot_session_links hcf
-    WHERE hcf.session_id = ${sessionId} AND hcf.bot_id = ${teammateId})`;
+  return sql`(EXISTS (SELECT 1 FROM bot_session_links hcf
+    WHERE hcf.session_id = ${sessionId} AND hcf.bot_id = ${teammateId}) OR
+    EXISTS (SELECT 1 FROM bot_task_origins hco WHERE hco.source_session_id = ${sessionId}
+      AND hco.bot_id = ${teammateId}))`;
 }

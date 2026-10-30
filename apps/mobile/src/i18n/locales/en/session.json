@@ -1,4 +1,5 @@
 {
+  "fromTask": {"create":"Create companion","explanation":"Keep the existing chat and continue with a companion. Project files stay where they are.","role":"Role (optional)","failed":"Could not create the companion. Check that the source session is stopped, its queue is empty, and its model is available."},
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"

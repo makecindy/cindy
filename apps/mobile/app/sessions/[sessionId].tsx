@@ -129,6 +129,7 @@ import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndica
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { PaperPlaneIcon } from '@/components/PaperPlaneIcon';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { useTaskCompanionCreation } from '@/session/useTaskCompanionCreation';
 import { useLocalNetworkStatus } from '@/device-link/localNetworkStatus';
 import { subscribeCredentialSwitchOutcome } from '@/session/credentialSwitchOutcome';
 import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
@@ -1458,6 +1459,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const [searchOpen, setSearchOpen] = useSessionHistorySearch(
     readRouteParam(params.openSearch), readRouteParam(params.openSearchRequest));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const createCompanionFromTask = useTaskCompanionCreation({ visible: settingsOpen, deviceId, session: currentSession, invoke,
+    onCreated: result => {
+      setSettingsOpen(false);
+      router.push({ pathname: '/sessions/[sessionId]', params: { deviceId, deviceName, sessionId: result.sessionId, botId: result.botId } });
+    },
+  });
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
   const [sideChatsOpen, setSideChatsOpen] = useState(false);
   const [sideChatsPendingOpen, setSideChatsPendingOpen] = useState(false);
@@ -9986,6 +9993,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <MountOnFirstOpen open={settingsOpen}>{() => (
           currentSession ? (
           <SessionMenuSheet
+            onCreateCompanion={createCompanionFromTask}
             onOpenSideChats={canUseSideChats ? () => {
               setSideChatsPendingOpen(true);
               setSettingsOpen(false);

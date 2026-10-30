@@ -45,6 +45,15 @@ describe('Bot named worker transactions', () => {
         created_at INTEGER NOT NULL, archived_at INTEGER
       );
       CREATE UNIQUE INDEX uniq_bot_canonical ON bot_session_links(bot_id) WHERE role = 'canonical';
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id), role TEXT,
+        content TEXT, created_at INTEGER, rewind_at INTEGER);
+      CREATE TABLE shared_task_events (session_id TEXT);
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT);
+      CREATE TABLE bot_task_origins (bot_id TEXT PRIMARY KEY REFERENCES bot_profiles(id) ON DELETE CASCADE,
+        source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, request_id TEXT UNIQUE,
+        created_at INTEGER NOT NULL, handoff_consumed_at INTEGER);
+      CREATE TABLE bot_task_origin_messages (bot_id TEXT REFERENCES bot_task_origins(bot_id) ON DELETE CASCADE,
+        message_id TEXT REFERENCES messages(id) ON DELETE CASCADE, PRIMARY KEY (bot_id, message_id));
       CREATE TABLE bot_lifecycle_events (
         id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bot_profiles(id) ON DELETE CASCADE,
         session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL, event_type TEXT NOT NULL,
@@ -54,6 +63,38 @@ describe('Bot named worker transactions', () => {
   });
 
   afterEach(() => db.close());
+
+  // Task-to-companion design §6: actual creation transaction must preserve source bytes,
+  // snapshot membership and deletion ownership. Previously no ordinary-source creation path.
+  // Minimal input: one ordinary task, a visible row and a withdrawn row; tier: unit (in-memory SQLite).
+  it('captures source membership atomically, rejects duplicate creation and preserves source on deletion', () => {
+    db.exec(`INSERT INTO sessions
+      (id,title,workspace_kind,model,effort,permission_mode,status,total_token_usage,total_cost_usd,
+       context_tokens,context_window,fast_mode,plan_mode_enabled,agent_kind,extra_dirs,source,created_at,updated_at)
+      VALUES ('source','Novel','project','model','high','ask','active',0,0,0,0,0,0,'cc','[]','desktop',1,1);
+      INSERT INTO messages VALUES ('visible','source','user','attachment: original',2,NULL),
+        ('withdrawn','source','assistant','withdrawn',3,4);
+    `);
+    const args = { id: 'new-bot', displayName: 'Editor', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'Editor', capabilitiesJson: '{}', sourceSessionId: 'source', requestId: 'request-1', now: 5 };
+    db.exec(`INSERT INTO agent_input_queue_snapshots VALUES ('source','[{"text":"pending"}]')`);
+    expect(() => tx(db, { name: 'bots.createProfile', args })).toThrow('Source task is unavailable');
+    expect(db.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(0);
+    db.exec('DELETE FROM agent_input_queue_snapshots');
+    tx(db, { name: 'bots.createProfile', args });
+    db.exec("INSERT INTO messages VALUES ('later','source','user','later',2,NULL)");
+    expect(db.prepare('SELECT message_id FROM bot_task_origin_messages').pluck().all()).toEqual(['visible']);
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'duplicate', displayName: 'Another' } }))
+      .toThrow('UNIQUE constraint failed');
+    expect(db.prepare('SELECT COUNT(*) FROM bot_profiles').pluck().get()).toBe(1);
+    db.exec("DELETE FROM bot_profiles WHERE id='new-bot'");
+    expect(db.prepare('SELECT COUNT(*) FROM bot_task_origins').pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM bot_task_origin_messages').pluck().get()).toBe(0);
+    expect(db.prepare("SELECT source,permission_mode FROM sessions WHERE id='source'").get())
+      .toEqual({ source: 'desktop', permission_mode: 'ask' });
+    expect(db.prepare("SELECT content FROM messages WHERE id='visible'").pluck().get()).toBe('attachment: original');
+    expect(db.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(3);
+  });
 
   // #6759: exercise the actual save transaction, then discard process-local
   // reconciliation state before IM preparation and automation restore.

@@ -25,6 +25,7 @@ import { BotGlanceButton } from './BotGlancePopover';
 import { useCompanionCloud } from './companionCloudStore';
 
 export interface BotChatIdentity {
+  sourceTaskTitle?: string;
   id: string;
   templateId?: string;
   deviceId?: string;
@@ -68,6 +69,10 @@ export function BotSessionContentHeader({ bot }: { bot: BotChatIdentity }) {
       >
         <BotAvatar bot={bot} size="xs" />
         <span className="min-w-0 truncate">{bot.name}</span>
+        {bot.sourceTaskTitle && <span className="min-w-0 truncate text-11 font-normal text-[var(--text-secondary)]"
+          title={t('bots.fromTask.history', { title: bot.sourceTaskTitle })}>
+          {t('bots.fromTask.history', { title: bot.sourceTaskTitle })}
+        </span>}
       </button>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {bot.canonicalChat && !bot.deviceId ? <BotAddToGroupMenu botId={bot.id} /> : null}

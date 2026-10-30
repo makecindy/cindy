@@ -339,6 +339,17 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
   const now = expectNumber(p.now, 'now');
   const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
   db.transaction(() => {
+    const sourceSessionId = p.sourceSessionId === undefined ? null : expectString(p.sourceSessionId, 'sourceSessionId');
+    if (sourceSessionId) {
+      const source = db.prepare(`SELECT id FROM sessions WHERE id = ? AND source IN ('desktop', 'shared')
+        AND status IN ('active', 'archived') AND remote_host_id IS NULL
+        AND agent_device_id IS NULL AND orca_role IS NULL
+        AND NOT EXISTS (SELECT 1 FROM shared_task_events WHERE session_id = sessions.id)
+        AND NOT EXISTS (SELECT 1 FROM agent_input_queue_snapshots WHERE session_id = sessions.id AND payload != '[]')
+        AND NOT EXISTS (SELECT 1 FROM bot_session_links WHERE session_id = sessions.id)`)
+        .get(sourceSessionId);
+      if (!source) throw Object.assign(new Error('Source task is unavailable'), { code: 'PRECONDITION_FAILED' });
+    }
     const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
     const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
       FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
@@ -371,6 +382,14 @@ function botsCreateProfile(db: Database.Database, args: unknown): void {
       (id, bot_id, session_id, event_type, payload_json, created_at)
       VALUES (?, ?, NULL, 'created', '{}', ?)`)
       .run(`${id}:created:${now}`, id, now);
+    if (sourceSessionId) {
+      db.prepare('INSERT INTO bot_task_origins (bot_id, source_session_id, request_id, created_at) VALUES (?, ?, ?, ?)')
+        .run(id, sourceSessionId, expectString(p.requestId, 'requestId'), now);
+      db.prepare(`INSERT INTO bot_task_origin_messages (bot_id, message_id)
+        SELECT ?, m.id FROM messages m JOIN sessions s ON s.id = m.session_id
+        WHERE s.id = ? AND m.rewind_at IS NULL AND m.created_at > COALESCE(s.cleared_at, 0)`)
+        .run(id, sourceSessionId);
+    }
   })();
 }
 

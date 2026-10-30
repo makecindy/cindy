@@ -2,6 +2,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGen
 import { useAuth } from '@/contexts/AuthContext';
 import { BotImportForm } from './BotImportForm';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight } from 'lucide-react';
@@ -13,6 +14,8 @@ import { addBotProfileAndWait, BotModelSelectionRequiredError, getEffectiveBotMo
 import { useProviders } from '@/hooks/useProviders';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import type { BotModelRoute } from '../../../shared/botModelChain';
+import type { Session } from '@/lib/ccAgent.types';
+import { extractIpcError } from '@/utils/ipcError';
 
 // Only the provider-setup detour retains a draft; ordinary close/unmount discards it.
 let providerSetupDraft: {
@@ -22,9 +25,13 @@ let providerSetupDraft: {
   portrait?: string;
   initialPortrait: number;
   modelOverride: BotModelRoute[] | null;
+  sourceTask?: Session;
+  description?: string;
+  requestId?: string;
 } | null = null;
 
 interface BotRosterViewProps {
+  sourceTask?: Session;
   onCreated?: (bot: BotProfile) => void;
   onClose?: () => void;
   restoreFocus?: () => void;
@@ -32,7 +39,7 @@ interface BotRosterViewProps {
 }
 
 /** A name creates a usable profile; identity and working habits develop in its own chat. */
-export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false }: BotRosterViewProps = {}) {
+export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false, sourceTask: requestedSource }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
   const { dataOwnerId } = useAuth();
   const navigate = useNavigate();
@@ -41,11 +48,21 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
   useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
   const [restoredDraft] = useState(() => providerSetupDraft
     && providerSetupDraft.dataOwnerId === dataOwnerId
+    && (!requestedSource || requestedSource.id === providerSetupDraft.sourceTask?.id)
     && isDataOwnerGenerationCurrent(providerSetupDraft.owner) ? providerSetupDraft : null);
+  const sourceTask = requestedSource ?? restoredDraft?.sourceTask;
+  const remoteDeviceId = sourceTask?.deviceLinkDeviceId;
+  const requestId = useRef(restoredDraft?.requestId);
+  const [attempted, setAttempted] = useState(false);
   useEffect(() => { providerSetupDraft = null; }, []);
-  const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(restoredDraft?.modelOverride ?? null);
+  const [modelOverride, setModelOverride] = useState<BotModelRoute[] | null>(restoredDraft ? restoredDraft.modelOverride : sourceTask ? [{
+    harness: sourceTask.agentKind === 'cc' ? 'claude' : sourceTask.agentKind ?? 'claude',
+    model: sourceTask.model, providerId: sourceTask.providerId ?? null,
+    effort: sourceTask.effort ?? '', fastMode: sourceTask.fastMode,
+  }] : null);
   const [importing, setImporting] = useState(false);
-  const [name, setName] = useState(restoredDraft?.name ?? '');
+  const [name, setName] = useState(restoredDraft?.name ?? sourceTask?.title ?? '');
+  const [description, setDescription] = useState(restoredDraft?.description ?? '');
   const [portrait, setPortrait] = useState<string | undefined>(restoredDraft?.portrait);
   const [initialPortrait] = useState(() => restoredDraft?.initialPortrait ?? Math.floor(Math.random() * BOT_PORTRAIT_COUNT));
   const [creating, setCreating] = useState(false);
@@ -60,23 +77,38 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     }).catch(() => { if (!cancelled) setError(t('bots.profile.avatarSelectionFailed')); });
     return () => { cancelled = true; alive.current = false; };
   }, [initialPortrait]);
-  const duplicate = bots.some(bot => bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
+  // A lost receipt may already have added this submission's profile to the roster.
+  // Let the host resolve retries by request ID before checking a new name conflict.
+  const duplicate = !(sourceTask && attempted) && !remoteDeviceId && bots.some(bot => bot.status !== 'archived' && normalizeBotName(bot.name) === normalizeBotName(name));
   const close = () => { if (onClose) onClose(); else navigate('/bots'); };
   const create = async () => {
     if (!name.trim() || duplicate || submitting.current || !portrait) return;
+    const creationRequestId = sourceTask ? (requestId.current ??= crypto.randomUUID()) : undefined;
     submitting.current = true;
     setCreating(true);
+    setAttempted(true);
     setError(null);
     try {
-      const bot = await addBotProfileAndWait({ name: name.trim(), description: '',
+      if (remoteDeviceId && sourceTask) {
+        const result = await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:task-companion',
+          [{ action: 'create', sourceSessionId: sourceTask.id, requestId: creationRequestId, name: name.trim(), description }]) as { botId: string; sessionId: string };
+        if (!alive.current) return;
+        navigate(`/bots/remote/${encodeURIComponent(remoteDeviceId)}/${encodeURIComponent(result.botId)}/session/${encodeURIComponent(result.sessionId)}`);
+        onClose?.();
+        return;
+      }
+      const bot = await addBotProfileAndWait({ name: name.trim(), description,
+        sourceSessionId: sourceTask?.id,
+        ...(sourceTask ? { requestId: creationRequestId } : {}),
         ...(modelOverride ? { capabilities: { ...modelOverride[0], modelChain: modelOverride, modelChainOverride: modelOverride } } : {}),
-        avatarImageBase64: portrait.split(',')[1], prepareInvitation: true });
+        avatarImageBase64: portrait.split(',')[1], prepareInvitation: !sourceTask });
       if (!alive.current) return;
       if (onCreated) onCreated(bot); else navigate(`/bots/${bot.id}`);
       onClose?.();
     } catch (cause) {
       if (alive.current) setError(t(cause instanceof BotModelSelectionRequiredError
-        ? 'bots.guided.modelRequired' : 'bots.createWizard.createFailed'));
+        ? 'bots.guided.modelRequired' : extractIpcError(cause)?.code === 'MODEL_SELECTION_UNAVAILABLE'
+          ? 'ipcError.MODEL_SELECTION_UNAVAILABLE' : 'bots.createWizard.createFailed'));
     } finally {
       submitting.current = false;
       if (alive.current) setCreating(false);
@@ -113,7 +145,14 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             className="mt-2 h-11 w-full rounded-full border border-[var(--border-default)] bg-[var(--confirm-bg)] px-3 text-16 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" />
         </label>
       </div>
-        <div className="mt-5">
+      {sourceTask && <div className="mt-5 text-13 text-[var(--text-secondary)]">
+        <p>{t('bots.fromTask.explanation', { title: sourceTask.title })}</p>
+        <label className="mt-4 block">{t('bots.fromTask.role')}
+          <Input value={description} maxLength={4000} disabled={creating} onChange={setDescription}
+            className="mt-2 h-11" />
+        </label>
+      </div>}
+        {!remoteDeviceId && <div className="mt-5">
           <BotModelChainEditor
             label={t('bots.settingsTabs.model')}
             value={(modelOverride ?? getEffectiveBotModelChain()).slice(0, 1)}
@@ -121,7 +160,7 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             allowFallbacks={false}
             onChange={(routes) => { setModelOverride(routes.slice(0, 1)); setError(null); }}
             onNavigateToProviders={() => {
-              providerSetupDraft = { owner: getDataOwnerGeneration(), dataOwnerId, name, portrait, initialPortrait, modelOverride };
+              providerSetupDraft = { owner: getDataOwnerGeneration(), dataOwnerId, name, portrait, initialPortrait, modelOverride, sourceTask, description, requestId: requestId.current };
               navigate('/settings?tab=providers');
             }}
           />
@@ -129,11 +168,12 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
             {t(modelOverride ? 'bots.guided.modelForThisBot' : 'bots.guided.modelFollowsDefault')}
           </p>
         </div>
+        }
         {(error || duplicate) && (
           <p role="alert" className="mt-4 text-13 text-[var(--text-danger)]">{duplicate ? t('bots.guided.duplicateName') : error}</p>
         )}
         <div className="mt-8 flex justify-between gap-3">
-          <Button variant="secondary" size="lg" type="button" disabled={creating} onClick={() => setImporting(true)}>{t('bots.import.entry')}</Button>
+          {!sourceTask && <Button variant="secondary" size="lg" type="button" disabled={creating} onClick={() => setImporting(true)}>{t('bots.import.entry')}</Button>}
           <Button
             variant="cta"
             size="lg"

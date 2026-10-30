@@ -9960,6 +9960,7 @@
     }
   },
   "bots": {
+    "fromTask": {"create":"仲間を作成","explanation":"「{{title}}」の会話を保持して、仲間との会話を続けます。プロジェクトのファイルは元の場所に残ります。","role":"役割（任意）","history":"元のセッション：{{title}}","openSource":"元のセッションを開く","loadMore":"履歴をさらに読み込む"},
     "avatarStatus": {
       "awaiting": "確認待ち",
       "error": "要確認",

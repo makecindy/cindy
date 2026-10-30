@@ -1,4 +1,7 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
+import { readBotTaskOrigin } from '../botTaskOrigin.js';
+import { setBotLinkedProject } from '../../maker-ipc/botWorkbenchService.js';
+import { updateNightlyLearningState } from '../../maker-ipc/botNightlyLearningState.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
@@ -38,7 +41,7 @@ import {
   sessions,
 } from '../schema';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
-import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { isDeviceLinkInvoke, getDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { collectPresentBotRemoteResourceSources } from './botRemoteResourceAbsence.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
@@ -104,7 +107,8 @@ import {
   inferBotTemplatePresetId,
   isBotTemplatePresetId,
 } from '../../../shared/botTemplatePreset.js';
-import { createMessage } from './messages.js';
+import { createMessage, runMessagesListImportSideEffects } from './messages.js';
+import { drainPersistQueue } from '../../messagePersistBroadcaster.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions, syncBotPermissionsByBotId } from '../../maker-ipc/botPermissionSync.js';
 import { withSessionPermissionChange } from '../../maker-ipc/sessionPermissionChange.js';
 import { withBotPermissionChangeForBot } from '../../maker-ipc/botPermissionDispatch.js';
@@ -305,6 +309,7 @@ export async function createBotCanonicalSession(
   }
   const owner = captureBotOperationOwner();
   owner.assertCurrent();
+  await prepareTaskOrigin(input.botId, owner.assertCurrent);
   const result = await createBotCanonicalSessionImpl(input, beforeCommit);
   owner.assertCurrent();
   return result;
@@ -1263,6 +1268,7 @@ async function readProfile(
   const modelChain = await readEffectiveBotModelChain(config);
   const primaryModelRoute = modelChain[0];
   const invitation = botInvitationProgress(config.invitation);
+  const sourceTask = await readBotTaskOrigin(botId);
   if (invitation && isManagedBotAvatarUrl(profile.avatar)) invitation.avatarSkipped = false;
   const failureReason = BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason)
     ? (profile.attentionReason as BotFailureReason)
@@ -1278,6 +1284,7 @@ async function readProfile(
     description: profile.description,
     identitySource: version?.identitySource ?? '',
     invitation,
+    sourceTask: sourceTask ?? undefined,
     userContextSource: typeof config.userContextSource === 'string' ? config.userContextSource : '',
     // 与 userContextSource 同款:存在档案 JSON 里,投影成顶层字段。老档案没有这
     // 个键 → undefined → 界面回落「用名字称呼」,与升级前行为一致。
@@ -1834,7 +1841,85 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
-export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
+export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin, beforeCommit?: () => Promise<void>) {
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  if (!body.sourceSessionId) return createBotProfileInternal(raw, restored, beforeCommit);
+  const sourceSessionId = readText(body.sourceSessionId, 'sourceSessionId', 128, true);
+  const requestId = readText(body.requestId, 'requestId', 128, true);
+  const owner = captureBotOperationOwner();
+  const client = getDbClient();
+  return coordinateBotCanonicalReplacement(sourceSessionId, async () => {
+    owner.assertCurrent();
+    const existing = await client.queryOne<{ botId: string; sourceSessionId: string }>('SELECT bot_id AS botId, source_session_id AS sourceSessionId FROM bot_task_origins WHERE request_id=?', [requestId]);
+    owner.assertCurrent();
+    if (existing) {
+      if (existing.sourceSessionId !== sourceSessionId) throwIpcError('INVALID_PARAMS', 'Creation request belongs to another source task');
+      await prepareTaskOrigin(existing.botId, owner.assertCurrent);
+      return readProfile(client, existing.botId);
+    }
+    const [source] = await client.drizzle.select().from(sessions).where(eq(sessions.id, sourceSessionId)).limit(1);
+    owner.assertCurrent();
+    // `shared` is a locally imported task; live shared tasks are excluded below.
+    if (!source || !['desktop', 'shared'].includes(source.source) || source.remoteHostId || source.agentDeviceId
+      || source.orcaRole || !['active', 'archived'].includes(source.status)) {
+      throwIpcError('PRECONDITION_FAILED', '请选择本机普通任务');
+    }
+    const unsafe = await client.queryOne<{ found: number }>(`SELECT 1 AS found WHERE
+      EXISTS (SELECT 1 FROM shared_task_events WHERE session_id=?) OR
+      EXISTS (SELECT 1 FROM agent_input_queue_snapshots WHERE session_id=? AND payload != '[]')`,
+      [sourceSessionId, sourceSessionId]);
+    owner.assertCurrent();
+    if (unsafe) throwIpcError('PRECONDITION_FAILED', '来源任务仍有待处理输入或属于共享任务');
+    await drainPersistQueue();
+    await runMessagesListImportSideEffects(sourceSessionId, {}, { deviceLinkFirstPage: true });
+    owner.assertCurrent();
+    const route = { harness: source.agentKind === 'cc' ? 'claude' : source.agentKind,
+      model: source.model, providerId: source.providerId, effort: source.effort ?? '', fastMode: source.fastMode ?? false };
+    const requested = body.capabilities as Record<string, unknown> | undefined;
+    const primary = normalizeBotModelChain(requested?.modelChainOverride ?? requested?.modelChain, requested ?? route)[0];
+    if (!primary || !await validateTaskModel(primary)) throwIpcError('MODEL_SELECTION_UNAVAILABLE', '请选择已启用且已连接的伙伴模型');
+    owner.assertCurrent();
+    const profile = await createBotProfileInternal({ ...body, sourceSessionId, requestId, name: body.name || source.title,
+      prepareInvitation: false, welcomeMessage: undefined,
+      capabilities: body.capabilities ?? { ...route, modelChain: [route], modelChainOverride: [route] },
+    }, undefined, beforeCommit);
+    owner.assertCurrent();
+    await prepareTaskOrigin(profile.id, owner.assertCurrent);
+    return profile;
+  });
+}
+
+async function prepareTaskOrigin(botId: string, assertCurrent: () => void) {
+  const client = getDbClient();
+  const row = await client.queryOne<{ workingDir: string | null; workspaceKind: string; firstAt: number | null; turns: number }>(
+    `SELECT s.working_dir AS workingDir, s.workspace_kind AS workspaceKind,
+       MIN(m.created_at) AS firstAt, COUNT(m.id) AS turns
+     FROM bot_task_origins o JOIN sessions s ON s.id=o.source_session_id
+     LEFT JOIN bot_task_origin_messages om ON om.bot_id=o.bot_id
+     LEFT JOIN messages m ON m.id=om.message_id AND m.role='assistant' AND m.rewind_at IS NULL
+       AND m.created_at > COALESCE(s.cleared_at,0)
+     WHERE o.bot_id=? AND o.prepared_at IS NULL GROUP BY o.bot_id`, [botId]);
+  assertCurrent();
+  if (!row) return;
+  const root = ownerScopedUserDataPath();
+  if (row.workspaceKind === 'project' && row.workingDir) {
+    await setBotLinkedProject(root, botId, { path: row.workingDir }, true, assertCurrent);
+  }
+  assertCurrent();
+  if (row.firstAt !== null) await updateNightlyLearningState(root, botId, state => {
+    assertCurrent();
+    if (state.throughAt === undefined && state.pending.firstAt === undefined) {
+      state.pending.firstAt = row.firstAt!;
+      state.throughAt = Math.max(0, row.firstAt! - 1);
+      state.pending.turns += row.turns;
+    }
+    return state;
+  });
+  assertCurrent();
+  await client.exec('UPDATE bot_task_origins SET prepared_at=? WHERE bot_id=? AND prepared_at IS NULL', [Date.now(), botId]);
+}
+
+async function createBotProfileInternal(raw: unknown, restored?: RestoredBotOrigin, beforeCommit?: () => Promise<void>) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
@@ -1941,8 +2026,11 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
+  await beforeCommit?.();
+  assertCreationOwnerStillCurrent();
   await client.tx('bots.createProfile', {
     id,
+    ...(typeof body.sourceSessionId === 'string' ? { sourceSessionId: body.sourceSessionId, requestId: body.requestId } : {}),
     ...(botAvatarRef ? { botAvatarRef } : {}),
     displayName: name,
     description,
@@ -2314,6 +2402,7 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
       ne(botSessionLinks.role, 'group'),
       ne(botSessionLinks.role, 'channel'),
     ));
+  const sourceTask = await readBotTaskOrigin(botId);
   return searchConversations(
     {
       query,
@@ -2321,17 +2410,36 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
       semanticMode: 'hybrid',
       filters: {
         status: 'all',
-        sessionIds: links.map((row) => row.sessionId),
+        sessionIds: [...links.map((row) => row.sessionId), ...(sourceTask ? [sourceTask.sourceSessionId] : [])],
       },
     },
     // The Bot-owned Session id set above is authoritative. Passing null here
     // allows migrated IM history to retain its original source while keeping
     // the renderer unable to widen the search scope.
-    { sessionSources: null },
+    { sessionSources: null, teammateId: botId },
   );
 }
 
 export function registerBotIpc(): void {
+  ipcMain.handle('maker:task-companion', async (event, raw: unknown) => {
+    const context = getDeviceLinkInvokeContext();
+    if (context) {
+      if (context.sharedTask || context.channel !== 'maker:task-companion' || !context.controllerDeviceId)
+        throwIpcError('PERMISSION_DENIED', 'Task owner required');
+    } else assertTrustedAppRendererEvent(event);
+    const body = requireObject(raw, 'body');
+    if (body.action === 'capabilities') return { version: 2 };
+    if (body.action !== 'create') throwIpcError('INVALID_PARAMS', 'Unknown task companion action');
+    const owner = captureBotOperationOwner();
+    const profile = await createBotProfile({ sourceSessionId: readText(body.sourceSessionId, 'sourceSessionId', 128, true),
+      requestId: readText(body.requestId, 'requestId', 128, true),
+      name: readText(body.name, 'name', 200), description: readText(body.description, 'description', 4000) });
+    owner.assertCurrent();
+    const canonical = await createBotCanonicalSession({ botId: profile.id, expectedCanonicalSessionId: profile.canonicalSessionId ?? null,
+      expectedProfileVersion: profile.currentVersion });
+    owner.assertCurrent();
+    return { version: 2, botId: profile.id, name: profile.name, description: profile.description, sessionId: canonical.canonicalSessionId };
+  });
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof token !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid draft');

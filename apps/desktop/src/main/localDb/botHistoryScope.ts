@@ -53,12 +53,15 @@ export async function resolveBotHistorySessionIds(
          FROM bot_session_links
         WHERE bot_id = ?
        UNION
+       SELECT source_session_id AS sessionId, created_at AS createdAt
+         FROM bot_task_origins WHERE bot_id = ?
+       UNION
        SELECT child_session_id AS sessionId, created_at AS createdAt
          FROM bot_delegations
         WHERE requesting_bot_id = ? AND child_session_id IS NOT NULL
      )
      ORDER BY createdAt DESC`,
-    [scope.botId, scope.botId],
+    [scope.botId, scope.botId, scope.botId],
   );
   return [...new Set(rows.map((row) => row.sessionId))];
 }

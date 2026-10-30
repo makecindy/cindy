@@ -1,5 +1,19 @@
 # 跨端协议兼容
 
+## 从已有任务创建伙伴
+
+`maker:task-companion` 是同账号远控业务入口，只支持 `capabilities`（返回 `version: 2`）
+与 `create`。由来源电脑校验普通任务、空闲、输入队列和模型，调用与本机 UI、Agent 相同的
+创建服务；回执包含新伙伴与主任务 ID。旧电脑拒绝新 channel，控制端探测失败不显示入口。
+不向共享访客或分享供应商开放，不加入自动重放。`create` 必须带 `requestId`；同一请求重试返回同一伙伴，
+新请求允许从同一来源创建独立伙伴。UI 与 Agent 发送前探测 version 2，拒绝尚未发布的 version 1
+按来源去重语义；缺少请求 ID 的旧调用明确失败，不猜测重试身份。未改变通用转发协议。
+
+历史消息读取可选增加 `teammateId`，新接收端应用来源消息范围并返回 `teammateIdApplied`。
+控制端收到未确认此范围的旧端回执时报告不支持，不把无过滤历史当作来源快照。
+无新帧、握手或 relay 服务端字段；官方与自建中转沿已有 invoke 通道转发。
+已运行 allowlist 定向检查与真实 loopback 自建中转 interop；不涉及重试或连接恢复改动。
+
 ## Chat Server 只读工作发现与定向通知（2026-10-29）
 
 `/me.capabilities` 新增 `workAvailabilityVersion:1`、`workNotificationsVersion:1`。
