@@ -176,13 +176,24 @@ describe('LibraryVault', () => {
       const parent = path.join(tmpRoot, 'picked-no-init');
       const custom = path.join(parent, 'mivo-canvas');
       await fs.promises.mkdir(parent, { recursive: true });
+      // Unit contract: LibraryVault.open must not recreate an initialized custom
+      // library after existing-open reports MISSING. Under CI load the native
+      // PowerShell helper can hit its 15s timeout instead (CI #7829). Inject
+      // its result here; adjacent custom-tree cases retain real helper coverage.
+      const openExistingCustom = vi.fn(async () => ({ ok: false as const, code: 'MISSING' as const }));
+      const initCustomTree = vi.fn(async () => ({ ok: false as const, code: 'UNSUPPORTED' as const }));
       const vault = makeVault({
         rootDir: () => custom,
         locationKind: 'custom',
         allowCustomInit: false,
+        openExistingCustom,
+        initCustomTree,
       });
       const missing = await vault.open();
       expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(initCustomTree).not.toHaveBeenCalled();
+      expect(fs.existsSync(custom)).toBe(false);
       expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(false);
     });
 

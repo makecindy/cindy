@@ -1352,10 +1352,10 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
-  /** Account-scoped tools may not borrow the Host identity from plugin or shared guest input. */
+  /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return !!item && !item.sourcePlugin && !item.sharedTaskAuthor;
+    return !!item && !item.sharedTaskAuthor;
   }
 
   /**

@@ -6,7 +6,7 @@ Desktop and Mobile expose **Disconnect and lock when idle** in the remote deskto
 Security panel. Each controller remembers its setting per computer: 1, 5 (default),
 10, 15, 30 minutes, or Never. The host must advertise `idleLock`; older hosts and
 platforms without native screen locking show this setting as unsupported.
-This is separate from default-off lock-on-exit and privacy-screen preferences.
+This is separate from the default-on lock-on-exit and privacy-screen preferences.
 
 The host counts elapsed time since actual remote input or manual clipboard actions.
 Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
@@ -143,6 +143,15 @@ policy at start and on heartbeats, then locks locally on stop, signaling loss or
 lease expiry. Live-lease resume/takeover and display changes do not lock; recovery
 after expiry waits for the already-triggered lock to finish.
 See [native credential behavior](remote-desktop-credentials.md) for password storage.
+Desktop and Mobile default privacy screen and lock-on-exit to enabled when no
+saved override exists; stored explicit choices remain unchanged. Desktop now
+retains explicit privacy-screen and lock-on-exit choices even when they match the
+current default; choosing the default idle duration still clears that override.
+Older desktop versions removed such values, so a historical manual opt-out that was not stored
+cannot be distinguished from an untouched default and follows the new default.
+Mobile already stores explicit `false` and preserves it. These defaults do not
+enable automatic unlock, clipboard sync or host mute, or bypass host capability
+checks; a privacy request is not shown as active until the host confirms it.
 Video quality changes are coalesced while negotiation is pending. The toolbar
 shows receive rate and clears stale network samples, while resolution discovery
 shows loading/failure and offers retry and native-resolution labels.
