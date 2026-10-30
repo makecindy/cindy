@@ -28,6 +28,17 @@ function record(value: unknown): Record<string, unknown> | null {
  */
 const DESTRUCTIVE_INNER_NAME_RE = /(?:^|_)(?:merge|system_write|overwrite)(?:_|$)/i;
 
+// These scheduler actions can install a command, resume it, or trigger it now.
+// A restored trusted MCP must still pass the channel's per-turn approval.
+const SCHEDULER_EXECUTION_TOOL_NAMES = new Set([
+  'schedule_create', 'schedule_update', 'schedule_set_pre_run_hook',
+  'schedule_resume', 'schedule_run_now',
+]);
+
+function schedulerExecutionNeedsConfirmation(toolName: string): boolean {
+  return SCHEDULER_EXECUTION_TOOL_NAMES.has(toolLeafName(toolName));
+}
+
 function isOpaqueWriteToolName(toolName: string): boolean {
   const normalized = toolName.toLowerCase();
   return normalized === 'file_change' || normalized === 'permissions';
@@ -131,10 +142,12 @@ export function channelForceConfirmToolCall(toolName: string, input: unknown): b
   // 1. 顶层工具名 / shell 命令(Bash/bash/PowerShell)直接命中破坏性规则。
   if (checkChannelDestructiveToolCall(toolName, input).destructive) return true;
   if (piManagementNeedsConfirmation(toolName, input)) return true;
+  if (schedulerExecutionNeedsConfirmation(toolName)) return true;
 
   // 2. 包装 / 二级分派的内层动作。
   for (const inner of unwrapInnerCalls(toolName, input)) {
     if (piManagementNeedsConfirmation(inner.name, inner.args)
+        || schedulerExecutionNeedsConfirmation(inner.name)
         || isOpaqueWriteToolName(inner.name) || DESTRUCTIVE_INNER_NAME_RE.test(inner.name)) {
       return true;
     }

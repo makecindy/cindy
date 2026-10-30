@@ -10,6 +10,8 @@ vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 vi.mock('node:readline', () => ({ createInterface: mocks.createInterface }));
 
 import { createStdioTransport } from './stdioTransport.js';
+import { AppServerHost, CodexNativeInitializationStoppedError } from './host.js';
+import type { Logger } from '../../../interfaces/logger.js';
 
 function makeEmitterStream() {
   const stream = new EventEmitter() as EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
@@ -62,6 +64,82 @@ afterEach(() => {
 });
 
 describe('createStdioTransport process observer', () => {
+  it.each(['exit', 'pending', 'stdout', 'signal', 'other-error', 'different-path'])('classifies only a confirmed pre-protocol SQLite exit (%s)', (scenario) => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const transport = createStdioTransport({ binaryPath: 'codex' });
+    const error = scenario === 'other-error' ? 'Error: failed to load configuration: revoked'
+      : `Error: failed to initialize sqlite state runtime under /synthetic: failed to initialize state runtime at ${scenario === 'different-path' ? '/other' : '/synthetic'}`;
+    child.stderr.emit('data', `${error}\n`);
+    if (scenario === 'stdout') child.stdout.emit('data', '{}');
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(false);
+    if (scenario !== 'pending') {
+      child.emit('exit', 1, scenario === 'signal' ? 'SIGTERM' : null);
+      expect(transport.nativeSqliteInitializationFailed?.()).toBe(false);
+      child.emit('close', 1, scenario === 'signal' ? 'SIGTERM' : null);
+    }
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(scenario === 'exit');
+  });
+  it.each(['/synthetic/db', String.raw`C:\synthetic\db`])('drains split fatal output after physical exit (%s)', async (home) => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const disposed = vi.fn();
+    const transport = createStdioTransport({ binaryPath: 'codex', onProcessSpawned: () => disposed });
+    const closed = vi.fn();
+    const stderr = vi.fn();
+    transport.onClose(closed);
+    transport.onStderr?.(stderr);
+    child.stderr.emit('data', `diagnostic\r\nError: failed to initialize sqlite state runtime under ${home}: failed to initialize state runtime at `);
+    child.emit('exit', 1, null);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(closed).not.toHaveBeenCalled();
+    expect(mocks.createInterface.mock.results[0]!.value.close).not.toHaveBeenCalled();
+    child.stderr.emit('data', home + '\r'); // No final newline.
+    child.emit('close', 1, null);
+    expect(stderr).toHaveBeenLastCalledWith(`Error: failed to initialize sqlite state runtime under ${home}: failed to initialize state runtime at ${home}`);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(true);
+    await transport.close('strict cleanup');
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(true);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['stdout', 'cancel', 'drain-timeout'])('refuses recovery when %s arrives between exit and drain', async (scenario) => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const transport = createStdioTransport({ binaryPath: 'codex', outputDrainMs: 25 });
+    const closed = vi.fn();
+    transport.onClose(closed);
+    child.stderr.emit('data', 'Error: failed to initialize sqlite state runtime under /x: failed to initialize state runtime at /x');
+    child.emit('exit', 1, null);
+    expect(closed).not.toHaveBeenCalled();
+    if (scenario === 'stdout') child.stdout.emit('data', '{}');
+    if (scenario === 'cancel') await transport.close('initialize timeout / cancellation');
+    if (scenario === 'drain-timeout') await vi.advanceTimersByTimeAsync(25);
+    child.emit('close', 1, null);
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
+    await transport.close();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels recovery when the drained stderr callback closes synchronously', async () => {
+    const child = makeChild();
+    mocks.spawn.mockReturnValue(child);
+    const transport = createStdioTransport({ binaryPath: 'codex' });
+    transport.onStderr?.(() => { void transport.close('callback cancelled startup'); });
+    const closed = vi.fn();
+    transport.onClose(closed);
+    child.stderr.emit('data', 'Error: failed to initialize sqlite state runtime under /x: failed to initialize state runtime at /x');
+    child.emit('exit', 1, null);
+    child.emit('close', 1, null);
+    expect(transport.nativeSqliteInitializationFailed?.()).toBe(false);
+    expect(closed).toHaveBeenCalledExactlyOnceWith({ reason: 'callback cancelled startup' });
+    await transport.close();
+  });
+
   it('starts the app-server without a visible Windows console', () => {
     mocks.spawn.mockReturnValue(makeChild());
 
@@ -134,6 +212,58 @@ describe('createStdioTransport process observer', () => {
         throw new Error('observer failed');
       },
     })).not.toThrow();
+  });
+});
+
+describe('production stdio initialization recovery', () => {
+  it.each(['recover', 'exhaust', 'timeout'])('keeps drain classification and the three-process budget on %s', async (scenario) => {
+    const logger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger };
+    const children: ReturnType<typeof makeChild>[] = [];
+    const readers: EventEmitter[] = [];
+    const requests: string[][] = [];
+    mocks.createInterface.mockImplementation(() => {
+      const reader = Object.assign(new EventEmitter(), { close: vi.fn() });
+      readers.push(reader); return reader;
+    });
+    mocks.spawn.mockImplementation(() => {
+      const child = makeChild(4321 + children.length);
+      const index = children.length;
+      children.push(child); requests.push([]);
+      child.stdin.end.mockImplementation(() => { child.emit('exit', 0, null); child.emit('close', 0, null); });
+      child.stdin.write.mockImplementation((line: string, _encoding: string, done: () => void) => {
+        const rpc = JSON.parse(line);
+        if (rpc.method) requests[index].push(rpc.method);
+        queueMicrotask(() => {
+          if (index === 2 && scenario === 'recover') {
+            if (rpc.id != null) readers[index].emit('line', JSON.stringify({ id: rpc.id, result: {} }));
+          } else if (rpc.method === 'initialize') {
+            child.stderr.emit('data', 'Error: failed to initialize sqlite state runtime under /x: failed to initialize state runtime at ');
+            child.emit('exit', 1, null);
+            // Late pipes: timeout must revoke retry eligibility before close.
+            setTimeout(() => { child.stderr.emit('data', '/x'); child.emit('close', 1, null); }, 20);
+          }
+        });
+        done(); return true;
+      });
+      return child;
+    });
+    const host = new AppServerHost({ logger, clientInfo: { name: 'test', version: '0' },
+      createTransport: () => createStdioTransport({ binaryPath: 'codex' }),
+    });
+    const started = scenario === 'timeout' ? host.ensureStartedWithTimeout(10, 'test') : host.ensureStarted();
+    const result = scenario === 'recover' ? expect(started).resolves.toBeDefined()
+      : scenario === 'exhaust' ? expect(started).rejects.toBeInstanceOf(CodexNativeInitializationStoppedError)
+        : expect(started).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(100);
+    await result;
+    expect(children).toHaveLength(scenario === 'timeout' ? 1 : 3);
+    if (scenario === 'recover') {
+      await host.request('thread/start');
+      children[0].emit('exit', 1, null); children[0].emit('close', 1, null);
+      expect(host.hasStarted).toBe(true);
+      expect(requests).toEqual([['initialize'], ['initialize'], ['initialize', 'thread/start']]);
+    } else expect(requests.every(methods => methods.every(method => method === 'initialize'))).toBe(true);
+    await host.retire();
   });
 });
 

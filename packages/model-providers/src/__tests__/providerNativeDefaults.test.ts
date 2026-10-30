@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BUNDLED_CATALOG } from '../catalog.js';
 import { buildUserProvider } from '../user-provider.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
+import { resolveModelMetadata } from '../modelMetadataLayers.js';
 import type { CustomProviderConfig, ProviderRuntimeModelConfig } from '../types.js';
 
 const agents = ['claude-code', 'codex', 'pi'] as const;
@@ -20,6 +21,42 @@ function connection(presetId: string, modelId: string): CustomProviderConfig {
 }
 
 describe('supplier import follows Gateway native model defaults', () => {
+  it('saved DeepSeek Flash aliases retain the Codex image restriction', () => {
+    const config = connection('deepseek', 'deepseek-flash');
+    for (const agent of agents) {
+      config.runtimes[agent]!.models = [{ id: 'deepseek-v4-flash', name: 'DeepSeek Flash' }];
+    }
+    const provider = buildUserProvider(config, options);
+    for (const agent of agents) {
+      const metadata = resolveModelMetadata(options.modelRegistry, 'deepseek', 'deepseek-v4-flash', undefined, undefined, agent);
+      expect(metadata.supportsImageInput).toBeUndefined();
+    }
+    expect(provider.models.codex![0].supportsImageInput).toBe(false);
+    const current = buildUserProvider(connection('deepseek', 'deepseek-flash'), options);
+    for (const agent of agents) expect(current.models[agent]![0].supportsImageInput).toBe(agent !== 'codex');
+  });
+
+  // #7005: route context overrides must also bound the inherited output sent to Pi adapters.
+  it.each([
+    ['moonshot-kimi-code', 'k3.1-pro', 262_144],
+    ['moonshot-kimi-code', 'k3', 262_144],
+    ['moonshot-kimi-code', 'k3-256k', 262_144],
+    ['moonshot-kimi-code', 'k3.1-pro-highspeed', 1_048_576],
+    ['moonshot-kimi-cn', 'kimi-k3.1-pro', 1_048_576],
+    ['moonshot-kimi-global', 'kimi-k3.1-pro', 1_048_576],
+  ] as const)('%s / %s inherits output within its route context', (preset, id, limit) => {
+    const provider = buildUserProvider(connection(preset, id), options);
+    for (const agent of agents) {
+      const metadata = resolveModelMetadata(options.modelRegistry, preset, id, undefined, undefined, agent);
+      expect(metadata.maxOutputTokens).toBeLessThanOrEqual(metadata.contextWindow!);
+      const model = provider.models[agent]![0];
+      expect(model.contextWindow).toBe(limit);
+      expect(model.maxOutput).toBeGreaterThan(0);
+      expect(model.maxOutput).toBeLessThanOrEqual(limit);
+      if (limit === 1_048_576) expect(model.maxOutput).toBe(limit);
+    }
+  });
+
   it.each([
     ['openrouter', 'google/gemini-3.8-flash', 'google-generative-ai', [false, false, true], ['anthropic-messages', 'openai-responses', 'openai-completions']],
     ['openrouter', 'anthropic/claude-fable-5', 'anthropic-messages', [true, false, true], ['anthropic-messages', 'openai-responses', 'anthropic-messages']],
@@ -79,11 +116,11 @@ describe('supplier import follows Gateway native model defaults', () => {
     expect(refreshed.models['claude-code']![0].defaultEnabled).toBe(false);
   });
 
-  it('does not infer native declarations from hand-written IDs on unrelated endpoints', () => {
+  it('uses declared manufacturer families on unrelated endpoints without enabling compatibility', () => {
     const provider = buildUserProvider({ id: 'proxy', name: 'Proxy', runtimes: {
       codex: { baseUrl: 'https://proxy.example/v1', models: [{ id: 'google/gemini-99', name: 'Gemini', api: 'openai-responses' }] },
     } }, options);
-    expect(provider.models.codex![0].nativeApi).toBeUndefined();
+    expect(provider.models.codex![0].nativeApi).toBe('google-generative-ai');
     expect(provider.models.codex![0].defaultEnabled).toBe(false);
   });
 
@@ -99,27 +136,38 @@ describe('supplier import follows Gateway native model defaults', () => {
     expect(provider.models.codex![0].defaultEnabled).toBe(nativeApi === 'openai-responses');
   });
 
-  it('all presets leave unknown or mismatched fixed engines off, while preserving Pi adapters', () => {
+  function auditProvider(preset: NonNullable<typeof options.presets>[number]) {
+    return buildUserProvider({ id: `${preset.id}-audit`, name: preset.name, runtimes: Object.fromEntries(
+      Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+        models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
+      }]),
+    ) }, options);
+  }
+
+  // Each supplier gets its own test budget and failure report as the catalog grows.
+  it.each(options.presets!)('$id leaves mismatched fixed engines off and preserves Pi adapters', preset => {
+    const provider = auditProvider(preset);
     let checked = 0;
-    for (const preset of options.presets!) {
-      const provider = buildUserProvider({ id: `${preset.id}-audit`, name: preset.name, runtimes: Object.fromEntries(
-        Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
-          ...runtime, catalogPresetId: preset.id,
-          models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
-        }]),
-      ) }, options);
-      for (const agent of agents) for (const model of provider.models[agent] ?? []) {
-        if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
-        const message = `${preset.id}/${agent}/${model.id}`;
-        if (agent === 'pi') expect(model.defaultEnabled, message).toBe(true);
-        else if (model.defaultEnabled) {
-          const api = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
-          expect(model.nativeApi, message).toBe(api);
-          expect([api, ...(agent === 'codex' ? ['azure-openai-responses'] : [])], message).toContain(model.api);
-        }
-        checked++;
+    for (const agent of agents) for (const model of provider.models[agent] ?? []) {
+      if (model.mode && !['chat', 'responses'].includes(model.mode)) continue;
+      checked++;
+      const message = `${preset.id}/${agent}/${model.id}`;
+      if (agent === 'pi') expect(model.defaultEnabled, message).toBe(true);
+      else if (model.defaultEnabled) {
+        const api = agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+        expect(model.nativeApis ?? [model.nativeApi], message).toContain(api);
+        expect([api, ...(agent === 'codex' ? ['azure-openai-responses'] : [])], message).toContain(model.api);
       }
     }
-    expect(checked).toBeGreaterThan(4000);
+    expect(checked).toBe(agents.reduce((total, agent) => total + (preset.runtimes[agent]?.models.length ?? 0), 0));
+  });
+
+  // Each supplier case above verifies that every input model was actually audited.
+  it('audits more than 4000 conversational models across all presets', () => {
+    const count = options.presets!.reduce((total, preset) => total + agents.reduce(
+      (subtotal, agent) => subtotal + (preset.runtimes[agent]?.models.length ?? 0), 0,
+    ), 0);
+    expect(count).toBeGreaterThan(4000);
   });
 });

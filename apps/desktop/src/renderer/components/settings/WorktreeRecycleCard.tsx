@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -43,10 +44,10 @@ export function WorktreeRecycleCard() {
   return (
     <div className="mt-6 rounded-xl border border-[var(--border-default)] p-4">
       <div className="flex items-center justify-between gap-4">
-        <h3 className="text-sm font-medium text-[var(--text-primary)]">{t('settings.worktreeRecycle.title')}</h3>
+        <h3 id="settings-search-settings-worktreeRecycle-title" className="text-sm font-medium text-[var(--text-primary)]">{t('settings.worktreeRecycle.title')}</h3>
         <Button variant="secondary" size="md" onClick={() => { void refresh(); }}>{t('settings.worktreeRecycle.refresh')}</Button>
       </div>
-      {failed ? <p role="alert" className="mt-3 text-sm text-[var(--text-secondary)]">{t('settings.worktreeRecycle.loadFailed')}</p>
+      {failed ? <ErrorNotice role="alert" className="mt-3" message={t('settings.worktreeRecycle.loadFailed')} />
         : rows === null ? null : rows.length === 0 ? <p className="mt-3 text-sm text-[var(--text-secondary)]">{t('settings.worktreeRecycle.empty')}</p>
           : <ul className="mt-3 divide-y divide-[var(--border-default)]">
             {rows.map((row) => <li key={`${row.id}:${row.generation}`} className="flex flex-wrap items-center justify-between gap-3 py-3">

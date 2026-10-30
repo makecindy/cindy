@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const state = vi.hoisted(() => ({ root: '', userData: '' }));
 vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
-import { newRecycleRecord, readRecycleRecordsAcrossProfiles, recycleJournalRoot, watchRecycleJournal, writeRecycleRecord } from '../worktree/recycleJournal';
+import { newRecycleRecord, recycleJournalRoot, watchRecycleJournal, writeRecycleRecord } from '../worktree/recycleJournal';
 import { withWorktreeResourceLock } from '../worktree/resourceLock';
 
 describe('native worktree journal watcher', () => {
@@ -15,6 +15,15 @@ describe('native worktree journal watcher', () => {
     state.userData = ''; stop = undefined;
   });
   afterEach(async () => { stop?.(); vi.restoreAllMocks(); await fs.rm(state.root, { recursive: true, force: true }); });
+
+  // Emulate an older client's existing locator format without keeping its reader in production.
+  const readPublishedRecords = async (id: string) => {
+    const directory = path.join(state.root, 'app-data', 'Cindy', 'shared-worktree-recycle-journals');
+    return Promise.all((await fs.readdir(directory)).map(async (name) => {
+      const { root } = JSON.parse(await fs.readFile(path.join(directory, name), 'utf8'));
+      return JSON.parse(await fs.readFile(path.join(root, id + '.json'), 'utf8'));
+    }));
+  };
 
   const recordFor = () => newRecycleRecord({
     sessionId: 'owner', name: 'one', path: path.join(state.root, 'repo', '.cindy-worktrees', 'one'),
@@ -45,12 +54,12 @@ describe('native worktree journal watcher', () => {
     await fs.writeFile(file, JSON.stringify(record));
     stop = await watchRecycleJournal(vi.fn(), vi.fn());
     state.userData = path.join(state.root, 'borrower-profile');
-    expect(await readRecycleRecordsAcrossProfiles(record.meta.path)).toEqual([record]);
+    expect(await readPublishedRecords(record.id)).toEqual([record]);
     // The owner can finish using the original journal protocol without updating a mirror.
     record.phase = 'restored';
     await fs.writeFile(`${file}.tmp`, JSON.stringify(record));
     await fs.rename(`${file}.tmp`, file);
-    expect(await readRecycleRecordsAcrossProfiles(record.meta.path)).toEqual([record]);
+    expect(await readPublishedRecords(record.id)).toEqual([record]);
   });
 
   it('keeps different profiles current records independent for the same resource', async () => {
@@ -60,19 +69,8 @@ describe('native worktree journal watcher', () => {
     const other = { ...record, phase: 'restored' as const, generation: 'other-generation' };
     await withWorktreeResourceLock(record.meta.path, () => writeRecycleRecord(other));
     state.userData = path.join(state.root, 'borrower');
-    expect(await readRecycleRecordsAcrossProfiles(record.meta.path)).toEqual(expect.arrayContaining([record, other]));
-    expect(await readRecycleRecordsAcrossProfiles(record.meta.path)).toHaveLength(2);
-  });
-
-  it('preserves and rejects malformed owner evidence without reading unrelated resource records', async () => {
-    const record = await recordFor();
-    await withWorktreeResourceLock(record.meta.path, () => writeRecycleRecord(record));
-    const file = path.join(recycleJournalRoot(), `${record.id}.json`);
-    await fs.writeFile(file, '{');
-    state.userData = path.join(state.root, 'borrower');
-    await expect(readRecycleRecordsAcrossProfiles(record.meta.path)).rejects.toThrow();
-    expect(await readRecycleRecordsAcrossProfiles(path.join(state.root, 'different-resource'))).toEqual([]);
-    expect(await fs.readFile(file, 'utf8')).toBe('{');
+    expect(await readPublishedRecords(record.id)).toEqual(expect.arrayContaining([record, other]));
+    expect(await readPublishedRecords(record.id)).toHaveLength(2);
   });
 
   it('does not commit a recycle intent if publishing its location fails', async () => {

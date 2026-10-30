@@ -2,7 +2,7 @@ import illustration from '../../renderer/assets/splash/illustration.webp?inline'
 import wordmarkDark from '../../renderer/assets/splash/wordmark.png?inline';
 import wordmarkLight from '../../renderer/assets/splash/wordmark-light.png?inline';
 
-const escape = (value: string) =>
+export const escapeHtml = (value: string) =>
   value.replace(
     /[&<>"']/g,
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
@@ -30,6 +30,6 @@ p{font-size:14px;line-height:1.8;color:var(--text-secondary);margin:20px 0 0;tex
 </style></head><body><main>
 <img class="hero" src="${illustration}" alt="">
 <section class="copy"><picture><source media="(prefers-color-scheme:dark)" srcset="${wordmarkDark}"><img class="wordmark" src="${wordmarkLight}" alt="Cindy"></picture>
-<h1>${escape(status)}</h1><p>${escape(hint)}</p></section>
+<h1>${escapeHtml(status)}</h1><p>${escapeHtml(hint)}</p></section>
 </main></body></html>`;
 }

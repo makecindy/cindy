@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { setFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 const log = createLogger('useFeishuBot');
 
@@ -43,6 +44,8 @@ export interface UseFeishuBotReturn {
   errorMessage: string | null;
   /** 是否已有持久化凭证（独立于当前连接状态） */
   hasSavedCreds: boolean;
+  /** 初次从 main 读取状态已经结束，搜索导航可以安全地选择未绑定服务。 */
+  hasLoadedState: boolean;
   /** 已绑定的 owner openId（仅显示用，可能为 null） */
   ownerOpenId: string | null;
 
@@ -92,6 +95,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     () => cachedState?.errorMessage ?? null,
   );
   const [hasSavedCreds, setHasSavedCreds] = useState(() => cachedState?.hasSavedCreds ?? false);
+  const [hasLoadedState, setHasLoadedState] = useState(false);
   const [ownerOpenId, setOwnerOpenId] = useState<string | null>(
     () => cachedState?.ownerOpenId ?? null,
   );
@@ -117,7 +121,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
   // 否则 device-code 流程在 main 写完凭证后, renderer 这边 appId/secret
   // 仍然停留在初始空字符串, 导致 ConnectedCard 显示空 + 跳转链接拼成
   // /app//event 落到飞书 app 列表页。
-  const reloadState = useCallback(async (): Promise<void> => {
+  const reloadState = useCallback(async (): Promise<FeishuBotStatus | undefined> => {
     const reloadRequestVersion = ++reloadRequestVersionRef.current;
     const statusPushVersion = statusPushVersionRef.current;
     try {
@@ -155,9 +159,12 @@ export function useFeishuBot(): UseFeishuBotReturn {
         ownerOpenId: nextOwnerOpenId,
         lifecycleAnnouncement: state.lifecycleAnnouncement,
       };
+      return nextStatus;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('getState failed:', msg);
+    } finally {
+      setHasLoadedState(true);
     }
   }, []);
 
@@ -340,36 +347,51 @@ export function useFeishuBot(): UseFeishuBotReturn {
   }, [isClearing, service, t]);
 
   const reconnect = useCallback(async () => {
-    if (isReconnecting) return false;
+    if (isReconnecting || isClearing) return false;
     setIsReconnecting(true);
+    const pushVersion = statusPushVersionRef.current;
     try {
       const { verdict } = await window.electronAPI.feishuBot.reconnect();
-      if (verdict === 'connected') {
-        setStatus('connected');
+      // Re-read the live status and its reason; a startup verdict can be stale
+      // by the time it reaches the UI (the SDK may already have recovered).
+      const refreshedStatus = await reloadState();
+      const liveStatus =
+        refreshedStatus ??
+        (statusPushVersionRef.current !== pushVersion
+          ? (latestStatusPushRef.current?.status ?? verdict)
+          : verdict);
+      if (!refreshedStatus && statusPushVersionRef.current === pushVersion) {
+        setStatus(liveStatus);
         setErrorMessage(null);
-        if (cachedState) {
-          cachedState = { ...cachedState, status: 'connected', errorMessage: null };
-        }
+        if (cachedState) cachedState = { ...cachedState, status: liveStatus, errorMessage: null };
+      }
+      if (liveStatus === 'connected') {
         toast.success(t('logic.toasts.feishuBotReconnected'));
         return true;
       }
-      if (verdict === 'conflict') {
-        setStatus('conflict');
-        toast.error(t('logic.toasts.feishuBotConflict'));
-        return false;
-      }
-      setStatus('error');
-      toast.error(t('logic.toasts.feishuBotReconnectFailed'));
       return false;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('reconnect failed:', msg);
-      toast.error(t('logic.toasts.feishuBotReconnectFailed'));
+      // Preserve a newer terminal status, but never leave a failed attempt spinning.
+      const pushedStatus = latestStatusPushRef.current?.status;
+      if (
+        statusPushVersionRef.current === pushVersion ||
+        pushedStatus === 'testing' ||
+        pushedStatus === 'reconnecting'
+      ) {
+        const message = t(
+          mapIpcErrorToI18nKey(err, { fallback: 'logic.toasts.feishuBotReconnectFailed' }),
+        );
+        setStatus('error');
+        setErrorMessage(message);
+        if (cachedState) cachedState = { ...cachedState, status: 'error', errorMessage: message };
+      }
       return false;
     } finally {
       setIsReconnecting(false);
     }
-  }, [isReconnecting, t]);
+  }, [isClearing, isReconnecting, reloadState, t]);
 
   const setLifecycleAnnouncement = useCallback((enabled: boolean) => {
     setLifecycleAnnouncementState(enabled);
@@ -399,6 +421,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     status,
     errorMessage,
     hasSavedCreds,
+    hasLoadedState,
     ownerOpenId,
     lifecycleAnnouncement,
     setLifecycleAnnouncement,

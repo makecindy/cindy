@@ -12,8 +12,16 @@
   "resync": "重新同步",
   "resyncing": "正在重新同步",
   "syncShort": "同步",
-  "deviceUnresponsiveTitle": "電腦端未響應",
-  "deviceUnresponsiveHint": "電腦暫時沒有回應請求，正在自動重試。",
+  "deviceUnresponsiveTitle": "連線暫無回應",
+  "deviceUnresponsiveHint": "請求尚未收到回應，正在自動重試。",
+  "localNetwork": {
+    "title": "手機網路無法使用",
+    "hint": "請檢查手機網路，恢復後會自動連線。"
+  },
+  "serviceConnection": {
+    "title": "暫時連不上服務",
+    "hint": "手機暫時連不上服務，正在自動重新連線。"
+  },
   "connectStep1": "在電腦上安裝並開啟 {{appName}}",
   "connectStep2": "用與手機相同的帳號登入",
   "connectStep3": "在「設定 → 遠端連線」中開啟「允許同帳號裝置控制本機」",
@@ -26,6 +34,8 @@
   "sectionAccessRevoked": "需要重新允許",
   "retryAccess": "重試訪問",
   "recheck": "重新檢查",
+  "deviceRemovedTitle": "裝置已移除",
+  "deviceRemovedHint": "請登出後重新登入，以重新加入裝置清單。",
   "authFailedTitle": "登入已失效",
   "authFailedHint": "登入狀態已過期，請退出後重新登入。",
   "replacedTitle": "連線被頂替",
@@ -35,7 +45,7 @@
   "versionMismatchTitle": "版本不匹配",
   "versionMismatchHint": "當前 App 版本與服務端協議不一致，請升級到最新版本。",
   "unstableTitle": "連線反覆斷開",
-  "unstableHint": "本機連線反覆斷開又重連，遠端操作可能一直超時。請檢查網路；若持續如此，重啟 App 後重試。",
+  "unstableHint": "連線不穩定，請檢查網路並等待連線恢復",
   "relay": {
     "label": {
       "online": "Relay 已連線",
@@ -61,7 +71,7 @@
     "remoteDisabled": "遠端電腦已關閉允許遠端控制。",
     "channelNotAllowed": "目前電腦端版本不支援這個遠端能力。",
     "accessRevoked": "這臺電腦已撤銷手機存取權限。",
-    "deviceUnresponsive": "電腦端未回應，正在自動重試，請稍後再試。",
+    "deviceUnresponsive": "請求尚未收到回應，正在自動重試。",
     "versionMismatch": "與服務端協定版本不一致，請升級 App 後重試。",
     "payloadTooLarge": "這次傳輸的內容過大，請拆分後重試。",
     "mediaFetchFailed": "取得電腦端檔案失敗，可以稍後重試。",
@@ -71,6 +81,8 @@
     "offerExpired": "Codex 重設憑證已失效，請重新整理配額後再次確認。",
     "preconditionFailed": "操作條件已變更，請重新整理後再次確認。",
     "transient": "網路或遠端電腦暫時不可用，可以稍後重新同步。",
-    "callFailed": "遠端呼叫失敗，可以稍後重試。（{{error}}）"
+    "callFailed": "遠端呼叫沒有完成。請稍後重試。",
+    "unclassified": "這個操作沒有完成。請稍後重試。",
+    "notFound": "要操作的內容已經不存在。請回到列表重新整理後再試。"
   }
 }

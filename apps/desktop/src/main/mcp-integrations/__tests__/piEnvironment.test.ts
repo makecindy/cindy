@@ -1,3 +1,5 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 /**
  * piEnvironment —— pi MCP 桥 per-session 身份接线测试。
  *
@@ -15,7 +17,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getLiziMcpSessionContext } from '@cindy/mcps';
+import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 
 vi.mock('electron', () => ({
@@ -25,11 +27,13 @@ vi.mock('electron', () => ({
 import type { Logger, McpProvider } from '@cindy/maker-core';
 import { CustomMcpProvider } from '../custom-mcp-provider.js';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
+import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY } from '../../maker-host/agentCapabilityCatalog.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
 } from '../codexBuiltinToolPolicy.js';
 import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
+import { BOT_IM_CHANNELS_VENDOR_KEY } from '../../../shared/botImConnection.js';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
@@ -159,6 +163,32 @@ async function readRpcText(resp: Response): Promise<unknown> {
 describe('piEnvironment per-session identity', () => {
   afterEach(async () => {
     await shutdownPiEnvironment();
+  });
+
+  it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {
+    let bound = false;
+    const providers = createLiziMcpProviders({ slackHook: { getBridge: () => ({
+      availability: () => ({ connected: true, bound, serverSupportsTools: true }),
+      callTool: async () => ({ ok: true as const, result: { bound } }),
+    }) } });
+    const peer = await getPiExtraSpawnConfig(providers, noopLogger(), { sessionId: 'busy-peer', workingDir: '/workspace' });
+    const config = await getPiExtraSpawnConfig(providers, noopLogger(), { sessionId: 'slack-session', workingDir: '/workspace' });
+    const server = config!.mcpBridge!.servers.find((entry) => entry.name === 'cindy_slack')!;
+    const client = new Client({ name: 'slack-recovery', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(server.url), {
+      requestInit: { headers: { Authorization: `Bearer ${config!.mcpBridge!.token}` } },
+    }));
+    try {
+      for (const next of [false, true, false]) {
+        bound = next;
+        const result = await client.callTool({ name: 'slack_status', arguments: {} });
+        expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ bound });
+      }
+    } finally {
+      await client.close();
+      config!.disposeSessionCtx?.();
+      peer!.disposeSessionCtx?.();
+    }
   });
 
   it('registers a pi session ctx and routes it through session + instance identity', async () => {
@@ -321,6 +351,54 @@ describe('piEnvironment per-session identity', () => {
     config?.disposeSessionCtx?.();
   });
 
+  it('reports the actual mounted Pi capabilities through the live bridge context', async () => {
+    const isEnabled = vi.spyOn(PluginRegistry.prototype, 'isEnabled')
+      .mockImplementation((pluginId) => pluginId !== 'collab');
+    const providers = ['cindy_helper', 'cindy_memory', 'cindy_docs', 'cindy_computer',
+      'cindy_make', 'cindy_orca', 'custom_probe'].map((name) => makeProvider(name));
+    const vendorOptions: Record<string, unknown> = {
+      [RUNTIME_MCP_NAMES_KEY]: providers.map((provider) => provider.name),
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['xdt_helper', 'memory', 'docs', 'collab'],
+      [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['docs'],
+    };
+    try {
+      const config = await getPiExtraSpawnConfig(providers, noopLogger(), {
+        sessionId: 'pi-capability-catalog', workingDir: '/repo', memoryEnabled: false,
+        vendorOptions,
+        botMcpPolicy: { mode: 'allowlist', configured: ['custom_probe'],
+          catalog: [{ name: 'custom_probe', source: 'custom', available: true }] },
+      });
+      expect(config?.mcpBridge?.servers.map((server) => server.name))
+        .toEqual(['cindy_helper', 'custom_probe']);
+      const probe = config!.mcpBridge!.servers.find((server) => server.name === 'custom_probe')!;
+      const headers = { authorization: `Bearer ${config!.mcpBridge!.token}`,
+        accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+      const initialized = await fetch(probe.url, { method: 'POST', headers, body: INIT_BODY(1) });
+      const mcpSessionId = initialized.headers.get('mcp-session-id')!;
+      await initialized.text();
+      const response = await fetch(probe.url, {
+        method: 'POST', headers: { ...headers, 'mcp-session-id': mcpSessionId },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call',
+          params: { name: 'current_vendor_options', arguments: {} } }),
+      });
+      const result = await readRpcText(response) as { result: { content: Array<{ text: string }> } };
+      const runtimeOptions = JSON.parse(result.result.content[0]!.text);
+      expect(runtimeOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['cindy_helper', 'custom_probe']);
+      expect(await readAgentCapabilityCatalog(providers, {
+        agentKind: 'pi', workingDir: '/repo', vendorOptions: runtimeOptions,
+      }, {})).toMatchObject({ capabilities: [
+        { server: 'cindy_helper', status: 'registered' },
+        ...['cindy_memory', 'cindy_docs', 'cindy_computer', 'cindy_make', 'cindy_orca'].map((server) => ({
+          server, status: 'unavailable', reason: 'not-mounted-in-current-runtime',
+        })),
+        { server: 'custom_probe', status: 'registered' },
+      ] });
+      config?.disposeSessionCtx?.();
+    } finally {
+      isEnabled.mockRestore();
+    }
+  });
+
   it('keeps native companion helpers available when memory is disabled', async () => {
     const config = await getPiExtraSpawnConfig([
       makeProvider('cindy_memory'), makeProvider('cindy_helper'),
@@ -372,6 +450,47 @@ describe('piEnvironment per-session identity', () => {
       'custom_probe',
     ]);
     make?.disposeSessionCtx?.();
+  });
+
+  it('exposes cindy_telegram_bot only to a Session carrying a Telegram channel marker', async () => {
+    const providers = [makeProvider('cindy_telegram_bot'), makeProvider('custom_probe')];
+    const desktop = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-desktop',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(desktop?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    desktop?.disposeSessionCtx?.();
+
+    const lane = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-lane',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { telegramChatId: 'g/-100123', source: 'telegram' },
+    });
+    expect(lane?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_telegram_bot',
+      'custom_probe',
+    ]);
+    lane?.disposeSessionCtx?.();
+
+    const canonical = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-main',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { [BOT_IM_CHANNELS_VENDOR_KEY]: ['telegram'] },
+    });
+    expect(canonical?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_telegram_bot',
+      'custom_probe',
+    ]);
+    canonical?.disposeSessionCtx?.();
+
+    const feishuOnly = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-feishu-only',
+      workingDir: '/bots/bot/workspace',
+      vendorOptions: { [BOT_IM_CHANNELS_VENDOR_KEY]: ['feishu'] },
+    });
+    expect(feishuOnly?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    feishuOnly?.disposeSessionCtx?.();
   });
 
   it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {
@@ -706,13 +825,14 @@ describe('piEnvironment per-session identity', () => {
     });
     const allowedSecret = 'allowed-remote-secret';
     const excludedSecret = 'excluded-remote-secret';
+    const vendorOptions: Record<string, unknown> = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] };
     const config = await getPiExtraSpawnConfig([
       remoteProvider('allowed_remote', 'ALLOWED_REMOTE_TOKEN', allowedSecret),
       remoteProvider('excluded_remote', 'EXCLUDED_REMOTE_TOKEN', excludedSecret),
     ], noopLogger(), {
       sessionId: 'pi-bot-remote-allowlist',
       workingDir: '/repo',
-      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] },
+      vendorOptions,
       botMcpPolicy: {
         mode: 'allowlist',
         configured: ['allowed_remote'],
@@ -726,9 +846,104 @@ describe('piEnvironment per-session identity', () => {
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual([
       'allowed_remote',
     ]);
+    expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_remote']);
     expect(Object.values(config?.mcpEnv ?? {})).toContain(`Bearer ${allowedSecret}`);
     expect(Object.values(config?.mcpEnv ?? {})).not.toContain(`Bearer ${excludedSecret}`);
     config?.disposeSessionCtx?.();
+  });
+
+  it.each([false, true])('enforces frozen Pi custom-App mounts at the bridge request boundary (remote=%s)', async (remote) => {
+    const credentials = vi.fn((id: string) => `test-main-only-credential-${id}`);
+    const providers = ['allowed_app', 'excluded_app'].map((id) => new CustomMcpProvider(
+      { id, name: id, url: 'https://mcp.example.invalid', transport: 'http', headers: {} },
+      credentials,
+      (read) => {
+        const server = new McpServer({ name: id, version: '1' });
+        server.tool('credentialed', {}, async () => {
+          read(); // Main would attach the stored credentials to the upstream here.
+          return { content: [{ type: 'text' as const, text: 'done' }] };
+        });
+        server.server.fallbackNotificationHandler = async () => { read(); };
+        return server;
+      },
+    ));
+    const ordinary = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-ordinary-apps', sessionInstanceId: 'ordinary-instance', workingDir: '/repo',
+      ...(remote ? { remoteHostId: 'remote-host' } : {}), vendorOptions: {},
+    });
+    const vendorOptions: Record<string, unknown> = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [] };
+    const frozen = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-frozen-apps', sessionInstanceId: 'frozen-instance', workingDir: '/repo',
+      ...(remote ? { remoteHostId: 'remote-host' } : {}), vendorOptions,
+      botMcpPolicy: {
+        mode: 'allowlist', configured: ['allowed_app'],
+        catalog: providers.map(({ name }) => ({ name, source: 'custom' as const, available: true })),
+      },
+    });
+    try {
+      expect(frozen!.mcpBridge!.servers.map((server) => server.name)).toEqual(['allowed_app']);
+      expect(vendorOptions[RUNTIME_MCP_NAMES_KEY]).toEqual(['allowed_app']);
+      expect(credentials).not.toHaveBeenCalled();
+      const headers = (token: string) => ({
+        authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+      });
+      const allowed = frozen!.mcpBridge!.servers[0]!;
+      const init = await fetch(allowed.url, {
+        method: 'POST', headers: headers(frozen!.mcpBridge!.token), body: INIT_BODY(1),
+      });
+      expect(init.status).toBe(200);
+      const allowedSession = init.headers.get('mcp-session-id')!;
+      await init.text();
+      const called = await fetch(allowed.url, {
+        method: 'POST', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': allowedSession },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'credentialed', arguments: {} } }),
+      });
+      expect(called.status).toBe(200);
+      expect(await readRpcText(called)).toMatchObject({ result: { content: [{ text: 'done' }] } });
+      expect(credentials).toHaveBeenCalledWith('allowed_app');
+      credentials.mockClear();
+
+      // A bridge transport can already exist for another Session. Neither its
+      // MCP session id nor a rewritten mounted URL may widen this Bot's mount.
+      const ordinaryExcluded = ordinary!.mcpBridge!.servers.find((server) => server.name === 'excluded_app')!;
+      const existing = await fetch(ordinaryExcluded.url, {
+        method: 'POST', headers: headers(ordinary!.mcpBridge!.token), body: INIT_BODY(3),
+      });
+      expect(existing.status).toBe(200);
+      const borrowedSession = existing.headers.get('mcp-session-id')!;
+      await existing.text();
+      const excluded = new URL(allowed.url);
+      excluded.pathname = '/mcp/excluded_app';
+      const statuses: number[] = [];
+      const deniedInit = await fetch(excluded, {
+        method: 'POST', headers: headers(frozen!.mcpBridge!.token), body: INIT_BODY(4),
+      });
+      statuses.push(deniedInit.status);
+      await deniedInit.text();
+      for (const body of [
+        { jsonrpc: '2.0', id: 5, method: 'tools/list' },
+        { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'credentialed', arguments: {} } },
+        { jsonrpc: '2.0', method: 'example/side-effect' },
+      ]) {
+        const response = await fetch(excluded, {
+          method: 'POST', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': borrowedSession },
+          body: JSON.stringify(body),
+        });
+        statuses.push(response.status);
+        await response.text();
+      }
+      const deleted = await fetch(excluded, {
+        method: 'DELETE', headers: { ...headers(frozen!.mcpBridge!.token), 'mcp-session-id': borrowedSession },
+      });
+      statuses.push(deleted.status);
+      await deleted.text();
+      expect(statuses).toEqual([403, 403, 403, 403, 403]);
+      expect(credentials).not.toHaveBeenCalled();
+    } finally {
+      frozen?.disposeSessionCtx?.();
+      ordinary?.disposeSessionCtx?.();
+    }
   });
 
   it('derives a stable per-session bridge token across rebuilds (round 41 — envHash stability)', async () => {

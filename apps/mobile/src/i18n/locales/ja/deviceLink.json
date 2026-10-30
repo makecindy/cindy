@@ -12,8 +12,16 @@
   "resync": "再同期",
   "resyncing": "再同期しています",
   "syncShort": "同期",
-  "deviceUnresponsiveTitle": "パソコンが応答していません",
-  "deviceUnresponsiveHint": "パソコンが一時的に応答していません。自動的に再試行しています。",
+  "deviceUnresponsiveTitle": "まだ応答がありません",
+  "deviceUnresponsiveHint": "まだ応答を受信していません。自動で再試行しています。",
+  "localNetwork": {
+    "title": "スマートフォンのネットワークが使えません",
+    "hint": "スマートフォンのネットワークを確認してください。復旧すると自動で接続します。"
+  },
+  "serviceConnection": {
+    "title": "サービスに接続できません",
+    "hint": "スマートフォンからサービスに接続できません。自動で再接続しています。"
+  },
   "connectStep1": "パソコンに {{appName}} をインストールして起動する",
   "connectStep2": "スマートフォンと同じアカウントでログインする",
   "connectStep3": "「設定 → リモート接続」で「同じアカウントのデバイスにこのパソコンの操作を許可」をオンにする",
@@ -26,6 +34,8 @@
   "sectionAccessRevoked": "再度の許可が必要",
   "retryAccess": "アクセスを再試行",
   "recheck": "再確認",
+  "deviceRemovedTitle": "デバイスが削除されました",
+  "deviceRemovedHint": "ログアウトして再度ログインすると、デバイス一覧に追加できます。",
   "authFailedTitle": "ログインの有効期限が切れました",
   "authFailedHint": "ログインの有効期限が切れています。ログアウトして、もう一度ログインしてください。",
   "replacedTitle": "接続が置き換えられました",
@@ -35,7 +45,7 @@
   "versionMismatchTitle": "バージョンが一致しません",
   "versionMismatchHint": "このアプリのバージョンはサービスと互換性がありません。最新版に更新して再試行してください。",
   "unstableTitle": "接続が繰り返し切断されています",
-  "unstableHint": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合はアプリを再起動してください。",
+  "unstableHint": "接続が不安定です。ネットワークを確認し、接続の復旧をお待ちください。",
   "relay": {
     "label": {
       "online": "Relay 接続済み",
@@ -61,7 +71,7 @@
     "remoteDisabled": "リモートのパソコンでリモート操作が無効になっています。",
     "channelNotAllowed": "現在のデスクトップ版はこのリモート機能に対応していません。",
     "accessRevoked": "このコンピューターはモバイルからのアクセスを取り消しました。",
-    "deviceUnresponsive": "コンピューターが応答していません。自動再試行中です。しばらくしてから再試行してください。",
+    "deviceUnresponsive": "まだ応答を受信していません。自動で再試行しています。",
     "versionMismatch": "サービスのプロトコルバージョンが一致しません。アプリを更新して再試行してください。",
     "payloadTooLarge": "転送内容が大きすぎます。分割して再試行してください。",
     "mediaFetchFailed": "コンピューターからファイルを取得できませんでした。後でもう一度お試しください。",
@@ -71,6 +81,8 @@
     "offerExpired": "Codex のリセット資格が失効しました。使用枠を更新して再確認してください。",
     "preconditionFailed": "操作条件が変わりました。更新して再確認してください。",
     "transient": "ネットワークまたはリモートのパソコンを一時的に利用できません。後で再同期してください。",
-    "callFailed": "リモート呼び出しに失敗しました。後でもう一度お試しください。（{{error}}）"
+    "callFailed": "リモート呼び出しが完了しませんでした。しばらくしてからもう一度お試しください。",
+    "unclassified": "この操作は完了しませんでした。しばらくしてからもう一度お試しください。",
+    "notFound": "操作しようとした内容はもうありません。一覧に戻って更新してからやり直してください。"
   }
 }

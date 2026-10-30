@@ -34,6 +34,7 @@ function harness(initial: Partial<CindyMakeCompletionMeta> = {}) {
     },
   );
   const openBuild = vi.fn(async () => {});
+  const buildSettled = vi.fn();
   const stop = vi.fn(() => {
     ready.reject(makeTestError('interrupted'));
     closed.resolve();
@@ -62,6 +63,7 @@ function harness(initial: Partial<CindyMakeCompletionMeta> = {}) {
     launch,
     build,
     openBuild,
+    onBuildSettled: buildSettled,
     now: () => 123,
     withUse: async (_context, run) => {
       leased = true;
@@ -77,6 +79,7 @@ function harness(initial: Partial<CindyMakeCompletionMeta> = {}) {
     launch,
     build,
     openBuild,
+    buildSettled,
     artifact,
     save,
     ready,
@@ -92,6 +95,32 @@ function harness(initial: Partial<CindyMakeCompletionMeta> = {}) {
 afterEach(() => vi.useRealTimers());
 
 describe('Main-owned Cindy Make test lifecycle', () => {
+  it('saves specific build failures and removes old diagnostics on a fresh attempt', async () => {
+    const h = harness();
+    await h.controller.act('session', 'completion', 'build');
+    h.artifact.reject(
+      Object.assign(new Error('buildFailed'), {
+        code: 'buildFailed',
+        diagnostic: {
+          kind: 'outOfMemory',
+          exitCode: 134,
+          message: 'FATAL ERROR: JavaScript heap out of memory',
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(h.meta().personal?.status).toBe('failed'));
+    expect(h.meta().personal?.diagnostic).toEqual({
+      kind: 'outOfMemory',
+      exitCode: 134,
+      message: 'FATAL ERROR: JavaScript heap out of memory',
+    });
+    const next = deferred<PersonalArtifact>();
+    h.build.mockImplementationOnce(async () => next.promise);
+    await h.controller.act('session', 'completion', 'build');
+    expect(h.meta().personal?.diagnostic).toBeUndefined();
+    next.reject(makeTestError('interrupted'));
+    await vi.waitFor(() => expect(h.controller.hasActiveJobs()).toBe(false));
+  });
   it.each(['continue', 'build', 'stop-for-build'] as const)(
     'bounds a missing stop receipt for %s without releasing the live workspace',
     async (action) => {
@@ -308,6 +337,7 @@ describe('personal build completion choices', () => {
     await vi.waitFor(() => expect(h.controller.hasActiveJobs()).toBe(false));
     expect(h.meta().personal).toMatchObject({ buildId: id, status: 'ready', ...installer });
     expect(h.meta().personal?.stopping).toBeUndefined();
+    expect(h.buildSettled).toHaveBeenCalledOnce();
   });
   it('preserves cleanup failures instead of reporting a completed cancellation', async () => {
     const h = harness();
@@ -321,6 +351,7 @@ describe('personal build completion choices', () => {
     await h.controller.cancelBuild(h.meta().personal!.buildId!);
     await vi.waitFor(() => expect(h.controller.hasActiveJobs()).toBe(false));
     expect(h.meta().personal).toMatchObject({ status: 'failed', error: 'cleanupFailed' });
+    expect(h.buildSettled).toHaveBeenCalledOnce();
   });
   it('stops only the current build, keeps cleanup leased, and gives retry a new identity', async () => {
     const h = harness();

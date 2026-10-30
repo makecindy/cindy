@@ -26,6 +26,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   // **故意留空**:该字段非空即把系统浏览器登录切到 hosted 轮询链路,默认注入会让
   // 既有 loopback 登录测试整体改道。要测 hosted 路径的用例自己覆盖这一个 key。
   authDesktopCallbackUrl: '',
+  chatApiBaseUrl: 'https://chat.test.invalid',
   deviceLinkApiBaseUrl: 'https://device.test.invalid',
   oauthBrokerApiBaseUrl: 'https://oauth.test.invalid',
   ossApiBaseUrl: 'https://oss.test.invalid',
@@ -40,6 +41,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   skillhubApiBaseUrl: 'https://skillhub.test.invalid',
   cindySkillHubApiBaseUrl: 'https://cindy-skillhub.test.invalid',
   pluginApiBaseUrl: 'https://plugin.test.invalid',
+  shareBaseUrl: '',
   cdnBaseUrl: TEST_CDN_BASE_URL,
   mobileUpdateBaseUrl: 'https://mobile-update.test.invalid',
 };

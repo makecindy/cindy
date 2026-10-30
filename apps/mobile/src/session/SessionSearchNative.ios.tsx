@@ -1,3 +1,4 @@
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { Host } from "@expo/ui";
 import {
   BottomSheet,
@@ -66,6 +67,7 @@ function SearchContent({
 }: SessionSearchNativeProps) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const glassStyle = useNativeGlassButtonStyle({ shape: "circle" });
   const text = useNativeState(query);
   useEffect(() => {
     if (text.get() !== query) text.set(query);
@@ -145,7 +147,7 @@ function SearchContent({
           testID="session.searchPreviousButton"
           modifiers={[
             labelStyle("iconOnly"),
-            buttonStyle("glass"),
+            ...glassStyle,
             disabled(!hasHits),
             frame({ width: 44, height: 44 }),
           ]}
@@ -157,7 +159,7 @@ function SearchContent({
           testID="session.searchNextButton"
           modifiers={[
             labelStyle("iconOnly"),
-            buttonStyle("glass"),
+            ...glassStyle,
             disabled(!hasHits),
             frame({ width: 44, height: 44 }),
           ]}

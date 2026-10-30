@@ -50,7 +50,7 @@ function styleBlock(source: string, name: string): string {
 describe('composer voice draft text metrics', () => {
   it('derives the shared composer metrics from the design tokens', () => {
     const source = read(METRICS);
-    expect(source).toContain('export const COMPOSER_TEXT_FONT_SIZE = typeScale.code;');
+    expect(source).toContain('export const COMPOSER_TEXT_FONT_SIZE = typeScale.bodySmall;');
     expect(source).toContain('export const COMPOSER_TEXT_LINE_HEIGHT = lineHeight.body;');
     expect(source).toContain('export const COMPOSER_TEXT_HORIZONTAL_PADDING = spacing.xs;');
     // WebView HTML 生成器与 node 单测都要 import 本文件,不能把 react-native 拖进来。

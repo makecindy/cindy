@@ -37,4 +37,20 @@ describe('custom provider credential readiness', () => {
     provider.routing.codex!.authStrategy = 'none';
     expect(hasCustomProviderCredential(provider, () => null)).toBe(true);
   });
+  it('recognizes an organization image-only provider through its image credential', () => {
+    const provider = {
+      ...custom(),
+      id: 'byok-images',
+      source: 'organization' as const,
+      agents: [],
+      routing: {},
+      imageModels: [{ id: 'byok-images/model', name: 'Model' }],
+    };
+    expect(hasCustomProviderCredential(provider, () => null)).toBe(false);
+    expect(
+      hasCustomProviderCredential(provider, (id, agent) =>
+        id === 'byok-images' && agent === 'image' ? 'member-key' : null,
+      ),
+    ).toBe(true);
+  });
 });

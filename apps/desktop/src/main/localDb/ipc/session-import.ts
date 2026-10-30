@@ -5,7 +5,7 @@
  * explicitly selects sessions and confirms import in Settings.
  */
 
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 
 import { getCurrentDbClientUserId, getDbClient } from '../client/current.js';
 import { createLogger } from '../../logger.js';
@@ -19,6 +19,11 @@ import {
   scanExternalClaudeCodeSessions,
 } from '../../maker-host/claude-local-sessions.js';
 import { dialogueWorkspaceRoots } from '../dialogueWorkspace.js';
+import {
+  createGitRepoProbe,
+  readSessionImportPathHints,
+  type SessionImportPathHints,
+} from './sessionImportDirFacts.js';
 import {
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForStorage,
@@ -54,6 +59,10 @@ interface SessionImportScanResult {
     existing: number;
   };
   currentProjectDirs: string[];
+  /** 候选与本机已有项目里是 git 仓库的目录(只 stat `.git`,按目录缓存)。 */
+  gitRepoDirs: string[];
+  /** 主目录、应用数据目录、系统临时目录:伙伴工作台不把它们当成用户项目。 */
+  pathHints: SessionImportPathHints;
 }
 
 interface SessionImportRequest {
@@ -69,6 +78,7 @@ interface CodexProjectLinkRequest {
 }
 
 const SESSION_IMPORT_SCAN_CACHE_TTL_MS = 30_000;
+const probeGitRepoDirs = createGitRepoProbe();
 
 let cachedSessionImportScan: { scope: string; result: SessionImportScanResult; expiresAt: number } | null = null;
 let inFlightSessionImportScan: {
@@ -248,6 +258,12 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
     }),
   ].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 
+  const gitRepoDirs = await probeGitRepoDirs([
+    ...currentProjectDirs,
+    ...candidates.flatMap((item) => (item.projectDir ? [item.projectDir] : [])),
+  ]);
+  const pathHints = await readSessionImportPathHints(safeUserDataDir());
+
   log.info('session import scan complete', {
     codexHomes: codex.homes.length,
     claudeRoots: claude.roots.length,
@@ -270,10 +286,20 @@ async function runSessionImportScan(): Promise<SessionImportScanResult> {
       existing: existingCount,
     },
     currentProjectDirs: [...currentProjectDirs].sort(),
+    gitRepoDirs,
+    pathHints,
   };
 }
 
-function invalidateSessionImportScanCache(): void {
+function safeUserDataDir(): string | null {
+  try {
+    return normalizeWorkingDirForStorage(app.getPath('userData'));
+  } catch {
+    return null;
+  }
+}
+
+export function invalidateSessionImportScanCache(): void {
   sessionImportScanCacheVersion += 1;
   cachedSessionImportScan = null;
   inFlightSessionImportScan = null;

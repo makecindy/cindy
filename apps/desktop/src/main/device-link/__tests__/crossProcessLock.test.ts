@@ -570,7 +570,10 @@ describe('接管陈旧锁', () => {
     ).resolves.toEqual({ held: true });
   });
 
-  it('retries when a released lock disappears during stale takeover', async () => {
+  it.each([
+    { takeoverMs: 100, expected: { held: true } },
+    { takeoverMs: 1_001, expected: { held: false, reason: 'busy' } },
+  ])('retries when a released lock disappears during stale takeover ($takeoverMs ms)', async ({ takeoverMs, expected }) => {
     const lock = path.join(dir, 'lock');
     await fsp.writeFile(
       lock,
@@ -586,6 +589,10 @@ describe('接管陈旧锁', () => {
     const old = new Date(Date.now() - 60_000);
     await fsp.utimes(lock, old, old);
 
+    // Assert the retry deadline independently of real Windows filesystem latency,
+    // as in the takeover-budget tests below. Keep real filesystem operations.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const originalRename = fsp.rename;
 
     let removedByRacingOwner = false;
@@ -601,6 +608,7 @@ describe('接管陈旧锁', () => {
       ) {
         removedByRacingOwner = true;
         await fsp.rm(lock, { force: true });
+        now += takeoverMs;
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       }
       return (originalRename as (...args: unknown[]) => Promise<unknown>)(from, to);
@@ -608,9 +616,10 @@ describe('接管陈旧锁', () => {
     try {
       await expect(
         withCrossProcessLock(lock, { label: 'waiter', waitMs: 1_000 }, async (s) => s),
-      ).resolves.toEqual({ held: true });
+      ).resolves.toEqual(expected);
     } finally {
       race.mockRestore();
+      clock.mockRestore();
     }
     expect(removedByRacingOwner).toBe(true);
   });

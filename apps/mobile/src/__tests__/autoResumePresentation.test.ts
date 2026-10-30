@@ -34,6 +34,23 @@ describe('autoResumePresentation', () => {
     expect(isMobileAutoResumeRowInFlight({ ...args, projectionCapability: 'unknown' })).toBe(false);
   });
 
+  it('shows a provider group switch as live without the held error or attempt counts', () => {
+    const presentation = getMobileAutoResumePresentation({
+      error: "You've hit your session limit",
+      attempt: 0,
+      maxAttempts: 0,
+      sessionTotal: 0,
+      groupSwitchPending: { cause: 'usage-limit' },
+      live: true,
+    });
+    expect(presentation.state).toBe('live');
+    expect(presentation.info.groupSwitchPending).toEqual({ cause: 'usage-limit' });
+    expect(presentation.info.error).toBeUndefined();
+    expect(presentation.summary).toBeUndefined();
+    expect(presentation.hasProgress).toBe(false);
+    expect(presentation.canExpand).toBe(false);
+  });
+
   it('lets terminal outcomes win over a stale in-flight signal', () => {
     expect(getMobileAutoResumePresentation({ ...info, outcome: 'succeeded' }, true).state).toBe('succeeded');
     expect(getMobileAutoResumePresentation({ ...info, outcome: 'failed' }, true).state).toBe('failed');
@@ -54,5 +71,53 @@ describe('autoResumePresentation', () => {
     expect(toggleMobileAutoResumeExpanded(false, true)).toBe(true);
     expect(toggleMobileAutoResumeExpanded(true, true)).toBe(false);
     expect(toggleMobileAutoResumeExpanded(true, false)).toBe(false);
+  });
+});
+
+describe('usage-limit reset continuation', () => {
+  it('is its own row without reconnect attempt details', () => {
+    const presentation = getMobileAutoResumePresentation({
+      reason: 'usage-limit-reset',
+      error: "You've hit your session limit",
+      attempt: 1,
+      maxAttempts: 3,
+      sessionTotal: 1,
+    });
+    expect(presentation.info.usageLimitReset).toBe(true);
+    expect(presentation.state).toBe('neutral');
+    expect(presentation.hasProgress).toBe(false);
+    expect(presentation.info.sessionTotal).toBeUndefined();
+    expect(presentation.canExpand).toBe(true);
+  });
+});
+
+
+describe('provider group computer switch', () => {
+  it('reads the switch carried by a desktop auto-continue record', () => {
+    expect(readMobileAutoResumeInfo({
+      reason: 'usage-limit-reset',
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'auth' },
+    })).toEqual({ usageLimitReset: true, agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'auth' } });
+  });
+
+  it('ignores malformed switch data', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', cause: 'auth' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'usage-limit' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'usage-limit' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: {} }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a reconnect to the original computer, with or without its name', () => {
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: { computer: 'Mac mini' } }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: 'Mac mini' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: {} }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: '' } });
+    expect(readMobileAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: 'Mac mini' }))
+      .toEqual({ usageLimitReset: true });
   });
 });

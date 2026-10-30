@@ -1,0 +1,395 @@
+{
+  "title": "グループチャット",
+  "memberSeparator": "、",
+  "memberCount_one": "メンバー {{count}} 人",
+  "memberCount_other": "メンバー {{count}} 人",
+  "organizer": "まとめ役",
+  "waitingConfirm": "{{name}} があなたの確認を待っています",
+  "loadFailedTitle": "このグループチャットを読み込めません",
+  "loadFailedDescription": "このグループチャットをパソコンから読み込めません。もう一度試すか、仲間の一覧に戻ってください。",
+  "unavailableTitle": "このグループチャットは利用できません",
+  "unavailableDescription": "削除された可能性があります。仲間のページに戻ると、ほかのグループチャットや仲間を開けます。",
+  "list": {
+    "noMessages": "メッセージはまだありません",
+    "empty": "グループチャットはまだありません。+ をタップして仲間を集めましょう。",
+    "running": "仲間が作業中"
+  },
+  "create": {
+    "title": "グループチャットを作成",
+    "nameLabel": "グループ名",
+    "namePlaceholder": "例: 週末のお出かけ",
+    "nameRequired": "グループ名を入力してください",
+    "membersLabel": "仲間を選択",
+    "selectedCount_one": "{{count}} 人選択中（最大 {{max}} 人）",
+    "selectedCount_other": "{{count}} 人選択中（最大 {{max}} 人）",
+    "close": "閉じる",
+    "submitShort": "作成",
+    "submit": "グループチャットを作成",
+    "failed": "グループチャットを作成できませんでした。しばらくしてから再試行してください"
+  },
+  "memberStatus": {
+    "paused": "一時停止中",
+    "unavailable": "利用不可"
+  },
+  "mention": {
+    "all": "全員",
+    "allHint": "全員が返信",
+    "label": "仲間をメンション"
+  },
+  "composer": {
+    "label": "グループチャットのメッセージ",
+    "placeholder": "グループに話しかけましょう。@ で仲間を指名すると、その仲間だけが返信します…",
+    "noMembers": "今返信できる仲間がいません。グループの設定で仲間を追加してください",
+    "tooLong": "メッセージが長すぎます。上限は {{max}} 文字です",
+    "sendFailed": "メッセージを送信できませんでした。しばらくしてから再試行してください",
+    "stopFailed": "このラウンドを停止できませんでした。もう一度お試しください",
+    "stop": "このラウンドを停止",
+    "more": "その他の操作",
+    "division": "役割分担する",
+    "divisionDescription": "まとめ役が先に役割を分け、仲間が一歩ずつ進めます",
+    "divisionBusy": "役割分担の途中です。終わるか停止してから新しく始めてください",
+    "divisionTag": "役割分担",
+    "removeDivision": "役割分担を外す",
+    "placeholderDivision": "やりたいことを書いてください。まとめ役が先に役割を分けます…",
+    "placeholderPlanProposed": "担当や手順を変えたいときは、そのまま話しかけてください…",
+    "placeholderPlanWaiting": "{{name}} に直してほしいことがあれば、そのまま話しかけてください…",
+    "placeholderPlanRunning": "送った内容は作業中の {{name}} に届きます…",
+    "send": "送信"
+  },
+  "timeline": {
+    "newMessages_one": "新着メッセージ {{count}} 件",
+    "newMessages_other": "新着メッセージ {{count}} 件",
+    "emptyTitle": "このグループにはまだメッセージがありません",
+    "emptyDescription": "話しかけると仲間たちが会話を続けます。@ で仲間を指名すると、その仲間だけが返信します。",
+    "roundEnded": "仲間たちの発言が終わりました",
+    "continue": "議論を続ける",
+    "continueFailed": "議論を続けられませんでした。もう一度お試しください",
+    "nextStep": "次のステップ:",
+    "continuePlan": "次へ進む",
+    "continuePlanFailed": "次のステップに進めませんでした。もう一度お試しください",
+    "stepFailed": "{{name}} は完了できませんでした",
+    "retryStep": "やり直す",
+    "retryFailed": "このステップをやり直せませんでした。もう一度お試しください",
+    "endPlan": "役割分担を終える",
+    "planDone_one": "{{count}} ステップすべて完了しました",
+    "planDone_other": "{{count}} ステップすべて完了しました",
+    "planDoneGeneric": "役割分担が完了しました",
+    "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
+  },
+  "quote": {
+    "label": "{{name}} を引用：{{summary}}",
+    "deleted": "元のメッセージは削除されました",
+    "attachments": "{{name}} など {{total}} 件",
+    "unavailable": "このメッセージは見つかりません。"
+  },
+  "notice": {
+    "memberJoined": "{{name}}さんがグループに参加しました",
+    "memberFailed": "{{name}} は今回返信できませんでした",
+    "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
+    "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
+    "planFailed": "{{name}} は役割分担を決められませんでした。もう一度お試しください",
+    "planStopped": "役割分担を停止しました",
+    "workdirUnavailable": "{{name}} が作業ディレクトリを見つけられません",
+    "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
+    "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
+    "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+    "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。",
+        "advice": "仲間の所有者に、未使用のセッションのアーカイブを依頼してください。",
+        "details": "仲間の所有者に不要なセッションのアーカイブを依頼するか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。"
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。",
+        "advice": "リモートコンピューターの所有者に、未使用のセッションの整理または上限の引き上げを依頼してください。",
+        "details": "そのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。"
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。",
+        "advice": "画像対応のモデルに切り替えてください。",
+        "details": "画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。"
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}は返信できませんでした。利用可能なモデルがありません。",
+        "advice": "仲間の設定で利用可能なモデルを選択してください。",
+        "details": "仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。"
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。",
+        "advice": "モデルの接続先に再接続してください。",
+        "details": "設定でモデルのプロバイダーに再接続し、メッセージを再送してください。"
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。",
+        "advice": "しばらくしてから再送信してください。",
+        "details": "しばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}は返信できませんでした。モデルサービスが一時的に混雑しています。",
+        "advice": "しばらくしてから再送信してください。",
+        "details": "しばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。",
+        "advice": "利用枠を確認するか、別のモデルを選択してください。",
+        "details": "プロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。"
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}は返信できませんでした。ネットワーク接続に失敗しました。",
+        "advice": "ネットワークまたはプロキシを確認してください。",
+        "details": "ネットワークやプロキシを確認し、メッセージを再送してください。"
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}の返信がタイムアウトしました。",
+        "advice": "メッセージを再送信してください。",
+        "details": "メッセージを再送するか、別の利用可能なモデルを選んでください。"
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}は今回は返信できませんでした。",
+        "advice": "メッセージを再送信してください。",
+        "details": "メッセージを再送してください。再度失敗する場合は、ログを確認して問題を報告してください。"
+      }
+    },
+    "runtimeFailureSetupHint": "モデルや設定を変更する場合は、この仲間が動作するパソコンで行ってください。"
+  },
+  "plan": {
+    "intro_one": "この件は {{count}} ステップに分けて、次のように分担します:",
+    "intro_other": "この件は {{count}} ステップに分けて、次のように分担します:",
+    "missing": "この計画は読み込めなくなりました",
+    "start": "開始する",
+    "dismiss": "今回はやめる",
+    "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoNote": "ステップが終わると自動で次へ進みます。",
+    "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
+    "superseded": "更新済み",
+    "dismissed": "見送りました",
+    "stopped": "停止しました",
+    "stepDone": "完了",
+    "stepRunning": "作業中",
+    "stepFailed": "未完了",
+    "stepPending": "未着手",
+    "stepMenuTitle": "このステップの担当",
+    "removeStep": "このステップを削除",
+    "keepOneStep": "1 つは残す必要があります",
+    "startFailed": "役割分担を開始できませんでした。もう一度お試しください",
+    "dismissFailed": "この計画を終了できませんでした。もう一度お試しください",
+    "editFailed": "このステップを変更できませんでした。もう一度お試しください",
+    "editStepHint": "担当を変えるか、このステップを削除します",
+    "reassignStepHint": "このステップの担当を変えます",
+    "eyebrow_one": "分担 · {{count}} ステップ",
+    "eyebrow_other": "分担 · {{count}} ステップ",
+    "awaitingStart": "開始待ち",
+    "progressRunning": "作業中 {{current}} / {{total}}",
+    "progressDone": "完了 {{done}} / {{total}}",
+    "allDone": "すべて完了"
+  },
+  "speaking": {
+    "stopping": "停止中…",
+    "planning": "役割分担を考えています…",
+    "step": "作業中…"
+  },
+  "task": {
+    "state": {
+      "started": "進行中",
+      "waiting": "確認待ち",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み",
+      "timed-out": "タイムアウト"
+    }
+  },
+  "files": {
+    "onComputer": "ファイルはパソコンにあります。パソコンで開いてください",
+    "loading": "読み込み中…",
+    "unavailable": "読み込めません",
+    "untitled": "添付ファイル"
+  },
+  "settings": {
+    "open": "グループの設定",
+    "title": "グループの設定",
+    "members": "メンバー",
+    "remove": "外す",
+    "removeNamed": "{{name}} をグループから外す",
+    "minMembers": "グループチャットには仲間が {{min}} 人以上必要です",
+    "maxMembers": "最大 {{max}} 人",
+    "noMoreBots": "追加できるほかの仲間はいません",
+    "nameSaveFailed": "グループ名を保存できませんでした。入力内容は保持されています。再試行してください。",
+    "membersSaveFailed": "メンバーを更新できませんでした。もう一度お試しください",
+    "replyMode": "誰も @ されていないとき",
+    "replyModeAll": "誰でも返信できる",
+    "replyModeMentioned": "@ された仲間だけ返信",
+    "replyModeNote": "付け加えることがない仲間は発言しません。1 ラウンドは最大 3 周・10 件までで、その後は「議論を続ける」を押すまで待ちます。",
+    "replyModeNoteQueue": "仲間が順番に一人ずつ答え、最初の 5 人は自動で続きます。仲間のメッセージを引用したり、そのスレッドに返信したりしても呼び出せます。",
+    "replyModeSaveFailed": "返信の設定を保存できませんでした。もう一度お試しください",
+    "delete": "グループチャットを削除",
+    "deleteNote": "削除されるのはこのグループチャットとそのメッセージだけです。仲間本人、その記憶、個別のチャットには影響しません。",
+    "deleteConfirmTitle": "「{{name}}」を削除しますか？",
+    "deleteFailed": "グループチャットを削除できませんでした。しばらくしてから再試行してください",
+    "speakingMode": "発言の順番",
+    "speakingModeAuto": "自動",
+    "speakingModeSequential": "常に順番に",
+    "speakingModeAutoNote": "メンションなし・@全員：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
+    "speakingModeSequentialNote": "一度に一人の仲間だけが話し、後の仲間は前の返信を見てから答えます。",
+    "speakingModeSaveFailed": "発言の順番を保存できませんでした。もう一度お試しください。",
+    "setOrganizer": "まとめ役にする",
+    "setOrganizerNamed": "{{name}} をまとめ役にする",
+    "organizerNote": "まとめ役が、どのステップを誰が担当するかを決めます。既定では最初の仲間です。",
+    "organizerSaveFailed": "まとめ役を変更できませんでした。もう一度お試しください",
+    "projectDir": "プロジェクトフォルダ",
+    "projectDirNone": "未選択",
+    "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
+    "add": "仲間を追加",
+    "projectDirOnComputer": "パソコンで選択・変更できます",
+    "memberActions": "{{name}} の操作",
+    "retry": "再試行",
+    "conflict": "グループ設定が更新されました。内容を確認してから再保存してください。入力内容は保持されています。",
+    "archive": "グループチャットをアーカイブ",
+    "archiveConfirmTitle": "「{{name}}」をアーカイブしますか？",
+    "archiveNote": "アーカイブできるのは所有者のみです。新しいメッセージは送信できなくなりますが、履歴は保持されます。",
+    "description": "グループの説明",
+    "descriptionSaveFailed": "グループの説明を保存できませんでした。",
+    "makeAdmin": "管理者にする",
+    "removeAdmin": "管理者を解除",
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "guest": "ゲスト"
+    },
+    "cloudStatus": {
+      "loading": "設定を読み込み中…",
+      "permission": "この設定を変更できるのはグループのオーナーと管理者だけです。",
+      "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
+    }
+  },
+  "errors": {
+    "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
+    "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
+    "mentionUnavailable": "メンションしたメンバーは現在利用できません。送信する前に選び直してください。",
+    "notFound": "このグループチャットはもう存在しません",
+    "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
+    "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
+    "planClosed": "この計画はすでに終了したか、更新されています",
+    "invalidAttachment": "添付ファイルを読み込めません。選び直して送信してください。",
+    "attachmentUnavailable": "スマートフォンから添付ファイルを取得できません。接続を確認して再試行してください。",
+    "attachmentTooLarge": "添付ファイルが 100 MB を超えています。小さいファイルを選んでください。",
+    "mediaUploadFailed": "チャットサービスに添付ファイルをアップロードできません。しばらくしてから再試行してください。",
+    "authRequired": "ログインの有効期限が切れました。パソコンで再度ログインしてください。",
+    "chatUnavailable": "チャットサービスに接続できません。ネットワークを確認して再試行してください。",
+    "importPending": "グループの履歴を同期中です。しばらくしてから再試行してください。",
+    "requestTimeout": "操作の結果をまだ確認できません。更新して結果を確認してから再試行してください。",
+    "permissionDenied": "このグループを管理する権限がありません。",
+    "serviceError": "チャットサービスで処理を完了できません。しばらくしてから再試行してください。",
+    "groupArchived": "このグループはアーカイブ済みのため操作できません。",
+    "quoteUnavailable": "引用したメッセージは削除されたか、表示できなくなりました。引用を外したので、もう一度送信してください。",
+    "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
+    "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
+    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
+  },
+  "followUp": {
+    "next": "分担 · 次のステップ",
+    "failedStep": "ステップ {{step}} は完了できませんでした"
+  },
+  "server": {
+    "attachmentTooLarge": "グループの添付ファイルは {{size}} MB 以下にしてください。小さいファイルを選んでください。",
+    "offline": "グループチャットに接続できません。もう一度お試しください。",
+    "loadFailed": "グループチャットを読み込めません。もう一度お試しください。",
+    "loadOlder": "以前のメッセージを読み込む",
+    "attachmentFailed": "添付ファイルを開けませんでした。もう一度お試しください。",
+    "attachmentPreviewLoading": "添付ファイルを読み込み中…",
+    "attachmentPreviewFailed": "この添付ファイルをプレビューできません。もう一度お試しください。",
+    "attachmentPreviewTooLarge": "ファイルが10 MBを超えているため、スマートフォンではプレビューできません。",
+    "attachmentPreviewBinary": "この添付ファイルは読み取り可能なテキストではないため、プレビューできません。",
+    "attachmentPreviewTruncated": "プレビューは最大10,000行、100,000文字まで表示します。",
+    "attachmentPreviewEmpty": "このファイルは空です。",
+    "attachmentPreviewRetry": "再試行",
+    "attachmentPreviewOpenOutside": "ブラウザーで開く",
+    "attachmentPreviewClose": "添付ファイルのプレビューを閉じる",
+    "previewUnavailable": "プレビューを読み込めません",
+    "endpointUnavailable": "グループチャットのサービス設定を利用できません。再試行してください。"
+  },
+  "lifecycle": {
+    "dissolve": "グループを解散",
+    "dissolveNote": "この操作は取り消せません。全員がメッセージを送信できなくなり、進行中の作業は停止し、招待は無効になります。メンバーはこれまで閲覧できた履歴を引き続き確認できます。",
+    "hide": "自分のリストから削除",
+    "hideNote": "すべての自分のデバイスでリストからこのチャットを削除します。メンバーの状態、履歴、進行中の作業、他のメンバーには影響しません。",
+    "leave": "グループを退出",
+    "leaveNote": "あなたとあなたの仲間がグループから退出します。新しいメッセージは届かなくなり、グループの履歴を閲覧できなくなります。",
+    "unavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
+    "dissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
+    "failed": "操作を完了できませんでした。もう一度お試しください。",
+    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
+  },
+  "mask": {
+    "toolAccess": "ツールの権限",
+    "catchup": {
+      "title": "自分へのメンション",
+      "me": "自分",
+      "markAll": "すべて既読にする",
+      "empty": "未読のメンションはありません",
+      "thread": "スレッド",
+      "main": "グループチャット",
+      "answered": "代理返信済み"
+    },
+    "title": "AI代理返信モード",
+    "settings": "AI代理返信の設定",
+    "companion": "自分のパートナー",
+    "choose": "パートナーを選ぶ",
+    "enabled": "自動で代理返信",
+    "triggerLabel": "起動方法",
+    "resumeAfter": "不在時の再開まで",
+    "start": "開始時刻",
+    "end": "終了時刻",
+    "startManual": "今すぐ開始",
+    "stop": "代理返信を停止",
+    "todos": "自分のやることを整理",
+    "digestLabel": "まとめを受け取る",
+    "saving": "保存中…",
+    "saveError": "保存できませんでした。以前の設定で続行します。再試行してください。",
+    "retry": "再試行",
+    "loading": "設定を読み込み中…",
+    "takeover": "自分で返信",
+    "resume": "AI代理返信を再開",
+    "status": {
+      "enabled": "有効",
+      "paused": "一時停止",
+      "off": "オフ",
+      "offline": "オフライン",
+      "waiting": "待機中",
+      "unbound": "未設定"
+    },
+    "detail": {
+      "paused": "このやり取りはあなたが対応中",
+      "off": "自動の代理返信はオフ",
+      "offline": "代理返信を一時停止 · PCオフライン",
+      "waiting": "手動の開始待ち",
+      "unbound": "パートナー未選択",
+      "enabled": "仲間が代わりに返信できる状態です"
+    },
+    "trigger": {
+      "always": "常時有効",
+      "manual": "手動で開始",
+      "scheduled": "時刻を指定"
+    },
+    "digest": {
+      "daily": "毎日",
+      "manual": "手動"
+    },
+    "minutes": "{{count}}分",
+    "presence": "本人が対応中 · 不在{{minutes}}分で再開",
+    "scheduledWait": "{{time}}に開始",
+    "attribution": "{{name}} が {{owner}} に代わって返信",
+    "digestNow": "今すぐ整理",
+    "digestWorking": "整理中…",
+    "digestSent": "パートナーとのチャットに送信済み",
+    "digestFailed": "整理できませんでした。再試行してください。",
+    "digestEmpty": "新しく整理する内容はありません",
+    "access": {
+      "chat": "グループ内の会話のみ",
+      "tools": "ツールと情報の利用を許可済み",
+      "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
+      "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
+      "confirm": "確認"
+    }
+  }
+}

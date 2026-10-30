@@ -119,6 +119,7 @@ function createFireContext(): FireContext & { abortController: AbortController }
 interface RunnerHarnessOptions {
   createSessionImpl?: () => Promise<Session>;
   sessionAlive?: boolean;
+  findUsageLimitWait?: (scheduleId: string) => Promise<string | null>;
 }
 
 function createRunnerHarness(session: Session, options: RunnerHarnessOptions = {}) {
@@ -137,7 +138,8 @@ function createRunnerHarness(session: Session, options: RunnerHarnessOptions = {
     getSessionMeta: vi.fn(async () => ({ sdkSessionId: 'sdk-1', workDir: 'F:\\X', model: 'gpt-5.4' })),
     isSessionAlive: vi.fn(() => options.sessionAlive ?? true),
   } as unknown as Maker;
-  const runner = new MakerScheduleRunner({ maker, getDb: () => ({}) as never, notifier, logger });
+  const runner = new MakerScheduleRunner({ maker, getDb: () => ({}) as never, notifier, logger,
+    findUsageLimitWait: options.findUsageLimitWait });
   return { runner, logger, notifier, maker };
 }
 
@@ -147,6 +149,21 @@ describe('MakerScheduleRunner 顺延 / 礼让', () => {
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: 'F:\\X' });
+  });
+
+  // Standard regression: after restart a schedule's saved wait belongs to its old session,
+  // including schedules that normally create a fresh session on every fire.
+  it.each([undefined, 'heartbeat-session'])('defers a saved quota wait before creating or sending to target=%s', async (targetSessionId) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const findUsageLimitWait = vi.fn(async () => 'old-quota-session');
+    const { runner, maker, notifier } = createRunnerHarness(h.session, { findUsageLimitWait });
+    const result = await runner.fire(heartbeatSchedule({ targetSessionId }), createFireContext());
+    expect(result).toMatchObject({ deferred: true, sessionId: 'old-quota-session' });
+    expect(findUsageLimitWait).toHaveBeenCalledWith('schedule-hb');
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+    expect(mocks.resolveWorkingDir).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 
   it('does not create a session or send a turn for a pre-aborted run', async () => {
@@ -283,6 +300,7 @@ describe('MakerScheduleRunner 顺延 / 礼让', () => {
       heartbeatSchedule({
         targetSessionId: undefined,
         workingDir: 'F:\\X',
+        model: 'gpt-6-astra',
       }),
       createFireContext(),
     );

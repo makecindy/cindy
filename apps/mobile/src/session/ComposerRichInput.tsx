@@ -29,10 +29,14 @@ import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery
 
 export interface ComposerRichInputHandle {
   expand?(): void;
+  /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
+  flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
   rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
   applyDocumentAndFocusSelection(document: ComposerDocument, offset: number): void;
+  /** Apply a document and place the caret where possible without opening the keyboard. */
+  applyDocumentAndSetSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
@@ -98,6 +102,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
+    const localDocumentsRef = useRef(new WeakSet<ComposerDocument>());
     const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
     const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
     const selectionRef = useRef<(ComposerSelection & { draft: string }) | null>(null);
@@ -114,6 +119,22 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     /** 尚未交接给附件上传 hook 的 WebView 粘贴缓存文件。 */
     const pendingPastedImageFilesRef = useRef(new Set<string>());
     const disposedRef = useRef(false);
+    const snapshotSequenceRef = useRef(0);
+    const pendingSnapshotRef = useRef<{
+      requestId: number;
+      documentId: number;
+      isCurrent?: () => boolean;
+      resolve(document: ComposerDocument): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null>(null);
+    const rejectSnapshot = useCallback(() => {
+      const pending = pendingSnapshotRef.current;
+      if (!pending) return;
+      pendingSnapshotRef.current = null;
+      clearTimeout(pending.timer);
+      pending.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+    }, []);
     const initialConfigRef = useRef({
       accessibilityLabel,
       document,
@@ -154,6 +175,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       webViewRef.current?.injectJavaScript(`try { ${script} } catch (_) {} true;`);
     }, []);
     const recovery = useComposerWebViewRecovery(inject, () => {
+      rejectSnapshot();
       readyRef.current = false;
       pendingFocusRef.current = false;
       if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
@@ -173,8 +195,10 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject('window.cindyComposer.focus();');
+      if (Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      rejectSnapshot();
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
       const documentId = webDocumentRef.current.id + 1;
       webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
@@ -183,9 +207,14 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
-    }, [inject]);
+      if (focusAfter && Platform.OS === 'android') webViewRef.current?.requestFocus();
+    }, [inject, rejectSnapshot]);
 
     useEffect(() => {
+      // A native edit may advance again before React commits its previous
+      // snapshot. Echoes acknowledge that edit; they must not reset the DOM
+      // or caret to an older value. External replacements still apply below.
+      if (localDocumentsRef.current.delete(document)) return;
       const signature = JSON.stringify(document);
       if (signature === webSignatureRef.current) return;
       webSignatureRef.current = signature;
@@ -198,6 +227,16 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     useEffect(() => {
       if (!forwardedRef) return undefined;
       const handle: ComposerRichInputHandle = {
+        flushDocument: (isCurrent) => {
+          if (!readyRef.current || disposedRef.current) return Promise.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+          rejectSnapshot();
+          return new Promise<ComposerDocument>((resolve, reject) => {
+            const requestId = ++snapshotSequenceRef.current;
+            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+              resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
+            inject(`window.cindyComposer.snapshot(${requestId});`);
+          });
+        },
         getSelection: (draft) => {
           const saved = selectionRef.current;
           return saved?.draft === draft
@@ -215,6 +254,12 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         applyDocumentAndFocusSelection: (value, offset) => {
           webSignatureRef.current = JSON.stringify(value);
           applyDocument(value, true, composerCaretPosition(value, offset));
+        },
+        // Restores the caret only if the editor is already focused; otherwise
+        // getSelection keeps the remembered insertion point until the user taps it.
+        applyDocumentAndSetSelection: (value, offset) => {
+          webSignatureRef.current = JSON.stringify(value);
+          applyDocument(value, false, composerCaretPosition(value, offset));
         },
         blur: () => {
           pendingFocusRef.current = false;
@@ -246,7 +291,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         if (typeof forwardedRef === 'function') forwardedRef(null);
         else forwardedRef.current = null;
       };
-    }, [applyDocument, focusEditor, forwardedRef, inject]);
+    }, [applyDocument, focusEditor, forwardedRef, inject, rejectSnapshot]);
 
     const persistPastedImage = useCallback(async (
       message: Extract<ComposerWebMessage, { type: 'paste-image' }>,
@@ -303,6 +348,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       disposedRef.current = false;
       return () => {
         disposedRef.current = true;
+        rejectSnapshot();
         // sessionId 原地换代时 ComposerRichInput 会重挂载。旧实例的异步图片写盘即使
         // 随后落定，也不能再沿旧闭包调用新任务的 onPasteImages / load-failed；先摘掉
         // 批次登记，settlePastedImage 会把迟到结果视为已作废。
@@ -312,7 +358,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         pendingPastedImageFilesRef.current.clear();
         if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       };
-    }, []);
+    }, [rejectSnapshot]);
 
     const settlePastedImage = useCallback((
       requestId: string,
@@ -373,6 +419,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       if (!message) return;
       if (message.type === 'pong') return recovery.onPong(message.id);
       if (message.type === 'ready') {
+        rejectSnapshot();
         recovery.onReady();
         readyRef.current = true;
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
@@ -393,15 +440,29 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
-      if (message.type === 'change') {
+      if (message.type === 'change' || message.type === 'snapshot') {
+        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
+        if (message.type === 'snapshot') {
+          if (!pending || pending.requestId !== message.requestId) return;
+          // Cancellation can restore the caller's draft before its next render.
+          // Reject before touching editor state or invoking the persistence callback.
+          if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }
+          if (message.pendingPaste || message.documentId !== pending.documentId) { rejectSnapshot(); return; }
+        }
         if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
-        if (!next) return;
+        if (!next) { if (pending) rejectSnapshot(); return; }
         const normalized = normalizeComposerDocument(next);
+        if (pending) {
+          pendingSnapshotRef.current = null;
+          clearTimeout(pending.timer);
+        }
         if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
         webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
+        localDocumentsRef.current.add(normalized);
         onChangeDocument(normalized);
+        pending?.resolve(normalized);
         return;
       }
       if (message.type === 'selection') {
@@ -456,7 +517,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (

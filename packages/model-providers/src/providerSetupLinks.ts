@@ -15,6 +15,8 @@ const links: Record<string, ProviderSetupLink> = {
   openai: key('https://platform.openai.com/api-keys'),
   xai: key('https://console.x.ai/team/default/api-keys'),
   openrouter: key('https://openrouter.ai/settings/keys'),
+  // Official Claude CLI guide directs users here to sign in and create a key.
+  agnes: account('https://platform.agnes-ai.com/'),
   deepseek: key('https://platform.deepseek.com/api_keys'),
   'zhipu-glm-cn': key('https://bigmodel.cn/usercenter/proj-mgmt/apikeys'),
   'zhipu-glm-global': key('https://z.ai/manage-apikey/apikey-list'),
@@ -37,6 +39,9 @@ const links: Record<string, ProviderSetupLink> = {
   'xiaomi-token-plan-sgp': key('https://platform.xiaomimimo.com/token-plan'),
   longcat: key('https://longcat.chat/platform/api_keys'),
   'volcengine-agent-plan': account('https://console.volcengine.com/ark/'),
+  'volcengine-api': account('https://console.volcengine.com/ark/'),
+  'siliconflow-cn': key('https://cloud.siliconflow.cn/account/ak'),
+  'siliconflow-global': key('https://cloud.siliconflow.com/account/ak'),
   'volcengine-coding-plan': account('https://console.volcengine.com/ark/'),
   'tencentcloud-coding-plan': account('https://console.cloud.tencent.com/'),
   opencode: account('https://opencode.ai/auth'),
@@ -65,7 +70,7 @@ export function providerSetupLink(preset: Pick<ProviderPreset, 'id' | 'docsUrl' 
   const link = links[sourceProviderForPreset(preset.id)];
   if (link) return link;
   // Local servers have no provider account. Keep their setup help without asking for a cloud key.
-  if (['litellm', 'lmstudio', 'llamacpp', 'vllm'].includes(preset.id) && preset.docsUrl) {
+  if (['litellm', 'lmstudio', 'llamacpp', 'vllm', 'sub2api'].includes(preset.id) && preset.docsUrl) {
     return { url: preset.docsUrl, kind: 'setup' };
   }
   return undefined;

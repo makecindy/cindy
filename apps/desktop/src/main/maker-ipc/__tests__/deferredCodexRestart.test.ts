@@ -27,6 +27,7 @@ describe('DeferredCodexRestartService', () => {
     hasBusyLocalCodexSession?: () => boolean;
     listLocalCodexSessionIds?: () => string[];
     onApplied?: (sessionIds: string[]) => void;
+    onQueueGateReleased?: (sessionIds: string[]) => void;
   }) {
     const restart = overrides?.restart ?? vi.fn(async () => {});
     const service = new DeferredCodexRestartService({
@@ -36,11 +37,49 @@ describe('DeferredCodexRestartService', () => {
       hasBusyLocalCodexSession: overrides?.hasBusyLocalCodexSession ?? (() => false),
       listLocalCodexSessionIds: overrides?.listLocalCodexSessionIds ?? (() => []),
       onApplied: overrides?.onApplied,
+      onQueueGateReleased: overrides?.onQueueGateReleased,
       retryDelayMs: 1_000,
       logger,
     });
     return { service, restart };
   }
+
+  it.each(['success', 'failure', 'owner-change'])(
+    'releases only the captured restart scope after %s', async (outcome) => {
+      let finish!: () => void;
+      const held = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const onQueueGateReleased = vi.fn((ids: string[]) => {
+        for (const id of ids) expect(service.isSessionRestarting(id)).toBe(false);
+      });
+      const { service } = createService({
+        listLocalCodexSessionIds: () => ['local-codex'],
+        restart: async () => {
+          await held;
+          if (outcome === 'failure') throw new Error('restart failed');
+        },
+        onQueueGateReleased,
+      });
+      service.schedule('browser-change');
+      expect(service.isSessionRestarting('local-codex')).toBe(false);
+      const attempt = service.flushBeforeLocalCodexSessionStart();
+      expect(service.isSessionRestarting('local-codex')).toBe(true);
+      expect(service.isSessionRestarting('unrelated-session')).toBe(false);
+      if (outcome === 'owner-change') service.clear();
+      finish();
+      await attempt;
+
+      expect(service.isSessionRestarting('local-codex')).toBe(false);
+      if (outcome === 'owner-change') {
+        expect(onQueueGateReleased).not.toHaveBeenCalled();
+      } else {
+        expect(onQueueGateReleased).toHaveBeenCalledExactlyOnceWith(['local-codex']);
+      }
+      expect(service.isPending()).toBe(outcome === 'failure');
+      service.clear();
+    },
+  );
 
   it('settle 边界兑现 pending 重启并收口', async () => {
     const restart = vi.fn(async () => {});

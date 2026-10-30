@@ -93,6 +93,23 @@ describe('manifestService cache channel identity', () => {
     clearCachedManifest();
   });
 
+  // Optional binary preparation observes metadata; it cannot change the result
+  // of the application's update lookup, even if the observer fails. Tier: unit.
+  it('isolates optional metadata observers and honors unsubscribe', async () => {
+    const service = await import('../manifestService');
+    const observer = vi.fn(() => { throw new Error('optional prefetch failed'); });
+    const unsubscribe = service.onManifestFetched(observer);
+    try {
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+      unsubscribe();
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); }
+  });
+
   it('discards a cached release manifest after the shared channel switches to beta', async () => {
     mockManifestResponse(RELEASE_MANIFEST);
     const service = await import('../manifestService');
@@ -105,6 +122,20 @@ describe('manifestService cache channel identity', () => {
     expect(service.getCachedManifest()).toBeNull();
     expect(netRequest.mock.calls[0]?.[0]).toContain('manifest-');
     expect(String(netRequest.mock.calls[0]?.[0])).not.toContain('-beta.json');
+  });
+
+  it('aborts an unread non-200 response before removing cancellation ownership', async () => {
+    const request = Object.assign(new EventEmitter(), { end: vi.fn(), abort: vi.fn() });
+    const response = Object.assign(new EventEmitter(), { statusCode: 404 });
+    netRequest.mockReturnValueOnce(request);
+    const controller = new AbortController();
+    const service = await import('../manifestService');
+    const pending = service.fetchManifest(1_000, controller.signal);
+    request.emit('response', response);
+    await expect(pending).resolves.toBeNull();
+    expect(request.abort).toHaveBeenCalledTimes(1);
+    controller.abort();
+    expect(request.abort).toHaveBeenCalledTimes(1);
   });
 
   it('does not cache a fetch that finishes after the shared channel changes', async () => {

@@ -7,6 +7,7 @@ import {
   type ModelFavoriteMutation,
 } from '@cindy/device-link';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { extractIpcError } from '@/utils/ipcError';
 import type { ModelFavoriteItem, ModelFavoriteConfig, ModelFavoritePatch } from './modelFavorites';
 
 export interface FavoriteStore {
@@ -15,6 +16,23 @@ export interface FavoriteStore {
   update(uid: string, patch: ModelFavoritePatch): void | Promise<void>;
   remove(uid: string): void | Promise<void>;
 }
+// 上次从那台电脑读到的收藏(按数据归属代次 + 电脑):面板每次打开先显示它，再在后台读最新的。
+// 写入仍带 expected 交给那台电脑核对，旧快照改不坏真相。
+const lastFavorites = new Map<string, ModelFavoriteItem[]>();
+let lastFavoritesOwner = '';
+/** 数据归属换了(切换 / 退出账号)就丢掉上一个账号的快照,缓存里只留当前归属的。 */
+function rememberFavorites(owner: string, key: string, items: ModelFavoriteItem[]): void {
+  if (owner !== lastFavoritesOwner) {
+    lastFavorites.clear();
+    lastFavoritesOwner = owner;
+  }
+  lastFavorites.set(key, items);
+}
+export function __resetRemoteModelFavoritesCacheForTest(): void {
+  lastFavorites.clear();
+  lastFavoritesOwner = '';
+}
+
 /** Remote views already hold the device's sessions topic. Only invalidate this
  * device's favorites; never reset the link or touch the controller's local store. */
 export function useRemoteModelFavorites(deviceId?: string) {
@@ -24,9 +42,11 @@ export function useRemoteModelFavorites(deviceId?: string) {
   current.current = key;
   const [state, setState] = useState<{ key: string; items: ModelFavoriteItem[] } | null>(null);
   const [error, setError] = useState(false);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [writeErrorKey, setWriteErrorKey] = useState<string | null>(null);
   const sequence = useRef(0);
-  const items = state?.key === key ? state.items : [];
+  const cached = lastFavorites.get(key);
+  const items = state?.key === key ? state.items : (cached ?? []);
   const refresh = async () => {
     if (!deviceId) return;
     const seq = ++sequence.current;
@@ -38,11 +58,15 @@ export function useRemoteModelFavorites(deviceId?: string) {
         JSON.stringify(getDataOwnerGeneration()) !== JSON.stringify(owner)
       )
         return;
-      setState({ key, items: parseModelFavorites(value) as ModelFavoriteItem[] });
+      const next = parseModelFavorites(value) as ModelFavoriteItem[];
+      rememberFavorites(JSON.stringify(owner), key, next);
+      setState({ key, items: next });
       setError(false);
-    } catch {
+      setErrorCode(null);
+    } catch (err) {
       if (current.current === key && sequence.current === seq) {
         setError(true);
+        setErrorCode(extractIpcError(err)?.code ?? null);
       }
     }
   };
@@ -63,7 +87,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
       }
     });
     const offResponsive = api.onResponsivenessChanged?.((event) => {
-      if (event.deviceId === deviceId) {
+      if (event.deviceId === deviceId && !event.unresponsive && event.recovered !== false) {
         void refresh();
       }
     });
@@ -84,7 +108,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
     setWriteErrorKey(null);
     if (
       !deviceId ||
-      state?.key !== key ||
+      (state?.key !== key && cached === undefined) ||
       current.current !== key ||
       JSON.stringify(getDataOwnerGeneration()) !== JSON.stringify(owner)
     )
@@ -98,6 +122,7 @@ export function useRemoteModelFavorites(deviceId?: string) {
     } catch (error) {
       if (current.current === key) {
         setWriteErrorKey(key);
+        setErrorCode(extractIpcError(error)?.code ?? null);
         void refresh();
       }
       throw error;
@@ -122,5 +147,5 @@ export function useRemoteModelFavorites(deviceId?: string) {
     },
     remove: (uid) => write({ kind: 'remove', expected: expected(uid) }),
   };
-  return { items, store, error: error || writeErrorKey === key };
+  return { items, store, error: error || writeErrorKey === key, errorCode };
 }

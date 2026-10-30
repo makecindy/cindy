@@ -6,11 +6,19 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CINDY_VERSION_PROTOCOL } from '../../../shared/cindyVersions';
+// These checkpoints include real filesystem I/O, not a one-second performance contract.
+// Use the existing platform test budget; vi.waitFor otherwise defaults to only 1000 ms.
+let ioTimeout: number;
+function waitForIo(assertion: () => unknown) {
+  return vi.waitFor(assertion, { timeout: ioTimeout });
+}
+
 const h = vi.hoisted(() => ({
   profile: '',
   appPath: '',
   name: 'Cindy',
   packaged: false,
+  makeEnabled: true,
   spawn: vi.fn(),
   pty: vi.fn(),
   exit: vi.fn(),
@@ -58,6 +66,11 @@ vi.mock('../../logger.js', () => ({
 }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'global' }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({
+  get CINDY_MAKE_ENABLED() {
+    return h.makeEnabled;
+  },
+}));
 
 const originalExec = process.execPath;
 const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
@@ -66,7 +79,8 @@ let root = '';
 let startup: typeof import('../versionStartup');
 let store: typeof import('../versionStore');
 let original: import('../versionStore').OriginalVersion;
-beforeEach(async () => {
+beforeEach(async ({ task }) => {
+  ioTimeout = task.timeout;
   vi.resetModules();
   vi.clearAllMocks();
   root = await mkdtemp(path.join(os.tmpdir(), 'cindy-version-startup-'));
@@ -75,6 +89,7 @@ beforeEach(async () => {
   Object.defineProperty(process, 'resourcesPath', { value: h.appPath, configurable: true });
   h.name = 'Cindy';
   h.packaged = false;
+  h.makeEnabled = true;
   h.ready = false;
   await mkdir(h.profile);
   await mkdir(path.join(h.appPath, 'drizzle'), { recursive: true });
@@ -145,7 +160,16 @@ afterEach(async () => {
   else Reflect.deleteProperty(process, 'resourcesPath');
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (root) await rm(root, { recursive: true, force: true });
+  if (root)
+    await rm(root, {
+      recursive: true,
+      force: true,
+      // Windows may briefly retain a lock/reclaim entry while the async
+      // version-store cleanup has just completed. Match the production
+      // cleanup retry policy so test teardown does not race that release.
+      maxRetries: 3,
+      retryDelay: 100,
+    });
 });
 function saveOriginal() {
   store.writeVersionJson(path.join(store.versionsRoot(h.profile), 'original.json'), original);
@@ -410,7 +434,7 @@ describe('one original version type for Dev and installed Cindy', () => {
     });
     startup.prepareCindyVersionStartup();
     const result = startup.dispatchCindyVersionStartup();
-    await vi.waitFor(() => expect(h.pty).toHaveBeenCalledOnce());
+    await waitForIo(() => expect(h.pty).toHaveBeenCalledOnce());
     expect(h.pty.mock.calls[0].slice(0, 2)).toEqual([
       originalExec,
       [path.join(root, 'checkout/scripts/desktop-dev-runner.mjs'), 'remote'],
@@ -429,6 +453,37 @@ describe('one original version type for Dev and installed Cindy', () => {
 // path that keeps this process running lets Electron become ready first (the 2026-09-20 Dev
 // startup failure with a recorded original.json).
 describe('startup dispatch stays ahead of Electron ready', () => {
+  it.each([false, true])('ignores a compatible retained personal selection while Make is disabled (packaged=%s)', async packaged => {
+    h.packaged = packaged;
+    h.makeEnabled = false;
+    original.migrationHash = store.migrationIdentity(path.join(h.appPath, 'drizzle'));
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    await store.selectVersion(h.profile, personal.id);
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(startup.getCurrentCindyVersionId()).toBe('original');
+    expect(h.spawn).not.toHaveBeenCalled();
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(store.selectedVersion(h.profile)).toBe(personal.id);
+    startup.finishCindyVersionStartup();
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    expect(fs.existsSync(personal.executable)).toBe(true);
+    expect(fs.existsSync(path.join(store.versionDirectory(h.profile, personal.id), 'resources', 'app.asar'))).toBe(true);
+  });
+  it('resets a retained selection even when its original record is missing', async () => {
+    h.makeEnabled = false;
+    const personal = await savePersonalVersion();
+    await store.selectVersion(h.profile, personal.id);
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(h.spawn).not.toHaveBeenCalled();
+    startup.finishCindyVersionStartup();
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    expect(fs.existsSync(personal.executable)).toBe(true);
+  });
   it.each([false, true])(
     'rejects an outdated selection using the running original before its registry refresh (packaged=%s)',
     async (packaged) => {
@@ -448,7 +503,7 @@ describe('startup dispatch stays ahead of Electron ready', () => {
       expect(h.exit).not.toHaveBeenCalled();
       expect(store.readOriginalVersion(h.profile)?.migrationHash).toBe(original.migrationHash);
       startup.finishCindyVersionStartup();
-      await vi.waitFor(() => {
+      await waitForIo(() => {
         expect(store.selectedVersion(h.profile)).toBe('original');
         expect(store.readOriginalVersion(h.profile)?.migrationHash).toBe(
           store.migrationIdentity(path.join(h.appPath, 'drizzle')),
@@ -463,7 +518,7 @@ describe('startup dispatch stays ahead of Electron ready', () => {
     expect(ready).not.toHaveBeenCalled();
     expect(store.readOriginalVersion(h.profile)?.version).toBeUndefined();
     startup.finishCindyVersionStartup();
-    await vi.waitFor(() => expect(store.readOriginalVersion(h.profile)?.version).toBe('0.1.99'));
+    await waitForIo(() => expect(store.readOriginalVersion(h.profile)?.version).toBe('0.1.99'));
     expect(
       store.readVersionJson(path.join(store.versionsRoot(h.profile), 'active.json')),
     ).toMatchObject({ pid: process.pid, id: 'original' });
@@ -480,7 +535,7 @@ describe('startup dispatch stays ahead of Electron ready', () => {
     expect(h.spawn).not.toHaveBeenCalled();
     expect(store.selectedVersion(h.profile)).toBe(personal.id);
     startup.finishCindyVersionStartup();
-    await vi.waitFor(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
   });
   it('opens the original in-process when the selected version fails before any real I/O', async () => {
     saveOriginal();
@@ -491,7 +546,7 @@ describe('startup dispatch stays ahead of Electron ready', () => {
     expect(h.exit).not.toHaveBeenCalled();
     expect(h.relaunch).not.toHaveBeenCalled();
     startup.finishCindyVersionStartup();
-    await vi.waitFor(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
   });
   it.each([
     ['packaged', true],

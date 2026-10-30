@@ -1,10 +1,11 @@
+// guard: protocol-compatibility.md: list bootstrap flags and schedule-index invalidation must agree across Home, device detail and event adapters; static wire/call-site contract.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('mobile remote session bootstrap', () => {
   it('asks the controlled desktop to include active pinned sessions outside the recent window', () => {
-    const homeSource = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const homeSource = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
     const detailSource = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
     const listWithPinned =
       /local-db:sessions:list'[\s\S]{0,280}\{ includePinned: true, fresh: true \}/;
@@ -22,7 +23,11 @@ describe('mobile remote session bootstrap', () => {
     expect(detailSource).toContain('loadSharedSessionScheduleIndex(deviceId, maker, canLoadScheduleIndex)');
     expect(detailSource).not.toContain('{ force: true }');
     expect(eventSource).toContain('projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread');
-    expect(eventSource).toContain('invalidateScheduleIndexForDevice(deviceId)');
+    // Events invalidate the shared index centrally (and keep the task-page binding record current).
+    expect(eventSource).toContain('noteScheduleEventInIndexCache(deviceId, {');
+    expect(eventSource).toContain('invalidate: projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread,');
+    const indexSource = readFileSync(resolve(process.cwd(), 'src/session/scheduleIndex.ts'), 'utf8');
+    expect(indexSource).toContain('if (change.invalidate) invalidateScheduleIndexForDevice(deviceId);');
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion,');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion,');
   });

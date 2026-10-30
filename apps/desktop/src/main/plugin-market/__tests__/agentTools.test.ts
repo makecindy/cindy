@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPluginMarketAgentTools } from '../agentTools.js';
 import type { PluginMarketDetail, PluginMarketSnapshot } from '../../../shared/pluginMarket.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ServerApiError } from '../../serverApiClient.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import type { PluginMarketInstallContext } from '../service.js';
 
 function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const detail: PluginMarketDetail = {
@@ -20,10 +22,11 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
     if (!state.current) throwIpcError('PERMISSION_DENIED', 'scope changed');
   });
   const release = vi.fn();
+  const consentPrompt = vi.fn(async () => true);
   const market = {
     snapshot: vi.fn(async () => snapshot), detail: vi.fn(async () => detail),
-    install: vi.fn(async (_id: string, _options: unknown, guard?: () => void) => {
-      guard?.();
+    install: vi.fn(async (_id: string, _options: unknown, context: PluginMarketInstallContext) => {
+      context.assertCurrent?.();
       state.installed = true;
       return { ghost: { manifest: detail.manifest, enabled: true } as InstalledGhost };
     }),
@@ -31,12 +34,20 @@ function harness(ghostId = 'mail-suite', name = 'Google Gmail') {
   const tools = createPluginMarketAgentTools({
     market, installedState: () => ({ exists: state.installed, errorCode: state.errorCode }),
     captureRead: () => assertCurrent,
-    captureInstall: () => { assertCurrent(); return { assertCurrent, release }; },
+    captureInstall: () => { assertCurrent(); return { assertCurrent, release, consentPrompt }; },
   });
-  return { tools, market, detail, snapshot, state, release };
+  return { tools, market, detail, snapshot, state, release, consentPrompt };
 }
 
 describe('Agent plugin discovery and installation', () => {
+  it.each([undefined, null, 'acme'])('preserves delivery namespace %s', async (namespace) => {
+    const h = harness();
+    if (namespace !== undefined) h.detail.namespace = namespace;
+    const result = await h.tools.search('gmail');
+    const item = (result.items as Array<Record<string, unknown>>)[0];
+    expect('namespace' in item).toBe(namespace !== undefined);
+    expect(item.namespace).toBe(namespace);
+  });
   it.each([['mail-suite', 'Google Gmail', 'gmail'], ['image-studio', 'Image creation', 'image']])(
     'discovers and installs %s through the same catalog contract', async (id, name, query) => {
       const h = harness(id, name);
@@ -44,15 +55,71 @@ describe('Agent plugin discovery and installation', () => {
       expect(h.market.snapshot).toHaveBeenCalledWith({ discoveryOnly: true });
       expect(h.market.install).not.toHaveBeenCalled();
       expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: true, status: 'installed', ghost_id: id });
-      expect(h.market.install).toHaveBeenCalledWith('catalog-id', { expectedReleaseId: 'release-1', expectedManifest: h.detail.manifest, allowSourceReplacement: false }, expect.any(Function));
+      expect(h.market.install).toHaveBeenCalledWith('catalog-id', { expectedReleaseId: 'release-1', expectedManifest: h.detail.manifest, allowSourceReplacement: false }, {
+        consent: { prompt: h.consentPrompt, initiator: 'agent' },
+        assertCurrent: expect.any(Function),
+      });
       expect(h.release).toHaveBeenCalledOnce();
     },
   );
+
+  it('returns the committed namespace for a namespaced install', async () => {
+    const h = harness();
+    h.market.install.mockResolvedValue({
+      ghost: { manifest: h.detail.manifest, enabled: true, namespace: 'acme' } as InstalledGhost,
+    });
+    expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' }))
+      .toMatchObject({ ok: true, status: 'installed', ghost_id: 'mail-suite', namespace: 'acme' });
+  });
 
   it.each([null, 'GHOST_ASLEEP', 'GHOST_DISABLED_IN_WORKDIR', 'GHOST_NOT_FOUND'])('preserves an existing installation and reports %s', async (errorCode) => {
     const h = harness(); h.state.installed = true; h.state.errorCode = errorCode;
     expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ status: 'already-installed', plugin: { installed: true, availability: errorCode ?? 'available' } });
     expect(h.market.install).not.toHaveBeenCalled();
+  });
+
+  it('does not call an organization-only outage a complete catalog', async () => {
+    const h = harness();
+    h.snapshot.organizationAccessError = 'PLUGIN_NAMESPACE_CLIENT_REQUIRED';
+    expect(await h.tools.search('gmail')).toMatchObject({
+      ok: true,
+      complete: false,
+      unavailable_sources: ['organization'],
+    });
+  });
+
+  it.each([
+    ['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'update Cindy'],
+    ['PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'Retry later'],
+    ['PLUGIN_LIST_CHANGED', 'Retry later'],
+    ['PLUGIN_NAMESPACE_CONFIG_REQUIRED', 'Do not retry repeatedly'],
+  ] as const)('returns %s from a market install failure', async (code, guidance) => {
+    const h = harness();
+    h.market.detail.mockRejectedValue(new ServerApiError(code, code === 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' ? 503 : 409, 'secret-plugin-id'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: code });
+    expect(String(result.message)).toContain(guidance);
+    expect(JSON.stringify(result)).not.toContain('secret-plugin-id');
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the guidance when the service reports a catalog-level organization outage', async () => {
+    const h = harness();
+    h.market.install.mockImplementation(async () =>
+      throwIpcError('PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE', 'Organization plugin catalog is unavailable'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE' });
+    expect(String(result.message)).toContain('Retry later');
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an ordinary install failure unavailable', async () => {
+    const h = harness();
+    h.market.install.mockRejectedValue(new Error('disk failed'));
+    expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({
+      ok: false,
+      errorCode: 'INSTALL_UNAVAILABLE',
+    });
   });
 
   it('distinguishes unavailable sources from an exhaustive empty result without leaking errors', async () => {
@@ -77,11 +144,21 @@ describe('Agent plugin discovery and installation', () => {
 
   it.each(['scope', 'concurrent-install'])('checks %s again at package placement', async (change) => {
     const h = harness();
-    h.market.install.mockImplementation(async (_id, _options, guard) => {
+    h.market.install.mockImplementation(async (_id, _options, context) => {
       if (change === 'scope') h.state.current = false; else h.state.installed = true;
-      guard?.(); throw new Error('should never reach placement');
+      context.assertCurrent?.(); throw new Error('should never reach placement');
     });
     expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' })).toMatchObject({ ok: false, errorCode: change === 'scope' ? 'PERMISSION_DENIED' : 'PRECONDITION_FAILED' });
+    expect(h.release).toHaveBeenCalledOnce();
+  });
+
+  it('tells the Agent not to retry when the user declines the install confirmation', async () => {
+    const h = harness();
+    h.market.install.mockImplementation(async () => throwIpcError('MUTATION_CANCELLED', '用户取消了插件安装'));
+    const result = await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'MUTATION_CANCELLED' });
+    expect(String(result.message)).toMatch(/Do not retry/);
+    expect(h.state.installed).toBe(false);
     expect(h.release).toHaveBeenCalledOnce();
   });
 

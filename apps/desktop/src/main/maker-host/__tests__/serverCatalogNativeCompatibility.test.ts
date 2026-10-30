@@ -6,7 +6,12 @@ import {
   parseCatalog,
   type Catalog,
 } from '@cindy/model-providers';
-import { getActiveCatalog, setActiveCatalog, setXdGatewayModels } from '../active-catalog.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+} from '../active-catalog.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 // Contract fixture extracted from cindy-server#581 providers.json at df0c1bd5b07e.
@@ -59,7 +64,15 @@ function accept(incoming: Catalog) {
   setActiveCatalog(mergeWithBundled(incoming), { authorityCatalog: incoming });
 }
 
+/** OpenAI 订阅成员只来自账号清单；Server Registry 只为账号返回的型号补资料。 */
+function seedCodexAccount(...ids: string[]): void {
+  setDiscoveredCodexModels(
+    ids.map((id) => ({ id, name: id, contextWindow: 272000, efforts: [], defaultEffort: null })),
+  );
+}
+
 afterEach(() => {
+  setDiscoveredCodexModels([]);
   setXdGatewayModels([]);
   setActiveCatalog(BUNDLED_CATALOG);
 });
@@ -67,6 +80,7 @@ afterEach(() => {
 describe('Server catalog updates with independent Cindy native protocols', () => {
   it('preserves each harness effort contract and local native metadata through an older schema', () => {
     accept(serverCatalog());
+    seedCodexAccount('gpt-6-astra');
     const active = getActiveCatalog();
     const openai = active.providers.find((provider) => provider.id === 'openai')!;
     for (const agent of ['claude-code', 'codex', 'pi'] as const) {
@@ -96,6 +110,7 @@ describe('Server catalog updates with independent Cindy native protocols', () =>
     const incoming = serverCatalog();
     incoming.modelRegistry!.models[0].contextWindow = 300000;
     accept(incoming);
+    seedCodexAccount('gpt-6-astra');
     const openai = getActiveCatalog().providers.find((provider) => provider.id === 'openai')!;
     expect(openai.models.codex!.find((model) => model.id === 'gpt-6-astra')?.contextWindowMax).toBe(
       300000,

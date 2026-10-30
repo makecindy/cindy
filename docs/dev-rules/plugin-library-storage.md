@@ -21,12 +21,13 @@
 | per-plugin worker 入口 | `apps/desktop/src/main/cindy-brain/libraryDbWorker.ts` |
 | 主进程 RPC 服务（发送前语句门 / dispose 收口） | `apps/desktop/src/main/cindy-brain/librarySqlService.ts` |
 | 协议分派（资格审 / binding 根解析 / owner scope 复核） | `apps/desktop/src/main/cindy-brain/librarySlot.ts` |
+| owner-scoped staging（独立于可迁移 Library 根） | `apps/desktop/src/main/cindy-brain/libraryStaging.ts` |
 | 随时迁移状态机 | `apps/desktop/src/main/cindy-brain/libraryMigrate.ts` |
 | 回收站删除通道 | `apps/desktop/src/main/cindy-brain/libraryTrash.ts` |
 | 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
 | 面板 `/library/` 投影 | `cindy-brain/runtime/electronSandboxAdapter.ts`（`serveGhostLibraryFile`） |
 | 装配 / 生命周期挂点 / 设置面 IPC | `cindy-brain/index.ts`（`getGhostLibrarySlot`、`relocateGhostLibraryTo`、`getGhostLibraryOverview`） |
-| 作者手册章节 | `cindy-brain/forge.ts` 的 `FORGE_GUIDE` §4.10.1 |
+| 作者手册章节 | 内置 `cindy-plugin-creator/references/plugin-files-and-library.md` §4.10.1（兼容导出为 `FORGE_GUIDE`） |
 
 ## 落盘布局（owner-scoped，全部经 `ownerScopedUserDataPath`）
 
@@ -34,8 +35,13 @@
 owners/<ownerKey>/
 ├── libraries/<ghostId>/          # 系统管理默认根
 ├── libraries-binding.json        # 自定义位置持久 binding（原子写）
-└── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+├── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+├── library-reattach.json         # 设置页「接回以前的作品数据」未完成时的日志
+└── library-staging/<ghostId>/    # H1 上传 staging（不可随 Library 根迁移）
 ```
+
+这里的 `<ghostId>` 是实例键（`installedGhostStoragePart`）：升级前的旧安装是裸 id，
+namespace 之后的新安装是 `_ns__<org>__<id>` / `_root__<id>`。
 
 自定义根 = `<用户所选父目录>/<ghostId>`（binding 记录 realpath 快照 + 文件
 identity + generation）。库内宿主命名空间 `.cindy-library/`（meta/usage/tmp/
@@ -45,14 +51,46 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 
 1. **不可用 ≠ 空**：meta 损坏 → `unavailable(corrupt)`；binding 漂移 →
    `binding-moved` / `disk-missing`。宿主不自动重建、不清空、不回退写默认根、
-   不触发 GC、不判素材已删。插件侧同样语义写进了 FORGE_GUIDE。
+   不触发 GC、不判素材已删。缓存中的 custom 会话在真实根消失后必须现解
+   binding：`open`/`status` 报 unavailable，不得 `mkdir` 重建空库。custom vault.open
+   不得 recursive mkdir 已消失的用户父目录（父目录不在 → `disk-missing`）；仅在父目录仍在时
+   允许创建 `<parent>/<ghostId>` 子目录。建根边界须复核 binding 的 realpath/dev/ino：同路径新对象是
+   `binding-moved`，不得初始化空库或把 extraDir 授权到错误根。已挂 extraDir 后若 open 进入 drift，必须
+   实际撤 grant。自动 open 失败要把 drift 记进 session，同盘归位后仅 `status` 也须恢复。合法 default
+   首次创建仍可 mkdir。被 rename 走的原件仍在旧目录，不称已删除。同一磁盘对象归位后既有 `open`/`status`
+   恢复，删后重建的同路径是 `binding-moved` 不是原盘回归。Windows st_ino=0 检不出同路径重建，已知限制。
+   既有 Library meta 的插件身份与当前物理实例不一致时不得打开；namespace 物理搬迁
+   必须随数据同步更新 meta 身份，恢复重试可重复执行但不得认领其它插件的库。
+   插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
    （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
    （`cleanupRetiredGhostData`）**不得**触及 Library。
+   **重装接回**：企业市场首次安装若找不到可复用的实例记录，市场账本又证明裸 id 下的
+   旧库属于同一插件编号、同一组织（升级前已卸载、未打 namespace 标记），安装直接收回
+   裸 id 键，旧库与 binding 原样接上；证明不了但裸 id 下有旧库时，由 Main 在安装确认
+   之后询问用户（后台 / 默认安装不询问，按新键）。已经拿到新键空库的实例，可在设置页
+   「接回以前的作品数据」：当前库与 staging 进回收站，旧库改名到当前实例键，meta 改身份
+   并清掉 orphaned；没有 `.cindy-library` 的旧目录按「来源不明」提示，接回时补写 meta。
+   动手前写 `library-reattach.json`（写完刷盘所在目录），每步可重跑，下次作品库请求或打开
+   设置页时续完；续完失败只拦日志里的两个库，其他插件照常读写。所有改名与 meta 改写
+   刷盘后才删日志。自定义位置的旧库在写日志前先确认能按目录身份搬（不提供 inode 的卷
+   直接拒绝）、目标没有 binding 且自定义父目录下没有同名目录；
+   换库前停插件运行时并卸下面板；面板与后台页走同源 BroadcastChannel，Main 不在中间，
+   所以 Main 还会关掉该实例分区里仍开着的页面并等它们销毁。换完再关一次旧页、清掉
+   该实例的 Electron 分区存储（内存分区，面板与后台共用，不清会把旧库的缓存写进新库），
+   再重启运行时、让面板从磁盘重新挂上。清分区重试后仍失败，插件保持停止、作品库保持
+   拦截，提示用户重启 Cindy；Main 记下该实例，面板挂载、插件运行时与 Node 运行时启动
+   （含 /wake、重载、常驻拉起）都拒绝，直到应用重启。未完成的接回只在真正打开作品库的请求里续完（能力查询与
+   资格不符的请求不触发）；报给界面的失败只用通用文案，原始错误留在 Main 日志。
+   属于其他组织或仍在启用的记录不让出裸 id；裸 id 被启用中的安装（如本地版）占用时，
+   设置页只提示占用、不给接回；接回只动作品库与 staging，不碰密钥、账号、KV 与私有目录。
 3. **owner 隔离**：会话绑定 `activeOwnerScopeKey` 每请求比对；切换在途由
    `interruptGhostCallsForAccountBoundary` 的 `disposeAll` 收口（在途写入随串行
    链归属原 owner）。根解析每次经 binding store 现解。
+   Host 的 bind/unbind/relocate/revert-default 与换源归档共用安装变更队列，复制及 binding
+   提交必须在同一队列操作内完成；排队前捕获安装目标，出队后复核，目标变化时拒绝旧操作。
+   owner mutation 租约只稳定账号归属，不能替代此互斥队列。
 4. **路径纪律**：相对路径四层校验（`isSafeGhostRelativePath` →
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验
@@ -105,8 +143,14 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
 13. **只读操作能力合同（capabilities）**：`{op:'capabilities'}` 在资格审与 op 合法性
     校验之后、会话创建之前返回，不捕获 owner、不解析库根、不 open vault、不弹窗、
     不碰剪贴板、不泄漏 owner 或绝对库路径。成功形态固定为
-    `{ok:true, op:'capabilities', capabilities:{version:1, operations:['clipboardWrite','saveAs']}}`。
+    `{ok:true, op:'capabilities', capabilities:{version:1, operations:[...clipboardWrite/saveAs, staging.*], staging:{version:1,...limits}}}`。
     `operations` 只表达**实现支持**，不等于此刻有窗口、已授权或库可用。
+    staging 操作与 capabilities 在 Library open/root/authorizedReadonly 门之前分派，
+    仍验当前 owner 与已启用 library 能力；只有 `staging.release` 核验当前 Library ACK。
+    `disposeGhost` / `disposeAll` 先置 `relocating` 再排空该 ghost 在途 `staging.release`（tombstone/fsync 期间 Library 会话保持稳定），新的 release 在闸上拒绝；bind/unbind/relocate/delete 都先置 relocating 再 dispose，不把 owner mutation lease 当迁库锁。首次 mint staging 根时，耐久还要 fsync 新建根在其父目录中的 entry，只 fsync 根 inode 不算。Windows 仍报 `fsynced:false`。
+    staging 根按 owner×ghost 捕获后不漂移；坏/不可读 manifest 返回 `LIBRARY_UNAVAILABLE`，不得报空或释放对应空间。
+    新原件在 blob 就位前经 Vault 写下 `intent.json`（owner/ghost/id/task/revision/hash/bytes/mime/recovery）；崩溃后 new Store 只从这份可信 intent 校验 bytes/hash 再补 `manifest.json`+dirfsync，不从 blob 猜归属。不完整或冲突 fail-closed 并保留源。本 PR 新原件必有 intent；历史无 intent 的 orphan blob 只隔离计费，不 TTL 删除、不声称可恢复。原件只在 Library ACK 且调用者已保存画布后释放。
+    恢复与 release 走流式 hash，禁止 `readFile` 整文件入内存。null owner 拒。
     消费规则：仅 `version===1` 且 `operations` 为字符串数组才有效；额外字段忽略，未知
     operation 忽略，已知项保留；有效 v1 清单缺少某项才是 unsupported；缺字段、错类型、
     `version` 非 1、或旧宿主 unknown-op 一律 unknown。旧插件无需重装或重授权。

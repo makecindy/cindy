@@ -39,8 +39,16 @@ export interface ResourceUsageWindowControllerDeps {
   activityPayload?: (active: boolean) => unknown;
   localeChannel?: string;
   prewarmWork?: boolean;
+  /**
+   * 原生 hide / minimize 是否暂停窗口工作；默认 true。只有用户关闭（hideWindow）才应结束
+   * 工作的窗口传 false——macOS 会把切换 Space、原生全屏切换和完全遮挡都报告成 hide / show。
+   */
+  pauseWhenHidden?: boolean;
   onActivityChanged?: (window: BrowserWindow, active: boolean) => void;
+  /** Runs only when a requested presentation is shown, never during hidden prewarm. */
+  onBeforeShow?: (window: BrowserWindow) => void;
   onCloseRequested?: (window: BrowserWindow) => void;
+  onUnavailable?: () => void;
   isOpenSender: (sender: WebContents) => boolean;
   /** 打开监视器的那扇应用窗；用于跟随显隐并在关闭监视器后恢复焦点。 */
   getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
@@ -83,6 +91,17 @@ export class ResourceUsageWindowController {
   prewarm(): void {
     if (this.disposed) return;
     this.ensureWindow();
+  }
+
+  /** A reused editor is about to receive a different document; wait for its first paint. */
+  resetPresentation(): void {
+    this.presentationReady = false;
+  }
+
+  /** A renderer error boundary can request the same bounded recovery as a process crash. */
+  rendererFailed(sender: WebContents): void {
+    const win = this.windowForSender(sender);
+    if (win) this.invalidateWindow(win, 'renderer reported a rendering failure');
   }
 
   /** 幂等打开：热窗口立即显示；冷窗口等待首份可展示快照，异常时才显示已挂载的 Loading 壳。 */
@@ -137,7 +156,9 @@ export class ResourceUsageWindowController {
       this.showAndFocus(win);
       return true;
     }
-    if (!this.visible && !this.pendingOpen) this.setSamplingActive(win, false);
+    // 隐藏不暂停的窗口（远程桌面）在隐藏后才就绪时保留会话，只是不再显示。
+    if (!this.visible && !this.pendingOpen && this.deps.pauseWhenHidden !== false)
+      this.setSamplingActive(win, false);
     return true;
   }
 
@@ -225,6 +246,7 @@ export class ResourceUsageWindowController {
       win = this.deps.createWindow();
     } catch (error) {
       this.resetWindowState();
+      this.deps.onUnavailable?.();
       log.error('resource-usage window creation failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -313,6 +335,7 @@ export class ResourceUsageWindowController {
     if (!win.isVisible()) this.enteringNativeFullscreen = false;
     this.visibilityGeneration += 1;
     this.setSamplingActive(win, true);
+    this.deps.onBeforeShow?.(win);
     if (win.isMinimized()) win.restore();
     // 打开时只负责显示和聚焦，不再按 owner 状态驱动 setFullScreen。
     // macOS 沿用本窗口的原生 Space / 全屏呈现；仅关闭时显式退出全屏再隐藏。
@@ -447,7 +470,7 @@ export class ResourceUsageWindowController {
   private onNativeVisibilityChanged(win: BrowserWindow, visible: boolean): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     this.visible = visible;
-    this.setSamplingActive(win, visible);
+    if (this.deps.pauseWhenHidden !== false) this.setSamplingActive(win, visible);
     if (!visible && this.pendingOpen) {
       this.pendingOpen = false;
       this.clearOpenTimeout();
@@ -544,6 +567,7 @@ export class ResourceUsageWindowController {
     if (!reopen || this.disposed) return;
     if (this.automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERY_ATTEMPTS) {
       log.error('resource-usage automatic recovery exhausted', { reason });
+      this.deps.onUnavailable?.();
       return;
     }
     this.automaticRecoveryAttempts += 1;

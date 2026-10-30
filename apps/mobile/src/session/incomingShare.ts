@@ -1,8 +1,8 @@
 /**
- * iOS Share Extension → 新建任务附件信箱。
+ * iOS Share Extension → 任务/伙伴的内容信箱。
  *
  * expo-sharing 把扩展收到的文件复制进 App Group，并在主 App 激活后提供本地
- * payload。根导航只负责把 payload 放进这个进程内信箱；新建会话页领取后复用现有
+ * payload。根导航把 payload 放进这个进程内信箱；用户选择的目标编辑器领取后复用现有
  * MobileLocalAttachmentUpload 管线。原生 payload 在领取成功前不清，避免登录/导航
  * 期间丢文件。
  */
@@ -28,6 +28,7 @@ export interface IncomingShareBatch {
   payloads: readonly ResolvedSharePayload[];
   acknowledge: () => void;
   owner: MobileAuthOwnerGeneration;
+  destination?: string;
 }
 
 export interface IncomingShareUploadSelection {
@@ -39,6 +40,11 @@ let currentBatch: IncomingShareBatch | null = null;
 const pendingBatches: IncomingShareBatch[] = [];
 const listeners = new Set<() => void>();
 let unsubscribeOwner: (() => void) | undefined;
+let rejectedNativeSnapshots = new WeakMap<IncomingShareNative, string | null>();
+
+function isFilePayload(payload: Pick<SharePayload, 'shareType'>): boolean {
+  return payload.shareType !== 'text' && payload.shareType !== 'url';
+}
 
 export async function deleteIncomingSharedFiles(uris: readonly string[]): Promise<void> {
   const FileSystem = await import('expo-file-system/legacy');
@@ -100,7 +106,7 @@ function updateIncomingShareOwner(
   for (const batch of discarded) {
     pendingBatches.splice(pendingBatches.indexOf(batch), 1);
     acknowledgeBatch(batch);
-    void deleteIncomingSharedFiles(batch.payloads.map((payload) => payload.contentUri ?? payload.value))
+    void deleteIncomingSharedFiles(batch.payloads.filter(isFilePayload).map((payload) => payload.contentUri ?? payload.value))
       .catch(() => undefined);
   }
   // New snapshots also wake the focused consumer after a rollback/first login.
@@ -115,7 +121,14 @@ function updateIncomingShareOwner(
 type IncomingShareNative = {
   getSharedPayloads(): SharePayload[];
   clearSharedPayloads(expected: SharePayload[]): void;
+  discardSharedPayloads?(expected: SharePayload[]): void;
+  rejectUnreadableSharedPayloads?(): void;
 };
+
+function discardNativeShare(native: IncomingShareNative, raw: SharePayload[]): void {
+  if (native.discardSharedPayloads) native.discardSharedPayloads(raw);
+  else native.clearSharedPayloads(raw);
+}
 
 /** Also clear a native payload not yet observed by the JS mailbox on logout/switch. */
 export function watchIncomingShareAccount(
@@ -124,11 +137,22 @@ export function watchIncomingShareAccount(
 ): () => void {
   return observeIncomingShareOwner((previous, current, restored) => {
     if (!canRetainShareOwner(previous, current, restored)) {
+      let raw: SharePayload[] | undefined;
       try {
-        const raw = native.getSharedPayloads();
-        native.clearSharedPayloads(raw);
-        void deleteIncomingSharedFiles(raw.map((payload) => payload.value)).catch(() => undefined);
-      } catch { /* Sharing is unavailable in older native binaries. */ }
+        raw = native.getSharedPayloads();
+        discardNativeShare(native, raw);
+        rejectedNativeSnapshots.delete(native);
+        void deleteIncomingSharedFiles(raw.filter(isFilePayload).map((payload) => payload.value)).catch(() => undefined);
+      } catch {
+        // Also fence older binaries, or a failure to persist the native tombstone.
+        // null means the slot was unreadable: its first readable batch must clear.
+        rejectedNativeSnapshots.set(native, raw ? JSON.stringify(raw) : null);
+        if (raw === undefined) {
+          // Persist without touching the unavailable App Group. A fresh process
+          // must reject its first readable slot before the new owner can see it.
+          try { native.rejectUnreadableSharedPayloads?.(); } catch { /* Keep the in-process fence too. */ }
+        }
+      }
     }
   }, previous);
 }
@@ -179,30 +203,78 @@ export function stageIncomingShareBatch(
   return batch;
 }
 
+/** Only the destination explicitly chosen by the user may claim this batch. */
+export function selectIncomingShareDestination(id: string, destination: string): boolean {
+  if (!currentBatch || currentBatch.id !== id || !isMobileAuthOwnerCurrent(currentBatch.owner)) return false;
+  currentBatch = { ...currentBatch, destination };
+  pendingBatches[0] = currentBatch;
+  emit();
+  return true;
+}
+
+export function incomingShareText(payloads: readonly ResolvedSharePayload[]): string {
+  return payloads.filter(payload => payload.shareType === 'text' || payload.shareType === 'url')
+    .map(payload => payload.value).filter(value => value.trim()).join('\n\n');
+}
+
+export function incomingShareDestination(deviceId: string, sessionId: string,
+  resource?: { collectionId: string; kind: string; id: string }): string {
+  return resource?.collectionId && resource.kind && resource.id
+    ? JSON.stringify([deviceId, 'resource', resource.collectionId, resource.kind, resource.id])
+    : JSON.stringify([deviceId, sessionId]);
+}
+
 export function consumeIncomingShareBatch(id: string): boolean {
   if (getMobileAuthOwner().switching || !currentBatch || currentBatch.id !== id
     || !currentBatch.owner.accountKey || !isMobileAuthOwnerCurrent(currentBatch.owner)) return false;
   const consumed = currentBatch;
+  // Do not expose a removable attachment until consumption is durable. On failure
+  // keep the mailbox entry so focusing the screen again can retry the handoff.
+  consumed.acknowledge();
   pendingBatches.shift();
   currentBatch = pendingBatches[0] ?? null;
   emit();
-  acknowledgeBatch(consumed);
   return true;
+}
+
+/** Cancelling the chooser discards only this share, never the source app's files. */
+export function discardIncomingShareBatch(id: string): boolean {
+  const batch = currentBatch;
+  if (!batch || !consumeIncomingShareBatch(id)) return false;
+  void deleteIncomingSharedFiles(batch.payloads.filter(isFilePayload).map(payload => payload.contentUri ?? payload.value)).catch(() => undefined);
+  return true;
+}
+
+/** A failed native acknowledgement retains the batch, but must not trap navigation. */
+export function leaveIncomingShareChooser(cancelBatchId: string | null, leave: () => void): void {
+  try { if (cancelBatchId) discardIncomingShareBatch(cancelBatchId); }
+  catch { /* Keep the unacknowledged batch and owned files available for retry. */ }
+  leave();
 }
 
 /** Raw local files need no asynchronous resolver; the uploader stats their size. */
 export function receiveIncomingShare(native: IncomingShareNative): void {
   if (getMobileAuthOwner().switching) return;
   const raw = native.getSharedPayloads();
+  if (rejectedNativeSnapshots.has(native)) {
+    const rejected = rejectedNativeSnapshots.get(native);
+    if (rejected === null || rejected === JSON.stringify(raw)) {
+      try { discardNativeShare(native, raw); } catch { return; }
+      rejectedNativeSnapshots.delete(native);
+      return;
+    }
+    // A different snapshot (or a durably empty slot) cannot expose old content.
+    rejectedNativeSnapshots.delete(native);
+  }
   if (raw.length === 0) return;
-  const payloads = raw.map((payload): ResolvedSharePayload => ({
-    ...payload,
-    contentUri: payload.value,
-    contentType: payload.shareType === 'image' ? 'image' : 'file',
-    contentMimeType: payload.mimeType ?? null,
-    originalName: basenameFromUri(payload.value),
-    contentSize: null,
-  }));
+  const payloads = raw.map((payload): ResolvedSharePayload => {
+    const common = { ...payload, contentMimeType: payload.mimeType ?? null,
+      originalName: basenameFromUri(payload.value), contentSize: null };
+    return payload.shareType === 'text'
+      ? { ...common, contentUri: null, contentType: 'text' }
+      : { ...common, contentUri: payload.value,
+        contentType: payload.shareType === 'url' ? 'website' : payload.shareType === 'image' ? 'image' : 'file' };
+  });
   stageIncomingShareBatch(payloads, () => {
     // Native compares the captured bytes and clears under the writer's lock.
     native.clearSharedPayloads(raw);
@@ -241,6 +313,7 @@ export function selectIncomingShareUploadCandidates(
   const rejectedUris: string[] = [];
 
   for (const payload of payloads) {
+    if (!isFilePayload(payload)) continue;
     const uri = payload.contentUri?.trim()
       || (payload.shareType === 'file' || payload.shareType === 'image'
         ? payload.value.trim()
@@ -248,19 +321,23 @@ export function selectIncomingShareUploadCandidates(
     if (!uri || !uri.startsWith('file://')) continue;
 
     const name = payload.originalName?.trim() || basenameFromUri(uri);
-    const category = name ? categorizeMobileAttachment(name) : null;
-    const isImage = payload.contentType === 'image' || payload.shareType === 'image';
-    if (!name || (!category && !isImage)) {
+    if (!name) {
       rejectedUris.push(uri);
       continue;
     }
+    const category = categorizeMobileAttachment(name);
+    const isImage = payload.contentType === 'image' || payload.shareType === 'image';
 
     const size = typeof payload.contentSize === 'number'
       && Number.isFinite(payload.contentSize)
       && payload.contentSize > 0
       ? payload.contentSize
       : 0;
-    if (!category && isImage) {
+    // Convert known raster encodings only. Vector/source images such as SVG or
+    // PSD remain original files rather than failing UIKit's raster decoder.
+    const imageExtension = extractRemoteFileExt(name).replace(/^\./, '');
+    const convertibleImage = isImage && (!imageExtension || ['heic', 'heif', 'tif', 'tiff', 'bmp'].includes(imageExtension));
+    if (category === 'file' && convertibleImage) {
       const index = candidates.length;
       candidates.push({
         kind: 'image',
@@ -282,7 +359,7 @@ export function selectIncomingShareUploadCandidates(
       continue;
     }
     candidates.push({
-      kind: candidateKind(category!),
+      kind: candidateKind(category),
       uri,
       name,
       size,
@@ -299,4 +376,5 @@ export function __resetIncomingShareForTest(): void {
   currentBatch = null;
   pendingBatches.length = 0;
   listeners.clear();
+  rejectedNativeSnapshots = new WeakMap();
 }

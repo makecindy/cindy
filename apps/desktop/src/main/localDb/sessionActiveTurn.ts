@@ -49,7 +49,7 @@
  * turn 主流程。
  */
 
-import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
 import { listCindyMakePendingFailureSessionIds } from './cindyMakeAttention';
@@ -57,9 +57,9 @@ import {
   getSessionInterruptionBootAt,
   setSessionInterruptionBootAtForTests,
 } from './sessionInterruptionBoot';
-import { messages, sessions } from './schema';
+import { botProfiles, botSessionLinks, messages, sessions } from './schema';
 import { createLogger } from '../logger';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { boundedSummary } from '../maker-ipc/recoveryCoordinator.js';
 
 const log = createLogger('session-active-turn');
@@ -103,7 +103,7 @@ export function beginSessionTurnEndedSuppression(): () => void {
 }
 
 /** ended 写抑制判定:quit freeze 或任一在持有的 owner 边界抑制。 */
-function isEndedWriteSuppressed(): boolean {
+export function isEndedWriteSuppressed(): boolean {
   return _quitFrozen || _endedWriteSuppressions > 0;
 }
 
@@ -152,6 +152,28 @@ function notifyTurnEndedPersisted(sessionId: string, endedAt: number, context: u
 
 /** started / ended 的 per-session 写链:只做 UPDATE 排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
+// Captured synchronously at the running edge, before either durable queue can
+// stall. Notification delivery uses this turn boundary when its DB preview is
+// unavailable; a later turn must never inherit the previous turn's dedupe key.
+const _notificationTurns = new Map<string, { startedAt: number; sequence: number; endedAt?: number }>();
+let _notificationTurnSequence = 0;
+
+export function getSessionNotificationTurnSignal(sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined {
+  const turn = _notificationTurns.get(sessionId);
+  if (!turn) return undefined;
+  return {
+    id: `signal:${turn.sequence}`,
+    ended: turn.endedAt !== undefined,
+    // The mobile deduper can reconcile an anonymous scheduler completion by
+    // terminal time even while SQLite is unavailable.
+    fallbackEventId: `turn:${turn.startedAt}:${turn.endedAt ?? turn.startedAt}:signal-${turn.sequence}`,
+  };
+}
+
+/** Wait for the turn-marker writes already queued for this session. */
+export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
+  return _writeChains.get(sessionId) ?? Promise.resolve();
+}
 
 /** 返回链上本次写完成(含失败吞错)的 promise,供需要落库确认的调用方 await。 */
 function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
@@ -165,6 +187,7 @@ function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
 export function markSessionTurnStarted(sessionId: string): void {
   if (_quitFrozen) return;
   const startedAt = Date.now();
+  _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
   chainWrite(sessionId, async () => {
     try {
       await getDbClient()
@@ -196,9 +219,12 @@ export function markSessionTurnStarted(sessionId: string): void {
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (isEndedWriteSuppressed()) return;
   const notifyContext = captureTurnEndedPersistedContext();
+  const endedAt = Math.min(endedAtOverride ?? Date.now(), Date.now());
+  const notificationTurn = _notificationTurns.get(sessionId);
+  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   enqueueEndedWrite(
     sessionId,
-    Math.min(endedAtOverride ?? Date.now(), Date.now()),
+    endedAt,
     notifyContext,
   );
 }
@@ -216,6 +242,8 @@ export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Pro
   if (isEndedWriteSuppressed()) return;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
+  const notificationTurn = _notificationTurns.get(sessionId);
+  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   void barrier.then(
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
@@ -347,19 +375,48 @@ export function _setBootAtMsForTests(ms: number): void {
  * 启动首拉消费它(见下方两条腿消费周期的说明);但 startedAt < bootAt 的守卫让它
  * 在任何时刻调用都不会把运行中的会话算进来,批量处置因此也可以安全复用。
  */
-export async function listInterruptedPendingRows(): Promise<
-  { sessionId: string; startedAt: number }[]
-> {
+export interface InterruptedBotTaskLink {
+  botId: string;
+  role: string;
+  profileStatus: string;
+}
+
+export async function listInterruptedPendingRows(
+  options: { includeBotTasks?: boolean } = {},
+): Promise<{ sessionId: string; startedAt: number; botTask?: InterruptedBotTaskLink }[]> {
   const db = getDbClient().drizzle;
+  // 只统计桌面 sidebar 可见来源(含 feishu/slack 等 IM 渠道)——
+  // 不可见来源的红点无处展示也无法清除。
+  const listedSource = inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES);
+  // 伙伴任务只给启动弹窗用(includeBotTasks):范围只收有页面 / 列在普通任务列表的角色
+  // (主对话、委派、例行、渠道);group 与私聊话题专线是隐藏专线,history 只读。能不能
+  // 真正继续(伙伴启用、未降级)不在这里重写判据,由调用方用发送路径同一套守卫判定。
+  const visibleBotRole = inArray(botSessionLinks.role, [
+    'canonical',
+    'delegation',
+    'routine',
+    'channel',
+  ]);
   const rows = await db
-    .select({ id: sessions.id, startedAt: sessions.activeTurnStartedAt })
+    .select({
+      id: sessions.id,
+      source: sessions.source,
+      startedAt: sessions.activeTurnStartedAt,
+      botId: botSessionLinks.botId,
+      botRole: botSessionLinks.role,
+      botStatus: botProfiles.status,
+    })
     .from(sessions)
+    .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+    .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
     .where(
       and(
         eq(sessions.status, 'active'),
-        // 只统计桌面 sidebar 可见来源(含 feishu/slack 等 IM 渠道)——
-        // 不可见来源的红点无处展示也无法清除。
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        options.includeBotTasks
+          ? or(listedSource, and(eq(sessions.source, 'bot'), visibleBotRole))
+          : listedSource,
+        // 插件后台隐藏任务不在侧栏展示，红点无处展示也无法清除。
+        isNull(sessions.hiddenAt),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.clearedAt}, 0)`),
         // 只认「开始于本进程启动之前」的 turn —— 排除正在跑的(见 _bootAtMs 注释)。
@@ -368,7 +425,17 @@ export async function listInterruptedPendingRows(): Promise<
     );
   // startedAt 必非 null(上面的 gt/lt 比较已排除),类型收窄用于批量处置的 CAS。
   return rows.flatMap((r) =>
-    r.startedAt == null ? [] : [{ sessionId: r.id, startedAt: r.startedAt }],
+    r.startedAt == null
+      ? []
+      : [
+          {
+            sessionId: r.id,
+            startedAt: r.startedAt,
+            ...(r.source === 'bot' && r.botId && r.botRole && r.botStatus
+              ? { botTask: { botId: r.botId, role: r.botRole, profileStatus: r.botStatus } }
+              : {}),
+          },
+        ],
   );
 }
 
@@ -396,8 +463,8 @@ export async function listInterruptedPendingSessionIds(): Promise<string[]> {
  *  1. content 是 TEXT 列而非 JSON 列,可能存非法 JSON(见 mergeDismissedIntoErrorContent
  *     的 fallback 分支)。json_extract 遇非法 JSON 直接抛 malformed JSON,故先用
  *     json_valid 守卫,非法内容按「未 dismissed」处理 —— 宁可多提示一次,不吞掉报错。
- *  2. 「最后一条」用 (created_at, rowid) 双键严格大于,同毫秒靠插入序区分,并且两侧
- *     都要 rewind_at IS NULL —— 漏掉会把已被 rewind 截断的历史行当成尾行。口径与
+ *  2. 「最后一条」按 (created_at DESC, rowid DESC) 取一行,同毫秒靠插入序区分,
+ *     必须过滤 rewind_at IS NULL —— 漏掉会把已被 rewind 截断的历史行当成尾行。口径与
  *     hasAssistantProgressAfterMessage 完全一致。
  *  3. **必须带 /clear 可见性边界**(created_at > cleared_at):`/clear` 不删消息行,
  *     只推进 sessions.cleared_at,消息读取路径靠它把旧历史挡在视图外。漏掉这条会
@@ -413,28 +480,27 @@ export async function listErrorTailPendingRows(): Promise<
   const db = getDbClient().drizzle;
   const rows = await db
     .select({ sessionId: messages.sessionId, clientId: messages.clientId })
-    .from(messages)
-    .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+    .from(sessions)
+    // 从每个可见会话按既有 (session_id, created_at) 索引取尾行,再用 rowid 定点读取。
+    // 不能从全局 error 候选出发:SQLite 可能选 rewind_at 索引扫描全部未 rewind 消息 (#6513)。
+    .innerJoin(messages, sql`${sql.raw('"messages"."rowid"')} = (
+      SELECT tail.rowid FROM messages tail
+      WHERE tail.session_id = ${sessions.id}
+        AND tail.rewind_at IS NULL
+        AND tail.created_at > COALESCE(${sessions.clearedAt}, 0)
+      ORDER BY tail.created_at DESC, tail.rowid DESC
+      LIMIT 1
+    )`)
     .where(
       and(
         eq(sessions.status, 'active'),
-        inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+        inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+        isNull(sessions.hiddenAt),
+        // 先取可见尾行,再判 role/dismissed;不能回退到更早的未处理 error。
         eq(messages.role, 'error'),
-        isNull(messages.rewindAt),
-        // /clear 可见性边界(见上方 ⚠️ 3):clear 之前的行在视图里已不可见,不能算告警。
-        gt(messages.createdAt, sql`COALESCE(${sessions.clearedAt}, 0)`),
         // 顶层 dismissed:true = 用户点过「忽略」(mergeDismissedIntoErrorContent 写入)。
         sql`(json_valid(${messages.content}) = 0
           OR json_extract(${messages.content}, '$.dismissed') IS NOT 1)`,
-        // 该 error 行必须是会话尾行(见上方 ⚠️ 2)。
-        sql`NOT EXISTS (
-          SELECT 1 FROM messages m2
-          WHERE m2.session_id = ${messages.sessionId}
-            AND m2.rewind_at IS NULL
-            AND (m2.created_at > ${messages.createdAt}
-              OR (m2.created_at = ${messages.createdAt}
-                AND m2.rowid > ${sql.raw('"messages"."rowid"')}))
-        )`,
       ),
     );
   // 尾行判定保证每会话最多一行(同毫秒同 rowid 不可能并存)。

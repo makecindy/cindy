@@ -39,8 +39,6 @@ const acceptedScreenshotNames = [
   'visual-new-session',
   'visual-files',
   'visual-files-preview',
-  'visual-automations',
-  'visual-automations-form',
 ];
 const pendingBaselineScreenshotNames = [];
 const imageExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);

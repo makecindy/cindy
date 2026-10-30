@@ -116,6 +116,10 @@ describe('classifyMarkdownLinkTarget', () => {
       kind: 'local-image-url',
       href: 'xdt-file://local/?path=%2Ftmp%2Fa.png',
     });
+    expect(classifyMarkdownLinkTarget('xdt-file:///D:/tmp/a%20b.png')).toEqual({
+      kind: 'local-image-url',
+      href: `xdt-file://local/?path=${encodeURIComponent('D:/tmp/a b.png')}`,
+    });
   });
 
   it('turns explicit local links into pending local candidates until fs resolution proves them', () => {
@@ -195,6 +199,43 @@ describe('classifyMarkdownLinkTarget', () => {
       absPath: 'C:\\Users\\me\\Downloads\\Report.DOCX',
       localKind: 'text',
     });
+  });
+
+  // F3: compare decoded hrefs with literal attachment names.
+  it.each(['report#final.pdf', 'a%20b.pdf', '报告 1.pdf'])(
+    'resolves the encoded link to literal attachment %s outside the workspace', (name) => {
+      const path = `/uploads/${name}`;
+      expect(classifyMarkdownLinkTarget(encodeURIComponent(name), [{ name, path }]))
+        .toMatchObject({ kind: 'resolved-local', absPath: path });
+    },
+  );
+
+  it('does not choose between duplicate literal attachment names', () => {
+    expect(classifyMarkdownLinkTarget('report%23final.pdf', [
+      { name: 'report#final.pdf', path: '/one/report#final.pdf' },
+      { name: 'report#final.pdf', path: '/two/report#final.pdf' },
+    ])).toMatchObject({ kind: 'local-candidate' });
+  });
+
+  // F2: a same-name attachment must not replace an explicit destination.
+  it.each([
+    'C:\\project\\report.pdf', 'C:/project/report.pdf', '/project/report.pdf',
+    'file:///C:/project/report.pdf', 'file:///project/report.pdf',
+    '\\\\server\\share\\report.pdf', '~/project/report.pdf',
+    '%2Fproject%2Freport.pdf',
+  ])('keeps explicit destination %s instead of a same-name attachment', (href) => {
+    expect(classifyMarkdownLinkTarget(href, [
+      { name: 'report.pdf', path: 'C:\\uploads\\report.pdf' },
+    ])).toMatchObject({ kind: 'local-candidate', href });
+  });
+
+  // F2 + F3: URL-decoding an explicit path must not make its literal
+  // percent-encoded basename eligible for attachment substitution.
+  it('keeps an encoded explicit path beside a same-name literal attachment', () => {
+    const href = 'file:///C:/project/a%2520b.pdf';
+    expect(classifyMarkdownLinkTarget(href, [
+      { name: 'a%20b.pdf', path: 'C:\\uploads\\a%20b.pdf' },
+    ])).toMatchObject({ kind: 'local-candidate', href });
   });
 
   it('does not render unsupported schemes or directories as clickable links', () => {

@@ -1,3 +1,4 @@
+import { modelNeedsReselection } from './modelReselection';
 /**
  * Shared model and permission selection for new and existing tasks.
  * iOS presents native Form pages inside one system sheet; options and permissions
@@ -7,9 +8,10 @@
 import { UnifiedModelPickerSheet, type UnifiedMobilePickerOptions } from './UnifiedModelPickerSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Search } from 'lucide-react-native';
+import { ChevronRight, Search, X } from 'lucide-react-native';
 import {
   Animated,
+  Easing,
   Platform,
   Pressable,
   ScrollView,
@@ -45,29 +47,34 @@ import {
   type ModelPickerSheetView,
 } from '@/session/modelPickerSheetModel';
 import { rowFastEditable } from '@/session/modelPickerRows';
-import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
+import { permissionPresentation } from '@/session/permissionPresentation';
 import {
   buildMobileModelSections,
   flattenProviderSections,
   type ProviderModelRow,
 } from '@/session/providerModelSections';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, motionDuration, motionEasing, radius, spacing, typeScale } from '@/theme/tokens';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import {
   mobileAgentLabel,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
 
-/** 二级 Surface 滑入/滑出时长(对齐 useContextSheetDrag 的 SNAP_ANIMATION_DURATION_MS)。 */
-const SECONDARY_SLIDE_DURATION_MS = 180;
+/** 二级 Surface 是重浮层:入场 enter / 退场 exit(DESIGN.md §14.4);减弱动态效果直接到位。 */
+const SECONDARY_SLIDE_IN_EASING = Easing.bezier(...motionEasing.out);
+const SECONDARY_SLIDE_OUT_EASING = Easing.bezier(...motionEasing.in);
 
 /** provider-aware 模式下传给列表的空 flat 集(身份稳定,防无谓重渲)。 */
 const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
 
 export interface ModelPickerSheetProps {
+  /** Host-owned context, such as the plugin requesting this selection. */
+  title?: string;
   unified?: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
+  onClosed?(): void;
   // —— 模型目录(与旧 drop-up 面板同口径) ——
   providers: readonly ProviderView[];
   /** 被控端「模型显示/隐藏」override 快照(useDeviceProviders 透传);undefined = 不过滤。 */
@@ -92,7 +99,7 @@ export interface ModelPickerSheetProps {
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   loading?: boolean;
   disabled?: boolean;
   emptyHint?: string;
@@ -101,7 +108,7 @@ export interface ModelPickerSheetProps {
   onSelectProviderRow(row: ProviderModelRow): void;
   onSelectFlatModel(option: MobileModelOption): void;
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   pricing?: MobileModelPricingMap | null;
   apiKeyStatus?: DeviceApiKeyStatus;
@@ -127,7 +134,9 @@ export function ModelPickerSheet(props: ModelPickerSheetProps) {
 }
 function LegacyModelPickerSheet({
   visible,
+  title,
   onClose,
+  onClosed,
   providers,
   modelVisibilityOverrides,
   flatOptions,
@@ -246,6 +255,8 @@ function LegacyModelPickerSheet({
   const noResults = hasQuery && providerRows.length === 0 && effectiveFlatOptions.length === 0;
 
   // —— 二级视图开合(translateY 滑入滑出,动画期间锁重复触发) ——
+  const reduceMotion = useReduceMotionEnabled();
+  const animateSecondary = reduceMotion === false;
   const openSecondary = useCallback(
     (next: ModelPickerSheetView) => {
       if (Platform.OS === 'ios') { setView(next); return; }
@@ -255,14 +266,15 @@ function LegacyModelPickerSheet({
       setView(next);
       secondaryTranslate.setValue(windowHeight);
       Animated.timing(secondaryTranslate, {
-        duration: SECONDARY_SLIDE_DURATION_MS,
+        duration: animateSecondary ? motionDuration.enter : 0,
+        easing: SECONDARY_SLIDE_IN_EASING,
         toValue: 0,
         useNativeDriver: true,
       }).start(() => {
         secondaryAnimatingRef.current = false;
       });
     },
-    [secondaryTranslate, windowHeight],
+    [animateSecondary, secondaryTranslate, windowHeight],
   );
   // 行内配置图标 → 二级「模型选项」:useCallback 稳定引用,避免每次 render 都给
   // MobileModelPickerList 递新函数(破坏其下行组件的 memo 短路)。
@@ -276,14 +288,15 @@ function LegacyModelPickerSheet({
     if (secondaryAnimatingRef.current) return;
     secondaryAnimatingRef.current = true;
     Animated.timing(secondaryTranslate, {
-      duration: SECONDARY_SLIDE_DURATION_MS,
+      duration: animateSecondary ? motionDuration.exit : 0,
+      easing: SECONDARY_SLIDE_OUT_EASING,
       toValue: windowHeight,
       useNativeDriver: true,
     }).start(() => {
       secondaryAnimatingRef.current = false;
       setView({ kind: 'models' });
     });
-  }, [secondaryTranslate, windowHeight]);
+  }, [animateSecondary, secondaryTranslate, windowHeight]);
 
   // Android 返回键 / iOS 关闭手势:两段式(二级先回一级,一级才关浮窗)。
   const handleRequestClose = useCallback(() => {
@@ -347,16 +360,34 @@ function LegacyModelPickerSheet({
         onFocus={Platform.OS === 'android' ? () => setPrimarySnap('full') : undefined}
         onChangeText={setQuery}
         placeholder={t('models.picker.searchPlaceholder')}
-        placeholderTextColor={colors.textTertiary}
+        placeholderTextColor={colors.textPlaceholder}
         ref={searchInputRef}
         style={styles.searchInput}
         testID={`${testID}.search`}
         value={query}
       />
+      {query ? (
+        <Pressable
+          accessibilityLabel={t('devices.detail.search.clearA11y')}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => setQuery('')}
+          style={({ pressed }) => [styles.searchClear, pressed && { opacity: 0.6 }]}
+          testID={`${testID}.search.clear`}
+        >
+          <X color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      ) : null}
     </View>
   );
 
-  const agentContent = (agentSwitch ? (
+  const agentContent = (<>
+      {providersReady && modelNeedsReselection(modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId) ? (
+        <Text style={styles.modelHiddenHint} testID={`${testID}.modelHiddenHint`}>
+          {t('session.common.modelHiddenReselect', { model: activeModelId })}
+        </Text>
+      ) : null}
+      {agentSwitch ? (
         <>
           <MobileAgentSwitcher
             disabled={disabled || agentSwitch.disabled}
@@ -375,7 +406,8 @@ function LegacyModelPickerSheet({
             </Text>
           ) : null}
         </>
-      ) : null);
+      ) : null}
+    </>);
 
   const primaryPinnedTop = (
     <View style={styles.pinnedTop}>
@@ -384,33 +416,32 @@ function LegacyModelPickerSheet({
     </View>
   );
 
-  // 权限入口:header 右侧「图标 + 文案 + 下拉箭头」,与桌面 composer 的 PermissionSelector
-  // trigger 同构——透明底、整体着色(中性 = textSecondary,auto / bypass = 语义色),点开二级
-  // 权限选择。按产品反馈刻意轻量化——不占列表整行,浮窗主体只留模型。
-  const permissionColor = permissionAccentColor(permission.accent, colors);
-  const permissionTrigger = (
+  // 权限入口:与 iOS ModelPickerNativeHeader 同构的独立「权限」行(标题 + 副标题为当前模式),
+  // 位于搜索之后、模型列表之前;点开二级权限选择。Android 外观沿用 RN 自绘行 + chevron。
+  const permissionRowDisabled = permissionDisabled || browsingOtherAgent;
+  const permissionRow = hidePermissionTrigger ? null : (
     <Pressable
       accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: permissionLabel })}
       accessibilityRole="button"
-      accessibilityState={{ disabled: permissionDisabled || browsingOtherAgent }}
-      disabled={permissionDisabled || browsingOtherAgent}
-      hitSlop={6}
+      accessibilityState={{ disabled: permissionRowDisabled }}
+      disabled={permissionRowDisabled}
       onPress={() => openSecondary({ kind: 'permission' })}
       style={({ pressed }) => [
-        styles.permissionTrigger,
-        (permissionDisabled || browsingOtherAgent) && styles.permissionTriggerDisabled,
+        styles.permissionRow,
+        permissionRowDisabled && styles.permissionRowDisabled,
         pressed && { opacity: 0.6 },
       ]}
       testID={`${testID}.permissionTrigger`}
     >
-      <permission.Icon color={permissionColor} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text
-        numberOfLines={1}
-        style={[styles.permissionTriggerLabel, { color: permissionColor }]}
-      >
-        {permissionLabel}
-      </Text>
-      <ChevronDown color={permissionColor} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      <View style={styles.permissionRowMain}>
+        <Text numberOfLines={1} style={styles.permissionRowTitle}>
+          {t('models.picker.permissionTitle')}
+        </Text>
+        <Text numberOfLines={1} style={styles.permissionRowSubtitle}>
+          {permissionLabel}
+        </Text>
+      </View>
+      <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
     </Pressable>
   );
 
@@ -485,8 +516,8 @@ function LegacyModelPickerSheet({
             ) : null);
   if (Platform.OS === 'ios') {
     return (
-      <ComposerSheet nativeContent visible={visible} onClose={onClose} backLabel={t('models.picker.backToModels')}
-        title={view.kind === 'models' ? t('models.picker.title') : secondaryTitle}
+      <ComposerSheet nativeContent visible={visible} onClose={onClose} onClosed={onClosed} backLabel={t('models.picker.backToModels')}
+        title={view.kind === 'models' ? title ?? t('models.picker.title') : secondaryTitle}
         onBack={view.kind === 'models' ? undefined : backToModels} testID={testID}>
         {view.kind === 'models' ? <>
           <ModelPickerNativeHeader query={query} onChangeQuery={setQuery}
@@ -502,6 +533,7 @@ function LegacyModelPickerSheet({
 
   return (
     <SheetModal
+      onClosed={onClosed}
       backdropTestID={`${testID}.backdrop`}
       keyboardAvoiding
       keyboardAvoidingBehavior={keyboardAvoidingBehavior}
@@ -511,7 +543,6 @@ function LegacyModelPickerSheet({
     >
       <SheetSurface
         bottomInset={insets.bottom}
-        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
         heights={heights}
         onClose={onClose}
         onSnapChange={handlePrimarySnapChange}
@@ -519,8 +550,9 @@ function LegacyModelPickerSheet({
         scrollRef={scrollRef}
         snap={primarySnap}
         testID={testID}
-        title={t('models.picker.title')}
+        title={title ?? t('models.picker.title')}
       >
+        {permissionRow}
         {noResults ? (
           <Text style={styles.noResults} testID={`${testID}.noResults`}>{t('models.picker.noResults')}</Text>
         ) : (
@@ -583,7 +615,14 @@ function makeStyles(colors: ThemeColors) {
       gap: spacing.sm,
       marginBottom: spacing.xs,
       minHeight: 36,
-      paddingHorizontal: spacing.md,
+      paddingLeft: spacing.md,
+      paddingRight: spacing.xs,
+    },
+    searchClear: {
+      alignItems: 'center' as const,
+      height: 36,
+      justifyContent: 'center' as const,
+      width: 36,
     },
     searchInput: {
       color: colors.textPrimary,
@@ -595,6 +634,7 @@ function makeStyles(colors: ThemeColors) {
     noResults: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.md,
       textAlign: 'center' as const,
@@ -602,27 +642,45 @@ function makeStyles(colors: ThemeColors) {
     pinnedTop: {
       gap: spacing.sm,
     },
-    agentSwitchHint: {
-      color: colors.textTertiary,
-      fontSize: typeScale.caption,
+    modelHiddenHint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
       paddingHorizontal: spacing.xs,
     },
-    // 对齐桌面 PermissionSelector trigger:透明底 + gap 4 + 13px 文案,整体随权限档着色。
-    permissionTrigger: {
-      alignItems: 'center' as const,
-      borderRadius: radius.pill,
-      flexDirection: 'row' as const,
-      gap: 4,
-      height: 36,
-      justifyContent: 'flex-end' as const,
-      paddingHorizontal: 2,
-    },
-    permissionTriggerLabel: {
+    agentSwitchHint: {
+      color: colors.textTertiary,
       fontSize: typeScale.footnote,
-      fontWeight: fontWeight.regular,
-      maxWidth: 120,
+      lineHeight: lineHeight.caption,
+      paddingHorizontal: spacing.xs,
     },
-    permissionTriggerDisabled: {
+    // 独立「权限」行:行标题 body 500 + 当前模式副标题(短元数据),整行可点。
+    permissionRow: {
+      alignItems: 'center' as const,
+      borderBottomColor: colors.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row' as const,
+      gap: spacing.md,
+      minHeight: 52,
+    },
+    permissionRowMain: {
+      flex: 1,
+      minWidth: 0,
+    },
+    permissionRowTitle: {
+      color: colors.textPrimary,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium,
+    },
+    permissionRowSubtitle: {
+      color: colors.textSecondary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
+    },
+    permissionRowDisabled: {
       opacity: 0.5,
     },
   };

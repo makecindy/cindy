@@ -1,5 +1,6 @@
 import { projectDraftSessionTitle } from './sessionTitle.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
 
 /**
  * 任务搜索的跨端契约与纯合并函数。
@@ -60,6 +61,13 @@ export interface ConversationSearchSessionSummary {
   source?: string | null;
   orcaRole?: ConversationSearchOrcaRole | null;
   parentSessionId?: string | null;
+  /** Host-verified personal companion chat; absent for ordinary/background tasks. */
+  companion?: {
+    id: string;
+    name: string;
+    role: 'canonical' | 'history';
+    readOnly: boolean;
+  };
   userSendAt: string | null;
   updatedAt: string;
   createdAt: string;
@@ -113,6 +121,7 @@ const LAST_ACTIVITY_DAY_COUNTS: Record<
   '30d': 30,
 };
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REMOTE_CONVERSATION_SEARCH_LIMIT = 50;
 
 export function emptyConversationSearchResponse(query = ''): ConversationSearchResponse {
   return {
@@ -122,6 +131,12 @@ export function emptyConversationSearchResponse(query = ''): ConversationSearchR
     vectorSkipReason: null,
     poolCapped: false,
   };
+}
+
+export function remoteConversationSearchRequest(
+  request: ConversationSearchRequest,
+): ConversationSearchRequest {
+  return CINDY_MAKE_ENABLED ? request : { ...request, limit: REMOTE_CONVERSATION_SEARCH_LIMIT };
 }
 
 export function stampRemoteSearchResponse(
@@ -155,6 +170,7 @@ export function remoteResultsFromFanoutPages(
   const byKey = new Map<string, ConversationSearchResultItem>();
   for (const page of pages) {
     for (const item of page.results) {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) continue;
       if (!item.session.deviceLinkDeviceId) continue;
       const key = conversationSearchResultKey(item);
       const existing = byKey.get(key);
@@ -174,6 +190,7 @@ export function mergeConversationSearchFanout(
   const byKey = new Map<string, ConversationSearchResultItem>();
   for (const page of pages) {
     for (const item of page.results) {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) continue;
       const key = conversationSearchResultKey(item);
       const existing = byKey.get(key);
       if (!existing || item.rankScore > existing.rankScore) {
@@ -224,8 +241,8 @@ export function filterResultsByRequestFilters(
   return {
     ...response,
     results: response.results.filter((item) => {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
       if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
-      if (item.session.orcaRole === 'worker') return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {
@@ -251,7 +268,8 @@ function normalizeWorkingDirForGrouping(raw: string | null | undefined): string 
     if (/^[A-Za-z]:\/$/.test(out)) break;
     out = out.slice(0, -1);
   }
-  return collapseWorktreeDirForGrouping(out);
+  const collapsed = collapseWorktreeDirForGrouping(out);
+  return isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 function stripWindowsLongPathPrefix(value: string): string {

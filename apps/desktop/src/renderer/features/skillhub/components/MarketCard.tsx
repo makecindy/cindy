@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Clock3, Download, Eye, Pencil, Trash2, type LucideIcon } from 'lucide-react';
 
@@ -51,18 +52,10 @@ interface MarketCardProps extends MarketInstallStatusProps {
 function CloneButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
   const { t } = useTranslation();
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex shrink-0 items-center justify-center gap-1.5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-      )}
-      style={{ height: '36px', padding: '0 16px', fontSize: 'var(--text-13)', fontWeight: 500 }}
-    >
+    <Button variant="cta" size="lg" compact type="button" onClick={onClick}>
       <Download size={14} className="shrink-0" />
       <span className="leading-none">{t('skillhub.marketCard.clone')}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -94,19 +87,16 @@ export function ManageMenu({
       <DropdownMenuTrigger asChild>
         {/* 几何对齐主仓次级按钮(h-9 pill + gap-2 + 14px icon),
             底色保留浅灰 chip —— 满屏卡片场景下描边按钮过于扎眼 */}
-        <button
+        <Button
+          variant="primary"
+          size="lg"
           type="button"
           onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'flex h-9 shrink-0 items-center gap-2 rounded-full px-[18px]',
-            'text-sm font-medium',
-            'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] hover:bg-[var(--cmd-palette-item-hover)]',
-            'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          )}
+          className="shrink-0"
         >
           <span className="leading-none">{t('skillhub.marketCard.manage')}</span>
           <ChevronDown size={14} className="shrink-0" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -114,7 +104,7 @@ export function ManageMenu({
         // 菜单渲染在 portal 里,但 React 事件仍沿组件树冒泡——不拦截的话,
         // 点菜单项(编辑/删除等)会触发卡片 onClick,把详情浮窗一起带出来。
         onClick={(e) => e.stopPropagation()}
-        className="w-56 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+        className="w-56"
       >
         {items.map(({ action, labelKey, icon: Icon, danger, disabled }) => {
           const item = (
@@ -122,11 +112,7 @@ export function ManageMenu({
               key={action}
               disabled={disabled}
               onSelect={() => onAction(skill, action)}
-              className={cn(
-                'h-10 rounded-lg px-3 text-sm focus:bg-[var(--cmd-palette-item-hover)]',
-                danger ? 'text-[var(--error-fg)]' : 'text-[var(--msg-assistant-text)]',
-                disabled && 'opacity-50',
-              )}
+              variant={danger ? 'danger' : 'default'}
             >
               <Icon size={15} className="mr-3 shrink-0" />
               {t(labelKey)}

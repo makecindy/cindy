@@ -22,6 +22,7 @@ export type SendToSessionCallback = (params: {
   targetSessionId?: string;
   message: string;
   dispatcherSessionId?: string;
+  messagePurpose?: "coordination" | "user-visible";
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
@@ -34,10 +35,11 @@ export type SendToSessionCallback = (params: {
   /** create 模式可选:显式推理强度；缺省继承 dispatcher。jump 忽略。 */
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }) => Promise<
   ControlResult<
     {
+      responsibilityRecorded?: false;
       targetSessionId: string;
       agentKind: ControlWorkerAgent;
       wakeKind: "resumed" | "already-active" | "created" | "queued";
@@ -49,7 +51,7 @@ export type SendToSessionCallback = (params: {
       worktreePath?: string | null;
       model?: string;
       effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
       providerId?: string | null;
     },
     | "NOT_FOUND"
@@ -67,20 +69,56 @@ export type SendToSessionCallback = (params: {
   >
 >;
 
+/**
+ * Host 注入的跨电脑投递回调:把消息交给 deviceId 那台电脑,由它投递到自己的既有任务。
+ * 只有 jump 语义;结果里的错误码区分「没有发出」与「结果未知」。
+ */
+export type SendToRemoteSessionCallback = (params: {
+  deviceId: string;
+  sessionId: string;
+  message: string;
+  dispatcherSessionId: string;
+}) => Promise<
+  ControlResult<
+    {
+      agentKind: ControlWorkerAgent;
+      wakeKind: "resumed" | "already-active" | "queued";
+      targetTitle: string | null;
+      targetLastUserSendAt: string | null;
+    },
+    string
+  >
+>;
+
+/** `deviceId::sessionId` → 两段;不含设备前缀的本机 id 返回 null。 */
+export function parseQualifiedSessionId(
+  value: string | undefined,
+): { deviceId: string; sessionId: string } | null {
+  if (!value) return null;
+  const split = value.indexOf("::");
+  if (split <= 0 || split >= value.length - 2) return null;
+  return { deviceId: value.slice(0, split), sessionId: value.slice(split + 2) };
+}
+
 export interface SendToSessionDeps {
   /** 解析当前 MCP 调用绑定的 session ctx(取 dispatcherSessionId)。 */
   getSessionContext: () => LiziMcpSessionContext;
   /** Host 注入的 handoff 实现(jump / create 在 host 侧按 targetSessionId 有无判定)。 */
   sendToSession: SendToSessionCallback;
+  /** 缺省 = host 不支持跨电脑投递;deviceId::sessionId 目标返 REMOTE_UNSUPPORTED。 */
+  sendToRemoteSession?: SendToRemoteSessionCallback;
 }
 
 // 这是 LLM 点进 handoff 类目、看到本工具后的行为说明;选类目阶段的协同规避另见
 // lizi_xdtHelperMcpServer.ts 的 D_LIST_TOOLS(handoff 类目介绍)。
 const DESCRIPTION = [
+  "⚠️【硬规则:发给已有任务时 target_session_id 必传】上层要求把消息发给某个已存在的任务(session / thread)时,必须传 target_session_id;不知道目标 id 就先用 history 类目的 list_sessions 查到再调用,不要省略。只有明确要为某个业务对象新建一个专属任务时才省略该参数——省略不会报错,而是静默新建一个任务、把消息当作首条输入并立刻跑一轮(返回 wake_kind=created + note)。把 created 误当成「已投给既有任务」会凭空多出一个任务并消耗 token。",
+  "",
   '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
+  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建),message_purpose 只能是 user-visible 或省略。",
   "- 不传 target_session_id → create:为业务对象新建一个专属 session。workingDir / Agent / model / effort / Fast 缺省继承当前 session；可用 agent_kind / model / effort / fast 显式覆盖目标执行配置。host 会在创建前按目标 Agent 的模型能力校验，非法组合结构化失败，不静默换模型。wake_kind 返 created,并回传 target_session_id 供调用方建立绑定。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
@@ -96,16 +134,30 @@ const DESCRIPTION = [
   "",
   "【失败码语义】",
   "- NOT_FOUND: 目标 session 不存在。skill 应清掉自己的绑定并回退到新建/普通流程。",
-  "- ARCHIVED: 目标 session 已归档。skill 应决定是清绑定、回退新流程,还是等未来的 unarchive 工具。",
+  "- ARCHIVED: 目标 session 已归档。已有恢复授权时，可先用 control/unarchive_sessions（支持 deviceId::sessionId）恢复，再发送新消息；不能自行推翻用户归档意图。",
   "- DELETED: 目标 session 已删除。skill 应清绑定并回退。",
   "- BUSY: 仅 create 模式的罕见兜底(新建 session 意外已有 turn 在跑)。jump 模式撞忙不再返 BUSY,而是入队并成功返回 wake_kind=queued。",
   "- WORKTREE_UNAVAILABLE: 仅 create + use_worktree=true:无法创建 worktree(非 git 仓库 / git 未装 / git worktree add 失败,message 带具体原因)。skill 决定是去掉 use_worktree 重试还是放弃。",
   "- AGENT_NOT_READY: 目标 session 恢复或投递时 agent 未能启动。skill 应告知用户稍后重试。",
   "- UNSUPPORTED_CAPABILITY: 目标 session 不接受跨任务投递（例如 host 管理的隔离 Review）。skill 不应重试或改走其它输入入口。",
   "- HOST_NOT_READY: 主进程服务尚未就绪。skill 应告知用户稍等几秒后重试。",
+  "- REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_UNAVAILABLE: 目标电脑离线、未开启远程控制或暂时连不上,消息没有发出。",
+  "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息,消息没有发出;需要对方升级。",
+  "- DELIVERY_UNKNOWN: 请求已发往目标电脑但没有收到可信回执(含对方 Agent 没能启动),可能已送达。重发前先用 get_chat_history(deviceId::sessionId) 确认,避免重复。",
   "",
   "【重要】这不是 chat 对话工具,而是 session 间 handoff 的控制层入口。不要拿它替代普通的 user→agent 对话。",
 ].join("\n");
+
+/**
+ * create 模式成功返回附带的说明:明确告诉调用方「这是新建、不是投给既有任务」以及
+ * 后果(本轮已触发),避免调用方漏传 target_session_id 时把 created 误读为投递成功(#4884)。
+ */
+export function createdNote(targetSessionId: string): string {
+  return (
+    `已新建任务 ${targetSessionId}(wake_kind=created),本条消息作为其首条输入,本轮已触发。` +
+    "这不是投递到既有任务;若原意是发给某个已存在的任务,请用 list_sessions 找到目标 id 后带 target_session_id 重发,并停止或归档这个多出来的任务。"
+  );
+}
 
 /**
  * 注册 send_to_session 到 XdtHelperToolRegistry(handoff 类目),经 call_tool 调用。
@@ -123,18 +175,24 @@ export function registerSendToSessionTool(
     inputShape: {
       target_session_id: z
         .string()
-        .uuid()
+        .min(1)
         .optional()
         .describe(
-          `目标 ${BRAND_NAME} session 的 business id(UUID)。` +
-            "省略 → create:新建一个专属 session 并在返回里回传新建 id;提供 → jump 到该既有 session。",
+          `目标 ${BRAND_NAME} session 的 business id(新建 desktop session 是 UUID,` +
+            "历史 session 可能是 cuid 或 IM 确定性 id,一律按不透明字符串处理、不校验格式)。" +
+            "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
+            "另一台电脑上的任务用 deviceId::sessionId。" +
+            "省略 → create:静默新建一个专属 session 并立刻跑一轮,返回里回传新建 id——仅在明确要新建专属任务时省略。",
         ),
       message: z
         .string()
         .min(1)
         .describe(
-          "要 handoff 给目标 session 的消息正文(create 模式下作为新 session 的首条消息)。",
+          "要发送的消息。当前输入属于主人请求或已核实转交时，宿主保留同一份用户原话；只补充必要上下文，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传按正文发送。",
         ),
+      message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
+        "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",
+      ),
       title: z
         .string()
         .optional()
@@ -173,7 +231,7 @@ export function registerSendToSessionTool(
           "仅 create 模式可选:目标模型推理强度。按实际 provider+model 支持档位校验；jump 模式忽略。",
         ),
       fast: z
-        .boolean()
+        .union([z.boolean(), z.literal('ultrafast')])
         .optional()
         .describe(
           "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
@@ -182,6 +240,7 @@ export function registerSendToSessionTool(
     handler: async ({
       target_session_id,
       message,
+      message_purpose,
       title,
       use_worktree,
       working_dir,
@@ -191,10 +250,43 @@ export function registerSendToSessionTool(
       fast,
     }) => {
       const ctx = deps.getSessionContext();
+      const qualified = parseQualifiedSessionId(target_session_id);
+      // 设备目录里本机的 id 是 "local":local::<id> 就是本机任务。
+      const localTargetId = qualified?.deviceId === "local" ? qualified.sessionId : target_session_id;
+      if (qualified && qualified.deviceId !== "local") {
+        if (!deps.sendToRemoteSession) {
+          return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
+        }
+        if (message_purpose === "coordination") {
+          return errorPayload(
+            "INVALID_ARGS",
+            "发给其它电脑上的任务时 message_purpose 只能是 user-visible 或省略。",
+          );
+        }
+        if (!ctx.sessionId) {
+          return errorPayload("LEAD_NOT_SUPPORTED", "当前调用未绑定任务,无法标明消息来源。");
+        }
+        const remote = await deps.sendToRemoteSession({
+          deviceId: qualified.deviceId,
+          sessionId: qualified.sessionId,
+          message,
+          dispatcherSessionId: ctx.sessionId,
+        });
+        if (!remote.ok) return errorPayload(remote.errorCode, remote.message);
+        return okPayload({
+          target_session_id,
+          target_device_id: qualified.deviceId,
+          agent_kind: remote.agentKind,
+          wake_kind: remote.wakeKind,
+          target_title: remote.targetTitle,
+          target_last_user_send_at: remote.targetLastUserSendAt,
+        });
+      }
       const result = await deps.sendToSession({
-        targetSessionId: target_session_id,
+        targetSessionId: localTargetId,
         message,
         dispatcherSessionId: ctx.sessionId,
+        ...(message_purpose !== undefined ? { messagePurpose: message_purpose } : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
@@ -218,6 +310,10 @@ export function registerSendToSessionTool(
         target_session_id: result.targetSessionId,
         agent_kind: result.agentKind,
         wake_kind: result.wakeKind,
+        ...(result.responsibilityRecorded === false ? { responsibility_recorded: false, responsibility_note: "Task creation succeeded, but the responsibility record could not be saved. Do not recreate or resend this task; reconcile the responsibility with the host." } : {}),
+        ...(result.wakeKind === "created"
+          ? { note: createdNote(result.targetSessionId) }
+          : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),

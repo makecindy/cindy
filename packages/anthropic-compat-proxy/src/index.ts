@@ -14,7 +14,7 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
-export { recoverInlineAttachments } from './oversized-attachments.js';
+export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-attachments.js';
 export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
 export type { OversizedRequestRecovery } from './types.js';
 export {
@@ -42,7 +42,9 @@ export {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createResponsesItemIdPrefixRecoveryRule,
   createResponsesItemIdLengthRecoveryRule,
@@ -59,6 +61,7 @@ export {
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
+  stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
   stripNonCanonicalResponsesItemIdsFromBody,
@@ -77,6 +80,7 @@ export {
   xaiBareModelId,
 } from './xai-model-input.js';
 export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+export { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';

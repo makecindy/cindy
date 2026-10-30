@@ -85,6 +85,7 @@
     "browserMore": "More actions",
     "browserShowSource": "View source",
     "browserShowPage": "Back to webpage",
+    "browserShowDocument": "View document",
     "browserAddToTask": "Add to current task",
     "browserFileInfo": "File information",
     "done": "Done",
@@ -96,6 +97,8 @@
     "downloadFailed": "Download failed",
     "fetchingVideo": "Fetching video from your computer…",
     "fetchingAudio": "Fetching audio from your computer…",
+    "videoBuffering": "Buffering…",
+    "videoBufferingPercent": "Buffering {{percent}}%",
     "fetchAvFailed": "Fetch failed: {{detail}}",
     "fetchPdfFailed": "PDF fetch failed: {{detail}}",
     "fetchingPdf": "Fetching PDF from your computer…",
@@ -115,9 +118,6 @@
     "htmlResourcesMissing": "{{count}} page resource(s) could not be fetched; images or styles may be missing",
     "htmlResourcesTruncated": "Too many page resources; only the first {{limit}} were attempted",
     "htmlResourcesOverBudget": "{{count}} more resource(s) were skipped because the page's total size limit was reached",
-    "mdRendered": "Rendered",
-    "mdSource": "Source",
-    "mdViewA11y": "{{view}} view",
     "a11yViewImage": "View full image {{name}}",
     "fetchOriginalFailed": "Failed to fetch original: {{detail}}",
     "a11yRetryOriginal": "Retry fetching the original image",
@@ -131,6 +131,7 @@
     "browserCancelAddress": "Cancel editing",
     "browserReturnToFile": "Return to file",
     "browserCopyAddress": "Copy address",
+    "browserCopiedAddress": "Address copied",
     "browserInvalidAddress": "Enter a valid http or https address.",
     "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
@@ -140,6 +141,6 @@
     "exportTimeout": "Export timed out. Try again."
   },
   "gallery": {
-    "cacheMiss": "Remote media cache miss (cachedOnly)"
+    "cacheMiss": "This media isn't cached on your phone yet. Open it again once your computer is connected"
   }
 }

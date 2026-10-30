@@ -1,4 +1,4 @@
-import { historyViewLeaves, type HistoryMessageSource, type HistoryWorkSummary, type DeferredHistoryWork } from './historyView.js';
+import { historyViewLeaves, historyWorkSummaries, type HistoryFileArtifact, type HistoryMessageSource, type HistoryWorkSummary, type DeferredHistoryWork } from './historyView.js';
 import type { HistoryViewController, HistoryViewSnapshot } from './historyViewController.js';
 import { liveContentWithHistoryOrder } from './historyViewHandoff.js';
 
@@ -7,12 +7,16 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   view: HistoryViewController<T>;
   snapshot: HistoryViewSnapshot<T>;
   liveMessages: readonly T[];
-  build(messages: readonly T[], streaming: boolean): TItem[];
+  build(messages: readonly T[], streaming: boolean, artifacts?: readonly HistoryFileArtifact[]): TItem[];
   streaming: boolean;
   isLive?(message: T): boolean;
   /** Already displayed assistant identities in observation order, awaiting history. */
   pendingHandoff?: ReadonlySet<string>;
+  /** Durable rows newer than a stale snapshot (`HistoryViewHandoff` tail), awaiting history. */
+  staleTail?: ReadonlySet<string>;
   isLocalUser?(message: T): boolean;
+  /** Ephemeral UI rows that never enter persisted history; retain their local position. */
+  isLocalMessage?(message: T): boolean;
   structure: {
     placeholder(summary: HistoryWorkSummary): T;
     children(item: TItem): readonly TItem[] | undefined;
@@ -26,7 +30,10 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
   const placeholders = new Set<string>();
   const references = new Map<string, HistoryWorkSummary>();
   const isPendingHandoff = (row: T) => row.role === 'assistant' && options.pendingHandoff?.has(row.clientId) === true;
-  const isLive = (row: T) => options.isLive?.(row) || isPendingHandoff(row);
+  const isLocal = (row: T) => (row.role === 'user' && options.isLocalUser?.(row) === true)
+    || options.isLocalMessage?.(row) === true;
+  const isStaleTail = (row: T) => options.staleTail?.has(row.clientId) === true && !isLocal(row);
+  const isLive = (row: T) => options.isLive?.(row) || isPendingHandoff(row) || isStaleTail(row);
   const live = new Map(options.liveMessages.filter(isLive).map((row) => [row.clientId, row]));
   const leaves = historyViewLeaves(snapshot.items);
   const sourceIds = new Set(leaves.flatMap((item) => item.type === 'messages' ? item.messages.map((row) => row.clientId) : []));
@@ -38,6 +45,21 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         rows.push(current ? liveContentWithHistoryOrder(current, row) : row);
         seen.add(row.clientId);
         endMs = Math.max(endMs, Date.parse(row.createdAt));
+      }
+      if (item.deferred) {
+        references.set(item.deferred.anchorClientId ?? item.key, item.deferred);
+        const summary = item.deferred;
+        const cached = snapshot.details.get(summary.key)?.messages ?? [];
+        const matches = (row: T, id: string) => row.id === id
+          || (id.startsWith('history-live:') && row.clientId === id.slice('history-live:'.length));
+        const first = cached.findIndex((row) => matches(row, summary.firstMessageId));
+        const last = cached.findIndex((row) => matches(row, summary.lastMessageId));
+        const body = first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1);
+        for (const row of body) {
+          if (!sourceIds.has(row.clientId) && !seen.has(row.clientId)) {
+            rows.push(row); seen.add(row.clientId);
+          }
+        }
       }
       continue;
     }
@@ -52,9 +74,14 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
       || (id.startsWith('history-live:') && row.clientId === id.slice('history-live:'.length));
     const first = cached.findIndex((row) => matchesReference(row, range.firstMessageId));
     const last = cached.findIndex((row) => matchesReference(row, range.lastMessageId));
+    // A running preview is a sliding tail: new activities move both endpoints
+    // past the cached window. Until that tail is read, keep showing the previous
+    // window — a partial slice would collapse the live list for one read and
+    // shift a bottom-pinned stream up and down.
+    const slidingPreview = preview && last < 0 && cached.length > 0;
     // A visible result can split a previously cached range. Retain only this
     // reference's prefix while its replacement pages are being fetched.
-    const body = (first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
+    const body = (slidingPreview ? cached : first < 0 ? [] : cached.slice(first, last < first ? undefined : last + 1))
       .filter((row) => !sourceIds.has(row.clientId));
     const placeholder = structure.placeholder(summary);
     if (!body.some((row) => row.clientId === placeholder.clientId)) {
@@ -81,12 +108,18 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     isPendingHandoff(source) && !seen.has(source.clientId)
       ? pendingTail[pendingIndex++] : source);
   for (const row of orderedLiveMessages) {
-    if (isLive(row) && !seen.has(row.clientId) && (row.role === 'assistant' || row.role === 'user')
-      && (Date.parse(row.createdAt) >= endMs
-        || isPendingHandoff(row))) rows.push(row);
+    if (!isLive(row) || seen.has(row.clientId)) continue;
+    const createdAt = Date.parse(row.createdAt);
+    if (isStaleTail(row) && !isPendingHandoff(row) && createdAt < endMs) {
+      // The receipt already proves this body arrived after the page read. A
+      // delayed/persisted timestamp cannot veto that proof. Insert missing durable
+      // rows in time order without reordering the authoritative page itself.
+      const before = rows.findIndex((known) => Date.parse(known.createdAt) > createdAt);
+      rows.splice(before < 0 ? rows.length : before, 0, row);
+    } else if (isStaleTail(row) || createdAt >= endMs || isPendingHandoff(row)) rows.push(row);
   }
-  // Local pending/blocked user bubbles belong to the current UI store, not
-  // persisted history. Anchor them to the same reordered slots used above,
+  // Local pending/blocked user bubbles and ephemeral UI rows belong to the
+  // current UI store, not persisted history. Anchor them to the reordered slots,
   // without trusting device clocks or changing their order relative to each other.
   const renderedIds = new Set(rows.map((row) => row.clientId));
   let beforeClientId: string | undefined;
@@ -94,7 +127,7 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const row = orderedLiveMessages[index];
     if (renderedIds.has(row.clientId)) {
       beforeClientId = row.clientId;
-    } else if (row.role === 'user' && options.isLocalUser?.(row)) {
+    } else if ((row.role === 'user' && options.isLocalUser?.(row)) || options.isLocalMessage?.(row)) {
       const before = beforeClientId === undefined ? -1 : rows.findIndex((item) => item.clientId === beforeClientId);
       rows.splice(before < 0 ? rows.length : before, 0, row);
       renderedIds.add(row.clientId);
@@ -105,13 +138,19 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
     const children = structure.children(item);
     if (!children) return item;
     const refs = new Map<string, HistoryWorkSummary>();
+    for (const id of structure.sourceIds(item)) {
+      const summary = references.get(id);
+      if (summary) refs.set(summary.key, summary);
+    }
     const next: TItem[] = [];
     for (const child of children) {
       if (structure.children(child)) { next.push(bind(child)); continue; }
       const ids = structure.sourceIds(child);
       for (const id of ids) {
         const summary = references.get(id);
-        if (summary) refs.set(summary.key, summary);
+        // A platform that only shows a subagent summary has no child-detail
+        // surface. Its enclosing work group must not fetch those hidden bodies.
+        if (summary && !summary.parentToolUseId) refs.set(summary.key, summary);
       }
       if (!ids.some((id) => placeholders.has(id))) next.push(child);
     }
@@ -126,9 +165,13 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         if (summary.preview) view.setExpanded(summary.preview.key, !full && preview);
       }
     };
+    const lines = [...summaries].reverse().find((summary) => summary.lines)?.lines;
     return structure.rebuild(item, next, {
       owner: view, key: summaries.map((summary) => summary.key).join('|'), expanded,
+      revision: summaries.map((summary) => summary.revision).join('|'),
       previewComplete: summaries.every((summary) => summary.preview?.firstMessageId === summary.firstMessageId),
+      ...(lines ? { lines } : {}),
+      awaitingDetails: states.some((state) => !state?.complete && !state?.messages.length),
       loading: states.some((state) => state?.loading), failed: states.some((state) => !!state?.error),
       setVisible,
       toggle: () => setVisible(!expanded, false),
@@ -136,5 +179,5 @@ export function renderHistoryView<T extends HistoryMessageSource, TItem>(options
         summary.preview && view.getSnapshot().expanded.has(summary.preview.key) ? summary.preview : summary); },
     });
   };
-  return options.build(rows, options.streaming).map(bind);
+  return options.build(rows, options.streaming, historyWorkSummaries(snapshot.items).flatMap((summary) => summary.artifacts ?? [])).map(bind);
 }

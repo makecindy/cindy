@@ -4,10 +4,10 @@
  * Identity is the current org membership. Audience is Host-minted
  * `<orgSlug>:cindy-publisher` and never goes through the plugin resolver.
  */
-import type { WebContents } from 'electron';
+import { app, type WebContents } from 'electron';
 
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
-import { getAuthState, onAuthStateChange } from '../authManager.js';
+import { getAuthState, onAuthStateChange, refresh } from '../authManager.js';
 import {
   getConnectionTokenProvider,
   getGhostManager,
@@ -16,6 +16,7 @@ import {
 import { isReservedConnectionPluginSlug } from '../cindy-brain/connectionAudienceResolver.js';
 import { createLogger } from '../logger.js';
 import { onQuit } from '../lifecycle.js';
+import { PluginMarketApi } from '../plugin-market/api.js';
 import { PluginPublisherApi } from './api.js';
 import { PluginPublisherConfirmBridge } from './confirmBridge.js';
 import {
@@ -23,7 +24,7 @@ import {
   PluginPublisherOrchestrator,
   type PluginPublisherSourceBinding,
 } from './orchestrator.js';
-import { PLUGIN_MEMBER_PUBLISHER_GHOST_ID, type PluginPublisherProgress } from './types.js';
+import { PLUGIN_MEMBER_PUBLISHER_GHOST_ID, type PluginPublisherIdentity, type PluginPublisherProgress } from './types.js';
 
 const log = createLogger('plugin-publisher');
 const ORG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -35,36 +36,72 @@ const trackedConfirmRequesters = new WeakSet<WebContents>();
 let orchestratorSingleton: PluginPublisherOrchestrator | null = null;
 let quitHooked = false;
 let authHooked = false;
+let resolvedMarketIdentity: { contextKey: string; orgSlug: string } | null = null;
 
 export function getPluginPublisherConfirmBridge(): PluginPublisherConfirmBridge {
   return confirmBridge;
 }
 
-export function currentPublisherIdentity(): {
-  membershipId: string;
-  orgSlug: string;
-  orgName: string | null;
-} | null {
+function publisherIdentityContextKey(): string | null {
+  const state = getAuthState();
+  const user = state.isAuthenticated ? state.user : null;
+  if (!user || user.membershipKind !== 'org' || !user.orgId) return null;
+  const owner = getActiveDataOwnerPushStamp();
+  return JSON.stringify([user.id, user.orgId, owner.dataOwnerId, owner.ownerGeneration]);
+}
+
+export function currentPublisherIdentity(): PluginPublisherIdentity | null {
   const state = getAuthState();
   const user = state.isAuthenticated ? state.user : null;
   if (!user || user.membershipKind !== 'org') return null;
-  if (!user.orgSlug || !ORG_SLUG_RE.test(user.orgSlug)) return null;
+  if (user.orgSlug != null && !ORG_SLUG_RE.test(user.orgSlug)) return null;
+  const contextKey = publisherIdentityContextKey();
+  const marketOrgSlug = contextKey !== null && resolvedMarketIdentity?.contextKey === contextKey
+    ? resolvedMarketIdentity.orgSlug : null;
   return {
     membershipId: user.id,
-    orgSlug: user.orgSlug,
+    orgSlug: user.orgSlug ?? marketOrgSlug,
     orgName: user.orgName,
   };
 }
 
-export function publisherAudience(orgSlug: string): string {
+async function resolvePublisherIdentity(): Promise<PluginPublisherIdentity | null> {
+  const identity = currentPublisherIdentity();
+  if (!identity || identity.orgSlug !== null) return identity;
+  const contextKey = publisherIdentityContextKey();
+  const organizationId = getAuthState().user?.orgId;
+  if (contextKey === null || !organizationId) return identity;
+  await refresh();
+  if (publisherIdentityContextKey() !== contextKey) return null;
+  const refreshed = currentPublisherIdentity();
+  if (!refreshed || refreshed.membershipId !== identity.membershipId) return null;
+  if (refreshed.orgSlug !== null) return refreshed;
+  try {
+    const { currentOrganization } = await new PluginMarketApi(undefined, () => app.getVersion()).listAll();
+    if (publisherIdentityContextKey() !== contextKey) return null;
+    const current = currentPublisherIdentity();
+    if (!current || current.membershipId !== identity.membershipId) return null;
+    if (current.orgSlug !== null) return current;
+    if (currentOrganization?.organizationId !== organizationId ||
+        !currentOrganization.orgSlug || !ORG_SLUG_RE.test(currentOrganization.orgSlug)) return current;
+    resolvedMarketIdentity = { contextKey, orgSlug: currentOrganization.orgSlug };
+    return { ...current, orgSlug: currentOrganization.orgSlug };
+  } catch {
+    return publisherIdentityContextKey() === contextKey ? currentPublisherIdentity() : null;
+  }
+}
+
+export function publisherAudience(orgSlug: string | null): string {
+  if (!orgSlug || !ORG_SLUG_RE.test(orgSlug)) throw new Error('无法确认发布组织 namespace，请刷新登录后重试');
   return `${orgSlug}:${PLUGIN_MEMBER_PUBLISHER_GHOST_ID}`;
 }
 
-function createApi(): PluginPublisherApi {
+export function createPluginPublisherApi(): PluginPublisherApi {
   return new PluginPublisherApi({
+    getClientVersion: () => app.getVersion(),
     async getToken() {
-      const identity = currentPublisherIdentity();
-      if (!identity) throw new Error('需要组织身份才能发布插件');
+      const identity = await resolvePublisherIdentity();
+      if (!identity?.orgSlug) throw new Error('无法确认发布组织身份，请刷新登录后重试');
       return getConnectionTokenProvider().getToken({
         membershipId: identity.membershipId,
         audience: publisherAudience(identity.orgSlug),
@@ -72,7 +109,7 @@ function createApi(): PluginPublisherApi {
     },
     invalidateToken() {
       const identity = currentPublisherIdentity();
-      if (!identity) return;
+      if (!identity?.orgSlug) return;
       getConnectionTokenProvider().invalidate({
         membershipId: identity.membershipId,
         audience: publisherAudience(identity.orgSlug),
@@ -96,8 +133,8 @@ export function trackPublisherConfirmRequester(contents: WebContents): void {
 export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
   if (!orchestratorSingleton) {
     orchestratorSingleton = createPluginPublisherOrchestrator({
-      api: createApi(),
-      identity: currentPublisherIdentity,
+      api: createPluginPublisherApi(),
+      identity: resolvePublisherIdentity,
       async inspectPackage(filePath) {
         const inspected = await getGhostManager().inspect(filePath);
         if ('rejection' in inspected) {
@@ -142,11 +179,19 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
     }
     if (!authHooked) {
       authHooked = true;
-      let lastKey = publisherIdentityKey();
+      let lastIdentity = currentPublisherIdentity();
+      let lastContextKey = publisherIdentityContextKey();
       onAuthStateChange(() => {
-        const nextKey = publisherIdentityKey();
-        if (nextKey === lastKey) return;
-        lastKey = nextKey;
+        const nextIdentity = currentPublisherIdentity();
+        const nextContextKey = publisherIdentityContextKey();
+        const contextChanged = nextContextKey !== lastContextKey;
+        if (!contextChanged && publisherIdentityKey(nextIdentity) === publisherIdentityKey(lastIdentity)) return;
+        const namespaceEnriched = !contextChanged && lastIdentity?.orgSlug === null &&
+          nextIdentity?.orgSlug != null && nextIdentity.membershipId === lastIdentity.membershipId;
+        lastIdentity = nextIdentity;
+        lastContextKey = nextContextKey;
+        if (namespaceEnriched) return;
+        resolvedMarketIdentity = null;
         orchestratorSingleton?.abortAll();
         confirmBridge.cancelAll();
       });
@@ -155,8 +200,7 @@ export function getPluginPublisherOrchestrator(): PluginPublisherOrchestrator {
   return orchestratorSingleton;
 }
 
-function publisherIdentityKey(): string {
-  const identity = currentPublisherIdentity();
+function publisherIdentityKey(identity: PluginPublisherIdentity | null): string {
   return identity ? `${identity.membershipId}:${identity.orgSlug}` : '';
 }
 

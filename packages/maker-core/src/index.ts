@@ -6,6 +6,7 @@
  */
 
 export const VERSION = '0.0.0';
+export { standardSpeedRequest, withFastModePolicy } from './agents/shared/fast-mode-policy.js';
 
 // types
 export * from './types/index.js';
@@ -25,7 +26,7 @@ export {
   resolveReviewReadPath,
   type ReviewReadGrant,
 } from './agents/shared/review-read-scope.js';
-export { isReviewSensitiveCredentialPath } from './agents/shared/sensitive-credential-paths.js';
+export { isReviewSensitiveCredentialPath, isSensitiveCredentialPath } from './agents/shared/sensitive-credential-paths.js';
 
 // codex app-server transport interface — host 实现自定义 transport (e.g. SSH-bridged
 // for remote codex) 时需要这个接口形状。
@@ -51,6 +52,8 @@ export type {
 } from './agents/pi/transport.js';
 // pi 远端 agentHome 文件操作原语(host 经 SSH 实现)。
 export type { PiRemoteFileOps } from './agents/base-agent.js';
+// 设备托管会话的链路往来快照(host 的任务隧道记录)。
+export type { DeviceHostedLinkActivity } from './agents/base-agent.js';
 
 // core
 export * from './session.js';
@@ -129,3 +132,4 @@ export {
 } from './contacts/manager.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
+export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';

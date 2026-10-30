@@ -102,6 +102,13 @@ export class ClipboardTransfer {
       return { data: value.data.slice(request.offset, request.offset + CLIPBOARD_CHUNK_CHARS) };
     }
     if (request.action === 'write' && value.direction === 'paste') {
+      // A lost peer acknowledgement may replay this staging chunk over WSS.
+      // Only byte-identical, fully written ranges are idempotent; commit stays single-use.
+      if (request.offset < value.data.length && request.offset + request.data.length <= value.data.length &&
+        value.data.slice(request.offset, request.offset + request.data.length) === request.data) {
+        this.timer?.refresh();
+        return { ok: true };
+      }
       if (
         request.offset !== value.data.length ||
         value.data.length + request.data.length > value.length

@@ -9,11 +9,6 @@ import type { SessionReference } from '../../shared/sessionReference';
 
 import { SchedulerPage } from '@/features/scheduler/SchedulerPage';
 import { ScheduleFormDialog } from '@/features/scheduler/components/ScheduleFormDialog';
-import {
-  oneTimeCronAfterUsageReset,
-  systemTimeZone,
-  usageLimitScheduleNavigationState,
-} from '@/features/scheduler/lib/usageLimitScheduleCreateIntent';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 
 const createSchedule = vi.fn();
@@ -183,7 +178,19 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/state/newMakerDraft', () => ({
   getPersistedVendorModel: () => '',
+  getDraft: () => ({ lastByVendor: {}, modelChosenByVendor: {} }),
 }));
+
+/** 新建任务默认(第三级回退)从这份已连接来源里挑:唯一可用的 claude-code 模型。 */
+const DEFAULT_CLAUDE_PROVIDER = {
+  id: 'xd', name: 'Cindy', source: 'builtin', connected: true, agents: ['claude-code'],
+  auth: { method: 'oauth' }, access: { kind: 'managed' },
+  routing: { 'claude-code': { upstream: 'https://gateway.example', authStrategy: 'none' } },
+  models: { 'claude-code': [{
+    id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200_000, sortOrder: 0,
+    efforts: ['medium', 'high'], defaultEffort: 'medium', supportsFastMode: false, status: 'active',
+  }] },
+} as unknown as ProviderView;
 
 vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
   const React = await import('react');
@@ -207,7 +214,7 @@ vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
 });
 
 beforeEach(() => {
-  modelFixtures.providers = [];
+  modelFixtures.providers = [DEFAULT_CLAUDE_PROVIDER];
   modelFixtures.sessionReferences.clear();
   createSchedule.mockImplementation(async (input) => ({ id: 'created-schedule', ...input }));
   routerMocks.location.pathname = '/cc-agent/scheduled';
@@ -283,56 +290,11 @@ describe('Scheduler template entry', () => {
         recurring: true,
         agentKind: 'claude-code',
         model: 'claude-sonnet-4-6',
+        // 新建任务默认的来源与模型成对落库,runner 不再把空来源重新解析成别的来源。
+        providerId: 'xd',
         notify: { desktop: true, feishu: false, wecomGroup: false },
       }),
     );
-  });
-
-  it('opens a usage-limit recovery Automation for confirmation without creating it', async () => {
-    const resetAtMs = Date.parse('2027-01-24T10:30:00.000Z');
-    routerMocks.location.state = usageLimitScheduleNavigationState({
-      kind: 'usage-limit-recovery',
-      requestId: 'request-1',
-      sessionId: 'session-1',
-      agentKind: 'codex',
-      resetAtMs,
-    });
-
-    render(createElement(SchedulerPage));
-
-    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
-    expect(
-      screen.getByDisplayValue('scheduler.usageLimitRecovery.name'),
-    ).toBeTruthy();
-    expect(
-      screen.getByDisplayValue('scheduler.usageLimitRecovery.prompt'),
-    ).toBeTruthy();
-    expect(screen.getByTestId('cron-expr').textContent).toBe(
-      oneTimeCronAfterUsageReset(resetAtMs, systemTimeZone()),
-    );
-    expect(screen.getByTestId('agent-kind').textContent).toBe('codex');
-    expect(createSchedule).not.toHaveBeenCalled();
-    expect(routerMocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled', {
-      replace: true,
-      state: null,
-    });
-  });
-
-  it('opens the same confirmation form with a blank schedule when reset time is unknown', async () => {
-    routerMocks.location.state = usageLimitScheduleNavigationState({
-      kind: 'usage-limit-recovery',
-      requestId: 'request-unknown-time',
-      sessionId: 'session-2',
-      agentKind: 'claude-code',
-      resetAtMs: null,
-    });
-
-    render(createElement(SchedulerPage));
-
-    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
-    expect(screen.getByTestId('cron-expr').textContent).toBe('');
-    expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
-    expect(createSchedule).not.toHaveBeenCalled();
   });
 
   it('插件请求打开预填的创建表单,但不创建任务', async () => {

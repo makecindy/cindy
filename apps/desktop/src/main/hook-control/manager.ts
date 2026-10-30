@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { HOOK_STATUS_REACTIONS } from './statusReactions.js';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
@@ -23,6 +24,7 @@ import {
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
+  HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -31,6 +33,10 @@ import {
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SLACK_TOOLS,
+  HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_COMMANDS,
+  HOOK_FEATURE_TELEGRAM_FINAL_OPS,
+  HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
   makeBindStart,
@@ -104,60 +110,11 @@ import {
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
+import { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
+export { providerForExternalKey, providerForTaskDispatch } from './providerRouting.js';
 
 /** dispatcher / bindings 的 connectionId 基础键；运行时追加账号与 provider。 */
 export const SLACK_HOOK_CONNECTION_ID = 'slack';
-
-/** Legacy Slack channel lane used before provider-prefixed external keys. */
-function isLegacySlackExternalKey(externalKey: string): boolean {
-  return /^[A-Z][A-Z0-9]*:[A-Z][A-Z0-9]*:\d+(?:\.\d+)?$/.test(externalKey);
-}
-
-/** Pre-provider-prefix Slack DM lane accepted only for source-less/Slack traffic. */
-function isLegacySlackDmExternalKey(externalKey: string): boolean {
-  return /^dm:(?:[A-Z][A-Z0-9]*:){1,2}g\d+$/.test(externalKey);
-}
-
-/**
- * Route only the providers implemented by this client.  Missing source is
- * retained solely for legacy Slack servers; Telegram and X always have both an
- * explicit source and the provider-prefixed lane key from their wire contracts.
- * A source/key disagreement fails closed instead of letting a future or
- * compromised provider inherit Slack permissions and prompt semantics.
- */
-export function providerForTaskDispatch(
-  payload: Pick<import('@cindy/slack-hook-protocol').TaskDispatchPayload, 'externalKey' | 'source'>,
-): HookProvider | null {
-  const telegramKey = payload.externalKey.startsWith('telegram:');
-  const xKey = payload.externalKey.startsWith('x:');
-  const slackKey =
-    payload.externalKey.startsWith('slack:') ||
-    payload.externalKey.startsWith('team-slack:') ||
-    // Pre-prefix Slack channel lane: <team>:<channel>:<message timestamp>.
-    isLegacySlackExternalKey(payload.externalKey) ||
-    isLegacySlackDmExternalKey(payload.externalKey);
-  const source = payload.source?.im;
-  if (source === undefined) return slackKey ? 'slack' : null;
-  if (source === 'telegram') return telegramKey ? 'telegram' : null;
-  if (source === 'x') return xKey ? 'x' : null;
-  if (source === 'slack') return slackKey ? 'slack' : null;
-  return null;
-}
-
-/** Route archive frames only for lane-key formats owned by implemented providers. */
-export function providerForExternalKey(externalKey: string): HookProvider | null {
-  if (externalKey.startsWith('telegram:')) return 'telegram';
-  if (externalKey.startsWith('x:')) return 'x';
-  if (
-    externalKey.startsWith('slack:') ||
-    externalKey.startsWith('team-slack:') ||
-    isLegacySlackExternalKey(externalKey) ||
-    isLegacySlackDmExternalKey(externalKey)
-  ) {
-    return 'slack';
-  }
-  return null;
-}
 
 /**
  * group.message 的本地持久化 owner 只能来自 server 针对本次扇出的权威
@@ -688,12 +645,20 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: telegramProviderBaseFeatures,
     helloFeatures: [
       ...telegramProviderBaseFeatures,
+      HOOK_FEATURE_SESSION_RESULT,
       HOOK_FEATURE_GROUP_RELAY,
       HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
       // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
       // 不接入(#1855 的红线之一)。
       HOOK_FEATURE_MESSAGE_OPS,
+      // 进度消息、成功终稿、交互卡由客户端渲染并经 msg.op 发布, 命令菜单以客户端注册表
+      // 为准(dispatcher 的 telegramTurnCarrier / telegramCardOps / provider.commands.set)。
+      // 每项都要服务端同时宣告才启用; 否则那一项继续由服务端渲染。
+      HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
+      HOOK_FEATURE_TELEGRAM_FINAL_OPS,
+      HOOK_FEATURE_TELEGRAM_CARD_OPS,
+      HOOK_FEATURE_TELEGRAM_COMMANDS,
       HOOK_FEATURE_SESSION_NEW,
     ],
     isEnabled: () => store.get().telegramEnabled,
@@ -1287,6 +1252,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.binding === null ? null : { ...lane.binding, actions: [...lane.binding.actions] },
       // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
       defaultWorkspace: defaultWorkspaceOf(store.get(), lane.config.provider),
+      ...(lane.config.provider === 'x' ? { companionBotId: store.get().xCompanionBotId ?? null } : {}),
     };
   }
 
@@ -1879,6 +1845,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   /** Slack legacy 线的 hello 能力声明(provider-neutral 线各自在 config.helloFeatures)。 */
   const SLACK_HELLO_FEATURES: readonly string[] = [
+    HOOK_FEATURE_SESSION_RESULT,
     HOOK_FEATURE_MULTI_TEAM,
     HOOK_FEATURE_SESSION_PICKER,
   ];
@@ -1901,6 +1868,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 每条连接只声明其服务会实际使用的能力，避免把 provider-neutral wire 误投
       // 到 Slack 服务，也保持老 Slack hello 的兼容面最小。
       features: [...features],
+      ...(provider === undefined || provider === 'telegram'
+        ? { statusReactions: HOOK_STATUS_REACTIONS[provider ?? 'slack'] }
+        : {}),
       ...(includeLifecycleAnnouncement
         ? { lifecycleAnnouncement: lifecycleAnnouncementEnabled() }
         : {}),

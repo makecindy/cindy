@@ -194,6 +194,7 @@ describe('WorkerThreadTransport', () => {
           title TEXT NOT NULL,
           working_dir TEXT,
           model TEXT NOT NULL,
+          scheduled_model_baseline TEXT,
           provider_id TEXT,
           effort TEXT NOT NULL,
           permission_mode TEXT NOT NULL,

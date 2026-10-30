@@ -17,6 +17,10 @@ export interface DesktopIceConfigDiagnostic {
   elapsedMs: number;
   serverCount: number;
   turnUrlCount: number;
+  /** TURN URLs by client→relay transport: UDP (default), TCP, TLS (`turns:`). */
+  turnUdpUrlCount: number;
+  turnTcpUrlCount: number;
+  turnTlsUrlCount: number;
   status?: number;
 }
 
@@ -132,13 +136,22 @@ export async function resolveDesktopIceServers(
       urls: [server.urls],
     }));
   try {
+    const turnUrls = servers
+      .flatMap((server) => server.urls)
+      .filter((url) => /^turns?:/.test(url));
     diagnostic?.({
       outcome,
       elapsedMs: Math.max(0, Math.round(performance.now() - started)),
       serverCount: servers.length,
-      turnUrlCount: servers
-        .flatMap((server) => server.urls)
-        .filter((url) => /^turns?:/.test(url)).length,
+      turnUrlCount: turnUrls.length,
+      turnUdpUrlCount: turnUrls.filter(
+        (url) => url.startsWith("turn:") && !url.endsWith("?transport=tcp"),
+      ).length,
+      turnTcpUrlCount: turnUrls.filter(
+        (url) => url.startsWith("turn:") && url.endsWith("?transport=tcp"),
+      ).length,
+      turnTlsUrlCount: turnUrls.filter((url) => url.startsWith("turns:"))
+        .length,
       ...(status === undefined ? {} : { status }),
     });
   } catch {

@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
@@ -12,6 +16,36 @@ import {
 } from './capability-routing.js';
 
 describe('Bot Skill config', () => {
+  it('keeps physical grants frozen when a catalog alias is repointed before reload', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-bot-skill-grants-'));
+    try {
+      const old = path.join(root, 'approved');
+      const replacement = path.join(root, 'replacement');
+      const alias = path.join(root, 'discovery');
+      for (const dir of [old, replacement]) {
+        fs.mkdirSync(dir);
+        fs.writeFileSync(path.join(dir, 'SKILL.md'), '# fixture');
+      }
+      fs.symlinkSync(old, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const policy = { mode: 'allowlist' as const, configured: ['learn'],
+        catalog: [{ name: 'learn', path: path.join(alias, 'SKILL.md') }] };
+      const grants = snapshotManagedSkillGrants(policy)!;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(replacement, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      const paths = [old, replacement].map(dir => path.join(dir, 'SKILL.md'));
+      expect(buildCodexBotSkillConfigOverrides(policy, { grants,
+        skills: paths.map(source => ({ path: source, enabled: true })),
+      })['skills.config']).toEqual(expect.arrayContaining([
+        { path: paths[0], enabled: true }, { path: paths[1], enabled: false },
+        { path: policy.catalog[0]!.path, enabled: false },
+      ]));
+      // A scoped native discovery error wins over a previously granted path.
+      expect(buildCodexBotSkillConfigOverrides(policy, { grants,
+        skills: [{ path: paths[0]!, enabled: false }],
+      })['skills.config']).toEqual(expect.arrayContaining([{ path: paths[0], enabled: false }]));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('maps a Bot allowlist to native per-thread Codex Skill state', () => {
     expect(buildCodexBotSkillConfigOverrides({
       mode: 'allowlist',
@@ -99,6 +133,7 @@ describe('Bot MCP config', () => {
         { name: 'custom.with.dot', source: 'custom' },
       ],
     }, new Set(['cindy_memory', 'cindy_helper', 'cindy', 'cindy_group_history', 'cindy_orca', 'custom-a', 'custom.with.dot']))).toEqual({
+      'features.apps': false,
       'mcp_servers.cindy_group_history.enabled': false,
       'mcp_servers.cindy_orca.enabled': false,
       'mcp_servers."custom.with.dot".enabled': false,
@@ -106,7 +141,7 @@ describe('Bot MCP config', () => {
   });
 
   it('does not manufacture invalid disabled-only transport entries', () => {
-    expect(buildCodexBotMcpConfigOverrides({ mode: 'allowlist', configured: [], catalog: [{ name: 'cindy_contacts', source: 'builtin' }] }, new Set())).toEqual({});
+    expect(buildCodexBotMcpConfigOverrides({ mode: 'allowlist', configured: [], catalog: [{ name: 'cindy_contacts', source: 'builtin' }] }, new Set())).toEqual({ 'features.apps': false });
   });
 
   it('keeps an explicitly configured builtin capability server enabled', () => {
@@ -122,10 +157,35 @@ describe('Bot MCP config', () => {
         { name: 'cindy_scheduler', source: 'builtin' },
       ],
     }, new Set(['cindy_memory', 'cindy_helper', 'cindy_docs', 'cindy_scheduler', 'cindy', 'cindy_group_history', 'cindy_orca', 'cindy_docs']))).toEqual({
+      'features.apps': false,
       'mcp_servers.cindy_scheduler.enabled': false,
       'mcp_servers.cindy_group_history.enabled': false,
       'mcp_servers.cindy_orca.enabled': false,
     });
+  });
+
+  // P1 regression: only real transports enter this set; a colliding custom name
+  // must not escape the restriction. Existing native-only cases had no transport.
+  it('disables an unselected transport named codex_apps', () => {
+    expect(buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist', configured: [],
+      catalog: [{ name: 'codex_apps', source: 'custom' }, { name: 'other_service', source: 'custom' }],
+    }, new Set(['codex_apps', 'other_service']))).toEqual({
+      'features.apps': false,
+      'mcp_servers.codex_apps.enabled': false,
+      'mcp_servers.other_service.enabled': false,
+    });
+  });
+
+  // Regression: native Apps has no transport and escaped explicit Bot restrictions.
+  // Unit tier: inspect actual thread config; never synthesize or enable a transport/account.
+  it.each([true, false])('preserves the native Apps selection (allowed=%s)', (allowed) => {
+    expect(buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist', configured: allowed ? ['codex_apps'] : [],
+      catalog: [{ name: 'codex_apps', source: 'harness', available: true }],
+    }, new Set())).toEqual(allowed ? {} : { 'features.apps': false });
+    expect(buildCodexBotMcpConfigOverrides(undefined, new Set())).toEqual({});
+    expect(buildCodexBotMcpConfigOverrides({ mode: 'inherit', configured: [], catalog: [] }, new Set())).toEqual({});
   });
 });
 

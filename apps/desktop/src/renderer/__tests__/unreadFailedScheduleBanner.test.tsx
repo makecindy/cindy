@@ -71,6 +71,17 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
+  it('exposes the recorded failure without marking or rerunning it', () => {
+    const onDiagnose = vi.fn();
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
+      onDiagnose={onDiagnose} />);
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.queryByText(/private-test-value/)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.diagnose'));
+    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+    expect(markRunRead).not.toHaveBeenCalled();
+  });
   it('distinguishes precheck failures while preserving the warning', () => {
     render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
       latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }} />);

@@ -27,9 +27,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { AgentKind, Session, WorkspaceKind } from '@/lib/ccAgent.types';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDraft } from '@/state/newMakerDraft';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -53,13 +59,15 @@ interface UseCCSessionsReturn {
     workingDir?: string;
     workspaceKind?: WorkspaceKind;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
     agentKind?: AgentKind;
     extraDirs?: string[];
     writableDirs?: string[];
     remoteHostId?: string;
+    /** Agent 在同账号另一台电脑上运行(任务与文件在本机)。 */
+    agentDeviceId?: string;
     /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create。 */
     providerId?: string | null;
     /** Only the Cindy Make purpose may be requested from the renderer; Main validates it. */
@@ -78,6 +86,9 @@ interface SnapshotState {
 
 export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsReturn {
   const filter: ListStatusFilter = options?.includeArchived ?? 'active';
+  // patchLocal 可能被异步写入失败回调持有；让该回调只属于创建它的 data owner，
+  // 避免旧账号的 remote/local pin 回滚在账号切换后的同 sessionId 上落入新缓存。
+  const patchOwner = getDataOwnerGeneration();
 
   // 关键：初始 snapshot 来自 store —— remount 命中 cache 即非 null，无 skeleton 闪烁。
   const [snapshotState, setSnapshotState] = useState<SnapshotState>(() => ({
@@ -154,7 +165,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       workingDir?: string;
       workspaceKind?: WorkspaceKind;
       permissionMode?: string;
-      fastMode?: boolean;
+      fastMode?: boolean | 'ultrafast';
       planModeEnabled?: boolean;
       agentKind?: AgentKind;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
@@ -163,13 +174,17 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 远端 host alias (Codex P2)。设置后 session.workingDir 必须是远端绝对路径,
        *  agent 跑在远端 SSH 机器上, 本地不 spawn codex 子进程。 */
       remoteHostId?: string;
+      /** Agent 在同账号另一台电脑上运行(任务与文件在本机)。 */
+      agentDeviceId?: string;
       /** per-session 来源(供应商)显式选择; null/undefined = 跟随默认路由。透传到 sessionService.create → mapper 落盘。 */
       providerId?: string | null;
       source?: 'cindy-make';
+      /** 新建页的未发送任务(见 sessionService.create)。 */
+      provisional?: boolean;
     }): Promise<Session | null> => {
       try {
         const newSession = await sessionService.create({
-          permissionMode: 'auto',
+          permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
@@ -190,8 +205,11 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
   /** Update a session's fields without re-fetching. Preserves list order — useful
    *  for renames that shouldn't re-sort. 实际转发给 store 让所有 subscriber 同步。 */
   const patchLocal = useCallback(
-    (id: string, patch: Partial<Session>) => sessionsStore.patchLocal(id, patch),
-    [],
+    (id: string, patch: Partial<Session>) => {
+      if (!isDataOwnerGenerationCurrent(patchOwner) || getStickySessionDeviceId(id)) return;
+      sessionsStore.patchLocal(id, patch);
+    },
+    [patchOwner],
   );
 
   return {

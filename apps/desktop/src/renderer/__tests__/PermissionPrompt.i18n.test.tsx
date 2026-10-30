@@ -45,7 +45,9 @@ describe('PermissionPrompt i18n', () => {
       />,
     );
 
-    expect(screen.getByText('允许 PowerShell？')).toBeTruthy();
+    // Say what happens instead of the harness tool name or its English title.
+    expect(screen.getByText('允许运行这条命令？')).toBeTruthy();
+    expect(screen.getByText('Get-ChildItem')).toBeTruthy();
     expect(screen.getByText('拒绝')).toBeTruthy();
     expect(screen.getByText('本任务总是允许')).toBeTruthy();
     expect(screen.getByText('允许一次')).toBeTruthy();
@@ -53,7 +55,7 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('Provider-supplied reason stays verbatim.')).toBeTruthy();
   });
 
-  it('preserves an action-specific title when no display name is available', () => {
+  it('replaces English harness file titles with a localized one and shows the path', () => {
     render(
       <PermissionPrompt
         permission={{
@@ -66,8 +68,9 @@ describe('PermissionPrompt i18n', () => {
       />,
     );
 
-    expect(screen.getByText('Allow Codex to edit /tmp/example.txt?')).toBeTruthy();
-    expect(screen.queryByText('允许 file_change？')).toBeNull();
+    expect(screen.getByText('允许修改文件？')).toBeTruthy();
+    expect(screen.getByText('/tmp/example.txt')).toBeTruthy();
+    expect(screen.queryByText('Allow Codex to edit /tmp/example.txt?')).toBeNull();
   });
 
   it('localizes the tool fallback when no richer title is available', () => {
@@ -75,14 +78,33 @@ describe('PermissionPrompt i18n', () => {
       <PermissionPrompt
         permission={{
           requestId: 'permission-3',
-          toolName: 'Bash',
-          input: { command: 'pwd' },
+          toolName: 'WebFetch',
+          input: { url: 'https://example.com' },
         }}
         onRespond={vi.fn()}
       />,
     );
 
-    expect(screen.getByText('允许 Bash？')).toBeTruthy();
+    expect(screen.getByText('允许 WebFetch？')).toBeTruthy();
+  });
+
+  // 2026-10-24: Auto asks showed no reason, so users could not tell why they were asked.
+  it('shows why Auto review asked and names the plugin being called', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-ask',
+          toolName: 'mcp:cindy:ghost_call',
+          input: { ghost_id: 'cindy-github', tool: 'call_tool', args: { name: 'add_repo_collaborator', args: { username: 'octo' } } },
+          autoReviewReason: '这会给 octo 开通仓库权限，你只让我查看协作者。',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('允许使用插件「cindy-github」？')).toBeTruthy();
+    expect(screen.getByText('自动审批需要你决定：这会给 octo 开通仓库权限，你只让我查看协作者。')).toBeTruthy();
+    expect(screen.getByText('add_repo_collaborator {"username":"octo"}')).toBeTruthy();
   });
 
   it('keeps the session boundary explicit in the English approval label', async () => {
@@ -113,12 +135,14 @@ describe('PermissionPrompt i18n', () => {
           title: 'Allow Codex to run this command?',
           description: 'Automatic review could not finish, so this action needs your confirmation.',
           autoReviewUnavailable: true,
+          sourceDescription: '来源：Telegram · 开发群\n原消息：检查仓库',
         }}
         onRespond={vi.fn()}
       />,
     );
 
     expect(screen.getByText('自动审批没完成，请确认要不要允许这次操作。')).toBeTruthy();
+    expect(screen.getByText(/来源：Telegram · 开发群/)).toBeTruthy();
     expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
   });
 });

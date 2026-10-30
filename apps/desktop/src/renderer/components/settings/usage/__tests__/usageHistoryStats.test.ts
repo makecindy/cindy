@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Session } from '@/lib/ccAgent.types';
 import type { UsageHistoryPayload } from '@/hooks/useUsageHistory';
 import {
   buildAgentRows,
@@ -15,14 +14,6 @@ import {
   usageRangeDay,
   toUsageDays,
 } from '../usageHistoryStats';
-import {
-  removeUsageSessionForScope,
-  mergeUsageSessionSnapshots,
-  shouldHideUsageTaskTable,
-  usageActivityIso,
-  usageSessionsForScope,
-  type UsageSessionsState,
-} from '../UsageTaskTable';
 
 const zeroMoney = {
   amount: 0,
@@ -66,14 +57,6 @@ function payload(over: Partial<UsageHistoryPayload> = {}): UsageHistoryPayload {
   };
 }
 
-describe('shouldHideUsageTaskTable', () => {
-  it('单日范围（包括 today）隐藏无法精确归因的任务表', () => {
-    expect(shouldHideUsageTaskTable('today')).toBe(true);
-    expect(shouldHideUsageTaskTable('day:2026-08-20')).toBe(true);
-    expect(shouldHideUsageTaskTable('7d')).toBe(false);
-  });
-});
-
 describe('isUsageHistorySingleDay', () => {
   it('识别 today 与日期钻取范围', () => {
     expect(isUsageHistorySingleDay('today')).toBe(true);
@@ -88,48 +71,6 @@ describe('usageRangeDay', () => {
     expect(usageRangeDay('today')).toBeNull();
     expect(usageRangeDay('day:2026-08-20', '2026-08-22')).toBe('2026-08-20');
   });
-});
-
-describe('usage task session scope', () => {
-  const readyState = (scopeKey: string): UsageSessionsState => ({
-    scopeKey,
-    status: 'ready',
-    sessions: [{ id: 'session-a' } as Session],
-  });
-
-  it('账号切换的过渡帧不暴露旧账号的全量快照', () => {
-    expect(usageSessionsForScope(readyState('owner-a'), 'owner-b')).toEqual([]);
-  });
-
-  it('只从同一账号的快照消费 deleted 事件', () => {
-    const state = readyState('owner-a');
-    expect(removeUsageSessionForScope(state, 'owner-a', 'session-a')).toMatchObject({
-      scopeKey: 'owner-a',
-      status: 'ready',
-      sessions: [],
-    });
-    expect(removeUsageSessionForScope(state, 'owner-b', 'session-a')).toBe(state);
-  });
-
-  it('合并实时元数据时保留全量查询的累计 token', () => {
-    const fullSession = {
-      id: 'session-a',
-      title: '历史标题',
-      totalTokenUsage: 1000,
-    } as Session;
-    const liveSession = {
-      id: 'session-a',
-      title: '最新标题',
-      totalTokenUsage: 100,
-    } as Session;
-
-    expect(mergeUsageSessionSnapshots(fullSession, liveSession)).toMatchObject({
-      id: 'session-a',
-      title: '最新标题',
-      totalTokenUsage: 1000,
-    });
-  });
-
 });
 
 describe('cacheHitRate', () => {
@@ -405,16 +346,3 @@ describe('filterUsageHistoryPayload', () => {
   });
 });
 
-describe('usageActivityIso', () => {
-  it('忽略元数据更新时间，优先使用用户发送时间；存量行才回退 updatedAt', () => {
-    expect(
-      usageActivityIso({
-        userSendAt: '2026-08-20T10:00:00.000Z',
-        updatedAt: '2026-08-22T10:00:00.000Z',
-      }),
-    ).toBe('2026-08-20T10:00:00.000Z');
-    expect(usageActivityIso({ userSendAt: null, updatedAt: '2026-08-22T10:00:00.000Z' })).toBe(
-      '2026-08-22T10:00:00.000Z',
-    );
-  });
-});

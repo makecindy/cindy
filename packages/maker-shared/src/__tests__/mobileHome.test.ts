@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildMobileHomePresentation,
+  parseHostProjectAliases,
+  remoteProjectAlias,
   type MobileHomeSessionLike,
 } from '../mobileHome.js';
 
@@ -26,6 +28,91 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('mobileHome', () => {
+  it('maps host aliases with the same Windows/worktree identity as project cards', () => {
+    const aliases = parseHostProjectAliases('pc:one', [
+      { projectKey: 'local:C:\\Repo\\App\\', alias: 'Newest' },
+      { projectKey: 'local:c:/repo/app', alias: 'Older' },
+      { projectKey: 'remote:ssh:/repo/app', alias: 'SSH only' },
+      { projectKey: 'device:another:/repo/app', alias: 'Viewer only' },
+    ]);
+    expect(remoteProjectAlias(aliases, 'pc:one', 'c:/REPO/app/.cindy-worktrees/branch')).toBe('Newest');
+    expect(remoteProjectAlias(aliases, 'pc:two', 'c:/repo/app')).toBeUndefined();
+    expect(aliases.size).toBe(1);
+    expect(() => parseHostProjectAliases('pc:one', {})).toThrow();
+  });
+  // #6916: existing grouping tests only exercised directory names. A host alias must
+  // change visible titles/search, without changing project identity (unit tier).
+  it('uses device-scoped project aliases for titles and search, and falls back after clearing', () => {
+    const sessions = ['mac-a', 'mac-b'].map((deviceLinkDeviceId) => session(deviceLinkDeviceId, {
+      deviceLinkDeviceId,
+    }));
+    const options = {
+      sessions,
+      projectAliases: new Map([['device:mac-a:/repo/app', 'Customer Portal']]),
+    };
+    const home = buildMobileHomePresentation(options);
+    expect(home.projects.map((project) => [project.key, project.title])).toEqual([
+      ['device:mac-a:/repo/app', 'Customer Portal'],
+      ['device:mac-b:/repo/app', 'app'],
+    ]);
+    expect(buildMobileHomePresentation({ ...options, searchQuery: 'customer' }).projects.map((p) => p.deviceId)).toEqual(['mac-a']);
+    expect(buildMobileHomePresentation({ ...options, projectAliases: new Map() }).projects.map((p) => p.title)).toEqual(['app', 'app']);
+  });
+
+  it('hides Cindy Make creation and merge tasks from the home presentation', () => {
+    const sessions = [
+      session('make-a', { source: 'cindy-make', workingDir: 'C:\\Cindy\\tasks\\random-a' }),
+      session('make-b', { source: 'cindy-make', workingDir: '/data/cindy/tasks/random-b' }),
+      session('merge', { source: 'cindy-make-merge', workingDir: '/data/cindy/merge/random-c' }),
+      session('no-dir', { source: 'cindy-make', workspaceKind: 'dialogue', workingDir: null }),
+      session('ordinary', { title: 'Cindy Make', workingDir: '/data/cindy/tasks/random-b' }),
+    ].map((item) => ({ ...item, deviceLinkDeviceId: 'pc', deviceLinkDeviceName: 'My PC' }));
+    const home = buildMobileHomePresentation({
+      sessions,
+      pendingInteractionIndex: new Map([['make-a', 1], ['merge', 2]]),
+    });
+
+    expect(home.chats).toEqual([]);
+    expect(home.projects).toHaveLength(1);
+    expect(home.projects[0]?.sessions.map((item) => item.session.id)).toEqual(['ordinary']);
+  });
+
+  it('hides Cindy Make projects regardless of device selection or task directory', () => {
+    const sessions = ['pc-a', 'pc-b'].map((deviceLinkDeviceId) => session(deviceLinkDeviceId, {
+      deviceLinkDeviceId,
+      source: 'cindy-make',
+    }));
+    const devices = sessions.map((item) => ({ deviceId: item.id, name: item.id }));
+    const home = buildMobileHomePresentation({ devices, sessions });
+    expect(home.projects).toEqual([]);
+
+    const selected = buildMobileHomePresentation({ devices, sessions, selectedDeviceId: 'pc-a' });
+    expect(selected.projects).toEqual([]);
+    const moved = buildMobileHomePresentation({
+      devices,
+      sessions: [{ ...sessions[0], workingDir: '/another/checkout' }],
+    });
+    expect(moved.projects).toEqual([]);
+  });
+
+  it('hides Cindy Make tasks from pinned, archived and search views', () => {
+    const sessions = [
+      session('pinned', { source: 'cindy-make', pinnedAt: '2026-01-01T00:00:00.000Z' }),
+      session('active', { source: 'cindy-make' }),
+      session('archived', { source: 'cindy-make-merge', status: 'archived' }),
+      session('deleted', { source: 'cindy-make', status: 'deleted' }),
+    ];
+    const home = buildMobileHomePresentation({ sessions });
+    expect(home.pinned).toEqual([]);
+    expect(home.projects).toEqual([]);
+    const archived = buildMobileHomePresentation({ sessions, statusFilter: 'archived' });
+    expect(archived.pinned).toEqual([]);
+    expect(archived.projects).toEqual([]);
+    const searched = buildMobileHomePresentation({ sessions, searchQuery: 'active' });
+    expect(searched.projects).toEqual([]);
+    expect(buildMobileHomePresentation({ sessions, searchQuery: 'absent' }).projects).toEqual([]);
+  });
+
   it('builds a unified home without merging same project path across devices', () => {
     const home = buildMobileHomePresentation({
       devices: [

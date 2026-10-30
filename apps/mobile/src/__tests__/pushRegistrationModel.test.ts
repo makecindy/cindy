@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPushTokenRegistrationBody,
+  notificationRecoveryRoute,
   parseNotificationDeepLink,
   parseNotificationResponseDeepLink,
   resolvePushAppVariant,
@@ -53,8 +54,32 @@ describe('parseNotificationDeepLink', () => {
     ['绝对 URL', { deepLink: 'https://evil.example/sessions/x' }],
     ['嵌入 scheme', { deepLink: '/sessions/x://evil' }],
     ['协议相对', { deepLink: '//evil.example/sessions/x' }],
+    ['群聊缺 deviceId', { deepLink: '/companions/groups/g-1' }],
+    ['群聊 deviceId 为空', { deepLink: '/companions/groups/g-1?deviceId=' }],
+    ['群聊多余参数', { deepLink: '/companions/groups/g-1?deviceId=d-1&next=/settings' }],
+    ['群聊重复 deviceId', { deepLink: '/companions/groups/g-1?deviceId=d-1&deviceId=d-2' }],
+    ['群聊多段路径', { deepLink: '/companions/groups/g-1/x?deviceId=d-1' }],
+    ['群聊片段', { deepLink: '/companions/groups/g-1?deviceId=d-1#x' }],
+    ['群聊未编码 id', { deepLink: '/companions/groups/g 1?deviceId=d-1' }],
+    ['群聊坏编码', { deepLink: '/companions/groups/%E0%A4%A?deviceId=d-1' }],
+    ['群聊控制字符', { deepLink: '/companions/groups/g%0A1?deviceId=d-1' }],
+    ['群聊嵌入 scheme', { deepLink: '/companions/groups/g-1?deviceId=https://evil' }],
+    ['群聊空 id', { deepLink: '/companions/groups/?deviceId=d-1' }],
+    ['其它伙伴路径', { deepLink: '/companions/direct/t-1?deviceId=d-1' }],
   ])('拒绝:%s', (_label, input) => {
     expect(parseNotificationDeepLink(input)).toBeNull();
+  });
+
+  it('接受分工提醒的群聊深链,并按规范编码重建', () => {
+    expect(parseNotificationDeepLink({ deepLink: '/companions/groups/g-1?deviceId=d-1' }))
+      .toBe('/companions/groups/g-1?deviceId=d-1');
+    expect(parseNotificationDeepLink({ deepLink: `/companions/groups/${encodeURIComponent('群 1')}?deviceId=${encodeURIComponent('mac:1')}` }))
+      .toBe(`/companions/groups/${encodeURIComponent('群 1')}?deviceId=${encodeURIComponent('mac:1')}`);
+  });
+
+  it('群聊深链经通知点击恢复路由后仍带着 deviceId', () => {
+    const link = parseNotificationDeepLink({ deepLink: '/companions/groups/g-1?deviceId=d-1' })!;
+    expect(notificationRecoveryRoute(link, 'id:n-1')).toBe('/companions/groups/g-1?deviceId=d-1&notificationResponse=id%3An-1');
   });
 });
 

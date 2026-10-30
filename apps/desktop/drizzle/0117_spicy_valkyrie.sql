@@ -1,0 +1,1 @@
+ALTER TABLE `bot_groups` ADD `speaking_mode` text DEFAULT 'auto' NOT NULL;

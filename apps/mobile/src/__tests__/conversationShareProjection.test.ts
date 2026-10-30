@@ -14,15 +14,22 @@ describe('projectConversationShareMessage', () => {
     expect(JSON.stringify(projected)).not.toContain('隐藏的第三行');
   });
 
-  it('保留自动化来源文案，但不暴露内部调度 ID', () => {
-    const projected = projectConversationShareMessage('automation', {
+  it('分享图不带任何消息来源：自动化、设备、插件与共享任务作者都不进投影', () => {
+    const message = {
       automationOrigin: { scheduleId: 'schedule-secret', scheduleName: '每日摘要' },
       body: '自动化消息',
-      kind: 'user',
-    }, { automationOriginLabel: '由自动化「每日摘要」发送' });
+      kind: 'user' as const,
+      sessionOrigin: { senderSessionId: 'sender-secret', senderSessionTitle: '来源任务' },
+      sourceDevice: { deviceId: 'device-secret', name: '我的 iPhone', platform: 'mobile' as const },
+      sourcePlugin: { pluginId: 'plugin-secret', name: '日报插件' },
+      sharedAuthorName: '访客甲',
+    };
+    const projected = projectConversationShareMessage('automation', message);
 
-    expect(projected?.automationOriginLabel).toBe('由自动化「每日摘要」发送');
-    expect(JSON.stringify(projected)).not.toContain('schedule-secret');
+    expect(projected).toEqual({ body: '自动化消息', clientId: 'automation', kind: 'user' });
+    for (const hidden of ['schedule-secret', '每日摘要', '来源任务', 'device-secret', '我的 iPhone', '日报插件', '访客甲']) {
+      expect(JSON.stringify(projected)).not.toContain(hidden);
+    }
   });
 
   it('把引用投影为紧凑可见 chip，并丢弃隐藏来源字段', () => {

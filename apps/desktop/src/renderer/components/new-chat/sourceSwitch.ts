@@ -16,7 +16,6 @@ import {
   categorize,
   chatEligibleSourcesForModel,
   classifyModel,
-  connectedProvidersForAgent,
   getModel,
   groupModelsForDisplay,
   groupOf,
@@ -67,6 +66,7 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   stt: 'newChat.modelSelector.category.stt',
   realtime: 'newChat.modelSelector.category.realtime',
   embedding: 'newChat.modelSelector.category.embedding',
+  decision: 'newChat.modelSelector.category.decision',
   compression: 'newChat.modelSelector.category.compression',
   other: 'newChat.modelSelector.category.other',
 };
@@ -171,6 +171,7 @@ export function resolveSourceSwitch(args: {
 export {
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,

@@ -22,13 +22,36 @@ function readSource(rel: string): string {
 const source = readSource('app/files/preview/[sessionId].tsx');
 
 describe('remote file preview pager wiring', () => {
+  it.each(['app/files/[sessionId].tsx', 'app/files/preview/[sessionId].tsx'])('cancels the in-flight export on blur and on Cancel, including the phone download and share sheet, in %s', (path) => {
+    const routeSource = readSource(path);
+    // 失焦即取消:点进下一层 / 跳会话页时本屏留在栈中不卸载。必须走与「取消」按钮同一个
+    // 会复位忙碌提示的出口,否则回到本屏时残留一个无事可取消的忙碌底栏。
+    expect(routeSource).toContain('useFocusEffect(useCallback(() => cancelExport, [cancelExport]));');
+    expect(routeSource).toMatch(/onCancel(Notice)?[=:] ?\{? ?cancelExport/);
+    // 动态加载分享模块期间可能已取消:shareAsync 前必须再查一次。
+    expect(routeSource).toMatch(/await import\('expo-sharing'\);\n\s*if \(run\.cancelled\) return;\n\s*await sharing\.shareAsync/);
+    expect(routeSource).toMatch(/run\.abort\.abort\(\);/);
+    expect(routeSource).toMatch(/downloadRemoteMediaShareTemp\(url, mime, item\.name, run\.abort\.signal\)/);
+  });
+
+  it.each(['app/files/[sessionId].tsx', 'app/files/preview/[sessionId].tsx'])('passes the route device ID into the source gate for %s', (path) => {
+    const routeSource = readSource(path).split('export default function ')[1]?.split('\n}\n')[0] ?? '';
+    expect(routeSource).toContain('const { sessionId, deviceId } = useLocalSearchParams<');
+    expect(routeSource).toContain('deviceId={readRouteString(deviceId) ?? undefined}');
+  });
+
   it('exposes source readiness only on the visible loaded text page', () => {
     const textPage = source.slice(source.indexOf('function TextPreviewPage('), source.indexOf('function ImagePreviewPage('));
     const sourceList = textPage.match(/<FlatList\s[\s\S]*?data=\{state.lines\}[\s\S]*?testID=\{visible \? 'filePreview.sourceReady' : undefined\}/);
     expect(sourceList).not.toBeNull();
-    // Loading/error pages and prefetched neighbours must not satisfy the wait.
-    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(textPage.indexOf("if (state.status === 'loading')"));
-    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(textPage.indexOf("if (state.status === 'unavailable')"));
+    // Guard protocol: Maestro file_browser.yaml / visual_files.yaml wait for sourceReady.
+    // Loading/error pages and prefetched neighbours must not satisfy that wait.
+    // Require both branches to exist: comparing a list offset with -1 silently passed.
+    const loadingBranch = textPage.indexOf("state.status === 'loading' ? (");
+    const unavailableBranch = textPage.indexOf("state.status === 'unavailable' ? (");
+    expect(loadingBranch).toBeGreaterThanOrEqual(0);
+    expect(unavailableBranch).toBeGreaterThan(loadingBranch);
+    expect(textPage.indexOf(sourceList![0])).toBeGreaterThan(unavailableBranch);
   });
 
   it('reserves horizontal gestures for the PDF WebView', () => {
@@ -37,7 +60,10 @@ describe('remote file preview pager wiring', () => {
 
   it('HTML 渲染态同样让出外层横滑,让内层 WebView 能横向平移', () => {
     // 固定宽度布局 / 放大后需要横向平移,pager 抢走手势就永远看不到超出视口的内容。
-    expect(source).toContain("scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}");
+    expect(source).toContain("scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key && markdownPagerPageKey !== current.key}");
+    const markdownReader = readSource('src/session/MarkdownFileReader.tsx');
+    expect(markdownReader).toContain('injectedJavaScript={onPageSwipe ? MARKDOWN_FILE_PAGER_SCRIPT : undefined}');
+    expect(markdownReader).toContain('onMessage={onPageSwipe ? handleMessage : undefined}');
     // 让路状态按页 key 存,不存布尔:翻页时新旧两页的上报先后顺序不能决定结果。
     expect(source).toContain('setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)))');
     // 只有真的挂着 WebView 的那种组合才要横滑(资源还在取 → 页面是 spinner → 不禁滑);
@@ -59,6 +85,63 @@ describe('remote file preview pager wiring', () => {
   it('retries a failed PDF after device recovery without remounting a loaded WebView', () => {
     expect(source).toContain('requestedAtRecoveryEpochRef.current >= recoveryEpoch');
     expect(source).toContain('setRequestEpoch((epoch) => epoch + 1)');
+  });
+
+  it('gives the audio/video player a definite height inside the preview page', () => {
+    // RemoteMediaPlayerWebView fills its wrapper with flex: 1. A width-only wrapper
+    // collapsed the player to 0 pt: media loaded, but no picture or controls to tap.
+    expect(source).toMatch(/avPlayer: \{[^}]*\bflex: 1\b[^}]*\}/);
+    expect(source).toContain('style={styles.avPlayer}');
+  });
+
+  it('pins every link of the player height chain, not just avPlayer (review P2)', () => {
+    // 上一条只看 avPlayer 自己的 flex: 1 —— 外层 avPage / 分页容器一旦失去高度约束,
+    // 用例照样绿,播放器又会塌成 0(review P2)。高度链每一环都要钉住:
+    // 1) 分页 cell 只定宽,高度靠横向 FlatList 的行向拉伸(默认 alignItems: stretch
+    //    把 cell 拉到 pager 高度)+ RN ScrollView 的隐式 flexGrow 填满 safeArea;
+    //    cell 改成按内容收高即破。
+    expect(source).toContain('<View style={{ width: pageWidth }}>');
+    // 2) avPlayer 的父级 avPage 以 flex: 1 占满 cell。
+    expect(source).toMatch(/avPage: \{[^}]*\bflex: 1\b[^}]*\}/);
+    // 3) 预览屏根容器把高度传给 pager。
+    expect(source).toMatch(/safeArea: \{[^}]*\bflex: 1\b[^}]*\}/);
+    // 4) 链条最里层:WebView 以 flex: 1 填满 RemoteMediaPlayerWebView 的样式外层。
+    const playerSource = readSource('src/session/mediaPlayerWebView.tsx');
+    expect(playerSource).toContain("style={{ backgroundColor: 'transparent', flex: 1 }}");
+  });
+
+  it('pauses the audio/video player when its preview page becomes inactive', () => {
+    // pager 用 windowSize={3} 保留相邻页,相邻页的 active 仍为 true —— 可见性(visible
+    // = screenFocused && 当前页)必须一路传进播放器,翻页失活时暂停,否则上一页的
+    // 媒体在后台继续播(review P1)。
+    const filePage = source.slice(source.indexOf('function FilePreviewPage('), source.indexOf('function AvPreviewPage('));
+    expect(filePage).toMatch(/<AvPreviewPage[^>]*visible=\{visible\}[^>]*\/>/);
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toMatch(/<RemoteMediaPlayerWebView[^>]*visible=\{visible\}[^>]*\/>/);
+    expect(avPage).toMatch(/<NativeVideoPlayer[^>]*visible=\{visible\}[^>]*\/>/);
+    // 判定落在纯生命周期模块(行为级用例在 mediaPlayerWebView.test.ts),载体只发 pause。
+    const playerSource = readSource('src/session/mediaPlayerWebView.tsx');
+    expect(playerSource).toContain('if (lifecycleRef.current.onVisibilityChange(visible)) pausePlayback();');
+    const nativeSource = readSource('src/session/NativeVideoPlayer.tsx');
+    expect(nativeSource).toContain('if (lifecycleRef.current.onVisibilityChange(visible)) player.pause();');
+  });
+
+  it('plays video with the system player and keeps it filling the page', () => {
+    // 视频走系统原生播放器(控件、全屏、旋转都由系统负责);data: 地址与原生播放器
+    // 报错的格式(iOS 上的 WebM)退回 WebView 播放器,原来能播的文件不能退化。
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toContain("if (kind === 'video' && !nativeFailed && !url.startsWith('data:')) {");
+    expect(avPage).toContain('onError={handleNativePlaybackError}');
+    expect(avPage).toContain('setNativeFailed(true);');
+    const nativeSource = readSource('src/session/NativeVideoPlayer.tsx');
+    expect(nativeSource).toMatch(/stage: \{[^}]*\bflex: 1\b[^}]*\}/);
+    expect(nativeSource).toContain('nativeControls');
+  });
+
+  it('shows real upload progress while the computer stages audio/video', () => {
+    const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
+    expect(avPage).toContain('if (!cancelled) setProgress(measure(uploaded, total));');
+    expect(avPage).toContain('formatTransferProgress(progress)');
   });
 });
 
@@ -154,12 +237,15 @@ describe('HTML 生成物的渲染态接线', () => {
     expect(source).toContain('testID="filePreview.htmlError"');
     expect(source).toContain("t('files.preview.htmlSnapshotTooLarge')");
     expect(source).toContain('onPress: htmlSnapshot.retry');
-    expect(source).toContain('!htmlSnapshot.preview || !htmlSnapshot.foreground');
+    // The viewport now mounts during preparation; executable content remains gated
+    // inside the reader until a current, guarded snapshot exists.
+    expect(readSource('src/session/HtmlFileReader.tsx')).toContain('{preview ? <WebView');
+    expect(readSource('src/session/useHtmlSnapshot.ts')).toContain('const current = enabled && foreground');
   });
 
   it('downloads stop on source mode, invisibility, background, and source identity changes', () => {
     const hook = readSource('src/session/useHtmlSnapshot.ts');
-    expect(hook).toContain('if (!enabled || !foreground) return');
+    expect(hook).toContain('if (!enabled || !foreground) {');
     expect(hook).toContain('controller.abort()');
     expect(hook).toContain('preview?.close()');
     expect(hook).toContain('[absPath, enabled, foreground, prepare, epoch]');
@@ -252,5 +338,19 @@ describe('导航门:只放行同文档锚点与首份文档加载(review P1)', (
     expect(source_reader).toContain('documentSettledRef.current = false');
     // 不得退回用长度当 key 的弱判据。
     expect(source_reader).not.toContain('key={guardedHtml.length}');
+  });
+
+  it('opens HTML straight into the pending browser chrome instead of the classic header', () => {
+    const pending = source.slice(source.indexOf('if (!current || !siblings) {'), source.indexOf("const htmlBrowser = richTextKindOf(current.relPath) === 'html';"));
+    const shell = pending.slice(pending.indexOf("if (richTextKindOf(pendingPath) === 'html')"), pending.indexOf('<PreviewNav'));
+    expect(shell).toContain('<HtmlBrowserChrome');
+    expect(shell).toMatch(/\bpending\b\s*\n\s*loading=\{!error\}/);
+    for (const chrome of ['src/session/HtmlBrowserChrome.ios.tsx', 'src/session/HtmlBrowserChrome.tsx']) {
+      const text = readSource(chrome);
+      const edit = text.slice(text.lastIndexOf('<', text.indexOf('testID="filePreview.browser.editAddress"')), text.indexOf('testID="filePreview.browser.editAddress"') + 200);
+      expect(edit, chrome).toMatch(/disabled(\(p\.pending === true\)|=\{p\.pending\})/);
+      const more = text.slice(text.indexOf('"filePreview.browser.more"') - 200, text.indexOf('"filePreview.browser.more"') + 200);
+      expect(more, chrome).toMatch(/p\.pending/);
+    }
   });
 });

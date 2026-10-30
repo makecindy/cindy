@@ -14,6 +14,8 @@ export interface FireContext {
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */
   canDispatch?: () => boolean;
+  /** Bound pre-run hooks must execute in the directory shown in the approval card. */
+  expectedPreRunWorkingDir?: string;
   /**
    * 由 Scheduler 创建并 own 的 AbortSignal。当用户在 UI 上 delete/pause 这条 schedule 时,
    * Scheduler 会对所有 in-flight 的 runner.fire() 触发 abort。
@@ -137,11 +139,11 @@ export interface FireResult {
    */
   deferRetryMs?: number;
   /**
-   * true = 本轮被前置检查脚本(preRunHook exit 2)拦截跳过:runner 未启动 agent、
-   * 未消耗 token。engine 据此:把预插的 running run 改成 status='skipped'(带
+   * true = 本轮被前置检查脚本(preRunHook exit 2)拦截，或发送到模型前被用户停止：
+   * 未消耗模型 token。engine 据此:把预插的 running run 改成 status='skipped'(带
    * readAt,生而已读、不通知不亮红点)、emit 'skipped' 事件,并**照常**按 recurring
    * 语义重排下一次触发(与 deferred 的短延重试不同——跳过就是这一轮的最终结果)。
-   * sessionId 在跳过时为空串：本轮不创建或更新会话，跳过原因通过 resultText 保存。
+   * preRunHook 跳过时 sessionId 为空串；派发前停止时可保留已创建的会话 ID。
    * resultText 可携带跳过原因摘要(脚本 stdout),落进 run 记录供历史回顾。
    */
   skipped?: boolean;

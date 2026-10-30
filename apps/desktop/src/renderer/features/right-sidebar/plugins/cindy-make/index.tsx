@@ -36,6 +36,7 @@ const plugin: TabKindPlugin<CindyMakeState> = {
     icon: Wrench,
     order: 12,
     enabled: true,
+    hiddenFromMenu: true,
     singleton: true,
   },
   TabPillTitle: CindyMakeTabPillTitle,

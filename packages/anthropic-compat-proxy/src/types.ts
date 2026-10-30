@@ -65,6 +65,8 @@ export type LocalRequestHandler = (args: {
  * 与 RequestTransform 职责分离:RequestTransform 改 body,RoutingTransform 只读、决定路由。
  */
 export interface RoutingDecision {
+  /** Trusted host-selected, versioned stream behavior (never a request header). */
+  compatibilityProfiles?: readonly string[];
   /** 覆盖本次请求的上游 URL(完整 `http(s)://host[:port][/basePath]`);省略 = 用默认 `opts.upstream`。 */
   upstreamOverride?: string;
   /**
@@ -102,6 +104,16 @@ export interface RoutingDecision {
    * classifications and an HTTP status after the real upstream request starts.
    */
   forwardLifecycle?: ForwardLifecycleObserver;
+  /**
+   * Optional body rewrite bound to this route, including opaque multipart requests.
+   * Runs after the JSON transform chain (even when that chain is bypassed). A rejection
+   * fails the request locally; dispatch-generation and body-size checks still apply.
+   * contentType must describe the returned bytes, including any new multipart boundary.
+   */
+  transformRequestBody?: (
+    body: Buffer,
+    ctx: RequestTransformCtx,
+  ) => { body: Buffer; contentType?: string } | Promise<{ body: Buffer; contentType?: string }>;
 }
 
 /**
@@ -217,7 +229,8 @@ export interface ProxyOptions {
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {
-    transformBody: (body: Buffer) => Buffer;
+    // Egress receives the resolved route; ingress has no upstream yet.
+    transformBody: (body: Buffer, ctx?: RequestTransformCtx) => Buffer;
     response: (headers: Readonly<Record<string, number | string | string[] | undefined>>) => Transform;
   } | null;
   /** Optional message enforcement. Requires uncompressed RFC6455 negotiation. */
@@ -340,6 +353,25 @@ export interface ProxyOptions {
     readonly url: string;
     readonly headers: Readonly<Record<string, string>>;
   }) => string | null;
+  /** Optional host authentication immediately before opening an upstream socket.
+   * Replaces outbound headers, preserving only host-approved handshake metadata.
+   * The signal revokes pending and established connections with the owning runtime.
+   * authorize rechecks mutable route ownership before forwarding each outbound chunk,
+   * without decoding frames or changing compression negotiation.
+   * Omitted by existing callers, whose forwarding remains unchanged.
+   */
+  prepareWebSocketRequest?: (ctx: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => Promise<{
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    authorize?: () => boolean;
+    /** Observe a complete, bounded HTTP upgrade refusal without consuming its body. */
+    onUpgradeFailure?: (status: number, body: string) => Promise<void>;
+    /** Connection-bound message guards; requires webSocketTransforms (uncompressed negotiation). */
+    transforms?: () => { outbound: Transform; inbound: Transform };
+  }>;
   /**
    * 对带稳定 thread id、且此前已真实完成过上游 101 的 WebSocket 重连启用 Cindy 侧保活。
    * proxy 会先用已证明一致的协商参数接住该条客户端 socket，再以有界退避回探上游；只要

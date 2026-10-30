@@ -415,7 +415,7 @@ export class GhostAgentSlot {
     if (code.startsWith('FORK_') || code === 'SOURCE_NEVER_RAN' || code === 'NO_PRIOR_ASSISTANT') {
       return { ok: false, errorCode: 'FORK_FAILED', message: result.message };
     }
-    if (code === 'ARCHIVED' || code === 'DELETED' || code === 'BUSY') {
+    if (code === 'MODEL_UNAVAILABLE' || code === 'ARCHIVED' || code === 'DELETED' || code === 'BUSY') {
       return { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: result.message };
     }
     return { ok: false, errorCode: 'INTERNAL', message: result.message };

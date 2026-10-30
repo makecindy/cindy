@@ -9,12 +9,6 @@
   filter: invert(1);
 }
 
-/**
- * Shared Plugin / Skill catalog chrome. Catalog pages have no enter-rise
- * animation; selection and overflow still ease.
- * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
- */
-
 /* Keep disclosure content mounted so collapse can ease out instead of jumping. */
 .plugin-installed-overflow {
   display: grid;
@@ -97,9 +91,26 @@
   }
 }
 
-@container plugin-detail (max-width: 420px) {
+@container plugin-detail (max-width: 520px) {
+  .plugin-detail-frame .plugin-detail-heading {
+    display: contents;
+  }
+
+  .plugin-detail-frame .plugin-detail-heading > h1 {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
   .plugin-detail-frame .plugin-detail-metadata {
-    display: none;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin-top: 0;
   }
 }
 
@@ -117,6 +128,28 @@
   }
 }
 
+@container plugin-detail (min-width: 680px) {
+  .plugin-detail-frame .plugin-detail-hero {
+    grid-template-columns: 64px minmax(160px, 1fr) auto;
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    /* Keep a readable title even when update/result actions wrap on the right. */
+    max-width: calc(100cqi - 64px - 160px - 2.5rem);
+    justify-content: flex-end;
+  }
+}
+
+@container plugin-detail (width < 680px) {
+  .plugin-detail-frame .plugin-detail-hero {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .plugin-detail-frame .plugin-detail-actions {
+    grid-column: 1 / -1;
+  }
+}
+
 @container plugin-management-content (max-width: 720px) {
   .plugin-installed-card-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -129,8 +162,6 @@
   }
 
   .plugin-catalog-filters {
-    flex-wrap: wrap;
-    justify-content: flex-start;
     width: auto;
   }
 }
@@ -158,8 +189,8 @@
   }
 
   .plugin-management-layout-root .plugin-management-tab {
-    min-width: 0;
-    flex: 1 1 0%;
+    min-width: max-content;
+    flex: 1 0 auto;
   }
 
   .plugin-management-layout-root .plugin-management-tools {
@@ -182,6 +213,51 @@
   .plugin-management-layout-root
     :is(.plugin-management-action-label, .plugin-management-action-chevron) {
     display: none;
+  }
+}
+
+.my-plugins-columns,
+.my-plugins-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6rem 6rem 9rem 5rem;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.my-plugins-mobile-label {
+  display: none;
+}
+
+@container plugin-management-content (max-width: 600px) {
+  .my-plugins-columns {
+    display: none;
+  }
+
+  .my-plugins-row {
+    grid-template-columns: minmax(0, 1fr) 5rem;
+    gap: 0.5rem;
+  }
+
+  .my-plugins-identity {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .my-plugins-chevron {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .my-plugins-local,
+  .my-plugins-market,
+  .my-plugins-latest {
+    grid-column: 1 / -1;
+    margin-inline-start: 3.75rem;
+  }
+
+  .my-plugins-mobile-label {
+    display: inline;
+    color: var(--text-tertiary);
   }
 }
 

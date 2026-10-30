@@ -18,8 +18,7 @@ const source = readSourceNormalized('../bootstrap-electron.ts');
 
 /**
  * The quit hook is Electron wiring in a module that cannot be imported under
- * test, so the wiring itself is asserted on the source — same approach as
- * `updateServiceIOSSimulatorExit.test.ts`.
+ * test, so the wiring itself is asserted on the source.
  *
  * What is being protected is not a style rule: without the escalation the sweep
  * only *asks* runners to stop, logs one line when they do not, and lets the app

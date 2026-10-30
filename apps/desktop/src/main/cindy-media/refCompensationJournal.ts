@@ -135,8 +135,7 @@ async function assertSafeJournalDirectory(journalDir: string): Promise<void> {
 }
 
 async function syncDirectory(journalDir: string): Promise<void> {
-  // Windows does not support opening directories for fsync. The simulator
-  // producer is macOS-only, while other guarded media paths remain portable.
+  // Windows does not support opening directories for fsync.
   if (process.platform === 'win32') return;
   const directory = await open(journalDir, 'r');
   try {

@@ -2,14 +2,22 @@ import { createFilePeerRuntime } from '@cindy/device-link';
 import type { FilePeerHostApi } from '../shared/filePeer';
 
 export function startFilePeerHost(api: FilePeerHostApi) {
-  const runtime = createFilePeerRuntime(api);
+  const runtime = createFilePeerRuntime({ ...api, writeBatch: api.write,
+    closed: (connection, reason) => { void api.closed(connection, reason).catch(() => {}); },
+  });
   const off = api.onCommand((id, c) => {
     void (async () => {
       try {
         let result: string | undefined;
         switch (c.action) {
           case 'offer':
-            result = await runtime.offer(c.connection, c.servers);
+            result = await runtime.offer(c.connection, c.servers, c.streaming);
+            break;
+          case 'stats':
+            result = await runtime.stats(c.connection);
+            break;
+          case 'invoke':
+            result = await runtime.invoke(c.connection, c.payload, c.timeoutMs, c.body);
             break;
           case 'accept':
             result = await runtime.accept(c.connection, c.servers, c.sdp);

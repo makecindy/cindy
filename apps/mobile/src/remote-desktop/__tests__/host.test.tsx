@@ -130,6 +130,27 @@ describe.each([false, true])(
       expect(host.querySelector('[data-pointer-events="auto"]')).not.toBeNull();
       expect(fixture.resetRoot).not.toHaveBeenCalled();
     });
+    it("opens a 代输入 window view as its own viewer and restores it as the same view", () => {
+      const windowView = {
+        key: "desktop-w",
+        name: REMOTE_DESKTOP_ROUTE,
+        params: { deviceId: "computer", deviceName: "Computer", handoff: "req1" },
+      };
+      fixture.state = stack(home, windowView);
+      render();
+      expect(fixture.props.handoff).toBe("req1");
+      // The whole-desktop viewer of the same computer is replaced, not reused.
+      expect(fixture.stopped).toHaveBeenCalledOnce();
+      expect(fixture.mounted).toHaveBeenCalledTimes(2);
+      act(() => fixture.props.onBack());
+      render();
+      fixture.props.onRestore();
+      expect(fixture.push).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { deviceId: "computer", deviceName: "Computer", handoff: "req1" },
+        }),
+      );
+    });
     it("retains one mounted viewer across back and fullscreen restoration", () => {
       act(() => fixture.props.onBack());
       render();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { LoaderCircle, Monitor, MonitorOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SIDEBAR_RAIL_ICON_BUTTON_CLASS } from '@/components/sidebar/SidebarIconButton';
@@ -7,9 +7,26 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useRemoteDesktopAvailability } from '@/features/remote-desktop/useRemoteDesktopAvailability';
 
-function RemoteDesktopShortcut({ deviceId, name }: { deviceId: string; name: string }) {
+function RemoteDesktopShortcut({
+  deviceId,
+  name,
+  revealRef,
+}: {
+  deviceId: string;
+  name: string;
+  revealRef: MutableRefObject<(() => void) | null>;
+}) {
   const { t } = useTranslation();
   const availability = useRemoteDesktopAvailability(deviceId);
+  // The shortcut is only visible while its row is hovered or focused, so an
+  // interrupted check is repeated exactly when the user is about to read it.
+  const { retryable, retry } = availability;
+  useEffect(() => {
+    revealRef.current = retryable ? retry : null;
+    return () => {
+      revealRef.current = null;
+    };
+  }, [revealRef, retryable, retry]);
   const [opening, setOpening] = useState(false);
   const openingRef = useRef(false);
   const generation = useRef(0);
@@ -50,7 +67,7 @@ function RemoteDesktopShortcut({ deviceId, name }: { deviceId: string; name: str
           aria-busy={busy || undefined}
           className={cn(
             SIDEBAR_RAIL_ICON_BUTTON_CLASS,
-            'h-6 w-6 aria-disabled:opacity-50 aria-disabled:hover:bg-transparent',
+            'h-6 w-6 aria-disabled:opacity-50 aria-disabled:hover:[--button-face-bg:transparent] aria-disabled:active:[--button-face-bg:transparent]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             !availability.available && 'opacity-50',
             busy && 'motion-safe:[&_svg]:animate-spin',
@@ -95,10 +112,16 @@ export function DeviceSectionHeader({
   name: string;
   children: ReactNode;
 }) {
+  const revealRef = useRef<(() => void) | null>(null);
+  const reveal = () => revealRef.current?.();
   return (
-    <div className="group/device-header flex min-w-0 items-center gap-1">
+    <div
+      className="group/device-header flex min-w-0 items-center gap-1"
+      onMouseEnter={reveal}
+      onFocus={reveal}
+    >
       {children}
-      {deviceId && <RemoteDesktopShortcut deviceId={deviceId} name={name} />}
+      {deviceId && <RemoteDesktopShortcut deviceId={deviceId} name={name} revealRef={revealRef} />}
     </div>
   );
 }

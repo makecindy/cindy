@@ -13,9 +13,20 @@ const transport = vi.hoisted(() => ({
   originListeners: new Set<() => void>(),
   updates: new Map<string, (payload: TurnChangeSetUpdatedPayload) => void>(),
   list: vi.fn(),
+  remoteList: vi.fn(),
+  connected: true,
+}));
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (id: string) => transport.remote.has(id) ? 'device' : undefined,
+}));
+vi.mock('@/lib/gitReviewTransport', () => ({
+  turnChangeReadApiFor: (deviceId?: string) => ({
+    listTurnChangeSets: deviceId ? transport.remoteList : transport.list,
+  }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: {
+    getDeviceList: () => [{ deviceId: 'device', connected: transport.connected }],
     subscribe: (listener: () => void) => {
       transport.originListeners.add(listener);
       return () => transport.originListeners.delete(listener);
@@ -64,7 +75,9 @@ let ownerNumber = 0;
 beforeEach(() => {
   setDataOwnerGeneration(`owner-${++ownerNumber}`);
   transport.remote.clear();
+  transport.connected = true;
   transport.list.mockReset().mockResolvedValue([]);
+  transport.remoteList.mockReset().mockResolvedValue([]);
   vi.stubGlobal('electronAPI', undefined);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -194,10 +207,64 @@ describe('turn change card cache', () => {
     });
     await act(async () => request.resolve([summary()]));
     expect(view.result.current).toEqual([]);
-    expect(transport.updates.has('a')).toBe(false);
+    expect(transport.updates.has('a')).toBe(true);
+    expect(transport.remoteList).toHaveBeenCalledWith('a');
     const ssh = renderHook(() => useTurnChangeSets('ssh', 'host'));
     expect(ssh.result.current).toEqual([]);
     expect(transport.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads remote history, preserves a newer remote push, and never reads local records', async () => {
+    transport.remote.add('a');
+    const request = deferred();
+    transport.remoteList.mockReturnValueOnce(request.promise);
+    const view = renderHook(() => useTurnChangeSets('a', null));
+    act(() => transport.updates.get('a')?.({ sessionId: 'a', summary: summary('change', 9) }));
+    await act(async () => request.resolve([summary()]));
+    expect(view.result.current[0]?.additions).toBe(9);
+    expect(transport.list).not.toHaveBeenCalled();
+  });
+
+  it('refreshes on reconnect without falling back to local reads while disconnected', async () => {
+    transport.remote.add('a');
+    transport.remoteList.mockResolvedValueOnce([summary()]);
+    const view = renderHook(() => useTurnChangeSets('a', null));
+    await act(async () => {});
+    act(() => {
+      transport.connected = false;
+      for (const notify of transport.originListeners) notify();
+    });
+    expect(view.result.current).toEqual([summary()]);
+    transport.remoteList.mockResolvedValueOnce([summary('change', 12)]);
+    act(() => {
+      transport.connected = true;
+      for (const notify of transport.originListeners) notify();
+    });
+    await act(async () => {});
+    expect(view.result.current[0]?.additions).toBe(12);
+    expect(transport.remoteList).toHaveBeenCalledTimes(2);
+    expect(transport.list).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])('replaces pending reads across reconnect with %i mounted panes', async (panes) => {
+    transport.remote.add('a');
+    const old = deferred(), fresh = deferred();
+    transport.remoteList.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+    const views = Array.from({ length: panes }, () => renderHook(() => useTurnChangeSets('a', null)));
+    // Each root can observe the connection transition separately while another
+    // pane still holds a subscription to the same cached entry.
+    transport.connected = false;
+    for (const notify of [...transport.originListeners]) act(() => notify());
+    transport.connected = true;
+    for (const notify of [...transport.originListeners]) act(() => notify());
+    expect(transport.remoteList).toHaveBeenCalledTimes(2);
+    await act(async () => old.resolve([summary()]));
+    expect(views[0].result.current).toEqual([]);
+    const updated = { ...summary(), workspaceState: 'undone' as const };
+    act(() => transport.updates.get('a')?.({ sessionId: 'a', summary: updated }));
+    await act(async () => fresh.resolve([summary()]));
+    for (const view of views) expect(view.result.current).toEqual([updated]);
+    expect(transport.list).not.toHaveBeenCalled();
   });
 
   it('keeps cached cards on refresh failure and shares live state across split panes', async () => {

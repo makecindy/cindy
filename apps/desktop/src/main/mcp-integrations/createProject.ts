@@ -48,7 +48,7 @@ export async function withLocalProjectContext<T extends object>(
   };
   try {
     const [caller] = await client.drizzle
-      .select({ id: sessions.id, remoteHostId: sessions.remoteHostId, source: sessions.source })
+      .select({ id: sessions.id, remoteHostId: sessions.remoteHostId })
       .from(sessions)
       .where(eq(sessions.id, callerSessionId))
       .limit(1);
@@ -60,16 +60,16 @@ export async function withLocalProjectContext<T extends object>(
         'UNSUPPORTED_CAPABILITY',
         'Project registration only supports local Cindy tasks.',
       );
-    const [botLink] = await client.drizzle
+    // Account-generation checkpoint. Bot callers may manage projects; the
+    // helper surface names the five project tools and keeps the rest of
+    // control/history closed. This read must stay so an account switch during
+    // the lookup still fails closed.
+    await client.drizzle
       .select({ botId: botSessionLinks.botId })
       .from(botSessionLinks)
       .where(eq(botSessionLinks.sessionId, callerSessionId))
       .limit(1);
     assertCurrent();
-    // Legacy Bot tasks can have only one ownership signal. All five project
-    // callbacks enforce this even when the helper surface classified them as default.
-    if (caller.source === 'bot' || botLink)
-      return fail('UNSUPPORTED_CAPABILITY', 'Bot tasks cannot manage account projects.');
     const result = await run({ client, owner, assertCurrent });
     assertCurrent();
     return result;

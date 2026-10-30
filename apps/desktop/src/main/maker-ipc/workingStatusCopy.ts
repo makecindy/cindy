@@ -1,7 +1,7 @@
 import { hasPublicWorkingSubject, type WorkingPhase } from '../../shared/workingStatus.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 
-const ACTIONS: Record<WorkingPhase, string> = {
+const ACTIONS: Record<Exclude<WorkingPhase, 'compacting'>, string> = {
   thinking: 'Reasoning is active. The subject is unknown.',
   replying: 'Writing the reply. Its content is unknown.',
   processing: 'Work is still in progress. The specific action is unknown.',
@@ -38,7 +38,7 @@ export const WORKING_STATUS_COPY_INSTRUCTIONS = [
 ].join('\n');
 
 export function workingStatusPrompt(phase: WorkingPhase, locale: string, previous: string | null): string {
-  return JSON.stringify({ language: locale, execution: ACTIONS[phase], previousCaption: previous });
+  return JSON.stringify({ language: locale, execution: phase === 'compacting' ? undefined : ACTIONS[phase], previousCaption: previous });
 }
 
 export function validateWorkingStatusCopy(raw: string, phase?: WorkingPhase): string | null {

@@ -1,13 +1,16 @@
 /** Desktop item projection for the shared work-run grouping algorithm. No UI side effects. */
+import { isContinuationMessage } from '@cindy/maker-shared/synthetic-trigger';
 import {
   deriveAgentTaskStatus,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
+  type AgentTaskStatus,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import {
   groupWorkRuns as groupSharedWorkRuns,
   isDeliveryProseText,
+  isSteerUserRow,
 } from '@cindy/maker-shared/message-render';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
@@ -51,6 +54,8 @@ export type AgentTaskRenderItem = {
   update?: AgentTaskUpdate;
   result?: string;
   persistedStatus?: AgentTaskTerminalStatus;
+  /** Host `subagent_runs` status for this call (local tasks); see deriveAgentTaskStatus. */
+  durableStatus?: AgentTaskStatus;
   /** 对应 tool_result 的 createdAt(ms)。历史会话没有 live taskUpdates 时,item 的结束
    *  时间只能靠它 —— 否则跑了半小时以上的 Agent/Task 会让紧随其后的最终答复被空洞守卫
    *  误判(#676 review)。与 tool_segment 的 resultTsMap 同源。 */
@@ -154,6 +159,7 @@ export type RenderItem =
   | WorkGroupRenderItem;
 
 export function isCompletedAssistantMessage(message: ChatMessage): boolean {
+  if (message.failedSamplingAttempt) return false;
   return (
     message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
@@ -165,8 +171,8 @@ export function isCompletedAssistantMessage(message: ChatMessage): boolean {
 }
 
 /** 完成态 work_group 可合并的子项:tool_segment / agent_task / thinking /
- *  assistant 工作文字。运行态只通过 isWorkActivityItem 收动作,所以不会提前
- *  折叠正在输出的 assistant 文字。 */
+ *  assistant 工作文字。正常流式正文不会提前折叠;已证实失败的采样输出
+ *  复用活动折叠,无需等待成功答复出现。 */
 function isWorkChild(it: RenderItem): it is WorkChildItem {
   return (
     it.type === 'tool_segment' ||
@@ -188,6 +194,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
   if (it.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(it.update?.status, it.result, {
     persistedStatus: it.persistedStatus,
+    durableStatus: it.durableStatus,
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
         undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
@@ -205,8 +212,8 @@ function isWorkflowTaskItem(it: RenderItem): boolean {
   );
 }
 
-/** preview 中计为一条真实活动的 render item。assistant 进度文字
- *  始终留在主消息流,不占最近 5 条活动窗口。 */
+/** Normal assistant progress stays in the main stream. SDK-proven failed
+ * sampling output uses the existing work fold even before a retry succeeds. */
 function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   return (
     !isRunningAgentTask(it) &&
@@ -214,7 +221,8 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
     !isWorkflowTaskItem(it) &&
     (it.type === 'tool_segment' ||
       it.type === 'agent_task' ||
-      (it.type === 'message' && it.message.role === 'thinking'))
+      (it.type === 'message' && (it.message.role === 'thinking' ||
+        (it.message.role === 'assistant' && it.message.failedSamplingAttempt === true))))
   );
 }
 
@@ -227,15 +235,17 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
  * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
  * 外面只剩 110 字的「已触发通知」)。
  *
- * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
- * 提供,两端不各写一份。
+ * 正文判据(长度 / 块级 markdown 结构 / 内嵌图片)由 maker-shared 的 isDeliveryProseText
+ * 单一提供,两端不各写一份;桌面消息另带 images / files 附件,附件本身就是交付成果。
  */
 function isDeliveryProseItem(it: RenderItem): boolean {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
+    !it.message.failedSamplingAttempt &&
     !it.message.systemCardType &&
-    isDeliveryProseText(it.message.content)
+    (Boolean(it.message.images?.length || it.message.files?.length) ||
+      isDeliveryProseText(it.message.content))
   );
 }
 
@@ -244,6 +254,7 @@ function isAssistantAnswerCandidate(it: RenderItem): it is MessageRenderItem {
   return (
     it.type === 'message' &&
     it.message.role === 'assistant' &&
+    !it.message.failedSamplingAttempt &&
     !it.message.systemCardType &&
     it.message.content.trim().length > 0
   );
@@ -481,7 +492,7 @@ function createCompletedWorkGroup(
   prevBoundaryTs: number | null = null,
 ): WorkGroupRenderItem {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.role === 'assistant',
+    (item) => item.type === 'message' && item.message.role === 'assistant' && !item.message.failedSamplingAttempt,
   );
   if (!hasAssistantText) return createWorkGroup(run, nextItem, false, prevBoundaryTs);
 
@@ -517,8 +528,10 @@ function createCompletedWorkGroup(
 /** Keep desktop card shapes and stable keys while sharing turn, gap and answer boundaries. */
 export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean): RenderItem[] {
   return groupSharedWorkRuns<RenderItem, WorkChildItem>(items, isSessionStreaming, {
-    isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user',
+    isUserBoundary: (item) => item.type === 'message' && item.message.role === 'user' && !isSteerUserRow(item.message),
+    isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message),
     isAnswer: isAssistantAnswerCandidate,
+    canPrependToAnswer: (item) => item.type !== 'message' || item.message.assistantPhase !== 'commentary',
     isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
     isCompactBoundary: isCompactBoundaryItem,
     isActivity: isWorkActivityItem,

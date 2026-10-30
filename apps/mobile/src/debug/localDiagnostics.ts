@@ -12,6 +12,7 @@ import {
 } from "./mobileDebugFiles";
 import { getMobileMarkdownRenderMetrics } from "../session/mobileMarkdownRenderMetrics";
 import { getMobileMessageWebViewMetrics } from "../session/mobileMessageWebViewMetrics";
+import { setJankMetricsEnabled, takeJankMetrics } from "./jankMetrics";
 import {
   MAX_DIAGNOSTIC_EVENTS,
   projectDiagnostic,
@@ -36,6 +37,8 @@ let debugBatch = "";
 let debugBytes = 0;
 let dropped = 0;
 const MAX_PENDING_BYTES = 512 * 1024;
+/** About every 30 s on the 2 s probe, plus immediately after any stall. */
+const JANK_METRICS_EVERY_TICKS = 15;
 
 function updateDebugSink(): void {
   setMobileDebugSink(
@@ -237,6 +240,10 @@ export function startLocalDiagnostics(): () => void {
   let stopped = false;
   let state = AppState.currentState;
   let lastTick = performance.now();
+  let lastWallTick = Date.now();
+  let lifecycleAt = lastTick;
+  let lastRenderSnapshot: string | undefined;
+  let lastRenderAt = -Infinity;
   void hydrateDiagnostics().then(() => {
     if (!stopped)
       mobileDebugLog("info", "lifecycle", "app started", { appState: state });
@@ -245,30 +252,59 @@ export function startLocalDiagnostics(): () => void {
     if (next === "active") prune();
     state = next;
     lastTick = performance.now();
+    lastWallTick = Date.now();
+    lifecycleAt = lastTick;
+    lastRenderSnapshot = undefined;
     mobileDebugLog("info", "lifecycle", `app ${next}`);
     void flushDiagnostics().catch(() => {});
   });
   let timer: ReturnType<typeof setInterval> | undefined;
+  let ticksSinceJankMetrics = 0;
   const tick = () => {
     const now = performance.now();
-    if (state === "active" && now - lastTick > 3000)
+    const stalled = state === "active" && now - lastTick > 3000;
+    if (stalled)
       mobileDebugLog("warn", "lifecycle", "js stall", {
         elapsedMs: now - lastTick - 2000,
+        // A timer gap alone cannot distinguish busy JS from process suspension.
+        wallElapsedMs: Math.max(0, Date.now() - lastWallTick - 2000),
+        lifecycleElapsedMs: Math.max(0, now - lifecycleAt),
       });
     lastTick = now;
-    if (enabled)
-      mobileDebugLog("debug", "performance", "render metrics", {
+    lastWallTick = Date.now();
+    if (enabled) {
+      const metrics = {
         markdown: getMobileMarkdownRenderMetrics(),
         webViews: getMobileMessageWebViewMetrics(),
-      });
+      };
+      const snapshot = JSON.stringify(metrics);
+      if (stalled || snapshot !== lastRenderSnapshot || now - lastRenderAt >= 30_000) {
+        mobileDebugLog("debug", "performance", "render metrics", metrics);
+        lastRenderSnapshot = snapshot;
+        lastRenderAt = now;
+      }
+    }
+    // Counters cover the interval since the previous line, so a line written
+    // right after a stall attributes the work that ran during it.
+    ticksSinceJankMetrics += 1;
+    if (
+      enabled &&
+      (stalled || ticksSinceJankMetrics >= JANK_METRICS_EVERY_TICKS)
+    ) {
+      ticksSinceJankMetrics = 0;
+      mobileDebugLog("debug", "performance", "jank metrics", takeJankMetrics());
+    }
     void flushDiagnostics().catch(() => {});
   };
   const syncProbe = () => {
+    setJankMetricsEnabled(enabled && !stopped);
     if (!enabled || stopped) {
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
     } else if (timer === undefined) {
       lastTick = performance.now();
+      lastWallTick = Date.now();
+      lastRenderSnapshot = undefined;
       timer = setInterval(tick, 2000);
     }
   };

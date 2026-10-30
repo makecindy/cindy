@@ -18,6 +18,26 @@ async function flush(): Promise<void> {
 }
 
 describe('PeerRecoveryScheduler', () => {
+  it('lets a recovery request wake a peer before its old retry deadline', async () => {
+    vi.useFakeTimers();
+    const run = vi.fn(async () => ({ retry: true }));
+    const scheduler = new PeerRecoveryScheduler(run);
+    try {
+      scheduler.request('a');
+      await flush();
+      expect(scheduler.getSnapshot('a').phase).toBe('waiting-retry');
+      run.mockResolvedValue({ retry: false });
+      scheduler.request('a');
+      await flush();
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(scheduler.getSnapshot('a').phase).toBe('idle');
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      scheduler.clear();
+      vi.useRealTimers();
+    }
+  });
   it('publishes stable active snapshots across queue, retry, completion and cancellation', async () => {
     vi.useFakeTimers();
     try {

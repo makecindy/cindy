@@ -24,15 +24,21 @@ import type { TabCloseInterceptor } from './store';
 export type BuiltinTabKindId =
   | 'file-browser'
   | 'web-browser'
-  | 'ios-simulator'
+  | 'mail-preview'
+  | 'retired-feature'
   | 'terminal'
   | 'review'
   | 'orca-workers'
   | 'subagents'
+  | 'side-chat'
   | 'background-tasks'
   | 'routines'
   | 'resource-usage'
-  | 'cindy-make';
+  | 'cindy-make'
+  /** 全局页签(不跟对话):承载插件的 mainView / panel 页面,见 globalTabs.ts。 */
+  | 'plugin-view'
+  /** 任务页签(跟对话):承载插件的 taskView 页面,存在各任务自己的页签桶里。 */
+  | 'plugin-task';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;
 
 /** 一个 tab 运行时实例。`state` 由各 plugin 自管理结构 + 序列化,壳子只搬运。 */
@@ -43,13 +49,14 @@ export interface TabState<TKindState = unknown> {
 }
 
 /**
- * 「+」dropdown 里一个菜单项的元数据。Phase 1 在 `AddTabDropdown.tsx` 硬编码;
- * Phase 2 之后由 `registerTabKind(plugin)` 自动汇总。
+ * 「+」菜单与空面板共用的入口元数据，由 `registerTabKind(plugin)` 自动汇总。
  */
 export interface TabKindMenuMeta {
   kind: TabKindId;
   /** i18n key, e.g. 'rightSidebar.tabs.kinds.fileBrowser' */
   labelKey: string;
+  /** Optional purpose text for the expanded welcome-panel entry. */
+  descriptionKey?: string;
   /**
    * 用户内容原文标签(如插件名),优先于 `t(labelKey)` 渲染 —— 插件名不是
    * i18n 资源,进不了 labelKey 体系。内置 plugin 不填。

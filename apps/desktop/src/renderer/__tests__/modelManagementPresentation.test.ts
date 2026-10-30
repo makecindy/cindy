@@ -3,6 +3,7 @@ import {
   compareModelNames,
   groupModelsForManagement,
   modelBrand,
+  sortModelsForManagement,
 } from '../components/settings/modelManagementPresentation';
 
 describe('model management presentation', () => {
@@ -109,5 +110,28 @@ describe('model management presentation', () => {
     });
     expect(modelBrand({ id: 'unidentified' })).toBeUndefined();
     expect(modelBrand({ id: 'tencent/hy4-preview' })?.label).toBe('Tencent');
+  });
+});
+
+describe('sortModelsForManagement', () => {
+  it('来源给出完整顺序时与选择器一致(按 sortOrder)', () => {
+    const models = [
+      { id: 'gpt-5.6', name: 'GPT-5.6', sortOrder: 2 },
+      { id: 'gpt-6-astra', name: 'GPT-6 Astra', sortOrder: 0 },
+      { id: 'gpt-6-sol', name: 'GPT-6 Sol', sortOrder: 1 },
+    ];
+    expect(sortModelsForManagement(models).map((m) => m.id)).toEqual([
+      'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-5.6',
+    ]);
+  });
+
+  it('只有部分条目带 sortOrder 时退回按名称/版本排序', () => {
+    const models = [
+      { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', sortOrder: 1 },
+      { id: 'google/gemini-3.8-flash', name: 'Gemini 3.8 Flash' },
+    ];
+    expect(sortModelsForManagement(models)[0]?.id).toBe('google/gemini-3.8-flash');
   });
 });

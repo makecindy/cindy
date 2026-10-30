@@ -457,19 +457,17 @@ describe('setPlanMode 乐观时序(勾选后立即发送不丢武装态)', () =>
     expect(makerChatStore.getSnapshot(SESSION_ID).planModeEnabled).toBe(true);
   });
 
-  it('持久化失败 → 回滚乐观值并通知 runtime 还原', async () => {
+  it('Host 提交失败只回滚乐观值，不另写 DB 或发第二次 runtime 回滚', async () => {
     const sessionService = await import('@/lib/sessionService');
-    (sessionService.update as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('db down'));
     const w = globalThis as unknown as {
       window: { electronAPI: { maker: { setPlanMode: ReturnType<typeof vi.fn> } } };
     };
-    w.window.electronAPI.maker.setPlanMode = vi.fn(async () => {});
+    w.window.electronAPI.maker.setPlanMode = vi.fn(async () => { throw new Error('db down'); });
 
     await expect(makerChatStore.setPlanMode(SESSION_ID, true)).rejects.toThrow('db down');
     expect(makerChatStore.getSnapshot(SESSION_ID).planModeEnabled).toBe(false);
-    // 先乐观 true、失败后还原 false 各推送一次。
-    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledWith(SESSION_ID, true);
-    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledWith(SESSION_ID, false);
+    expect(w.window.electronAPI.maker.setPlanMode).toHaveBeenCalledExactlyOnceWith(SESSION_ID, true);
+    expect(sessionService.update).not.toHaveBeenCalled();
   });
 });
 

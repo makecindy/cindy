@@ -182,6 +182,11 @@ function parseSsePayloads(body: string): unknown[] {
   return payloads;
 }
 
+/** 缺少 Content-Type 时仅识别 SSE 起始字段；正文已受非流式 16 MiB 上限保护。 */
+function looksLikeSse(body: string): boolean {
+  return /^(?:(?:event|data|id|retry):|:)/.test(body.trimStart());
+}
+
 /** image block 的粗估 token 占位(Anthropic 图像典型 ~1100-1600 tok;粗估用中值,免 stringify 整段 base64)。 */
 const IMAGE_BLOCK_ESTIMATE_CHARS = 1400 * 4;
 
@@ -228,7 +233,7 @@ export interface BridgeSessionPrefs {
   /** 用户选定的思维深度档(maker 6 档,handler 内收敛到 Responses 4 档);缺省走默认档。 */
   reasoningEffort?: string;
   /** Fast 模式;仅 provider 声明了 fastServiceTier 时映射成 service_tier。 */
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /** createResponsesHandler 的 handle 入参 —— 与 compat-proxy LocalRequestHandler 的 args 同形 + prefs。 */
@@ -348,7 +353,10 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     const reasoningEffort = !reasoningSupported ? 'none' : prefEffort;
 
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。
-    const serviceTier = prefs?.fast === true && provider.fastServiceTier ? provider.fastServiceTier : undefined;
+    const fastModel = prefs?.fast === true ? provider.fastModel?.(realModel) : undefined;
+    const serviceTier = !fastModel && prefs?.fast === true ? provider.fastServiceTier : undefined;
+    // Cindy's existing usage variant uses priority for Fast pricing, independently of wire service_tier.
+    const priceTier = fastModel ? 'priority' : serviceTier ?? 'default';
 
     // 上游服务端工具(如 xAI x_search):只由 provider 按 model 静态声明,不受会话态影响,
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
@@ -363,7 +371,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       && provider.prefix === 'xai/'
       && realModel === 'grok-4.6';
     const responsesReq = translateRequest(parsed, {
-      model: realModel,
+      model: fastModel ?? realModel,
       promptCacheKey: sessionId,
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
       reasoningEffort,
@@ -481,7 +489,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
     // 同时兼容个别上游直接给 Responses JSON 的情况。
     if (!downstreamStreaming) {
-      const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
+      const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
       const collector = new AnthropicMessageCollector();
       const collect = (event: AnthropicSseEvent): void => {
         diagnostics?.recordDownstreamEvent(event);
@@ -490,7 +498,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       try {
         const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
         if (!body.trim()) throw new Error('provider returned an empty response body');
-        if (upstreamIsSse) {
+        if (upstreamIsSse || (!upstreamContentType && looksLikeSse(body))) {
           for (const event of parseSsePayloads(body)) {
             diagnostics?.recordUpstreamEvent(event);
             for (const output of translator.push(event)) collect(output);
@@ -547,7 +555,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     // 用 wireModel(带前缀,如 chatgpt/gpt-5.5)而非 realModel 构造 —— message_start 回显带前缀 id,
     // CC 的 modelUsage 据此记账,下游 usage 可按前缀区分订阅轮,不与真网关同名裸模型混淆。
-    const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
+    const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

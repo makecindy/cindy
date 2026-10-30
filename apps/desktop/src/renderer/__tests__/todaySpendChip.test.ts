@@ -25,17 +25,9 @@ const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendC
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 describe('TodaySpendChip dashboard routing', () => {
-  it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
-    expect(compact(source)).toContain(compact('https://chatgpt.com/codex/settings/usage'));
-    expect(compact(source)).toContain(compact('https://grok.com'));
-    expect(compact(source)).toContain(compact('https://claude.ai/settings/usage'));
-    // 网关 / 托管账号这一路 URL 落到 null(点击无跳转);其余三路指向各自公开看板。
-    expect(source).toMatch(
-      /usesXaiQuotaForm\s*\?\s*XAI_USAGE_DASHBOARD_URL\s*:\s*isCodexOauth \|\| isChatgptBridge\s*\?\s*CODEX_USAGE_DASHBOARD_URL\s*:\s*isClaudeSubscription\s*\?\s*CLAUDE_USAGE_DASHBOARD_URL\s*:\s*null/,
-    );
-    expect(compact(source)).toContain(compact('todaySpend.openCodexUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openXaiUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openClaudeUsage'));
+  it('reads Model Access quota only for actual gateway sessions', () => {
+    // Dashboard destinations are exercised through real component clicks in
+    // TodaySpendChip.popover.test.tsx rather than pinning the ternary's source shape.
     // 只有实际 Gateway 会话读取 Model Access quota；自定义供应商只保留本会话统计。
     expect(compact(source)).toContain(
       compact('const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;'),
@@ -44,7 +36,7 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('treats codex/ budget models + explicit XD selection as API usage on an oauth-bearer spawn', () => {
-    expect(compact(source)).toContain(compact("modelId.startsWith('codex/')"));
+    expect(compact(source)).toContain(compact('isCodexGatewayWireModel(modelId)'));
     expect(compact(source)).toContain(compact("codexAuthInjection === 'oauth-bearer'"));
     expect(compact(source)).toContain(compact("vendorKey === 'codex' && !isCodexXaiProvider"));
     expect(compact(source)).toContain(compact('isRemoteCodexSession ||'));
@@ -61,9 +53,15 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('renders device-link remote sessions data-driven without local-account classification', () => {
-    // device-link 远程会话:计费形态事实在被控端,本机 route 观察 / 账号状态一律不用。
+    // device-link 远程会话 / 远程 Agent:计费形态事实在账号所在电脑,本机 route 观察 / 账号
+    // 状态一律不用。账号所在电脑缺省是任务所在电脑(被控端),远程 Agent 时是 Agent 那台。
     expect(compact(source)).toContain(
-      compact('const isDeviceLinkRemote = Boolean(deviceLinkDeviceId);'),
+      compact(
+        "usageAccount.kind === 'task' ? (deviceLinkDeviceId ?? null)",
+      ),
+    );
+    expect(compact(source)).toContain(
+      compact('const isDeviceLinkRemote = Boolean(accountDeviceId) || accountUnreadable;'),
     );
     // 本机 Codex runtime route 观察对 device-link 关闭(否则按控制端账号形态张冠李戴)
     expect(compact(source)).toContain(
@@ -82,7 +80,7 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(compact(source)).toContain(compact('const isDeviceLinkRemoteClaudeSubscription ='));
     expect(compact(source)).toContain(
-      compact('isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? (deviceLinkDeviceId ?? null) : null,'),
+      compact('isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? accountDeviceId : null,'),
     );
     // 本机订阅快照 hook 对 device-link 关闭(两个 hook 的 enabled 互斥)
     expect(compact(source)).toContain(
@@ -114,10 +112,10 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(
       compact("const isRemoteCodexSession = vendorKey === 'codex' && Boolean(remoteHostId);"),
     );
-    // SSH(remoteHostId)与 device-link(deviceLinkDeviceId)远程会话都抑制本机账户快照读取
+    // SSH(remoteHostId)与 device-link / 远程 Agent(账号不在本机)都抑制本机账户快照读取
     expect(compact(source)).toContain(compact('deviceLinkDeviceId?: string | null'));
     expect(compact(source)).toContain(
-      compact('const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);'),
+      compact('const isAnyRemoteSession = Boolean(remoteHostId) || isDeviceLinkRemote;'),
     );
     expect(compact(source)).toContain(
       compact(
@@ -157,6 +155,21 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(compact('todaySpend.codex.unavailableLabel'));
     expect(compact(source)).toContain(compact('todaySpend.codex.noUsageDetail'));
     expect(compact(source)).toContain(compact('todaySpend.codex.unavailableDetail'));
+  });
+
+  it('caps the reset countdown at the window length right after a reset', () => {
+    const units = ((key: string) =>
+      key === 'todaySpend.unit.day' ? '天' : key === 'todaySpend.unit.hour' ? '小时' : key) as TFunction;
+    const week = 7 * 24 * 60;
+    // resetsAt 比 now + 7 天晚 30 秒 (服务端取整 / 时钟偏差): 不得向上取整成「8天」
+    const resetsAt = week * 60 + 30;
+    expect(formatCompactTimeUntilReset(resetsAt, 0, units, week)).toBe('7天');
+    expect(formatCompactTimeUntilReset(5 * 3600 + 30, 0, units, 5 * 60)).toBe('5小时');
+    // 未越界时封顶不改变向上取整口径
+    expect(formatCompactTimeUntilReset(6 * 86400 + 60, 0, units, week)).toBe('7天');
+    expect(formatCompactTimeUntilReset(5 * 86400 + 60, 0, units, week)).toBe('6天');
+    // 窗口长度未知时不封顶
+    expect(formatCompactTimeUntilReset(25 * 86400, 0, units)).toBe('25天');
   });
 
   it('ticks the reset countdown per second in the last minute and rolls remaining % up after a reset', () => {
@@ -225,12 +238,12 @@ describe('TodaySpendChip dashboard routing', () => {
     );
     expect(compact(source)).toContain(compact('requestCodexAccountRefresh(providerId ?? undefined);'));
     expect(compact(source)).toContain(compact("requestXaiSubscriptionRefresh(providerId ?? 'xai');"));
-    // 悬念期催刷按会话来源分路:远程订阅会话催被控端(隧道,被控端节流兜底),
+    // 悬念期催刷按账号所在分路:远程订阅会话 / 远程 Agent 催账号所在电脑(隧道,那台节流兜底),
     // 本机订阅会话催本机;不得拿本机通道替远程会话催刷(账号不同)。
     expect(compact(source)).toContain(
       compact(
-        'if (isDeviceLinkRemoteClaudeSubscription && deviceLinkDeviceId) {\n' +
-          "        requestRemoteClaudeSubscriptionRefresh(deviceLinkDeviceId, providerId ?? 'anthropic');\n" +
+        'if (isDeviceLinkRemoteClaudeSubscription && accountDeviceId) {\n' +
+          "        requestRemoteClaudeSubscriptionRefresh(accountDeviceId, providerId ?? 'anthropic');\n" +
           '      } else if (!isDeviceLinkRemote) {\n' +
           "        requestClaudeSubscriptionRefresh(providerId ?? 'anthropic');\n" +
           '      }',

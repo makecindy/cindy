@@ -174,7 +174,7 @@ for await (const line of createInterface({input:process.stdin})) {
           }),
       });
       const init = await host.ensureStarted();
-      const expectedPolicy = init.userAgent?.includes('/0.153.4 ') ? currentPolicy : defaultPolicy;
+      const expectedPolicy = init.userAgent?.includes('/0.145.0 ') ? defaultPolicy : currentPolicy;
       const config = nativeAutoReviewContinuationConfig(init.userAgent, {});
       expect(config["auto_review.policy"]).toBeTruthy();
       for (const overrides of [{}, config]) {

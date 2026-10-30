@@ -40,7 +40,21 @@ vi.mock('@/hooks/useDeviceLinkSettings', () => ({
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ mode: 'cloud' }) }));
 vi.mock('../components/settings/MyDevicesPanel', () => ({
-  MyDevicesPanel: () => <div data-testid="my-devices-panel" />,
+  MyDevicesPanel: ({
+    variant,
+    focusDeviceId,
+    focusRequestKey,
+  }: {
+    variant?: string;
+    focusDeviceId?: string | null;
+    focusRequestKey?: string | null;
+  }) => (
+    <div
+      data-testid={`my-devices-panel-${variant ?? 'all'}`}
+      data-focus-device={focusDeviceId ?? ''}
+      data-focus-key={focusRequestKey ?? ''}
+    />
+  ),
 }));
 vi.mock('../components/settings/RemoteSection', () => ({
   RemoteSection: () => <div data-testid="remote-section" />,
@@ -135,5 +149,80 @@ describe('RemoteControlSection devices deep link', () => {
     await waitFor(() => expect(currentSearch()).not.toContain('section=devices'));
     expect(currentSearch()).toContain('tab=remote-control');
     expect(devicesHeader().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('hands the device focus param to both device panels once the list is expanded', () => {
+    render(
+      <MemoryRouter
+        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
+      >
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('true');
+    for (const variant of ['self', 'others']) {
+      const panel = screen.getByTestId(`my-devices-panel-${variant}`);
+      expect(panel.getAttribute('data-focus-device')).toBe('phone-1');
+      expect(panel.getAttribute('data-focus-key')).toMatch(/^phone-1:/);
+    }
+  });
+
+  it('ignores a device param that is not part of the devices deep link', () => {
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=remote-control&device=phone-1']}>
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    expect(devicesHeader().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe('');
+  });
+
+  it('re-requests focus when the same device deep link is opened again', async () => {
+    function SameLinkTrigger() {
+      const navigate = useNavigate();
+      return (
+        <button
+          type="button"
+          onClick={() => navigate('/settings?tab=remote-control&section=devices&device=phone-1')}
+        >
+          go phone
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter
+        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
+      >
+        <SameLinkTrigger />
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+    const panel = () => screen.getByTestId('my-devices-panel-others');
+    const firstKey = panel().getAttribute('data-focus-key');
+
+    fireEvent.click(screen.getByRole('button', { name: 'go phone' }));
+
+    await waitFor(() => expect(panel().getAttribute('data-focus-key')).not.toBe(firstKey));
+    expect(panel().getAttribute('data-focus-device')).toBe('phone-1');
+  });
+
+  it('drops the device focus param together with the section when the user collapses', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={['/settings?tab=remote-control&section=devices&device=phone-1']}
+      >
+        <LocationProbe />
+        <RemoteControlSection />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(devicesHeader());
+
+    await waitFor(() => expect(currentSearch()).not.toContain('section=devices'));
+    expect(currentSearch()).not.toContain('device=');
+    expect(currentSearch()).toContain('tab=remote-control');
+    expect(screen.getByTestId('my-devices-panel-others').getAttribute('data-focus-device')).toBe('');
   });
 });

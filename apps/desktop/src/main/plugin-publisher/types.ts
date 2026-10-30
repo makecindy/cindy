@@ -6,6 +6,12 @@ import type {
 
 export const PLUGIN_MEMBER_PUBLISHER_GHOST_ID = 'cindy-publisher';
 
+export interface PluginPublisherIdentity {
+  membershipId: string;
+  orgSlug: string | null;
+  orgName: string | null;
+}
+
 export type PluginPublisherStage =
   | 'confirming'
   | 'hashing'

@@ -18,6 +18,223 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Discovery used to describe auth as Grok-only and omit the handoff schema.
+  // Unit: a fresh client must discover the required window/purpose arguments
+  // before its first call, without using an invalid call to obtain the schema.
+  it('discovers input handoff and its required arguments before starting it', async () => {
+    const start = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-1' }));
+    const server = createXdtHelperMcpServer({ inputHandoff: { start } }, {
+      agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => ({
+        agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
+      }),
+    });
+    const client = new Client({ name: 'handoff-discovery-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'auth', description: expect.stringContaining('二维码') }),
+      ]));
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'auth' } }));
+      const handoff = (catalog.tools as Array<{ name: string; inputSchema: Record<string, unknown> }>)[0]!;
+      expect(handoff.name).toBe('request_input_handoff');
+      expect(handoff.inputSchema).toMatchObject({
+        required: ['purpose', 'target'],
+        properties: { purpose: { type: 'string' }, target: { type: 'object', properties: { app: { type: 'string' } } } },
+      });
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: handoff.name, args: { purpose: 'Sign in to continue', target: { app: 'Google Chrome' } },
+      } }))).toMatchObject({ ok: true, request_id: 'handoff-1', status: 'pending' });
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
+        purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
+      });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it.each(['default', 'bot-main'] as const)('exposes runtime declarations through the same helper tool for %s', async (surface) => {
+    const runtimeCapabilities = vi.fn(async () => ({ ok: true, capabilities: [{ server: 'fixture' }] }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => surface, runtimeCapabilities }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'current-task',
+    });
+    const client = new Client({ name: 'catalog-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { scope: 'runtime', server: 'fixture', category: 'files' },
+      } }));
+      expect(result).toMatchObject({ ok: true, capabilities: [{ server: 'fixture' }] });
+      expect(runtimeCapabilities).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task', agentKind: 'pi' }), { server: 'fixture', category: 'files' });
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('offers update checks without installation only to a live local task', async () => {
+    let context = {
+      agentKind: 'codex' as const, workingDir: '/repo', sessionId: 'local-task',
+      sessionInstanceId: 'instance-1', remoteHostId: undefined as string | undefined,
+    };
+    let current = true;
+    const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      appUpdate: {
+        isCurrentSession: (sessionId, instanceId) => current && sessionId === 'local-task' && instanceId === 'instance-1',
+        check,
+      },
+    }, {
+      ...context, getSessionContext: () => context,
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'app-update-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string) => parsePayload(await client.callTool({
+      name: 'call_tool', arguments: { name, args: {} },
+    }));
+    try {
+      const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
+      expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
+        'check_app_update',
+      ]);
+      expect(await call('check_app_update')).toMatchObject({ status: 'available', targetVersion: '0.1.90' });
+      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
+      expect(check).toHaveBeenCalledOnce();
+      current = false;
+      expect(await call('check_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
+      context = { ...context, remoteHostId: 'remote-machine' };
+      expect(await call('check_app_update')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(check).toHaveBeenCalledOnce();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+  it('routes install and auto-update requests to the Host with the bound caller', async () => {
+    let current = true;
+    const caller = { sessionId: 'local-task', sessionInstanceId: 'instance-1' };
+    const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const install = vi.fn(async () => ({ status: 'started', targetVersion: '0.1.90' }));
+    const setAutoUpdate = vi.fn(async (_caller: unknown, enabled: boolean) => enabled
+      ? { status: 'updated', autoUpdateEnabled: true }
+      : { ok: false, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' });
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      appUpdate: { isCurrentSession: () => current, check, install, setAutoUpdate },
+    }, {
+      agentKind: 'claude-code', workingDir: '/repo', sessionId: 'local-task',
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: '/repo', ...caller }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'app-install-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args: Record<string, unknown> = {}) => parsePayload(await client.callTool({
+      name: 'call_tool', arguments: { name, args },
+    }));
+    try {
+      const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
+      expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
+        'check_app_update', 'install_app_update', 'set_app_auto_update',
+      ]);
+      expect(await call('check_app_update')).toMatchObject({ ok: true, status: 'available' });
+      expect(check).toHaveBeenCalledWith(caller);
+      expect(await call('install_app_update')).toMatchObject({ ok: true, status: 'started', targetVersion: '0.1.90' });
+      expect(install).toHaveBeenCalledWith(caller);
+      expect(await call('set_app_auto_update', { enabled: true })).toMatchObject({ ok: true, autoUpdateEnabled: true });
+      expect(await call('set_app_auto_update', { enabled: false })).toMatchObject({
+        ok: false, errorCode: 'OWNER_TURN_REQUIRED', data: { hint: 'owner only' },
+      });
+      expect(setAutoUpdate).toHaveBeenNthCalledWith(1, caller, true);
+      current = false;
+      expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
+      expect(install).toHaveBeenCalledOnce();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+  it('hides app updates from a remote Pi task while retaining its other helper categories', async () => {
+    let remoteHostId: string | undefined;
+    const check = vi.fn(async () => ({ status: 'ready', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      appUpdate: { isCurrentSession: () => true, check },
+    }, {
+      agentKind: 'pi', workingDir: '/repo', sessionId: 'pi-task',
+      getSessionContext: () => ({
+        agentKind: 'pi', workingDir: '/repo', sessionId: 'pi-task',
+        sessionInstanceId: 'instance-1', remoteHostId,
+      }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'remote-pi-update-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const list = async () => parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      const local = (await list()).categories as Array<{ name: string }>;
+      expect(local.map((category) => category.name)).toContain('app_update');
+      remoteHostId = 'ssh-host';
+      const remote = (await list()).categories as Array<{ name: string }>;
+      expect(remote.map((category) => category.name)).not.toContain('app_update');
+      expect(remote.map((category) => category.name)).toContain('cindy');
+      expect(parsePayload(await client.callTool({
+        name: 'list_tools', arguments: { category: 'app_update' },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'check_app_update', args: {} },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(check).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+  it('lets a remote agent start only the scoped Grok device login and returns no credential', async () => {
+    let current = true;
+    const start = vi.fn(async () => ({
+      status: 'pending' as const,
+      verificationUrl: 'https://auth.x.ai/device',
+      userCode: 'ABCD-1234',
+      expiresAt: Date.now() + 120_000,
+    }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => 'default',
+      grokLogin: { start, status: async () => ({ status: 'idle' }), cancel: async () => ({ status: 'idle' }) },
+    }, {
+      agentKind: 'codex', workingDir: '', remoteHostId: 'remote-host',
+      getSessionContext: () => current ? {
+        agentKind: 'codex', workingDir: '/remote', remoteHostId: 'remote-host',
+        sessionId: 'remote-session', sessionInstanceId: 'instance-1',
+      } : undefined,
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'grok-remote-auth-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual([
+        { name: 'cindy', tool_count: 2, description: expect.stringContaining('self-management') },
+        { name: 'auth', tool_count: 3, description: expect.any(String) },
+      ]);
+      const result = parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
+      }));
+      expect(result).toMatchObject({ status: 'pending', userCode: 'ABCD-1234' });
+      expect(JSON.stringify(result)).not.toContain('access_token');
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'remote-session', sessionInstanceId: 'instance-1', remoteHostId: 'remote-host',
+      }));
+      current = false;
+      const stale = parsePayload(await client.callTool({
+        name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
+      }));
+      expect(stale).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
   it("creates a teammate through the scoped helper entry", async () => {
     const create = vi.fn(async () => ({
       ok: true as const,
@@ -146,6 +363,7 @@ describe("cindy_helper MCP server", () => {
       delegationId: "session-task-1",
       childSessionId: "desktop-child-session",
       status: "running",
+      completionDestination: 'group',
       deadlineAt: 1_788_000_000_000,
     }));
     const messageSessionTask = vi.fn(async () => ({
@@ -163,6 +381,14 @@ describe("cindy_helper MCP server", () => {
       delegationId: "session-task-1",
       childSessionId: "desktop-child-session",
     }));
+    const inspectSessionTaskRoute = vi.fn(async () => ({
+      ok: true as const,
+      generation: 3,
+      current: { agentKind: 'codex', model: 'model-a', providerId: 'subscription', effort: null, fastMode: false },
+      next: { agentKind: 'codex', model: 'model-a', providerId: 'paid', effort: null, fastMode: false },
+      selectionToken: 'a'.repeat(64),
+    }));
+    const advanceSessionTaskRoute = vi.fn(async () => ({ ok: true as const, status: 'applied', generation: 4 }));
     const server = createXdtHelperMcpServer(
       { resolveSurface: async () => "bot",
         sessionTasks: {
@@ -170,6 +396,8 @@ describe("cindy_helper MCP server", () => {
           messageSessionTask,
           getSessionTask,
           stopSessionTask,
+          inspectSessionTaskRoute,
+          advanceSessionTaskRoute,
         },
       },
       {
@@ -191,11 +419,15 @@ describe("cindy_helper MCP server", () => {
           "check_session_task",
           "message_session_task",
           "stop_session_task",
+          "inspect_session_task_route",
+          "advance_session_task_route",
         ]),
       );
       expect(tools.map((tool) => tool.name)).not.toContain("collaborate_with_bot");
       expect(sessionTaskTool?.description).toContain("real independent Cindy Session task");
       expect(sessionTaskTool?.description).toContain("never calls a Cindy Bot");
+      expect(sessionTaskTool?.description).toContain("A repository, multiple files, tools, or a deliverable alone is not a reason to delegate");
+      expect(sessionTaskTool?.description).toContain("the user explicitly requests an independent task");
       expect(
         (sessionTaskTool?.inputSchema as { properties?: Record<string, unknown> }).properties,
       ).toHaveProperty("working_dir");
@@ -217,11 +449,14 @@ describe("cindy_helper MCP server", () => {
       expect(sessionTask).toMatchObject({
         ok: true,
         action: "start_session_task",
+        completion_destination: 'group',
         task_id: "session-task-1",
         session_id: "desktop-child-session",
         deadline_at: 1_788_000_000_000,
       });
       expect(sessionTask).not.toHaveProperty("delegationId");
+      // The card is posted in the background: the teammate must not say it is already there.
+      expect((sessionTask as { guidance?: string }).guidance).not.toContain("already posted");
       expect(startSessionTask).toHaveBeenLastCalledWith(
         expect.objectContaining({
           callerSessionId: "bot-parent-session",
@@ -231,6 +466,30 @@ describe("cindy_helper MCP server", () => {
           useWorktree: true,
         }),
       );
+
+      // 折叠形态的 context_refs 也要自愈(glm 兼容层 <item> 序列化,同 #6369/images 病)。
+      const foldedRefs = parsePayload(
+        await client.callTool({ name: "call_tool", arguments: { name: "start_session_task", args: {
+            instruction: "Summarize the demo state.",
+            context_refs: { item: ["note-1", "note-2"] },
+          } } }),
+      );
+      expect(foldedRefs).toMatchObject({ ok: true, task_id: "session-task-1" });
+      expect(startSessionTask).toHaveBeenLastCalledWith(
+        expect.objectContaining({ contextRefs: ["note-1", "note-2"] }),
+      );
+
+      // An old local-only group cannot carry the task's messages: the teammate must not promise them there.
+      startSessionTask.mockResolvedValueOnce({ ok: true as const, delegationId: "session-task-2", childSessionId: "desktop-child-2",
+        status: "running", completionDestination: 'private', deadlineAt: 1_788_000_000_000 });
+      const privateTask = parsePayload(
+        await client.callTool({ name: "call_tool", arguments: { name: "start_session_task", args: {
+            instruction: "Build and verify a standalone HTML demo.",
+          } } }),
+      ) as { completion_destination?: string; guidance?: string };
+      expect(privateTask.completion_destination).toBe('private');
+      expect(privateTask.guidance).toContain("private chat");
+      expect(privateTask.guidance).not.toContain("will arrive here");
 
       const replied = parsePayload(
         await client.callTool({ name: "call_tool", arguments: { name: "message_session_task", args: {
@@ -286,6 +545,18 @@ describe("cindy_helper MCP server", () => {
       expect(getSessionTask).toHaveBeenCalledWith({
         callerSessionId: "bot-parent-session",
         taskId: "session-task-1",
+      });
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'inspect_session_task_route', args: { task_id: 'session-task-1' },
+      } }))).toMatchObject({ ok: true, generation: 3, next: { providerId: 'paid' }, selection_token: 'a'.repeat(64) });
+      expect(inspectSessionTaskRoute).toHaveBeenCalledWith({
+        callerSessionId: 'bot-parent-session', taskId: 'session-task-1',
+      });
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'advance_session_task_route', args: { task_id: 'session-task-1', expected_generation: 3, selection_token: 'a'.repeat(64) },
+      } }))).toMatchObject({ ok: true, status: 'applied', generation: 4 });
+      expect(advanceSessionTaskRoute).toHaveBeenCalledWith({
+        callerSessionId: 'bot-parent-session', taskId: 'session-task-1', expectedGeneration: 3, selectionToken: 'a'.repeat(64),
       });
 
       const stopped = parsePayload(
@@ -451,6 +722,16 @@ describe("cindy_helper MCP server", () => {
             ok: true as const,
             queuedMessageId,
           })),
+          steerQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+            ok: true as const,
+            queuedMessageId,
+            delivery: "steered" as const,
+          })),
+          moveQueuedMessage: vi.fn(async ({ queuedMessageId, position }) => ({
+            ok: true as const,
+            queuedMessageId,
+            position,
+          })),
           steerSession: vi.fn(async () => ({
             ok: true as const,
             queuedMessageId: "steer-1",
@@ -515,6 +796,8 @@ describe("cindy_helper MCP server", () => {
       expect(names).toEqual(expect.arrayContaining([
         "update_session_queued_message",
         "cancel_session_queued_message",
+        "steer_session_queued_message",
+        "move_session_queued_message",
         "steer_session",
         "stop_session_turn",
         "get_session_runtime",
@@ -526,6 +809,28 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it('binds send_to_user to the current lane without accepting an arbitrary recipient', async () => {
+    const sendToUser = vi.fn(async () => ({ ok: true as const, messageId: 'saved', targetSessionId: 'owner-private', delivered: true }));
+    const messageAgent = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'must not run' }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'bot', botMessaging: { sendToUser, messageAgent } },
+      { agentKind: 'codex', workingDir: '/fixture', sessionId: 'group-lane' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'group-private-message', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+      expect(JSON.stringify(catalog)).toContain('send_to_user');
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'send_to_user',
+        args: { message: 'Owner reply', idempotency_key: 'request-123', target_id: 'another-account' } } }));
+      expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(sendToUser).not.toHaveBeenCalled();
+      const valid = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'send_to_user', args: { message: 'Owner reply', idempotency_key: 'request-123' } } }));
+      expect(valid).toMatchObject({ ok: true, delivered: true, read: null, session_id: 'owner-private' });
+      expect(sendToUser).toHaveBeenCalledWith({ callerSessionId: 'group-lane', message: 'Owner reply', idempotencyKey: 'request-123' });
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(["default", "restricted", "error", "unbound"] as const)("hides and blocks all companion commands on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
     const server = createXdtHelperMcpServer({
@@ -534,7 +839,7 @@ describe("cindy_helper MCP server", () => {
         return surface === "unbound" ? "bot" : surface;
       },
       sessionTasks: { startSessionTask: callback, getSessionTask: callback, messageSessionTask: callback, stopSessionTask: callback },
-      botMessaging: { messageAgent: callback, checkMessage: callback },
+      botMessaging: { messageAgent: callback, checkMessage: callback, sendToUser: callback },
       botProfiles: { create: callback },
     }, { agentKind: "codex", workingDir: "/repo", sessionId: surface === "unbound" ? undefined : "normal-session" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -544,7 +849,7 @@ describe("cindy_helper MCP server", () => {
       expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
       expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "check_agent_message", "create_teammate"]) {
+      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "check_agent_message", "create_teammate"]) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
@@ -557,8 +862,20 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
-  it("exposes product knowledge while keeping general history and control out of the Bot surface", async () => {
+  it("grants Bots only the named project tools, not the rest of control or history", async () => {
     let surface: "bot" | "default" = "bot";
+    const createProject = vi.fn(async () => ({
+      ok: true as const,
+      workingDir: "/repo",
+    }));
+    const moveSession = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "task",
+      workingDir: "/repo",
+      workspaceKind: "project",
+    }));
+    const stopSessionTurn = vi.fn(async () => ({ ok: true as const, status: "requested" as const }));
+    const listSessionQueue = vi.fn(async () => ({ ok: true as const, messages: [] }));
     const sendToSession = vi.fn(async () => ({
       ok: true as const,
       targetSessionId: TARGET_SESSION_ID,
@@ -578,6 +895,22 @@ describe("cindy_helper MCP server", () => {
       {
         resolveSurface: async () => surface,
         sendToSession,
+        createProject,
+        moveSession,
+        sessionControl: {
+          updateQueuedMessage: vi.fn(),
+          cancelQueuedMessage: vi.fn(),
+          steerQueuedMessage: vi.fn(),
+          moveQueuedMessage: vi.fn(),
+          steerSession: vi.fn(),
+          stopSessionTurn,
+          getSessionRuntime: vi.fn(),
+          setSessionRuntime: vi.fn(),
+        },
+        sessionQueue: {
+          listSessionQueue,
+          listSessionQueuedCounts: vi.fn(),
+        },
         botMessaging: { messageAgent },
       },
       {
@@ -594,30 +927,29 @@ describe("cindy_helper MCP server", () => {
       const overview = parsePayload(
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
-      expect(overview.categories).toEqual([{ name: "cindy", tool_count: 2 }, { name: "bots", tool_count: 1 }]);
-
-      const forbiddenCategory = parsePayload(
-        await client.callTool({ name: "list_tools", arguments: { category: "handoff" } }),
+      expect(overview.categories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'cindy' }),
+        expect.objectContaining({ name: 'control' }),
+        expect.objectContaining({ name: 'history' }),
+        expect.objectContaining({ name: 'handoff' }),
+        expect.objectContaining({ name: 'bots' }),
+      ]));
+      // 概览阶段就写明每类的用途与作用范围;可跨电脑的类目必须在这一步可见。
+      const described = Object.fromEntries(
+        (overview.categories as Array<{ name: string; description: string }>).map((c) => [c.name, c.description]),
       );
-      expect(forbiddenCategory).toMatchObject({
-        ok: false,
-        errorCode: "CAPABILITY_NOT_AVAILABLE",
-      });
-
-      const forbiddenCall = parsePayload(
-        await client.callTool({
-          name: "call_tool",
-          arguments: {
-            name: "send_to_session",
-            args: { target_session_id: TARGET_SESSION_ID, message: "Do work" },
-          },
-        }),
-      );
-      expect(forbiddenCall).toMatchObject({
-        ok: false,
-        errorCode: "CAPABILITY_NOT_AVAILABLE",
-      });
-      expect(sendToSession).not.toHaveBeenCalled();
+      for (const description of Object.values(described)) expect(description).toMatch(/\S/);
+      for (const name of ['history', 'handoff', 'bots']) expect(described[name]).toContain('可跨电脑');
+      expect(described.control).toMatch(/本机。$/);
+      const controlTools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      const controlNames = controlTools.tools as Array<{ name: string; description: string }>;
+      expect(controlNames.map((tool) => tool.name)).toEqual(expect.arrayContaining(['create_project', 'move_session', 'stop_session_turn']));
+      expect(controlNames.find((tool) => tool.name === 'move_session')?.description).toContain('list_sessions');
+      const handedOff = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'send_to_session', args: { target_session_id: TARGET_SESSION_ID, message: 'Do work' },
+      } }));
+      expect(handedOff).toMatchObject({ ok: true });
+      expect(sendToSession).toHaveBeenCalled();
 
       const botTools = parsePayload(
         await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
@@ -629,6 +961,153 @@ describe("cindy_helper MCP server", () => {
       }));
       expect(afterReclassification).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       expect(messageAgent).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("gives a local Bot main task the ordinary surface and judges every call with the host", async () => {
+    const stopSessionTurn = vi.fn(async () => ({ ok: true as const, status: "requested" as const }));
+    const messageAgent = vi.fn(async () => ({
+      ok: true as const,
+      targetBotId: "bot-b",
+      targetBotName: "Dash Bot",
+      targetSessionId: "bot-b-main",
+      wakeKind: "queued" as const,
+    }));
+    const authorizeCall = vi.fn(async ({ tool }: { tool: string }) => (tool === "stop_session_turn"
+      ? { ok: false as const, errorCode: "TASK_OUT_OF_SCOPE", message: "not yours" }
+      : { ok: true as const }));
+    const server = createXdtHelperMcpServer(
+      {
+        resolveSurface: async () => "bot-main",
+        authorizeCall,
+        sessionControl: {
+          updateQueuedMessage: vi.fn(),
+          cancelQueuedMessage: vi.fn(),
+          steerQueuedMessage: vi.fn(),
+          moveQueuedMessage: vi.fn(),
+          steerSession: vi.fn(),
+          stopSessionTurn,
+          getSessionRuntime: vi.fn(),
+          setSessionRuntime: vi.fn(),
+        },
+        botMessaging: { messageAgent },
+      },
+      { agentKind: "pi", workingDir: "/bot", sessionId: "bot-a-main" },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "bot-main-surface", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+      const categories = (overview.categories as Array<{ name: string }>).map((category) => category.name);
+      expect(categories).toEqual(expect.arrayContaining(["control", "bots"]));
+
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "stop_session_turn", args: { session_id: TARGET_SESSION_ID } },
+      }))).toMatchObject({ ok: false, errorCode: "TASK_OUT_OF_SCOPE" });
+      expect(stopSessionTurn).not.toHaveBeenCalled();
+      expect(authorizeCall).toHaveBeenCalledWith({
+        sessionId: "bot-a-main",
+        server: "cindy_helper",
+        tool: "stop_session_turn",
+        args: { session_id: TARGET_SESSION_ID },
+      });
+
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "send_to_agent", args: { target_id: "bot-b", message: "hello" } },
+      }))).toMatchObject({ ok: true });
+      expect(messageAgent).toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("fails closed when the host authorizer throws", async () => {
+    const messageAgent = vi.fn();
+    const server = createXdtHelperMcpServer(
+      {
+        resolveSurface: async () => "bot-main",
+        authorizeCall: async () => { throw new Error("db gone"); },
+        botMessaging: { messageAgent },
+      },
+      { agentKind: "pi", workingDir: "/bot", sessionId: "bot-a-main" },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "bot-main-authorizer-throws", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      expect(parsePayload(await client.callTool({
+        name: "call_tool",
+        arguments: { name: "send_to_agent", args: { target_id: "bot-b", message: "hello" } },
+      }))).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("gives remote and secondary companion tasks the ordinary surface for their transport", async () => {
+    const authorizeCall = vi.fn(async () => ({ ok: true as const }));
+    const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
+    for (const context of [
+      { agentKind: "codex" as const, workingDir: "/repo", sessionId: "bot-remote", remoteHostId: "ssh-host" },
+      { agentKind: "pi" as const, workingDir: "/repo", sessionId: "bot-lane" },
+    ]) {
+      const server = createXdtHelperMcpServer(
+        { resolveSurface: async () => (context.remoteHostId ? "bot-main" : "bot"), authorizeCall, createProject },
+        context,
+      );
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "bot-narrow-surface", version: "0.0.0" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+        const categories = (overview.categories as Array<{ name: string }>).map((category) => category.name);
+        if (context.remoteHostId) {
+          expect(categories).not.toContain("history");
+        } else {
+          expect(categories).toContain("cindy");
+          expect(categories).toContain("control");
+        }
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    }
+    expect(authorizeCall).not.toHaveBeenCalled();
+  });
+
+  it("does not offer local project tools to a remote Bot", async () => {
+    const createProject = vi.fn(async () => ({ ok: true as const, workingDir: "/repo" }));
+    const server = createXdtHelperMcpServer(
+      { resolveSurface: async () => "bot", createProject },
+      {
+        agentKind: "codex",
+        workingDir: "/repo",
+        sessionId: "bot-remote",
+        remoteHostId: "ssh-host",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "remote-bot-projects", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: "list_tools", arguments: {} }));
+      expect(overview.categories).toEqual([{ name: "cindy", tool_count: 2, description: expect.any(String) }]);
+      expect(
+        parsePayload(await client.callTool({
+          name: "call_tool",
+          arguments: { name: "create_project", args: { working_dir: "/repo" } },
+        })),
+      ).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
+      expect(createProject).not.toHaveBeenCalled();
     } finally {
       await client.close();
       await server.close();
@@ -728,6 +1207,34 @@ describe("direct Bot MCP tools", () => {
     }
   });
 
+  it.each(["claude-code", "codex"] as const)("judges direct Bot tools of a local Bot main task on %s", async (agentKind) => {
+    const messageAgent = vi.fn();
+    const authorizeCall = vi.fn(async () => ({ ok: false as const, errorCode: "OWNER_TURN_REQUIRED", message: "owner only" }));
+    const server = createXdtHelperMcpServer({
+      resolveSurface: async () => "bot-main",
+      authorizeCall,
+      botMessaging: { messageAgent },
+    }, {
+      agentKind,
+      workingDir: "",
+      getSessionContext: () => ({ agentKind, workingDir: "/bot", sessionId: "bot-main" }),
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "direct-bot-gate", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      expect(parsePayload(await client.callTool({
+        name: "send_to_agent",
+        arguments: { target_id: "bot-b", message: "hello" },
+      }))).toMatchObject({ ok: false, errorCode: "OWNER_TURN_REQUIRED" });
+      expect(authorizeCall).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "bot-main", tool: "send_to_agent" }));
+      expect(messageAgent).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("keeps ghost plugin guidance in Pi helper discovery on remote sessions", async () => {
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => "bot",
@@ -760,6 +1267,30 @@ describe("direct Bot MCP tools", () => {
     }
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('passes one-task model selection and its receipt through %s', async agentKind => {
+    const modelRoute = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: true };
+    const start = vi.fn(async () => ({ ok: true as const, delegationId: 'task', childSessionId: 'child', modelRoute }));
+    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const server = createXdtHelperMcpServer({ resolveSurface: async () => 'bot',
+      sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+    }, { agentKind, workingDir: '/bot', sessionId: 'parent' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'task-model-test', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      for (const model_selection of [{ model: 'astra' }, { id: 'route', harness: 'pi' }]) {
+        const invalid = await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: { instruction: 'Work', model_selection } } });
+        expect(invalid.isError).toBe(true);
+      }
+      expect(start).not.toHaveBeenCalled();
+      const result = await client.callTool({ name: 'call_tool', arguments: { name: 'start_session_task', args: {
+        instruction: 'Work', model_selection: { id: 'route', effort: 'high', fast_mode: true },
+      } } });
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'parent', modelSelection: { id: 'route', effort: 'high', fastMode: true } }));
+      expect(parsePayload(result)).toMatchObject({ ok: true, model_route: modelRoute });
+    } finally { await client.close(); await server.close(); }
+  });
+
   it.each(["claude-code", "codex"] as const)("exposes and executes tasks on %s without discovery", async (agentKind) => {
     let sessionId: string | undefined = "bot-parent";
     const start = vi.fn(async () => ({ ok: true as const, taskId: "task-1" }));
@@ -778,6 +1309,8 @@ describe("direct Bot MCP tools", () => {
       const first = await client.listTools();
       const task = first.tools.find(t => t.name === "start_session_task");
       expect(task?.inputSchema.required).toContain("instruction");
+      const discovered = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } })).tools as Array<{ name: string; description: string }>;
+      expect(task?.description).toBe(discovered.find(tool => tool.name === "start_session_task")?.description);
       expect(first.tools.map(t => t.name)).toEqual(expect.arrayContaining([
         "start_session_task", "check_session_task", "message_session_task", "stop_session_task",
       ]));

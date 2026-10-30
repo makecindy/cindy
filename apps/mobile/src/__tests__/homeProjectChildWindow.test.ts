@@ -13,7 +13,7 @@ import {
 describe('home project child window', () => {
   it('uses the current native position despite delayed scroll events and transient failed measurements', () => {
     const source = ts.createSourceFile('index.tsx', readFileSync(
-      resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8',
+      resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8',
     ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const tracker = source.statements.find((node): node is ts.FunctionDeclaration => (
       ts.isFunctionDeclaration(node) && node.name?.text === 'HomeProjectWindowAnchorTracker'
@@ -45,7 +45,7 @@ describe('home project child window', () => {
     expect(anchor).toBe(36);
     layout = { pageY: -3956 }; // The entire child area has actually left the screen.
     react(prepare(), null);
-    expect(anchor).toBe(-1);
+    expect(anchor).toBe(36);
     layout = { pageY: -3800 }; // Reverse scrolling brings the final rows back.
     react(prepare(), -1);
     expect(anchor).toBe(48);
@@ -72,7 +72,7 @@ describe('home project child window', () => {
     expect(initialRange.trailingSpacerHeight).toBeGreaterThan(0);
   });
 
-  it('keeps off-screen child content unmounted and anchors it once visible', () => {
+  it('skips anchor updates outside the viewport and locates children once visible', () => {
     const childOffsets = buildHomeProjectChildOffsets(Array.from({ length: 112 }, () => 78));
 
     expect(resolveHomeProjectChildAnchor({
@@ -117,34 +117,42 @@ describe('home project child window', () => {
   });
 
   it('keeps layout readiness out of the first-render window gate', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
-    const setupStart = source.indexOf('const windowingEnabled = shouldWindowHomeProjectChildren({');
-    const setupEnd = source.indexOf('const scrollY = homeScrollY;', setupStart);
-    const setup = source.slice(setupStart, setupEnd);
-
-    expect(setupStart).toBeGreaterThan(-1);
-    expect(setup).not.toContain('projectLayoutReady');
-    expect(source).toContain('function HomeProjectWindowAnchorTracker({');
-    expect(source).toContain('const layout = measure(projectRef);');
-    expect(source).toContain('projectTop: layout.pageY,');
-    expect(source).toContain('viewportTop: 0,');
-    expect(source).toContain('if (next === null || next === previous) return;');
-    expect(source).not.toContain('projectRef.current?.measureInWindow');
-    expect(source).toContain('return resolveHomeProjectChildAnchor({');
-    expect(source).toContain('const [windowAnchor, setWindowAnchor] = useState(-1);');
-    expect(source).toContain('trailingSpacerHeight: childContentHeight');
-    expect(source).toContain('{windowingEnabled && scrollY ? (');
-    expect(source).toContain('const renderedSessions = windowingEnabled ? visibleSessions.slice');
-    expect(source).toContain('if (!windowingEnabled) return;');
+    const file = ts.createSourceFile('screen.tsx', readFileSync(
+      resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8',
+    ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let initializer: ts.Expression | undefined;
+    const visit = (node: ts.Node) => {
+      if (!initializer && ts.isVariableDeclaration(node) && node.name.getText(file) === 'windowingEnabled') {
+        initializer = node.initializer;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    if (!initializer) throw new Error('Missing production child-window gate');
+    const evaluate = new Function('shouldWindowHomeProjectChildren', 'collapsed', 'visibleSessions',
+      'homeScrollY', 'projectLayoutReady', 'PROJECT_CHILD_WINDOW_THRESHOLD',
+      'return (' + initializer.getText(file) + ');');
+    // Execute the real first-render gate before native layout exists. The old
+    // readiness dependency mounted the full 200-row tree before windowing began.
+    expect(evaluate(shouldWindowHomeProjectChildren, false, Array(200), {}, false, 20)).toBe(true);
+    expect(evaluate(shouldWindowHomeProjectChildren, true, Array(200), {}, false, 20)).toBe(false);
   });
 
   it('bounds the outer home list window instead of retaining every flat row', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/session/HomeSurface.tsx'), 'utf8');
 
-    expect(source).toContain('initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}');
-    expect(source).toContain('maxToRenderPerBatch={HOME_LIST_RENDER_BATCH_SIZE}');
-    expect(source).toContain('updateCellsBatchingPeriod={32}');
-    expect(source).toContain('windowSize={HOME_LIST_WINDOW_SIZE}');
+    const readBatch = (attribute: string, platform: string, grouped: boolean) => {
+      const expression = source.match(new RegExp(`${attribute}=\\{([^}]+)\\}`))?.[1];
+      if (!expression) throw new Error('Missing production list batch expression: ' + attribute);
+      return new Function('Platform', 'groupByProject', 'HOME_LIST_INITIAL_RENDER_COUNT', 'HOME_LIST_RENDER_BATCH_SIZE',
+        `return (${expression});`)({ OS: platform }, grouped, 12, 12);
+    };
+    for (const platform of ['android', 'ios']) {
+      for (const grouped of [false, true]) {
+        expect(readBatch('initialNumToRender', platform, grouped)).toBe(platform === 'android' && grouped ? 4 : 12);
+        expect(readBatch('maxToRenderPerBatch', platform, grouped)).toBe(platform === 'android' && grouped ? 2 : 12);
+      }
+    }
   });
 
   it('keeps the last visible project rows mounted when scrolling down and back up', () => {

@@ -36,7 +36,7 @@ afterEach(() => {
 
 it('negotiates only the overlay path and preserves legacy init and response', async () => {
   await expect(
-    capture.frame('1', true, { fps: 60, bitrate: 8_000_000, audio: false }),
+    capture.frame('1', true, { fps: 60, quality: 'auto', audio: false }),
   ).resolves.toEqual({ jpeg: 'anBlZw==', cursor: null });
   expect(openWindowsDesktopConnection).toHaveBeenLastCalledWith({
     mode: 'capture',
@@ -60,7 +60,7 @@ it('reuses capture until video quality changes, then closes the old connection',
   await capture.frame('1', true);
   await capture.frame('1', true);
   expect(connections).toHaveLength(1);
-  await capture.frame('1', true, { fps: 30, bitrate: 20_000_000, audio: true });
+  await capture.frame('1', true, { fps: 30, quality: 'hd', audio: true });
   expect(connections).toHaveLength(2);
   expect(connections[0].close).toHaveBeenCalledOnce();
 });

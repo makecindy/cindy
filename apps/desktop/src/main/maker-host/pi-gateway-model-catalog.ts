@@ -44,7 +44,7 @@ function piApiFromWireProtocol(protocol: ProviderWireProtocol | undefined): PiMo
 }
 
 function catalogModelApi(
-  model: ProviderRuntimeModelConfig,
+  model: Pick<ProviderRuntimeModelConfig, 'piApi' | 'route'>,
   defaultProtocol: ProviderWireProtocol | undefined,
 ): PiModelApi | undefined {
   return model.piApi ?? piApiFromWireProtocol(model.route?.wireProtocol ?? defaultProtocol);
@@ -136,12 +136,17 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
     'gpt-6-astra',
   ].flatMap((id) => [
     [id, { provider: 'openai', modelId: id }] as const,
+    [`openai-codex/${id}`, { provider: 'openai', modelId: id }] as const,
     [`codex/${id}`, { provider: 'openai', modelId: id }] as const,
   ]),
+  ['openai-codex/gpt-5.5:auto', { provider: 'openai', modelId: 'gpt-5.5' }],
   ['codex/gpt-5.5:auto', { provider: 'openai', modelId: 'gpt-5.5' }],
-  ...['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4-pro'].map(
-    (id) => [`deepseek/${id}`, { provider: 'deepseek', modelId: id }] as const,
+  // DeepSeek serves every Flash alias (including the retired V4 names) with V4.1 Flash as
+  // `deepseek-flash`; Pi 1.4 only catalogs that ID, so map the aliases to its compat row.
+  ...['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'].map(
+    (id) => [`deepseek/${id}`, { provider: 'deepseek', modelId: 'deepseek-flash' }] as const,
   ),
+  ['deepseek/deepseek-v4-pro', { provider: 'deepseek', modelId: 'deepseek-v4-pro' }],
   ['moonshot/kimi-k3', { provider: 'moonshotai', modelId: 'kimi-k3' }],
   ['moonshotai/kimi-k2.6', { provider: 'moonshotai', modelId: 'kimi-k2.6' }],
   ['moonshotai/kimi-k3', { provider: 'moonshotai', modelId: 'kimi-k3' }],

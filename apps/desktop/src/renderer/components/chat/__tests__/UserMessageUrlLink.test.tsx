@@ -14,6 +14,7 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuShortcut: ({ children }: { children: ReactNode }) => <span aria-hidden>{children}</span>,
   DropdownMenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>
       {children}
@@ -141,13 +142,30 @@ describe('UserMessageUrlLink', () => {
     expect(screen.getByText('chat.markdownRenderer.copyLink')).toBeTruthy();
   });
 
-  it('keeps Ctrl-click as a temporary external-browser override', async () => {
+  it.each([{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }])('uses %j as a temporary external-browser override', async (modifier) => {
     localStorage.setItem('chat.webLinkOpenPreference', 'sidebar');
     render(<UserMessageUrlLink url={URL} sessionId="session-a" />);
 
-    fireEvent.click(screen.getByRole('link'), { ctrlKey: true });
+    fireEvent.click(screen.getByRole('link'), modifier);
 
     await waitFor(() => expect(openExternal).toHaveBeenCalledWith(URL));
     expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+    expect(localStorage.getItem('chat.webLinkOpenPreference')).toBe('sidebar');
+  });
+
+  it('supports middle click and Shift+Enter without changing the sidebar preference', async () => {
+    render(<UserMessageUrlLink url={LOCAL_URL} sessionId="session-a" />);
+    fireEvent(screen.getByRole('link'), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    fireEvent.keyDown(screen.getByRole('link'), { key: 'Enter', shiftKey: true });
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    expect(openUrlInSidebarBrowser).not.toHaveBeenCalled();
+  });
+
+  it('offers copy and system-browser actions without a session, including keyboard access', () => {
+    render(<UserMessageUrlLink url={URL} />);
+    fireEvent.keyDown(screen.getByRole('link'), { key: 'F10', shiftKey: true });
+    expect(screen.getByText('chat.markdownRenderer.copyLink')).toBeTruthy();
+    expect(screen.getByText('chat.markdownRenderer.openInDefaultBrowser')).toBeTruthy();
+    expect(screen.queryByText('chat.markdownRenderer.openInSidebarBrowser')).toBeNull();
   });
 });

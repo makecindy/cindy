@@ -15,8 +15,9 @@
  *
  * 错误模型:
  *   - writeLine() reject = "这一行没写出去" (caller 自行决定怎么处理)
- *   - onClose 触发 = "transport 已经断了" (重连由上层 / 不在 transport 责任内)
- *   - transport 内部任何异步错误都最终走 onClose(reason)
+ *   - 本地 onClose = 已确认进程退出;远端仍沿用其 channel 关闭语义
+ *   - 本地 onDisconnect = RPC 管道失联但进程退出未确认,不能提前清理 runtime
+ *   - RPC 失联后仍须 close() 确认终止;不靠静默时长推断管道失联
  *
  * 生命周期语义 (SSH remote 关键差异):
  *   - 本地 stdio: close() = SIGTERM → 宽限期 → SIGKILL 子进程
@@ -41,6 +42,7 @@ export interface PiTransportCloseInfo {
 export type PiLineHandler = (line: string) => void;
 export type PiCloseHandler = (info: PiTransportCloseInfo) => void;
 export type PiOversizedFrameHandler = () => void;
+export type PiDisconnectReason = 'stdout-ended' | 'stdout-closed' | 'stdout-error' | 'stdin-error';
 
 /**
  * 双向 transport。一个实例只服务一个 PiRpcProcess (1:1)。
@@ -58,6 +60,9 @@ export interface PiTransport {
   /** 注册关闭回调。触发后此 transport 不再可用, writeLine 一律 reject。 */
   onClose(handler: PiCloseHandler): () => void;
 
+  /** RPC pipes are unusable; this is NOT proof that the executor exited. */
+  onDisconnect?(handler: (reason: PiDisconnectReason) => void): () => void;
+
   /**
    * (可选) 丢掉超限 JSONL 帧时通知协议层。合法 get_entries 带图历史可以超过
    * 16 MiB；transport 必须保持存活，但对应 pending RPC 不能再空等超时。
@@ -70,7 +75,7 @@ export interface PiTransport {
   /** 本地进程 pid (ssh 场景无意义, undefined)。 */
   readonly pid: number | undefined;
 
-  /** 已关闭 (进程退出 / channel 断开 / close() 之后)。 */
+  /** RPC 已不可用 (进程退出 / 管道失联 / channel 断开 / close() 之后)。 */
   isClosed(): boolean;
 
   /**
@@ -116,10 +121,16 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     cwd: opts.cwd,
     env: opts.env as NodeJS.ProcessEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
+    // #5173:pi.exe 是 Bun 编译的控制台子系统可执行文件,Windows 上不隐藏窗口会为每个
+    // 本机会话派生一个 conhost.exe;与仓库内其它 agent 子进程 spawn 保持一致。
+    windowsHide: true,
   });
   const logger = opts.logger;
 
   let closed = false;
+  let disconnected: PiDisconnectReason | undefined;
+  let disconnectNotified = false;
+  let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
   // First close permanently fences writes. Individual termination attempts are
   // shared while in flight, then cleared after failure so a later owner can
   // run a fresh SIGTERM -> SIGKILL sequence.
@@ -141,6 +152,7 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   const lineHandlers = new Set<PiLineHandler>();
   const oversizedHandlers = new Set<PiOversizedFrameHandler>();
   const closeHandlers = new Set<PiCloseHandler>();
+  const disconnectHandlers = new Set<(reason: PiDisconnectReason) => void>();
   const stderrHandlers = new Set<(line: string) => void>();
   const stderrBuffer: string[] = [];
 
@@ -155,6 +167,8 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     closed = true;
     if (exitDrainTimer) clearTimeout(exitDrainTimer);
     exitDrainTimer = undefined;
+    if (disconnectTimer) clearTimeout(disconnectTimer);
+    disconnectTimer = undefined;
     disposeRegistration();
     for (const handler of closeHandlers) {
       try { handler(info); } catch { /* handler should not throw */ }
@@ -179,11 +193,39 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     return () => { stderrHandlers.delete(handler); };
   };
 
+  // Fence writes before the JSONL reader's EOF flush invokes tail callbacks.
+  // Keep reads open through the confirmation window so settled/results survive;
+  // only confirmed executor exit/close may release the process lease.
+  const disconnect = (reason: PiDisconnectReason): void => {
+    if (closed || closing || exitInfo || disconnected) return;
+    disconnected = reason;
+    // A normal process exit often closes stdout before Node emits `exit`.
+    // Fence writes now, but allow a bounded confirmation window so startup
+    // failures retain their exit code and drained stderr instead of becoming
+    // an unconfirmed RPC-loss error. This is not a long-tool timeout.
+    disconnectTimer = setTimeout(() => {
+      disconnectTimer = undefined;
+      if (closed || closing || exitInfo) return;
+      disconnectNotified = true;
+      for (const handler of disconnectHandlers) {
+        try { handler(reason); } catch { /* owner handles its own cleanup */ }
+      }
+    }, 250);
+    disconnectTimer.unref?.();
+  };
+  child.stdout.on('end', () => disconnect('stdout-ended'));
+  child.stdout.on('close', () => disconnect('stdout-closed'));
+  child.stdout.on('error', () => disconnect('stdout-error'));
+  child.stdin.on('error', () => disconnect('stdin-error'));
+
   attachJsonlReader(child.stdout, (line) => {
-    if (closed) return;
+    // A broken stdin fences new commands immediately, but stdout can still
+    // carry already-written results/settled during the confirmation window.
+    // Freeze reads only once loss is reported (or executor close is final).
+    if (closed || disconnectNotified) return;
     for (const handler of lineHandlers) handler(line);
   }, () => {
-    if (closed) return;
+    if (closed || disconnectNotified) return;
     for (const handler of oversizedHandlers) handler();
   });
   attachJsonlReader(child.stderr, (line) => {
@@ -292,7 +334,7 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
 
   return {
     writeLine(line: string): Promise<void> {
-      if (closed || closing) return Promise.reject(new Error('pi transport already closed'));
+      if (closed || closing || disconnected) return Promise.reject(new Error('pi transport already closed'));
       return new Promise<void>((resolve, reject) => {
         child.stdin.write(line + '\n', (err) => {
           if (err) reject(err);
@@ -313,6 +355,12 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     onClose(handler: PiCloseHandler): () => void {
       closeHandlers.add(handler);
       return () => { closeHandlers.delete(handler); };
+    },
+
+    onDisconnect(handler): () => void {
+      disconnectHandlers.add(handler);
+      if (disconnectNotified && disconnected) handler(disconnected);
+      return () => { disconnectHandlers.delete(handler); };
     },
 
     onOversizedFrame(handler: PiOversizedFrameHandler): () => void {
@@ -346,8 +394,9 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     },
 
     isClosed(): boolean {
-      // closing 期间也算关闭:close() 已开始, 不应再接受新写入(轮 40-w1 M-2)。
-      return closed || closing;
+      // Unavailable RPC does not imply confirmed executor termination. close()
+      // still retries termination until the process exit is observed.
+      return closed || closing || disconnected !== undefined;
     },
 
     get remoteBinaryPath(): undefined {

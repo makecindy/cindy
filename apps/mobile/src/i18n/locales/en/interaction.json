@@ -20,7 +20,14 @@
     "allowOnceAccessibility": "Allow permission request once",
     "allowOnceConfirm": "Confirm allow once",
     "highRisk": "High risk",
-    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action."
+    "autoReviewUnavailable": "Automatic review could not finish. Confirm whether to allow this action.",
+    "autoReviewReason": "Auto review needs your decision: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "Enable Full access?",
+      "description": "Full access disables the workspace sandbox and skips routine approvals. {{appName}} can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
+      "confirm": "Enable Full access",
+      "cancel": "Keep current permissions"
+    }
   },
   "planMode": {
     "label": "Plan mode",
@@ -69,6 +76,8 @@
     "next": "Next",
     "answerRequired": "Select or enter an answer to continue.",
     "submit": "Submit",
+    "sendAndContinue": "Send and continue",
+    "closeAnswer": "Close",
     "planReviewTitle": "Review Claude's plan",
     "planExpand": "Expand plan",
     "planEditHint": "Use edit mode to adjust the plan",
@@ -123,11 +132,17 @@
     "fallback": {
       "title": "Remote Request Needs Attention",
       "label": "Request"
+    },
+    "input_handoff": {
+      "title": "Input Handoff Needed",
+      "label": "Input Handoff"
     }
   },
   "rewind": {
     "readError": "Couldn't read the rewind preview. Sync again and retry.",
-    "noFilesNote": "No files to roll back; only the chat after this message will be truncated.",
+    "noFilesNote": "No project file changes were detected after this message. Continuing will remove the later chat.",
+    "conversationOnlyNote": "Project files cannot be restored because no Git savepoint is available. Continuing will remove the chat after this message; files will not return to their earlier state.",
+    "gitSafetyDisabledNote": "Git safety savepoints are disabled, so project files cannot be restored. Enable them in Settings on your computer; continuing will remove the chat after this message.",
     "moreFiles": "{{count}} more files",
     "stats": "{{count}} files · +{{insertions}} / -{{deletions}} lines",
     "gotIt": "Got it",
@@ -141,7 +156,8 @@
     "titleError": "Can't rewind",
     "detailLoading": "Reading the file rewind preview from your computer.",
     "detailDefault": "This rolls back the files below and truncates the chat after this message.",
-    "detailEmpty": "No files to roll back; confirming truncates only the chat after this message.",
+    "detailEmpty": "No project file changes were detected after this message.",
+    "detailConversationOnly": "Project files will not return to their earlier state.",
     "detailError": "Your computer declined this rewind."
   },
   "collab": {
@@ -154,8 +170,10 @@
     "dispatchBodyFallback": "Create worker",
     "sendTitle": "Message to worker",
     "sendBodyFallback": "Send message",
-    "reportTitle": "Worker report",
-    "reportBodyFallback": "(empty report)"
+    "fromLead": "Message from Lead",
+    "fromWorkerNamed": "Message from Worker “{{role}}”",
+    "fromWorker": "Message from Worker",
+    "emptyMessageBody": "(Empty message)"
   },
   "contextSheet": {
     "backAccessibility": "Back to the context panel",
@@ -194,7 +212,8 @@
     "photoNotReadable": "This photo can't be read right now (it may not have finished downloading from iCloud). Try again later."
   },
   "pluginSetup": {
-    "completeOnDesktop": "Complete this setup on the controlled desktop. This card will update automatically.",
+    "remoteDesktop": "Open Desktop",
+    "completeOnDesktop": "Use remote desktop to complete setup on the computer. Login, authorization and credentials stay on that computer; this card updates automatically.",
     "chooseOne": "Choose one setup method",
     "progress": "{{satisfied}}/{{total}} completed",
     "desktopActionHint": "On your computer: {{action}}",
@@ -232,8 +251,133 @@
     "inlineFormAction": "Enter {{label}} on your computer",
     "inlineFormActionGeneric": "Enter one setting on your computer"
   },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "This page doesn't use a secure connection. What you enter could be read by others.",
+      "ip-address": "This page uses an IP address instead of a domain. Make sure it's the site you expect.",
+      "local-host": "This page comes from a service on this computer. Make sure it's the app you expect.",
+      "local-file": "This page is a local file. Make sure it's what you expect.",
+      "punycode": "This address contains unusual characters and may imitate another site. Check it carefully.",
+      "embedded-frame": "These fields are inside another site embedded in the page. Make sure the source is trusted."
+    },
+    "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
+    "error": {
+      "decision": "That didn't go through. Try again.",
+      "stale": "The screen has changed. Use the latest version.",
+      "submit": "Your input didn't go through. Try again."
+    },
+    "terminal": {
+      "succeeded": "Handed back to the agent.",
+      "cancelled": "Input handoff canceled.",
+      "failed": "Input handoff ended.",
+      "expired": "Input handoff ended after waiting too long."
+    },
+    "failure": {
+      "permission": "Cindy can't read this computer's screen. Allow Cindy under Accessibility in System Settings.",
+      "target_gone": "The target window was closed.",
+      "unreadable": "This screen can't be read. You can finish it on the host computer, then hand back to the agent.",
+      "action_failed": "That action didn't take effect. Check the screen and try again.",
+      "timeout": "Input handoff ended after waiting too long.",
+      "unsupported": "This computer doesn't support input handoff yet.",
+      "origin_changed": "The page changed before Cindy could fill it, so nothing was entered. Check the current page, then try again.",
+      "picture_unavailable": "Couldn't show this step as a picture. Allow Cindy to record the screen in System Settings, and make sure the window isn't minimized.",
+      "screen_locked": "This computer's screen is locked (a display going to sleep locks it too). Wake and unlock it, then ask the agent to try again.",
+      "nothing_to_fill": "Nothing on this screen needs typing, so the agent carries on by itself."
+    },
+    "phase": {
+      "reading": "Reading the screen…",
+      "working": "Filling in…",
+      "finishing": "Looks complete. Handing back to the agent in {{count}}s.",
+      "finishingNow": "Looks complete. Handing back to the agent…"
+    },
+    "action": {
+      "stay": "Not Done Yet",
+      "done": "Hand Back to Agent",
+      "cancel": "Cancel Handoff",
+      "claim": "Handle Here",
+      "picture": "Show screen",
+      "backToForm": "Back to form",
+      "liveView": "Live View",
+      "fill": "Fill In",
+      "skip": "Skip",
+      "continue": "Continue",
+      "close": "Cancel",
+      "showPassword": "Show Password",
+      "hidePassword": "Hide Password",
+      "scan": "Scan"
+    },
+    "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",
+    "unnamedField": "Field",
+    "passwordField": "Password",
+    "codeField": "Verification code",
+    "filledHint": "Already has content. Leave empty to keep it.",
+    "record": {
+      "doneOn_one": "Owner finished {{count}} input step on {{device}}",
+      "doneOn_other": "Owner finished {{count}} input steps on {{device}}",
+      "doneHost_one": "Owner finished {{count}} input step on the host computer",
+      "doneHost_other": "Owner finished {{count}} input steps on the host computer",
+      "donePhone_one": "Owner finished {{count}} input step on a phone",
+      "donePhone_other": "Owner finished {{count}} input steps on a phone",
+      "doneElsewhere_one": "Owner finished {{count}} input step on another device",
+      "doneElsewhere_other": "Owner finished {{count}} input steps on another device",
+      "done": "Input handoff finished",
+      "nothingToFill": "Nothing to type; handed back to the agent",
+      "cancelled": "Input handoff cancelled",
+      "expired": "Input handoff timed out",
+      "failed": "Input handoff didn't finish"
+    },
+    "holder": {
+      "elsewhere": "Being handled on {{device}}. You can take it over here.",
+      "host": "the host computer",
+      "phone": "a phone",
+      "otherDevice": "another device"
+    },
+    "agentNote": "Note from the agent: {{note}}",
+    "picture": {
+      "hint": "Tap a spot in the picture and Cindy taps the same spot on the host computer.",
+      "open": "Show this step",
+      "openHint": "This step can't be shown as a form. The picture is sent encrypted to this device only and isn't saved.",
+      "alt": "Picture of the target window",
+      "loading": "Getting the picture…",
+      "error": "Couldn't get the picture. Try again.",
+      "field": "Focused field",
+      "type": "Type",
+      "typeEnter": "Type and press Return"
+    },
+    "liveViewHint": "See just this window live from here. Clicks and typing stay inside it.",
+    "deviceCode": {
+      "prompt": "Sign in with this code",
+      "copy": "Copy Code",
+      "copied": "Code copied",
+      "copyFailed": "Couldn't copy the code",
+      "open": "Open on This Device",
+      "openFailed": "Couldn't open the link",
+      "then": "Enter the code on that page and finish signing in, then choose Hand Back to Agent."
+    },
+    "sheetNote": "Only entered here on the computer. Not shared with the agent, and not saved.",
+    "nothingLeft": "Nothing here needs you to type.",
+    "qr": {
+      "open": "Open {{site}} Here",
+      "openApp": "Open {{site}} Link Here",
+      "share": "Save or Share Image",
+      "copyLink": "Copy Link",
+      "copyText": "Copy Text",
+      "copied": "Copied.",
+      "copyFailed": "Couldn't copy. Try again.",
+      "openFailed": "This device can't open the link. Save the image and pick it from Photos in the app's scanner.",
+      "shareFailed": "Couldn't open sharing. Try again.",
+      "hintLink": "Opening it here hands the sign-in to the app that handles the link. Or save the image and pick it from Photos in the app's scanner. Cindy continues once you're signed in.",
+      "hint": "Save the image and pick it from Photos in the app's scanner, or scan this code from another device. Cindy continues once you're signed in.",
+      "alt": "QR code on the computer. Tapping it taps the code on the computer.",
+      "loading": "Getting the QR code…",
+      "failed": "Couldn't get the QR code. Tap to try again.",
+      "scanned": "Scanned. Confirm on your phone; Cindy continues once you do."
+    }
+  },
   "presentation": {
-    "action": { "submitting": "Submitting" },
+    "action": {
+      "submitting": "Submitting"
+    },
     "permission": {
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
@@ -241,7 +385,12 @@
       "allowTitle": "The computer will continue after you allow this",
       "tool": "Tool: {{tool}}",
       "title": "Allow {{tool}}?",
-      "risk": "This command may change the system, repository, or an external service. Before allowing it, confirm that you trust the current task and command."
+      "risk": "This command may change the system, repository, or an external service. Before allowing it, confirm that you trust the current task and command.",
+      "titleCommand": "Allow this command to run?",
+      "titleFileRead": "Allow reading files?",
+      "titleFileWrite": "Allow changing files?",
+      "titleBrowser": "Allow this browser step?",
+      "titlePlugin": "Allow the {{plugin}} plugin?"
     },
     "ask": {
       "progress": "Question {{current}} of {{total}}",
@@ -261,7 +410,6 @@
     },
     "queue": {
       "count": "{{count}} requests",
-      "readOnlyHint": "Collaboration is read-only; requests from the computer are shown here.",
       "empty": "No pending requests",
       "hint": {
         "plan_review": "Review the plan and request changes if needed. The computer continues only after approval.",
@@ -271,6 +419,19 @@
         "plugin_setup": "Setup must be completed on the computer; you can cancel this request here.",
         "fallback": "Mobile handles remote requests in the order sent by the desktop."
       }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} needs your go-ahead",
+    "operation": "Operation",
+    "details": "Details",
+    "fields": {
+      "path": "File",
+      "file_path": "File",
+      "url": "Address",
+      "command": "Command",
+      "ghost_id": "Plugin",
+      "tool": "Tool"
     }
   }
 }

@@ -4,13 +4,17 @@ import { BUNDLED_CATALOG, providerMediaField } from '@cindy/model-providers';
 
 import {
   commitModelPlaneFromCatalog,
+  clearDiscoveredProviderModels,
   getActiveCatalog,
   getActiveCatalogRevision,
   setActiveCatalog,
+  setManagedProviders,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
   setCustomProviderConfigs,
   setDiscoveredCodexModels,
+  setDiscoveredProviderMediaModels,
+  setDiscoveredProviderModels,
   setXaiDiscoveredModels,
 } from '../active-catalog.js';
 
@@ -20,8 +24,11 @@ describe('active catalog revision', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([]);
     setDiscoveredCodexModels([]);
+    clearDiscoveredProviderModels();
+    setDiscoveredProviderMediaModels('byok-collision', null);
     setXaiDiscoveredModels(null);
     setCustomProviderConfigs([]);
+    setManagedProviders([]);
   });
 
   it('invalidates the merged catalog before notifying one monotonic revision', () => {
@@ -253,4 +260,52 @@ describe('active catalog revision', () => {
       currentOpenAi.models.codex,
     );
   });
+  it('retains a pending enterprise Provider without inventing a runnable route', () => {
+    setManagedProviders([{ id: 'byok-pending', name: 'Enterprise',
+      source: 'organization', auth: { method: 'managed' }, access: { kind: 'managed' }, agents: [], models: {}, routing: {},
+    }]);
+    expect(getActiveCatalog().providers.find((provider) => provider.id === 'byok-pending')).toMatchObject({
+      agents: [], models: {}, routing: {}, source: 'organization',
+    });
+    setManagedProviders([]);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'byok-pending')).toBe(false);
+  });
+
+  it('temporarily gives a managed Provider precedence over a legacy personal id collision', () => {
+    setCustomProviderConfigs([{
+      id: 'byok-collision', name: 'Legacy personal', runtimes: {
+        pi: { baseUrl: 'https://personal.example/v1', models: [{ id: 'chat', name: 'Chat' }] },
+      },
+    }]);
+    setDiscoveredProviderModels('byok-collision', 'pi', [{
+      id: 'personal-discovered', name: 'Personal discovered', contextWindow: 8_000,
+      efforts: [], defaultEffort: null,
+    }]);
+    setDiscoveredProviderMediaModels('byok-collision', {
+      imageModels: [{ id: 'personal-image', name: 'Personal image' }],
+    });
+    setManagedProviders([{
+      id: 'byok-collision', name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['pi'],
+      models: { pi: [{ id: 'enterprise-chat', name: 'Enterprise chat', contextWindow: 8_000,
+        efforts: [], defaultEffort: null }] }, routing: {},
+      imageModels: [{ id: 'enterprise-image', name: 'Enterprise image' }],
+    }]);
+    const enterprise = getActiveCatalog().providers.filter(
+      (provider) => provider.id === 'byok-collision',
+    );
+    expect(enterprise).toHaveLength(1);
+    expect(enterprise[0]).toMatchObject({
+      name: 'Enterprise', source: 'organization',
+      models: { pi: [{ id: 'enterprise-chat' }] },
+      imageModels: [{ id: 'enterprise-image' }],
+    });
+
+    setManagedProviders([]);
+    expect(getActiveCatalog().providers.find((provider) => provider.id === 'byok-collision')).toMatchObject({
+      name: 'Legacy personal', source: 'user',
+      models: { pi: expect.arrayContaining([expect.objectContaining({ id: 'personal-discovered' })]) },
+    });
+  });
+
 });

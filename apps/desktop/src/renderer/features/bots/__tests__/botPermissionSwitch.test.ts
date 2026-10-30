@@ -42,7 +42,7 @@ function fixture() {
 }
 
 describe('companion canonical task uses the standard live permission switch', () => {
-  it('applies ask to the running task before saving or reporting success', async () => {
+  it('waits for the Host commit before reporting success without a second DB write', async () => {
     const f = fixture();
     let release!: () => void;
     f.runtime.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
@@ -52,7 +52,7 @@ describe('companion canonical task uses the standard live permission switch', ()
     expect(f.changed).not.toHaveBeenCalled();
     release();
     await pending;
-    expect(f.persist).toHaveBeenCalledWith('bot-canonical', { permissionMode: 'ask' });
+    expect(f.persist).not.toHaveBeenCalled();
     expect(f.changed).toHaveBeenCalledWith('ask');
   });
 
@@ -65,15 +65,25 @@ describe('companion canonical task uses the standard live permission switch', ()
     expect(f.error).toHaveBeenCalled();
   });
 
-  it('restores the running task when persistence fails', async () => {
+  it('does not send a stale rollback after the Host rejects persistence', async () => {
     const f = fixture();
-    f.persist.mockRejectedValueOnce(new Error('database failed'));
+    f.runtime.mockRejectedValueOnce(new Error('database failed'));
     await f.change('ask');
     expect(f.runtime.mock.calls).toEqual([
-      ['bot-canonical', 'ask'], ['bot-canonical', 'bypassPermissions'],
+      ['bot-canonical', 'ask'],
     ]);
     expect(f.changed).not.toHaveBeenCalled();
   });
+
+  it.each(['ask', 'auto', 'default', 'acceptEdits', 'bypassPermissions', 'plan'])(
+    'reports %s only after the actual shared callback completes', async (mode) => {
+      const f = fixture();
+      await f.change(mode);
+      expect(f.runtime).toHaveBeenCalledExactlyOnceWith('bot-canonical', mode);
+      expect(f.persist).not.toHaveBeenCalled();
+      expect(f.changed).toHaveBeenCalledWith(mode);
+    },
+  );
 
   it('requires explicit confirmation before enabling full access', async () => {
     const f = fixture();

@@ -34,9 +34,9 @@ const session = (id: string): RemoteSession =>
 function reader(): SessionMenuUsageReader {
   return {
     getCodexRateLimits: vi.fn(async () => account),
-    getAccountUsage: vi.fn(async () => {
-      throw new Error("unavailable");
-    }),
+    getAccountUsage: vi.fn(async (): Promise<unknown> => null),
+    getSubscriptionUsage: vi.fn(async () => null),
+    getClaudeSessionRoute: vi.fn(async () => null),
     getSessionEstimatedValue: vi.fn(async () => ({
       totalValueMoney: {
         amount: 12,
@@ -178,7 +178,8 @@ describe("menu usage refresh lifecycle", () => {
         account: { ...account.account, planType: "wrong-provider" },
       }),
     );
-    expect(h.value.account?.source).toBe("unavailable");
+    expect(h.value.account?.source).toBe("xai");
+    expect(h.value.account?.plan).toBeNull();
     expect(h.value.account?.windows).toEqual([]);
   });
   it("does not reuse web quota across an unresolved source and a Gateway switch", async () => {
@@ -191,8 +192,10 @@ describe("menu usage refresh lifecycle", () => {
       agentKind: "pi" as const,
       model: "chatgpt/gpt-5",
     };
+    // A providerless non-bridge Pi model has no confirmed account route.
+    const unresolved = { ...task, providerId: null, model: "gpt-5" };
     await h.render(task);
-    await h.render({ ...task, providerId: null });
+    await h.render(unresolved);
     expect(h.value.account?.source).toBe("unavailable");
     expect(r.getAccountUsage).toHaveBeenCalledTimes(1);
     vi.mocked(r.getAccountUsage).mockResolvedValue({
@@ -206,7 +209,7 @@ describe("menu usage refresh lifecycle", () => {
     );
     expect(h.value.account?.source).toBe("gateway");
     expect(h.value.account?.windows).toEqual([]);
-    await h.render({ ...task, providerId: null });
+    await h.render(unresolved);
     expect(h.value.account?.source).toBe("unavailable");
     expect(h.value.account?.amounts).toEqual([]);
     expect(r.getAccountUsage).toHaveBeenCalledTimes(2);
@@ -218,6 +221,7 @@ describe("menu usage refresh lifecycle", () => {
     vi.mocked(r.getCodexRateLimits).mockRejectedValue(
       new Error("DEVICE_OFFLINE"),
     );
+    vi.mocked(r.getAccountUsage).mockRejectedValue(new Error("DEVICE_OFFLINE"));
     vi.mocked(r.getSessionEstimatedValue).mockRejectedValue(
       new Error("DEVICE_OFFLINE"),
     );
@@ -233,11 +237,71 @@ describe("menu usage refresh lifecycle", () => {
     vi.mocked(r.getCodexRateLimits).mockRejectedValue(
       new Error("CHANNEL_NOT_ALLOWED"),
     );
+    vi.mocked(r.getAccountUsage).mockRejectedValue(new Error("unavailable"));
     const h = harness(r);
     await h.render();
     expect(h.value.account).toBeNull();
     expect(h.value.accountFailed).toBe(true);
     expect(h.value.estimate?.amount).toBe(12);
     expect(h.value.loading).toBe(false);
+  });
+});
+
+// 远程 Agent:Agent 在另一台电脑上用那台的登录运行,账号余量读那台;任务价值仍读被控电脑。
+describe("menu usage with a remote Agent account", () => {
+  async function renderWith(
+    host: SessionMenuUsageReader,
+    accountReader: SessionMenuUsageReader | null,
+    task: RemoteSession,
+  ) {
+    let value!: ReturnType<typeof useSessionMenuUsage>;
+    function Probe() {
+      value = useSessionMenuUsage(task, host, true, null, undefined, accountReader);
+      return null;
+    }
+    root = createRoot(document.createElement("div"));
+    await act(async () => root!.render(createElement(Probe)));
+    return () => value;
+  }
+
+  it("reads the account from the Agent's computer and the task value from the host", async () => {
+    const host = reader();
+    const agent = reader();
+    vi.mocked(agent.getSubscriptionUsage).mockResolvedValue({
+      subscriptionType: "max",
+      fiveHour: { utilization: 12 },
+    });
+    const task = {
+      ...session("a"),
+      agentKind: "cc",
+      model: "claude-fable-5",
+      providerId: "anthropic",
+      agentDeviceId: "device-agent",
+    } as RemoteSession;
+    const value = await renderWith(host, agent, task);
+    expect(value().account?.source).toBe("claude");
+    expect(value().account?.windows[0]?.remainingPercent).toBe(88);
+    expect(value().estimate?.amount).toBe(12);
+    expect(agent.getSubscriptionUsage).toHaveBeenCalledWith("claude", "anthropic");
+    expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
+    expect(host.getSessionEstimatedValue).toHaveBeenCalledWith("a");
+    expect(agent.getSessionEstimatedValue).not.toHaveBeenCalled();
+  });
+
+  it("shows an unreadable account as unavailable without borrowing the host's account", async () => {
+    const host = reader();
+    const task = {
+      ...session("a"),
+      agentKind: "cc",
+      model: "claude-fable-5",
+      providerId: "anthropic",
+      agentDeviceId: "share:share-1",
+    } as RemoteSession;
+    const value = await renderWith(host, null, task);
+    expect(value().account?.source).toBe("unavailable");
+    expect(value().account?.windows).toEqual([]);
+    expect(value().estimate?.amount).toBe(12);
+    expect(host.getSubscriptionUsage).not.toHaveBeenCalled();
+    expect(host.getCodexRateLimits).not.toHaveBeenCalled();
   });
 });

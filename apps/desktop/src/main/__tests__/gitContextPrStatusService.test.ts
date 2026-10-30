@@ -29,7 +29,9 @@ function remote(partial: Partial<PrRemoteState>): PrRemoteState {
 describe('mapRemoteToStatus', () => {
   it('四态映射:merged 优先于 closed,draft 仅在 open', () => {
     expect(mapRemoteToStatus(remote({ state: 'closed', merged: true }))).toBe('merged');
-    expect(mapRemoteToStatus(remote({ state: 'closed', merged_at: '2026-06-12T00:00:00Z' }))).toBe('merged');
+    expect(mapRemoteToStatus(remote({ state: 'closed', merged_at: '2026-06-12T00:00:00Z' }))).toBe(
+      'merged',
+    );
     expect(mapRemoteToStatus(remote({ state: 'closed' }))).toBe('closed');
     expect(mapRemoteToStatus(remote({ draft: true }))).toBe('draft');
     expect(mapRemoteToStatus(remote({}))).toBe('open');
@@ -51,6 +53,16 @@ describe('filterPrStatusQueriesForRefs', () => {
 });
 
 describe('PrStatusService', () => {
+  it('expired credentials offer local sign-in while remote callers retain no-token', async () => {
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => {
+        throw Object.assign(new Error('Unauthorized'), { status: 401 });
+      },
+    });
+    expect(await svc.getStatuses([Q])).toMatchObject([{ reason: 'gh-not-logged-in' }]);
+    expect(await svc.getStatuses([Q], { remote: true })).toMatchObject([{ reason: 'no-token' }]);
+  });
   it('正常查询返回状态与标题', async () => {
     const svc = new PrStatusService({
       readToken: TOKEN_OK,
@@ -82,7 +94,10 @@ describe('PrStatusService', () => {
       readToken: TOKEN_OK,
       fetchPr: async () => remote({}),
     });
-    expect((await withoutCount.getStatuses([Q]))[0]).toMatchObject({ ok: true, unresolvedCount: null });
+    expect((await withoutCount.getStatuses([Q]))[0]).toMatchObject({
+      ok: true,
+      unresolvedCount: null,
+    });
   });
 
   it('TTL 内命中缓存,过期后重新拉取', async () => {
@@ -102,11 +117,36 @@ describe('PrStatusService', () => {
     expect(fetchPr).toHaveBeenCalledTimes(2);
   });
 
+  // 过期但未超 stale 窗:立即用旧值回答,后台复核一次;下一次查询拿到新值。
+  // 修复前每 60s 过期都让一次 ~1.2s 的 GitHub 往返挡在侧栏 / 手机的状态查询前面。
+  it('过期后先回旧值再后台复核,超过 stale 窗才同步等待', async () => {
+    let now = 0;
+    let resolveFetch!: (v: PrRemoteState) => void;
+    const fetchPr = vi.fn(async () => remote({}));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK, fetchPr, cacheTtlMs: 100, staleTtlMs: 1_000, now: () => now,
+    });
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: true, status: 'open' });
+    now = 200;
+    fetchPr.mockImplementation(() => new Promise<PrRemoteState>((res) => (resolveFetch = res)));
+    // Stale answer returns without waiting for the slow revalidation.
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ ok: true, status: 'open' });
+    await vi.waitFor(() => expect(fetchPr).toHaveBeenCalledTimes(2));
+    // A second stale read joins the same in-flight revalidation.
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'open' });
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+    resolveFetch(remote({ merged: true, state: 'closed' }));
+    await vi.waitFor(async () => expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'merged' }));
+    // Beyond the stale window the read waits for GitHub again.
+    now = 5_000;
+    fetchPr.mockImplementation(async () => remote({ state: 'closed' }));
+    expect((await svc.getStatuses([Q]))[0]).toMatchObject({ status: 'closed' });
+    expect(fetchPr).toHaveBeenCalledTimes(3);
+  });
+
   it('并发同一 PR 只发一次请求(in-flight 去重)', async () => {
     let resolveFetch!: (v: PrRemoteState) => void;
-    const fetchPr = vi.fn(
-      () => new Promise<PrRemoteState>((res) => (resolveFetch = res)),
-    );
+    const fetchPr = vi.fn(() => new Promise<PrRemoteState>((res) => (resolveFetch = res)));
     const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr });
     const p1 = svc.getStatuses([Q]);
     const p2 = svc.getStatuses([Q]);

@@ -93,11 +93,28 @@ export async function syncBotProfileFromFolder(
           : '',
       config: stripUserContext(snapshot.config),
     });
-    return 'seeded';
+    // 播种只补缺失的文件:旁边留着的手改 USER.md 要在这一轮就收进来,而不是等下一次。
+    // 重读后身份仍为空(例如空的 SOUL.md 还在)时绝不派生,不能把人格抹成空。
+    const seeded = await deps.readFolder(botId);
+    if (!seeded.identitySource.trim() || botProfileFolderMatchesSnapshot(seeded, snapshot)) {
+      return 'seeded';
+    }
+    await deriveFromFolder(botId, seeded, snapshot, deps);
+    return 'derived';
   }
 
   if (botProfileFolderMatchesSnapshot(folder, snapshot)) return 'unchanged';
 
+  await deriveFromFolder(botId, folder, snapshot, deps);
+  return 'derived';
+}
+
+async function deriveFromFolder(
+  botId: string,
+  folder: BotProfileFolderContent,
+  snapshot: BotProfileSnapshot,
+  deps: BotProfileFolderSyncDeps,
+): Promise<void> {
   await deps.deriveVersion({
     botId,
     identitySource: folder.identitySource,
@@ -105,7 +122,6 @@ export async function syncBotProfileFromFolder(
     config: { ...snapshot.config, userContextSource: folder.userContextSource },
     expectedCurrentVersion: snapshot.currentVersion,
   });
-  return 'derived';
 }
 
 function stripUserContext(config: Record<string, unknown>): Record<string, unknown> {

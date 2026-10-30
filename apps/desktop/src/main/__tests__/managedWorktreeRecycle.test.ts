@@ -1,8 +1,3 @@
-// These suites exercise real archive I/O in Node; Electron worker isolation is covered separately.
-vi.mock('../worktree/recoveryArchiveWorkerClient', async () => {
-  const { executeRecoveryArchiveTask } = await import('../worktree/recoveryArchiveTask');
-  return { runRecoveryArchiveTask: executeRecoveryArchiveTask };
-});
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -14,7 +9,6 @@ import type { LocalWorktreeReference } from '../localDb/worker/worktreeReference
 const state = vi.hoisted(() => ({ root: '', userData: '', refs: [] as LocalWorktreeReference[], runtimes: new Set<string>(), registry: new Map<string, WorktreeMeta>() }));
 const snapshot = vi.hoisted(() => vi.fn());
 const baselineMatches = vi.hoisted(() => vi.fn());
-const archive = vi.hoisted(() => vi.fn());
 const query = vi.hoisted(() => vi.fn());
 const git = vi.hoisted(() => vi.fn());
 
@@ -30,20 +24,21 @@ vi.mock('../worktree/runtimeLeases', async (original) => ({
   ...await original<typeof import('../worktree/runtimeLeases')>(),
   readWorktreeRuntimePaths: vi.fn(async () => state.runtimes),
 }));
-vi.mock('../worktree/contentSnapshot', () => ({ captureWorktreeContent: snapshot, worktreeContentBaselineMatches: baselineMatches }));
-vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
-vi.mock('../worktree/recoveryArchive', async (original) => ({
-  ...await original<typeof import('../worktree/recoveryArchive')>(),
-  createRecoveryArchive: archive, verifyRecoveryArchive: async () => {},
+vi.mock('../worktree/contentSnapshot', () => ({
+  captureWorktreeContent: snapshot, worktreeContentMatches: baselineMatches,
+  worktreeStagedContentMatches: vi.fn(async () => true), releaseSnapshotRef: vi.fn(async () => true),
+  // Path lists are covered with real Git; here a resumed removal checks timestamps only.
+  discardableWorktreePaths: vi.fn(async () => null), snapshotTreePaths: vi.fn(async () => new Set()),
 }));
+vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
 
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
-import { readRecycleRecord } from '../worktree/recycleJournal';
-import { inventoryWorktree } from '../worktree/recoveryArchive';
+import { pruneUnreferencedRecoveryArchives, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';
 import { physicalWorktreeKey } from '../worktree/resourceLock';
 import { readWorktreeRuntimePaths } from '../worktree/runtimeLeases';
-import { acquireIOSSimulatorProjectUse } from '../mcp-integrations/ios-simulator-project-source';
+import { releaseWorktreeRuntimeLease } from '../worktree/runtimeLeases';
 import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
 
 describe('shared worktree recycling', () => {
   let meta: WorktreeMeta;
@@ -61,9 +56,8 @@ describe('shared worktree recycling', () => {
     state.refs = [{ id: meta.sessionId, status: 'archived', source: 'desktop', workingDir: meta.path, worktreePath: meta.path, currentDatabase: true }];
     removable = true;
     query.mockReset().mockImplementation(async () => state.refs);
-    snapshot.mockReset().mockResolvedValue({ head: 'actual-head', tree: 'file-tree', indexTree: 'index-tree', commit: 'saved-commit', ref: 'saved-ref' });
+    snapshot.mockReset().mockResolvedValue({ head: 'actual-head', tree: 'file-tree', indexTree: 'index-tree', commit: 'saved-commit', ref: 'saved-ref', untracked: true });
     baselineMatches.mockReset().mockResolvedValue(true);
-    archive.mockReset().mockImplementation(async () => ({ file: 'archive.tar.gz.enc', files: await inventoryWorktree(meta.path) }));
     git.mockReset().mockImplementation(async (args: string[]) => {
       if (args.includes('--show-toplevel')) return { stdout: meta.path };
       if (args.includes('--git-common-dir')) return { stdout: path.join(meta.baseRepo, '.git') };
@@ -78,13 +72,13 @@ describe('shared worktree recycling', () => {
   });
   const recycle = () => recycleManagedWorktree(meta, { canRemove: async () => removable });
 
-  it('does not rebuild failed archives after the durable budget is exhausted', async () => {
-    archive.mockRejectedValue(new Error('temporary filesystem failure'));
+  it('does not retake failed snapshots after the durable budget is exhausted', async () => {
+    snapshot.mockRejectedValue(new Error('temporary filesystem failure'));
     for (let attempt = 0; attempt < 5; attempt++) expect(await recycle()).toBe(false);
-    expect(archive).toHaveBeenCalledTimes(3);
+    expect(snapshot).toHaveBeenCalledTimes(3);
     expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('paused');
     await expect(checkpointWorktreeForReuse(meta)).rejects.toThrow('recycling is paused');
-    expect(archive).toHaveBeenCalledTimes(3);
+    expect(snapshot).toHaveBeenCalledTimes(3);
     expect((await fs.stat(meta.path)).isDirectory()).toBe(true);
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
@@ -92,6 +86,8 @@ describe('shared worktree recycling', () => {
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { markEntered = resolve; });
     let active = 0;
     let peak = 0;
     let checked = 0;
@@ -100,25 +96,72 @@ describe('shared worktree recycling', () => {
       state.registry.set(candidate.sessionId, candidate);
       return recycleManagedWorktree(candidate, { canRemove: async () => {
         active++; peak = Math.max(peak, active); checked++;
+        markEntered();
         try { await gate; return false; } finally { active--; }
       } });
     });
+    // Observe every job immediately and drain them before fixture cleanup,
+    // including when an assertion or filesystem operation fails.
+    const settled = Promise.allSettled(jobs);
     try {
-      await vi.waitFor(() => expect(active).toBe(1));
+      // Journal/lock I/O can exceed waitFor's default 1s on Windows CI.
+      // Synchronize on entry instead; the suite timeout still bounds a hang.
+      await Promise.race([entered, settled]);
+      expect(active).toBe(1);
       expect(checked).toBe(1);
-    } finally { release(); }
+    } finally {
+      release();
+      await settled;
+    }
     expect(await Promise.all(jobs)).toEqual(Array(12).fill(false));
     expect(checked).toBe(12); expect(peak).toBe(1);
   });
 
-  it('keeps content recoverable and drops registration only after the directory is gone', async () => {
-    const order: string[] = [];
-    archive.mockImplementation(async () => { order.push('archive'); return { files: await inventoryWorktree(meta.path) }; });
-    snapshot.mockImplementation(async () => { order.push('snapshot'); return { head: 'head', tree: 'tree', indexTree: 'index', commit: 'commit', ref: 'ref' }; });
+  it('saves new files in the Git snapshot, writes no archive, and drops registration after deletion', async () => {
     expect(await recycle()).toBe(true);
-    expect(order).toEqual(['archive', 'snapshot']);
+    expect(snapshot).toHaveBeenCalledWith(meta.path, expect.any(String), { includeUntracked: true });
+    await expect(fs.stat(meta.path)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(state.registry.has(meta.sessionId)).toBe(false);
+    const record = await readRecycleRecord(meta.path);
+    expect(record?.phase).toBe('removed');
+    expect(record?.archive).toBeUndefined();
+    expect((await fs.readdir(path.join(state.root, 'worktree-recycle'))).filter((name) => name.endsWith('.enc'))).toEqual([]);
+  });
+  it('finishes a request whose directory is already gone, even while another task names the path', async () => {
+    state.refs.push({ ...state.refs[0], id: 'borrower', status: 'active' });
+    await fs.rm(meta.path, { recursive: true });
+    expect(await recycle()).toBe(true);
+    expect(snapshot).not.toHaveBeenCalled();
     expect((await readRecycleRecord(meta.path))?.phase).toBe('removed');
+    expect(state.registry.has(meta.sessionId)).toBe(false);
+    expect(git).toHaveBeenCalledWith(['worktree', 'prune'], meta.baseRepo);
+  });
+  it('deletes only old recovery archives that no record references, and none when a record is unreadable', async () => {
+    await requestWorktreeRecycle(meta.sessionId);
+    const record = (await readRecycleRecord(meta.path))!;
+    const journal = path.join(state.root, 'worktree-recycle');
+    const archives = { referenced: 'aaaa', orphan: 'bbbb', young: 'cccc' };
+    const name = (kind: keyof typeof archives) => `${record.id}-${archives[kind]}.tar.gz.enc`;
+    const old = new Date(Date.now() - 3 * 60 * 60_000);
+    for (const kind of ['referenced', 'orphan', 'young'] as const) {
+      await fs.writeFile(path.join(journal, name(kind)), 'encrypted bytes');
+      if (kind !== 'young') await fs.utimes(path.join(journal, name(kind)), old, old);
+    }
+    await writeRecycleRecord({ ...record, archive: { file: name('referenced'), encryptedKey: '', iv: '', tag: '', files: {} } });
+    const unreadable = path.join(journal, `${'f'.repeat(64)}.json`);
+    await fs.writeFile(unreadable, '{');
+    expect(await pruneUnreferencedRecoveryArchives()).toBe(0);
+    await fs.rm(unreadable);
+
+    expect(await pruneUnreferencedRecoveryArchives()).toBe(1);
+    expect((await fs.readdir(journal)).filter((entry) => entry.endsWith('.enc')).sort())
+      .toEqual([name('referenced'), name('young')].sort());
+  });
+  it('keeps a request waiting when the owner task is no longer archived, even if the directory is gone', async () => {
+    removable = false;
+    await fs.rm(meta.path, { recursive: true });
+    expect(await recycle()).toBe(false);
+    expect(state.registry.has(meta.sessionId)).toBe(true);
   });
   it.each(['active', null, 'unknown'])('protects a %s reference in another local database', async (status) => {
     state.refs.push({ ...state.refs[0], id: 'borrower', status, currentDatabase: false });
@@ -137,9 +180,9 @@ describe('shared worktree recycling', () => {
   it('protects a terminal task with an active runtime lease', async () => {
     state.runtimes.add(await physicalWorktreeKey(meta.path));
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
-  it('protects a simulator source borrowed by another isolated profile until release', async () => {
+  it('protects a worktree borrowed by another isolated profile until release', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'profile-a');
@@ -148,17 +191,16 @@ describe('shared worktree recycling', () => {
       await fs.mkdir(path.join(profile, '.dev-instances'), { recursive: true });
     }
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     expect(release).not.toBeNull();
     try {
       // The recycler has a different userData and no active database reference.
       state.userData = ownerProfile;
       expect(await recycle()).toBe(false);
-      expect(archive).not.toHaveBeenCalled();
+      expect(snapshot).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
       expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(meta.path)]));
-      // Retain the profile-local evidence that existing readers already consume.
-      expect(await fs.readdir(path.join(borrowerProfile, 'worktree-runtime-leases'))).toHaveLength(1);
 
       await release!();
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
@@ -179,12 +221,13 @@ describe('shared worktree recycling', () => {
         JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')).path as string)));
     });
     state.userData = borrowerProfile;
-    const release = await acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController());
+    const lease = await seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), meta.path, path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'locked'));
+    const release = lease ? () => releaseWorktreeRuntimeLease(lease) : null;
     try {
       state.userData = ownerProfile;
       expect(await readWorktreeRuntimePaths()).toEqual(new Set());
       expect(await recycle()).toBe(false);
-      expect(archive).not.toHaveBeenCalled();
+      expect(snapshot).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
       await release!();
       expect(await recycle()).toBe(true);
@@ -197,23 +240,17 @@ describe('shared worktree recycling', () => {
   it('preserves when any local reference source is unreadable', async () => {
     query.mockRejectedValue(new Error('database locked'));
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
   it('keeps the sentinel outside the snapshot/removal flow', async () => {
     await fs.writeFile(path.join(meta.path, '.worktree-keep'), '');
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
   it('never snapshots the parent repository when .git is missing', async () => {
     await fs.rm(path.join(meta.path, '.git'));
     expect(await recycle()).toBe(false);
     expect(snapshot).not.toHaveBeenCalled();
-  });
-  it('keeps files and registration when the archive cannot be encrypted', async () => {
-    archive.mockRejectedValue(new Error('key store unavailable'));
-    expect(await recycle()).toBe(false);
-    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
-    expect(state.registry.has(meta.sessionId)).toBe(true);
   });
   it('keeps the live index/files when Git snapshot creation fails', async () => {
     snapshot.mockRejectedValue(new Error('unmerged index'));
@@ -229,11 +266,6 @@ describe('shared worktree recycling', () => {
   it('rechecks a newly active borrower after the snapshot', async () => {
     snapshot.mockImplementation(async () => { state.refs.push({ ...state.refs[0], id: 'new', status: 'active' }); return { head: 'head' }; });
     expect(await recycle()).toBe(false);
-  });
-  it('preserves edits made during snapshot creation', async () => {
-    snapshot.mockImplementation(async () => { await fs.writeFile(path.join(meta.path, 'new.txt'), 'new work'); return { head: 'head' }; });
-    expect(await recycle()).toBe(false);
-    expect((await readRecycleRecord(meta.path))?.reason).toBe('files-changed');
   });
   it('supports a changed branch or detached HEAD by recording the actual content baseline', async () => {
     meta.branch = 'cindy/old-name';
@@ -260,7 +292,7 @@ describe('shared worktree recycling', () => {
     expect(await recycle()).toBe(false);
     expect((await readRecycleRecord(meta.path))?.reason).toBe('directory-replaced');
   });
-  it('partial EBUSY deletion rejects cross-profile borrowing and retries unchanged surviving bytes', async () => {
+  it('partial EBUSY deletion retries unchanged surviving bytes', async () => {
     const actual = await vi.importActual<typeof import('../worktree/runtimeLeases')>('../worktree/runtimeLeases');
     vi.mocked(readWorktreeRuntimePaths).mockImplementation(actual.readWorktreeRuntimePaths);
     const borrowerProfile = path.join(state.root, 'borrower-profile');
@@ -284,17 +316,8 @@ describe('shared worktree recycling', () => {
     expect(state.registry.has(meta.sessionId)).toBe(true);
     await expect(fs.stat(path.join(meta.path, '.git'))).rejects.toMatchObject({ code: 'ENOENT' });
     state.userData = borrowerProfile;
-    let release: (() => Promise<void>) | null = null;
-    try {
-      await expect(acquireIOSSimulatorProjectUse('borrower', meta.path, new AbortController()).then((value) => {
-        release = value; return value;
-      })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
-      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
-      expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
-    } finally {
-      await (release as (() => Promise<void>) | null)?.();
-      state.userData = '';
-    }
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    state.userData = '';
     fail.mockRestore();
     expect(await recycle()).toBe(true);
     expect(snapshot).toHaveBeenCalledTimes(1);
@@ -312,13 +335,15 @@ describe('shared worktree recycling', () => {
     expect((await readRecycleRecord(meta.path))?.reason).toBe('git-baseline-changed');
     expect(git.mock.calls.some(([args]) => args.includes('remove'))).toBe(false);
   });
-  it('rechecks files after marking removal and preserves a late editor write', async () => {
+  it('rechecks content after marking removal and preserves a late editor write', async () => {
     baselineMatches.mockImplementationOnce(async () => {
       await fs.writeFile(path.join(meta.path, 'late-editor-write.txt'), 'keep me');
       return true;
-    });
+    }).mockResolvedValueOnce(false);
     expect(await recycle()).toBe(false);
-    expect((await readRecycleRecord(meta.path))?.reason).toBe('files-changed-before-removal');
+    // Nothing was deleted, so the next attempt verifies (and if needed re-snapshots) the full tree.
+    expect((await readRecycleRecord(meta.path))?.phase).toBe('snapshotted');
+    expect((await readRecycleRecord(meta.path))?.reason).toBe('git-baseline-changed-before-removal');
     expect(git.mock.calls.some(([args]) => args.includes('remove'))).toBe(false);
     expect(await fs.readFile(path.join(meta.path, 'late-editor-write.txt'), 'utf8')).toBe('keep me');
     expect(state.registry.has(meta.sessionId)).toBe(true);
@@ -330,27 +355,27 @@ describe('shared worktree recycling', () => {
   it('protects an unknown registration sharing the physical directory', async () => {
     state.registry.set('unknown', { ...meta, sessionId: 'unknown' });
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
   it('preserves an externally locked Git worktree', async () => {
     const gitDir = path.join(meta.baseRepo, '.git', 'worktrees', 'one');
     await fs.mkdir(gitDir, { recursive: true });
     await fs.writeFile(path.join(gitDir, 'locked'), 'external use');
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
   it('preserves indexed submodules before creating incomplete recovery evidence', async () => {
     const originalGit = git.getMockImplementation()!;
     git.mockImplementation(async (args: string[]) => args.includes('--stage')
       ? { stdout: `160000 ${'a'.repeat(40)} 0\tchild\0` } : originalGit(args));
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
   it('preserves submodule metadata even after its gitlink was removed from the index', async () => {
     await fs.mkdir(path.join(meta.baseRepo, '.git', 'worktrees', 'one', 'modules', 'child'), { recursive: true });
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
   it('rejects a Git link pointing at another repository', async () => {
@@ -358,6 +383,6 @@ describe('shared worktree recycling', () => {
     git.mockImplementation(async (args: string[], cwd: string) => args.includes('--git-common-dir') && cwd === meta.path
       ? { stdout: path.join(state.root, 'different-repo', '.git') } : originalGit(args, cwd));
     expect(await recycle()).toBe(false);
-    expect(archive).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
   });
 });

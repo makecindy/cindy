@@ -10,7 +10,9 @@
 
 import { useCallback, useRef, useState } from 'react';
 import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspaceKind } from '@cindy/maker-scheduler';
-import { getPersistedVendorModel } from '@/state/newMakerDraft';
+import type { ProviderView } from '@cindy/model-providers';
+import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
+import { resolveNewTaskDefaultRoute } from '@/lib/draftModelCalibration';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   EFFORT_VALUES,
@@ -45,6 +47,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   agentKind: 'claude-code',
   model: '',
   providerId: '',
+  agentDeviceId: '',
   effort: '',
   fastMode: false,
   workspaceKind: 'dialogue',
@@ -128,7 +131,7 @@ function sanitizeAgentPrefs(raw: Partial<ScheduleAgentPrefs> | undefined): Sched
     model: typeof raw?.model === 'string' ? raw.model : '',
     providerId: typeof raw?.providerId === 'string' ? raw.providerId : '',
     effort: raw?.effort && isEffortValue(raw.effort) ? raw.effort : '',
-    fastMode: raw?.fastMode === true,
+    fastMode: (raw?.fastMode === 'ultrafast' ? 'ultrafast' : raw?.fastMode === true),
   };
 }
 
@@ -146,31 +149,58 @@ export function getScheduleAgentPrefs(agentKind: ScheduleFormState['agentKind'])
 }
 
 /**
- * 调度任务的冷启动兜底模型 —— 故意**不**跟对话的 Opus 默认
- * (modelDefinitions.ts getDefaultModelForVendor):自动化是无人值守反复执行的
- * 场景,默认不该是最贵的模型,要 Opus 的用户会显式选。
- * ⚠️ 必须与 scheduler-host/runner.ts defaultModelFor 保持一致
- * (runner 对 MCP 建的 / 历史遗留空 model 任务兜同一个值,UI 显示 ≠ 实际运行
- * 的事故见 2026-06 踩坑:任务里看着选了 Opus 4.8,实际每次跑 4.7)。
- */
-export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']): string {
-  // Pi 的来源/模型来自动态连接目录；没有能与 providerId 解耦的静态默认。
-  return agentKind === 'codex' ? 'gpt-5.5' : agentKind === 'pi' ? '' : 'claude-sonnet-4-6';
-}
-
-/**
- * 新任务的默认模型,三级回退:
+ * 新任务的默认模型(及第三级回退时与之成对的来源),三级回退:
  *   1. 上次建自动化任务时选的模型(scheduleFormPrefs,任务维度记忆)
  *   2. 对话上次选择的模型(newMakerDraft 真实持久化值 —— 与新建对话同源,
  *      跟着用户实际在用的模型走)
- *   3. 成本保守冷启动兜底(schedulerFallbackModel)
+ *   3. 新建任务默认(shared/draftModelCalibration resolveNewTaskDefaultRoute,与 runner
+ *      对空 model 任务的实时解析同源)。不写死型号:供应商清单未到位(`providers` 缺省)
+ *      或一个可用来源都没有时返回 '',由表单在清单到位后回填。第三级返回的来源必须与模型
+ *      一起落到表单:只存模型会让 runner 把空来源重新解析成原生默认(可能是网关)。
+ * 不变量:返回值是原子的 (模型, 来源) 对,调用方整对应用,不拿别处的来源去拼模型。
+ * 三级都返回与模型成对的来源(一级取任务记忆的来源,二级取对话草稿记着的来源),
+ * 没有记来源时为 null(跟随原生默认)。`preferredProviderId` 是表单 / 模板已定下的来源:
+ * 给定时只接受同一来源的一、二级结果,第三级只在该来源内挑,保证模型一定由这个来源提供。
  */
-export function getScheduleDefaultModel(agentKind: ScheduleFormState['agentKind']): string {
+export function getScheduleDefaultRoute(
+  agentKind: ScheduleFormState['agentKind'],
+  providers?: readonly ProviderView[],
+  preferredProviderId?: string | null,
+): { model: string; providerId: string | null } {
+  const preferred = preferredProviderId?.trim() || null;
+  const compatible = (providerId: string | null) => !preferred || providerId === preferred;
   const prefs = getScheduleAgentPrefs(agentKind);
-  if (prefs.model.trim()) return prefs.model;
-  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc');
-  if (chatLast.trim()) return chatLast;
-  return schedulerFallbackModel(agentKind);
+  const prefsProviderId = prefs.providerId || null;
+  if (prefs.model.trim() && compatible(prefsProviderId)) {
+    return { model: prefs.model, providerId: prefsProviderId };
+  }
+  const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+  const draft = getDraft();
+  const chatLast = getPersistedVendorModel(vendor);
+  const chatProviderId = draft.lastByVendor[vendor]?.providerId || null;
+  if (chatLast.trim() && compatible(chatProviderId)) {
+    return { model: chatLast, providerId: chatProviderId };
+  }
+  if (!providers) return { model: '', providerId: preferred };
+  return (
+    resolveNewTaskDefaultRoute({
+      providers,
+      agent: agentKind,
+      requiredProviderId: preferred,
+      draft: {
+        model: draft.lastByVendor[vendor]?.model,
+        providerId: draft.lastByVendor[vendor]?.providerId,
+        chosenByUser: draft.modelChosenByVendor[vendor] === true,
+      },
+    }) ?? { model: '', providerId: preferred }
+  );
+}
+
+export function getScheduleDefaultModel(
+  agentKind: ScheduleFormState['agentKind'],
+  providers?: readonly ProviderView[],
+): string {
+  return getScheduleDefaultRoute(agentKind, providers).model;
 }
 
 export function rememberScheduleFormPrefs(form: ScheduleFormState): void {
@@ -181,7 +211,8 @@ export function rememberScheduleFormPrefs(form: ScheduleFormState): void {
     workspaceKind,
     workingDir: workspaceKind === 'project' ? form.workingDir : '',
     useWorktree: workspaceKind === 'project' && form.useWorktree,
-    lastByAgent: {
+    // 另一台电脑上的选择属于那台的目录,不作为本机新建任务的默认记忆。
+    lastByAgent: (form.modelAgentDeviceId ?? form.agentDeviceId) ? current.lastByAgent : {
       ...current.lastByAgent,
       [form.agentKind]: {
         model: form.model,
@@ -196,15 +227,16 @@ export function rememberScheduleFormPrefs(form: ScheduleFormState): void {
 function makeDefaultForm(): ScheduleFormState {
   const prefs = loadScheduleFormPrefs();
   const agentPrefs = prefs.lastByAgent[prefs.agentKind] ?? EMPTY_AGENT_PREFS;
+  // 三级回退:任务上次选择 → 对话上次选择 → 新建任务默认;清单未到位时先留空,
+  // 由 ScheduleFormDialog 在清单到位后回填显式值(所见即所存)。模型与来源成对应用。
+  const defaultRoute = getScheduleDefaultRoute(prefs.agentKind, undefined, agentPrefs.providerId);
   return {
     ...DEFAULT_FORM,
     agentKind: prefs.agentKind,
-    // 三级回退:任务上次选择 → 对话上次选择 → 成本保守兜底,保证新任务
-    // 表单的 model 永远是显式值(所见即所存,不再依赖 chip 的显示回退)。
-    model: getScheduleDefaultModel(prefs.agentKind),
-    // providerId 空 = 跟随原生默认来源（no-break）。沿用任务维度记忆;UI 显示时
-    // 用 form.providerId || nativeDefaultSourceId(agentKind) 算高亮来源。
-    providerId: agentPrefs.providerId,
+    model: defaultRoute.model,
+    // providerId 空 = 跟随原生默认来源（no-break）。默认路由已限定在任务记忆的来源内,
+    // 整对应用;UI 显示时用 form.providerId || nativeDefaultSourceId(agentKind) 算高亮来源。
+    providerId: defaultRoute.providerId ?? '',
     effort: agentPrefs.effort,
     fastMode: agentPrefs.fastMode,
     workspaceKind: prefs.workspaceKind,
@@ -232,11 +264,13 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     manual: s.manual,
     agentKind: s.modelAgentKind ?? s.agentKind,
     modelAgentKind: s.modelAgentKind,
+    modelAgentDeviceId: s.modelAgentDeviceId,
     boundAgent: s.targetSessionId ? { sessionId: s.targetSessionId, agentKind: s.agentKind } : undefined,
     model: s.model ?? '',
     providerId: s.providerId ?? '',
+    agentDeviceId: s.agentDeviceId ?? '',
     effort: s.effort && isEffortValue(s.effort) ? s.effort : '',
-    fastMode: !!s.fastMode,
+    fastMode: (s.fastMode ?? false),
     workspaceKind,
     workingDir: s.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && s.useWorktree,
@@ -260,7 +294,7 @@ export type Destination = 'local' | 'worktree' | 'thread';
 export interface UseScheduleFormResult {
   form: ScheduleFormState;
   selectModelConfiguration: (
-    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode'> | null,
+    selection: Pick<ScheduleFormState, 'agentKind' | 'model' | 'providerId' | 'effort' | 'fastMode' | 'modelAgentDeviceId'> | null,
     followedAgentKind?: ScheduleFormState['agentKind'],
   ) => void;
   setField: <K extends keyof ScheduleFormState>(k: K, v: ScheduleFormState[K]) => void;
@@ -275,7 +309,7 @@ export interface UseScheduleFormResult {
    */
   selectBoundSession: (session: Session | null) => void;
   /** 应用模板里的 agent/model/provider/effort/fast 字段,并在跨 agent 时重建成目标 agent 的默认组合。 */
-  applyTemplateAgentFields: (template: ScheduleTemplate) => void;
+  applyTemplateAgentFields: (template: ScheduleTemplate, providers?: readonly ProviderView[]) => void;
   reset: (s?: Schedule | null, overrides?: Partial<ScheduleFormState>) => void;
   /**
    * 把表单转成 CreateScheduleInput；
@@ -321,7 +355,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
           ? form.boundAgent.agentKind : form.agentKind);
       const boundAgent = followedAgentKind && form.targetSessionId
         ? { sessionId: form.targetSessionId, agentKind } : form.boundAgent;
-      return { ...form, agentKind, boundAgent, model: '', providerId: '', effort: '', fastMode: false, modelAgentKind: undefined };
+      return { ...form, agentKind, boundAgent, model: '', providerId: '', agentDeviceId: '', effort: '', fastMode: false,
+        modelAgentKind: undefined, modelAgentDeviceId: undefined };
     });
   }, []);
 
@@ -334,14 +369,18 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     setForm(next);
   }, []);
 
-  const applyTemplateAgentFields = useCallback((template: ScheduleTemplate) => {
+  const applyTemplateAgentFields = useCallback((template: ScheduleTemplate, providers?: readonly ProviderView[]) => {
     setForm((f) => {
       const selection = resolveTemplateAgentFields(f, template, {
-        getDefaultModel: getScheduleDefaultModel,
+        getDefaultRoute: (agentKind, preferredProviderId) =>
+          getScheduleDefaultRoute(agentKind, providers, preferredProviderId),
         getAgentPrefs: getScheduleAgentPrefs,
       });
       // A template that supplies a model is an explicit selection, even while following a bound task.
-      return { ...f, ...selection, modelAgentKind: selection.model.trim() ? selection.agentKind : undefined };
+      // 模板的模型与来源属于本机目录;路由变了就回到本机运行。
+      const sameRoute = selection.agentKind === f.agentKind && selection.model === f.model && selection.providerId === f.providerId;
+      return { ...f, ...selection, agentDeviceId: sameRoute ? f.agentDeviceId : '',
+        modelAgentKind: selection.model.trim() || selection.modelAgentDeviceId === '' ? selection.agentKind : undefined };
     });
   }, []);
 
@@ -394,8 +433,10 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         boundAgent: { sessionId: session.id, agentKind: sessionAgentKindToScheduleAgentKind(session.agentKind) },
         model: '',
         modelAgentKind: undefined,
+        modelAgentDeviceId: undefined,
         // 绑定会话 = 跟随其模型/来源,providerId 一并清空(与 model/effort 同语义)。
         providerId: '',
+        agentDeviceId: '',
         effort: '',
         fastMode: false,
       };
@@ -408,6 +449,9 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
     if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };
+    }
+    if ((form.executionMode ?? 'agent') === 'agent' && form.modelAgentKind && !form.model.trim()) {
+      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: form.providerId } };
     }
     if (form.executionMode === 'script' && !form.scriptCommand?.trim()) {
       return { key: 'scheduler.editor.validation.scriptCommandRequired' };

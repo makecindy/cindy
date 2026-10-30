@@ -1,5 +1,10 @@
 export * from './types';
 export * from './BufferedAsrProvider';
+export * from './SpeakerGate';
+export * from './speakerEnrollment';
+export * from './speakerModels';
+export * from './speaker-onnx/kaldiFbank';
+export * from './speaker-onnx/onnxSpeakerEngine';
 export * from './VoiceInputController';
 export * from './VoiceTimelineLogger';
 export * from './DictationRefiner';
@@ -9,3 +14,7 @@ export * from './dictionaryLearningPolicy';
 export * from './dictionary-sync';
 export * from './streamingJson';
 export * from './refinementContext';
+export * from './pcmActivity';
+
+export * from './VoiceConversationInput';
+export * from './conversationActivity';

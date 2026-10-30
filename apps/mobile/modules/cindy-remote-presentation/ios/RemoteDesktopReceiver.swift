@@ -268,6 +268,20 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
           data.count <= 32_768 else { return false }
     return channel.sendData(RTCDataBuffer(data: data, isBinary: false))
   }
+  /// A small control request over `input-v1`, so it keeps its order with input.
+  /// False when the channel cannot take it now; the caller then uses the relay.
+  func sendRequest(_ message: [String: Any]) -> Bool {
+    guard !stopped, !isPresenting(), UIApplication.shared.applicationState == .active,
+          peer?.connectionState == .connected, let channel, channel.readyState == .open,
+          channel.bufferedAmount < 16384,
+          let id = message["id"] as? String, !id.isEmpty, id.utf8.count <= 64,
+          let request = message["request"] as? [String: Any] else { return false }
+    let envelope: [String: Any] = ["type": "request", "id": id, "request": request]
+    guard JSONSerialization.isValidJSONObject(envelope),
+          let data = try? JSONSerialization.data(withJSONObject: envelope),
+          data.count <= 32_768 else { return false }
+    return channel.sendData(RTCDataBuffer(data: data, isBinary: false))
+  }
   private func fail(_ reason: String, retry: Bool = true) {
     diagnose("failed", ["reason": reason])
     post("fallback", ["reason": reason, "retry": retry])
@@ -379,6 +393,13 @@ final class RemoteDesktopReceiver: NSObject, RTCPeerConnectionDelegate, RTCDataC
         self.replyToViewChallenge()
       } else if message["type"] as? String == "cursor", UIApplication.shared.applicationState == .active {
         self.post("nativeCursor", ["cursor": message["cursor"] ?? NSNull()])
+      } else if message["type"] as? String == "reply",
+                let id = message["id"] as? String, !id.isEmpty, id.utf8.count <= 64 {
+        // The parent matches the id to its pending request and validates the rest.
+        var reply: [String: Any] = ["id": id, "ok": message["ok"] as? Bool == true]
+        if let result = message["result"] { reply["result"] = result }
+        if let error = message["error"] as? String { reply["error"] = error }
+        self.post("channelReply", reply)
       }
     }
   }

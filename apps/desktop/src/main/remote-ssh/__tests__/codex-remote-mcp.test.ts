@@ -29,6 +29,8 @@ vi.mock('../../mcp-integrations/remoteMcpBridgeToken.js', () => ({
 }));
 
 import { getRemoteMcpBridgeToken } from '../../mcp-integrations/remoteMcpBridgeToken.js';
+import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
+import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const SERVERS = ['cindy_orca', 'orca_worker_bridge'];
 
@@ -363,6 +365,87 @@ describe('mergeManagedMcpBlock helper-scalar residue (#4776)', () => {
     expect(parsed.mcp_servers.cindy_orca.url).toBe('http://127.0.0.1:47921/mcp/cindy_orca');
     return parsed;
   };
+
+  /**
+   * The *actual* output of the old merge after N refreshes (#4946): it stopped stripping the
+   * managed table at `enabled`, kept that scalar group beneath whatever table preceded the
+   * managed block (here the project table) and appended the rebuilt block at EOF — so the
+   * orphan groups stack up *before* BEGIN, not after END.
+   */
+  const legacyPrefixResidue = (orphanCopies: number): string[] => [
+    'model = "gpt-5.5"',
+    '',
+    '[projects."/home/u/repo"]',
+    'trust_level = "trusted"',
+    '',
+    ...Array.from({ length: orphanCopies }, () => [
+      'enabled = false',
+      'startup_timeout_sec = 600',
+      'tool_timeout_sec = 600',
+      '',
+    ]).flat(),
+    BEGIN,
+    '# cindy-token-fingerprint: fp-old',
+    '[mcp_servers.cindy_orca]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_orca"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    '',
+    '[mcp_servers.cindy_helper]',
+    'url = "http://127.0.0.1:47000/mcp/cindy_helper"',
+    'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+    'enabled = false',
+    'startup_timeout_sec = 600',
+    'tool_timeout_sec = 600',
+    END,
+    '',
+  ];
+
+  it('recovers duplicated helper scalars the old merge left before the begin marker (#4946)', () => {
+    const broken = legacyPrefixResidue(3).join('\n');
+    // Three old refreshes → three copies under the project table → duplicate keys, codex refuses to start.
+    expect(() => parseToml(broken)).toThrow();
+    let config = broken;
+    for (let refresh = 0; refresh < 5; refresh += 1) {
+      const { next, strippedUserServers } = mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS });
+      expect(strippedUserServers, `refresh ${refresh}`).toEqual([]);
+      expect(() => parseToml(next), `refresh ${refresh}`).not.toThrow();
+      const parsed = parseToml(next) as Record<string, any>;
+      expect(parsed.model).toBe('gpt-5.5');
+      expect(parsed.projects['/home/u/repo'].trust_level).toBe('trusted');
+      // The orphan groups never belonged to the project table; none of them may survive there.
+      expect(parsed.projects['/home/u/repo'].enabled, `refresh ${refresh}`).toBeUndefined();
+      expect(parsed.projects['/home/u/repo'].startup_timeout_sec, `refresh ${refresh}`).toBeUndefined();
+      expect(parsed.mcp_servers.cindy_helper.enabled).toBe(false);
+      expect(next.match(/# >>> cindy-remote-mcp/g), `refresh ${refresh}`).toHaveLength(1);
+      config = next;
+    }
+    expect(mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS }).changed).toBe(false);
+  });
+
+  it('keeps a single legitimate user scalar group that sits before the begin marker (#4946)', () => {
+    // A user-authored table right before the managed block: unique keys, valid TOML — must not be touched.
+    const config = [
+      'model = "gpt-5.5"',
+      '',
+      '[mcp_servers.my_custom]',
+      'url = "http://127.0.0.1:22222/mcp/my_custom"',
+      'enabled = true',
+      'startup_timeout_sec = 30',
+      '',
+      BEGIN,
+      '# cindy-token-fingerprint: fp-old',
+      '[mcp_servers.cindy_orca]',
+      'url = "http://127.0.0.1:47000/mcp/cindy_orca"',
+      'bearer_token_env_var = "LIZI_MCP_TOKEN"',
+      END,
+      '',
+    ].join('\n');
+    const { next } = mergeManagedMcpBlock(config, block, { serverNames: HELPER_SERVERS });
+    const parsed = parseToml(next) as Record<string, any>;
+    expect(parsed.mcp_servers.my_custom.enabled).toBe(true);
+    expect(parsed.mcp_servers.my_custom.startup_timeout_sec).toBe(30);
+    expect(parsed.mcp_servers.my_custom.url).toBe('http://127.0.0.1:22222/mcp/my_custom');
+  });
 
   it('stays valid TOML across five refreshes starting from the pre-fix layout', () => {
     let config = [...USER_LINES, ...legacyManaged(1)].join('\n');
@@ -1541,4 +1624,40 @@ describe('remote Bot helper transport', () => {
       }
     },
   );
+});
+
+describe('remote App transports', () => {
+  it('renders custom App transports disabled without depending on the current registry', () => {
+    const block = parseToml(renderManagedMcpBlock({
+      remotePort: 47921, serverNames: ['example'], tokenFingerprint: 'test-fingerprint',
+    })) as { mcp_servers: Record<string, { enabled?: boolean }> };
+    expect(block.mcp_servers.example.enabled).toBe(false);
+  });
+  it.each([false, true])('disables process-wide discovery and binds ordinary/Bot threads with helper=%s', async (helper) => {
+    registerAppServer('example', () => ({ id: 'example', url: 'https://example.invalid/mcp', transport: 'http' }));
+    try {
+      const { host, inputs } = fakeHost(`host-app-${helper}`, '');
+      const serverNames = ['example', ...(helper ? ['cindy_helper'] : [])];
+      expect(await ensureRemoteCodexMcpBridge(host, {
+        ensureBridgeStarted: async () => ({ port: 38991, serverNames, bridgeInstanceId: 'app-bridge' }),
+        isCollabEnabled: () => false, isMakerMemoryEnabled: () => false,
+      })).toMatchObject({ ok: true });
+      const written = parseToml(decodeWrittenConfig(inputs)!) as { mcp_servers: Record<string, { enabled?: boolean }> };
+      expect(written.mcp_servers.example.enabled).toBe(false);
+      const opts = { bridgeInstanceId: 'app-bridge', serverNames, collabEnabled: false, makerMemoryEnabled: false };
+      const ordinary = buildRemoteCodexSessionMcpConfig(host.id, 'app-instance', opts);
+      expect(ordinary).toMatchObject({
+        'mcp_servers.example.url': 'http://127.0.0.1:47921/mcp/example?instance=app-instance',
+        'mcp_servers.example.enabled': true,
+        'mcp_servers.example.bearer_token_env_var': 'LIZI_MCP_TOKEN',
+      });
+      const vendorOptions = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [], cindyRuntimeMcpServerNames: [] as string[] };
+      expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...opts, vendorOptions }))
+        .toHaveProperty('mcp_servers.example.enabled', false);
+      vendorOptions.cindyRuntimeMcpServerNames = ['example'];
+      expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...opts, vendorOptions }))
+        .toHaveProperty('mcp_servers.example.enabled', true);
+      if (helper) expect(ordinary['mcp_servers.cindy_helper.enabled']).toBe(false);
+    } finally { clearAppServerConfigs(); }
+  });
 });

@@ -580,7 +580,24 @@ describe('条目数超上限', () => {
     for (let i = 0; i < 40; i += 1) {
       roots.push(await makeOwnerCache(`owner-${i}`));
     }
-    for (const root of roots) await enqueuePurge(root);
+    // Seed the below-limit state directly; ordinary enqueue persistence is
+    // covered above. Exercise the 32-entry boundary and every overflow write
+    // without 31 redundant lock/read/rewrite cycles on Windows CI.
+    await fsp.writeFile(queueFile(), JSON.stringify({
+      version: 1,
+      entries: roots.slice(0, 31).map((root) => ({ root, since: 1, attempts: 1 })),
+    }), 'utf8');
+    for (const root of roots.slice(31)) await enqueuePurge(root);
+    expect(JSON.parse(await fsp.readFile(queueFile(), 'utf8')).entries).toHaveLength(32);
+    const pendingDir = path.join(userData, __testing.pendingDirName);
+    const overflowRoots = new Set<string>();
+    for (const name of fs.readdirSync(pendingDir).filter((name) => name.endsWith('.json'))) {
+      const pending = JSON.parse(await fsp.readFile(path.join(pendingDir, name), 'utf8')) as {
+        entries: Array<{ root: string }>;
+      };
+      for (const entry of pending.entries) overflowRoots.add(entry.root);
+    }
+    expect([...overflowRoots].sort()).toEqual(roots.slice(32).sort());
 
     __testing.resetMemoryQueue(); // 只看盘上
     const persisted = await __testing.readQueue();

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type {
   RemoteCollectionItem,
   RemoteLocalizedText,
@@ -7,10 +9,13 @@ import type {
 
 import type { BotRemoteResourceSource } from './bots.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
+import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue.js';
 
 export const TEAMMATES_REMOTE_COLLECTION_ID = 'teammates';
 export const BOT_REMOTE_RESOURCE_KIND = 'bot';
+/** Link to an open task this teammate looks after; controllers draw the follow mark from it. */
+export const BOT_FOLLOWING_LINK_REL = 'following';
 
 export const TEAMMATES_TITLE: RemoteLocalizedText = {
   fallback: 'Teammates',
@@ -81,6 +86,7 @@ function resourceRef(id: string) {
 function sourceRevision(source: BotRemoteResourceSource): string {
   return [
     source.currentVersion,
+    source.invitation?.stage ?? '',
     source.updatedAt,
     source.lastMessageAt ?? 0,
     source.lastReplyAt ?? 0,
@@ -89,7 +95,14 @@ function sourceRevision(source: BotRemoteResourceSource): string {
     source.activityAt,
     source.canonicalSessionId ?? '',
     source.needsAttention ? 1 : 0,
+    followingDigest(source.followingSessionIds ?? []),
   ].join(':');
+}
+
+/** Short stand-in for the followed task list, so revisions stay small however many tasks. */
+function followingDigest(sessionIds: readonly string[]): string {
+  if (!sessionIds.length) return '';
+  return createHash('sha256').update(sessionIds.join('\n')).digest('hex').slice(0, 16);
 }
 
 export function botRemoteCollectionItemFromSource(
@@ -103,6 +116,8 @@ export function botRemoteCollectionItemFromSource(
     ref: resourceRef(source.id),
     display: {
       title: source.name,
+      teammateActivity: { phase: source.needsAttention ? 'error'
+        : source.lastMessageRole === 'assistant' && source.lastMessageAt === source.lastReplyAt ? 'completed' : 'idle' },
       lastReplyAt: source.lastReplyAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),
@@ -124,12 +139,15 @@ export function botRemoteCollectionItemFromSource(
         ? { badges: [{ accessibilityLabel: ATTENTION_COPY, tone: 'warning' as const }] }
         : {}),
     },
-    links: source.canonicalSessionId
-      ? [{
-          rel: 'conversation',
-          target: { kind: 'session', sessionId: source.canonicalSessionId },
-        }]
-      : [],
+    links: [
+      ...(source.canonicalSessionId
+        ? [{ rel: 'conversation', target: { kind: 'session' as const, sessionId: source.canonicalSessionId } }]
+        : []),
+      ...(source.followingSessionIds ?? []).map((sessionId) => ({
+        rel: BOT_FOLLOWING_LINK_REL,
+        target: { kind: 'session' as const, sessionId },
+      })),
+    ],
     revision: sourceRevision(source),
   };
 }
@@ -139,7 +157,8 @@ export function visibleBotRemoteResourceSources(
   sources: readonly BotRemoteResourceSource[],
 ): BotRemoteResourceSource[] {
   return sources
-    .filter(isBotVisibleRemotely)
+    // A demoted copy runs on its home computer; listing it here would duplicate it on other devices.
+    .filter(source => isBotVisibleRemotely(source) && !isCompanionShadowed(source.id))
     .sort((left, right) => {
       const pinned = Number(Boolean(right.pinnedAt)) - Number(Boolean(left.pinnedAt));
       return pinned || right.activityAt - left.activityAt || left.id.localeCompare(right.id);
@@ -147,17 +166,8 @@ export function visibleBotRemoteResourceSources(
 }
 
 export function botRemoteResourceFromSource(source: BotRemoteResourceSource): RemoteResource {
-  const item = botRemoteCollectionItemFromSource(source);
-  return {
-    ...item,
-    ...(source.description
-      ? {
-          blocks: [{
-            id: 'about',
-            primitive: 'markdown',
-            fallbackMarkdown: source.description,
-          }],
-        }
-      : {}),
-  };
+  const blocks: NonNullable<RemoteResource['blocks']> = [];
+  if (source.description) blocks.push({ id: 'about', primitive: 'markdown', fallbackMarkdown: source.description });
+  if (source.invitation) blocks.push({ id: 'invitation', primitive: 'status', fallbackMarkdown: '', data: { stage: source.invitation.stage } });
+  return { ...botRemoteCollectionItemFromSource(source), ...(blocks.length ? { blocks } : {}) };
 }

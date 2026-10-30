@@ -1,5 +1,7 @@
+import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { invokeOpenPath } from './openPath';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '../shared/pngClipboard';
+import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../shared/selectionContextMenu';
 /**
  * 鍙充晶鏍忓瓙绐楀彛涓撶敤 preload锛氬彧鏆撮湶 RSB 绐楀彛鎵€闇€鐨勬渶灏忚兘鍔涖€?
  *
@@ -17,7 +19,7 @@ import { COPY_PNG_TO_CLIPBOARD_CHANNEL, type CopyPngToClipboardParams } from '..
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
-import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { createAppearanceSnapshotBridge } from './appearanceSnapshot';
 import { DEVICE_LINK_INVOKE, DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
 import type { LocalThemesResult } from '../shared/local-themes';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
@@ -26,10 +28,30 @@ import {
   RSB_WINDOW_REFRESH_CONTEXT_CHANNEL,
   RSB_WINDOW_RENDERER_READY_CHANNEL,
   RSB_WINDOW_LOCALE_CHANGED_CHANNEL,
+  RSB_WINDOW_COMMAND_CHANNEL,
+  RSB_WINDOW_CONTEXT_CHANGED_CHANNEL,
+  RSB_WINDOW_STATE_CHANGED_CHANNEL,
   RSB_WINDOW_TAB_HANDOFF_CHANNEL,
   RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL,
 } from '../shared/rightSidebarWindow';
-import type { RsbWindowTabHandoff } from '../shared/rightSidebarWindow';
+import type { RsbWindowContext, RsbWindowTabHandoff } from '../shared/rightSidebarWindow';
+import {
+  SIDEBAR_TAB_WINDOW_ADOPT_TAB_CHANNEL,
+  SIDEBAR_TAB_WINDOW_ASSIGNED_CHANNEL,
+  SIDEBAR_TAB_WINDOW_GET_ASSIGNMENT_CHANNEL,
+  SIDEBAR_TAB_WINDOW_LOCALE_CHANGED_CHANNEL,
+  SIDEBAR_TAB_WINDOW_MERGE_BACK_CHANNEL,
+  SIDEBAR_TAB_WINDOW_CLOSE_REQUESTED_CHANNEL,
+  SIDEBAR_TAB_WINDOW_PRESENTATION_READY_CHANNEL,
+  SIDEBAR_TAB_WINDOW_RENDERER_READY_CHANNEL,
+  SIDEBAR_TAB_WINDOW_VISIBILITY_CHANGED_CHANNEL,
+} from '../shared/sidebarTabWindow';
+import type {
+  SidebarTabWindowAdoptRequest,
+  SidebarTabWindowAssignmentPayload,
+  SidebarTabWindowMergeBackRequest,
+  SidebarTabWindowsState,
+} from '../shared/sidebarTabWindow';
 
 type ApplicationMenuLocale = SupportedLocale;
 
@@ -38,6 +60,13 @@ function onPayload<T>(channel: string, cb: (payload: T) => void): () => void {
   ipcRenderer.on(channel, listener);
   return () => ipcRenderer.removeListener(channel, listener);
 }
+
+// Match the resource window: hidden prewarm must not start decorative playback,
+// and late renderer/HMR subscribers must receive the latest native state.
+let windowHidden = true;
+onPayload<boolean>('window-hidden-change', (hidden) => {
+  windowHidden = hidden;
+});
 
 function onPayloadWithMetadata<T, M>(
   channel: string,
@@ -60,15 +89,21 @@ function readPreferredSystemLocale(): ApplicationMenuLocale {
   }
 }
 
-const appearanceSettings = ipcRenderer.sendSync(
-  'appearance-settings:get-sync',
-) as AppearanceSettings | null;
+const appearanceSnapshot = createAppearanceSnapshotBridge({ wallpaperAssets: true });
 
 const fanOutFullscreenChange = (cb: (isFullscreen: boolean) => void): (() => void) =>
   onPayload('fullscreen-change', cb);
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  onSelectionContextMenuAddToChat: (callback: () => void): (() => void) =>
+    onPayload(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL, () => callback()),
+  accessibilitySupport: createAccessibilitySupportBridge(),
+  onWindowHiddenChange: (cb: (hidden: boolean) => void): (() => void) => {
+    const off = onPayload('window-hidden-change', cb);
+    cb(windowHidden);
+    return off;
+  },
   preferredSystemLocale: readPreferredSystemLocale(),
   windowMinimize: (): void => ipcRenderer.send('window-minimize'),
   windowMaximize: (): void => ipcRenderer.send('window-maximize'),
@@ -80,11 +115,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): void => ipcRenderer.send('renderer:log', level, scope, msg),
   onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
     onPayload(RSB_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
-  appearanceSettings: {
-    getSync: (): AppearanceSettings | null => appearanceSettings,
-    onChanged: (cb: (settings: AppearanceSettings) => void): (() => void) =>
-      onPayload('appearance-settings:changed', cb),
-  },
+  appearanceSettings: appearanceSnapshot,
   localThemes: {
     listSync: (): LocalThemesResult => {
       try {
@@ -131,8 +162,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deviceLink: {
     getState: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.GET_STATE),
     listDevices: (): Promise<unknown> => ipcRenderer.invoke(DEVICE_LINK_INVOKE.LIST_DEVICES),
-    invoke: (deviceId: string, channel: string, args: unknown[]): Promise<unknown> =>
-      ipcRenderer.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args }),
+    invoke: (deviceId: string, channel: string, args: unknown[], scheduling?: { background?: boolean }): Promise<unknown> =>
+      ipcRenderer.invoke(DEVICE_LINK_INVOKE.INVOKE, { deviceId, channel, args, ...(scheduling ? { scheduling } : {}) }),
     subscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
       ipcRenderer.invoke(DEVICE_LINK_INVOKE.SUBSCRIBE, { deviceId, topics }),
     unsubscribe: (deviceId: string, topics: string[]): Promise<{ ok: true }> =>
@@ -149,6 +180,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onPayload(DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED, cb),
     onResponsivenessChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, cb),
+    onPeerLinkReopened: (cb: (payload: unknown) => void): (() => void) =>
+      onPayload(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, cb),
     onPeerLinkReset: (cb: (payload: unknown) => void): (() => void) =>
       onPayload(DEVICE_LINK_PUSH.PEER_LINK_RESET, cb),
     mirrorCache: {
@@ -162,6 +195,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedOwnerToken?: string,
         expectedAccountCounter?: number,
         historyView?: string,
+        mergeListMessage?: boolean,
       ): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, {
           deviceId,
@@ -171,6 +205,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           expectedOwnerToken,
           expectedAccountCounter,
           historyView,
+          mergeListMessage,
         }),
       getSessionList: (): Promise<unknown> =>
         ipcRenderer.invoke(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST),
@@ -214,7 +249,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cachePut: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:file-browser:cache-put', params),
     onTransferProgress: (cb: (event: unknown) => void): (() => void) => onPayload('maker:file-browser:transfer', cb),
     previewHtml: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:html-preview:open', params),
+    cancelHtmlPreview: (requestId: string): Promise<{ ok: true }> => ipcRenderer.invoke('maker:html-preview:cancel', requestId),
     chatFetch: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:fetch', params),
+    chatDownload: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:download', params),
+    chatCancel: (requestId: string): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:cancel', requestId),
     chatStat: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:chat-file:stat', params),
   },
   terminal: {
@@ -275,17 +313,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ghosts: {
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
-    setEnabled: (id: string, enabled: boolean): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('ghosts:set-enabled', id, enabled),
+    openRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:open-retirement', id),
+    acknowledgeRetirement: (id: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:acknowledge-retirement', id),
+    setEnabled: (id: string, enabled: boolean, expectedInstalledApproval?: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('ghosts:set-enabled', id, enabled, expectedInstalledApproval),
     resolvePanelMedia: (
       uri: string,
       purpose?: 'attach' | 'menu',
-    ): Promise<unknown> => ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose),
+      instanceId?: string,
+      sourceToken?: string,
+    ): Promise<unknown> => sourceToken !== undefined
+      ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId, sourceToken)
+      : instanceId === undefined
+        ? ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose)
+        : ipcRenderer.invoke('ghosts:resolve-panel-media', uri, purpose, instanceId),
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     onChanged: (cb: (payload: unknown) => void): (() => void) => onPayload('ghosts:changed', cb),
     onRuntimeChanged: (cb: (payload: unknown) => void): (() => void) =>
       onPayload('ghosts:runtime-changed', cb),
+    onLibraryReplaced: (cb: (payload: unknown) => void): (() => void) =>
+      onPayload('ghosts:library-replaced', cb),
     onPreviewMedia: (cb: (payload: unknown) => void): (() => void) =>
       onPayload('ghosts:preview-media', cb),
     unreadSync: (): { entries: unknown[] } => {
@@ -314,14 +364,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       handoff?: RsbWindowTabHandoff,
     ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
       ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
-    getContext: (): Promise<{
-      sessionId: string | null;
-      workdir: string | null;
-      remoteHostId: string | null;
-      deviceLinkDeviceId?: string | null;
-      subagentsAvailable?: boolean;
-      available: boolean;
-    } | null> => ipcRenderer.invoke('maker:rsb-window:get-context'),
+    getContext: (): Promise<RsbWindowContext | null> =>
+      ipcRenderer.invoke('maker:rsb-window:get-context'),
     /** 瀛橀噺灏辩华鎻℃墜 鈫?鏄犲皠鍒?renderer-ready(renderer shell 宸叉寕杞?銆?*/
     ready: (): Promise<void> => ipcRenderer.invoke('maker:rsb-window:ready'),
     /** 鍙岄樁娈靛氨缁?renderer shell 鎸傝浇銆?*/
@@ -332,20 +376,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     refreshContext: (): Promise<void> => ipcRenderer.invoke(RSB_WINDOW_REFRESH_CONTEXT_CHANNEL),
     onStateChanged: (
       cb: (state: { detached: boolean; open: boolean }) => void,
-    ): (() => void) => onPayload('maker:push:rsb-window:state-changed', cb),
-    onContextChanged: (
-      cb: (ctx: {
-        sessionId: string | null;
-        workdir: string | null;
-        remoteHostId: string | null;
-        deviceLinkDeviceId?: string | null;
-        subagentsAvailable?: boolean;
-        available: boolean;
-      }) => void,
-    ): (() => void) => onPayload('maker:push:rsb-window:context-changed', cb),
+    ): (() => void) => onPayload(RSB_WINDOW_STATE_CHANGED_CHANNEL, cb),
+    onContextChanged: (cb: (ctx: RsbWindowContext) => void): (() => void) =>
+      onPayload(RSB_WINDOW_CONTEXT_CHANGED_CHANNEL, cb),
+    /** main → 子窗口的命令推送；channel 必须与 main 端 MAKER_PUSH.RSB_WINDOW_COMMAND 同源。 */
     onCommand: (
       cb: (cmd: unknown) => void,
-    ): (() => void) => onPayload('maker:push:rsb-window:command', cb),
+    ): (() => void) => onPayload(RSB_WINDOW_COMMAND_CHANNEL, cb),
     onTabHandoff: (cb: (handoff: RsbWindowTabHandoff) => void): (() => void) =>
       onPayload(RSB_WINDOW_TAB_HANDOFF_CHANNEL, cb),
     sendCommand: (request: unknown): Promise<string> =>
@@ -356,6 +393,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // 鈹€鈹€ RSB tab 鎸佷箙鍖?杞婚噺,浠?RSB 闇€瑕? 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+  // ── 右侧栏单页签独立窗口(sidebar tab window)─────────────────────────────
+  // 本 preload 同时服务整栏子窗口与单页签弹出窗口(同一工厂 / 同一 renderer 入口,
+  // 按 `?sidebarTabWindow=1` 分流)。弹出窗口只需要:取 / 收指派、双阶段就绪握手、
+  // 合并回侧边栏、响应原生关窗与显隐;状态镜像供其内 store 判断页签归属。
+  sidebarTabWindow: {
+    getState: (): Promise<SidebarTabWindowsState> =>
+      ipcRenderer.invoke('maker:sidebar-tab-window:get-state'),
+    onStateChanged: (cb: (state: SidebarTabWindowsState) => void): (() => void) =>
+      onPayload('maker:sidebar-tab-window:state-changed', cb),
+    /** 聚焦另一扇弹出窗口(本窗口内切到被弹出页签时)。 */
+    focus: (tabId: string): Promise<void> =>
+      ipcRenderer.invoke('maker:sidebar-tab-window:focus', tabId),
+    /** 本窗口承载的页签已被关闭:销毁本窗口,不交回页签。 */
+    closeForTab: (tabId: string): Promise<void> =>
+      ipcRenderer.invoke('maker:sidebar-tab-window:close-for-tab', tabId),
+    getAssignment: (): Promise<SidebarTabWindowAssignmentPayload | null> =>
+      ipcRenderer.invoke(SIDEBAR_TAB_WINDOW_GET_ASSIGNMENT_CHANNEL),
+    onAssigned: (cb: (assignment: SidebarTabWindowAssignmentPayload) => void): (() => void) =>
+      onPayload(SIDEBAR_TAB_WINDOW_ASSIGNED_CHANNEL, cb),
+    rendererReady: (): Promise<void> =>
+      ipcRenderer.invoke(SIDEBAR_TAB_WINDOW_RENDERER_READY_CHANNEL),
+    presentationReady: (): Promise<void> =>
+      ipcRenderer.invoke(SIDEBAR_TAB_WINDOW_PRESENTATION_READY_CHANNEL),
+    /** 把本窗口里的某个页签合并回侧边栏(窗口清空后 main 关窗)。 */
+    mergeBack: (request: SidebarTabWindowMergeBackRequest): Promise<void> =>
+      ipcRenderer.invoke(SIDEBAR_TAB_WINDOW_MERGE_BACK_CHANNEL, request),
+    /** 本窗口里新建的页签归本窗口承载。 */
+    adoptTab: (request: SidebarTabWindowAdoptRequest): Promise<void> =>
+      ipcRenderer.invoke(SIDEBAR_TAB_WINDOW_ADOPT_TAB_CHANNEL, request),
+    onCloseRequested: (cb: () => void): (() => void) =>
+      onPayload(SIDEBAR_TAB_WINDOW_CLOSE_REQUESTED_CHANNEL, cb),
+    onVisibilityChanged: (cb: (payload: { visible: boolean }) => void): (() => void) =>
+      onPayload(SIDEBAR_TAB_WINDOW_VISIBILITY_CHANGED_CHANNEL, cb),
+    onLocaleChanged: (cb: (locale: SupportedLocale) => void): (() => void) =>
+      onPayload(SIDEBAR_TAB_WINDOW_LOCALE_CHANGED_CHANNEL, cb),
+  },
 
   rightSidebarTabs: {
     list: (input: { sessionId: string }): Promise<unknown> =>
@@ -418,6 +492,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The renderer's durable-tab consumers use the canonical localDb namespace.
   // Keep the legacy top-level alias above for compatibility with older builds.
   localDb: {
+    bots: {
+      autonomy: {
+        glance: (botId: string): Promise<import('../shared/botAutonomy').BotGlance> =>
+          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId),
+      },
+    },
     // Minimal read-only chat hydration bridge used by BackgroundTasks and the
     // shared makerChatStore. Do not expose the primary window's full DB API.
     sessions: {
@@ -462,6 +542,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       close: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:right-sidebar-tabs:close', input),
       setActive: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:right-sidebar-tabs:setActive', input),
       reorder: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:right-sidebar-tabs:reorder', input),
+      /** 其它 renderer 改动了某会话的页签持久化数据(主窗 ↔ 弹出窗口)。 */
+      onChanged: (cb: (payload: { sessionId: string }) => void): (() => void) =>
+        onPayload('maker:right-sidebar-tabs:changed', cb),
     },
     subagentRuns: {
       list: (input: unknown): Promise<unknown> => ipcRenderer.invoke('local-db:subagent-runs:list', input),
@@ -470,6 +553,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onChanged: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) => onPayloadWithMetadata('local-db:subagent-runs:changed', cb),
     },
     orcaWorkflows: {
+      projectLabel: (workerSessionId: string) => ipcRenderer.invoke('maker:worker:project-label', workerSessionId),
       getByLeadSession: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:get-by-lead', id),
       getByWorkerSession: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:get-by-worker-session', id),
       listWorkersByLead: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:orca-workflows:list-workers-by-lead', id),
@@ -497,10 +581,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       },
       archiveWorker: (leadSessionId: string, workerId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:worker:archive', { leadSessionId, workerId }),
+      updateWorker: (input: {
+        leadSessionId: string;
+        workerId: string;
+        role?: string;
+        label?: string;
+      }): Promise<unknown> => ipcRenderer.invoke('maker:worker:update', input),
       endTeam: (leadSessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('maker:team:end', leadSessionId),
       getCollaborationSettings: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:collaboration-settings:get'),
+      listExecutionDevices: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:orca:execution-devices'),
       onOrcaWorkerChanged: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:orca:worker-changed', cb),
     },
   },
@@ -528,6 +620,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     push: (params: unknown): Promise<unknown> => ipcRenderer.invoke('git-review:push', params),
   },
   maker: {
+    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void): (() => void) =>
+      onPayload('maker:bot-autonomy:changed', cb),
+    allowBotWorkbenchPermission: (
+      botId: string,
+      sessionId: string,
+      requestId: string,
+    ): Promise<{ accepted: boolean }> =>
+      ipcRenderer.invoke('maker:rsb-window:allow-bot-workbench-permission', { botId, sessionId, requestId }),
     // Live event subset consumed by makerChatStore in the detached renderer.
     onEvent: (cb: (payload: unknown) => void): (() => void) => onPayload('maker:event', cb),
     onStatusChanged: (cb: (payload: unknown) => void): (() => void) =>
@@ -550,36 +650,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:pi-subagent:control', input),
     getPendingInteractions: (sessionId: string): Promise<unknown> =>
       ipcRenderer.invoke('maker:get-pending-interactions', sessionId),
-    iosSimulator: {
-      requestAccess: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:request-access', request),
-      status: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:status', request),
-      call: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:call', request),
-      setAgentControl: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-agent-control', request),
-      setMutationControl: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-mutation-control', request),
-      setViewerVisibility: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
-      retryNativeRoute: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
-      latestFrame: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
-      copyScreenshot: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:copy-screenshot', request),
-      setStreamProfile: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:set-stream-profile', request),
-      liveTouch: (request: unknown): Promise<unknown> =>
-        ipcRenderer.invoke('maker:ios-simulator:live-touch', request),
-      onH264Frame: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:h264-frame', cb),
-      onRouteStatus: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:route-status', cb),
-      onFocusRequest: (cb: (payload: unknown) => void): (() => void) =>
-        onPayload('maker:ios-simulator:focus-request', cb),
-    },
   },
   /** 涓荤獥鎺ㄩ€?RSB 娴忚鍣ㄦ寜閿懡浠?鈱樷嚙鈫?绛?鍒板瓙绐楀彛銆?*/
   search: {
@@ -587,7 +657,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cancel: (params: unknown): Promise<unknown> => ipcRenderer.invoke('maker:search:cancel', params),
     onEvent: (cb: (event: unknown) => void): (() => void) => onPayload('maker:search:event', cb),
   },
+  /** 主窗推送 RSB 浏览器按键命令（⌘L / ⌘W 等）—— main 端常量见 webview-security RSB_BROWSER_COMMAND_CHANNEL。 */
   onRsbBrowserCommand: (
     cb: (payload: { command: string }) => void,
-  ): (() => void) => onPayload('maker:push:rsb-browser-command', cb),
+  ): (() => void) => onPayload('rsb:browser-command', cb),
 });

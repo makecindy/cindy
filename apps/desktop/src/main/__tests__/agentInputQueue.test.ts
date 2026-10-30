@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import {
+  HOST_ONLY_AGENT_PREFIX,
   ANNOTATED_IMAGE_NOTE,
+  ANNOTATED_IMAGE_REGIONS_PREFIX,
   buildMakerUserMessage,
   getAgentFacingText,
   reconcileSessionRefsForText,
   sanitizeQueuedMessageForPersistence,
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
   updateQueuedMessageContent,
   updateQueuedMessageText,
 } from '../../shared/agentInputQueue.js';
@@ -58,6 +61,42 @@ describe('agentInputQueue', () => {
     expect(rewritten.text).toBe(toolsDisabled ? '[UI_ACTION_TRIGGER]Updated welcome.' : 'Updated welcome.');
     expect(rewritten.persistedContent).toBe(rewritten.text);
     expect(getAgentFacingText(rewritten)).toBe('Updated welcome.');
+  });
+
+  it.each([false, true])('preserves host-owned peer hiding through rewrite and persistence (attachments=%s)', attachments => {
+    const body = '[UI_ACTION_TRIGGER]Original peer message';
+    const images = [{ url: 'cindy-media://fixture', mimeType: 'image/png' }];
+    const entry = { ...queuedMessage([]), text: body,
+      persistedContent: attachments ? JSON.stringify({ text: body, images }) : body,
+      agentOmitsTriggerPrefix: true as const,
+      [HOST_ONLY_AGENT_PREFIX]: '[Group source: fixture]\n' };
+    const rewritten = updateQueuedMessageText(entry, 'Rewritten peer message');
+    const hiddenText = '[UI_ACTION_TRIGGER]Rewritten peer message';
+    expect(rewritten.text).toBe(hiddenText);
+    expect(rewritten.chatMessage.content).toBe(hiddenText);
+    if (attachments) expect(JSON.parse(rewritten.persistedContent)).toMatchObject({ text: hiddenText, images });
+    else expect(rewritten.persistedContent).toBe(hiddenText);
+    expect(buildMakerUserMessage(rewritten)).toEqual({ type: 'user', content: '[Group source: fixture]\nRewritten peer message' });
+    const snapshot = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(rewritten)));
+    expect(snapshot.text).toBe(hiddenText);
+    expect(JSON.stringify(snapshot)).not.toContain('Group source');
+    expect(updateQueuedMessageText(rewritten, hiddenText).text).toBe(hiddenText);
+    expect(buildMakerUserMessage(snapshot)).toEqual({ type: 'user', content: 'Rewritten peer message' });
+  });
+
+  it('keeps the hidden-row prefix on host receipts but omits it from the model input', () => {
+    const body = '[任务回执] 后台任务已完成。task_id: d-1';
+    const text = `[UI_ACTION_TRIGGER]${body}`;
+    const queued = {
+      ...queuedMessage([]), text, persistedContent: text, agentOmitsTriggerPrefix: true as const,
+    };
+    const restored = JSON.parse(JSON.stringify(sanitizeQueuedMessageForPersistence(queued)));
+    // 排队行遮蔽按 text 判定,text / 落库内容都保留前缀。
+    expect(restored.text).toBe(text);
+    expect(restored.persistedContent).toBe(text);
+    expect(buildMakerUserMessage(restored)).toEqual({ type: 'user', content: body });
+    // 没有主机标记的合成指令(续跑)照旧带前缀发给模型。
+    expect(buildMakerUserMessage({ ...queued, agentOmitsTriggerPrefix: undefined })).toEqual({ type: 'user', content: text });
   });
 
   it('sends queued GIF attachments as file blocks', () => {
@@ -151,6 +190,123 @@ describe('agentInputQueue', () => {
         { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
         { type: 'image', path: 'xdt-image://session/other.png', mimeType: 'image/png' },
         { type: 'text', text: ANNOTATED_IMAGE_NOTE },
+      ],
+    });
+  });
+
+  it('keeps the plain note byte-identical and pins its exact wording', () => {
+    expect(ANNOTATED_IMAGE_NOTE).toBe(
+      'Note: the red freehand marks on the attached image(s) are annotations drawn by the user ' +
+        'to highlight the region(s) they are referring to; they are not part of the original image.',
+    );
+    // 编号只在本条消息内有效,说明里必须讲清楚。
+    expect(ANNOTATED_IMAGE_REGIONS_PREFIX).toBe(
+      'Marked regions (normalized image coordinates, origin top-left; ' +
+        'images numbered in their order within this message): ',
+    );
+  });
+
+  it('appends marked regions indexed by image order when annotated images carry them', () => {
+    const image = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: `${id}.png`,
+      path: `/repo/${id}.png`,
+      ext: '.png',
+      size: 64,
+      category: 'image' as const,
+      mimeType: 'image/png',
+      url: `xdt-image://session/${id}.png`,
+      ...extra,
+    });
+    const message = buildMakerUserMessage(
+      queuedMessage([
+        image('plain'),
+        {
+          id: 'gif',
+          name: 'clip.gif',
+          path: '/repo/clip.gif',
+          ext: '.gif',
+          size: 1,
+          category: 'image',
+          mimeType: 'image/gif',
+          url: 'xdt-image://session/clip.gif',
+        },
+        image('marked', {
+          annotated: true,
+          annotationRegions: [
+            { x0: 0.31, y0: 0.12, x1: 0.46, y1: 0.2 },
+            { x0: 0.7, y0: 0.55, x1: 0.9, y1: 0.61 },
+          ],
+        }),
+        // 标注图但区域缺失:只贡献固定说明,不出现在区域描述里。
+        image('legacy', { annotated: true }),
+      ]),
+    );
+    expect(message).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'image', path: 'xdt-image://session/plain.png', mimeType: 'image/png' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'image', path: 'xdt-image://session/marked.png', mimeType: 'image/png' },
+        { type: 'image', path: 'xdt-image://session/legacy.png', mimeType: 'image/png' },
+        {
+          type: 'text',
+          text:
+            `${ANNOTATED_IMAGE_NOTE}\n${ANNOTATED_IMAGE_REGIONS_PREFIX}` +
+            'image 2: x 0.31–0.46, y 0.12–0.20; x 0.70–0.90, y 0.55–0.61.',
+        },
+      ],
+    });
+  });
+
+  it('falls back to the plain note when region data is missing or malformed', () => {
+    const annotatedImage = (annotationRegions: unknown) => ({
+      id: 'image-1',
+      name: 'shot.png',
+      path: '/repo/shot.png',
+      ext: '.png',
+      size: 128,
+      category: 'image' as const,
+      mimeType: 'image/png',
+      url: 'xdt-image://session/shot.png',
+      annotated: true,
+      annotationRegions: annotationRegions as never,
+    });
+    for (const regions of [undefined, [], 'bad', [{ x0: 'a', y0: 0, x1: 1, y1: 1 }], [{ x0: 0.9, y0: 0, x1: 0.1, y1: 1 }]]) {
+      const message = buildMakerUserMessage(queuedMessage([annotatedImage(regions)]));
+      expect(message).toEqual({
+        type: 'user',
+        content: [
+          { type: 'text', text: 'inspect attachment' },
+          { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
+          { type: 'text', text: ANNOTATED_IMAGE_NOTE },
+        ],
+      });
+    }
+  });
+
+  it('ignores region data on images that are not annotated', () => {
+    const message = buildMakerUserMessage(
+      queuedMessage([
+        {
+          id: 'image-1',
+          name: 'shot.png',
+          path: '/repo/shot.png',
+          ext: '.png',
+          size: 128,
+          category: 'image',
+          mimeType: 'image/png',
+          url: 'xdt-image://session/shot.png',
+          annotationRegions: [{ x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 }],
+        },
+      ]),
+    );
+    expect(message).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'inspect attachment' },
+        { type: 'image', path: 'xdt-image://session/shot.png', mimeType: 'image/png' },
       ],
     });
   });
@@ -356,6 +512,23 @@ describe('agentInputQueue', () => {
       .toHaveProperty('text', 'process-local referenced body');
   });
 
+  // Unit contract (#6611, usage-limit-auto-continue.md): sanitizing either snapshot
+  // boundary must copy out a first-input marker without mutating the live send.
+  // Existing reference sanitization did not cover this metadata or hidden continuations.
+  it.each([false, true])('sanitizes quota activity while preserving hidden continuation metadata (hidden=%s)', hidden => {
+    const entry = queuedMessage(undefined);
+    entry.autoResume = hidden;
+    entry.autoResumeInfo = {
+      reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+      attempt: 1,
+      maxAttempts: 3,
+      sessionTotal: 0,
+    };
+    const persisted = sanitizeQueuedMessageForPersistence(entry);
+    expect(persisted.autoResumeInfo).toEqual(hidden ? entry.autoResumeInfo : undefined);
+    expect(entry.autoResumeInfo.reason).toBe(USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
+  });
+
   it('strips transient Bot host state from crash-recovery snapshots', () => {
     const entry = queuedMessage(undefined);
     const href = 'cindy://bot/bot-b';
@@ -492,8 +665,8 @@ describe('agentInputQueue', () => {
 
     const projected = getAgentFacingText(entry);
     expect(projected).toContain('Complete target message body');
-    expect(projected).toContain('Session ID: session-a');
-    expect(projected).toContain('Message ID: message-a');
+    expect(projected).toContain('Session ID: "session-a"');
+    expect(projected).toContain('Message ID: "message-a"');
     expect(projected).not.toContain(href);
   });
 

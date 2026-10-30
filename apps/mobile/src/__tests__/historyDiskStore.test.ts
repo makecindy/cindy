@@ -63,8 +63,8 @@ describe('history disk cache', () => {
   });
   it('does not replace a good snapshot with an oversized write', async () => {
     const h = fixture(5);
-    await h.cache.write('s', 'good', current);
-    await h.cache.write('s', 'oversized', current);
+    expect(await h.cache.write('s', 'good', current)).toBe(true);
+    expect(await h.cache.write('s', 'oversized', current)).toBe(false);
     expect(await h.cache.read('s', current)).toBe('good');
   });
   it('clears only the selected scope and survives restart', async () => {
@@ -89,6 +89,7 @@ describe('history disk cache', () => {
     const clear = h.cache.clear();
     release();
     await Promise.all([write, clear]);
+    expect(await write).toBe(false);
     expect(await h.cache.read('s', current)).toBeNull();
     expect([...h.files.keys()]).toEqual(['index.json']);
   });
@@ -105,7 +106,7 @@ describe('history disk cache', () => {
     h.files.set('index.json', '{'); h.files.set('view-orphan.json', 'discard');
     expect(await h.cache.read('s', current)).toBeNull();
     expect(h.files.has('view-orphan.json')).toBe(false);
-    await h.cache.write('s', 'new', current);
+    expect(await h.cache.write('s', 'new', current)).toBe(true);
     expect(await h.cache.read('s', current)).toBe('new');
   });
   it('keeps the previous body if committing the new index fails', async () => {
@@ -113,7 +114,7 @@ describe('history disk cache', () => {
     await h.cache.write('s', 'old', current);
     const original = h.io.write;
     h.io.write = async (name, text) => { if (name === 'index.json') throw Error('disk full'); await original(name, text); };
-    await h.cache.write('s', 'new', current);
+    expect(await h.cache.write('s', 'new', current)).toBe(false);
     h.io.write = original;
     expect(await h.cache.read('s', current)).toBe('old');
   });

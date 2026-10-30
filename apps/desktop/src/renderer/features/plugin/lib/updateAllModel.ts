@@ -1,12 +1,13 @@
 /**
  * Pure state model for the "update all plugins" batch flow.
  *
- * Inputs: market items and installed Ghost manifests.
+ * Inputs: market items and installed versions keyed by market pluginId.
  * Outputs: serially consumable rows whose transitions the dialog renders;
  * no IPC here so the batch policy stays unit-testable.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
+import { deliveryNamespaceFields } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 /**
@@ -23,6 +24,8 @@ export type UpdateAllRowStatus =
 export interface UpdateAllRow {
   pluginId: string;
   ghostId: string;
+  /** Present when the market row carried a known namespace; omitted stays legacy. */
+  namespace?: string | null;
   name: string;
   fromVersion: string;
   toVersion: string;
@@ -34,15 +37,16 @@ export interface UpdateAllRow {
 /** 从市场快照萃取可更新行;顺序即执行顺序(与列表快照顺序一致,稳定)。 */
 export function buildUpdateAllRows(
   marketItems: readonly PluginMarketItem[],
-  installedVersionById: ReadonlyMap<string, string>,
+  installedVersionByPluginId: ReadonlyMap<string, string>,
 ): UpdateAllRow[] {
   return marketItems
     .filter((item) => item.installState === 'update-available')
     .map((item) => ({
       pluginId: item.pluginId,
       ghostId: item.ghostId,
+      ...deliveryNamespaceFields(item),
       name: item.name,
-      fromVersion: installedVersionById.get(item.ghostId) ?? '',
+      fromVersion: installedVersionByPluginId.get(item.pluginId) ?? '',
       toVersion: item.version,
       status: 'pending' as const,
     }));
@@ -103,7 +107,7 @@ export function ignoredRoundStorageKey(
 export function updateRoundKey(marketItems: readonly PluginMarketItem[]): string {
   return marketItems
     .filter((item) => item.installState === 'update-available')
-    .map((item) => `${item.ghostId}@${item.version}`)
+    .map((item) => `${item.pluginId}@${item.version}`)
     .sort()
     .join('|');
 }

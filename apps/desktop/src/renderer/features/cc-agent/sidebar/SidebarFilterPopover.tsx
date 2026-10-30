@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 一级入口：分组 / 任务排序 / 项目排序 / 任务状态 / 筛选 / 显示 / 任务信息。
  * 每行显示当前设置，具体选项在子菜单中；任务排序直接三选一，优先级在前。
- * 分组、排序保持原有语义；筛选只包含项目 / Harness / 最近活跃，不重置任务状态。
+ * 分组、排序保持原有语义；筛选只包含项目 / 伙伴 / Harness / 最近活跃，不重置任务状态。
  *
  * 入口仍复用 sliders-horizontal 图标；内容为行式菜单 + 子菜单。
  *
@@ -47,12 +47,14 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
-  Tags,
   Wallet,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import { taskCreatorFilterKey } from '@/features/bots/cindyDeviceRoster';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useSidebarMainViewMode, type SidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -90,13 +92,8 @@ import type {
 import { DIALOGUE_FILTER_KEY, projectFilterIncludes } from '../hooks/helpers/sidebarFilterCore';
 import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
-import {
-  MENU_CONTENT_CLASS,
-  MENU_ITEM_CLASS,
-  MENU_ROW_CLASS,
-  MENU_SEPARATOR_CLASS,
-  MENU_SUB_CONTENT_CLASS,
-} from './menuStyles';
+import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
+import { FilterReminderDot } from './FilterReminderDot';
 
 type Option<T extends string> = {
   value: T;
@@ -175,7 +172,6 @@ const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
  * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
-  { value: 'tags', labelKey: 'taskTags.title', Icon: Tags },
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
   { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
@@ -205,8 +201,8 @@ export interface SidebarFilterPopoverProps {
   /** 当前范围内无项目任务数,用来在项目筛选里画「对话」选项。 */
   dialogueCount?: number;
   /**
-   * 是否有远程设备连接(E 期)。「按设备分组」与顶部设备切换栏同一出现条件:
-   * 仅远程连接时显示;仅本机时该选项整行隐藏。
+   * 是否有可选的远程设备（含断线缓存）。设备仍在切换栏可选时保留分组选项，
+   * 仅剩本机或被拒设备时隐藏，不因连接状态抖动改变分组。
    */
   hasRemoteDevices?: boolean;
   /**
@@ -238,7 +234,9 @@ function MenuSubRow({
   value,
   valueNode,
   valueEmphasized = false,
+  filterReminder = false,
   Icon,
+  contentClassName,
   children,
 }: {
   label: string;
@@ -253,13 +251,16 @@ function MenuSubRow({
   valueNode?: ReactNode;
   /** 偏离默认值时右侧摘要转正文色，提示筛选生效。 */
   valueEmphasized?: boolean;
+  filterReminder?: boolean;
+  contentClassName?: string;
   children: ReactNode;
 }) {
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger className={MENU_ROW_CLASS}>
         <MenuItemIcon Icon={Icon} />
-        <span className="truncate">{label}</span>
+        <span className="truncate" title={label}>{label}</span>
+        {filterReminder && <FilterReminderDot inline />}
         <span
           className={cn(
             'ml-auto max-w-[96px] truncate text-right',
@@ -267,12 +268,13 @@ function MenuSubRow({
           )}
           // 图标摘要下把文字版留给读屏(图标本身 aria-hidden)。
           aria-label={valueNode ? value : undefined}
+          title={valueNode ? undefined : value}
         >
           {valueNode ?? value}
         </span>
         <ChevronRight size={14} className="shrink-0 text-[var(--cmd-palette-item-meta)]" />
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent sideOffset={8} className={cn(MENU_SUB_CONTENT_CLASS, 'w-[220px]')}>
+      <DropdownMenuSubContent sideOffset={8} className={cn('w-[220px]', contentClassName)}>
         {children}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
@@ -296,6 +298,7 @@ function SelectMenuItem({
   onSelect,
   Icon,
   tip,
+  filterReminder = false,
 }: {
   label: string;
   selected: boolean;
@@ -303,6 +306,7 @@ function SelectMenuItem({
   Icon?: LucideIcon;
   /** 可选 hover 说明(见 Option.tipKey);为空时 Tip 透明透传,不挂 tooltip。 */
   tip?: string;
+  filterReminder?: boolean;
 }) {
   return (
     // side="right":菜单本身贴着侧栏右缘,提示往上/下会压住相邻选项,往右才有空间
@@ -319,6 +323,7 @@ function SelectMenuItem({
       >
         <MenuItemIcon Icon={Icon} />
         <span className="truncate">{label}</span>
+        {filterReminder && <FilterReminderDot inline />}
         {selected && (
           <Check size={15} className="ml-auto shrink-0 text-[var(--msg-assistant-text)]" />
         )}
@@ -387,6 +392,11 @@ export function SidebarFilterPopover({
     status,
     projects,
     projectsAsSet,
+    creators,
+    creatorOptions,
+    toggleCreator,
+    setCreatorsAll,
+    setCreatorsNone,
     isFilterActive,
     vendor,
     lastActivity,
@@ -516,9 +526,16 @@ export function SidebarFilterPopover({
       ? t('ccAgent.sidebar.filterAllText')
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
 
+  const creatorValue = creators === 'all' ? t('ccAgent.sidebar.filterCreatorsAny')
+    : creators === 'none' ? t('ccAgent.sidebar.filterCreatorsNone')
+    : creators.length === 1
+      ? (creatorOptions.find(bot => taskCreatorFilterKey(bot) === creators[0])?.name
+        ?? t('ccAgent.sidebar.filterSelectedCreators', { count: creators.length }))
+      : t('ccAgent.sidebar.filterSelectedCreators', { count: creators.length });
+
   // 一级「筛选」行摘要：偏离默认的维度数。
   const activeFilterCount =
-    (projects !== 'all' ? 1 : 0) + (vendor !== 'all' ? 1 : 0) + (lastActivity !== 'all' ? 1 : 0);
+    (projects !== 'all' ? 1 : 0) + (vendor !== 'all' ? 1 : 0) + (lastActivity !== 'all' ? 1 : 0) + (creators !== 'all' ? 1 : 0);
   const filterSummary =
     activeFilterCount > 0
       ? t('ccAgent.sidebar.filterSummaryActive', { count: activeFilterCount })
@@ -533,7 +550,8 @@ export function SidebarFilterPopover({
           )
           .join(t('ccAgent.sidebar.taskInfoSummarySeparator'))
       : t('ccAgent.sidebar.taskInfoSummaryNone');
-  const taskInfoIsDefault = taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
+  const taskInfoIsDefault =
+    taskInfoFields.length === DEFAULT_TASK_INFO_FIELDS.length &&
     DEFAULT_TASK_INFO_FIELDS.every((field, index) => taskInfoFields[index] === field);
 
   const ariaLabel = t('ccAgent.sidebar.filterAria', {
@@ -543,6 +561,7 @@ export function SidebarFilterPopover({
     groupBy: groupByValue,
     sortBy: sortByValue,
     projects: projectValue,
+    creators: creatorValue,
   });
 
   return (
@@ -583,12 +602,15 @@ export function SidebarFilterPopover({
               aria-pressed={isFilterActive}
               className={cn(
                 // 配色与段头其余按钮统一(侧栏 token 对),不用通用 text-tertiary。
-                'flex h-7 w-7 items-center justify-center rounded-md',
+                'relative flex h-7 w-7 items-center justify-center rounded-md',
                 'text-[var(--sidebar-list-muted)]',
                 'transition-colors hover:text-[var(--sidebar-nav-text)]',
               )}
             >
               <SlidersHorizontal size={14} strokeWidth={2} />
+              {/* 正在看已归档任务时标一个点,提醒列表不是平常的进行中任务;
+                  段头会让这个按钮常驻显示。 */}
+              {status === 'archived' && <FilterReminderDot />}
             </button>
           </Tip>
         )}
@@ -599,7 +621,7 @@ export function SidebarFilterPopover({
         sideOffset={isContextMode ? 2 : 8}
         // 与窗口边缘留白:菜单向上翻转时不顶死在标题栏上(仓库既有 8~16 的先例)。
         collisionPadding={8}
-        className={cn(MENU_CONTENT_CLASS, 'w-[248px]')}
+        className="w-[248px]"
       >
         {/* 菜单自身的标题行已去掉(2026-08-12 用户裁决,节约高度;与远程机器菜单
             2026-07 的「无标题行」同规)——触发按钮的 tooltip 已经说明这是什么。
@@ -674,10 +696,11 @@ export function SidebarFilterPopover({
                   ))}
                 </MenuSubRow>
               )}
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator />
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskStatusHeading')}
                 value={statusValue}
+                filterReminder={status === 'archived'}
                 Icon={ListChecks}
               >
                 {STATUS_OPTIONS.map((option) => (
@@ -685,6 +708,7 @@ export function SidebarFilterPopover({
                     key={option.value}
                     label={t(option.labelKey)}
                     selected={status === option.value}
+                    filterReminder={status === 'archived' && option.value === 'archived'}
                     Icon={option.Icon}
                     onSelect={() => setStatus(option.value)}
                   />
@@ -695,6 +719,7 @@ export function SidebarFilterPopover({
                 value={filterSummary}
                 valueEmphasized={activeFilterCount > 0}
                 Icon={Filter}
+                contentClassName="w-[280px]"
               >
                 <MenuSubRow
                   label={t('ccAgent.sidebar.filterProjectsHeading')}
@@ -717,7 +742,7 @@ export function SidebarFilterPopover({
                       />
                     )}
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                  <DropdownMenuSeparator />
                   <div className="max-h-[256px] overflow-y-auto">
                     <DropdownMenuItem
                       onSelect={(event) => {
@@ -787,6 +812,32 @@ export function SidebarFilterPopover({
                   </div>
                 </MenuSubRow>
 
+                <MenuSubRow label={t('ccAgent.sidebar.filterCreatorsHeading')} value={creatorValue} Icon={Users}>
+                  <SelectMenuItem label={t('ccAgent.sidebar.filterCreatorsAny')} selected={creators === 'all'}
+                    onSelect={setCreatorsAll} Icon={Users} />
+                  <SelectMenuItem label={t('ccAgent.sidebar.filterCreatorsNone')} selected={creators === 'none'}
+                    onSelect={setCreatorsNone} Icon={Users} />
+                  {creatorOptions.length > 0 && <DropdownMenuSeparator />}
+                  <div className="max-h-[256px] overflow-y-auto">
+                    {creatorOptions.map(bot => {
+                      const key = taskCreatorFilterKey(bot);
+                      return (
+                        <DropdownMenuItem key={key} className={cn(MENU_ITEM_CLASS, bot.deviceName && 'h-auto min-h-8 items-start')}
+                          role="menuitemcheckbox" aria-label={[bot.name, bot.deviceName].filter(Boolean).join(' ')} aria-checked={Array.isArray(creators) && creators.includes(key)}
+                          onSelect={event => { event.preventDefault(); toggleCreator(key); }}>
+                          <BotAvatar bot={bot} size="xs" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate" title={bot.name}>{bot.name}</span>
+                            {bot.deviceName && <span className="block truncate text-xs text-[var(--cmd-palette-item-meta)]" title={bot.deviceName}>{bot.deviceName}</span>}
+                          </span>
+                          {Array.isArray(creators) && creators.includes(key) &&
+                            <Check size={15} className={cn('shrink-0 text-[var(--msg-assistant-text)]', bot.deviceName && 'mt-0.5')} />}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </div>
+                </MenuSubRow>
+
                 <MenuSubRow
                   label={t('ccAgent.sidebar.filterAgentHeading')}
                   value={vendorValue}
@@ -819,7 +870,7 @@ export function SidebarFilterPopover({
                   ))}
                 </MenuSubRow>
 
-                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={(event) => {
                     event.preventDefault();
@@ -835,7 +886,7 @@ export function SidebarFilterPopover({
                 </DropdownMenuItem>
               </MenuSubRow>
 
-              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <DropdownMenuSeparator />
 
               <MenuSubRow
                 label={t('ccAgent.sidebar.displayHeading')}

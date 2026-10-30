@@ -1,10 +1,9 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import {
-  getDataOwnerGeneration,
-  isDataOwnerIdCurrent,
-} from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { isRemoteSessionSticky, subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
+import { subscribeTurnChangeSetUpdated } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { turnChangeReadApiFor } from '@/lib/gitReviewTransport';
 import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 const EMPTY: TurnChangeSetSummary[] = [];
@@ -62,24 +61,41 @@ export function useTurnChangeSets(
   sessionId: string | undefined,
   remoteHostId: string | null | undefined,
 ) {
-  const remote = useSyncExternalStore(
+  const deviceId = useSyncExternalStore(
     remoteProjectsStore.subscribe,
-    () => Boolean(sessionId && isRemoteSessionSticky(sessionId)),
+    () => (sessionId ? getStickySessionDeviceId(sessionId) : undefined),
+    () => undefined,
+  );
+  const enabled = Boolean(sessionId && remoteHostId === null);
+  const connected = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () =>
+      !deviceId ||
+      remoteProjectsStore
+        .getDeviceList()
+        .some((device) => device.deviceId === deviceId && device.connected),
     () => false,
   );
-  const enabled = Boolean(sessionId && remoteHostId === null && !remote);
   const owner = getDataOwnerGeneration();
   const store = useMemo(() => {
     if (!enabled || !sessionId) return { getSnapshot: () => EMPTY, subscribe: () => () => {} };
-    const entry = entryFor(sessionId);
+    const cacheKey = JSON.stringify([deviceId ?? null, sessionId]);
+    const entry = entryFor(cacheKey);
     const current = () =>
       isDataOwnerIdCurrent(owner) &&
-      cache.get(sessionId) === entry &&
-      !isRemoteSessionSticky(sessionId);
+      cache.get(cacheKey) === entry &&
+      getStickySessionDeviceId(sessionId) === deviceId;
     return {
       getSnapshot: () => (current() ? entry.summaries : EMPTY),
       subscribe: (listener: () => void) => {
         entry.listeners.add(listener);
+        // Invalidate on disconnect even while another pane keeps this entry subscribed.
+        // A late pre-disconnect reply must neither publish nor clear the new request.
+        if (!connected && entry.pending) {
+          entry.generation += 1;
+          entry.pending = null;
+          entry.updates.clear();
+        }
         if (!entry.unsubscribe) {
           let subscribed = true;
           const off = subscribeTurnChangeSetUpdated(sessionId, ({ summary }) => {
@@ -92,10 +108,10 @@ export function useTurnChangeSets(
             off();
           };
         }
-        if (!entry.pending && current()) {
+        if (connected && !entry.pending && current()) {
           entry.updates.clear();
           const generation = ++entry.generation;
-          entry.pending = window.electronAPI.maker
+          entry.pending = turnChangeReadApiFor(deviceId)
             .listTurnChangeSets(sessionId)
             .then((summaries) => {
               if (!current() || generation !== entry.generation) return;
@@ -128,6 +144,6 @@ export function useTurnChangeSets(
         };
       },
     };
-  }, [enabled, sessionId, owner]);
+  }, [enabled, sessionId, owner, deviceId, connected]);
   return useSyncExternalStore(store.subscribe, store.getSnapshot, () => EMPTY);
 }

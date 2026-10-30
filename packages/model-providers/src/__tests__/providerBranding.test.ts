@@ -13,7 +13,7 @@ describe('provider branding', () => {
   it.each([
     ['anthropic', 'anthropic'],
     ['openai', 'openai'],
-    ['xd', 'xd'],
+    ['xd', 'cindy'],
   ] as const)('maps built-in provider %s to its official mark', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
   });
@@ -70,6 +70,7 @@ describe('provider branding', () => {
   });
 
   it('guards runtime logo values before indexing shared paths', () => {
+    expect(isProviderLogoKind('cindy')).toBe(true);
     expect(isProviderLogoKind('vercel')).toBe(true);
     expect(isProviderLogoKind('future-brand')).toBe(false);
     expect(isProviderLogoKind(null)).toBe(false);

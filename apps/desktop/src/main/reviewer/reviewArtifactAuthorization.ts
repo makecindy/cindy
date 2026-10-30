@@ -134,20 +134,20 @@ export async function reviewArtifactFileLinkLayoutIsSafe(
  * renderer-only inline bytes require an explicit native confirmation.
  */
 export async function authorizeReviewExplicitArtifacts(input: {
-  workingDir: string;
+  workingDir: string | null;
   focus?: string;
   attachments: ReviewArtifactAuthorizationAttachment[];
   resolvePath: (rawPath: string, workingDir: string) => Promise<ResolvedReviewArtifactPath | null>;
   confirm: (items: ReviewArtifactConfirmationItem[]) => Promise<boolean>;
 }): Promise<ReviewExplicitArtifactGrant> {
-  const canonicalWorkingDir = await fs.realpath(input.workingDir).catch(() => null);
+  const canonicalWorkingDir = input.workingDir ? await fs.realpath(input.workingDir).catch(() => null) : null;
   const grantedPaths = new Set<string>();
   const pathIdentities = new Map<string, ReviewArtifactPathIdentity>();
   const confirmationItems: ReviewArtifactConfirmationItem[] = [];
   const confirmationKeys = new Set<string>();
 
   const addResolved = async (rawPath: string, label: string): Promise<boolean> => {
-    const resolved = await input.resolvePath(rawPath, input.workingDir);
+    const resolved = await input.resolvePath(rawPath, input.workingDir ?? '');
     if (!resolved) return false;
     const stat = await fs.lstat(resolved.absPath).catch(() => null);
     if (!stat || stat.isSymbolicLink()) {

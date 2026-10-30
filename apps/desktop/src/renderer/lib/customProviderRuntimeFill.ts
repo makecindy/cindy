@@ -3,7 +3,7 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
-import { savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
+import { adaptCustomProviderModelEfforts, savedCustomProviderModelShape } from '@/../shared/piRuntimeInitialization';
 
 export type RuntimeFillAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 export interface RuntimeFillHeaderRow {
@@ -154,24 +154,19 @@ function modelsForTarget(
 ) {
   const targetById = new Map(validModels(targetModels).map((model) => [model.id, model]));
   return validModels(sourceModels).map((sourceModel) => {
-    if (targetAgent !== 'pi') return savedCustomProviderModelShape(sourceModel, false);
-    if (sourceAgent === 'pi') return savedCustomProviderModelShape(sourceModel, true);
-
-    const portable = savedCustomProviderModelShape(sourceModel, false);
+    const portable = savedCustomProviderModelShape(sourceModel, targetAgent === 'pi');
     const existing = targetById.get(portable.id);
-    return {
-      ...portable,
-      ...(existing?.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(existing?.reasoning === true && existing.reasoningEfforts?.length
-        ? {
-            reasoning: true,
-            reasoningEfforts: [...existing.reasoningEfforts],
-            ...(existing.reasoningDefaultEffort
-              ? { reasoningDefaultEffort: existing.reasoningDefaultEffort }
-              : {}),
-          }
-        : {}),
-    };
+    if (sourceAgent === targetAgent) return adaptCustomProviderModelEfforts(portable, targetAgent);
+    // Copy all portable metadata, but an engine's opt-in is not another engine's opt-in.
+    const { defaultEnabled: sourceEnabled, ...metadata } = portable;
+    // Adapt after merging so a retained target default cannot outlive a replaced effort list.
+    return adaptCustomProviderModelEfforts({
+      ...existing,
+      ...metadata,
+      ...(existing?.defaultEnabled !== undefined
+        ? { defaultEnabled: existing.defaultEnabled }
+        : sourceEnabled === false ? { defaultEnabled: false } : {}),
+    }, targetAgent);
   });
 }
 

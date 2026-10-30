@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findActiveReconnect } from '@/lib/autoResumePresentation';
+import { findActiveReconnect, readAutoResumeInfo } from '@/lib/autoResumePresentation';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 const row = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -98,5 +98,56 @@ describe('composer reconnect presentation', () => {
     expect(active).not.toBeNull();
     expect(active?.attempt).toBeUndefined();
     expect(active?.maxAttempts).toBeUndefined();
+  });
+});
+
+describe('usage-limit reset continuation', () => {
+  it('is not reported as a reconnect in the composer', () => {
+    expect(
+      findActiveReconnect({
+        ...base,
+        messages: [
+          row({
+            systemCardData: { reason: 'usage-limit-reset', attempt: 1, maxAttempts: 3, sessionTotal: 1 },
+          }),
+        ],
+      }),
+    ).toBeNull();
+  });
+});
+
+
+describe('provider group switch presentation', () => {
+  it('reads the computer switch carried by an auto-continue record', () => {
+    expect(readAutoResumeInfo({
+      reason: 'usage-limit-reset',
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'usage-limit' },
+    })).toEqual({
+      usageLimitReset: true,
+      agentSwitch: { from: 'Mac mini', to: 'Studio-PC', cause: 'usage-limit' },
+    });
+  });
+
+  it('ignores malformed switch data and keeps the plain usage-limit row', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: '', cause: 'usage-limit' } }))
+      .toEqual({ usageLimitReset: true });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentSwitch: { from: 'A', to: 'B', cause: 'other' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a shared user’s switch without any computer names', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'overload' } }))
+      .toEqual({ usageLimitReset: true, groupSwitch: { cause: 'overload' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', groupSwitch: { cause: 'other' } }))
+      .toEqual({ usageLimitReset: true });
+  });
+
+  it('reads a reconnect to the original computer, with or without its name', () => {
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: { computer: 'Mac mini' } }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: 'Mac mini' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: {} }))
+      .toEqual({ usageLimitReset: true, agentReconnect: { computer: '' } });
+    expect(readAutoResumeInfo({ reason: 'usage-limit-reset', agentReconnect: 'Mac mini' }))
+      .toEqual({ usageLimitReset: true });
   });
 });

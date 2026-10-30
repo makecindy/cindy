@@ -96,6 +96,8 @@ export interface MakeHistoryBuildSelection {
 export interface CindyMakeHistoryState {
   items: CindyMakeHistoryItem[];
   busy: boolean;
+  /** Running work only; a retained source conflict does not block version switching. */
+  activeWork?: boolean;
   canBuild: boolean;
   build?: CindyMakePersonalBuildState;
   batch?: { current: number; total: number; runId: string; title: string };

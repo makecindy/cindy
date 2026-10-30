@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
@@ -512,15 +513,19 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
             {t('settings.shortcuts.xboxGamepad.layout.reset.description')}
           </p>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
+          loading={saving}
           type="button"
           disabled={!state || saving}
           onClick={() => void resetSettings()}
-          className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="shrink-0"
         >
           <RotateCcw size={13} />
           {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
-        </button>
+        </Button>
       </SettingsCard>
     </div>
   );
@@ -544,8 +549,8 @@ function XboxGamepadPartEditor({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-[var(--shadow-menu)] focus:outline-none">
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Content onPointerDownOutside={(event) => event.preventDefault()} className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[min(700px,calc(100vh-48px))] w-[min(520px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none">
           <div className="px-6 pb-4 pt-6">
             <Dialog.Title className="text-18 font-medium leading-[1.3]">{title}</Dialog.Title>
             <Dialog.Description className="mt-1 text-13 leading-[1.4] text-[var(--text-secondary)]">
@@ -554,13 +559,9 @@ function XboxGamepadPartEditor({
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">{children}</div>
           <div className="flex justify-end border-t border-[var(--border-default)] px-6 py-4">
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              className="rounded-lg bg-[var(--accent-cta-bg)] px-3 py-2 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-            >
+            <Button variant="cta" size="md" compact type="button" onClick={() => onOpenChange(false)}>
               {closeLabel}
-            </button>
+            </Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -653,7 +654,7 @@ function SelectControl({
         className={cn(
           'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
           'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
           className,
         )}
@@ -695,7 +696,6 @@ function SelectControl({
                     className={cn(
                       'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
                       'text-[var(--text-primary)]',
-                      'data-[highlighted]:bg-[var(--surface-hover)]',
                       'data-[state=checked]:font-medium',
                     )}
                   >

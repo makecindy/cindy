@@ -1,6 +1,7 @@
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
-import { Text, Toggle } from '@expo/ui/swift-ui';
-import { disabled } from "@expo/ui/swift-ui/modifiers";
+import { Text, Toggle, Picker } from '@expo/ui/swift-ui';
+import { disabled, tint, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
+import { useTheme } from "@/theme";
 import { useTranslation } from "react-i18next";
 import type { ModelOptionsSheetViewProps } from "./ModelOptionsSheetView";
 import { ComposerNativeRow } from "./ComposerNativeRow";
@@ -15,6 +16,7 @@ import {
 } from "./modelPickerRows";
 export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
   const { t } = useTranslation();
+  const { colors } = useTheme();
   useDraftModelMemoryVersion();
   useSessionModelMirrorVersion();
   const meta = buildRowMetaLine({
@@ -48,6 +50,10 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
     fastEditable: p.fastEditable,
     memory: p.modelMemory,
   });
+  const setFast = (value: boolean | 'ultrafast') => {
+    if (p.selected) void p.onChangeSelectedFastMode?.(value);
+    else if (p.providerId) p.modelMemory?.setFast(p.agentKind, p.providerId, p.model.id, value);
+  };
   return (
     <>
       {meta || price ? (
@@ -63,11 +69,24 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
           ) : null}
         </Section>
       ) : null}
-      {p.fastEditable ? (
+      {p.fastEditable && p.agentKind === 'codex' && p.model.supportsUltrafastMode ? (
+        <Section>
+          <Picker
+            label={t("models.options.speed.label")}
+            selection={fast === 'ultrafast' ? 'ultrafast' : fast ? 'fast' : 'standard'}
+            onSelectionChange={(value: string) => setFast(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}
+            modifiers={[pickerStyle("menu"), disabled(!!p.disabled)]}
+          >
+            {(['standard', 'fast', 'ultrafast'] as const).map(value => (
+              <Text key={value} modifiers={[tag(value)]}>{t(`models.options.speed.${value}`)}</Text>
+            ))}
+          </Picker>
+        </Section>
+      ) : p.fastEditable ? (
         <Section>
           <Toggle
             label={t("models.options.fastMode")}
-            isOn={fast}
+            isOn={!!fast}
             onIsOnChange={(value) => {
               if (p.selected) void p.onChangeSelectedFastMode?.(value);
               else if (p.providerId)
@@ -78,7 +97,8 @@ export function ModelOptionsSheetView(p: ModelOptionsSheetViewProps) {
                   value,
                 );
             }}
-            modifiers={[disabled(!!p.disabled)]}
+            // 表单 Toggle 显式用统一开关蓝,不继承 Host 的 textPrimary 黑白 seed。
+            modifiers={[disabled(!!p.disabled), tint(colors.inputCaret)]}
             testID={`${p.testID}.fastToggle`}
           />
         </Section>

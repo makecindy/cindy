@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
   composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
@@ -371,5 +372,21 @@ describe('clampEffortToSupported —— 未门控入口按模型能力 clamp(iss
     expect(clampEffortToSupported(null, XHIGH_MODEL)).toBeNull();
     // 空串:不在 EFFORT_ORDER 内,若不透传会被当"未知档"clamp 到模型最高受支持档(#456 review)。
     expect(clampEffortToSupported('', XHIGH_MODEL)).toBe('');
+  });
+});
+
+describe('resolveRemoteSwitchEffort —— 远程切模时目录未知不据占位档', () => {
+  // Bug:远程会话切到 pi 模型时镜像只聚合 cc+codex → efforts 空 → 占位 'low' 进乐观态与
+  // SET_MODEL 快照 → 被控端 effort 轴被清空 → 胶囊渲染「低」,而 DB/实跑仍是 max。
+  it('目录未知(efforts 空)→ 保留会话当前档,不拿占位 low', () => {
+    expect(resolveRemoteSwitchEffort({ efforts: [], requested: 'low', currentEffort: 'max' })).toBe(
+      'max',
+    );
+  });
+
+  it('目录已知 → 用解析出的目标档(真固定档模型仍会被下游 clamp 成 null 轴)', () => {
+    expect(
+      resolveRemoteSwitchEffort({ efforts: ['low', 'high'], requested: 'high', currentEffort: 'max' }),
+    ).toBe('high');
   });
 });

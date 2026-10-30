@@ -1,20 +1,32 @@
 import { iconSize } from '@/theme';
+import { useState } from 'react';
 import { Host } from "@expo/ui";
 import {
   BottomSheet,
   Form,
+  List,
   Button,
   Group,
   HStack,
   Image,
   RNHostView,
+  ScrollView,
   Spacer,
   Text,
   VStack,
+  ZStack,
 } from "@expo/ui/swift-ui";
 import {
   accessibilityLabel,
+  accessibilityElement,
+  accessibilityHidden,
+  disabled,
+  environment,
+  opacity,
+  scrollDisabled,
   contentShape,
+  containerRelativeFrame,
+  onGeometryChange,
   shapes,
   buttonStyle,
   font,
@@ -22,13 +34,17 @@ import {
   frame,
   padding,
   presentationDetents,
+  interactiveDismissDisabled,
   presentationDragIndicator,
   scrollContentBackground,
+  listStyle,
+  scrollDismissesKeyboard,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTranslation } from "react-i18next";
-import { ScrollView, View } from "react-native";
+import { ScrollView as RNScrollView, View, useWindowDimensions } from "react-native";
 import { useTheme } from "@/theme";
 import type { ComposerSheetProps } from "./ComposerSheet";
+import { CompanionNativeContent } from "./CompanionNativeContent.ios";
 
 /** One native presentation; secondary pages replace content without a second backdrop. */
 export function ComposerSheet({
@@ -37,6 +53,7 @@ export function ComposerSheet({
   onClosed,
   title,
   onBack,
+  backDisabled = false,
   backLabel,
   children,
   aboveContent,
@@ -44,10 +61,23 @@ export function ComposerSheet({
   footer,
   testID,
   nativeContent,
+  contentScrolls,
+  nativeList,
+  nativeEditMode,
   nativeHeader,
+  nativeRoot,
+  preventDismiss = false,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
+  const { width, height } = useWindowDimensions();
+  const [sheetWidth, setSheetWidth] = useState(0);
+  // UIKit disables the medium detent in compact-height landscape. Never bind
+  // selection to an unavailable detent, including after rotating an open sheet.
+  const landscape = width > height;
+  const editModeModifiers = nativeEditMode === undefined
+    ? []
+    : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
   return (
     <Host
       colorScheme={mode}
@@ -58,19 +88,24 @@ export function ComposerSheet({
       <BottomSheet
         isPresented={visible}
         onIsPresentedChange={(open) => {
-          if (!open) onClose();
+          if (!open && visible) onClose();
         }}
         onDismiss={onClosed}
       >
         <Group
           modifiers={[
-            presentationDetents(["medium", "large"], { selection: "medium" }),
+            presentationDetents(landscape ? ["large"] : ["medium", "large"], { selection: landscape ? "large" : "medium" }),
             presentationDragIndicator("visible"),
+            interactiveDismissDisabled(preventDismiss),
           ]}
         >
           <VStack
             spacing={0}
-            modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
+            modifiers={[
+              frame({ maxWidth: Infinity, maxHeight: Infinity }),
+              containerRelativeFrame({ axes: 'horizontal' }),
+              onGeometryChange(size => { if (size.width > 0) setSheetWidth(size.width); }),
+            ]}
           >
             {title || onBack ? <HStack
               modifiers={[
@@ -79,7 +114,7 @@ export function ComposerSheet({
               ]}
             >
               {onBack ? (
-                <Button onPress={onBack} modifiers={[buttonStyle("plain"), accessibilityLabel(backLabel ?? t("interaction.contextSheet.backAccessibility"))]}>
+                <Button onPress={onBack} modifiers={[buttonStyle("plain"), disabled(backDisabled), accessibilityLabel(backLabel ?? t("interaction.contextSheet.backAccessibility"))]}>
                   <Image size={iconSize.lg} systemName="chevron.left" modifiers={[frame({ width: 44, height: 44 }), contentShape(shapes.rectangle())]} />
                 </Button>
               ) : null}
@@ -88,7 +123,7 @@ export function ComposerSheet({
               <Spacer />
               {onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null}
             </HStack> : null}
-            {nativeHeader}
+            {!nativeRoot && nativeHeader}
             {aboveContent && aboveContentTitle ? (
               <Text modifiers={[
                 font({ textStyle: "subheadline" }),
@@ -98,23 +133,79 @@ export function ComposerSheet({
               ]}>{aboveContentTitle}</Text>
             ) : null}
             {aboveContent ? (
+              // Constrain the photo strip to the presented sheet, which can be
+              // narrower than the window on Duo/iPad and in landscape.
               <RNHostView matchContents>
-                <View style={{ paddingHorizontal: 20, paddingTop: aboveContentTitle ? 0 : 24 }}>
-                  {aboveContent}
+                <View style={{ width: sheetWidth, paddingHorizontal: 20, paddingTop: aboveContentTitle ? 0 : 24 }}>
+                  {sheetWidth > 0 ? aboveContent : null}
                 </View>
               </RNHostView>
             ) : null}
-            {nativeContent ? (
+            {nativeContent && nativeRoot ? (
+              <ZStack
+                modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
+              >
+                <VStack
+                  spacing={0}
+                  modifiers={[
+                    frame({ maxWidth: Infinity, maxHeight: Infinity }),
+                    opacity(nativeRoot.active ? 1 : 0),
+                    disabled(!nativeRoot.active),
+                    scrollDisabled(!nativeRoot.active),
+                    accessibilityElement(
+                      nativeRoot.active ? "contain" : "ignore",
+                    ),
+                    accessibilityHidden(!nativeRoot.active),
+                  ]}
+                >
+                  {nativeRoot.header}
+                  <Form
+                    testID={testID ? `${testID}.list` : undefined}
+                    modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                  >
+                    {nativeRoot.content}
+                  </Form>
+                </VStack>
+                {!nativeRoot.active ? (
+                  <VStack
+                    spacing={0}
+                    modifiers={[
+                      frame({ maxWidth: Infinity, maxHeight: Infinity }),
+                    ]}
+                  >
+                    {nativeHeader}
+                    <Form
+                      testID={testID}
+                      modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                    >
+                      {children}
+                    </Form>
+                  </VStack>
+                ) : null}
+              </ZStack>
+            ) : nativeContent && nativeList ? (
+              <List testID={testID} modifiers={[
+                ...editModeModifiers,
+                containerRelativeFrame({ axes: 'horizontal' }),
+                listStyle("plain"),
+                scrollContentBackground("hidden"),
+                scrollDismissesKeyboard("interactively"),
+              ]}>
+                {children}
+              </List>
+            ) : nativeContent ? (
               <Form testID={testID} modifiers={[
+                ...editModeModifiers,
+                containerRelativeFrame({ axes: 'horizontal' }),
                 scrollContentBackground("hidden"),
                 ...(aboveContent ? [padding({ top: -12 })] : []),
               ]}>
                 {children}
               </Form>
-            ) : (
+            ) : contentScrolls ? (
               <RNHostView>
                 <View style={{ flex: 1 }} testID={testID}>
-                  <ScrollView
+                  <RNScrollView
                     keyboardShouldPersistTaps="handled"
                     keyboardDismissMode="interactive"
                     contentContainerStyle={{
@@ -123,12 +214,28 @@ export function ComposerSheet({
                     }}
                   >
                     {children}
-                  </ScrollView>
+                  </RNScrollView>
                   {footer ? (
                     <View style={{ padding: 16 }}>{footer}</View>
                   ) : null}
                 </View>
               </RNHostView>
+            ) : (
+              <>
+                {/* Native scrolling keeps the viewport aligned with the sheet detent. */}
+                <ScrollView modifiers={[scrollDismissesKeyboard("interactively")]}>
+                  <CompanionNativeContent>
+                    <View testID={testID} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+                      {children}
+                    </View>
+                  </CompanionNativeContent>
+                </ScrollView>
+                {footer ? (
+                  <CompanionNativeContent>
+                    <View style={{ padding: 16 }}>{footer}</View>
+                  </CompanionNativeContent>
+                ) : null}
+              </>
             )}
             {nativeContent && footer ? (
               <Group

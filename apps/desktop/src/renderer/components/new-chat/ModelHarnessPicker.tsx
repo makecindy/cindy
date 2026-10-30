@@ -65,9 +65,11 @@ export function ModelHarnessPicker({
           <div
             key={engine}
             className={cn(
-              'relative flex min-h-7 items-center gap-1 rounded-sm pr-1',
-              active && 'bg-[var(--model-item-hover)]',
-              interactive && 'hover:bg-[var(--model-item-hover)]',
+              // 8px 行高亮档;悬停与共享菜单同一灰。模型菜单是「选中 = 勾 + 500」的例外:
+              // 选中行保留整行底色和勾(DESIGN §4 Composer dropdown rows)。
+              'relative flex min-h-7 items-center gap-1 rounded-lg pr-1',
+              active && 'bg-sidebar-item-hover',
+              interactive && 'hover:bg-sidebar-item-hover',
             )}
           >
             <button
@@ -84,8 +86,8 @@ export function ModelHarnessPicker({
               data-engine-active={active ? 'true' : undefined}
               data-engine-support={mode}
               className={cn(
-                'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1 text-left text-[var(--model-item-text)]',
-                interactive && 'cursor-pointer after:absolute after:inset-0 after:rounded-sm',
+                'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 text-left text-[var(--model-item-text)]',
+                interactive && 'cursor-pointer after:absolute after:inset-0 after:rounded-lg',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--model-dropdown-border)]',
                 !interactive && 'cursor-default',
                 disabled && 'opacity-50',

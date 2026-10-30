@@ -1,6 +1,7 @@
 import {
-  readHistoryWorkDetails, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
-  type HistoryViewItem, type HistoryViewPage, type HistoryWorkSummary,
+  nextHistoryCacheReceipt, type HistoryCacheReceipt,
+  readHistoryWorkDetails, readContinuousHistoryPage, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
+  type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkSummary,
 } from './historyView.js';
 
 export interface HistoryWorkDetailState<T extends HistoryMessageSource> {
@@ -21,13 +22,34 @@ export interface HistoryViewSnapshot<T extends HistoryMessageSource> {
   loading: boolean;
   ready: boolean;
   error: unknown | null;
+  /**
+   * The latest page may be behind rows the raw store already received: it came from
+   * disk, or was read before the view went inactive/offline. Cleared by a latest-page read.
+   */
+  stale?: boolean;
+  /** Controller-local start of the latest page read, also retained in its disk cache. */
+  readReceipt?: HistoryCacheReceipt;
 }
 
 export interface HistoryViewTransport<T extends HistoryMessageSource> {
+  /** False when the owning screen already coordinates focus/reconnect snapshots. */
+  refreshOnResume?: boolean;
   page(before?: string): Promise<HistoryViewPage<T>>;
   details(summary: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<T>>;
   /** Full replacement of this view's intent; empty releases detail streaming. */
   expanded(summaries: readonly HistoryWorkSummary[]): Promise<void>;
+  /** Local diagnostics only: counts and lifecycle, never message bodies. */
+  diagnostic?(event: HistoryViewDiagnostic): void;
+}
+
+export interface HistoryViewDiagnostic {
+  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset';
+  previousItemCount: number;
+  itemCount: number;
+  messageCount: number;
+  detailMessageCount: number;
+  ready: boolean;
+  stale: boolean;
 }
 
 /**
@@ -49,7 +71,10 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   private pagePromise: Promise<void> | null = null;
   private pageOlder = false;
   private pageGeneration = 0;
+  private intentVersion = 0;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private latestReadStartedAtMs = 0;
+  private latestReadOkStartedAtMs = 0;
 
   constructor(
     private readonly transport: HistoryViewTransport<T>,
@@ -66,19 +91,44 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.detailRuns.clear();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
-    this.publish({ loading: false, details: new Map([...this.state.details].map(([key, detail]) =>
-      [key, detail.loading ? { ...detail, loading: false } : detail])) });
-    if (available && this.active) void this.refresh();
+    this.publish({ loading: false, ...(available ? {} : { stale: this.state.ready }),
+      details: new Map([...this.state.details].map(([key, detail]) =>
+        [key, detail.loading ? { ...detail, loading: false } : detail])) });
+    if (available && this.active && this.transport.refreshOnResume !== false) void this.refresh();
   }
   getSnapshot = (): HistoryViewSnapshot<T> => this.state;
   /** Pagination feedback only; background validation must not disturb the reading viewport. */
   isLoadingOlder = (): boolean => this.state.loading && this.pageOlder;
+  /**
+   * Wall-clock start of the most recent latest-page read (0 before the first). A caller
+   * holding the time a change notice arrived can tell whether a read already covers it,
+   * instead of forcing one more page read per notice.
+   */
+  latestReadStartedAt = (): number => this.latestReadStartedAtMs;
+  /**
+   * Start time of the most recent latest-page read that completed and was applied (0 before
+   * the first). A failed or superseded read never advances it, so "covered by a read" can
+   * be certified without trusting an error-cleared snapshot.
+   */
+  latestReadOkStartedAt = (): number => this.latestReadOkStartedAtMs;
+  /** True while a latest-page read is in flight; older-page reads do not count. */
+  isReadingLatest = (): boolean => this.pagePromise !== null && !this.pageOlder;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  private publish(patch: Partial<HistoryViewSnapshot<T>>): void {
+  private publish(patch: Partial<HistoryViewSnapshot<T>>, source?: HistoryViewDiagnostic['source']): void {
+    const previousItemCount = this.state.items.length;
     this.state = { ...this.state, ...patch };
+    if (source && this.transport.diagnostic) {
+      try {
+        this.transport.diagnostic({ source, previousItemCount, itemCount: this.state.items.length,
+          messageCount: historyViewLeaves(this.state.items).reduce((count, item) =>
+            count + (item.type === 'messages' ? item.messages.length : 0), 0),
+          detailMessageCount: [...this.state.details.values()].reduce((count, detail) => count + detail.messages.length, 0),
+          ready: this.state.ready, stale: this.state.stale === true });
+      } catch { /* Diagnostics must not interrupt cache restoration or remote reads. */ }
+    }
     for (const listener of this.listeners) listener();
   }
 
@@ -88,7 +138,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const generation = this.cacheGeneration;
     const cached = await read().catch(() => null);
     if (!cached || this.state.ready || isHistoryViewUnavailable(this.state.error) || generation !== this.cacheGeneration) return;
-    this.publish({ ...cached, loading: this.state.loading, error: this.state.error });
+    this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
   }
 
   refresh(older = false, fresh = false): Promise<void> {
@@ -125,32 +175,50 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     }, 500);
   }
 
+  /**
+   * Replace one running top-level work item in place. Anything this controller cannot
+   * prove to be the Host's base (a read in flight, a missing or reshaped item, another
+   * revision) falls back to the ordinary page refresh the notice used to trigger.
+   */
+  applyWorkPatch(patch: HistoryWorkPatch): void {
+    if (!this.isActive()) return;
+    const index = this.state.items.findIndex((item) => item.key === patch.item.key);
+    const current = this.state.items[index];
+    if (this.pagePromise || this.refreshTimer || !this.state.ready || !current || current.type !== 'work' || current.children
+      || current.summary.revision !== patch.baseRevision
+      || current.summary.firstMessageId !== patch.item.summary.firstMessageId) {
+      this.invalidate();
+      return;
+    }
+    const items = [...this.state.items];
+    items[index] = patch.item;
+    this.publish({ items });
+    for (const summary of historyWorkSummaries([patch.item])) {
+      if (this.state.expanded.has(summary.key)) void this.loadDetails(summary);
+    }
+  }
+
   private async readPage(older: boolean): Promise<void> {
     if (!this.isActive() || this.state.loading || (older && !this.state.hasMore)) return;
     const generation = this.generation;
     const before = older ? this.state.nextCursor ?? undefined : undefined;
+    const readReceipt = nextHistoryCacheReceipt();
+    const readStartedAt = Date.now();
+    if (!older) this.latestReadStartedAtMs = readStartedAt;
     this.publish({ loading: true, error: null });
     try {
       const page = await this.transport.page(before);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       if (!this.active || generation !== this.generation) return;
-      let items = page.items;
+      const continuous = older ? page : await readContinuousHistoryPage(page, this.state,
+        (cursor) => this.transport.page(cursor), () => this.active && generation === this.generation);
+      if (!continuous) return;
+      const retained = older ? continuous : retainHistoryViewPrefix(continuous, this.state);
+      let items = retained.items;
       if (older) {
         const keys = new Set(items.map((item) => item.key));
         items = [...items, ...this.state.items.filter((item) => !keys.has(item.key))];
-      } else if (page.hasMore && this.state.items.length) {
-        const firstSourceId = (item: HistoryViewItem<T> | undefined) => item?.type === 'work'
-          ? item.summary.firstMessageId : item?.messages[0]?.id;
-        const first = page.items[0];
-        const sourceId = firstSourceId(first);
-        const boundary = this.state.items.findIndex((item) => item.key === first?.key
-          || (sourceId !== undefined && firstSourceId(item) === sourceId));
-        // Completed outer groups can replace the running top-level key while
-        // retaining its exact source start. Never infer a prefix from a later overlap.
-        // Only retain a prefix with a proven overlap. Reset/rewind cannot leave an island.
-        if (boundary > 0) items = [...this.state.items.slice(0, boundary), ...items];
       }
-      const retainedPrefix = !older && items.length > page.items.length;
       // A background validation of the same page must not replace rendering
       // identities. Applies to both Mobile and Desktop history consumers.
       const previous = new Map(this.state.items.map((item) => [item.key, item]));
@@ -161,8 +229,9 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const stableItems = items.length === this.state.items.length
         && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
       this.publish({ items: stableItems, ready: true, loading: false,
-        hasMore: retainedPrefix ? this.state.hasMore : page.hasMore,
-        nextCursor: retainedPrefix ? this.state.nextCursor : page.nextCursor });
+        ...(older ? {} : { stale: false, readReceipt }),
+        hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
+      if (!older) this.latestReadOkStartedAtMs = readStartedAt;
       for (const summary of historyWorkSummaries(items)) {
         if (this.state.expanded.has(summary.key)) void this.loadDetails(summary);
       }
@@ -178,7 +247,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           if (this.refreshTimer) clearTimeout(this.refreshTimer);
           this.refreshTimer = null;
           this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
-            nextCursor: null, hasMore: false, loading: false, error });
+            nextCursor: null, hasMore: false, loading: false, error }, 'fallback');
         } else this.publish({ loading: false, error });
       }
     }
@@ -199,14 +268,18 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     if (!this.networkAvailable) return;
     // Serialize replacement intents: a late expand ACK can never win over collapse.
     const generation = this.generation;
+    const version = ++this.intentVersion;
     this.intentQueue.tail = this.intentQueue.tail.catch(() => undefined).then(async () => {
-      if (generation !== this.generation || !this.networkAvailable) return;
+      // Each replacement carries the latest state. Skip superseded *unsent*
+      // requests, but still resend after page reads/reconnects. Keep this token
+      // controller-local: a replacement Host must not cancel the old Host's release.
+      if (version !== this.intentVersion || generation !== this.generation || !this.networkAvailable) return;
       // Empty replacement intents must release old interest even before a reset view is ready.
       const summaries = this.active ? historyWorkSummaries(this.state.items).filter((item) => this.state.expanded.has(item.key)) : [];
       await this.transport.expanded(summaries);
     }).catch(() => {
       // Detail interest is advisory; a transient ACK failure must not poison a successful page.
-      if (this.active && generation === this.generation) this.invalidate();
+      if (this.active && version === this.intentVersion && generation === this.generation) this.invalidate();
     });
   }
 
@@ -230,9 +303,16 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const completed = this.state.details.get(summary.key);
       if (completed?.complete && completed.revision === summary.revision && !patch.complete) return;
       const details = new Map(this.state.details);
-      details.set(summary.key, { messages: collected.length ? collected : (existing?.messages ?? []), revision: summary.revision,
+      // A reread keeps the previous window until it settles. Publishing each
+      // incoming page would replace the old window with a partial slice of the
+      // new range: the rendered list collapses to the first page and shifts a
+      // bottom-pinned stream before the tail lands.
+      const settled = patch.complete === true;
+      const messages = !settled && existing?.messages?.length ? existing.messages
+        : collected.length ? collected : (existing?.messages ?? []);
+      details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });
-      this.publish({ details });
+      this.publish({ details }, settled ? 'details' : undefined);
     };
     update({});
     token.promise = (async () => {
@@ -271,13 +351,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
         if (item.type === 'messages') {
           const found = item.messages.find((row) => row.clientId === clientId);
           if (found) return found;
-        } else if (!tried.has(item.key) && targetMs >= item.summary.startedAtMs && targetMs <= item.summary.endedAtMs) {
-          tried.add(item.key);
-          const summary = item.summary;
+        }
+        const summary = item.type === 'work' ? item.summary : item.deferred;
+        if (summary && !tried.has(summary.key) && targetMs >= summary.startedAtMs && targetMs <= summary.endedAtMs) {
+          tried.add(summary.key);
           const current = () => this.active && generation === this.generation
             && historyWorkSummaries(this.state.items).some((value) => value.key === summary.key && value.revision === summary.revision
               && value.firstMessageId === summary.firstMessageId && value.lastMessageId === summary.lastMessageId);
-          const cached = this.state.details.get(item.key);
+          const cached = this.state.details.get(summary.key);
           let messages = cached?.complete && cached.revision === summary.revision ? [...cached.messages] : [];
           if (!messages.length && this.networkAvailable) {
             // Search reads the bounded range without changing user expansion memory
@@ -294,7 +375,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
             }
             if (!current()) return null;
             const details = new Map(this.state.details);
-            details.set(item.key, { messages, revision: summary.revision, lastMessageId: summary.lastMessageId,
+            details.set(summary.key, { messages, revision: summary.revision, lastMessageId: summary.lastMessageId,
               loading: false, complete: true, error: null });
             this.publish({ details });
           }
@@ -312,23 +393,27 @@ export class HistoryViewController<T extends HistoryMessageSource> {
 
   /** View blur/background and source resets invalidate all outstanding reads. */
   setActive(active: boolean): void {
-    if (active === this.active) { if (active && !this.state.ready) void this.refresh(); return; }
+    if (active === this.active) {
+      if (active && !this.state.ready && this.transport.refreshOnResume !== false) void this.refresh();
+      return;
+    }
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     this.active = active;
     this.generation++;
-    this.cacheGeneration++;
+    // Leaving drops a late disk read; gaining focus keeps it (pages mount hidden, then focus).
+    if (!active) this.cacheGeneration++;
     this.detailRuns.clear();
-    this.publish({ loading: false });
+    this.publish({ loading: false, ...(active ? {} : { stale: this.state.ready }) });
     this.sendIntent();
-    if (active) void this.refresh();
+    if (active && this.transport.refreshOnResume !== false) void this.refresh();
   }
   reset(): void {
     this.generation++;
     this.cacheGeneration++;
     this.detailRuns.clear();
     this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
-      nextCursor: null, hasMore: false, loading: false, error: null });
+      nextCursor: null, hasMore: false, loading: false, error: null, stale: false, readReceipt: undefined }, 'reset');
     this.sendIntent();
     if (this.active) void this.refresh();
   }

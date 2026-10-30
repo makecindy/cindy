@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ spawn: vi.fn(), binary: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
@@ -33,7 +34,7 @@ it('reuses one child for large bounded frames and releases it on cancellation', 
   const { child, owner } = setup();
   const first = owner.frame('wayland-portal');
   await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
-  expect(h.spawn).toHaveBeenCalledWith('/capture', ['video', '1', '65'], { stdio: 'pipe' });
+  expect(h.spawn).toHaveBeenCalledWith('/capture', ['video', '1', '80'], { stdio: 'pipe' });
   await expect(owner.frame('wayland-portal')).resolves.toBeNull();
   const jpeg = 'a'.repeat(400000);
   child.stdout.write(jpeg + '\n');
@@ -78,7 +79,10 @@ it('times out a stalled child and rejects unsupported display requests', async (
   expect(h.binary).not.toHaveBeenCalled();
   vi.useFakeTimers();
   const pending = owner.frame('wayland-portal');
+  // A starting helper keeps the cold-start budget instead of the steady-state bound.
   await vi.advanceTimersByTimeAsync(3000);
+  expect(child.kill).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(REMOTE_DESKTOP_OFFER_BUDGET.captureReadyMs - 3000);
   await expect(pending).resolves.toBeNull();
   expect(child.kill).toHaveBeenCalledOnce();
 });
@@ -86,11 +90,11 @@ it('parses a bounded Linux cursor frame and applies requested encoding quality',
   const { child, owner } = setup();
   const pending = owner.frame('wayland-portal', true, {
     fps: 60,
-    bitrate: 20_000_000,
+    quality: 'hd',
     audio: false,
   });
   await vi.waitFor(() => expect(h.spawn).toHaveBeenCalledOnce());
-  expect(h.spawn).toHaveBeenCalledWith('/capture', ['cursor-overlay', '1', '95'], {
+  expect(h.spawn).toHaveBeenCalledWith('/capture', ['cursor-overlay', '1', '90'], {
     stdio: 'pipe',
   });
   const frame = { jpeg: 'anBlZw==', cursor: null };

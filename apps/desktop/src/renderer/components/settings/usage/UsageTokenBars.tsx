@@ -11,10 +11,11 @@
  *   - 柱高 max(3, round(ratio × H)); 零值日固定 2px, 保留"那天有格子但没用量"的视觉
  *
  * 日期推算一律以 main 返回的 todayKey 为锚, renderer 不自己取系统日期。
- * 30 根柱子用原生 title 做 tooltip (Radix per-cell 实例太重, 同热力图取舍)。
+ * 悬停 / 聚焦时整张图共用一个 UsageBarsTooltip 浮层 (日期、总量、占比条、按模型明细),
+ * 不再用原生 title —— 原生提示无法排版配色, 也不给每根柱子各挂一个 Radix 实例。
  */
 
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -22,6 +23,7 @@ import type { UsageHistoryModelDay } from '@/hooks/useUsageHistory';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 
 import { usageHistoryModelColor } from './usageHistoryColors';
+import { UsageBarsTooltip, type UsageBarsTooltipData } from './UsageBarsTooltip';
 
 const WINDOW_DAYS = 30;
 const CHART_HEIGHT_PX = 96;
@@ -63,23 +65,62 @@ function niceTicks(max: number): number[] {
   return ticks;
 }
 
-export function UsageTokenBars({
-  modelDaily,
-  colorOrder,
-  todayKey,
-  selectedDay,
-  highlightRecentWeek = false,
-  onDayClick,
-}: {
-  modelDaily: UsageHistoryModelDay[];
-  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
-  colorOrder: string[];
+/** 柱图的一行来源数据：某天某个分段(模型、人或电脑)的 token；key 决定配色顺序与合并。 */
+export interface UsageSeriesDay {
+  day: string;
+  key: string;
+  tokens: number;
+}
+
+interface UsageBarsProps {
   todayKey: string;
   selectedDay?: string | null;
   /** Visual emphasis only; a multi-day range does not select individual buttons. */
   highlightRecentWeek?: boolean;
   onDayClick?: (day: string) => void;
+}
+
+export function UsageTokenBars({
+  modelDaily,
+  colorOrder,
+  ...props
+}: UsageBarsProps & {
+  modelDaily: UsageHistoryModelDay[];
+  /** 完整历史的模型 key（按 token 排序），决定分段与表格配色。 */
+  colorOrder: string[];
 }): React.JSX.Element {
+  const daily = useMemo(
+    () => modelDaily.map((row) => ({ day: row.day, key: usageModelKey(row.agentKind, row.model), tokens: row.tokens })),
+    [modelDaily],
+  );
+  const labels = useMemo(
+    () => new Map(modelDaily.map((row) => [usageModelKey(row.agentKind, row.model), row.model])),
+    [modelDaily],
+  );
+  const labelOf = useCallback((key: string) => labels.get(key) ?? key, [labels]);
+  return <UsageSeriesBars {...props} daily={daily} order={colorOrder} labelOf={labelOf} />;
+}
+
+/**
+ * 按任意分段堆叠的近 30 天每日 token 柱图：设置 → 用量按模型；「远程与分享」页的用量还可按人、按电脑
+ * (provider-groups.md §7)。几何、交互、浮层与配色规则与模型柱图完全相同(usage-history-charts.md)。
+ */
+export function UsageSeriesBars({
+  daily,
+  order,
+  labelOf,
+  todayKey,
+  selectedDay,
+  highlightRecentWeek = false,
+  onDayClick,
+}: UsageBarsProps & {
+  daily: readonly UsageSeriesDay[];
+  /** 分段 key 的固定顺序，决定堆叠次序与配色；不在里面的合并成「其它」。 */
+  order: readonly string[];
+  /** 分段在浮层与读屏文本里的名字。 */
+  labelOf: (key: string) => string;
+}): React.JSX.Element {
+  const colorOrder = order;
   const { t, i18n } = useTranslation();
   const dateFormatter = useMemo(
     () =>
@@ -94,9 +135,9 @@ export function UsageTokenBars({
   const bars = useMemo(() => {
     const ranks = new Map(colorOrder.map((key, rank) => [key, rank]));
     const segsByDay = new Map<string, Map<number, DaySegment>>();
-    for (const row of modelDaily) {
+    for (const row of daily) {
       if (row.tokens <= 0) continue;
-      const rank = ranks.get(usageModelKey(row.agentKind, row.model)) ?? colorOrder.length;
+      const rank = ranks.get(row.key) ?? colorOrder.length;
       let daySegs = segsByDay.get(row.day);
       if (!daySegs) {
         daySegs = new Map();
@@ -111,7 +152,7 @@ export function UsageTokenBars({
       } else {
         daySegs.set(rank, {
           rank,
-          label: rank >= colorOrder.length ? t('usageDashboard.othersLegend') : row.model,
+          label: rank >= colorOrder.length ? t('usageDashboard.othersLegend') : labelOf(row.key),
           tokens: row.tokens,
         });
       }
@@ -128,7 +169,45 @@ export function UsageTokenBars({
       });
     }
     return { list, max: Math.max(...list.map((b) => b.tokens), 0) };
-  }, [modelDaily, colorOrder, todayKey, t]);
+  }, [daily, colorOrder, labelOf, todayKey, t]);
+
+  const plotRef = useRef<HTMLDivElement>(null);
+  const descriptionIdBase = useId();
+  // 悬停与键盘聚焦是两个独立的触发源:任一仍有效就显示,悬停优先。只记「哪一天」,
+  // 坐标由浮层在布局阶段按当前 DOM 测量 —— 数据刷新或重排后不会停在旧位置。
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const activeDay = hoverDay ?? focusDay;
+  // fixed 定位的浮层不随页面滚动:滚动或窗口尺寸变化时重新测量,跟随柱子。
+  const [layoutTick, remeasure] = useReducer((tick: number) => tick + 1, 0);
+  useEffect(() => {
+    if (!activeDay) return;
+    window.addEventListener('scroll', remeasure, true);
+    window.addEventListener('resize', remeasure);
+    return () => {
+      window.removeEventListener('scroll', remeasure, true);
+      window.removeEventListener('resize', remeasure);
+    };
+  }, [activeDay]);
+  const activeBar = activeDay ? bars.list.find((b) => b.day === activeDay) : undefined;
+  const tooltip: UsageBarsTooltipData | null = activeBar
+    ? {
+        day: activeBar.day,
+        tokens: activeBar.tokens,
+        segments: activeBar.segments.map((s) => ({
+          key: s.rank,
+          label: s.label,
+          tokens: s.tokens,
+          color: usageHistoryModelColor(s.rank, colorOrder.length),
+        })),
+        layoutTick,
+        measureAnchor: () =>
+          plotRef.current
+            ?.querySelector<HTMLElement>(`[data-day="${activeBar.day}"]`)
+            ?.getBoundingClientRect() ?? null,
+        measurePlot: () => plotRef.current?.getBoundingClientRect() ?? null,
+      }
+    : null;
 
   const ticks = niceTicks(bars.max);
   const recentWeekStart = shiftDayKeyLocal(todayKey, -6);
@@ -159,7 +238,11 @@ export function UsageTokenBars({
           />
         ))}
         <div className="absolute inset-0">
-          <div className="usage-token-plot flex h-full items-end gap-[3px]">
+          <div
+            ref={plotRef}
+            className="usage-token-plot flex h-full items-end gap-[3px]"
+            onPointerLeave={() => setHoverDay(null)}
+          >
             {bars.list.map((b) => {
               const ratio = bars.max > 0 ? b.tokens / bars.max : 0;
               const visualHeight =
@@ -169,21 +252,18 @@ export function UsageTokenBars({
                 b.tokens > 0
                   ? t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(b.tokens) })
                   : t('usageHistory.heatmap.emptyCell');
-              const titleLines = [
-                `${b.day} · ${usageSummary}`,
-                ...b.segments.map(
-                  (s) =>
-                    `${s.label}: ${t('usageDashboard.tokensOnly', {
-                      tokens: formatCompactTokens(s.tokens),
-                    })}`,
-                ),
-              ];
               return (
                 <button
                   key={b.day}
                   type="button"
-                  title={titleLines.join('\n')}
+                  data-day={b.day}
+                  onPointerEnter={() => setHoverDay(b.day)}
+                  onFocus={() => setFocusDay(b.day)}
+                  onBlur={() => setFocusDay((day) => (day === b.day ? null : day))}
                   aria-label={`${dateFormatter.format(parseDayKeyLocal(b.day))} · ${usageSummary}`}
+                  aria-describedby={
+                    b.segments.length > 0 ? `${descriptionIdBase}-${b.day}` : undefined
+                  }
                   aria-pressed={selectedDay === b.day}
                   data-highlighted={
                     selectedDay
@@ -227,6 +307,25 @@ export function UsageTokenBars({
           </div>
         </div>
       </div>
+      {/* 逐日模型明细的读屏文本:浮层 aria-hidden,原生 title 的这部分信息由它承接。 */}
+      <div className="sr-only">
+        {bars.list
+          .filter((b) => b.segments.length > 0)
+          .map((b) => (
+            <span key={b.day} id={`${descriptionIdBase}-${b.day}`}>
+              {[...b.segments]
+                .sort((x, y) => y.tokens - x.tokens)
+                .map(
+                  (s) =>
+                    `${s.label}: ${t('usageDashboard.tokensOnly', {
+                      tokens: formatCompactTokens(s.tokens),
+                    })}`,
+                )
+                .join('; ')}
+            </span>
+          ))}
+      </div>
+      <UsageBarsTooltip data={tooltip} />
     </div>
   );
 }

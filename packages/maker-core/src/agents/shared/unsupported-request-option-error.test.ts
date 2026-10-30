@@ -1,0 +1,159 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  UNSUPPORTED_REQUEST_OPTION_REASON,
+  isUnsupportedRequestOptionErrorMessage,
+  unsupportedRequestOptionCompatOverride,
+} from './unsupported-request-option-error.js';
+
+// 真实形态（2026-09-20，Console Go / opencode-go + glm-5.3-flash）。
+const CONSOLE_GO_REJECTION =
+  '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+  + '"Error from provider (Console Go): Upstream request failed: [invalid_request_error] '
+  + '\\"prompt_cache_retention\\" is not supported by this endpoint; use \\"prompt_cache_options\\""}';
+
+describe('unsupported request option error', () => {
+  it('classifies the Console Go prompt_cache_retention rejection and maps the compat fix', () => {
+    expect(isUnsupportedRequestOptionErrorMessage(CONSOLE_GO_REJECTION)).toBe(true);
+    expect(unsupportedRequestOptionCompatOverride(CONSOLE_GO_REJECTION)).toEqual({
+      supportsLongCacheRetention: false,
+    });
+    expect(UNSUPPORTED_REQUEST_OPTION_REASON).toBe('unsupported-request-option');
+  });
+
+  it('accepts an upstream that phrases the same rejection without the HTTP prefix', () => {
+    expect(
+      isUnsupportedRequestOptionErrorMessage(
+        'invalid_request_error: prompt_cache_retention is unsupported here, use prompt_cache_options',
+      ),
+    ).toBe(true);
+  });
+
+  // issue #5878（2026-10-12）：政企/内网自定义 OpenAI 兼容网关只点名 prompt_cache_key。
+  // Pi 1.0.2 的特殊 URL 还需要精确路由 hook；真实 native integration 覆盖该差异。
+  const CUSTOM_GATEWAY_KEY_REJECTION =
+    '400: {"message":"Validation: Unsupported parameter(s): `prompt_cache_key`",'
+    + '"type":"invalid_request_error"}';
+
+  it('classifies a custom gateway prompt_cache_key rejection and maps the same compat fix', () => {
+    expect(isUnsupportedRequestOptionErrorMessage(CUSTOM_GATEWAY_KEY_REJECTION)).toBe(true);
+    expect(unsupportedRequestOptionCompatOverride(CUSTOM_GATEWAY_KEY_REJECTION)).toEqual({
+      supportsLongCacheRetention: false,
+    });
+  });
+
+  it('accepts a prompt_cache_key rejection without markup or a suggested field', () => {
+    expect(
+      isUnsupportedRequestOptionErrorMessage('Unsupported parameter(s): prompt_cache_key'),
+    ).toBe(true);
+    expect(
+      isUnsupportedRequestOptionErrorMessage(
+        '400: {"param":"prompt_cache_key","message":"prompt_cache_key is not supported by this endpoint"}',
+      ),
+    ).toBe(true);
+  });
+
+  // #6649: these gateways identify an unknown field in Chinese or in code/data.field.
+  it.each([
+    '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"message":"未知请求字段：`prompt_cache_key`"}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_retention"}}',
+    '400: {"error":{"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_key"}}}',
+  ])('maps an explicitly rejected cache field to the existing compat fix: %s', (message) => {
+    expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
+    expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
+  });
+
+  it.each([
+    '401: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '429: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"type":"authentication_error","code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"param":"temperature","code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention","data":{"field":"temperature"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_keyword"}}',
+    '400: {"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":null}}',
+    '400: {"code":"INVALID_VALUE","message":"Invalid value for prompt_cache_retention","data":{"field":"prompt_cache_retention"}}',
+    '400: {"message":"未知请求字段：temperature；prompt_cache_key 已转发"}',
+    '400: {"message":"未知请求字段：prompt_cache_retention_policy"}',
+    '{"code":"UNKNOWN_FIELD","message":"Request validation failed","data":{"field":"prompt_cache_retention"}}',
+  ])('does not learn cache compatibility from an unrelated rejection: %s', (message) => {
+    expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+  });
+
+  // #6570: a nullable param means no parameter was specified, as does an omitted key.
+  describe.each(['prompt_cache_key', 'prompt_cache_retention'])('structured rejection of %s', (field) => {
+    describe.each([false, true])('wrapped in error: %s', (wrapped) => {
+      it.each(['omitted', 'null', 'named'] as const)('accepts param %s', (paramForm) => {
+        const error = {
+          code: null,
+          message: `Validation: Unsupported parameter(s): \`${field}\``,
+          type: 'invalid_request_error',
+          ...(paramForm === 'omitted' ? {} : { param: paramForm === 'null' ? null : field }),
+        };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(true);
+        expect(unsupportedRequestOptionCompatOverride(message)).toEqual({ supportsLongCacheRetention: false });
+      });
+
+      it.each(['temperature', 'prompt_cache_options', '', 0, false, [], {}].map(param => ({ param })))('rejects non-cache param $param', ({ param }) => {
+        const error = { code: null, param, type: 'invalid_request_error', message: `Unsupported parameter(s): ${field}` };
+        const message = '400: ' + JSON.stringify(wrapped ? { error } : error);
+        expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+        expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+      });
+    });
+  });
+
+  it.each([
+    [400, 'invalid_request_error', 'Invalid value for prompt_cache_key'],
+    [400, 'invalid_request_error', 'Unsupported parameter(s): temperature'],
+    [400, 'authentication_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [401, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+    [429, 'invalid_request_error', 'Unsupported parameter(s): prompt_cache_key'],
+  ])('keeps null param from bypassing rejection criteria: %s %s %s', (status, type, message) => {
+    const rejection = `${status}: ` + JSON.stringify({ error: { code: null, param: null, type, message } });
+    expect(isUnsupportedRequestOptionErrorMessage(rejection)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(rejection)).toBeUndefined();
+  });
+
+  it.each([
+    ['generic invalid request', '400: {"error":{"message":"invalid api key"}}'],
+    ['rate limit', '429: rate limit exceeded, retry later'],
+    ['overload', 'overloaded_error: upstream is busy'],
+    ['only the suggested field', 'prompt_cache_options is not supported by this endpoint'],
+    ['only the rejected field, no verdict', 'request field prompt_cache_retention was forwarded'],
+    // 点名了别的参数：即使提到 prompt_cache_key 也不算（param 点名另一字段时同样拒绝）。
+    ['unsupported parameter that is not a cache field', 'Unsupported parameter(s): `temperature`'],
+    ['near-miss field name', 'Unsupported parameter(s): `prompt_cache_keyword`'],
+    [
+      'structured param names another cache-related field',
+      '400: {"param":"prompt_cache_options","message":"Unsupported parameter(s): `prompt_cache_key`"}',
+    ],
+    // 裸 invalid_request_error 不再算「不支持」；结构化 param 不点名被拒字段也不算。
+    [
+      'generic invalid_request_error mentioning both fields',
+      '400: {"type":"invalid_request_error","message":"prompt_cache_retention conflicts with prompt_cache_options"}',
+    ],
+    [
+      'structured param names another field',
+      '400: {"param":"prompt_cache_options","type":"invalid_request_error","message":"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}',
+    ],
+    ['empty', ''],
+  ])('does not classify %s as a self-heal target', (_label, message) => {
+    expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+    expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
+  });
+});
+
+it.each([
+  '401: Unsupported parameter(s): prompt_cache_key',
+  '429: prompt_cache_key is not supported',
+  '400: {"error":{"param":"temperature","message":"Unsupported parameter(s): prompt_cache_key"}}',
+  '400: {"type":"authentication_error","message":"Unsupported parameter(s): prompt_cache_key"}',
+  'temperature is unsupported; prompt_cache_key was forwarded',
+  'Unsupported parameter(s): temperature; prompt_cache_key was forwarded',
+  '400: {broken: Unsupported parameter(s): prompt_cache_key',
+])('does not infer cache support from unrelated or ambiguous failure: %s', (message) => {
+  expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
+});

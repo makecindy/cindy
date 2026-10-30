@@ -21,8 +21,8 @@
  *     无单位后缀(与费用的货币前缀天然区分);0 视为无数据不显示。
  *   - cost:优先 totalMoney(区域币种 $/¥),回退 legacy totalCostUsd;
  *     两者都为 0 / 缺失(如订阅模式)不显示。
- *   - time:与现状时间槽同一时间轴(activityIso 由调用方传入,SessionItem 用
- *     session.updatedAt,SessionCard 同)。
+ *   - time:与列表排序同一时间轴,调用方通过 getSessionListActivityAt 依次取
+ *     lastActivityAt、userSendAt、updatedAt。
  *
  * 远程会话:token / 费用字段在远端 DB,device-link 投影可能缺失或为 0——按
  * 「无数据不显示」自然降级,不误显示 0(设计文档 §9.6:第一期仅本机会话有值)。
@@ -35,7 +35,6 @@
  */
 
 import { useEffect, useState } from 'react';
-import { TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Folders, GitPullRequest } from 'lucide-react';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { useTranslation } from 'react-i18next';
@@ -67,7 +66,6 @@ type TFunc = (key: string, options?: Record<string, unknown>) => string;
 export interface SessionInfoPiece {
   key: TaskInfoField;
   text: string;
-  tags?: Session['tags'];
   /** hover 提示(绝对时间 / 字段说明)。 */
   title?: string;
   /** time 片段:渲染成语义化 <time dateTime>(与旧时间槽一致)。 */
@@ -93,10 +91,6 @@ export function buildSessionInfoPieces(
 ): SessionInfoPiece[] {
   const pieces: SessionInfoPiece[] = [];
   for (const field of fields) {
-    if (field === 'tags') {
-      if (session.tags?.length) pieces.push({ key: 'tags', text: '', tags: session.tags });
-      continue;
-    }
     if (field === 'tokens') {
       if (session.totalTokenUsage > 0) {
         pieces.push({
@@ -319,9 +313,7 @@ export function SessionInfoMeta({
               ·
             </span>
           )}
-          {piece.key === 'tags' ? (
-            <TaskTagDots tags={piece.tags} />
-          ) : piece.key === 'pr' ? (
+          {piece.key === 'pr' ? (
             prRef ? (
               <PrNumberPiece prRef={prRef} isActive={isActive} />
             ) : null

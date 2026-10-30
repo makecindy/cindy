@@ -1,4 +1,5 @@
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
+import { isCustomRoutedProvider } from '@cindy/model-providers';
 
 import { extractIpcError } from '@/utils/ipcError';
 
@@ -40,7 +41,7 @@ export function buildModelWindowRecoveryToast(input: {
 
   const model = modelDisplayName(provider, input.modelId, input.agent);
   const messageKey =
-    provider.source === 'user'
+    isCustomRoutedProvider(provider)
       ? 'newChat.chatInput.modelWindowUnknown.custom'
       : 'newChat.chatInput.modelWindowUnknown.builtin';
   const params = new URLSearchParams({

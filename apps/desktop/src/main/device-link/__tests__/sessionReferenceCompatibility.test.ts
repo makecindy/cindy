@@ -6,11 +6,13 @@ import { handleInvoke, type DeviceLinkIpcDeps } from '../ipc.js';
 function depsForInvoke(
   invoke: DeviceLinkIpcDeps['invoke'],
   rewrite = vi.fn(async (_channel: string, args: unknown[]) => args),
+  rewriteMedia?: DeviceLinkIpcDeps['rewriteOutboundMedia'],
 ): DeviceLinkIpcDeps {
   return {
     getState: () => ({ disabledControlDeviceIds: [] }) as never,
     invoke,
     rewriteOutboundSessionReferences: rewrite,
+    ...(rewriteMedia ? { rewriteOutboundMedia: rewriteMedia } : {}),
   } as unknown as DeviceLinkIpcDeps;
 }
 
@@ -172,5 +174,62 @@ describe('device-link target session-reference capability gate', () => {
         queuedWithReference(),
       ]),
     ).rejects.toThrow('[SESSION_REFERENCE_UNAVAILABLE]');
+  });
+
+  it('rewrites ordinary queue-edit attachments using the target projection', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          sessionId: 'target-session',
+          pendingQueue: [{ clientId: 'client-1', files: [{ path: '/target/old.png' }] }],
+        },
+      })
+      .mockResolvedValueOnce({ ok: true, result: { accepted: true } });
+    const rewriteMedia = vi.fn(async (
+      _channel: string,
+      args: unknown[],
+      existing?: ReadonlySet<string>,
+    ) => {
+      expect(existing).toEqual(new Set(['/target/old.png']));
+      return args;
+    });
+
+    await expect(
+      handleInvoke(depsForInvoke(invoke, undefined, rewriteMedia), 'target-device', 'maker:input:update-content', [
+        'target-session',
+        'client-1',
+        { files: [{ path: '/target/old.png' }, { path: '/controller/new.png' }] },
+      ]),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'target-device', 'maker:input:get-projection', ['target-session']);
+    expect(invoke).toHaveBeenNthCalledWith(2, 'target-device', 'maker:input:update-content', [
+      'target-session',
+      'client-1',
+      { files: [{ path: '/target/old.png' }, { path: '/controller/new.png' }] },
+    ]);
+    expect(rewriteMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the update-content channel error visible for an old target', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'projection unavailable' },
+      });
+    const rewriteMedia = vi.fn(async (_channel: string, args: unknown[]) => args);
+
+    await expect(
+      handleInvoke(depsForInvoke(invoke, undefined, rewriteMedia), 'target-device', 'maker:input:update-content', [
+        'target-session',
+        'client-1',
+        { files: [{ path: '/controller/new.png' }] },
+      ]),
+    ).rejects.toMatchObject({ code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' });
+    expect(rewriteMedia).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

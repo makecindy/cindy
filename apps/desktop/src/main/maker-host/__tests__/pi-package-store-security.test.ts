@@ -361,8 +361,17 @@ describe('Pi package executable-code boundary', () => {
     runtime.listOutput = `${entries.join('\n')}\n`;
 
     const store = await import('../pi-package-store.js');
-    const result = await store.listPiPackages();
+    // 本用例只验证超长元数据的截断与总量上限；固定时钟，避免慢速 runner 触发
+    // 单包检查时限后降级成 inspection-limit 投影（名称即来源、不截断）。
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    let result: Awaited<ReturnType<typeof store.listPiPackages>>;
+    try {
+      result = await store.listPiPackages();
+    } finally {
+      clock.mockRestore();
+    }
     expect(result.packages).toHaveLength(128);
+    expect(result.packages.filter((pkg) => pkg.warning === 'inspection-limit')).toEqual([]);
     expect(result.packages.every((pkg) => pkg.name.endsWith('…'))).toBe(true);
     expect(result.packages.every((pkg) => pkg.version?.endsWith('…'))).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(128 * 1_024);
@@ -448,6 +457,7 @@ describe('Pi package executable-code boundary', () => {
           expect(processRuntime.killTree).toHaveBeenCalledOnce();
         }, { timeout: 1_000 });
         processRuntime.pendingTreeSettled?.();
+        // real-wait: allow the real package-runtime watcher deadline to elapse.
         await new Promise((resolve) => setTimeout(resolve, 900));
         expect(failure).toBeUndefined();
         expect(runtime.pendingClose).not.toBeNull();
@@ -2633,6 +2643,11 @@ describe('Pi package executable-code boundary', () => {
   );
 
   it('does not run a skipped descendant extension from an unverified ancestor snapshot', async () => {
+    // The aggregate snapshot warning lives in the one-second inspection cache.
+    // Control only Date so slow CI cannot expire it during real filesystem I/O.
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
     const ancestorRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-approved-overlap-'));
     roots.push(ancestorRoot);
     const descendantRoot = path.join(ancestorRoot, 'extension');
@@ -2705,6 +2720,16 @@ describe('Pi package executable-code boundary', () => {
         { source: descendantRoot, enabled: true, warning: 'inspection-limit' },
       ],
     });
+    // After the cache expires, a fresh inspection clears this transient warning
+    // without disabling either native package or changing the returned snapshot.
+    vi.setSystemTime(now + 2_000);
+    const refreshed = await store.listPiPackages();
+    expect(refreshed.packages).toMatchObject([
+      { source: ancestorRoot, enabled: true },
+      { source: descendantRoot, enabled: true },
+    ]);
+    expect(refreshed.packages[1].warning).toBeUndefined();
+    expect(snapshot.extensions).toEqual([]);
     const state = JSON.parse(await fs.readFile(
       path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
       'utf8',
@@ -3845,11 +3870,13 @@ describe('Pi package executable-code boundary', () => {
       // Recover the old legacy baseline while runtime observation stays down.
       legacyReadBlocked = false;
       await fs.writeFile(legacyToken, 'runtime:old\n');
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Simulate another Main publishing only the runtime edge while its legacy
       // mirror write fails. The legacy file intentionally stays on the old token.
       await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 300));
       runtimeReadBlocked = false;
       await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
@@ -3919,6 +3946,7 @@ describe('Pi package executable-code boundary', () => {
         'runtime-refresh',
         expect.objectContaining({ afterCurrentTurn: true }),
       ));
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
       expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
@@ -3956,6 +3984,7 @@ describe('Pi package executable-code boundary', () => {
       ));
       runtimeReadBlocked = false;
       await fs.writeFile(runtimeToken, 'runtime:already-present\n');
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener).not.toHaveBeenCalled();
     } finally {
@@ -3999,6 +4028,7 @@ describe('Pi package executable-code boundary', () => {
 
       runtimeReadBlocked = false;
       await fs.writeFile(runtimeToken, 'runtime:old\n');
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
     } finally {
@@ -4041,11 +4071,13 @@ describe('Pi package executable-code boundary', () => {
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
       // Keep runtime observation down for another poll. The already-notified
       // legacy edge must not become a new recovery comparison baseline.
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
       await fs.writeFile(runtimeToken, 'runtime:old\n');
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
     } finally {
@@ -4090,6 +4122,7 @@ describe('Pi package executable-code boundary', () => {
       await vi.waitFor(() => expect(delayedRuntimeRead).toBe(true));
       await mutateAuthorized(store, { action: 'install', source: 'npm:local-publication' });
       releaseRuntimeRead();
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       expect(listener).toHaveBeenCalledWith('local');
@@ -4163,6 +4196,7 @@ describe('Pi package executable-code boundary', () => {
         'runtime-refresh',
         expect.objectContaining({ afterCurrentTurn: true }),
       ), { timeout: 2_000 });
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
       expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
@@ -4197,6 +4231,7 @@ describe('Pi package executable-code boundary', () => {
     const listener = vi.fn();
     const unsubscribe = store.onPiPackagesChanged(listener);
     try {
+      // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener).not.toHaveBeenCalled();
     } finally {
@@ -4223,15 +4258,41 @@ describe('Pi package executable-code boundary', () => {
     ]);
     const store = await import('../pi-package-store.js');
     const listener = vi.fn();
+    const tokenPaths = new Set([
+      'cindy-package-runtime-change-token',
+      'cindy-package-change-token',
+      'cindy-package-view-change-token',
+    ].map((name) => path.resolve(tokenDir, name)));
+    const initialReadsClosed = new Set<string>();
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (target, flags, mode) => {
+      const tokenPath = path.resolve(String(target));
+      if (!tokenPaths.delete(tokenPath)) return originalOpen(target, flags, mode);
+      // Exercise slow initial I/O: a 50 ms sleep must not stand in for readiness.
+      // real-wait: inject slow initial filesystem I/O before the observer establishes its baseline.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const handle = await originalOpen(target, flags, mode);
+      return {
+        stat: () => handle.stat(),
+        readFile: (...args: Parameters<typeof handle.readFile>) => handle.readFile(...args),
+        close: async () => {
+          await handle.close();
+          initialReadsClosed.add(tokenPath);
+        },
+      } as Awaited<ReturnType<typeof fs.open>>;
+    }) as typeof fs.open);
     const unsubscribe = store.onPiPackagesChanged(listener);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // All three baseline values must be captured before publishing the peer edge.
+      await vi.waitFor(() => expect(initialReadsClosed.size).toBe(3));
+      expect(listener).not.toHaveBeenCalled();
       await fs.writeFile(path.join(tokenDir, filename), `${nextToken}\n`);
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(expectedOrigin), {
         timeout: 2_000,
       });
     } finally {
       unsubscribe();
+      openSpy.mockRestore();
     }
   });
 
@@ -5378,35 +5439,25 @@ describe('native Pi core management', () => {
     expect(JSON.stringify(result)).not.toMatch(/alice|private-host|install-location|secret/);
   });
 
-  it.each(['native-core', 'host-binary-update'] as const)('preserves completed packages when %s fails', async phase => {
+  it('preserves completed packages when the shared kernel installer fails', async () => {
     const { executePiNativeManagementCommand, piNativeManagementFailure, piPackageMutationMayHaveChangedState } = await import('../pi-package-store.js');
-    if (phase === 'host-binary-update') runtime.fallbackError = new Error('network failure with private data');
-    runtime.spawnHook = args => {
-      if (args.includes('--self')) {
-        runtime.exitCode = 1;
-        runtime.stderr = phase === 'native-core' ? 'network timeout' : 'pi cannot self-update this installation';
-      }
-    };
+    runtime.fallbackError = new Error('network failure with private data');
     const error = await executePiNativeManagementCommand({ kind: 'all', force: false }).catch(error => error);
     expect(error).toBeInstanceOf(Error);
     expect(piPackageMutationMayHaveChangedState(error)).toBe(true);
-    expect(piNativeManagementFailure(error)).toMatchObject({ phase, packagesUpdated: true,
-      recovery: phase === 'native-core' ? 'retry-core-only' : 'check-host-update-and-retry-core' });
+    expect(piNativeManagementFailure(error)).toMatchObject({ phase: 'host-binary-update', packagesUpdated: true,
+      recovery: 'check-host-update-and-retry-core' });
     expect(runtime.spawns.filter(call => call.args.includes('--extensions'))).toHaveLength(1);
+    expect(runtime.spawns.some(call => call.args.includes('--self'))).toBe(false);
     expect(JSON.stringify(piNativeManagementFailure(error))).not.toContain('private data');
   });
 
-  it('uses the standalone updater only after the precise native unsupported result', async () => {
+  it('uses the shared installer directly, preserving force and avoiding in-place self-update', async () => {
     const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
-    runtime.spawnHook = args => {
-      if (args.includes('--self')) {
-        runtime.exitCode = 1;
-        runtime.stderr = 'error: pi cannot self-update this installation.';
-      }
-    };
     const result = await executePiNativeManagementCommand({ kind: 'self', force: true });
     expect(result).toMatchObject({ execution: 'host-binary-update', nativeSucceeded: false, afterVersion: '0.85.1', activation: 'new-root-tasks' });
     expect(runtime.fallbackCalls).toEqual([true]);
+    expect(runtime.spawns.some(call => call.args.includes('--self'))).toBe(false);
   });
 
   it('does not disguise a failed package phase of --all as a core fallback', async () => {
@@ -5419,20 +5470,20 @@ describe('native Pi core management', () => {
     expect(runtime.spawns.some(call => call.args.includes('--self'))).toBe(false);
   });
 
-  it('preserves native network failures instead of treating every failed update as a fallback request', async () => {
+  it('reports installer network failures without switching the version', async () => {
     const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
-    runtime.spawnHook = args => { if (args.includes('--self')) { runtime.exitCode = 1; runtime.stderr = 'network timeout'; } };
+    runtime.fallbackError = new Error('network timeout');
     await expect(executePiNativeManagementCommand({ kind: 'self', force: false })).rejects.toThrow('network timeout');
-    expect(runtime.fallbackCalls).toEqual([]);
+    expect(runtime.fallbackCalls).toEqual([false]);
+    expect(runtime.version).toBe('0.83.0');
   });
 
-  it('reads the executable after an in-place update, not the old directory name or cached version', async () => {
+  it('reads the selected executable after an update, not the old directory name or cached version', async () => {
     const { executePiNativeManagementCommand } = await import('../pi-package-store.js');
     runtime.version = '0.84.4';
-    runtime.spawnHook = args => { if (args.includes('--self')) runtime.version = '0.85.1'; };
     const result = await executePiNativeManagementCommand({ kind: 'self', force: false });
     expect(result).toMatchObject({ beforeVersion: '0.84.4', afterVersion: '0.85.1', versionVerified: true, activeTasksPreserved: true, activation: 'new-root-tasks' });
-    expect(runtime.spawns.map(call => call.args)).toEqual([['--version'], ['update', '--self', '--no-approve'], ['--version']]);
+    expect(runtime.spawns.map(call => call.args)).toEqual([['--version'], ['--version']]);
     expect(await executePiNativeManagementCommand({ kind: 'version' })).toMatchObject({ version: '0.85.1' });
     expect((await fs.readdir(runtime.userData)).some(name => name.includes('runtime-change'))).toBe(false);
   });

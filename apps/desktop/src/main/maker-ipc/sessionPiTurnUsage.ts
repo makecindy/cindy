@@ -184,6 +184,9 @@ export function recordSessionPiTurnUsage(
           turnDurationMs,
         });
 
+        // 每个模型组的用量行只写一次:catch 只补写正常分支尚未发起的组。后续消息 /
+        // 调度落库失败也会落进 catch,不能再重放已写过的组(会让任务与模型用量翻倍)。
+        const recordedModels = new Set<string>();
         try {
           const pricing =
             billingRoute === 'xd-gateway'
@@ -212,6 +215,7 @@ export function recordSessionPiTurnUsage(
             } else {
               money = resolveTurnCost({
                 rawModel: model,
+                agent: 'pi',
                 tokens: group.tokens,
                 // Pi computes usage.cost from its local model catalog. For
                 // BYOM/provider-api routes that is a reference estimate,
@@ -223,6 +227,7 @@ export function recordSessionPiTurnUsage(
                   providerId: sessionProvider,
                   billingRoute,
                   region: CURRENT_CINDY_REGION,
+                  accessKind: turnContext.accessKind,
                 },
                 segments: pricingSegments,
               }).money;
@@ -238,8 +243,10 @@ export function recordSessionPiTurnUsage(
                 : isSubscriptionValue
                   ? (money ?? deps.unpricedSubscriptionValueMarker())
                   : null;
+            recordedModels.add(model);
             modelWrites.push(
               recordModelTurnUsage({
+                sessionId: session.id,
                 agentKind: 'pi',
                 model: modelUsageKey,
                 // daily_model_usage has no money-kind column. Subscription
@@ -290,17 +297,20 @@ export function recordSessionPiTurnUsage(
           }
         } catch {
           // Price/catalog failure must not lose token/cache facts.
-          const writes = [...groupedSegments].map(([model, group]) =>
-            recordModelTurnUsage({
-              agentKind: 'pi',
-              model: isSubscriptionValue ? piSubscriptionUsageModelKey(model) : model,
-              money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
-              inputTokensDelta: group.tokens.inputTokens,
-              outputTokensDelta: group.tokens.outputTokens,
-              cacheReadTokensDelta: group.tokens.cacheReadTokens,
-              cacheCreateTokensDelta: group.tokens.cacheCreateTokens,
-            }),
-          );
+          const writes = [...groupedSegments]
+            .filter(([model]) => !recordedModels.has(model))
+            .map(([model, group]) =>
+              recordModelTurnUsage({
+                sessionId: session.id,
+                agentKind: 'pi',
+                model: isSubscriptionValue ? piSubscriptionUsageModelKey(model) : model,
+                money: isSubscriptionValue ? deps.unpricedSubscriptionValueMarker() : undefined,
+                inputTokensDelta: group.tokens.inputTokens,
+                outputTokensDelta: group.tokens.outputTokens,
+                cacheReadTokensDelta: group.tokens.cacheReadTokens,
+                cacheCreateTokensDelta: group.tokens.cacheCreateTokens,
+              }),
+            );
           await Promise.allSettled(writes);
           void rebroadcastTodaySpend();
           if (turnAssistantPersistId && usageOnlyDetails) {

@@ -1,0 +1,31 @@
+{
+  "id": "taptap-game",
+  "match": [
+    "www.taptap.cn"
+  ],
+  "description": "读取 TapTap 中国站游戏详情、评分、评价数量与官方链接。",
+  "access": "read",
+  "inputs": {
+    "appId": {
+      "required": true,
+      "description": "TapTap 数字游戏 ID，例如 82835"
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://www.taptap.cn/app/{{appId|url}}"
+    },
+    {
+      "action": "wait",
+      "fn": "() => !!document.querySelector('h1') && Array.from(document.querySelectorAll('script[type=\"application/ld+json\"]')).some(element => { try { return JSON.parse(element.textContent)['@type'] === 'VideoGame'; } catch { return false; } })",
+      "timeoutMs": 30000
+    },
+    {
+      "action": "evaluate",
+      "as": "game",
+      "fn": "() => {\n const id = '{{appId|js}}';\n if (!/^\\d+$/.test(id) || location.hostname !== 'www.taptap.cn' || location.pathname !== '/app/' + id) throw new Error('当前页面不是请求的 TapTap 游戏详情');\n let game;\n for (const element of document.querySelectorAll('script[type=\"application/ld+json\"]')) {\n  try { const data = JSON.parse(element.textContent); if (data['@type'] === 'VideoGame') game = data; } catch {}\n }\n if (!game) throw new Error('TapTap 未提供游戏结构化数据，请检查验证页或页面变化');\n return {id, name: document.querySelector('h1').textContent.trim(), description: game.description, rating: game.aggregateRating?.ratingValue, ratingCount: game.aggregateRating?.ratingCount, reviewCount: game.aggregateRating?.reviewCount, ratingScale: game.aggregateRating?.bestRating, publisher: game.publisher, updatedAt: game.dateModified, url: location.href};\n}"
+    }
+  ],
+  "output": "{{game}}"
+}

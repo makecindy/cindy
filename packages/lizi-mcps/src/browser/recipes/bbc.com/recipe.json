@@ -1,12 +1,35 @@
 {
   "id": "bbc-news-feed",
-  "match": ["bbc.com", "www.bbc.com", "bbc.co.uk"],
-  "description": "读取 BBC News 某个板块的头条列表(标题/摘要/链接/发布时间)。走 BBC 官方公开 RSS,无需登录。section 填板块路径,如 news(全站)、news/world、news/technology、news/business、sport。返回的是 RSS XML 文本,每条 <item> 含 <title>/<description>/<link>/<pubDate>。",
-  "inputs": { "section": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://feeds.bbci.co.uk/{{section}}/rss.xml" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "xml", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "bbc.com",
+    "www.bbc.com",
+    "bbc.co.uk"
   ],
-  "output": "{{xml}}"
+  "description": "读取 BBC News 某个板块的头条列表(标题/摘要/链接/发布时间)。走 BBC 官方公开 RSS,无需登录。section 填板块路径,如 news(全站)、news/world、news/technology、news/business、sport。返回的是 RSS XML 文本,每条 <item> 含 <title>/<description>/<link>/<pubDate>。",
+  "inputs": {
+    "section": {
+      "required": true
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://feeds.bbci.co.uk/{{section}}/rss.xml"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "extract",
+      "as": "xml",
+      "extract": {
+        "fields": {
+          "body": "body"
+        }
+      }
+    }
+  ],
+  "output": "{{xml}}",
+  "access": "read"
 }

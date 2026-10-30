@@ -42,8 +42,8 @@ The decision and review correction are recorded in
 
 ### Primary Text
 
-- **Pure Black** (`#000000`): Primary headlines, primary links, and the darkest text in Light Mode. The only "color" that demands attention. **Never used as a background** — reserved exclusively for text and icons.
-- **Near Black** (`#262626`): Button text on light-colored surfaces, secondary headline weight.
+- **Near Black** (`#262626` Light / `#d4d4d4` Dark, token `--text-primary`): primary headlines, body text, primary links and button text on light-colored surfaces — the darkest text tier. In the CINDY themes the same token resolves to translucent ink (§15.16).
+- **Pure Black** (`#000000`) is not part of the ordinary text tiers: body and heading text use `--text-primary`. It remains only where a section registers it — the Light fill of the maximum-emphasis Black Pill CTA (`--accent-cta-bg-pure`) and the inverse CTA foreground (`--accent-pure-cta-fg`, Dark `#000000`, §4 Buttons) — and in local text tokens that keep their own value (for example `--chat-input-text` in the default Light theme).
 
 ### Layer System (Light & Dark)
 
@@ -62,9 +62,199 @@ The interface is built from a three-tier layer system that applies symmetrically
 
 > **Important — element-level vs. page-level:** The "flat Surface" rule in full-window layouts applies only to the **overall page structure**, not to individual widgets. Lifted widgets _within_ a full-window layout — inputs, chat input boxes, raised cards, modal overlays, panel popups — still use **Card** color per their component rules (see Section 4). A full-window chat interface can have a flat Surface page _and_ a Card-colored chat input box at the same time; those are two different scopes. "Surface flat" means "don't split the page into Page+Card layers," not "every element on the page must be Surface color."
 
+### Optional application wallpaper (user decision, 2026-10-01)
+
+An explicitly selected Desktop wallpaper replaces the flat page canvas across
+the whole host application: title bar, navigation, messages, tool-pane chrome,
+settings and other host pages share continuous viewport-aligned artwork. This
+opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
+disabling it restores the original theme without modifying theme files or tokens.
+Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
+must not affect text or icons. Elevated controls, menus, dialogs and embedded web
+or editor content keep their readable surfaces. Composer scroll masking must
+align with the same wallpaper instead of introducing an opaque footer rectangle.
+Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
+Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
+
+The built-in picker lists 13 artworks (user curation, 2026-10-17): the Cindy group —
+Whisper, Night Glance, Scarlet Stroll, Neon Silhouette, Prism Shards — followed by
+Night Launch, Silent Orbits, Dune Dawn, Planet Dawn, Indigo Folds, Dune Sphere,
+Ocean Clouds and Rose Quartz. All five Cindy wallpapers offer Static / Dynamic; their
+1920×1080, 24fps, 10-second loops keep the source composition as first and last frame.
+The other eight are stills. All official originals are metadata-free WebP/MP4 delivered
+on demand from the CDN (user decision, 2026-10-17); only lightweight thumbnails and the
+three legacy scene previews ship with the app.
+Window Companion, Future Atelier and Dream Wander are retired from the picker
+(`RETIRED_WALLPAPER_IDS`, 2026-10-17). Their manifest entries and CDN objects stay, so a
+saved selection keeps its still and motion; while one is in use it appears selected right
+after None with its Static / Dynamic choice, and it disappears once the user switches away.
+Removing a catalog choice never rewrites appearance preferences or deletes CDN objects.
+All official images share the existing on-demand downloader, verified cache reuse,
+and preview fallback; only manifest entries with video metadata offer motion. Download progress appears
+as a 3px bottom track inside the selected thumbnail (user choice, 2026-10-19), with no visible
+percentage or separate row. Its transform interpolates the precise byte ratio over
+the base motion tier, linearly for this transfer indicator to avoid restarting an
+ease-in/out on every progress sample; reduced motion updates immediately.
+It follows real transfer progress and disappears once ready;
+cache hits show the original directly. A failed tile shows a retry icon and supports click,
+Enter and Space to retry, preserving the grid's single Tab stop and selected border.
+Expose progress and failure descriptions to assistive technology outside the radio descendants.
+Keep the displayed background while the next official original is loading or decoding;
+reuse already decoded original URLs directly when revisiting a selection. Once ready,
+crossfade the static canvas and its composer copies using opacity and the fast motion
+token, respecting reduced motion. Initial load may use the bundled preview.
+Reuse the settings download percentage normalization. Browsing the grid or hiding the wallpaper does not
+download originals; only a selected, visible image is requested. Reuse valid cached
+images offline and after upgrades. Do not request CDN assets for IDs absent from the manifest.
+Earlier unreleased artwork (including Blue Gaze, Amber Light and the 2026-10-16 batch
+trimmed on 2026-10-17) is not shipped and needs no compatibility.
+The new artwork uses the existing continuous cover fit, theme-derived visibility
+and blur controls. None remains the default and restores the theme canvas.
+While a window's opaque in-app wallpaper canvas is active, disable its covered
+native macOS Vibrancy / Windows backdrop material. Restore the theme's native
+material when that canvas is removed. Use actual per-window canvas state rather
+than the saved selection; pending replacements may retain the previous canvas.
+The visibility veil (including 0%) remains opaque to the desktop. Wallpaper blur
+and in-app overlay blur keep their existing behavior.
+The picker remains an inline compact grid (user choice, 2026-10-15): use
+container-width-driven columns with a 6rem minimum, 8px grid gaps, 16:9 previews,
+and a 4px gap before each readable name. At the standard 1280px window width this
+shows eight columns; narrower windows naturally show fewer. Keep direct click-to-apply
+selection, the existing selected/focus treatment, and full names in accessible labels
+and hover/focus tooltips when the visible label is truncated.
+The grid has one Tab entry, using the selected visible tile or the first tile for
+a hidden saved selection. Arrow keys move focus and selection with wrapping; Home /
+End reach the first / last tile. An empty Custom tile only receives focus during
+arrow navigation; Enter / Space explicitly opens the file picker.
+Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
+in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
+20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
+in the managed media store. Also accept local MP4 videos up to 100 MB, preserving their bytes;
+H.264 is recommended for playback compatibility. Wallpaper selection and the custom media reference
+are shared within the Desktop profile, just like theme preferences (user decision,
+2026-10-02). Import, replacement, removal and recycling are client-wide as well:
+no account database, account-bound operation guard or pre-release owner migration.
+The media store's client wallpaper scope isolates its bytes from chat attachments;
+switching accounts (or signing out) keeps the same wallpaper. Font-only utility renderers never receive
+custom media URLs.
+Detached sidebar and plugin-panel host chrome use the same wallpaper provider;
+embedded plugin webviews retain their own surfaces and permission boundary.
+Cancellation and import failures retain the existing media. Switching to a built-in
+or None keeps the imported media available; Remove Wallpaper forgets it. Custom imagery
+shares the continuous cover-fit canvas and readability veil. Custom MP4 exposes the existing
+Static / Dynamic choice: Static and reduced motion show a paused frame; Dynamic loops silently
+and pauses when hidden/minimized. Playback failure releases the decoder, leaves the theme surface
+visible and shows an actionable error in wallpaper settings. The custom video tile uses a film icon
+instead of opening a second decoder for a thumbnail.
+Wallpaper Visibility ranges from 0% (hidden) to 100% (fully visible), in 1% steps
+(user decision, 2026-10-05). Static images use the theme-surface veil with opacity equal to
+100% minus visibility. Video uses visibility directly as the video element's opacity over
+an opaque theme-surface backing, without a separate translucent veil; this avoids the
+observed Windows HDR brightness shift when P3 content changes the output composition.
+The video wrapper's opacity is reserved for loading/exit crossfades. Visibility never fades
+text or controls: they keep their token colors (including the translucent text tiers of §2)
+and no element opacity is layered on top. Release video playback at 0%. Blend-mode controls
+remain out of scope.
+Optional Wallpaper Blur (user addition, 2026-10-06) ranges from 0 (off, default) to 20
+in whole steps, applying a CSS-pixel radius only to the wallpaper image/video. No UI,
+theme backing, or text is blurred; video opacity remains on the video itself. At zero,
+retain the existing filter-free rendering path. Overscan the artwork by three radii
+and clip the video at the viewport to avoid transparent edges; static and video crops
+must match. For blurred static scenes, reuse the moving-scene message fade instead
+of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
+Reset removes the blur override. Reuse the settings Slider with a localized accessible
+label and hint, disable it for None, and explain the additional GPU cost for video.
+Dragging previews blur locally; only a committed pointer/keyboard value is saved and
+broadcast. Cancelled gestures or leaving settings discard the preview.
+Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
+Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
+Reset removes that override and restores the theme-dependent default. Do not rewrite old
+preferences just because they were read or a theme changed.
+Remove the previous arrow, standalone portrait, gradient and paper
+options and assets. Retired saved selections normalize to None; unrelated theme
+and font preferences remain unchanged. All three scenes use the same cover fit,
+so do not expose a fit selector that cannot affect them.
+
+The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
+character and black cat in three distinct illustrated environments: a sunny
+window, a futuristic atelier and a floating garden above clouds. Preserve each
+landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
+tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
+or reposition/scale it when sidebars open: that splits the app into disconnected
+pieces (user correction, 2026-10-01). Only window resizing changes the crop.
+These curated scenes use a lighter theme-derived
+veil than arbitrary photos, with a stronger Dark veil to preserve reading
+contrast. Validate real long messages, not only empty chat views.
+
+The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
+Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
+camera, preserving the same composition and full-window crop. Camera position,
+viewing angle and field of view must stay constant throughout the entire loop,
+including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
+tilts, dolly movement, zooms or perspective drift; matching first and last frames
+alone is insufficient. Built-in static artwork
+uses 3584×2240 WebP. The three official scenes use bundled 640×400 previews and
+download the full WebP or 2304×1440 MP4 on demand (2026-10-15 decision), with no
+resolution switching on window resize. Only the previews enter the Renderer bundle.
+The motion approved on 2026-10-02 is preserved frame for frame at its original
+24fps. The 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
+of the approved 1214×758 sources, not native 2K generation; do not regenerate,
+retime or reverse the accepted motion while preparing higher-resolution assets.
+Download only selected, visible assets and request video only for active dynamic
+mode without reduced motion. Verify byte length and SHA-256 before placing assets
+in the existing client-wallpaper media scope. Valid cached content is reused across
+restarts, upgrades and accounts without another download; failures retain the preview
+and permit retry. The download and cache contract is defined in
+[`media-storage-and-protocols.md`](../dev-rules/media-storage-and-protocols.md).
+Decode one local video
+per window, suspend playback while hidden/minimized, and use the original still for
+reduced motion or playback failure. Static / Dynamic switches crossfade the video
+over the retained high-resolution still using base/ease-move (200ms), starting
+only after playback is ready. Switching back to Static releases the video after
+the fade; rapid toggles reverse it without adding a decoder. Reduced motion
+bypasses the transition and releases the video immediately.
+For moving scenes, fade the message layer above the composer instead of painting a
+static duplicate of the wallpaper over it. Check the loop seam and actual Light/Dark
+chat readability, including collapsed sidebars and resized windows.
+
+Environment motion must be clearly perceptible rather than concentrated on the
+character (user correction, 2026-10-01). Animate existing foliage, curtains and
+leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
+clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
+and the camera stationary. Prefer several slow, independent environmental rhythms
+with restrained character movement; verify foliage crops and loop transitions,
+including after the Light/Dark readability veil is applied.
+For the floating garden, keep the environmental amplitude restrained: tiny leaf
+and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
+large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
+the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
+chat interface with messages, composer and pane chrome, not only isolated artwork.
+In the sunny window scene, keep the curtain close to its resting drape: small,
+slow folds rather than large billows across the window. Nearby leaves and light
+shadows should move gently without competing with messages (user correction,
+2026-10-01).
+The window scene needs infrequent, natural blinking and coherent whole-scene
+motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
+foliage together at normal playback speed. Do not retime an isolated eye patch
+against a differently moving face or reverse hair motion to manufacture a loop.
+Keep the blink gentle and the environment moving at a steady pace: never speed
+up the entire frame to shorten a blink, which also accelerates curtains, hair and
+shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
+holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
+motion; inspect the complete action and loop boundary before accepting an asset.
+
 ### Task tag identity colors
 
 用户确认的任务标签色板为红、橙、黄、绿、蓝、紫、灰、粉、珊瑚、青、靛蓝、白共十二色。只用于标签色球与编辑色板，表示用户分类，不表示任务运行状态。色球为圆形、细描边，选中时勾位于球内；白色在 Light/Dark 中均保持白色，用独立深色勾保证对比度。Desktop 使用 `task-tag-*` 语义 token；Mobile 使用对应 `taskTag*` 色板字段。默认面板只显示选择列表，添加或编辑后才显示名称和两行六列色板，不显示双击编辑提示。
+
+### Personal message bubble colors (Mobile, 2026-10-12)
+
+手机版设置提供「我的消息气泡颜色」:默认继续跟随现有主题,另有初稿、晨光、灵感、梦境、夜猫、项圈六个预设和自定义颜色。名称取自 Cindy 自身的设定(创作的一天、黑猫与红项圈),不使用公司名或游戏 IP;各语言意译,不逐字翻译。此项是用户主动选择的个性化例外,只作用于确认是自己发出的消息气泡(会话、待发送与伙伴群聊)和设置预览,不染色 Agent 回复、系统卡片或页面背景。共享任务里所有 user 消息都右对齐,因此按归属而不是对齐判断:访客消息只有作者账号是当前账号才染,房主消息只在不是以访客身份查看时染;归属只用于展示,不作权限依据。偏好仅保存在本机;选「默认」即删除 override。桌面端暂未提供。
+
+颜色由 packages/maker-shared/src/userBubbleAppearance.ts 在运行期按 light/dark 生成背景、前景与描边,属于治理合同 §3.4 的运行时派生值,消费者只用该结果,不把用户输入直接拼进样式。预设柔化较强;自定义色着色更明显。着色强度会自动收敛到气泡内实际出现的文字(正文、次要文字、弱提示、行内代码)都不低于 4.5:1、派生前景不低于 7:1;已满足的颜色不降低。项圈取品牌红色相,只用柔化后的浅红调,不直接使用品牌红。
+
+iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设与「自定义颜色」同在一个 inline Picker 勾选列表;选中自定义才在其下展开一条彩虹色带(仅选色相,外形对齐系统滑块)。iOS 没有比系统 ColorPicker 更轻的自由选色组件,系统取色面板因功能过多不采用。拖动时只更新本页预览,松手才保存;保存失败的提示提供「重试」。Android 沿用设置页内的面板实现。
 
 ### Chip & Button Neutrals
 
@@ -78,6 +268,8 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 ### Neutrals & Text
 
+**Text tiers (user decision, 2026-10-22).** Neutral text follows one strictly ordered ladder in every theme: primary > description > secondary > tertiary > placeholder/disabled. In the CINDY family every tier is the same ink at decreasing alpha — black in Light, white in Dark (values in §15.16) — the way Apple's label colors work: a translucent tier keeps its step on glass, wallpaper, hover fills and cards, and picks up the warmth of the surface beneath it. Don't recreate a tier with a solid gray picked by eye, and don't fake a tier by fading an element with `opacity`. Text on inverse surfaces (selected pills, tooltips, CTAs) uses its dedicated foreground token, never a translucent ink tier. The same ink at low alpha draws the CINDY hover, chip, selected and pressed fills and its borders and dividers (§15.16). The hex values below are the Classic (default) theme's reference sample.
+
 - **Stone** (`#737373`): Secondary body text, footer links, and de-emphasized content. The primary "muted" tone.
 - **Mid Gray** (`#525252`): Emphasized secondary text, slightly darker than Stone.
 - **Silver** (`#a3a3a3`): Tertiary text and deeply de-emphasized metadata. **Never use it as a placeholder** — too prominent, reads as filled-in (see §4 Inputs; the G3 erratum is archived in [`design-decision-log.md`](./design-decision-log.md); placeholders use `--text-placeholder` `#c4c4c4`).
@@ -90,23 +282,29 @@ Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, w
 
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
-- **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Never visible in normal interaction flow.
-- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
+- **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Keep it out of mouse-only interaction: controls show it on `:focus-visible`, not on click. Text inputs are the approved exception — a focused text field always matches `:focus-visible`, so the generic `Input` shows the soft ring `--focus-ring-soft` whenever focused, while settings and composer inputs use their own focus-border aliases (§4 Inputs).
+- **Thinking / Warning Orange** (`#EA6B17`, finalized 2026-07-17, replaces the frozen `#FF6600`): the shared warning-accent family, identical in both modes. Sanctioned consumers only — the ChatView Running Status Bar (sparkles icon + status text, e.g. `Spelunking...`, no background fill), running-state breathing icons in the sidebar, the collaboration-mode menu row's ON state, the plan-approve icon, the Full Access permission highlight, the settings integration warning, and the workflow agent status strip's running cells (8×8px filled squares in the background-tasks panel detail and the workflow chat card, registered 2026-07-28 — running-state semantics, same family as the sidebar breathing icons; the done/failed/queued cells stay on their own semantic tokens: `--card-status-done` / `--error-fg` / `--surface-chip`), and the sidebar task-info PR unresolved corner dot (registered 2026-08-17 — same `--status-bar-accent` as the session-header unresolved count; static, no breathing), and the filter reminder dot (registered 2026-10-20 — a static 6px/6pt dot at the top-right corner of a filter or view-settings button, meaning "this list is not the default active view": the search filter button while any narrowing filter is applied, and the sidebar organize button / Mobile home `⋯` display-settings button while viewing archived tasks; same `--status-bar-accent` / `statusAccent`, no breathing, no text; Desktop shares one `FilterReminderDot` component and Mobile one `FilterReminderDot` component so size, offset and color live in one place; it is purely visual, so the button's accessible name or state must carry the same information; sort and grouping changes and the "all" status do not light it), and the Bot group chat speaking row (registered 2026-09-27 — sparkles icon + status text for the teammate currently taking its turn, the same running semantics and `--status-bar-accent` as the ChatView Running Status Bar; no background fill), and the running step of a Bot group chat 分工 plan card and the group's sidebar 「正在做 / 正在安排」 preview (registered 2026-09-27 — icon + status word of the one step in progress, same running semantics and `--status-bar-accent`; no background fill; done / pending / failed steps stay neutral) (see the §10 exemption table and §15 for the full token list: `--warning-accent` and its follower tokens). A consumer that introduces no new token — one that reads `--warning-accent` or an existing follower directly, like this strip — is registered by this list alone; a consumer needing a NEW token must be registered in the §10 exemption table first.
 
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
-> - **Cindy Make source comparison** — the owner-approved source overview (2026-09-20) combines local main and the online target in one row, with personal and its comparison to local main below. Matching main hashes appear once in `--status-success`; differing hashes show the local value in `--text-secondary` → the verified online target in `--status-success`, with a `--text-tertiary` arrow. The online green identifies the official target even when local main is behind; difference counts remain explicit. Unavailable lookups stay neutral. Both modes use the existing semantic tokens; no other version surface inherits this treatment.
+> - **Screenshot toolbar Cindy icon** — the star icon before “Cindy” in Desktop's `ScreenshotModeBar` uses the existing gold foreground `--warning-fg` (`#F3A115` in Light and Dark; user decision 2026-10-28). Only this entry icon is gold; its label and button keep their standard theme colors and disabled treatment.
+> - **Mobile model-picker account quota bars** — owner-approved desktop parity (2026-10-23): `quotaBarWarn` marks remaining quota below 30% and above 10%; `quotaBarCrit` marks remaining quota at or below 10%. Both are quota-only semantic fills registered in §10, independent of the owner-crown and task-error roles. Normal quota remains neutral (`textSecondary`), and the track uses `surfaceChip`. iOS / Android share the real remaining proportion without a minimum fill width; 0% is empty. Keep the numerical percentage alongside the bar, so color is supplementary and never the only information. These colors do not apply to the account title, percentage text or row background.
+> - **Cindy Make source comparison** — the owner-approved source overview (2026-09-20, refined 2026-09-21) combines local main and the online target in one row, with personal below. Matching main hashes appear once in `--status-success`; differing hashes show the local value in `--text-secondary` → the verified online target in `--status-success`, with a `--text-tertiary` arrow. The online green identifies the official target even when local main is behind; difference counts remain explicit. Personal uses an icon-first label flush with the main row's left edge, without chip fill or inset padding: status icon, then `cindy-personal` with the localized status in parentheses, followed by the SHA and change count. The icon, name and parenthesized status inherit one color. Latest uses a check and `--status-success`; missing official updates use a download icon and the existing Light/Dark update foreground `--upgrade-banner-fg`; an inconclusive comparison uses a help icon and `--text-secondary`. The status stays visible; the shared hover/focus `Tip` may explain it further. This is informational, with no click action. During operations that replace the comparison, keep the name neutral and omit the status icon, suffix and tooltip. Personal-only changes do not invalidate latest; unavailable lookups never imply latest or an available update. Each source row wraps independently. Both modes use existing tokens; no other version surface inherits this treatment. Since 2026-10-01 (owner-approved plain-language Settings, [cindy-make-upstream.md](../cindy-make-upstream.md)), this hash comparison, the source path and its open/clear buttons sit inside the default-collapsed native `details` disclosure “Technical details (for developers)”; the visible overview is the plain-language `CindyMakeVersionSummary` (personal: official version + N changes; latest official: release/beta/dev label + included / not yet / can't confirm). The summary reuses the same verified comparison, the same check / download / help icons and `--status-success` / `--upgrade-banner-fg` / `--text-secondary` colors, shows no hash, branch or main, and is plain text because the technical comparison keeps the single live status region.
+> - **Shared-task mobile confirmations** — only the management page is full-screen. Remove, leave, close-current and close-all use compact confirmations. iOS retains `showConfirm` and the system Alert with supported Liquid Glass / older-system fallback. On 2026-09-20 the user rejected Android's default green-text system Alert: Android uses a centered content-height card, container radius 12, themed elevated surface, neutral outlined Cancel and pill-shaped solid danger action using `sharedTaskConfirmBackground/Foreground`. Reuse Mobile action primitives, minimum target 44, wrap actions when needed, and scroll long descriptions. Android Back cancels; the scrim does not dismiss. Cancellation preserves the task, page, tab and scroll position. An in-task guest exits directly from task details, without another management page. No native configuration changes or simulated iOS glass. Desktop retains the Plan B shared window.
 > - **CINDY checked Switch** — `--switch-track-on` uses blue `#417CDD` in CINDY Light and Dark (owner decision 2026-09-15, §15.17). This is an enabled-state signal, independently adjustable from focus, caret and Auto Approval despite sharing their current hue. Other themes retain their own checked-track colors.
-> - **Windows taskbar attention badge** — the native OS overlay uses a fixed red background (`#D91F37`) and white digits with no outline (`#FFFFFF`) in both Light and Dark taskbars. This is the app-wide count of active tasks needing attention, not an error-only status. The image-specific semantic pair lives in `apps/desktop/src/main/windowsBadgeIcon.ts`; it is not an in-app theme token. Keep a 16-logical-pixel transparent canvas and center the circle and digits at 80% of their original size (user refinement, 2026-09-16). Render using the highest connected display scale and pass that physical-size image directly to the Windows Shell through the native taskbar bridge (Electron 41 otherwise forces overlays to 16 physical pixels). Redraw after display/DPI changes and taskbar recreation; keep the multi-resolution Electron overlay as a failure fallback. Use a circle for one digit, a rounded square for multiple digits, and `99+` above 99. The accessibility description keeps the exact total. Only the OS image may use its fitted 8–12px system-font digits; web typography and status-dot color rules are unchanged.
+> - **Windows taskbar attention badge** — the native OS overlay uses a fixed red background (`#D91F37`) and white digits with no outline (`#FFFFFF`) in both Light and Dark taskbars. This is the count of local tasks needing attention, not an error-only status and not a literal total of every task. Device-link sessions owned by another machine are excluded, as are automation-generated sessions (scheduler source or a legacy Schedule title prefix) and a heartbeat completion (done with an unread run) bound to an ordinary task. A local learn session is not that exception: awaiting-review is a review the user must handle on this machine, using the same done / awaiting / error signals. Later awaiting or error attention on a heartbeat-bound ordinary task still counts. The image-specific semantic pair lives in `apps/desktop/src/main/windowsBadgeIcon.ts`; it is not an in-app theme token. Keep a 16-logical-pixel transparent canvas and center the circle and digits at 80% of their original size (user refinement, 2026-09-16). Render using the highest connected display scale and pass that physical-size image directly to the Windows Shell through the native taskbar bridge (Electron 41 otherwise forces overlays to 16 physical pixels). Redraw after display/DPI changes and taskbar recreation; keep the multi-resolution Electron overlay as a failure fallback. Use a circle for one digit, a rounded square for multiple digits, and `99+` above 99. The accessibility description keeps the exact total. Only the OS image may use its fitted 8–12px system-font digits; web typography and status-dot color rules are unchanged.
 > - **Toast Info / Success / Warning / Error** — `#417CDD` / `#2AAE5B` / `#F3A115` / `#D91F37`(finalized 2026-07-17; Toast exemption lifted) — used ONLY on the 16×16 lucide icon inside Toast pill notifications. The pill body (background, text, border, close icon) remains strictly grayscale. Info blue #417CDD equals the focus-ring / Auto Approval value (originally #3B82F6, added 2026-07-14, now finalized); success/warning/error equal the global status colors (done green / status error / warning foreground).
-> - **Usage History category color (owner-approved 2026-09-08, extended 2026-09-09).** The registered usage heatmap uses a blue intensity scale. Daily token bars and their corresponding model-table swatches/share marks use `--usage-model-1` … `--usage-model-5` as the seed palette; additional models receive theme-derived hues without a top-five cutoff. All model identities in the full history are included, even when absent from the last 30 days. Agent/harness swatches, share marks and the stacked share strip reuse the existing engine identity tokens: `--engine-badge-cc` (terracotta orange), `--engine-badge-codex` (blue), and `--usage-model-1` (owner-chosen teal for pi, to distinguish it from Codex blue). Claude/Codex retain their cross-mode fixed-value contract; pi follows the existing Light/Dark teal values. `--usage-heatmap-high` supplies the high end of the heatmap. The heatmap retains its process-blue alias; category colors do not inherit process/status semantics. Task marks, text and control frames stay neutral. See [the component specification](./usage-history-charts.md); colors.ts remains the seed-value source, with runtime derivation under governance §3.4.
+> - **Usage History category color (owner-approved 2026-09-08, extended 2026-09-09).** The registered usage heatmap uses a blue intensity scale. Daily token bars and their corresponding model-table swatches/share marks use `--usage-model-1` … `--usage-model-5` as the seed palette; additional models receive theme-derived hues without a top-five cutoff. All model identities in the full history are included, even when absent from the last 30 days. Agent/harness swatches, share marks and the stacked share strip reuse the existing engine identity tokens: `--engine-badge-cc` (terracotta orange), `--engine-badge-codex` (blue), and `--usage-model-1` (owner-chosen teal for pi, to distinguish it from Codex blue). Claude/Codex retain their cross-mode fixed-value contract; pi follows the existing Light/Dark teal values. `--usage-heatmap-high` supplies the high end of the heatmap. The heatmap retains its process-blue alias; category colors do not inherit process/status semantics. Task marks, text and control frames stay neutral. **Extended 2026-10-17 (owner approved the prototype):** the provider「远程与分享」page reuses the same charts and tables for provider usage; there the same seed palette and derivation also colour the person and group-computer categories (bars stacked by person / computer / model, plus each table's swatches, share marks and share strip), ranked by a fixed order (people as listed, computers in group order, models by full-history tokens) that filters never reassign. No new tokens, shapes or status meaning. See [the component specification](./usage-history-charts.md); colors.ts remains the seed-value source, with runtime derivation under governance §3.4.
 > - **Resource Usage Process Categories** — the Resource Usage table may color only its 14px process-type glyphs so dense rows can be scanned by category (user-requested 2026-08-06). The six category pairs are task Agent blue `#2563EB / #60A5FA`, Agent service purple `#7C3AED / #A78BFA`, main-process pink `#DB2777 / #F472B6`, renderer cyan `#0891B2 / #22D3EE`, GPU amber `#D97706 / #F59E0B`, and utility green `#059669 / #34D399` (Light / Dark). These colors encode process category, **not health or status**; row backgrounds, labels, metrics, selection and actions remain on the neutral system. Direct use is confined to `resource-usage` process glyphs; the explicitly registered Usage History heatmap alias above may also reference the task-blue value. No other table or process UI inherits this permission. Tokens: `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon`.
 > - **Bot Avatar Hues** — the Bots feature may fill a Bot's round avatar with one of nine registered tints so a list of persistent assistants can be told apart at a glance (registered 2026-08-17). The hue encodes **which Bot this is** — an identity cue like the file-type badges above, never health, status, or channel. Light mode uses soft tints, Dark mode the matching deep tints; the emoji and the initial-letter fallback (always `--text-primary`) stay legible in both. Tokens: `--bot-avatar-red-bg` / `-orange-` / `-amber-` / `-green-` / `-teal-` / `-blue-` / `-violet-` / `-pink-` / `-graphite-bg` (the last is the neutral step, and is where legacy `graphite` avatar data lands). Scope is strictly the Bot avatar fill in `features/bots` — do not reuse these tints for status dots, badges, row backgrounds, or any other surface. External theme import never touches them (the import template is allow-list only), so Bot identity colors do not drift between themes.
-> - **Bot Unread Badge** — the Bots sidebar may paint its unread pill and its pending-todo dot in information blue `#417CDD` with white text (registered 2026-08-19). The color encodes **IM unread semantics** ("how much have I not seen"), the one signal every chat list has taught users to read by color alone; it is not a CTA and not a health/status tone. The pill was previously the inverse-CTA fill, which on the selected row's light-gray pill turned into two high-contrast marks competing for the same glance. Same value both modes — an unread count means the same thing in Light and Dark, and the value is already the registered focus-ring / Auto Approval / Toast-info blue. The foreground is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. Tokens: `--bot-unread-bg` / `--bot-unread-fg`. Scope is strictly the teammate-list unread badge and the pending-todo dot in `features/bots/BotsSidebar.tsx` — do not reuse it for other badges, status dots, row backgrounds, or any other surface.
-> - **ConfirmDialog Danger** — `#EF4444` used ONLY on the confirm button background in the Danger variant. The cancel button and rest of the dialog remain grayscale.
+> - **Bot Unread Badge** — the Bots sidebar may paint its unread pill and its pending-todo dot in information blue `#417CDD` with white text (registered 2026-08-19). The color encodes **IM unread semantics** ("how much have I not seen"), the one signal every chat list has taught users to read by color alone; it is not a CTA and not a health/status tone. The pill was previously the inverse-CTA fill, which on the selected row's light-gray pill turned into two high-contrast marks competing for the same glance. Same value both modes — an unread count means the same thing in Light and Dark, and the value is already the registered focus-ring / Auto Approval / Toast-info blue. The foreground is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. Tokens: `--bot-unread-bg` / `--bot-unread-fg`. Scope is strictly teammate-list unread indicators in `features/bots`, including the Cindy device row, its device-picker options/trigger and the computer rows of the teammate 近况 popover (which replaced the chat-header picker on 2026-10-21), and — as a 6px dot only, never a text color — a group chat's 话题 unread marks: the thread entry under a root, the in-chat 话题 hint above the composer, its list rows and the thread panel's 「新回复」 divider (registered 2026-10-21, owner-approved r4 prototype; the words beside the dot stay `--text-primary`); Mobile mirrors the value as `botUnread` for the companion list row's unread dot only (registered 2026-09-29 — the host sends a boolean, so Mobile shows a dot, not a count) — do not reuse it for other badges, status dots, row backgrounds, or any other surface.
+> - **Teammate todo due dot (registered 2026-10-21, owner request)** — a static 6px `--error-fg` dot (Mobile `statusError`, 7pt) meaning "this todo's own deadline is today or already passed". Exactly two placements, one shared component per platform (`TodoDueDot` in `features/bots/BotGlancePopover.tsx`): before the deadline text of the due row inside the teammate 近况 popover, and at the top-right of the chat-header 近况 entry (Mobile: the header avatar) while the owner has not opened 近况 since that item became due. The row dot stays until the item is handled or rescheduled; the entry dot clears on opening. No text, no breathing; the entry's accessible name carries the same information. It is not an error state and must not be reused for task errors, unread, or other badges.
+> - **ConfirmDialog Danger** — the theme's semantic destructive color (`--destructive`, via Button `tone="danger-solid"`) used ONLY on the confirm button background in the destructive variant; the value differs between Light and Dark only; it is a theme-invariant exemption that imported themes cannot override. The cancel button and rest of the dialog remain grayscale.
+> - **Screenshot overlay and annotation ink (registered 2026-10-26, owner-approved)** — the global screenshot overlay and its pinned images draw on top of arbitrary screen content, so two small fixed sets live in `features/region-screenshot/screenshotColors.ts` and are the same in Light and Dark. **Annotation ink** (`SCREENSHOT_INK`): red `#FF3B30` (the `annotation-accent` value), yellow `#FFCC00`, green `#34C759`, blue `#007AFF`, black `#000000`, white `#FFFFFF`. Ink is burned into the user's screenshot; it is user content, not UI color. The color swatches in the annotation style bar show the ink itself, each inside a `--border-default` ring so black and white stay visible in both modes. **Functional overlay pixels** (`SCREENSHOT_OVERLAY`): the dim layer `rgba(0,0,0,0.45)` outside the selection, the 1px white selection edge with a `rgba(0,0,0,0.6)` outer ring, white resize handles, the dashed selected-annotation box, the magnifier crosshair band and the black backdrop under the frozen frame. These must stay legible over any wallpaper, window or video. Everything else in the screenshot UI (toolbar, style bar, AI menu, magnifier card and its text, size label, hint pill, pin zoom badge and pin border) uses theme tokens and the standard icon-button and CTA treatments. Do not reuse these values outside the screenshot overlay and pinned images.
 > - **Permission Selector Mode Highlights** — selected risky permission modes may color only the option text/icon/checkmark and the collapsed trigger text/icon. The selected row background remains grayscale. Auto Approval uses `#417CDD` in both modes (finalized 2026-07-17, same value light/dark; replaces light #000050 / dark #00D9C5). Full Access uses Heart Orange `#EA6B17` in both modes (auto-follows warning-accent, finalized 2026-07-17). These hex values are the **default-theme palette only** — other themes may override `--perm-auto-selected-text` and `--perm-bypass-selected-text` with their own accent colors, provided both modes remain color-coded, distinguishable from each other, and visually distinct from neutral text. Tokens: `--perm-auto-selected-text` and `--perm-bypass-selected-text` in `apps/desktop/src/renderer/styles/globals.css`.
+> - **Shared-task Owner Crown** — the small crown immediately after the Agent/status icon uses the existing gold foreground `#F3A115` in both modes (`--warning-fg` on Desktop, `warningFg` on Mobile). This is a narrowly registered identity mark: it appears only for tasks owned by the current account, stays gold on selected rows, and never colors the title, row background, guest tasks, or an empty placeholder.
 > - **Diff Add Green / Diff Del Red** — GitHub-standard diff syntax colors, used on the `+` / `-` symbol glyph, the changed-line text foreground, **and the full row background** inside code-diff renderings. Applied in three places: (1) the Edit-tool DiffView card (F-MSG-6), (2) markdown ````diff`fenced code blocks in the message stream, and (3)`.diff`/`.patch`files opened in TextLightbox (the document previewer) — there hljs`.hljs-addition`/`.hljs-deletion`are forced`display: block`so the background fills to the right edge instead of stopping at the last glyph. Line-number gutter and ctx (unchanged) lines remain strictly grayscale per the layer system. **Foreground** — Add:`#22863a`Light /`#7ee787`Dark; Del:`#b31d28`Light /`#ff7b72`Dark. **Background** — Add:`#f0fff4`Light /`#033a16`Dark; Del:`#ffeef0`Light /`#67060c`Dark. Tokens:`--diff-add-fg/-bg`and`--diff-del-fg/-bg`in`apps/desktop/src/renderer/styles/globals.css`. Updated 2026-04-21: backgrounds switched from grayscale → GitHub red/green for full-row fill so additions / deletions are unambiguous at a glance.
-> - **PR Status Colors (session-git-pr-context / sidebar task-info)** — closed = `--error-fg`, merged = `--focus-ring`, draft = `--text-tertiary` (single source: `PR_STATUS_COLOR` in `apps/desktop/src/renderer/features/cc-agent/gitContextPrVisuals.ts`). **Open green is split:** the session-header GitContextBadge and sidebar hover tooltip keep `--diff-add-fg` (theme-following GitHub greens). The sidebar task-info icon (registered 2026-08-17) follows the **surface**, not the theme name: it reads HSL lightness of `--sidebar` / `--sidebar-item-active` (Cindy's selected pill is inverse; many community/imported themes are not). Light surfaces use `--pr-open-on-light` `#2EA043`; dark surfaces use `--pr-open-on-dark` `#3FB950`. Both values are theme-invariant. The `#number` stays on the info-slot foreground. Open/draft PRs with `unresolvedCount > 0` add a 5px static `--status-bar-accent` corner dot on the status icon (not an AttentionDot tone). Unknown/unloaded status degrades to `--text-tertiary`. Scope is strictly PR-state surfaces; do not generalize these colors to other status systems.
+> - **PR Status Colors (session-git-pr-context / sidebar task-info)** — closed = `--error-fg`, merged = `--focus-ring`, draft = `--text-tertiary` (single source: `PR_STATUS_COLOR` in `apps/desktop/src/renderer/features/cc-agent/gitContextPrVisuals.ts`). **Open green is split:** the session-header GitContextBadge and sidebar hover tooltip keep `--diff-add-fg` (theme-following GitHub greens). The sidebar task-info icon (registered 2026-08-17) follows the **surface**, not the theme name: it reads HSL lightness of `--sidebar` / `--sidebar-item-active` (selected surfaces vary by theme). Light surfaces use `--pr-open-on-light` `#2EA043`; dark surfaces use `--pr-open-on-dark` `#3FB950`. Both values are theme-invariant. The `#number` stays on the info-slot foreground. Open/draft PRs with `unresolvedCount > 0` add a 5px static `--status-bar-accent` corner dot on the status icon (not an AttentionDot tone). Unknown/unloaded status degrades to `--text-tertiary`. Scope is strictly PR-state surfaces; do not generalize these colors to other status systems. Mobile mirrors the semantics with its own tokens (`prStatusVisual`): open `statusDone`, merged `prMerged` (focus blue `#417CDD`), closed `statusError`, draft / unknown `textTertiary`.
 
 _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4d4d4`) for primary text, **Silver** (`#a3a3a3`) for secondary, **Stone** (`#737373`) for tertiary (per `--text-secondary` / `--text-tertiary` in `colors.ts` — the two swap between modes). Pure White (`#ffffff`) is reserved for button labels and high-contrast UI elements on dark backgrounds._
 
@@ -114,6 +312,19 @@ _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4
 
 - **None in the core UI.** Cindy uses no gradients; visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice. (The login canvas is also flat by ruling — see §16.5.)
 - **Session-loading wordmark sheen — narrow functional exception (Desktop approved 2026-08-10).** `BrandLoadingMark` may use one neutral `transparent → --text-primary → transparent` gradient solely as a mask-clipped highlight inside the official Light/Dark wordmark while a session's message tree is deferred. It is a loading-progress signal, not a background, separator, fill, or reusable surface treatment. It may appear only after the 200ms delayed-reveal threshold, disappears as soon as the message tree mounts, and may not leak to messages, cards, dialogs, sidebars, or static branding. Full motion and brand-surface constraints are registered in §14.4 and §15.7.
+
+### Filter reminder inside display settings (2026-10-28)
+
+When the sidebar display-settings trigger shows the archived-view reminder, repeat
+the same static accent dot on the Task status submenu and its selected Archived
+option. Desktop and Mobile retain neutral labels and selection checkmarks. Active
+and All remove the whole reminder path. Native iOS menus retain their system UIMenu
+and toolbar presenters and use the image slot for the dot. MenuView receives an
+absolute path to a temporary 1x copy of the bundled PNG: a 20pt canvas containing
+the same 6pt dot. Ordinary row icons and selection checkmarks remain available.
+Custom menus remain fallback paths and use the shared inline dot. This extends
+the existing filter reminder registration without changing which settings light
+the entry indicator.
 
 ## 3. Typography Rules
 
@@ -150,7 +361,7 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 - **Single sans family**: Inter carries both display headlines and body text — no typeface switching between hierarchy levels. Size and weight alone create hierarchy, keeping the typographic system maximally simple.
 - **Weight restraint**: Everyday chrome defaults to 400 (regular) and 500 (medium); 600 is a rationed emphasis tier, and 700 lives exclusively inside registered exemption domains. No light, no black weight, no in-between values. The full ladder and its rules are in 「字重阶梯」 below (2026-08 revision, issue #1505 — this supersedes the former "400/500 only" wording).
 - **Tight display, comfortable body**: Headlines compress to 1.0 line-height, while body text relaxes to 1.43–1.56. The contrast creates clear hierarchy without needing weight contrast.
-- **Monospace for code only**: JetBrains Mono is reserved for inline code, terminal commands, and code blocks — never used for UI chrome.
+- **Monospace for code only**: the code font (system monospace stack by default; JetBrains Mono is an optional preset, see Font Family above) is reserved for inline code, terminal commands, and code blocks — never used for UI chrome.
 
 ### 字重阶梯(2026-08 修订,issue #1505)
 
@@ -164,6 +375,7 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 | 700 | Bold     | **仅限下方豁免登记表中的域**,禁止出现在普通 UI chrome                       |
 
 - 与手机端 `apps/mobile/src/theme/tokens.ts` 的 `fontWeight` token(regular / medium / semibold / bold)一一对应 —— 两端一张梯子。
+- **手机端按角色选字重**(2026-09-26 用户定稿):标题 600、列表行 / 按钮 500、正文与说明 400、分组小标签 600;浅色字不配粗字重。角色表正本见 `apps/mobile/docs/mobile-design-guide.md` §3。
 - **两端 700 口径**:手机端 UI chrome 的上限仍是 600（正本为 `apps/mobile/docs/mobile-design-guide.md`,该文已同步登记本例外）。`bold` / 700 在手机端**只允许**出现在下表登记的域——原生 Markdown strong 与登录品牌画布。也就是说「四档梯子」是两端共用的**档位定义**,不等于两端 chrome 都可用 700。
 - **CJK 注记**:桌面未设 `font-synthesis: none`,中文回退字体(PingFang)公开档位到 600 —— UI 里用 700 会在中文上触发伪粗体(算法加粗、边缘发糊),且 600 与 700 在 CJK 上的渲染差异不可靠。**中文层级不得依赖 600 vs 700 区分**,强调靠字号或颜色。
 
@@ -183,6 +395,7 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 
 | 域                                    | 范围                                                                                                                                                                                                                                                                                                                                                                 | 允许                  | 理由                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 录屏倒计时 | `features/region-screenshot/LiveCapturePanel.tsx` 的倒计时数字 | 64px / 600 | 2026-10-27 用户要求显著放大录制倒计时；仅选区中央 160px 圆形提示使用此字号，控制条与其它文案仍遵守字号 token 阶梯。 |
 | 登录 / Splash 品牌画布                | 桌面 `LoginControls.tsx`、`loginDesignTokens.ts`(Splash 借用同族面板)、`LegacyMigrationDialog.tsx`(仅字重)、`oauthResultPage.ts`(自包含品牌页生成器,raw CSS 为其常量载体)；手机 `apps/mobile/app/(auth)/login.tsx`(登录页本体)、`apps/mobile/src/components/LoginSkinControls.tsx` 与 `apps/mobile/src/auth/loginSkinLayout.ts`                                      | 700 + 设计 px 字号    | §16 已登记 Bold,两端共用同源登录画布与 figma 坐标系；桌面守卫只扫描 `apps/desktop/src/renderer`，手机端由自身守卫体系负责，本登记不扩展 PR #1553 的扫描范围                                                                                                                                                                                                                                                                         |
 | markdown 内容                         | **仅 Markdown 渲染路径**：桌面 Markdown 渲染器输出的 DOM `<strong>`（`MarkdownRenderer` 及其消费方；必须解析为绝对 700；嵌套 strong 仍封顶 700）、CodeMirror strong 语法节点（`codemirrorGithubTheme.ts` 的 `t.strong` → `fontWeight: 'bold'`）、移动端原生 Markdown strong（`apps/mobile/src/session/MessageRenderer.tsx` 的 `markdownStrong` → `fontWeight.bold`） | 700 / `bold`          | 用户内容语义,非 UI chrome;编辑器内 strong 与两端渲染后的 strong 同权。DS-11 已在 `MarkdownRenderer` 的内容 strong 显式使用绝对 700，嵌套层同样封顶；不依赖 preflight 的相对 `bolder`。**本行不覆盖普通 UI chrome 里直接写的 `<strong>`**（如 `MakerExperimentalView.tsx` 会话状态与事件列表）——它们同样被 preflight 的相对 `bolder` 渲染成 700,但不属豁免域,是已登记缺口,待归一为 `font-medium` / `font-semibold`。 |
 | hljs 主题移植                         | `globals.css` 内 hljs 规则                                                                                                                                                                                                                                                                                                                                           | `bold`                | 第三方主题移植,保真优先                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -206,6 +419,12 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 
 ## 4. Component Stylings
 
+**Desktop scrolling screenshot flow (owner correction, 2026-10-26).** Scrolling capture stays in the original screenshot overlay: the selected area passes input to the source app, while the available space beside it contains a width-scaled, scrollable preview and edit/save/cancel/finish icons. During capture, the area outside the selection keeps the same dimming mask as region selection; the selected area remains clear and preview/actions appear above the mask (owner correction, 2026-10-28). Do not add a separate capture toolbar or result page. Finish copies and closes; Edit returns the stitched image to the existing annotation toolbar. Preview scaling must not reduce export resolution. All control chrome follows the same Light/Dark tokens as the ordinary toolbar. The draggable screen-top mode bar contains Screenshot, Scrolling screenshot, Region recording, GIF and Cindy, and appears only on the currently operated display. Switching modes does not start capture; after selection an explicit start action begins scrolling/recording. The bottom toolbar contains only annotation and export tools. Manual scrolling supports both directions without duplicating previously captured content; automatic scrolling can be stopped. Automatic scrolling must not move, lock, or repeatedly restore the system pointer; users can move freely and click Stop. Acceptance must include real pointer movement and button clicks, not only DOM automation (owner correction, 2026-10-28). The bottom automatic-scroll control has a single standard button face; its positioning wrapper has no background or border (owner correction, 2026-10-28). Static or briefly unmatched frames do not immediately show a failure notice; persistent failure preserves the captured content and stops automatic scrolling.
+
+**Screenshot chrome safe area (owner request, 2026-10-27).** The selection may cover the whole display, but every piece of screenshot chrome (mode bar, hint, size label, magnifier, annotation toolbar and style bar, scrolling preview and its actions, recording controls) stays inside the display's chrome area: the system work area (no menu bar, Dock or taskbar), with the macOS camera housing (notch) also excluded when the menu bar is hidden. Live controls fall back to the rest of the display only when the selection leaves no room inside it. On macOS, a two-finger trackpad swipe never zooms a pinned image (pinch zooms it continuously around the pointer); pinch in the editor zooms around the pointer; one swipe, including its momentum, changes the snap level by one step.
+
+**Recording toolbar movement (owner request, 2026-10-27).** The grip, format, timer and their shared empty space form one drag target. Recording actions remain separate click targets. Releasing or cancelling a drag leaves the toolbar at its final accepted position, outside the capture region and within the same display's chrome area; delayed host replies must not move it back. Starting recording keeps the existing macOS panel's geometry and stacking unchanged.
+
 > Buttons / Cards / Inputs below use the structured key-value format (adopted from the §12 pilot, 2026-07): `field → token → Default Light / Default Dark resolved values`. Token names per §10.
 
 ### Buttons
@@ -217,7 +436,7 @@ button/primary  (Gray Pill)
   border    1px solid --surface-chip   (same as fill)
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
-  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1, 2026-09-03)
+  height    28px (sm) / 32px (md) / 36px (lg); compact exceptions 24px (xs) / 22px (xxs), see the inventory migration below — no 40px size (DS-4 G1, 2026-09-03)
   type      text-13 / font-medium 500 (DS-4 G4, 2026-09-03)
   hover     --button-primary-hover     rest fill mixed 8% toward --text-primary   (swap-color, never opacity; DS-4 G2)
   pressed   --button-primary-pressed   hover mixed a further 10% toward --text-primary   (DS-4 G3)
@@ -231,7 +450,7 @@ button/secondary  (White Pill)
   border    --border-default      #d7d7d4 / #3c3c3a
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
-  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1)
+  height    28px (sm) / 32px (md) / 36px (lg); compact xs 24px / xxs 22px — no 40px size (DS-4 G1)
   type      text-13 / font-medium 500 (DS-4 G4)
   hover     --button-secondary-hover    rest fill mixed 8% toward --text-primary
   pressed   --button-secondary-pressed  hover mixed a further 10% toward --text-primary
@@ -244,7 +463,7 @@ button/cta  (Black Pill — maximum emphasis)
   text      --accent-pure-cta-fg  #ffffff / #000000
   radius    9999px (pill)
   padding   horizontal 24px; vertical content centered within the fixed height
-  height    32px (md) / 36px (lg) — no 40px size (DS-4 G1)
+  height    28px (sm) / 32px (md) / 36px (lg); compact xs 24px / xxs 22px — no 40px size (DS-4 G1)
   type      text-13 / font-medium 500 (DS-4 G4)
   hover     --button-cta-hover    = --accent-hover  #262626 / #e5e5e5   (swap-color; was opacity-90 on the private prototype, DS-4 G2, intentional)
   pressed   --button-cta-pressed  cta hover mixed a further 10% toward --accent-pure-cta-fg
@@ -253,7 +472,19 @@ button/cta  (Black Pill — maximum emphasis)
   impl      components/ui/button.tsx variant="cta"
 ```
 
+**Compact settings actions (owner feedback, 2026-09-21).** Button adds an explicit 28px sm size alongside 32px md and 36px lg. Logs and compact automation actions use this shared size with their existing horizontal spacing. Contacts section actions retain their approved 24px target; appearance actions retain 36px or 32px targets. A 13px identity-removal icon keeps its visible size inside a 24px target. Destructive contacts actions retain semantic red hover/pressed feedback. The authorization-waiting Cancel action remains named and enabled; it is not a disabled loading button. The contacts discard/add-identity treatments are retained per this batch’s explicit keep-before decisions.
+
+**Button inventory migration (owner-authorized 2026-09-22).** Functional text actions in Design Lab's pending-migration Button inventory call the shared Button, directly or through thin wrappers. Standard heights remain 28/32/36px; `xs` (24px) and `xxs` (22px) are compact exceptions. `compact` supplies shared 12px horizontal padding for dense rows and narrow toolbars. `tone` owns quiet and destructive treatments; `palette="confirmation"` preserves existing confirmation theme overrides without copying paint rules into dialogs. The portrait-confirmation row keeps its image-led height; long confirmation labels may wrap and grow. Loading retains an accessible action name and shows only the spinner. A busy action whose purpose is to open progress may explicitly use `allowWhileLoading`; ordinary loading actions remain disabled. Underlined links, pure icon actions and the AI composer/send topic remain separate. Runtime and visual verification are recorded in the migration evidence; this does not claim every native button in the client is a Button.
+
+**Button state audit follow-up (2026-09-22).** Inventory status alone does not prove that an action calls the shared implementation: follow local wrappers to their rendered control. Storage CardButton and the repaired pill wrappers now delegate to Button. Functional action-menu triggers (add plugin, manage subscription, manage skill, manage models) inherit normal press feedback; opening a menu is not itself a reason to disable feedback. Form Select triggers and the excluded input controls retain their separate contract. Audit both computed hover/pressed colors and the 1px face inset; a matching resting screenshot or a color-only assertion cannot prove the press motion. See [state audit evidence](../design-evidence/2026-09-22/button-state-audit.md).
+
+**Source-wide Button audit (2026-09-22).** Scan native actions and local wrappers even when absent from the Lab migration list. Text branches of responsive action wrappers use Button; icon-only branches remain in the icon-action topic. The danger-surface tone retains an opaque theme surface for inline archive confirmations that cover existing text. The permission palette retains the existing permit-action colors and derives hover/pressed from that pair; confirmation handlers and keyboard guards do not change. See [the source-wide audit](../design-evidence/2026-09-22/button-full-source-audit.md).
+
 **Why hover / pressed are derived, not aliased** (DS-4; ratios ruled by the designer 2026-09-04): in Dark, `--surface-hover` and `--surface-chip` resolve to the same value in default-dark / cindy-dark / one-dark-pro / monokai-pro, so aliasing primary's hover to `--surface-hover` made the hover state invisible; `--surface-hover-soft` sat within 2/255 of `--surface-elevated` in cindy-dark, breaking secondary the same way. Each state is therefore mixed off **its own variant's rest fill toward its own foreground** — 8% for hover, a further 10% for pressed. The ladder follows any theme override automatically and introduces no theme-blind literals. Guard: `themes/__tests__/buttonStateContrast.test.ts` asserts every builtin theme keeps each step at ΔRGB ≥ 8. These are runtime-derived values, registered but not modeled in the DTCG shadow layer (governance §3.4).
+
+**Desktop Button feedback (HTML v3 approved 2026-09-19).** Shared action Buttons use 28/32/36px heights (28px added by owner feedback on 2026-09-21), pill radius, 13px/500 text and existing semantic colors. Icon/text gap defaults to 6px. On press, only the non-interactive fill/border layer retracts by 1px per edge over `--motion-instant` (80ms), using `--motion-ease-out`; the text, icon, layout and hit region stay fixed. State colors transition over `--motion-fast` (150ms). Loading shows only the centered spinner, retaining the accessible name and label width; disabled/loading controls do not receive press feedback. Reduced motion removes inset movement, transitions and spinner rotation.
+
+The same paint layer is shared with ChromeIconButton (28px) and SidebarIconButton (36px; retired 34px grid style removed). Button's `--button-face-bg` / `--button-face-border` are component-local aliases of existing theme tokens, not additional theme IDs. Domain overrides set these aliases, including hover/active states, instead of painting the stationary hitbox. Select triggers and excluded composer/permission controls opt out via `pressFeedback={false}`. AI input/send/stop, login, legacy ConfirmDialog and other independent native buttons are outside this migration; HTML approval is not a claim that every button-tag consumer has migrated or passed client acceptance.
 
 ### Cards & Containers
 
@@ -266,6 +497,10 @@ card/container
   shadow    none
   hover     --surface-hover       #e5e5e5 / #3c3c3a
 ```
+
+### Desktop settings rows
+
+Desktop Settings sections put the 16px/500 section title outside the card. A card groups related settings as rows: label (13px/500) and hint (12px) on the left, the control on the right, `px-4 py-4` per row, and an inset divider between visible rows only. Related switches share one card instead of one card each; a row that opens a sub-page uses the same row with a trailing chevron. Use the shared classes in [settingsRowClasses.ts](../../apps/desktop/src/renderer/components/settings/settingsRowClasses.ts). Settings → General follows this throughout (owner request, 2026-10-17); other Settings pages still contain 20px single-row cards and are not declared migrated.
 
 ### Provider detail header
 
@@ -280,6 +515,15 @@ row with the existing layer separation, not a nested card. Provider-specific aut
 recovery content may fill the explanation slot without replacing the header layout.
 Identity, state, action semantics and pending implementation are defined in
 [供应商设置](../product-rules/provider-settings.md). This contract does not declare existing headers migrated.
+
+### Teammate model settings
+
+The existing model page groups the primary model and task model by purpose. Both use the shared
+model picker, retaining provider account, Harness, thinking level and Fast. The primary backup chain
+stays folded; the task model is a single route. Task settings start in “Inherit Primary Model” and
+provide a compact restore action after an explicit selection. Desktop separates the two groups with
+the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
+Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
 
 ### Inputs & Forms
 
@@ -301,6 +545,7 @@ input/text
 
 - **Multi-line inputs (textarea) take the 8px inner-control radius — never the pill** (tall frames deform it), whether nested in a container or standing alone in a form (§5 radius scale; single rule, no nesting condition). Implementation: `components/ui/input.tsx` `Textarea`.
 - **Existing settings inputs retain their local theme contract** through `SettingsTextInput`, a thin wrapper over `ui/input`. It supplies the historical `settings-input-text`, `settings-input-border`, `settings-input-border-focus`, and `settings-input-placeholder` aliases via `inputClassName`. Their defaults still resolve to Tier-1; explicit local overrides stay local. Generic `Input` keeps the Tier-1 defaults above. Standard error-state border/ring takes precedence over wrapper styles. Do not promote these legacy overrides into global semantic slots or rewrite user theme files. Existing placeholder load-time normalization remains unchanged.
+- **Composer-surface inputs keep the composer's local focus-border alias** — the composer input and the composer suggestion panel's own search field (the 「+」面板 in `AtMentionPanel`) take `focus:border-[var(--chat-input-border-focus)]`, a neutral 30% token, not the generic `--focus-ring-soft` ring (owner decision 2026-10-29: the blue frame read as off-style). The panel floats directly over the composer input, so it is focused by ordinary mouse flow, and §2 keeps Focus Blue out of the normal interaction flow; a text input matches `:focus-visible` whenever it is focused, so the blue ring cannot be reserved for keyboard-only use there. The generic `Input` and the settings family keep the Tier-1 focus ring above.
 - Placeholders must **read as clearly empty** — Silver (`#a3a3a3`) is too prominent against either Card surface (≈5:1 Dark / ≈2.6:1 Light) and reads as real input; forbidden. **Every input surface's placeholder (chat / ask / settings / plan-action-fb) resolves to `--text-placeholder`** (2026-06 G3, archived in `design-decision-log.md`); non-default themes express their own placeholder color by overriding `text-placeholder`.
 
 **DS-6 form usage (approved 2026-09-08)**: use `FormField` for a real field's label, hint and inline validation error; pass its render-function props to `Input` / `SettingsTextInput`. `required` supplies assistive semantics only, never adds browser validation or changes the business rules. Reserve feedback space on fields that can fail and focus/scroll to the first invalid field; dynamic rows keep stable IDs when siblings are added or removed. Service failures remain Toasts. No new Textarea consumer is required.
@@ -314,16 +559,21 @@ Ordinary confirmations opt into standard buttons with `presentation="standard"` 
 - Preserve the accepted hierarchy: ordinary ConfirmDialog title 18/500; provider/MCP form title 18/600; compact prompt title 15/600 where already specified. Different roles are not interchangeable merely because their font size matches.
 - Pair Button md (32px) with Input sm (32px), Button lg (36px) with Input md (36px). Input lg remains 40px for spacious fields; Button has no 40px size. Size names are local component APIs, not a shared ordinal scale.
 - Font aliases may share default numbers while retaining separate line-height/role contracts. Preserve public aliases; do not globally round historical unitless line heights or optical spacing. On affected surfaces, UI text consumes `--text-*`, and line boxes must grow with font settings.
-- FormField reading hints use `--form-field-hint` (defaults to `--text-secondary-mid`; One Dark Pro / Solarized Light override this help role only): this keeps Cindy Light/Dark's existing hint colors while providing stronger reading contrast in other built-in themes. Preserve `text-tertiary` metadata and `text-placeholder` roles.
+- FormField reading hints use `--form-field-hint` (defaults to `--text-secondary-mid`; One Dark Pro / Solarized Light override this help role only): in Cindy Light/Dark this is the description ink tier (70% / 66%, §15.16), and other built-in themes get stronger reading contrast. Preserve `text-tertiary` metadata and `text-placeholder` roles.
 - MarketCard's title is a registered frameless text action inside the existing card content, with an independent inset focus indicator. The title button supplies keyboard detail access without nesting the card's Clone/manage controls inside a button. Mouse card selection remains available.
 
 ### Select & Dropdown
 
 - **Trigger**: same as a single-line input — pill (9999px), Card bg, 1px Board border, carrying the current value + a chevron.
-- **Panel**: a container — 12px radius, Card bg (`--surface-elevated`), 1px Board border, no shadow (separation comes from the overlay / layer colors), 6–8px padding.
-- **Panel width must bind to the trigger width** — never narrower or wider than the control that opened it. Radix Select: `position="popper"` + `width: var(--radix-select-trigger-width)`; other primitives measure the trigger. (A repeatedly-tripped rule: dropdown width must match the control above.)
-- **Option rows**: selected / hovered highlight fills use the **8px inner radius** (see §5 — the panel is a 12px container, the row highlight is the inner 8px tier; the inner radius must be smaller than the container's to nest cleanly). Highlight bg via `--surface-hover` / Radix `data-[highlighted]`; selected rows get the chip fill, unselected rows stay transparent.
-- **Composer dropdown rows (the model / permission / + MorphPopover menus) — one unified contract** (2026-07-22): every option row in these three menus must match **verbatim** — horizontal padding `px-3`, radius `rounded-[8px]`, and both hover and selected fills on the **same token `--model-item-hover`**; the selected state is additionally marked only by a check + `font-medium` (danger-tier orange / blue tints **text only**, never the fill). **Why not `--surface-chip` for the selected fill**: the cindy default skins tune `--surface-hover` / `--surface-chip` to sit-on-page values that are darker than the lifted panel (`--surface-elevated`), which would make row highlights invisible; so menu-row hover resolves to the component-level token `--model-item-hover`, overridden in cindy-dark / cindy-light to "one step above the panel" (dark lifts lighter, light presses darker). When touching any of these three menus' row styles, change all three in sync — never just one.
+- **Panel**: a container — 12px radius, 1px Board border, 6–8px padding. Select listbox panels use the Card bg (`--surface-elevated`) and the soft, downward `--shadow-menu` elevation in both modes, like the menu panels below (owner decision, 2026-10-18; supersedes their former no-shadow rule and does not authorize shadows on in-page controls). Existing local panel-color aliases remain compatible.
+- **Menu and popover panels** (shared defaults in `components/ui/dropdown-menu.tsx` / `popover.tsx`): 12px radius and the registered floating-layer shadow `--shadow-menu` (a §6 token-gated exception) written as `shadow-[shadow:var(--shadow-menu)]` — the untyped `shadow-[var(--shadow-menu)]` is a Tailwind shadow *colour* and renders no shadow. `DropdownMenuContent` / `DropdownMenuSubContent` use `p-1`, `bg-[var(--cmd-palette-bg)]`, `border-[var(--cmd-palette-border)]` and `text-[var(--cmd-palette-item-text)]`; under Cindy themes that surface is glass (`--surface-translucent-overlay` + `blur(6px)`, globals.css), and on Windows (`html[data-platform='win32']`) every `--cmd-palette-bg` surface is opaque with no `backdrop-filter` (§15.12). `PopoverContent` stays opaque `bg-popover`. `DropdownMenuSeparator` uses `--cmd-palette-border`. Row highlights use the 8px inner tier.
+- **Menu text** (`components/ui/dropdown-menu.tsx`): option rows (Item / CheckboxItem / RadioItem / SubTrigger) are `text-14` / `leading-[1.43]` (32px row with `py-1.5`) on `--cmd-palette-item-text`; shortcuts `text-12` / `leading-[1.33]` / 400 on `--cmd-palette-item-meta`; group labels `text-12` / 500 on `--cmd-palette-item-meta`; destructive rows `variant="danger"` on `--error-fg`; disabled rows 50% opacity. The text colour is the same at rest and on hover. The highlighted (`data-menu-active` / `data-[highlighted]`), checked or open row is 500 (§3 ladder) and its default-stroke Lucide icons go 1.5 → 2, on `--motion-instant` / `--motion-ease-out` (instant under reduced motion). Width never moves: row text and `truncate` spans reserve the 500 width with an invisible zero-height `::after` copy (`content: attr(data-menu-label) / ""`, so `textContent`, typeahead and the accessible name are unchanged), and the shared panels lock their laid-out width (`lockMenuWidth`, re-measured on content, window, image or font changes). A caller's own text colour, weight or inline width wins.
+- **Menu hover highlight** (`components/ui/dropdown-menu-highlight.ts`): one `--sidebar-item-hover` surface (8px) per `DropdownMenuContent` / `DropdownMenuSubContent` glides between rows with `transform`; the row nearest the pointer anywhere in the panel wins, and separators do not interrupt the glide. Entering fades in from the checked row (or the target), leaving fades out; keyboard follows Radix's highlighted item, and an open SubTrigger stays highlighted while its submenu is in use. Motion: `transform` / `opacity` on `--motion-instant` / `--motion-ease-out` (fade-out `--motion-ease-in`), size snaps, no slide under reduced motion. Danger rows use the same grey layer. Rows whose caller sets its own `focus:` / `hover:` / `data-[highlighted]:` / `data-[state=open]:` background keep it and get no layer; `hoverHighlight={false}` restores per-row fills. Sidebar menus (`features/cc-agent/sidebar/menuStyles.ts`: `MENU_ITEM_CLASS` / `MENU_ROW_CLASS` = `h-8 gap-2`, triggers `cursor-pointer`) use the same highlight.
+- **Panel width must bind to the trigger width** — never narrower or wider than the control that opened it, except for the explicitly scoped device-navigation treatment below. Radix Select: `position="popper"` + `width: var(--radix-select-trigger-width)`; other primitives measure the trigger. Ordinary form fields retain this equal-width invariant.
+- **Compact Cindy device navigation (sidebar only)**: the trigger fits the device label, unread indicator and chevron, retaining its 24px height. The sidebar's remaining row area opens chat. The teammate chat header no longer carries this picker (2026-10-21): computers are listed in the 近况 popover instead. Long labels truncate and retain their full title. Its listbox is independently 256px wide, capped by the available viewport width, so device names, offline state and unread indicators remain usable even when the trigger says only “本机”. This exception belongs to `CindyDevicePicker`, not the shared Select default or other dropdowns. Keep the existing Radix keyboard/focus behavior and theme tokens. Hit-target and layout regression: `pnpm ui:check --page device-picker --case all --theme all --locale all`.
+- **Select listbox option rows** (Select only; dropdown menu rows follow the Menu entries above): rows use the **8px inner radius** (§5 — inner tier inside the 12px panel) and join the **shared menu hover highlight** above — one `--sidebar-item-hover` layer per listbox viewport, same glide, fade and reduced-motion behaviour as the dropdown menu (2026-10-18, supersedes the per-row `--surface-hover` / chip fills). The saved value is marked by its checkmark (and the caller's checked text style), not by a fill; Radix's highlighted option drives the layer for keyboard browsing, including the saved option it focuses on open. Rows whose caller sets its own `data-[highlighted]:` / `hover:` / `focus:` background keep it and get no layer. Group labels, wrapped descriptions, disabled options and scroll controls retain their semantics.
+- **Shared Select implementation (2026-10-18)**: use `components/ui/select.tsx` for single-value fields; rich/grouped consumers use its `SelectParts` compound API (`components/ui/select-parts.tsx`) instead of importing `@radix-ui/react-select` directly. Both share the trigger, panel, highlight and motion. Trigger rings use `focus-visible`, including after menu dismissal: mouse-only open/close leaves no ring, keyboard navigation keeps a visible focus cue. Radix still owns focus return, keyboard/typeahead, cancellation and value callbacks. Panel entry/exit reuses §14.4's `float-in` / `float-out` with the transform origin following the actual top/bottom collision placement; reduced motion removes the animation.
+- **Composer dropdown rows — one contract with the shared menu** (2026-10-04, supersedes 2026-07-22): the composer menus keep their own shells — MorphPopover (model / permission / + / agent; §14.4 container transform unchanged), the / and @ lists, the bot-chat @ list and the settings search results — but use the shared menu row parts from `components/ui/menu-row.tsx`: `COMPOSER_MENU_ROW` (8px radius, menu text / weight / motion), `menuRowAttrs`, `withMenuLabels`, and one glide highlight per panel (`useMenuPanel` + `MenuHighlightLayer`, the same `--sidebar-item-hover` layer as the shared menu). Rows inside a glide panel set no `hover:` / `focus:` fill of their own (rows that sit outside any glide panel — the model config card's engine rows, the legacy follow-session and "manage providers" rows — keep a `hover:bg-sidebar-item-hover` fill in the same grey). The selected row is marked by a check + 500 and never by a fill — permission, + and agent menus. **The model menu is the one exception** (owner ruling 2026-10-04, keeping the 2026-08-13 ruling): its chosen row keeps a whole-row `--sidebar-item-hover` fill with no check (`data-[menu-active]:bg-transparent`, so the fill steps aside while the glide layer covers that row instead of stacking two translucent layers), the model name stays 500, and the effort / follow-session rows keep their fill and existing check; it still takes the shared glide highlight and the glass panel. Danger-tier orange / blue tints the **text only**. Lists that keep focus in a text input (/, @, bot @, settings search) stay focus-in-input: the highlight follows their own current index (`data-menu-current` or `aria-selected`) through `attachMenuHighlight`'s `current` option, never Radix focus. Panels: MorphPopover ends on `--menu-panel-surface` (the shared menu's glass under Cindy themes, opaque on Windows) with `--cmd-palette-border` and `--shadow-menu`; the / and @ lists and the model config flyout use the same 12px panel and `--shadow-menu` (the softer `--cmd-palette-shadow` stays for the command palette and the / tooltip). Group labels use the shared label (12 / 500 / `--cmd-palette-item-meta`). When touching any composer menu's row styles, change them through `menu-row.tsx` — never one menu alone.
 
 FormField → Select forwards descriptions, required/error semantics, and the semantic error border; native browser required validation remains opt-in by the business form.
 
@@ -331,35 +581,39 @@ FormField → Select forwards descriptions, required/error semantics, and the se
 
 DS-11: short notifications keep their pill frame. When the rendered message or action wraps, the outer frame is a 12px content container (`rounded-xl`, §5), using the same background, border, status icon colors and padding. The whole notification fits within the viewport with 16px gutters; long URLs wrap, source identity stays visible, and action text remains complete. Hover and keyboard focus independently pause auto-dismiss until both have left. This classification follows the user’s 2026-09-15 instruction to prioritize the actual Cindy UI; final visual acceptance is recorded separately.
 
+### Error notices
+
+错误提示统一使用中性浮层底色、默认细边框、12px 圆角和小尺寸红色状态图标；正文使用正常文字颜色，不铺大面积红底。先说明发生了什么，再给出恢复操作，技术错误详情默认折叠。桌面复用 `ErrorNotice`，移动端复用同名组件并保持至少 44pt 的操作热区。表单校验、危险操作与状态徽章保留各自语义色。
+
+独立的加载、保存、执行失败，以及需要用户处理的错误横幅使用卡片；字段校验、列表项状态、消息发送状态、已经有完整容器的内嵌工具结果、短暂 Toast 与系统原生警告保留原有形态，避免卡片套卡片。手机采用紧凑布局：标题下集中放说明，右上角关闭代替重复的「忽略」按钮；重试、Fork 与详情入口共用可换行的操作区。按钮面板操作文字为 15/20、500、`textPrimary`，视觉底板最小 36pt，但点击热区保持至少 44pt。卡片内边距与说明到操作区的间距为 16pt，标题与说明间距为 8pt；按钮内水平留白 12pt、图标到文字 8pt，操作间距 12pt。空间不足时自然换行，不压缩留白来强塞一行。说明与详情入口为 13/18 常规字重、`textSecondary`，红色只用于 `statusError` 图标。iOS 原生表单使用 `NativeErrorNotice`，由现有 Section 提供卡片底色与圆角，不再嵌套第二层边框，保留 SwiftUI 文字换行。错误卡片不自行增加重试、自动恢复或 Fork 的适用范围。
+
+历史恢复操作命名为「在新任务中继续」，说明会保留对话记录与原任务，以及需要重新发送刚才的消息。图标必须与消息 Fork「开启一个新任务」入口一致，使用 `Split`；不使用侧栏新建任务的 `SquarePen`。
+
 ### Dialog & Modal
 
 Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialog.tsx` (the shared confirm dialog); new dialogs reuse its structure — do not invent a parallel one.
 
 **Cindy Make preflight exception (owner decision, 2026-09-20):** this progress dialog uses a top-right × instead of a footer Cancel. The header stays visible while the report scrolls. The ×, Esc and scrim all open the same confirmation, with live copy distinguishing environment preparation, source preparation, upstream search and finished checks. Explain that stopping shared preparation also stops its Settings projection and that prepared resources are kept. Creating the build session temporarily disables dismissal. This exception supersedes the general closing-affordance rule below only for `CindyMakePreflightDialog`; the request form keeps its existing footer.
 
-- **Overlay**: the full-screen scrim uses the `--overlay-modal` token (ConfirmDialog's current `neutral-900/40` hardcoded pair is legacy — **new dialogs always use the token**; do not copy the legacy pair).
+- **Overlay** (blur added 2026-10-04): every modal scrim — Radix `Dialog.Overlay` / `AlertDialog.Overlay`, hand-built scrims and the Radix side drawers — uses the shared `.modal-scrim` class (`styles/globals.css`): `--overlay-modal` (Light `rgba(0,0,0,0.5)` / Dark `rgba(0,0,0,0.7)`) plus a 4px `backdrop-filter` blur of whatever is behind; on Windows (`html[data-platform='win32']`) there is no blur, the same reason as the opaque Windows menus (§15.12). Never write a scrim colour, `bg-black/…`, `backdrop-blur-*` or an inline background at the call site; to change depth or blur, change the token or the class, never one component. Not dialogs and therefore not covered: the lighter whole-window closing dim in `WindowControls.tsx`, the tap-to-close drawer scrims in `DiffPanelShell.tsx`, lightboxes (`--overlay-lightbox`), the login brand canvas (§16) and the transparent click blocker behind anchored plugin-card prompts.
 - **Tooltips opened inside the modal** (2026-09-08, DS-6 review fix): the shared `Tip` portals its content to `document.body` on the default `z-[60]` layer — **below** the `z-[10000]` modal overlay, so an unraised tooltip is covered by its own dialog. Any `Tip` whose trigger lives inside a modal must raise its content above the host dialog: pass `contentClassName="z-[10001]"` to `Tip`, and `secretTipContentClassName="z-[10001]"` on `Input` for the password reveal button (both DS-6 forms do). This mirrors the existing `z-[10001]` popover/dropdown convention inside `z-[10000]` dialogs.
-- **Container**: a container — 12px radius (`rounded-xl`), `--confirm-bg`, `--confirm-shadow`, 16px padding (`p-4`), centered. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
+- **Container**: every centered modal panel uses the shared `.modal-panel` class — 12px radius, `--confirm-bg` Card fill, 1px Board (`--border-default`) outline and the registered floating-layer shadow `--shadow-menu` — the same shadow as menu panels (2026-10-04 unification; user ruling the same day). Bot dialogs share this panel; the Bot zero-shadow rule covers in-page Bot surfaces, not modal panels. Call sites never add their own radius, background, border colour or shadow, nor glass `--cmd-palette-bg`; they set only width, position, padding (16px `p-4` by default) and layout. Radix side drawers keep their own edge-anchored panel and share only the scrim. Guard: `__tests__/modalSurfaceContract.test.ts`. Width: confirm/notice dialogs ≈ 400px (`max-w-[400px]`); dialogs with inputs/forms may widen to ≈ 460px and shrink with the viewport (`min(460px, 100vw-32px)`). The DS-6 multi-runtime provider and MCP forms use 600px with the same 16px viewport gutters and a scrollable body capped within 88vh.
 - **Title / description**: `--confirm-title` / `--confirm-desc`, medium weight.
 - **Buttons**: pill (9999px); primary = inverse neutral (`--confirm-btn-primary-*`, not an automatic CTA assignment), secondary/cancel = outlined (`--confirm-btn-secondary-*`, transparent fill + Board border); footer `justify-end`.
 - **Focus on open**: dismissible forms focus their primary input. Ordinary AlertDialog confirmation retains Cancel by default; explicit `autoFocusConfirm` focuses the primary action, while a required typed confirmation takes precedence. Preserve primary → optional third → Cancel DOM order (DS-6 decision).
-- **Closing affordance** (made explicit 2026-07-30, scope clarified 2026-07-31): **dismissible** dialogs (wizards, catalogs, forms — anything a user may abandon freely) close via the footer Cancel button, Esc, and a scrim click, and carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation, not a convenience. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) intentionally do **not** close on scrim click (a deliberate mis-tap guard) — that behavior stays. The provider form has no ×. Its existing image-generation interruption confirmation is a separate business layer and retains its current dismissal contract.
+- **Closing affordance** (made explicit 2026-07-30, updated 2026-09-24, widened 2026-10-01): **no modal dialog closes by clicking the scrim** — forms, wizards, catalogs, confirmations, progress/copy dialogs and informational notices alike, on desktop and mobile. They close only through their own controls (Cancel / primary action / ×) or Esc (Android: Back). A mis-tap outside must not discard an in-progress form or interrupt a flow. Radix `Dialog.Content` therefore always sets `onPointerDownOutside={(event) => event.preventDefault()}`; hand-built scrims only block the click (and keep focus inside so Esc still works). Not covered: media viewers (lightboxes), anchored menus and plain popovers, side drawers and mobile bottom sheets, which keep tap-outside dismissal — except an anchored input popover holding text the user is typing (e.g. the plugin card prompt popover), which follows this rule and closes only via Cancel / Send / Esc. Dialogs with a Cancel action carry **no top-right × close icon** — a × coexisting with Cancel is a spec violation. Confirm-tier dialogs built on AlertDialog (ConfirmDialog) also do **not** close on scrim click. The provider form has no ×; its image-generation interruption confirmation remains a separate business layer. Implementation and regressions: [AddProviderWizard](../../apps/desktop/src/renderer/components/settings/AddProviderWizard.tsx), [provider dialog tests](../../apps/desktop/src/renderer/components/settings/__tests__/CustomProviderDialogAccessibility.test.tsx).
 - **Multi-step dialogs / wizards** (registered 2026-07-30, first consumer: Add-Provider wizard): the step indicator lives in the header row (round numbered chips — current step solid `--accent-cta-bg` with `--surface-on-card` text, completed steps ✓ on `--surface-chip`, upcoming outlined `--border-default`). Footer: **back navigation ("← 上一步") is a left-aligned bare text button** (`--text-secondary`, 13px/500, no background — the §5 bare-text-button exemption, no radius) — navigation is not a commit action and must not sit inside the right-aligned pill group; commit actions (取消 / 下一步 / 完成) remain right-aligned pills per the button rule above. Catalog/list steps put the scrollable region between **two full-width 1px `--border-default` hairlines**, with permanent entries (e.g. 自定义端点) pinned below the scroll region, always visible. Width matches the custom-provider form dialog (600px, `min(600px, 100vw-32px)`) so the two provider dialogs read as one family; height is capped at `min(640px, 85vh)` — on large displays a catalog dialog must not stretch toward full-screen height (2026-07-30 ruling).
 
 ### Tabs
 
-**Tab Pills**
+Pill-shaped tab selectors (e.g. the Claude | Codex agent switch on the new-session screen) are segmented controls: use the shared `SegmentedControl` described in the next subsection. The former Tab Pills rule (active `--surface-chip` fill, transparent inactive) was superseded by the 2026-09-25 v8 decision; do not hand-roll chip-filled tabs.
 
-- Pill-shaped tab selectors (e.g. the Claude | Codex agent switch on the new-session screen)
-- Active: Light Gray bg (`--surface-chip`); Inactive: transparent
-- All pill-shaped (9999px)
-
-### Desktop segmented controls (v8, owner-approved 2026-09-18)
+### Desktop segmented controls (v8 appearance / v9 layout, owner-approved 2026-09-25)
 
 - All Desktop segmented settings, form choices, filters, Agent selectors and pill navigation use `components/ui/segmented-control.tsx`. `VendorSegmentedSwitcher` only adapts Agent labels/icons. Mobile and native iOS controls are outside this decision.
 - The borderless pill track uses `--segmented-track`: a black alpha overlay, Light 6% / Dark 25%, applied to its background only. It adapts to the parent surface; pure black cannot be darkened further. Do not add a compensating track border.
 - The selected pill uses component-local `--segmented-selected-bg`, `--segmented-selected-border` and `--segmented-selected-shadow`. CINDY Light: #FDFDF8 / #F0F0EB; Dark: #353535 / #3B3B3B. Its narrowly scoped two-layer shadow is the owner-approved elevation exception; it does not authorize shadows on other controls. Other themes default to their elevated/border aliases and may override these roles without changing saved theme files. DTCG is the numeric source.
-- Preserve each scene's density, icons, counts, configured markers, width, wrapping and callbacks. Settings default to a 32px track / 28px option; compact Diff retains 24px / 18px visuals with a transparent minimum 24px target. Do not force all scenes to one fixed dimension.
+- Preserve each scene's density, icons, counts, configured markers, width and callbacks. Options stay on one line. Let the description wrap first; when the row cannot fit, move the whole control to the next line. At extreme widths the outer viewport scrolls horizontally while the track remains one line. Settings default to a 32px track / 28px option; compact Diff retains 24px / 18px visuals with a transparent minimum 24px target. Do not force all scenes to one fixed dimension.
 - A single measured plate moves with selection over `--motion-base`; hover/press use `--motion-fast`, and press scale is .98. Reduced motion disables movement/transitions. Resize and label changes realign the plate. Unselected text uses `--segmented-option-fg`, hover fill uses `--segmented-hover-bg`, selected/hover text uses `--text-primary`; all options keep weight 500. Disabled controls preserve selection at reduced opacity and cannot activate; focus remains independently visible.
 - Settings and filters use `radiogroup` / `radio` / `aria-checked`; panel navigation retains `tablist` / `tab` / `aria-selected`. Tab enters at the enabled selected option (or first enabled option); arrows wrap, skip disabled choices and respect RTL. Home/End select the first/last enabled option; Space/Enter retain native button activation. A missing preset remains unselected.
 - Fixed short alternatives with one shared setting can share a track (Telegram reply modes, import dimensions, authentication mode/flow). Dynamic account/object lists, wrapping API protocols, popup actions, multi-select and ordinary document/sidebar tabs remain separate controls.
@@ -369,11 +623,32 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 - `UsageHeatmap` and `UsageTokenBars` encode dates and quantities, including when clicking a mark filters by date. **Clickable data marks keep their data geometry; they are not ordinary pill buttons.** Their corner treatment is the registered data-mark members `usage-heatmap-day` and `usage-token-bar` (§5) — **the registration covers the coloured mark itself, not its hit region, legend, container or tooltip** — and is limited to these usage charts. For the heatmap, the transparent date hit target overlays the cell and shares its 12×12 footprint. For the token bars, the hit target may extend beyond a low or zero bar — the implementation gives it at least 24px of height — while the bar itself keeps its data height. In both charts the hit target's corner treatment is an implementation choice (currently the mark's 2px) and is not fixed by the registration; focus and selection indicators are independent of the registration and follow §5's interaction rules.
 - Heatmap: 12×12px square cells, 2px radius and 3px gaps in both read-only and clickable views. Reserve a 3px outer gutter so edge cells retain their focus/selected outlines. Preserve month alignment, the complete requested history window and the existing four-level neutral intensity scale.
 - Token bars: 30 equal-width slim columns fitted to the plot, 3px gaps, 2px outer radius, shared baseline and proportional stacked segments. Do not enforce a 24px minimum column width or clip the latest days behind horizontal scrolling. A low/zero bar may have a taller transparent hit target without inflating its data height.
-- Preserve native date/value tooltips, accessible date/value labels, keyboard activation and visible focus/selected outlines. Charts stay on the semantic gray palette except for the owner-approved Usage History chart colors registered in §2 (2026-09-08); this remains a geometry exception, not permission to introduce further category colors or apply chart radii to other buttons.
+- Preserve date/value tooltips (the heatmap keeps the native title; the daily token bars use the shared `UsageBarsTooltip` overlay registered in `usage-history-charts.md`, 2026-09-26), accessible date/value labels, keyboard activation and visible focus/selected outlines. Charts stay on the semantic gray palette except for the owner-approved Usage History chart colors registered in §2 (2026-09-08); this remains a geometry exception, not permission to introduce further category colors or apply chart radii to other buttons.
 
 ### Usage History Charts
 
 The usage heatmap, daily-token bars and their separate interaction indicators follow [the Usage History component specification](./usage-history-charts.md). Their 2px data-mark geometry is set by the §5 registered data-mark members (`usage-heatmap-day` / `usage-token-bar`); the bounded hover/focus/selection emphasis is registered with those members in §5 (interaction constraints), and the extensible model palette, fixed Agent/harness colors and heatmap blue are the §2 Usage History color registration. Date filtering enters through the charts themselves (cell / bar hit targets), the range selector on the page, and the DS-11-restored 36px labelled date field beside it, which writes the same single-day filter as chart activation and shares the charts' selected-day state — the previously owed equivalent entry (the component spec keeps the unchanged hit-target geometry and the pending platform/user acceptance record).
+
+### macOS menu bar quota panel (owner-approved v6 prototype, 2026-10-11)
+
+Icon refinement reference (2026-10-18, macOS AppKit rendering; enlarged and actual 18pt size):
+[Light/Dark before and after](assets/menubar-icon-refinement.png).
+
+- Remote control uses the same active-controller set as the in-app connection indicator. Its menu-bar dot uses a brighter orange (`#FF9F0A`, owner correction, 2026-10-25). The 5pt dot sits near the icon's upper-left corner, centered at (4.5pt, 4.5pt), with a 0.75pt transparent rim, without widening the 18pt icon or moving the unread count. Release builds light it only for active controllers and clear it when the last one leaves; development builds temporarily keep it visible for visual tuning. The number uses 13pt regular monospaced digits with a thin space after the icon. The native menu item and its settings preview use the same artwork (owner request, 2026-10-25).
+- When the remote-control dot is visible, the main panel explains it directly below the wordmark: a neutral computer symbol with the same orange dot, “Remote control active”, and the active devices' names, joined by middle dots (owner request, 2026-10-26). Names update on connection, disconnection and rename even while usage collection is pending; two visible lines keep the strip compact, with the full list available on hover and to accessibility. The entire row opens Settings → Remote control through the existing main-window navigation, with a quiet chevron and hover fill. This status strip stays above the scrolling quota content, shares the panel's warm neutrals and translucent backdrop, and ends with the existing inset hairline. Development preview without a real controller keeps the generic explanation rather than inventing a device name, including on the sign-in panel. Both appearances and all five languages share this layout.
+- A native status item (`NSStatusItem`) and panel rendered by the Swift helper in `apps/desktop/native/menubar/`, not an HTML window. Main builds every sentence and value; the helper renders, animates and formats only times that tick while the panel is open. Available on macOS 14+ and toggled in Settings → Window behavior (default on).
+- The panel uses the system popover material (`NSVisualEffectView`, `.popover`) with a 0.5pt hairline edge, so it follows the desktop wallpaper and Light/Dark automatically. Over the material it lays a warm tint (Light `#F8F7F3` at 50%, Dark `#1A1918` at 54%; owner corrections, 2026-10-16: 72%/74% was noticeably more solid than the plain material, 22%/26% let busy wallpapers wash out gray text and made the tiles read as pasted-on boxes) and a faint Heart Orange glow in the top-left corner, so the panel reads in Cindy's warm neutrals instead of the cool system gray (owner-approved B2 direction, 2026-10-16). Because the panel is translucent, every neutral — text, outlines, hairlines, tiles, the glass wells, the liquid and neutral ring arcs — is Cindy's warm black `#26221C` (Light) or warm white `#F2EFE9` (Dark) at an opacity, never a fixed gray, so its contrast tracks whatever shows through instead of drifting (owner decision, 2026-10-16): primary text 92% / 94%, secondary 60% / 62%, tertiary 42% / 42%, outlines 14% / 13%, hairlines 8% / 7%, faint fills and ring tracks 5% / 5%; tiles are white 45% / warm white 5%; wells white 70%→50% / warm white 7%→2.5%. Solid colors are reserved for state (warning, error), brand (logo red), Agent/harness identity (including the Codex blue and Claude orange detail rings, kept by owner decision 2026-10-16) and the primary pill fill (`#1F1E1C` / `#F2EFE9`), which must read at full contrast. Native SwiftUI controls (segmented `Picker`, `Toggle`, Swift Charts) are used as-is; their system geometry is not restyled to Web tokens. A segmented control is used only where its labels fit in every language (see below).
+- The menu bar icon uses a fixed Light/Dark image pair with template tinting disabled (owner-approved hair and earring refinement, 2026-10-18). Its silhouette stays flat and 100% opaque: pure black in Light, pure white in Dark. Four irregular, tapered hair strands add gray detail over that silhouette (`#BDBDBD` in Light / `#686868` in Dark, at 58%, 48%, 36% and 52%); these are tonal overlays, not transparent cutouts or whole-character shading. The `>` earring cutout is larger and shifted slightly left. The native status button's effective appearance selects the image, since the wallpaper can make the menu bar differ from the app; the settings preview uses the same pair. These fixed grays belong only to this native brand asset. Provider/harness logos remain template images (monochrome, tinted by the system). Brand red (logo red `#F70121`) appears only in the Cindy wordmark, a fixed Light/Dark image pair, and in the logo's `>` mark that leads the footer "Open Cindy" pill (owner request, 2026-10-16); it is never used for state.
+- Status colors are fixed native values shared by both appearances: warning `#EA6B17` (15% or less left, or a pace that runs out before reset) and error `#D91F37` (used up). Agent/harness fills reuse the identity colors of the §2 Usage History registration: `--engine-badge-cc` `#D97757` (with two lighter steps for Claude's session/per-model rings), `--engine-badge-codex` `#7A9DFF` and `--usage-model-1` teal for Pi; neutral ink fills carry no state.
+- Usage tubes are glass wells holding a translucent liquid instead of solid paint (owner correction, 2026-10-16: the opaque gray read as dirty): one flat tone with no gradient — warm black `#26221C` at 46% (Light) or warm white `#F2EFE9` at 72% (Dark) — so the well shows through and each appearance stays clean; deliberately lower contrast than the text so seven full tubes do not read as hard black or white bars. Neutral ring arcs (Grok, a balance) use the same warm black 42% / warm white 80%; the warning liquid is flat `#EA6B17` with a still glow under the tube. The recommended tube gets a 1pt secondary-gray outline (owner decision, 2026-10-16: the earlier 1.5pt ink outline read as a selection or an error once the liquid was softened) and nothing else — no halo and no logo tile before the headline (owner decision, 2026-10-16: the headline already names the source). The warning glow does not animate. A 7pt warning dot precedes the second headline line when that line is about sources running low or resetting (main sends `headlineAlert`).
+- Numbers use Barlow Condensed (OFL, shipped next to the helper): tube values and their % sign (the sign at about 60% of the value, same baseline), reset times, task amounts and shares, the task total, the month total, the detail ring value, and the usage page total and harness amounts. The detail page's fact-card values ("62,500", "周四 14:13") stay in the system font (owner correction, 2026-10-16): they are content, often mixing words, not metrics. Only pure numbers take Barlow (digits, money and % signs, and unit letters straight after a digit: "53", "$31.17", "12.5k", "98%"); any string that mixes in Chinese or words ("15天12时后重置", "周四 14:13", "5d 11h") stays entirely in the system font, because a condensed face beside Chinese reads uneven (owner correction, 2026-10-16). Two-line rows align the amount to the title's baseline and the share to the meta line's. If the font files are missing the helper falls back to a smaller system font.
+- Separators inside the panel are a single 0.5pt hairline in the soft `line` color (Light `#26221C` at 8%, Dark white at 7%); a system `Divider` is not used because it draws its own darker separator under any overlay (owner correction, 2026-10-16).
+- Copy is truthful: Cindy does not switch accounts automatically and has no default account per service, so the headline recommends the source with the most room ("{{name}} has the most left.") instead of claiming which one is in use.
+- Size and density (owner request, 2026-10-12: lighter on small laptops, verified in every language): every page is 320–368pt wide by tube count, with a 20pt panel radius and 14pt tile radius. The panel never takes more than 86% of the screen's visible height; longer content scrolls between the fixed header and footer. When the visible height is under 1000pt (13–14" laptops at default scaling), the panel opens in a short layout: 82pt tubes instead of 104pt, 160pt rings instead of 188pt, and two task rows instead of three.
+- The usage page (owner-approved redesign, 2026-10-12) shares the panel width and slides in like a detail page instead of widening into a dashboard. Top to bottom it shows: back, title and a 7/30/90-day switch; one total with two caption lines (period, scope and value basis; daily average, paid and tokens); a 100pt stacked chart labeled only with its first day and Today, where hovering a day swaps the total for that day's amount and harness split; a thin harness bar with share and amount per harness; the top five models or today's tasks; and the value note. There is no amount/tokens switch and no scope switch: the scope follows Settings, and the caption names it.
+- Every row must fit in the longest supported language. A segmented control is used only where all its labels fit on one row in every language. The four menu bar text options are a two-column chip grid. Other controls fall back instead of overflowing: the usage-scope picker moves under its title. Screenshots for review cover English, Simplified and Traditional Chinese, Japanese and Korean, in Light and Dark.
+- Keep the main panel's original order: model quota first, tasks second, then the usage chart (owner correction, 2026-10-26). The task section uses three quiet text tabs: Unread, In progress and Today's usage. These are deliberately frameless, with no filled segment track; ink emphasis and a short underline identify selection. Each keeps a 28pt hit height and native keyboard/selected accessibility. Opening with attention selects Unread; otherwise it restores the last manually selected non-unread tab for this helper lifetime. Before any manual choice, prefer In progress when work exists, otherwise Today's usage. Updates never switch an already-open panel, including when the last unread item clears. Opening or switching tabs never acknowledges messages.
+- Unread and In progress reuse the island's full candidate projection before current-card clipping, including remote tasks and restored companion chats. Unread counts the exact attention candidates; In progress includes running and waiting-for-input tasks. Preserve the island's candidate order: waiting items come first in In progress, then the latest user/scheduler prompt; agent output and tool progress never reorder running rows (owner correction, 2026-10-27). Rows show identity, a single-line message/status preview with tail truncation, and time; no full-content hover tooltip (owner correction, 2026-10-27). Privacy mode masks both identity and preview. Clicking uses the island's existing device-aware navigation and read acknowledgement. Two rows on short screens, otherwise three, with an in-place All tasks / Collapse action; usage keeps its existing money ranking and usage-page link.
 
 ### Desktop chat and operation authorization (DS-9, 2026-09-11)
 
@@ -381,7 +656,74 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 **IM context card disclosures (owner-confirmed HTML direction, registered 2026-09-12, #4367):** `HookTaskCard` has two narrowly scoped bare-text controls: long-body expand/collapse and the attached-context disclosure. Both remain frameless in resting, hover and expanded states; group contents also have no background frame. This records the confirmed quiet presentation, not a general exemption for chat actions. Both controls share a minimum 24px hit height/width and 4px vertical padding, retain native button keyboard activation, and use a separate visible `focus-ring` outline. Text uses `text-tertiary`, with `text-secondary` on hover, in both modes; context text may wrap. The outer message card retains its existing content-clipping treatment. This registration does not assert real-client visual acceptance; Light/Dark HTML previews are not client screenshots.
 
+**Android in-app update card (owner-approved HTML direction, registered 2026-10-16, #6199):** `AndroidUpdateSheet` is one content-height Material bottom sheet for discovery, install permission, download and install. Its paired actions are pills (secondary `surfaceChip` left, primary `cta` right). The only bare-text control is the centered browser-download fallback ("改用浏览器下载" / "Download in Browser Instead") shown under the pills while a decision is pending: frameless, `footnote` 13/18 medium in `textSecondary`, full-width 44pt hit height, pressed opacity 0.72. It is a secondary escape route rather than a commit action, so it stays out of the pill pair; this is not a general exemption for other sheet actions. In short windows the details region scrolls while the actions stay pinned. Floating compatibility presentations round all four container corners. The Light/Dark HTML previews are not Android device screenshots.
+
 **Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
+
+### Desktop chat threads
+
+Group and private threads share the same panel chrome, root message row and reply divider. The complete root message belongs to the replies’ scroll container; it has no independent height limit or scrollbar. Keep the header and reply composer visible outside that scrolling content. Private threads retain the ordinary task runtime for progress, approvals and stopping.
+
+### Desktop group progress strip
+
+`BotGroupProgressStrip` is the persistent in-progress surface above the group composer
+([group chat §5](../product-rules/bot-group-chat.md#5-界面)). Its collapsed outer frame uses
+the **Desktop group progress capsule** registered in §5: a centered, content-width capsule
+containing the speaker/step status, elapsed time, current action and separate process/stop controls.
+The process action opens the exact task in the ordinary Session UI (2026-10-25). It no longer expands an inline panel.
+The registration covers only the collapsed outer frame; the inner buttons retain their own
+control-tier treatment. Keep semantic surface/border/text colors in both Light and Dark.
+It does not authorize pill-shaped toolbars or other status panels.
+
+### Desktop hidden channel records
+
+`BotChannelsPage` lists each connection's hidden channel tasks. The record name and
+summary are one narrowly scoped bare-text control: resting, hover and pressed states
+keep the existing text block (12px `--text-primary` name, 11px `--text-tertiary` meta,
+no fill, border, radius or added padding). Making that existing text open the read-only
+history page does not assign a pill frame or change task state. The separate restart
+action remains the registered compact secondary Button and is outside this exemption.
+This records the accepted quiet list, not a general exemption for settings actions.
+
+Keyboard focus uses the theme-invariant `--focus-ring` as a `focus-visible` box-shadow
+ring. Non-input `outline` is suppressed globally, so an outline class is not a visible
+focus treatment here. The ring appears only for keyboard focus and does not create an
+ordinary control frame (§5). The single-page comparison showed no resting-pixel change;
+this registration does not claim a new client screenshot of the keyboard ring.
+
+### About: harness versions
+
+Each harness occupies one compact row. Pi shows the executable's actual version and a short
+check/update status in that row. Its pill trigger opens a menu containing upstream update,
+restore Cindy release, check again, and release notes; source versions never become permanently
+expanded rows. Upstream compatibility risk appears only in the install confirmation. Installation
+progress remains inside the row. Menus use the existing container and inner-row geometry, and
+all states use semantic colors in both Light and Dark.
+
+Claude Code and Codex use the same row, trigger and menu (`HarnessVersionMenuRow`), with only
+the Cindy-maintained version chain: update to the current channel's version (shown right-aligned,
+disabled unless strictly newer), check again, and the last successful check time. A later failed
+online check keeps that last version in the menu but disables Update. There is no upstream
+source, restore or release-notes entry. Updating first prepares the selected version in the
+shared background cache, showing download status in the row, then follows the existing
+confirm → busy warning → restart flow. Startup installs only a complete cache matching the
+current manifest; if that target has changed or the cache is unavailable, it keeps a usable
+old runtime and retries in the background. First-install and repair downloads retain their
+existing startup fallback.
+
+
+### User-attached long images
+
+Desktop user attachments with natural height / width **strictly greater than 3** use a
+240×240 top-aligned partial preview, shrinking to the available container width. A
+non-interactive pill overlay says “长图 · 点击查看完整图片” (localized); it uses semantic
+surface/text tokens and wraps in narrow containers. The image retains its existing
+12px content crop and keyboard/click target. Ordinary portraits, landscape images,
+unknown dimensions and tool-output images retain their existing contain rules.
+Click/Enter/Space still opens the complete original in ImageLightbox; gallery, copy,
+annotations and original bytes remain unchanged. This applies through the shared
+Desktop user-attachment renderer in private chats, groups and tasks.
+Decision: [#6796, maintainer confirmation](https://github.com/makecindy/cindy/issues/6796#issuecomment-6361112964).
 
 ## 5. Layout Principles
 
@@ -389,7 +731,7 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 - Base unit: 8px
 - Scale: 4px, 6px, 8px, 10px, 12px, 14px, 16px, 20px, 24px, 32px, 40px, 48px
-- Standard Button action frames use 24px horizontal padding and vertical centering within the 32/36px height (§4); do not add 10px top/bottom padding to that height. Registered keycaps, data marks and bare-text buttons follow their component treatments; a `<button>` tag alone does not assign this padding to a visible layer or hit region (§5 Border Radius Scale).
+- Standard Button action frames use 24px horizontal padding and vertical centering within the 28/32/36px height (§4); do not add 10px top/bottom padding to that height. Registered keycaps, data marks and bare-text buttons follow their component treatments; a `<button>` tag alone does not assign this padding to a visible layer or hit region (§5 Border Radius Scale).
 - Container padding: dialogs 16px (`p-4`, see §4 Dialog & Modal); dropdown panels 6–8px (see §4 Select & Dropdown)
 
 ### Layout Structure (App)
@@ -397,6 +739,78 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 - Full-window three-region structure: sidebar + content area (+ optional right panel), separated by 1px Board dividers on a single flat Surface — never by background shifts (see §2 layer rule).
 - Centered-card layouts (login, empty states) follow the Surface + Card two-layer rule in §2.
 - Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
+
+### Desktop teammate sidebar
+
+The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. Collapsing the section to its existing avatar strip resets the preview; the strip’s +N button opens the full list. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
+
+### Desktop and Mobile task creator filters (2026-10-27)
+
+The sidebar's existing Filter submenu adds Teammates. All (全部) is the default and includes personal tasks and all teammates' tasks;
+choosing one teammate selects only its created tasks, then further choices add or remove teammates.
+Hide all (都不显示) excludes teammate-created tasks and teammate routine/IM tasks while retaining personal tasks.
+Selecting a teammate from Hide all switches to that teammate; removing the last choice restores All. Reset Filters also clears this dimension, preserving task status,
+grouping and sorting. Pinned entries retain their existing exemption from content filters.
+Use the existing menu rows, avatar component and check marks; keep the menu open for multiple choices.
+Show a remote computer name only for device-scoped identities, to distinguish same-name teammates.
+Cindy and cloud companions use a single name row without a computer subtitle: their filters span computers. Persist selections
+per viewer account. Built-in Cindy is one choice across computers; choosing it includes every copy’s
+created tasks, including archived history. Identify it from preset/cloud identity, never its name; custom
+namesakes remain separate. Existing per-computer Cindy selections migrate to the unified choice.
+Cloud companions use their account identity across old and current computers; retired copies stay out
+of the choices, as in the teammate roster. Unlinked teammates remain keyed by computer and teammate ID.
+Creation attribution is distinct from following. Existing teammate routine and IM channel tasks also
+appear in the desktop task list and share this filter. Their exact linked owner supplies the avatar;
+the tooltip says “Belongs to” to distinguish ownership from delegation or following. Active/archived
+filters still apply; main chats, private threads and internal group lanes retain their dedicated entries.
+Task rows retain their creator avatar after archiving, on both local and remote computers. Prefer the
+creator's avatar when others follow the same task; the tooltip distinguishes creation from following.
+Two-line teammate rows grow with their content; align the avatar and check mark with the name line,
+keeping the computer name in the same text column and preserving vertical padding.
+Verify the menu in all five UI locales and both themes; long names retain the existing menu width.
+Mobile uses the same multi-selection semantics in the existing iOS native / Android display menus.
+The home (including the task drawer) and device task lists retain creation/ownership avatars after
+archiving and cold start. Read the existing teammate delegation and history APIs on older hosts;
+keep main chats and internal lanes out of these lists. Cache only portable ownership/avatar metadata
+in the account-scoped home snapshot. Late cloud/preset discovery canonicalizes existing selections
+without clearing the list or splitting Cindy by computer.
+
+### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
+
+The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 48pt avatars in 56pt cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 48pt create cell last. Phones scroll instead of the Desktop +N. Desktop uses the same 48px collapsed avatar, 44px list avatar, and status-dot geometry as iOS and Android. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); collapsed selection is a 1px tertiary circular outline with 2px separation. Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When avatars are hidden, existing attention and bot/group unread (including threads) appear as a small header dot with an accessible status and no fabricated count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
+
+There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separate teammate home, no Tasks/Teammates switch in the drawer and no Teammates entry in the title scope menu. Home search keeps the section and lists every matching teammate and group as expanded rows, without the fold toggle or create entries; with no match the section is absent. Clearing search restores the saved display choice. Teammate unread shows on the section's rows, enabled strip cells, or compact header, not as a count on a mode switch. Implementation and regression coverage: `apps/mobile/src/session/HomeTeammatesSection.tsx`, `homeChromeMenus.ts`, and `src/__tests__/HomeTeammatesSection.test.tsx`.
+
+### Mobile iOS navigation chrome / iPhone Duo
+
+- The home menu artwork is the narrow 20pt glyph centered in a transparent 26pt canvas, with semantic template tint in both modes; do not use an empty Stack.Toolbar.Badge (the current header bridge creates a large string badge). Duo uses the same template. The menu carries no attention dot: it only marked tasks needing attention from the retired teammate home.
+
+- The home takes its iOS navigation container, menu control and centered-title width from HomeStackHeader (2026-10-13). The bar's measured-height blur is drawn once by the home route behind the bar. The home menu uses the slightly narrower three-line template in assets/navigation/menu.svg (owner refinement, 2026-10-13); only artwork changes, not button geometry or hit targets. System toolbars own ordinary menu/create/action geometry, with the existing Duo top-left exception. Task scope titles retain their long-name toolbar avoidance. Android retains its existing fallback; chat, secondary-page and sheet headers are not claimed migrated.
+
+- Teammate and group chat headers (`ChatIdentityHeader`) keep their left-aligned identity (mark, name, one subtitle line) next to back (owner decision, 2026-10-13). Back is the task header's system `chevron.backward` (`NativeChromeBackButton`). The trailing to-do and settings actions stay **two separate glass circles** with their existing Lucide artwork (18pt); only their stroke rises to `CHAT_HEADER_GLYPH_STROKE` (`iconStroke.medium`, about 1.65pt) so they read level with back — do not group them into one capsule or swap their artwork. On iOS the header floats on the same feathered `SessionHeaderNativeBlur` as the task header and content scrolls beneath it; an opaque header band is not allowed because its hard bottom edge reads as a divider. Because the two-line identity runs to the header's lower edge, chat headers keep the whole header over solid blur and feather only below it (`CHAT_HEADER_BLUR_FADE_INSIDE = 0`); single-line task and home bars keep the default 24pt inside feather. All iOS header blurs are progressive (owner request, 2026-10-13, to approach the softer system scroll edge on Settings): three equal layers (`HEADER_BLUR_LAYER_INTENSITY`) start fading together and finish at one third, two thirds and the end of the fade, which reaches `HEADER_BLUR_FADE_OUTSIDE` (24pt) past the chrome edge, so the blur thins toward content instead of one layer cross-fading into a double image. The composer's bottom blur keeps its single 55 layer. Android keeps its existing header.
+
+- Teammate rows share the task list typography: 18pt medium (500) titles with 28pt line height, 15pt regular previews with 26pt line height, and 13pt metadata with 22pt line height.
+
+- Wide Home and task-sidebar presentations share one native list instance in `ResidentHomeListProvider`, outside route lifetimes. Route slots supply layout and callbacks; do not key the host by task/route or restore a cached offset over its live scroll position. Collapse/expand its bounds, keep native headers outside its touch area, and pause hidden row subscriptions. Narrow screens retain their route-local list.
+
+- Home's main menu is a top-left affordance, including when Duo moves native toolbar actions into the right rail. Host this home-only exception in the native header's left custom view with its shared background hidden, never in an absolute screen-content overlay under the transparent navigation bar; remote-desktop and display actions remain native toolbar items.
+- Custom iOS home/sidebar icon buttons and standalone back buttons share `NativeChromeButton` (SwiftUI Button with native glass style). Preserve existing icon artwork inside the native label; do not substitute a React Native Pressable with a separate GlassView for this button family.
+- Mobile glass button styles are configured in `platform/chrome/nativeGlassButtonStyle.ios.ts`: neutral circles, text/primary actions and grouped toolbar material share that entry. Home floating new-task and share-cancel actions use the same native button path; text buttons retain intrinsic label sizing. Keep light/dark semantic colors and native disabled/activation behavior. Non-iOS retains the React Native fallback.
+- Login actions use `LoginNativeButton.ios.tsx` with the same shared glass styling. SwiftUI owns activation, disabled state and loading indicators; existing brand artwork can remain inside RNHostView labels. The login stage retains its design-coordinate frames and scaling, while text actions use native borderless buttons. This supersedes the hand-painted button feedback in the login skin on iOS only; inputs, consent checkbox, inline legal links and non-iOS controls retain their existing implementations.
+- The home main menu remains a left-edge drawer on every platform and window shape, using `HomeChromeDrawer.tsx` (iOS uses FullWindowOverlay above the native header; Android uses a transparent Modal window, because wide layouts mount the resident home list and connection notices in root layers that an in-route overlay cannot cover). Preserve backdrop dismissal, swipe-left dismissal and the drawer's close lifecycle. Native glass button unification must not replace this navigation drawer with a bottom sheet. Device-scope/display pull-downs keep their existing system UIMenu path and native toolbar menus; their custom panels are fallback code, not a reason to replace working native menus. System navigation/toolbars remain native container-owned.
+- Standalone custom navigation controls use a 44pt visible circle and 44pt hit frame (`navigationChrome.target`), with 20pt artwork (`iconSize.action`) centered inside. Apply the native interactive glass effect after the explicit frame on a borderless SwiftUI Button; do not add `controlSize(large)` or another glass/padding layer. System toolbar items retain native sizing and positioning: never replace them with `Toolbar.View` to enforce this custom-control rule, because that breaks Duo's vertical adaptation.
+- Prefer the native navigation container for page back/close and toolbar actions. On Duo, let the system adapt navigation to the shared status/toolbar region; only the detail column gets the vertical bar in a split view. Sidebar-local menus stay in the sidebar.
+- Floating page chrome that a native bar cannot host (file preview's close, title capsule and menu) takes its edges from `floatingTopRow`: in Duo portrait it shares the status row and ends before the status area, the same way the native bar does; beside a vertical bar its close and menu become native toolbar items and the title keeps a top margin instead of touching the screen edge. Chrome inside a Modal stays fully in the Modal and never writes the host route's bar. Full-screen Modal controls add the side safe insets, which hold the landscape notch or Duo's vertical bar (2026-10-29).
+- Full-screen custom overlays (remote desktop) keep back and tools on the right in both Duo landscape rotations, centered on one rail below the system status area. Back comes before tools. Respect safe areas and reserved folds; do not mirror the rail from a video orientation event.
+- Portrait tabletop remote desktop on iPhone Duo defaults to the Macintosh II-inspired case and functional keyboard (owner request, 2026-10-24). The lower-pane appearance rail accepts left/right swipes and an accessible tap to cycle directionally through classic, slim classic, full-screen retro, Macintosh II, PowerBook 170, ThinkPad 701C and modern (wrapping at either end), retaining the choice for this viewer. Slim and full-screen variants maximize the viewport and use a nearly full-width keyboard and invisible palmrest pointer surface; retain the original classic as a comparison. Switching between any two appearances releases held input. Pointer gestures cover the entire palmrest below the keys, independently of the much smaller visible touchpad, trackball or buttons; never extend this region over the keyboard or appearance rail. Use photorealistic classic Macintosh-inspired hardware artwork: textured ivory plastic, a deep CRT recess, a floppy slot and beveled keycaps (owner refinement, 2026-10-24). Hardware artwork keeps each model’s material in Light/Dark mode, with Light text tokens on ivory keycaps and Dark text tokens on graphite keycaps. Macintosh II and PowerBook retain their rainbow Apple badge; ThinkPad retains its black material and red TrackPoint. These are space-adapted homages, not mechanically exact replicas; surrounding app chrome follows the active theme. Fit the live viewer within the screen opening. Do not substitute flat CSS/vector panels for the physical material. Keep the live viewer and lease mounted across switches. Unfolded/landscape layouts and system keyboard panels retain their ordinary appearance. Implementation: `apps/mobile/src/remote-desktop/FoldDesktopSkin.tsx` and `RemoteDesktopScreen.tsx`.
+- Duo retro hardware draws the upper display case and lower keyboard deck edge-to-edge across their respective physical halves, meeting at the fold center. Scale the original artwork itself; never fill unsafe strips with a separate texture, tiled background or substitute image. Only the live screen, keyboard and interactive controls respect safe regions and toolbar clearance (owner correction, 2026-10-24).
+- Android foldables share the same adaptive pane and portrait tabletop remote-desktop layouts, including the keyboard, touchpad and appearance selector (owner request, 2026-10-24). Use Jetpack WindowManager's separating folds/hinges in local dp; a zero-thickness crease is valid. Flat continuous screens return to ordinary responsive layout, while a physical hinge stays reserved. Preserve Android's own safe areas, navigation appearance and keyboard-driven window resize; do not emulate iOS vertical system bars or infer a fold from a device name or aspect ratio. Unsupported devices and older packages retain the responsive fallback.
+- Retain the first three appearances (classic, slim classic, full-screen retro), but apply the same space optimization to all three: enlarged host-aspect screen openings, nearly full-width keys, shared beveled spacebar and bounded legends. This supersedes keeping the classic layout unchanged as a comparison. Reserve the lower safe area and toolbar before allocating keyboard height; a short lower pane scrolls the keys rather than pushing the palmrest outside the screen (owner refinement, 2026-10-24).
+- Floating back/menu controls use the shared `navigationChrome.target` size; grouped actions use the same target breadth, without an extra outer padding ring. Use native Liquid Glass (regular for app navigation; clear over immersive remote desktop imagery), circle for a single icon and capsule for a group; do not tint neutral glass with opaque surface colors. Use semantic foregrounds and the existing non-glass fallback in both themes.
+- Clear glass over remote imagery follows the navigation theme: dark icons in Light and light icons in Dark. A localized light/dark backing inside the control outline protects contrast, with a matching translucent selected-state fill. Keep the material clear and the desktop outside the controls unchanged. This explicit two-mode palette is Cindy’s design choice; Clear material does not provide automatic foreground adaptation.
+- The mobile in-app HTML browser's floating controls sit over arbitrary page content. They keep regular glass and add the translucent `navigationChrome.pageTint` theme tint (70%, never opaque). Untinted regular glass adapts to the page behind it. Over a light page in Dark mode it turned light under light icons. The tint keeps the control polarity aligned with the app theme. The user approved this design on 2026-10-11.
+- These are Cindy's shared component rules, not a claim that Apple's status glyph is an app button or that Apple mandates our precise size. Content actions and keyboard accessories retain their own hierarchy.
+- References: [Designing for iPhone Duo](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo), [Raise the bar with iPhone Duo](https://developer.apple.com/videos/play/tech-talks/111462/), [Design for iPhone Duo](https://developer.apple.com/videos/play/tech-talks/111466/).
 
 ### Whitespace Philosophy
 
@@ -422,6 +836,8 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 | --- | --- | --- |
 | **Keyboard keycap** | Every visible keyboard shortcut frame, whether rendered as `<kbd>` or as an interactive button that accepts the shortcut. Border, fill, padding and text colors stay appropriate to the surrounding surface; the radius is the shared cross-surface rule. *(Registered 2026-09-06, #4001.)* | 4px |
 | **Data mark** | A visible layer inside a chart or visualization whose shape belongs to the data rather than to the control. Members below. *(Registered 2026-09-07.)* | 0px or 2px, pinned per member |
+| **Bot Market opening bubble tail** | Only the opening-line bubble in the Bot Market detail header (`BotMarketDialog`): 12px bubble with a square bottom-left corner joined to a curved SVG tail on the left that follows the bubble fill and border. Not a general chat-bubble shape; any other bubble needs its own adjudication. *(User ruling 2026-10-15; decision log 10-15.)* | 12px, bottom-left square + tail |
+| **Desktop group progress capsule** | Only the collapsed outer status-and-controls frame of `BotGroupProgressStrip`, centered above the group composer at content width. The process action opens the ordinary task page; child controls keep their own assignments. See §4 component entry and decision log 10-20, [#6549](https://github.com/makecindy/cindy/pull/6549). | Pill (9999px) while collapsed |
 
 **Overlap.** A keyboard shortcut frame retains its registered 4px treatment when another channel, such as colour, also encodes data. Data encoding alone does not override the keycap entry. Other overlaps must be resolved explicitly in the registration; listing order alone does not grant precedence.
 
@@ -462,7 +878,7 @@ Ordinary control frames, containers and inner-control surfaces not covered by St
 
 **A layer with no frame or surface to round needs no corner-radius assignment.** This does not authorize a control to discard its prescribed frame treatment merely by omitting a fill or border. A transient hover or pressed surface on an ordinary control remains that control's frame and takes its assigned tier.
 
-**A focus or selection indicator is a separate visual treatment.** Its appearance alone does not create a new ordinary control frame or reclassify the associated layer. Registered bare-text buttons (wizard back-navigation "← 上一步", the §16.3 login text-button category) remain frameless and retain their visible focus treatment; new bare-text-button usages must still be registered in the introducing component entry.
+**A focus or selection indicator is a separate visual treatment.** Its appearance alone does not create a new ordinary control frame or reclassify the associated layer. Registered bare-text buttons (wizard back-navigation "← 上一步", the §16.3 login text-button category, and the hidden-channel record text in the §4 Desktop hidden channel records entry) remain frameless and retain their visible focus treatment; new bare-text-button usages must still be registered in the introducing component entry.
 
 Evaluate the approved component treatment across its states, including shared styles and pseudo-elements. **The absence of a local background or border class is not evidence of frameless status.**
 
@@ -488,13 +904,15 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 
 ## 6. Depth & Elevation
 
+**Mobile home navigation drawer exception (owner request, 2026-09-27):** The left-edge main menu uses an elevated surface, right-side container corners, and a soft outward shadow from mobile's `homeDrawerShadow` theme token. This exception is confined to `HomeChromeDrawer` (including its companion entry), not in-page cards or the task-list sidebar. The account header puts the user's name first, with a default letter avatar, optional email, and a small organization logo beside the organization name; do not show an account ID. Opening waits for native layout, then translates the panel and fades the backdrop together; drag, cancellation and close share one UI-thread progress value and respect reduced motion. Numeric values remain in mobile tokens and component styles.
+
 | Level              | Treatment                                                                 | Use                                            |
 | ------------------ | ------------------------------------------------------------------------- | ---------------------------------------------- |
 | Flat (Level 0)     | No shadow, no border                                                      | Surface background, most content               |
 | Bordered (Level 1) | `1px solid` Board (`#d7d7d4` Light / `#3c3c3a` Dark)                      | Cards, code blocks, dividers, section outlines |
 | Lifted (Card)      | Card fill (`#ffffff` Light / `#2c2c2a` Dark) + optional 1px Board outline | Login cards, modals, raised panels             |
 
-**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` / `--segmented-selected-shadow`; never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
+**Shadow Philosophy**: Cindy's base visual language uses **zero shadows**. This is not an oversight — it's a deliberate design decision. The flat, shadowless approach creates a paper-like experience where elements are distinguished purely by background color and single-pixel borders. Depth is communicated through **content hierarchy and typography weight**, not visual layering. (The only shadows in the system are the mobile home drawer exception above and the token-gated floating-layer exceptions and the Slider thumb (§15.18) / Segmented selected-pill (§4) exceptions registered in §10 — `--shadow-menu` (menus, popovers and modal panels, §4) / `--cmd-palette-shadow` / `--segmented-selected-shadow` (`--confirm-shadow` stays registered for theme compatibility but is no longer consumed by dialogs); never add ad-hoc shadows to in-page elements. A Switch-knob shadow was trialed and explicitly rejected — user ruling 2026-08-05: the legacy `shadow-lg` on the 16px thumb was invisible in practice, and a visible replacement read as noise; the knob is flat by decision, don't re-add it.)
 
 ## 7. Do's and Don'ts
 
@@ -506,7 +924,7 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 - Use the §5 Step 2 inner-control tier for multi-line inputs (textarea, always), dropdown/menu row highlights and in-block cells not covered by Step 1.
 - Keep the palette strictly grayscale — chromatic color only via the sanctioned semantic set in §2, always through tokens
 - Use Inter at weight 400 / 500 for display headings (per the §3 Hierarchy rows) — hierarchy comes from size + weight, not typeface switching
-- Maintain zero shadows — depth comes from borders and background shifts only
+- Keep in-page elements shadowless — depth comes from borders and background shifts; only the shadows registered in §6 are allowed
 - Keep content density low — each section should present one clear idea
 - Use monospace for terminal commands and code — it's primary content, not decoration
 - Keep ordinary action frames on their §4 component treatment and §5 assigned tier, including transient hover / pressed surfaces. Focus and selection indicators are separate treatments: their appearance alone creates no ordinary control frame and does not reclassify the associated layer. Registered bare-text buttons remain frameless with visible focus; evaluate approved states, shared styles and pseudo-elements, not only local background or border classes.
@@ -515,10 +933,11 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 
 - Don't introduce any chromatic color outside the sanctioned semantic set in §2 — no brand blue, no accent green, no warm tones beyond the registered exceptions
 - Don't invent arbitrary radii — §5 governs the inventory: 0px / 2px for registered data marks (pinned per member), 4px for keycaps, 8px for inner controls, 12px for containers and 9999px for pill frames. No 3px / 6px / 10px or arbitrary values. Frameless layers need no assignment; intrinsic content and mark geometry remain outside this corner-radius inventory. Existing non-keycap `rounded-[4px]` usages remain registered debt; bare `rounded` and `rounded-sm` substitute for nothing.
-- Don't add shadows to any element — the flat aesthetic is intentional
+- Don't add shadows outside the §6 registry (floating menus / popovers / modal panels via `--shadow-menu`, the segmented selected pill, the Slider thumb, the Mobile home drawer) — never ad-hoc shadows on in-page elements; the flat aesthetic is intentional
 - Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16
-- Don't use gradients anywhere — flat blocks and borders only
+- Don't introduce gradients — flat blocks and borders only; the registered exceptions are the session-loading wordmark sheen (§2 Gradient System), the Computer Use cursor bloom (§15.7) and the neutral model-budget spectrum bar / GhostTool shimmer (§15.4)
+- Don't hard-code a solid gray for neutral text or fake a text tier with element `opacity` — use the text tier tokens (§2); in the CINDY family they are translucent ink and stay correct on glass and wallpaper
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
 - Don't use borders heavier than 1px — containment is always the lightest possible touch
 - Don't add decorative or large-motion animation — no bounce, parallax, looping, or gratuitous movement. Short **functional** state transitions (color / background / opacity, ≤150ms) are fine and expected — see §14.4.
@@ -529,43 +948,44 @@ Cindy Desktop is an Electron app: layout responds to window resizing, not page b
 
 ### Desktop Window
 
-- Minimum window size: **800 × 600** for the main window and secondary session windows (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts` / `secondary-windows.ts`). The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`) — layouts hosted there must stay legible down to that width
+- Minimum window size: **800 × 600** for the main window and secondary session windows (enforced at the BrowserWindow level — `apps/desktop/src/main/bootstrap-electron.ts` / `secondary-windows.ts`). The detached right-sidebar window has its own smaller floor of **360 × 480** (`right-sidebar-window/window.ts`), and a popped-out sidebar tab window (one or more tabs) floors at **360 × 420** (`sidebar-tab-window/window.ts`) — layouts hosted there must stay legible down to that width
 - The sidebar is collapsible; region dividers and paddings hold as the window narrows, and content reflows fluidly
 - Chat stream and composer reflow with the window; code blocks keep horizontal scroll instead of wrapping
 - Ordinary control sizes and paddings follow their §4 component treatments at every window size. Registered shapes and their hit regions follow their owning component treatments and §5 Interaction constraints; the usage charts' dense date targets use the Equivalent route only under the conditions stated there. Window resizing does not waive the applicable target requirements or authorize changing a mark's registered geometry.
 
 ### Mobile
 
-Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). Cross-platform skins and login follow §15.13 and §16. iOS navigation, sheets, materials and controls follow the platform supplement [iOS native design](./ios-native-design.md); implementation guidance remains in [Mobile design guide](../../apps/mobile/docs/mobile-design-guide.md). Real system-owned components retain system geometry, typography and material; this does not exempt custom content from Mobile tokens. Existing implementations are migration evidence, not the specification for new surfaces.
+Cindy Mobile (React Native) has its own device-class rules (phone / pad portrait / pad landscape). Cross-platform skins and login follow §15.13 and §16. iOS navigation, sheets, materials and controls follow the platform supplement [iOS native design](./ios-native-design.md); implementation guidance remains in [Mobile design guide](../../apps/mobile/docs/mobile-design-guide.md). **Mobile text (color, size, weight, line height) is decided by role from the guide's §3 text quick-reference table** (ruling 2026-09-26 / 27): five neutral text colors, lighter colors never take heavier weights, an 11-step type scale, and every text style paired with a line height; guard tests enforce these, role choice is checked in review. Real system-owned components retain system geometry, typography and material; this does not exempt custom content from Mobile tokens. Existing implementations are migration evidence, not the specification for new surfaces.
 
 ## 9. Agent Prompt Guide
 
 ### Quick Color Reference
 
-- Primary Text: "Pure Black (#000000)" Light / "Soft Gray (#d4d4d4)" Dark
+Default-theme values; the CINDY themes resolve the same tokens to translucent ink (§15.16), so always write the token.
+
+- Primary Text: "Near Black (#262626)" Light / "Soft Gray (#d4d4d4)" Dark — `--text-primary`
 - **Surface** (page bg): "Light Surface (#f8f8f6)" / "Dark Surface (#1f1f1e)"
 - **Card** (elevated layer): "Pure White (#ffffff)" / "Dark Card (#2c2c2a)"
 - **Board** (1px dividers/borders): "Light Board (#d7d7d4)" / "Dark Board (#3c3c3a)"
 - Secondary Text: "Stone (#737373)" Light / "Silver (#a3a3a3)" Dark — `--text-secondary`
 - Tertiary Text: "Silver (#a3a3a3)" Light / "Stone (#737373)" Dark — `--text-tertiary`
-- Near Black: (#262626) — Light primary reading text
 - Chip/Button Background: "Light Gray (#e5e5e5)" Light / "Dark Chip (#3c3c3a)" Dark — `--surface-chip` (the collapse-to-Card variant `--surface-chip-alt` #2c2c2a: see §2)
 
 ### Example Component Prompts
 
-- "Create a settings section: an ivory Card (--surface-card-ivory, 12px radius, 1px --border-default outline) on the Surface page background; section title 14px Inter 500, body rows 14px 400."
-- "Design a code block with a 12px border-radius, 1px solid Board (#d7d7d4 Light / #3c3c3a Dark) border on Card background. Use JetBrains Mono for the code. No shadow."
-- "Build a tab bar with pill-shaped tabs (9999px radius). Active tab: Light Gray (#e5e5e5) background, Near Black (#262626) text. Inactive: transparent background, Stone (#737373) text."
+- "Create a settings section: a 16px/500 section title outside the card; one elevated Card (--surface-elevated, 12px radius, 1px --border-default outline) groups related rows — label 13px/500 and hint 12px on the left, control on the right, inset dividers between visible rows (§4 Desktop settings rows)."
+- "Design a code block with a 12px border-radius, 1px solid Board (#d7d7d4 Light / #3c3c3a Dark) border on Card background. Use the code font stack (§3 Font Family). No shadow."
+- "Build a pill tab switch with the shared SegmentedControl (§4 Desktop segmented controls): borderless --segmented-track, selected pill on --segmented-selected-bg, all options weight 500. Do not hand-roll chip-filled tabs."
 - "Build a chat composer: a Card-colored (--surface-elevated) 12px-radius container; inside, pill control chips (9999px) that are borderless at rest and gain a --border-default outline on hover."
 - "Design a confirm dialog: 12px-radius container, max-width 400px, pill buttons — inverse neutral primary, optional outlined third action, then outlined Cancel; Cancel receives initial focus unless the caller explicitly selects primary focus or requires typed confirmation."
-- "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via --model-item-hover."
+- "Create a dropdown: pill trigger; panel width bound to the trigger; 12px-radius Card panel with 1px Board border; option rows highlighted with 8px inner radius via the shared menu highlight (--sidebar-item-hover)."
 
 ### Iteration Guide
 
 1. Focus on ONE component at a time
 2. Keep all values grayscale — "Stone (#737373)" not "use a light color"
 3. Assign the specific visible layer through §5: check Step 1 registered shapes first (keycaps or an approved data-mark member), then use Step 2 for ordinary control frames, containers and inner-control surfaces. Keep contained content, hit testing and focus / selection indicators separate as §5 requires; submit unresolved shapes for adjudication.
-4. Shadows are always zero — never add them
+4. No new shadows — only the §6 registered exceptions carry one
 5. Weight is 400/500 for everyday chrome, 600 for rationed emphasis — 700 never appears in new UI (registered exemption domains in §3 only)
 6. If something feels too decorated, remove it — less is always more
 
@@ -591,6 +1011,8 @@ Source: `apps/desktop/src/renderer/themes/`
 - `registry.ts` — the `builtinThemes` registry + `listThemesByType('light' | 'dark')`
 
 Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plus `lightThemeId` / `darkThemeId` (which concrete theme). Settings → Appearance is the UI entry.
+
+Settings → Appearance opens with a 20px/500 page title (line height 1.3, 24px above the first section), one step above the 16px section titles. The theme card follows the page title directly, without its own section title; Wallpaper, Fonts, Sidebar & panels and Reply Animation follow, each titled outside its card and laid out as settings rows (see “Desktop settings rows”). In the theme card, Theme, Appearance mode and Local themes are separate rows divided by lines. Theme is a single row whose picker is the same 320×36 pill select as Settings → General → Display language (same trigger, popover, option and selected styles). Theme, Local themes and Wallpaper carry no extra description line. Wide controls (wallpaper grid, sliders, and the font pickers, whose preview popovers must match the trigger width) sit under their row label. The appearance mode is one row: label on the left, three 92×60 window thumbnails on the right with a 12px caption. Each thumbnail draws a miniature Cindy window (sidebar, user message, reply lines, composer with send dot) from the selected color theme’s own `surface`, `surface-chip`, `border-default`, `surface-elevated`, `text-primary` and `text-tertiary` values; “System” shows the light half on the left and the dark half on the right. The selected thumbnail gets a 2px `--settings-theme-preview-border-active` ring with a 2px gap (12px outer / 8px inner radius), unselected ones show the ordinary preview border on hover. The theme picker comes before the appearance mode. A theme family with only one variant is tagged “Light only” / “Dark only” in the theme list. While such a theme is selected, the three mode cards are disabled and show the variant actually rendered, with one line under the mode label explaining it; the saved mode is not changed and applies again when a two-variant theme is chosen (owner request, 2026-10-17). Implementation: [AppearanceSection.tsx](../../apps/desktop/src/renderer/components/settings/AppearanceSection.tsx); regressions in `AppearanceSection.accessibility.test.tsx`.
 
 ### Token Tiers
 
@@ -623,7 +1045,7 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 |  | `--text-secondary` | `#737373` | `#a3a3a3` | Secondary text / icons |
 |  | `--text-secondary-cross` | `#a3a3a3` | `#a3a3a3` | Lighter cross-theme secondary |
 |  | `--text-secondary-mid` | `#525252` | `#a3a3a3` | Muted body text |
-|  | `--text-tertiary` | `#a3a3a3` | `#737373` | Placeholder / tertiary |
+|  | `--text-tertiary` | `#a3a3a3` | `#737373` | Tertiary text / metadata (never placeholders — use --text-placeholder) |
 |  | `--text-tertiary-stone` | `#737373` | `#737373` | Cross-theme Stone tertiary |
 |  | `--text-tertiary-mid` | `#525252` | `#737373` | Mid-gray tertiary |
 |  | `--text-tertiary-hsl` | `0 0% 45%` | `0 0% 45%` | Tertiary, HSL form |
@@ -661,6 +1083,8 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--warning-fg`                                                                                                                                                | `#F3A115`                                                               | `#F3A115`                                                             | Warning text/icons, including the update-restart busy-turn interruption hint                                                                                                                                                                                                                                                                                                                                                                     |
 | `--focus-ring` / `--focus-ring-soft`                                                                                                                          | `#417CDD` / @50%                                                        | same                                                                  | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant                                                                                                                                                                                                                                                                                                                                                                        |
 | `--text-selection-bg`                                                                                                                                         | `var(--focus-ring-soft)`                                                | same                                                                  | Selected text background; remains visible when focus moves into an embedded webview                                                                                                                                                                                                                                                                                                                                                              |
+| Mobile `quotaBarWarn` | `#F3A115` | `#F3A115` | Account quota-bar fill only: 10% < remaining <30%; owner-approved desktop semantic parity, 2026-10-23 (§2). |
+| Mobile `quotaBarCrit` | `#D91F37` | `#D91F37` | Account quota-bar fill only: remaining ≤10%; independent of task-error status, 2026-10-23 (§2). |
 | `--slider-thumb-shadow` | two neutral shadows | two neutral shadows (deeper) | Slider numeric/media thumb only, owner-approved 2026-09-17 (§15.18); no Switch or panel reuse. |
 | `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow`                                                                                                 | rgba                                                                    | rgba (deeper)                                                         | Shadows, theme-invariant                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `--segmented-selected-shadow` | two neutral shadows | two neutral shadows (deeper) | Segmented selected pill only, owner-approved 2026-09-18 (§4); no Switch or panel reuse. |
@@ -669,8 +1093,8 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | Toast `#417CDD / #2AAE5B / #F3A115 / #D91F37`                                                                                                                 | (hardcoded in Toast.tsx, VARIANT_MAP exported)                          | same                                                                  | Finalized 2026-07-17 (Toast exemption lifted, merged into the status-color family)                                                                                                                                                                                                                                                                                                                                                               |
 | `--file-badge-pdf/-doc/-sheet/-slide/-code` + `--file-badge-fg`                                                                                               | `#B23A26` / `#2C5CA8` / `#2E7D4F` / `#A25A12` / `#5B49A8`, fg `#FFFFFF` | same                                                                  | File-type badges on the self-drawn attachment icon (2026-07-27). Bound to _what the file is_, not to the theme, so both modes share one value. Each accent is picked for ≥4.5:1 against `--file-badge-fg` (5.96 / 6.56 / 5.05 / 5.24 / 7.09) — the badge label renders at 10px (Micro Label floor, §3), so AA small-text applies. `--file-badge-fg` is a standalone white: `--accent-pure-cta-fg` flips to black in Dark and cannot be borrowed. |
 | `--bot-avatar-red-bg` … `--bot-avatar-graphite-bg` (9 tokens)                                                                                                 | soft tints (`#f7ded9` … `#e5e5e5`)                                      | deep tints (`#4a2e2a` … `#3c3c3a`)                                    | Bot avatar fills in `features/bots` only (2026-08-17). Identity cue ("which Bot"), not status; emoji / initial-letter fallback reads `--text-primary` in both modes. Not part of the external-theme import allow-list, so the hues stay stable across themes.                                                                                                                                                                                    |
-| `--bot-unread-bg` / `--bot-unread-fg`                                                                                                                         | `#417CDD` / `#FFFFFF`                                                   | same                                                                  | Teammate-list unread badge + pending-todo dot in `features/bots/BotsSidebar.tsx` only (2026-08-19). IM unread semantics, not a CTA and not status; theme-invariant because "unread" means the same thing in both modes. Value is the registered focus-ring / Auto Approval / Toast-info blue; the fg is a standalone white because `--accent-pure-cta-fg` flips to black in Dark. Must not leak to other badges, dots or surfaces.               |
-| `--usage-heatmap-high`, `--usage-model-1` … `--usage-model-5` | Heatmap blue alias + reference-refined model palette; see colors.ts | Corresponding Dark palette; see colors.ts | Usage History heatmap, token bars and matching model-table marks only (2026-09-08). Category/intensity, never status. Only these newly introduced model-role defaults are refined; process tokens and user theme overrides do not change. |
+| `--bot-unread-bg` / `--bot-unread-fg`                                                                                                                         | `#417CDD` / `#FFFFFF`                                                   | same                                                                  | Teammate-list unread indicators in `features/bots`, including the Cindy device row, its device-picker options/trigger and the 近况 popover's computer rows (scope extended 2026-09-21, header picker moved into 近况 2026-10-21); Mobile `botUnread` mirrors it for the companion list unread dot only (2026-09-29). IM unread semantics, not a CTA and not status; theme-invariant because "unread" means the same thing in both modes. Value is the registered focus-ring / Auto Approval / Toast-info blue; the fg is a standalone white because `--accent-pure-cta-fg` flips to black in Dark. Must not leak to unrelated badges, dots or surfaces.               |
+| `--usage-heatmap-high`, `--usage-model-1` … `--usage-model-5` | Heatmap blue alias + reference-refined model palette; see colors.ts | Corresponding Dark palette; see colors.ts | Usage History heatmap, token bars and matching model-table marks only (2026-09-08); since 2026-10-17 also the same charts and person / computer / model table marks in the provider「远程与分享」usage block. Category/intensity, never status. Only these newly introduced model-role defaults are refined; process tokens and user theme overrides do not change. |
 | `--process-agent-task-icon`, `--process-agent-service-icon`, `--process-main-icon`, `--process-renderer-icon`, `--process-gpu-icon`, `--process-utility-icon` | `#2563EB` / `#7C3AED` / `#DB2777` / `#0891B2` / `#D97706` / `#059669`   | `#60A5FA` / `#A78BFA` / `#F472B6` / `#22D3EE` / `#F59E0B` / `#34D399` | Resource Usage 14px process-category glyphs only (2026-08-06). Category cue, not status; all surrounding UI stays neutral. Protected from automatic external-theme import so category identity does not drift.                                                                                                                                                                                                                                   |
 
 Mobile's `betaChannelBadgeBackground/Foreground` remain the cross-theme fixed pair `#DF0C27` /
@@ -731,6 +1155,7 @@ CSS variable names are always kebab-case. Dot-style ids (VSCode's `sidebar.itemA
 3. **HSL tokens must be wrapped**: `hsl(var(--background))`, never bare `var(--background)` (the latter yields a raw HSL string, not a valid CSS color)
 4. **No suitable token? Don't force one**: discuss adding a slot/singleton with the user instead
 5. **Never** use `bg-[#xxx] dark:bg-[#xxx]` hardcoded pairs — the pre-P2 anti-pattern; it was migrated away once and new code must not reintroduce it
+6. **Text color = the tier token for its role**: `--text-primary`, `--text-secondary-mid` (description), `--text-secondary`, `--text-tertiary`, `--text-placeholder` (or its input aliases). Placeholders use the placeholder tier itself, not `--text-tertiary` or an extra `placeholder:opacity-*`; neutral text never pairs its token with a static `opacity-*` to sit between tiers (disabled states and `opacity-0`/`100` reveals excepted). Guarded by `textTierDiscipline.test.ts`
 
 This section is the authoritative token-usage text; i18n rules for UI copy live in `docs/dev-rules/engineering-conventions.md` §5.
 
@@ -755,7 +1180,7 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 ### 11.1 Language-Independent Principles (zh-CN / zh-TW / en / ja / ko alike)
 
 - **Actions = verb + object, never a bare verb.** Buttons and menu items say what is done to what: `Deploy Project` / `删除会话` / `セッションを削除`. **Forbidden**: objectless verbs like `Confirm` / `OK` / `确定` / `提交` (confirm-dialog primary buttons especially must carry the object so they read correctly out of context).
-- **Errors = what happened + what to do.** A bare "Failed / 出错了" is not acceptable — give the next step ("Connection timed out — check your network and retry"). Pairs with `docs/dev-rules/engineering-conventions.md` §2 (IPC error protocol): error codes are for code; the user-facing sentence must be human and actionable.
+- **Errors name what failed; advice must be supported by the cause.** When the cause is known, give the corresponding remedy. Suggest retrying only when there is evidence it may help; never append "Try again / 请重试" by default. When the cause or recovery path is unknown, state the failed operation honestly (for example, `Could not save panel positions` / `未能保存面板位置`), without inventing a cause, promising recovery, or prescribing an arbitrary action. Before suggesting a repeated write, import, or payment, account for possible partial completion. Pairs with `docs/dev-rules/engineering-conventions.md` §2 (IPC error protocol).
 - **In-progress = present continuous + ellipsis.** `Deploying…` / `正在部署…` / `デプロイ中…`. The ChatView Thinking status bar (`Spelunking…`, Thinking Orange) already is this pattern; new loading/processing states follow it.
 - **Results name the object — never say "success".** Toasts say what changed, not that an operation succeeded: `会话已删除` not `删除成功`; `Project deleted` not `Deleted successfully`. **Forbidden**: filler like "successfully / 成功了". (Toast visuals are §2; this rule is copy only.)
 - **Empty states point at the first action** — never just "No data"; tell the user what they can do now ("No sessions yet — hit + to create one").
@@ -768,14 +1193,25 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 - **zh-TW**: likewise has no Title Case; use Traditional Chinese characters and punctuation, while keeping English terms as-is in mixed text. No full stop at the end of toasts / labels.
 - **ja / ko**: likewise no Title Case; follow each language's particle / politeness conventions, and verify terminology when unsure (per `docs/dev-rules/engineering-conventions.md` §5: no improvised ja/ko).
 - **Numbers / units**: Arabic numerals + half-width in all five languages; number-to-unit spacing per language convention.
+- **Task elapsed time**: promote long durations to hours/minutes at one hour and days/hours/minutes at one day. Always retain the minute field, including zero (for example, `1h 0m` or `2d 0h 5m`). Apply this to work summaries, thinking, live counters, task cards and usage details on Desktop and Mobile. Keep existing sub-hour precision; live counters may retain a zero-padded remainder. Stored durations and rate calculations keep their original precision.
 
 ### 11.3 Self-Check (when touching copy)
 
 - [ ] Action buttons carry an object — not a bare `确定` / `OK`
-- [ ] Error copy says what to do next, not just that it failed
+- [ ] Error copy names the failed operation; any cause, remedy, or retry advice is supported by the actual failure
 - [ ] No "successfully / 成功" filler
 - [ ] In-progress states read "present continuous + …"
-- [ ] All 5 `common.json` files updated, each matching its language's casing/punctuation (see `docs/dev-rules/engineering-conventions.md` §5)
+- [ ] Affected copy reviewed in all 5 languages on each affected client, including descriptions, navigation names, and accessible labels (see `docs/dev-rules/engineering-conventions.md` §5)
+- [ ] Names and descriptions match the actual controls, scope, conditions, and consequences; shorter copy has not changed the promise
+- [ ] Relevant structural, placeholder, terminology, and copy tests run; language review and any unverified runtime presentation are reported separately
+
+### 11.4 Plain-language copy and multilingual review (owner decision, 2026-10-09)
+
+- **Make the next action understandable at a glance.** Menus and settings use everyday language describing what users can do or what changes. Do not expose implementation vocabulary such as `chip`, `hover tooltip`, or `max_budget` as instructions. Keep established product terms, brand names, and technical identifiers when users need them to identify a real option; consult `i18n/GLOSSARY.md` rather than inventing synonyms.
+- **Brevity is a target, not a truncation rule.** In Simplified and Traditional Chinese, aim for 2–4 characters for names and no more than 20 characters for short descriptions. Preserve the action's object, device/account scope, effective time, exceptions, and irreversible consequences even when they require more text. Detailed help and accessible labels may be longer. Other languages use natural concise phrasing, not the Chinese character limit or word-for-word translations.
+- **Explain the actual behavior.** Read the consuming UI and relevant behavior before rewriting. A three-way display selector must not be described as a card-mode switch; a notification setting covering errors and requests for a reply must not be named only for completion. Distinguish mode labels from action buttons and keep page headings, navigation/search labels, descriptions, and accessible names consistent.
+- **Review every affected language.** Compare zh-CN, zh-TW, en, ja, and ko for meaning, conditions, terminology, natural phrasing, and local punctuation. For shared concepts, check Desktop and Mobile together. Preserve placeholders and plural forms. A translation that is already correct need not be changed merely to produce a matching diff.
+- **Use checks and language review together.** Run the existing i18n structure and glossary gates plus relevant Desktop/Mobile catalog, placeholder, and copy tests. These do not prove semantic accuracy or naturalness, and static references do not cover every dynamically constructed key. State the review scope and distinguish automated checks, language review, native-speaker review, and runtime layout/readability checks; do not claim a full-product audit or verified Light/Dark presentation from a passing catalog check.
 
 ## 12. Component Spec (merged into §4)
 
@@ -783,7 +1219,7 @@ Cindy's product voice matches its visuals: **restrained, direct, never self-cong
 
 ## 13. Open Spec / Token Gaps
 
-No gaps are currently open.
+This section no longer tracks open items; it keeps the pointer only. Open design rulings — for example the user-theme `colors.radius` override, legacy cross-surface aliases, the Mobile permission presentation and Mobile/Desktop radius-tier differences — are registered in [`design-governance.md` §10](./design-governance.md#10-待裁决登记). Do not treat an absence here as "no open gaps".
 
 Resolved items (G1–G4, 2026-06 — button-text drift, border drift, placeholder unification, radius tiering) are archived in [`design-decision-log.md`](./design-decision-log.md); each entry records the drift, the ruling, and where the conclusion was folded back (§2 / §4 / §5 / §10).
 
@@ -806,22 +1242,37 @@ Known but deliberately-deferred cleanups are tracked in the decision log's backl
 
 - When a dismissible form opens, focus its primary input. Ordinary ConfirmDialog retains Cancel by default; explicit `autoFocusConfirm` opts into the primary action, and typed confirmation takes precedence (§4, DS-6). Selection-only dialogs such as InstallTargetPicker start on Cancel to avoid focusing an immediate installation action. Contain Tab, support Esc when idle, and restore the opener on close; actual saving/installation blocks dismissal until settlement.
 - On close, focus returns to the triggering element (Radix default — don't break it).
+- Composer-replacing cards (permission, plan review, ask) take window-level Enter / Esc / number shortcuts only when the key is otherwise unclaimed. An already-handled key, IME composition, an editable field, a control or popup layer outside the card, and Enter on the card's own control (native activation — Enter on Deny denies) all take precedence. Implementation: `shouldCardShortcutYield` in [editableKeyboardTarget.ts](../../apps/desktop/src/renderer/lib/editableKeyboardTarget.ts); regressions in [cardShortcutYield.test.tsx](../../apps/desktop/src/renderer/__tests__/cardShortcutYield.test.tsx).
+- Settings (an in-window route, all desktop platforms) steps back one level on an unclaimed Esc, the same exit as its top-left Back: the Pi extensions sub-page returns to General, otherwise Settings closes. Inner owners settle first — clearing a non-empty search, shortcut recording, dialogs / menus / popovers, a plugin detail page (back to its list) and the Help panel; IME composition, modified Esc and auto-repeat from a held key never navigate (one physical press steps back one level). With a Settings field focused, the first Esc only leaves the field (blur-to-save fields commit as on click-away) and the next one exits. Implementation: [useSettingsEscape.ts](../../apps/desktop/src/renderer/components/settings/useSettingsEscape.ts); regressions in [useSettingsEscape.test.tsx](../../apps/desktop/src/renderer/components/settings/__tests__/useSettingsEscape.test.tsx).
 
 ### 14.3 Keyboard & IME (send-type text fields)
 
 Applies to submit-on-Enter fields: the chat composer, goal input, ask input, etc. **Not** ordinary single-line editors in Settings — there Enter must not submit.
 
-- **Enter = submit**, **Shift+Enter = newline**.
+- By default, **Enter = submit**, **Shift+Enter = newline**. The desktop chat composer also supports the existing **Cmd/Ctrl+Enter = submit** preference; when enabled, **Enter = newline**.
+- Composer list continuation follows newline intent: Enter in that preference, as well as Shift/Alt+Enter, continues a list or exits an empty item. Send shortcuts and IME confirmation must not edit lists; fenced code keeps native newline behavior. The shared key handler is `handleComposerListEnter` in `apps/desktop/src/renderer/components/new-chat/ComposerListNodes.ts`, covered by `apps/desktop/src/renderer/lib/__tests__/composerListContinuationEditor.test.ts`.
 - **Enter during IME composition must not submit** — check `event.nativeEvent.isComposing` (a CJK user confirming a candidate must not accidentally send).
 - Centralize this logic in code; do not re-implement it per field and let behavior drift (per "code-first determinism" in `docs/dev-rules/maker-core-and-agent-behavior.md`).
 
 ### 14.4 Motion & Transitions
 
-> Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **ordinary UI fades, nudges, and resizes smoothly; overshoot is limited to the explicitly registered Done and Usage History chart responses below**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
+> Expanded 2026-07. Cindy's motion character extends the paper-like restraint of §1 / §7: **ordinary UI fades, nudges, and resizes smoothly; overshoot is limited to the explicitly registered Done, Usage History chart and mobile new-task morph responses below**. Functional state transitions are allowed; decorative motion is forbidden. This section pins "functional" into executable tiers and prototypes so components stop inventing their own durations and curves.
+
+**Desktop companion composer action (owner-approved prototype, 2026-10-22).** An idle
+one-to-one companion composer shows dictation and a call action. A visible prompt
+recommendation keeps the call action available (owner correction, 2026-10-29); its
+Tab/click acceptance and Enter send remain available. An accepted or typed draft,
+attachments or browser comments replace the call with Send in the same 30px circular
+target. Crossfade the icon layers and scale 55% ↔ 100% on
+`--motion-enter` (250ms) / `--motion-ease-move`; keep the shell, hit target and dictation
+position fixed, with no bounce. CSS transitions retarget from their current values.
+Respect reduced motion, retain keyboard focus, and reject a press whose action changes
+before activation. Recording/refinement, Stop, Queue and queue editing retain their
+existing actions. Other composers keep their existing behavior.
 
 #### Motion tokens (the only tier source)
 
-Global tokens live in `:root` of `apps/desktop/src/renderer/styles/globals.css`; mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (dual-platform isomorphism, same policy as color tokens, landing with the mobile motion overhaul). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 radius scale. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
+Global tokens are generated from `packages/design-tokens` into `:root` of `apps/desktop/src/renderer/styles/generated/tokens.css`; `styles/globals.css` only holds the reduced-motion overrides. Mobile (`apps/mobile`) mirrors same-name same-value constants in `src/theme/tokens.ts` (`motionDuration` / `motionEasing`; dual-platform isomorphism, same policy as color tokens). **New transitions/animations must reference tokens — no hardcoded durations or cubic-beziers**; 5 interaction-duration tiers + 3 curves, the same philosophy as the §5 radius scale. Values outside the tiers require design review first. Narrow semantic exceptions are recorded directly below.
 
 | Token                | Value                           | Use                                                                                |
 | -------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
@@ -855,19 +1306,26 @@ long duration to leak into any other hover or transition.
 
 **Switch feedback (owner-approved 2026-09-16).** The shared Desktop Switch uses the bounded thumb width/height changes registered in §15.17: a one-shot size transition with `--motion-fast` / `--motion-ease-out`, no overshoot, and direct pointer tracking during drag. The track and hit region do not move or grow. This is a functional transient width/height exception; it does not authorize looping layout animation. Reduced motion removes transitions and keeps immediate state feedback.
 
+**Mobile list disclosure rhythm (owner request, 2026-09-30).** On mobile, expanding and collapsing list groups (home pinned / shared / project / conversation groups, automation run groups on the home and device pages, the collapsible Settings debug group) and task-row moves from archive, unarchive, pin or unpin (rows leaving stay visible while the rows below close over them, then fade) follow the iOS system list rhythm instead of the Desktop `base` tier (200ms): 225ms quadratic ease-out with no overshoot, reaching about 90% of the travel within 150ms (the owner asked for the first 450ms version to be halved the same day). The group opens from under its header: list cells clip their content while their position and height animate, new rows sit at their final positions and are revealed as the group grows, and the rows below move down in step; new rows do not fade in place. Collapsing reverses this: removed rows stay visible while the group closes over them and fade only near the end. The disclosure chevron switches without animation. The duration lives in mobile's `listDisclosureMotion` token and the shared implementation is `apps/mobile/src/session/listDisclosureTransition.tsx` (Reanimated layout animations, attached only during the transition window; React Native `LayoutAnimation` is a no-op in this app because Reanimated owns the Fabric mounting layer). Reduced motion switches instantly. This exception does not apply to Desktop, sheets, dialogs, or other panels.
+
+**Mobile image viewer edge elasticity (owner request, 2026-10-10).** In the mobile full-screen image viewer (`apps/mobile/src/session/ImageLightbox.tsx`), direct manipulation follows the system Photos physics instead of hard stops: a zoomed one-finger pan may run past the image edge with rubber-band resistance (UIScrollView coefficient 0.55 over the container size), and a pinch may overshoot 1x / the maximum zoom with the same resistance. On release, anything out of bounds returns on a near-critically damped spring (no visible oscillation, about 0.3s); an in-bounds release continues with inertial decay that may briefly overrun the edge and return; a touch catches it in place. Scale and translation settle on the same spring so the point under the fingers stays put. These are physics responses to the hand, not duration-tier transitions, so they use spring/decay parameters rather than motion tokens; the parameters and decisions live in `imageLightboxModel.ts`. A single image at 1x keeps the native horizontal edge bounce. This exception does not apply to any other surface.
+
+**macOS menu bar quota fill (owner request, 2026-10-11; liquid and ripple 2026-10-16).** The native menu bar panel (`apps/desktop/native/menubar/`) fills its detail rings from empty over 0.5s with `timingCurve(0.22, 1, 0.36, 1)` (no overshoot) each time the panel opens or a page loads; page switches use the same curve and duration. Usage tube liquid rises on the same curve over 0.9s, staggered 60ms per tube; while it rises the surface rocks only slightly (about 1pt, a quick 0.34s rock that swells mid-climb and is level again on arrival) and it sloshes properly once it stops — inertia tips the surface from side to side (first mode, up to about 5pt at the edges for a nearly full tube, ~0.95s period) with a smaller faster second mode, decaying over about 4.5s. How hard a tube sloshes follows how high its liquid climbed (momentum grows with level^1.5, so a low tube barely moves), and every opening draws a fresh profile — first lean direction, strength, period, decay, the second mode and the instant of arrival — so the tubes never repeat themselves. The slosh then decays to the gentle ripple on a source in use and to a still surface everywhere else (owner request, 2026-10-16). The task total reads "3M token · $66.46": tokens first, so the amount ends flush with the task amounts below; without tokens the amount alone sits at the right. Plain numbers (tube values, task amounts and total, the month total, the detail ring value) count up from zero on the same 0.9s curve each time the panel opens, with the final text reserving its width so nothing shifts; strings that mix in words stay static. Today's task total (19pt) reads larger than each task's amount (14pt). After the opening settles, continuous motion carries one meaning only — **tokens are being spent right now**: the liquid surface of a source that a running task on this computer is drawing on ripples gently (about 1.5pt, a 3.6s period; main marks it `active` from the running session's provider, with Cindy-managed providers marking the Cindy balance), and a running task's share bar carries a travelling highlight. When the task stops, the ripple eases to a flat, still surface over 1.4s; every other tube and the warning glow stay still. Feedback: moving the pointer onto a tube gives its liquid a small nudge (about a third of the opening slosh, scaled by its level, random first direction) that dies down within about a second, and sweeping across the row does not restart a nudge that just began; a pressed tube squeezes to 95% and springs back; the "Open Cindy" `>` slides in once as the panel opens, leans 2pt forward on hover and pushes 4pt on press. These are SwiftUI motions, not Web duration tiers: the Web tokens do not apply inside the native helper. Reduced motion shows the final values without animation and keeps every surface still. This exception does not apply to any other surface.
+
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 
 | Semantic                                    | Spec                                                                                                                                                                                                                                                                                         | Reference implementation                        |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | Light overlay (menu / popover / tooltip)    | In: `animate-float-in` (opacity + scale 0.97→1, fast/ease-out; pure-opacity tooltips use `animate-fade-in`). Out: `animate-float-out` (opacity only, instant/ease-in). **Exit is always faster than enter, and never scales** (a scaling exit reads as "sucked away" — paper fades in place) | `components/ui/dropdown-menu.tsx`               |
-| Heavy overlay (modal / confirm)             | In: 250ms fade + scale 0.95→1; out: 150ms                                                                                                                                                                                                                                                    | `components/ui/confirm-dialog.tsx`              |
+| Heavy overlay (modal / confirm)             | Every modal, from the shared `.modal-scrim` / `.modal-panel` (2026-10-04): scrim fades in; panel fades in + rises 8px + scale 0.96→1 on `--motion-enter` / `--motion-ease-out` (entrance borrowed from Fluid Functionalism's chat-message). Out: fade only on `--motion-exit` / `--motion-ease-in` — a dismissal does not replay the entrance. Radix dialogs animate by `data-state`; hand-built dialogs have the entrance only. Call sites add no `animate-*` classes | `styles/globals.css`, `__tests__/modalSurfaceContract.test.ts` |
 | Expand / collapse                           | base/ease-move, grid `0fr↔1fr` height + opacity                                                                                                                                                                                                                                              | `features/cc-agent/sidebar/SectionCollapse.tsx` |
 | List reorder                                | FLIP, transform translation                                                                                                                                                                                                                                                                  | `components/ui/toast/ToastContainer.tsx`        |
-| Press                                       | `active:scale-[0.98]` for ordinary pill action frames. Registered shapes follow their component interaction treatment and §5 constraints; a button tag does not authorize scaling a contained data mark or its data mapping.                                                                                                                                  | ConfirmDialog buttons                           |
+| Press                                       | Shared Desktop Button / ChromeIconButton / SidebarIconButton: paint-only 1px inset, instant/ease-out, stable text and hitbox (§4). Legacy frames retain their existing `active:scale-[0.98]` until separately migrated. Registered shapes follow §5; a button tag does not authorize scaling a contained data mark or its data mapping. | `components/ui/button.css` |
 | Done                                        | registered completion overshoot (`status-done-pop`); chart response has its own narrow registration below                                                                                                                                                                                                                                  | `globals.css`                                   |
 | Running                                     | Opacity breathing; must sit on an HTML wrapper (`docs/dev-rules/engineering-conventions.md` §7)                                                                                                                                                                                              | `session-breathing`                             |
 | Loading spinner                             | `animate-spinner` (`--motion-spinner-cycle`, linear full turn); HTML wrapper only, static under reduced motion                                                                                                                                                                               | `tailwind.config.ts`                            |
 | Hover / state colors                        | `transition-colors`, ≤ fast (150ms)                                                                                                                                                                                                                                                          | App-wide status quo                             |
+| Menu row hover (shared dropdown panels)     | One layer glides between rows: `transform` + `opacity` on `--motion-instant` / `--motion-ease-out` (fade-out `--motion-ease-in`); row weight 400 → 500 and icon stroke 1.5 → 2 on `--motion-instant`; no slide under reduced motion (§4 Select & Dropdown) | `components/ui/dropdown-menu-highlight.ts` |
 | Container transform (chip grows into panel) | 220ms — see the dedicated category below (explicit exception)                                                                                                                                                                                                                                | Composer permission/model selectors             |
 
 _Reference-implementation paths in this table are relative to `apps/desktop/src/renderer/`._
@@ -896,7 +1354,7 @@ Only the two registered chart members inside Usage History may enlarge their non
 - **Composer toolbar: two chrome tiers, one set shared between in-session and the create dialog (finalized 2026-07-22)**:
   - **Morphing-dropdown tier (+/permission/model)**: bare at rest (`border border-transparent bg-transparent`); the pill outline appears only on hover (`hover:border-[var(--border-default)]` + `composer-pill-bg`); selected/danger tiers tint the text only, never the fill.
   - **Persistent-tool tier (voice/send)**: permanent outline / solid CTA (voice: `composer-pill-bg` + `border-default`, hover `model-trigger-hover`, recording state `surface-chip` fill + red-dot timer expansion; send: `send-btn-*` neutral-inverse solid).
-  - **In-session (default) and the create dialog (create-agent) must match verbatim**: the five shared controls (+/permission/model/voice/send) no longer fork styles by `visualVariant`; `create-agent-control-*` / `create-agent-send-*` must not be used for these five controls (legacy segmented token IDs remain for theme compatibility; the top mode/project/branch pills retain their existing roles). Changing any control's chrome changes both surfaces. Contract test: `newMakerCreateAgentVisualContract.test.ts`.
+  - **In-session (default) and the create dialog (create-agent) must match verbatim**: the five shared controls (+/permission/model/voice/send) no longer fork styles by `visualVariant`; `create-agent-control-*` / `create-agent-send-*` must not be used for these five controls (legacy segmented token IDs remain for theme compatibility; the top mode/project/branch pills retain their existing roles). Changing any control's chrome changes both surfaces. Verify this at the real component boundary when the shared controls change.
 - **Quota-reset confetti** — the third sanctioned motion class (approved 2026-07-23), **only** for the status-bar usage chip’s full-quota reveal (updated by user decision, 2026-09-12):
   - **Definition**: the first observation of 100% remaining quota throws confetti once from the full window segment, including the first visit. Deduplicate by provider across task switches and component remounts. After that first burst, the quota must drop below 100% and return to 100% before another burst. Remaining at 100% never replays, even across scheduled cycles. Reset deadlines do not participate in this decision; official extra resets follow the same rule. Snapshot update timestamps only reject stale task data. The percentage roll keeps its own reset detection.
   - **Form** (finalized over four/five review rounds, 2026-07-23): **true parabolic toss + vanish on landing** — all particles launch simultaneously from the segment center in a ~**100° fan** (±50° of straight up) at equal speed, **constant horizontal velocity + constant vertical gravity** (decelerating up, accelerating down past the apex), so perceived speed is consistent from burst to fall; wider-angle particles fly lower arcs, travel farther, land earlier — the scatter comes from physics, not scripting. The final stretch before the ground line ends in a **short fade**: landing is fine, but lingering after landing ("corpsing") or vanishing without a fade is forbidden; the ground line jitters randomly so landing points don't queue up.
@@ -915,9 +1373,48 @@ Only the two registered chart members inside Usage History may enlarge their non
   - **Definition**: the active theme's official Light/Dark Cindy wordmark sits centered in the empty message viewport at 35% opacity; after a 200ms delayed-reveal threshold, one narrow neutral highlight traverses the wordmark shape. The PNG alpha channel is the mask, so motion is confined to the glyphs and never paints a panel/background. This is functional loading feedback for a measured long switch, not a decorative brand loop: ordinary sessions complete before the reveal threshold and never show it; the mark unmounts immediately when the message tree mounts.
   - **Parameters / performance**: highlight cycle 1.6s, `cubic-bezier(0.4, 0, 0.2, 1)`, HTML pseudo-element `transform: translateX(-120% → 350%)` only (compositor-only). The neutral gradient is the narrow §2 exception registered under “Gradient System”; it may use only `transparent` and `--text-primary`, never brand red or a component-authored chromatic value. `prefers-reduced-motion` removes both the reveal and sheen animations and shows a static wordmark; `[data-app-hidden='true']` pauses the infinite sheen via `animation-play-state` while the window is hidden.
   - **Scope boundary**: session-switch deferred-loading overlay only. No reuse for startup, streaming, tool execution, message generation, dialogs, cards, sidebars, empty states, or static branding. The standard `animate-spinner` remains the default loader everywhere else. Implementation: `components/branding/BrandLoadingMark.tsx`, `MessageStream.tsx`, and `.brand-loading-mark*` in `globals.css`.
+- **Mobile new-task morph(移动端新建按钮形变)** — the seventh sanctioned motion class (approved 2026-09-29), **only** for the iOS home floating new-task button and the composer pill it becomes (`apps/mobile/modules/cindy-composer-morph`):
+  - **Definition**: on touch-down the 55pt round button stretches horizontally, in place, into the equal-height composer pill (it does not play the button's own press). A stand-in glass grows over the old screen while the new-task page mounts; once the page is ready the real composer glass takes over with the stand-in's current velocity, so the trajectory is continuous and nothing is swapped at the end. Sliding off before release springs back into the button and does not navigate. Later, a tap on the pill opens it upward into the full composer card and then focuses the input; the keyboard follows (per-frame keyboard follow is layout, not motion, and has no easing).
+  - **Parameters**: button → pill uses an underdamped spring, stiffness **305**, damping ratio **0.67** (response ≈ 0.36s), one visible overshoot of ≈ 14pt on a phone pill, kept inside the 16pt screen inset; the stand-in, the real glass and the slide-off return share this spring. Pill → card uses a critically damped spring, stiffness **320**, damping ratio **1** (no overshoot), so the card is open before the keyboard starts rising. Both springs take their duration from physics; the nominal `UIViewPropertyAnimator` durations in code are ignored. Handoff fades: the old-screen snapshot clears in 0.16s ease-out, the stand-in reveals over 0.18s ease-out and dissolves over 0.22s ease-in-out after a 0.06s delay, and the composer controls fade in over 0.24s ease-out after a 0.1s delay. Native focus is requested 0.05s after the card starts opening.
+  - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
+  - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
+  - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the tokens above. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+- **Bot Market detail entrance(Bot Market 详情入场错峰)** — the eighth sanctioned motion class (approved 2026-10-16), **only** for the Bot Market detail page (`BotMarketDialog` / `BotMarketModules`):
+  - **Definition**: when a teammate's detail opens, its segments — identity block, capability strip, then each module that has data (skills, knowledge and memory, work tools, routines) — fade in and rise 6px one after another, so the page reads as content arriving in reading order. This is a one-shot entrance for the opened detail; it does not replay on scroll, expand/collapse, or data refresh.
+  - **Parameters**: each segment `--motion-base` / `--motion-ease-out`, opacity 0→1 and `translateY(6px→0)`; adjacent segments start **30ms** apart via `--rise-index` (`animation-delay: calc(var(--rise-index) * 30ms)`); at most **6** segments (the index is clamped at 5). `transform` / `opacity` only. This is an explicit exception to the rule that stagger is limited to the composer-container rows (≤20ms/row) and must not leak elsewhere.
+  - **Degradation**: `.bot-market-rise` is in the `prefers-reduced-motion` whitelist in `globals.css`; reduced motion lands on the final frame directly.
+  - **Scope boundary**: this page only. The same detail page's other motion uses existing tiers: the header identity and compact action fade in on `--motion-fast` / `--motion-ease-out` and out on `--motion-instant` / `--motion-ease-in` (a state-driven transition, not a keyframe); placeholders appear only after 300ms of loading, static, with no shimmer. Implementation: `.bot-market-rise` in `globals.css`.
 - **Retired: mobile-download QR brand edge** — a rotating app-icon edge on the `MobileDownloadDialog` QR card was briefly registered here as a fourth (persistent) motion class on 2026-07-25 and **removed the same day** at the user's request: read as a strange ring turning behind the code. There is **no sanctioned persistent decorative motion** — the red lines above hold without exception. The card is now a bare QR (no edge, no border, no shadow, no tilt); its only motion is the linked ↔ onboarding size tween. Do not re-add. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 
 ### 14.5 聊天正文的可点性信号(Clickability in message bodies)
+
+**桌面消息链接的操作（2026-10-16）**：用户消息与 AI 消息共用同一套点击与右键语义。
+任务链接右键提供「在当前窗口打开」「在新窗口打开」「复制链接」；Shift+点击、⌘/Ctrl+点击和
+中键点击均在新窗口打开，保留来源电脑与消息锚点，不切换原窗口或分屏 pane。
+嵌入式任务内容不拥有宿主路由，任务链接直接开新窗口，其菜单不提供当前窗口跳转。
+
+网页普通点击沿用用户的内置／系统浏览器偏好；上述修饰键和中键临时使用系统浏览器，
+不修改偏好。文件链接普通点击沿用预览／审查等原行为，修饰键和中键交给默认应用，
+HTML 则交给系统浏览器；远程文件复用现有下载缓存／HTML 预览通道，不读取本机同名路径。
+安全降级附件仍只允许另存，不因快捷键扩大打开能力。远程文件若命中已有危险扩展名规则，
+快捷打开改为下载到本地，菜单省略默认应用打开。项目链接提供「定位到项目」与
+复制链接菜单；嵌入式项目引用只保留复制菜单，不带按钮语义、手形指针或下划线，
+仍可聚焦并用 Shift+F10／菜单键打开菜单。文内标题和媒体链接保留各自定位／预览动作，并可复制链接。
+
+菜单按对象精简并平铺，不使用「更多」或「打开方式」子菜单。HTML 的标准菜单为
+「在侧边栏打开」「在浏览器打开」「查看源代码」／「在文件夹中显示」「复制路径」；
+远程文件将「在文件夹中显示」替换为「下载到本地」，两者只占同一位置。
+HTML 不提供复制文件、在文件列表中定位或选择应用。无侧边栏上下文时省略该打开项。
+普通文件保留文件列表定位、默认应用打开／本地定位或远程下载、复制、复制路径；
+仅带有效行号的文件引用额外提供「复制位置」。不把「复制」「复制位置」扩成长文案。
+网页只保留在侧边栏打开、在浏览器打开／复制链接；文内链接保留打开与复制链接。
+任务新窗口、外部浏览器和默认应用动作右侧标注 Shift+点击，提示不增加菜单项。
+无任务上下文的网页链接仍可右键复制和交给系统浏览器，只省略不可用的侧边栏项。
+键盘聚焦后 Enter 激活；Shift+Enter 保留 Shift+点击语义，Shift+F10／菜单键打开链接菜单，
+关闭菜单后焦点回到原链接。所有菜单复用语义主题组件，同时支持 Light／Dark。
+这组窗口与鼠标快捷键仅属于桌面端，不向手机增加无效的新窗口入口。
+实现见 `components/chat/linkInteraction.ts`、`useLinkContextMenu.tsx`、`useOpenWithMenu.tsx`
+与 `useFileChipContextMenu.tsx`（均位于 Desktop renderer）。
 
 > 拍板 2026-07-30。起因:用户问「哪些是链接可以点、哪些不是，现在是不是看得不够清楚？」
 > 排查结论是**两个独立缺陷叠在一起**,且方向相反——加强可点信号会放大误判,所以两者必须
@@ -980,11 +1477,17 @@ Only the two registered chart members inside Usage History may enlarge their non
    solarized 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 `linkColor` 也映射到
    它),而移动端根本没有链接色概念。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
    token,统一为**正文色 + 常显下划线**。token 本身保留(其它界面仍在用),只是不进
-   markdown 正文与用户消息气泡。
+   markdown 正文与用户消息气泡。例外:伙伴群聊里的 `@成员` 点名不是链接,按产品裁决
+   (2026-10-20)用 `--msg-link` 着色、悬停出成员卡,见 `bot-group-chat.md`。
 4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
    或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
    限(前者作者已声明,后者词法本就要求带分隔符)。
-5. **无法判定时的点亮门槛按形态分级。** 适用于任何存在「无法判定」中间态的链路:移动端
+5. **自动识别路径的点亮门槛按形态分级。** 显式 Markdown 文件链接（`[查看报告](路径)`）
+   在桌面和手机聊天中保留点击入口，不因尚未验证、文件缺失或断线退化为普通文字；点击时
+   通过原有文件访问通道打开或说明失败，保留复制目标的操作，不绕过权限、不猜搬迁位置。
+   已解析文件仍沿用原有预览与文件菜单。没有文件访问上下文或不允许特权链接的内容面不因此
+   获得文件访问能力。以下形态门槛仅适用于正文自动识别路径和行内 code。
+   适用于任何存在「无法判定」中间态的链路:移动端
    全部会话、以及桌面的**远程会话**(两者的 `fs:stat` 都会回 `unknown`)。桌面**本机**
    会话不适用 —— 那边走真实存在性检查,解析不到一律纯文本,没有中间态。
 
@@ -1098,16 +1601,22 @@ PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点�
 | ----------------------- | ------------------------------------------- | -------------------------------------- | ------------------------------------------- |
 | 桌面聊天正文            | 外链 / anchor / 本地图片 URL                | ✅                                     | ✅ `MARKDOWN_LINK_CLASS`                    |
 | 桌面聊天正文            | 已解析本地文件(chip / 散文 label)           | ✅                                     | ✅                                          |
-| 桌面聊天正文            | 未解析路径、行内 code                       | ❌                                     | ❌                                          |
+| 桌面聊天正文            | 未解析的显式文件链接                         | ✅（点击重验，失败提示）                 | ✅                                          |
+| 桌面聊天正文            | 未解析的自动识别路径、行内 code              | ❌                                     | ❌                                          |
 | 桌面聊天正文            | **远程**会话里 stat 回 `unknown` 的引用     | 仅非歧义形状                           | 由 `isAmbiguousPathShape` 门槛裁决          |
-| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick / onContextMenu | **与 `interactive` 同源**                   |
+| 桌面聊天正文 / 用户气泡 | 会话 / 项目深链 chip(`InlineReferenceChip`) | 取决于是否注入 onClick | **与 `interactive` 同源**                   |
 | 桌面用户气泡            | URL / 图片路径                              | ✅                                     | ✅（改前只有 hover 下划线）                 |
 | 手机聊天正文            | 外链 / 图片 chip / 会话 chip                | 取决于 handler 是否注入                | **与 handler 同源**(`clickableInlineStyle`) |
-| 手机聊天正文            | 路径 chip                                   | 取决于远端 verdict                     | 由 `ChatPathChipSpan.lit` 单点裁决          |
+| 手机聊天正文            | 路径 chip                                   | 显式链接保留，其余取决于远端 verdict    | 由 `ChatPathChipSpan.lit` 单点裁决          |
 | 手机文件阅读器          | http(s)                                     | ✅                                     | ✅                                          |
 | 手机文件阅读器          | 会话 chip / 图片 chip / 本地路径 / mailto   | ❌（无 bridge、只放行 http(s)）        | ❌                                          |
 
-**颜色也归这条不变量管**:可点态只多一条下划线,所以链接**不得写死颜色**,必须继承所在
+**正文文件类型图标（2026-09-22）**：桌面正文中已解析的文件链接与行内文件引用，文字前增加
+14px 共享 `FileTypeIcon`，按解析后的目标路径分类，继承文字颜色。图标只表达文件类型，
+不可独立聚焦，也不进入可访问名称；下划线仍表达可点性。保留原有文字换行、复制、点击与
+右键行为。目录、未解析路径、外链和纯图片链接不加文件类型图标。
+
+**颜色也归这条不变量管**:可点性由下划线表达,所以链接**不得写死颜色**,必须继承所在
 上下文 —— 表头(`markdownTableHeaderCell` 用 `textSecondary`)、引用块等非正文色上下文里
 写死正文色,会让链接相对周围文本除下划线之外还变色。移动端 `markdownLink` 与阅读器的
 `a` 都已去掉显式 `color`。
@@ -1199,19 +1708,16 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 > 数组;两端都要有。(第 10 轮重构只做对了桌面那一半,第 11 轮 review 实捉;这类 bug 的形状
 > 是「依赖数组漏了触发源」,没有类型保护,故两端各有源码级守卫。)
 
-> **不变量 B:点亮门槛(规则 5)对所有候选来源同口径。** 与候选门槛(规则 4)的来源豁免
-> **无关** —— 两者是两道独立的门,显式 markdown 链接只豁免前者。
+> **不变量 B（2026-10-27 更新）:显式链接保留作者声明的点击入口，自动识别引用仍需验证。**
 
-作者写下 `[配置](package.json)` 只声明了「我想让它可点」,并不能让远端在链路断时知道它是否
-存在;点亮了却点不开正是规则 1 要防的反例。判据在两端各只有一份、且**逐字同形**:桌面
-`markdownTarget.isAmbiguousPathShape`、移动 `chatPathCandidate.isAmbiguousChatPathShape`;
-所有入口都调它,**不得按来源硬写 `true` / `false`**(移动端曾对链接入口恒 `false`,与桌面
-不对称,review 实捉)。
+`[配置](package.json)` 的下划线表示可以尝试打开，不承诺文件仍然存在。文件移动、删除或
+暂时不可达时，点击后给出可理解的反馈。正文路径与行内 code 仍按原有形态门槛判断，避免
+把 `array.map` 等普通文本变成假链接。两端以来源标记区分，不放宽路径分类或文件访问权限。
 
 | 候选来源           | 桌面入口                      | 移动入口                          | 走门槛?                                    |
 | ------------------ | ----------------------------- | --------------------------------- | ------------------------------------------ |
 | 行内 code          | `classifyInlineCodeTarget`    | `classifyInlineCodePathCandidate` | ✅                                         |
-| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | ✅                                         |
+| 显式 markdown 链接 | `classifyMarkdownLinkTarget`  | `classifyChatPathLinkTarget`      | 不以存在性决定可点；实际访问仍校验          |
 | 正文裸写路径       | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上    | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
 | 尾斜杠目录         | 回看 `originalHref` → 非歧义  | 同左                              | ✅                                         |
 | `file://` 绝对路径 | 单列为非歧义                  | 同左                              | ✅                                         |
@@ -1275,9 +1781,9 @@ peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端�
 | Deep brand red (hover/pressed) | `#A61629`                                                                                                          | `#A61629`                                   |
 | Background                     | `#F2F2ED` (warm ivory — 2026-08 revision, see 15.16)                                                               | `#181818` (pure neutral — 2026-08 revision) |
 | Card / input                   | `#FDFDF8`                                                                                                          | `#1F1F1F`                                   |
-| Border                         | `#E4E4DF` (desktop, warm; mobile light keeps its own exception `#C6C9CE` pending the mobile follow-up — see 15.13) | `#313131`                                   |
-| Secondary info                 | `#888883` (2026-08 ruling: warmed + raised to ≥3.0, supersedes the 2026-07-20 `#8C8E94`; history in 15.5)          | `#6F6F6F`                                   |
-| Body text                      | `#1A1A1A` (near-black neutral; emphasis tier `#0C0C0C`)                                                            | `#D4D4D4`                                   |
+| Border                         | black ink 8% (desktop, since 2026-10-22 — see 15.16; mobile owns its own ramp since 2026-09-26 — see 15.13)       | white ink 10%                               |
+| Secondary info                 | black ink 56% (2026-10-22 ink ladder, supersedes `#888883` and U2; full ladder in 15.16)                           | white ink 55%                               |
+| Body text                      | black ink 88% (emphasis 95%)                                                                                       | white ink 82% (emphasis 100%)               |
 | Pure white                     | `#FFFFFF`                                                                                                          | `#FFFFFF`                                   |
 
 ### 15.2 Red-Boundary Test Maps(品牌红边界)
@@ -1293,24 +1799,22 @@ See the skin decision table §2 (design-stage working file, not in repo). The Li
 ### 15.4 Cross-Theme Exemptions (not covered by CINDY overrides)
 
 - Semantic colors: `warning-accent` `#EA6B17` (finalized 2026-07-17, replaces `#FF6600`) / `annotation-accent` `#FF3B30` (image-annotation burn-in ink — exempt, do not change) / `status-bar-accent` (alias of warning orange, auto-follows).
-- The status four (finalized 2026-07-17; same values both modes, all 9 themes follow with no override): running `#EA6B17` / awaiting `#19D2C1` / error (status family) `#D91F37` / done `#2AAE5B`; warning foreground `warning-fg` `#F3A115` (decoupled from Toast amber `#F59E0B` — Toast keeps its group-B status quo).
+- The status four (finalized 2026-07-17; same values both modes, all 9 themes follow with no override): running `#EA6B17` / awaiting `#19D2C1` / error (status family) `#D91F37` / done `#2AAE5B`; warning foreground `warning-fg` `#F3A115`, which the Toast warning icon also uses since the 2026-07-17 Toast finalization (§2; the former Toast amber `#F59E0B` is retired).
 - `sidebar-draft-indicator` is a narrow semantic exception for the 8px pencil shown on non-selected sidebar rows with a composer draft or paused send queue. Light uses deep teal `#0B726B`; dark aliases `card-status-awaiting` (`#19D2C1`). Both must remain ≥3:1 against ordinary and hover CINDY sidebar surfaces after the translucent sidebar is composited over black and white wallpaper extremes (worst case at registration: `3.17:1` light / `5.65:1` dark). Rail tiles therefore use `--sidebar-item-hover`, never the inverse upgrade-button-only `--update-btn-hover`. Do not reuse the indicator token for generic awaiting states or add an active-row variant; the pencil is intentionally hidden while that task is selected.
 - `focus-ring` `#417CDD` (blue — never red); diff red/green; modal scrim/shadows; `overlay-lightbox`; the four Toast colors.
 - `destructive` / `search-match-bg` stay outside HSL_FORMAT_IDS coverage.
 - **hljs syntax colors** (light = highlight.js `github.css`; dark = globals.css `.dark .hljs-*` mirroring github-dark) — dual-threshold ruling (2026-07-17): syntax colors ≥3:1, body text ≥4.5:1. The hljs palettes were designed for GitHub's default canvases; CINDY's code-block canvas (`surface-elevated`, since 2026-08 `#FDFDF8`/`#1F1F1F`; code block fill `perm-code-bg` `#FAFAF5`/`#191919`) sits close to default's, so marginal shortfalls are inherited, not CINDY-introduced (default is equally affected). Light: all syntax colors ≥3 — no remediation, itemized as exemptions. Dark: `[data-theme="cindy-dark"]` overrides `.hljs-section` to `#2573ec` (3.00:1 on the pre-2026-08 canvas; 3.72:1 after the darker revision — margins only improved, override retained) and sets `.hljs-punctuation` / `.hljs-tag` explicitly to `#c9d1d9` (defensive). Guarded by `cindyCodeBlockContrast.test.ts` (≥2 baseline + text ≥4.5). Full derivation: decision log.
 - model-budget spectrum bar / GhostTool shimmer: explicitly exempt (neutral shimmer, theme-invariant).
 
-### 15.5 U2 Explicit Exception (secondary-info color stays true to Figma)
+### 15.5 U2 Explicit Exception — retired 2026-10-22
 
-- Tokens: `text-secondary` (light `#888883` since 2026-08 / dark `#6F6F6F`) / `text-secondary-cross` (light merged into the same `#888883` tier in 2026-08; was `#9A9DA3`).
-- **Light side superseded 2026-08-13 (user ruling)**: light secondary info moved to `#888883` — warmed to the ivory hue (B=R−5) and raised to a ≥3.0 floor on every surface it sits on (page 3.17 / hover 3.06 / sidebar 3.06). The U2 "stay true to Figma" exemption now applies to **dark only** (`#6F6F6F` untouched).
-- Measured contrast (WCAG): × surface `2.32/2.92:1`, × elevated `2.56/2.65:1`, × chip `2.41/2.72:1` — all below the 4.5:1 body-text AA. Ruling **U2 (2026-07-16): stay true to the Figma values**, readability loss accepted as a recorded explicit deviation. (Light was later re-tuned in two rounds to `#8C8E94`, finalized 2026-07-20, desktop and mobile in sync — see decision log.)
-- Constraint: **never darken unilaterally** (`#686B72` was tried and rejected, kept only as an archived sample); changing the value requires a fresh user ruling (the 2026-08 light change carries one).
-- Reverse-frozen test: `cindyThemes.test.ts` group ⑦ asserts the exact finalized values (light `#888883`, ruling 2026-08-13 / dark `#6F6F6F`); injecting `#686B72` must fail; update the baseline only after a user ruling.
+- **Retired by user ruling (2026-10-22).** CINDY text tiers are translucent ink (§2, §15.16), so the dark secondary `#6F6F6F` "stay true to Figma" exemption and the light `#888883` secondary no longer apply on Desktop. The reverse-frozen test in `cindyThemes.test.ts` group ⑦ is re-baselined to the ink ladder under this ruling; changing a tier's alpha still requires a fresh user ruling.
+- Mobile keeps its own secondary values (`#4D4D4A` / `#BDBDBD`, §15.13) until its own phase.
+- History (U2 2026-07-16, light re-tunes 2026-07-20 / 2026-08-13, mobile scope 2026-09-26) is in [`design-decision-log.md`](./design-decision-log.md).
 
 ### 15.6 HSL Format Contract
 
-The 42 `HSL_FORMAT_IDS` must be HSL triplets (`h s% l%`, `h∈[0,360)`, grays use `hue=0`, 1 decimal place); every other token is hex/rgba. Round-trip HSL→RGB channel error ≤1. Nothing outside `HSL_FORMAT_IDS` may be written as an HSL triplet.
+The 42 `HSL_FORMAT_IDS` must be HSL triplets (`h s% l%`, `h∈[0,360)`, grays use `hue=0`, 1 decimal place); every other token is hex/rgba. Translucent values append the same alpha as their rgba twin (`h s% l% / a`, e.g. the text tiers). Tailwind opacity modifiers on these slots (`border-border/40`) compile through `color-mix` (`tailwind.config.ts` `hslVar`), so a slot that carries its own alpha stays valid; never hand-write `hsl(var(--x) / a)` for a slot that may be translucent. Round-trip HSL→RGB channel error ≤1. Nothing outside `HSL_FORMAT_IDS` may be written as an HSL triplet.
 
 ### 15.7 Brand Assets (icon + logo)
 
@@ -1372,10 +1876,10 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - Red is confined to semantic exceptions: `destructive`/delete, `error-*`, warning, diff red, status dots, and the explicit Mobile Beta-channel state badge (`betaChannelBadgeBackground/Foreground`, user decision 2026-08-25) — plus the login brand accent via `--login-brand-accent` (§16). The Desktop sidebar's Beta label is ordinary version text. The older `brand-login-*` tokens were retired with the wave4 white-canvas login and survive only as whitelist strings in `cindyDecisionData.ts` (harmless — the whitelist permits, it does not require).
 - **send-btn family**: `send-btn-bg/-icon/-hover-bg/-pressed-bg/-disabled-bg/-disabled-icon` — CINDY overrides the whole family to the neutral four states + disabled grays (light `#444242`/`#585555` unchanged; dark shifted 2026-08 to `#323232`/`#464646`); defaults keep `--accent-cta-bg` with the opacity-85 hover. Whole family sits in `cindyDecisionData` REQUIRED_IDS + CINDY_EXPECTED, guarded by assertion ③.
 - **Sidebar color hierarchy** (same set for light/dark):
-  - Body (session titles) = `text-foreground` (= `text-primary`: light `#3C3F43` / dark `#D4D4D4`).
-  - Secondary gray (leading icons at rest / timestamps / meta / group labels) = light `#888883` (2026-08, was `#9A9DA3`) / dark `#6F6F6F` (same as `text-secondary`); CINDY overrides `sidebar-muted` / `sidebar-action-icon` (HSL `60.0 2.1% 52.4%` / `0 0% 43.5%`) + `cmd-palette-item-meta` (hex).
-  - Selected pill = inverse pill: `sidebar-item-active` light `#3C3F43` / dark `#EEEEEE`, foreground `sidebar-item-active-foreground` light `#FCFCFC` / dark `#151515` (2026-08, was `#252222`), border transparent. **Any foreground sitting on `bg-sidebar-item-active` must use `text-sidebar-item-active-foreground` — `text-foreground` is forbidden there** (the token defaults to foreground, so non-CINDY themes see zero change).
-  - Running-state leading icons (vendor glyph / Puzzle / RadioTower / Clock) = **Thinking Orange `--warning-accent` `#EA6B17`**, breathing via `session-status-breathing`; the selected state stays orange (running outranks the inverse foreground). Mobile `statusAccent` mirrors value and priority. Persistent breathing sits on an HTML wrapper; SVG stays static (engineering conventions §7).
+  - Body (session titles) = `text-foreground` (= `text-primary`: black ink 88% / white ink 82%, §15.16).
+  - Secondary gray (timestamps / meta / group labels) = secondary ink (black 56% / white 55%, same as `text-secondary`), via CINDY overrides `sidebar-muted` (HSL with alpha) and `cmd-palette-item-meta`; leading icons at rest use `sidebar-action-icon` = tertiary ink (black 44% / white 40%). Since 2026-10-22 these follow the ink ladder (§15.16) instead of `#888883` / `#6F6F6F`.
+  - Selected pill uses a softer surface: `sidebar-item-active` light `hsl(214.3 6% 99%)` / dark `#3C3F43`, foreground `sidebar-item-active-foreground` light `#292A2C` / dark `#EEEEEE`, border transparent. CTA colors stay independent. **Any foreground sitting on `bg-sidebar-item-active` must use `text-sidebar-item-active-foreground` — `text-foreground` is forbidden there** (the token defaults to foreground, so non-CINDY themes see zero change).
+  - Running-state leading icons (vendor glyph / Puzzle / RadioTower / Clock) = **Thinking Orange `--warning-accent` `#EA6B17`**, breathing via `session-status-breathing`; the selected state stays orange (running outranks the selected foreground), with contrast ≥3:1 against the selected fill in both modes. Mobile `statusAccent` mirrors value and priority. Persistent breathing sits on an HTML wrapper; SVG stays static (engineering conventions §7).
   - Assertions: ③ CINDY_EXPECTED locks the 4 token values; ⑦ adds hierarchy assertions (secondary gray clearly weaker than body; selected-pill foreground ≥4.5 on its fill).
 - Test maps: `NEUTRAL_PRIMARY_EXPECTED_BY_ID` / `NEUTRAL_PRIMARY_FOREGROUND_BY_ID` + `RED_EXCEPTION_ALLOWED_IDS` (replacing the pre-E1D `BRAND_RED_*` maps — archived in the decision log). Assertions ⑤/⑦/⑧ enforce exact neutrals, the red whitelist, neutral contrast, and falsifiability.
 - Backlog: the five R2 §4.3 Project_List deviations stay deferred (see the decision log backlog).
@@ -1392,13 +1896,14 @@ _(Finalized 2026-07-18 after two same-day revisions — earlier "brand-red caret
 
 ### 15.12 Vibrancy (frosted glass) System (macOS / Windows; finalized 2026-07-18, Windows resize backing updated 2026-08-21)
 
-- **The only translucent-surface token**: `surface-translucent-sidebar` — CINDY light `rgba(238, 238, 233, 0.85)` / dark `rgba(5, 5, 5, 0.85)` (defaults to opaque `var(--surface)` in the default theme; zero effect on non-CINDY themes). Consumer: the left sidebar (`aside.bg-sidebar`); any future translucent surface **reuses this token by default** — no new ad-hoc rgba. The splash root is opaque `--surface` (it must fully cover the mounted UI until loading completes — ruling 2026-07-19).
+- **Translucent-surface tokens**: `surface-translucent-sidebar` — CINDY light `rgba(238, 238, 233, 0.85)` / dark `rgba(5, 5, 5, 0.85)` (defaults to opaque `var(--surface)` in the default theme; zero effect on non-CINDY themes), consumed by the left sidebar (`aside.bg-sidebar`); and `surface-translucent-overlay`, the CINDY floating-menu glass behind `--cmd-palette-bg` (§4 Menu and popover panels). Any future translucent surface **reuses one of these two by default** — no new ad-hoc rgba. The splash root is opaque `--surface` (it must fully cover the mounted UI until loading completes — ruling 2026-07-19).
 - **Wallpaper-through triple pipeline — missing any one yields dead black** (verified by on-device A/B, 2026-07-18):
   1. Set the vibrancy backing **at window creation** (`bootstrap-electron.ts` / `vibrancyConfig.ts`); changing alpha via `setBackgroundColor` at runtime is unreliable. macOS uses `backgroundColor: '#00000000'`. Windows Acrylic uses the current `surface-translucent-sidebar` RGBA as its steady-state BrowserWindow backing, and the ordinary sidebar CSS is transparent on that exact platform/material combination to avoid double tinting. The material remains stable during live resize; Renderer layout must follow the changing window through CSS rather than switching the native backdrop per gesture.
   2. Under CINDY themes the **root container steps aside**: globals.css sets `.h-screen.bg-content-area` (and the splash backing layer while present) to transparent — otherwise the opaque root blocks everything.
   3. **No CSS `backdrop-filter` on the ordinary sidebar** — it renders the transparent window backing as a black box; wallpaper blur is entirely the native vibrancy material's job. macOS CSS lays the translucent tint; Windows Acrylic gets that same tint from the creation-time native backing. The sidebar peek drawer is the intentional exception because it covers application content rather than wallpaper.
 - Material selected via the `XDT_VIBRANCY_MATERIAL` env knob, **code default `hud`** (user-tested). Windows: Win11+ uses `backgroundMaterial` (default `acrylic`, `XDT_BACKDROP_MATERIAL` knob — not yet device-verified); Win10 / non-CINDY fall back to opaque `--surface`.
 - **No gradient overlays on translucent surfaces** — the light-red gradient layer was confirmed absent from the design and removed wholesale (2026-07-18); the splash gradient glow is likewise unimplemented (backlog, awaiting a ruling).
+- **Floating cards on `--cmd-palette-bg`** (menus, including the shared dropdown default): `--surface-translucent-overlay` + `blur(6px)` on macOS Cindy themes; opaque with no `backdrop-filter` on Windows (the rule 3 black-box risk; Windows native material not device-verified). See §4 Select & Dropdown.
 - The `surface-translucent-sidebar` alpha is the **only open look-and-feel knob** in the theme-frozen zone; adjusting it requires synchronized changes in three places (`cindy-light.ts` / `cindy-dark.ts` / `cindyDecisionData.ts`) with the themes suite green.
 
 ### 15.13 Cross-Platform Skin Rules(双端换肤定稿规则,2026-07-18)
@@ -1407,8 +1912,8 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 
 #### Red boundary
 
-- Brand red `#DF0C27` only for brand display / splash, destructive actions, running/thinking emphasis, and the list active glyph (dark uses `#A61629` for the glyph).
-- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08). Never brand-red these.
+- Brand red `#DF0C27` only for brand display / splash, destructive actions, and the list active glyph (dark uses `#A61629` for the glyph). Running / thinking states use Thinking Orange, never red (§15.14); the complete red whitelist is §15.10.
+- Ordinary CTAs, FABs, send buttons, and confirm-style primaries are neutral-inverse: desktop light bg `#3C3F43` / text `#FCFCFC`, dark bg `#EEEEEE` / text `#151515` (2026-08); mobile light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (2026-09-26, see Cross-platform color semantics). Never brand-red these.
 - The red whitelist does not include carets, focus rings, ordinary buttons, or ordinary selected backgrounds. A new red consumer must document its semantics and enter the token/test whitelist first; no component-level hardcoding.
 
 #### Caret & focus
@@ -1417,26 +1922,33 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - Focus ring, Auto Approval, and info blue share the `#417CDD` family. Figma's older blue `#426BF2` is not adopted.
 - Red-family carets are forbidden.
 
-#### Cross-platform color isomorphism
+#### Cross-platform color semantics (mobile owns its ramp — ruling 2026-09-26)
 
-- Mobile color semantics must mirror the desktop token decisions: the base layers (background, body, secondary info, borders) map directly from CINDY desktop semantics — never invent a parallel mobile palette for the same meanings.
-- **Pending follow-up (2026-08)**: the desktop color-ramp revision (15.16) moved the desktop base layers; mobile has **not** been synced yet and still carries the pre-revision values (including comments claiming "in sync with desktop"). Until the mobile follow-up lands, the isomorphism baseline for mobile remains the pre-2026-08 desktop values; do not partially sync individual tokens.
-- **`colors.border` light is a mobile-wide exception, not a homepage-scoped token** (ruling 2026-07-21, PR #266): mobile light `border` / `borderTranslucent` = `#C6C9CE` / `rgba(198,201,206,0.62)`, deviating from desktop `#DCDFE3` — desktop borders usually sit on `#F8F8F8` cards, while mobile hairlines sit directly on the `#EDEDED` background, where `#DCDFE3` reads at a nearly invisible 1.14:1; the darkened 1.42:1 is device-verified legible. The value lives in `apps/mobile/src/theme/tokens.ts` global `lightColors.border`, applying to every mobile-light hairline; dark stays `#434343`, isomorphic with desktop. `chatCodeBorder` / `sheetActionBorder` / `sheetGrabber` keep independent values and do not follow this exception.
+- Mobile shares Cindy's brand identity and semantic roles with desktop — the same meanings for background, card, body, secondary / tertiary text, borders, neutral-inverse CTA, brand red, status colors, caret and focus blue — but **owns its own ramp values, contrast and warmth** (user ruling 2026-09-25: mobile design may decouple from desktop and should be higher contrast; values finalized 2026-09-26). Do not copy desktop hex values into mobile, and do not sync them back to desktop; semantics stay mirrored, values do not. This supersedes the 2026-07-18 "isomorphism" baseline and the 2026-08 pending mobile follow-up.
+- **Mobile light = bright ivory**: page `#F9F9F6` (user-specified: brighter than desktop `#F2F2ED`, warmth B = R−3 — a lighter ivory than desktop's R−5), card / list row / popover `#FFFFFC`, chip / selected `#EAEAE6`, border `#CCCCC8`. Body text stays neutral `#0F0F0F`; secondary `#4D4D4A`, tertiary `#686864`.
+- **Consequence of the brighter page — mobile light cards separate by hairline, not by fill.** Against `#F9F9F6` the near-white ceiling leaves only a 1.05 card lift (desktop 1.12, iOS grouped background 1.12). Every new raised mobile-light surface (card, list row, popover, input container) therefore **must carry the 1px `border`**; do not rely on the `surfaceElevated` fill alone. Surfaces that must read as recessed (chip / selected, expanded block, code card) sit **below** the page instead.
+- **Mobile dark = pure neutral near-black**: page `#121212`, card `#1E1E1E`, chip `#2A2A2A`, border `#383838`; body `#EDEDED`, secondary `#BDBDBD`, tertiary `#999999`. No warmth.
+- **Text tiers are ordered and legible**: body → secondary → tertiary go from strongest to weakest, and all three are ≥ 4.5:1 on every surface they sit on (page, card, chip, code card, sheet action group). This replaces the inverted pre-2026-09 mobile order where secondary (`#8C8E94` / `#6F6F6F`, 2.8 / 2.9:1) was lighter than tertiary; the U2 exception (15.5) no longer applies to mobile. Guarded by `themeTokens.test.ts` and the frozen `theme-colors-snapshot.json`.
+- **Mobile text colors are five neutral tiers** (ruling 2026-09-27): body, secondary, tertiary, placeholder, neutral-inverse (`ctaText`). `textPlaceholder` (light `#858581` / dark `#757575`, ≥ 3:1 on page, card and chip) is a registered exception to the 4.5:1 tier rule and may be used only for input placeholders and the voice-listening prompt that mirrors them. Sheet action labels use `textPrimary` (the former `sheetActionText` alias was removed); text on a `textPrimary` / `cta` fill uses `ctaText`, never `surface`; the shared-task danger button label uses `#FFFFFF` / `#121212`. The login skin (§16) keeps its own registered grays for now.
+- **Neutral-inverse CTA on mobile**: light `#0F0F0F` / `#FFFFFF`, dark `#EDEDED` / `#121212` (19.17 / 16.00:1).
+- The appearance mode is a user setting (Settings → Appearance: follow system / light / dark, default follow system; only an explicit light / dark choice is persisted). It forces native system surfaces to the same mode; the first-launch light login gate (§16.5) still applies inside the login stage.
+- Values live only in `apps/mobile/src/theme/tokens.ts`; the proposal record and before / after comparison are in Design Lab (`colors` study, platform iPhone / Android). Login skin tokens (§16), brand splash, status four, task tags and syntax colors are outside this ramp and keep their own registered values.
 - Mobile-only tokens carry only mobile-specific layers or geometry:
 
 | Mobile token          | Light                    | Dark                  | Use                             |
 | --------------------- | ------------------------ | --------------------- | ------------------------------- |
-| `surfaceListRow`      | `#F6F6F6`                | `#312F2F`             | List project/task rows          |
-| `surfaceListExpanded` | `#EAEAEA`                | `#2A2828`             | Expanded list block             |
+| `surfaceListRow`      | `#FFFFFC`                | `#1E1E1E`             | List project/task rows          |
+| `surfaceTranslucent`  | `rgba(249,249,246,0.78)` | `rgba(18,18,18,0.78)` | Sticky chrome (page at opacity) |
+| `surfaceListExpanded` | `#EAEAE6`                | `#121212`             | Expanded list block             |
 | `activeGlyph`         | `#DF0C27`                | `#A61629`             | Leading active glyph in lists   |
-| `chatCodeSurface`     | `#F8F8F8`                | `#353333`             | Chat / task code card           |
-| `chatCodeBorder`      | `#DCDFE3`                | `#3C3C3C`             | Chat / task code card border    |
+| `chatCodeSurface`     | `#F1F1EC` (recessed)     | `#1A1A1A`             | Chat / task code card           |
+| `chatCodeBorder`      | `#CCCCC8`                | `#383838`             | Chat / task code card border    |
 | `inputCaret`          | `#417CDD`                | `#417CDD`             | All input carets                |
-| `sheetSurface`        | `rgba(248,248,248,0.95)` | `rgba(59,59,59,0.95)` | Bottom-sheet root               |
-| `sheetActionSurface`  | `#F6F6F6`                | `rgba(59,59,59,0.5)`  | Sheet action group / row        |
-| `sheetActionBorder`   | `#DCDFE3`                | `#505050`             | Sheet action group / row border |
-| `sheetActionText`     | `#3C3F43`                | `#C1C1C1`             | Sheet action row label          |
-| `sheetGrabber`        | `#DCDFE3`                | `#6F6F6F`             | Sheet / composer grabber        |
+| `sheetSurface`        | `rgba(249,249,246,0.96)` | `rgba(28,28,28,0.96)` | Bottom-sheet root               |
+| `sheetActionSurface`  | `#FFFFFC`                | `#262626`             | Sheet action group / row        |
+| `sheetActionBorder`   | `#CCCCC8`                | `#383838`             | Sheet action group / row border |
+| `sheetGrabber`        | `#C2C2BE`                | `#5C5C5C`             | Sheet / composer grabber        |
+| `textPlaceholder`     | `#858581`                | `#757575`             | Input placeholder only (≈3.5:1) |
 
 #### Iconography
 
@@ -1445,6 +1957,14 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **Cross-platform action icons must match exactly (2026-09-08 owner ruling):** the same action on desktop and mobile uses the same source glyph and stroke geometry. For Lucide icons, use the same named glyph from `lucide-react` / `lucide-react-native`; a semantically similar SF Symbol or another icon family is not an equivalent replacement. Platform-appropriate size and semantic Light/Dark colors may differ, but the icon artwork must remain identical. This applies to native menus as well as custom components. Message menu baseline: `MessageSquarePlus` (add to chat), `Link2` (copy message link), `Undo2` (rewind), `Trash2` (delete message). If a native component cannot display the shared artwork, resolve the rendering approach explicitly instead of silently substituting a system symbol.
 - **Mobile action-menu icon sizing (2026-09-08 owner ruling):** message, session, and file action menus use `iconSize.lg` (18 pt) and `iconStroke.regular` (2 in Lucide's 24-unit viewBox). Native menu assets follow the same logical size: 18 / 36 / 54 px at 1x / 2x / 3x; a 24-unit SVG viewBox does not imply a 24 pt display size. Keep the shared glyph geometry and scale the whole artwork. Existing compact filter/navigation menus may retain `iconSize.md` (16); `iconSize.action` (20) is the toolbar/lightbox tier, not the action-menu default. Preserve native menu row layout and touch targets when sizing the glyph.
 - Send semantics use the filled paper plane `Send`, colored by the neutral-inverse CTA tokens; never a red send button or icon for ordinary send.
+
+#### File identity: shared classification, two presentation sizes (2026-09-22)
+
+- File identity is classified by `packages/maker-shared/src/filePresentation.ts` on both platforms. Known file names/extensions take precedence; MIME is a fallback for unknown names. This is presentation metadata only, never a decoder or permission decision.
+- Compact file rows, search results, tabs, mentions, references and diff headers use `FileTypeIcon` / `pickFileIcon`: the same named Lucide glyph on Desktop and Mobile, regular stroke, inherited semantic foreground. At 12–18 px/pt, do not squeeze PDF/DOC/XLS text into the glyph. PDF, prose and word-processing documents may share `FileText`; the filename provides the finer distinction.
+- Large attachment and generated-file tiles keep real content previews first. Without a preview, use `FileTypeTile` and the shared type label. Desktop reuses the attachment paper/badge artwork and registered file-badge tokens; Mobile uses the shared Lucide glyph and a separate readable label; at the 64 pt `iconSize.glyph` tier that glyph matches the file-browser folder glyph — `iconStroke.thin` with `absoluteStrokeWidth` on `borderStrong` — because Lucide's regular 2-unit stroke would otherwise scale to ~5 pt (2026-10-02). Labels must respect the platform micro-text minimum; never scale a labeled tile down into a compact icon.
+- Categories cover code/configuration, text, PDF, documents, spreadsheets, presentations, images, audio, video, archives, databases and unknown files. New entry points reuse the shared classifier and platform components instead of adding extension tables.
+- File-type decoration does not replace upload progress, errors, diff counts, rename/copy status or action icons. Folder navigation, pasted-text actions and generic “files” section icons keep their own semantics. Decorative file glyphs add no focus stop or duplicate accessible label.
 
 #### Type & layout
 
@@ -1456,14 +1976,14 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 #### Process gates
 
 - New or changed colors go through tokens — desktop via ColorRegistry / CSS variables, mobile via `ThemeColors` / `useTheme`; no hex/rgba in components.
-- `hardcoded-color-audit` (`scripts/hardcoded-color-audit.mjs`) must pass before merging. ⚠ Not yet wired into CI as a required check — run it manually for now; CI enforcement is tracked as a follow-up (modularization plan P6-3'). Genuine exceptions (asset-intrinsic or platform-semantic) must be whitelisted with reasons.
+- `hardcoded-color-audit` (`scripts/hardcoded-color-audit.mjs`) runs in client-ci as `pnpm check:design-colors` and checks added lines only. It blocks new literal colors in Desktop renderer consumer code; Mobile and other paths are reported, not blocked (Mobile keeps its own blocking token tests). Genuine exceptions (asset-intrinsic or platform-semantic) need a narrow, reasoned entry in `scripts/hardcoded-color-exemptions.json`. Scope, exemption format and rollback: [`design-governance.md` §8](./design-governance.md).
 - When a design mock conflicts with existing tokens, list it as "pending ruling" in the spec / PR and request a decision — never self-adjudicate or substitute a near color.
 - Shared-component restyles default to variant / prop isolation. Pages, states, and platforms not covered by the mock keep the status quo.
 
 ### 15.14 Running / Collaboration Orange (finalized 2026-07-20)
 
 - **Running breathing icons are always Thinking Orange** (`--warning-accent` `#EA6B17`, all themes): VendorIcon, SessionStatusIcon (Puzzle/RadioTower), AutomationSessionGroupItem (Clock); the selected state stays orange — priority: running > selected inverse foreground > rest. Mobile `statusAccent` mirrors value and priority (glyphColor same).
-- **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row background remains the standard `--model-item-hover`, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
+- **Collaboration menu row ON state is orange**: the collaboration item inside the composer「+」menu sits beside Goal and Plan. Its active text + UsersRound icon use `warning-accent`; the row highlight remains the shared menu glide, and the OFF state stays neutral. This is an explicit carve-out from the 2026-07-17 neutral composer-menu rule for the ON state only.
 - **SVG persistent-animation red line**: breathing-type persistent animation sits on an HTML wrapper (span); SVG stays static.
 
 ### 15.15 Create-Page Content Position + Titlebar Hover Discipline (finalized 2026-07-21)
@@ -1473,21 +1993,22 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
   - the 268px cap is dead (a leftover of the Figma frame height — the root cause of content sitting high on large windows); 28% is device-tuned (from 25.5%);
   - `--content-header-h` is broadcast by `ContentHeaderSlot` (inside FeatureSidebarSlotProvider) through a display:contents wrapper (46px rendered / 0px hidden, same source as ContentHeader `h-[46px]`) — content stays pinned at the "header present" position with **zero jump** when selecting a project toggles the header;
   - header visibility has a single decision source = `useContentHeaderHidden` (mac + sidebar expanded + no injected content + no right-panel toggle; continues the 2026-06-11 "hide empty header" ruling);
-  - guard: `newMakerCreateAgentVisualContract` locks the position formula + anti-regression assertions.
+  - guard: the position formula and its anti-regression assertions are part of the create-page review contract.
 - **Hover-token discipline**: `--update-btn-hover` is exclusively the upgrade button's hover (inverse dark CTA) — **forbidden** on ordinary ghost buttons/badges (near-black `#2E3237` under CINDY light swallows text and icons; 6 misuses cleaned up 2026-07-21). Correct picks:
   - titlebar-area (ContentHeader) ghost elements → `titlebar-button-hover` (same as the ChromeActions window buttons);
   - general light hover in the content area → `--surface-hover`.
 
 ### 15.16 2026-08 Color-Ramp Revision (warm ivory light / neutral near-black dark)
 
-> Value authority: [`token-decision-table.md`](./token-decision-table.md) §9 (full ladders, text tiers, contrast matrix, approval trail). Frozen in `cindyDecisionData.ts`; this subsection pins the rules.
+> Numeric source: the DTCG files in `packages/design-tokens` (generated into the Desktop defaults), with the CINDY expectations frozen in `cindyDecisionData.ts`. [`token-decision-table.md`](./token-decision-table.md) §9 is the decision record (full ladders, text tiers, contrast matrix, approval trail), not a numeric source (`design-governance.md` §11). This subsection pins the rules.
 
-- **Light** = warm ivory: page `#F2F2ED`; every surface/border is warm with **B = R−5** (single warmth constant; one sanctioned ceiling exception — pure white `#FFFFFF` stays for floating planes that need maximum lift above the near-white card, currently `ask-option-list-bg` only). Cards stay near-white (`#FDFDF8`) — card lift ≈9.4%, matching the original spec. Hover/chip tiers sit **below** the page (the white ceiling leaves no room above); the sidebar is its own plane one step darker (`#EEEEE9` at 85% glass opacity).
+- **Light** = warm ivory: page `#F2F2ED`; every surface is warm with **B = R−5**, and the translucent borders and fills inherit that warmth (single warmth constant; one sanctioned ceiling exception — pure white `#FFFFFF` stays for floating planes that need maximum lift above the near-white card, currently `ask-option-list-bg` only). Cards stay near-white (`#FDFDF8`) — card lift ≈9.4%, matching the original spec. Hover/chip tiers sit **below** the page (the white ceiling leaves no room above); the sidebar is its own plane one step darker (`#EEEEE9` at 85% glass opacity).
 - **Dark** = pure neutral: page `#181818`, all layers R=G=B (zero warmth), simple parallel shift from the 2026-07 values. Known debt: near-black compression keeps only ~65% of the original perceived layer separation — recorded in [#2559](https://github.com/makecindy/cindy/issues/2559), fix is the equal-luminance ladder.
-- **Text ramp (light)**: deepest emphasis `#0C0C0C` → body `#1A1A1A` (both neutral, crisp) → tertiary `#6B6B67` (warm −4) → secondary/meta `#888883` (warm −5, ≥3.0 floor) → disabled `#9D9D98` (WCAG-exempt). Warmth increases as text gets lighter; dark text tiers are all neutral (tertiary `#C1C1C1`, equal-luminance neutralized 2026-08).
-- **Dual anchoring**: interactive fills that sit on the **page** anchor to the page (`surface-hover` tier); fills that sit on **cards/popovers** anchor to the card (light `#F6F6F1`, ≈6% below card — `settings-menu-bg-selected`, `perm-item-selected-bg`, `ask-badge-bg`, `cmd-palette-item-hover`, etc.). Dark exception, this revision only: `settings-menu-bg-selected` uses the menu-hover lift `#282828`, not the page-anchored `#1D1D1D` chip. `perm-item-selected-bg`, `ask-badge-bg`, and `cmd-palette-item-hover` stay on the page-anchored chip/hover values until their own follow-up. A single token cannot serve both planes after the revision; do not "unify" them back.
-- **Twin sync**: every color carried in both hex and HSL forms (24 pairs) must stay value-identical; derived translucent inlines (e.g. `chat-input-border-focus` = tertiary at 30%) must be re-derived when their source moves.
-- **Exempt families untouched**: `login-*` (58 tokens), `diff-*`, `error-*`, `overlay-*`, semantic status colors, shadows — per §10/§16 and `protected-tokens.ts`.
+- **Text tiers (user ruling 2026-10-22, replaces the 2026-08 warm text ramp)**: one neutral ink at decreasing alpha, black in Light and white in Dark — emphasis 95% / 100%, primary 88% / 82%, description 70% / 66%, secondary 56% / 55%, tertiary 44% / 40%, placeholder and disabled 32% / 30%. On the page that measures 17.4 / 15.0 / 8.1 / 4.8 / 3.2 / 2.2 (Light) and 17.8 / 12.1 / 8.2 / 6.1 / 3.8 / 2.7 (Dark); the ≥3.0 floor for informational text holds on page, card and hover planes. Warmth now comes from the ivory surface showing through, not from per-tier hue shifts. Desktop only; Mobile keeps its values until its own phase. Values and tokens: token-decision-table §9.4.
+- **Fills and lines (user ruling 2026-10-22, replaces dual anchoring)**: hover, chip, selected and pressed fills and all borders and dividers are the same ink at low alpha — soft hover 3.5% / 4%, hover and chip 5% / 6%, selected and pressed 8% / 10%, weak tier (file chip, scrollbar hover) 10% / 13%, borders and dividers 8% / 10% (Light black / Dark white). A translucent fill shifts whatever plane it sits on — page, card, popover, glass or wallpaper — by the same step, so page- and card-anchored variants are no longer needed, and in Dark a chip is always lighter than the card beneath it. Borders read softer on wallpaper than the former solid lines; this was accepted with the ruling. A line or fill that sits over a transparent window region (the layout dividers between panes under glass) is laid on the page color first, so the native window material never shows through. The Light switch off-track darkens to `#808080` so it keeps 3:1 on hovered rows. Values: token-decision-table §9.2–§9.3.
+- **Icons on ink**: icons take their tier through `currentColor`, so an icon drawn from several strokes would turn darker (Light) or brighter (Dark) wherever its strokes overlap. In the CINDY family `globals.css` composites each icon as one shape — strokes drawn opaque, the whole icon masked to the ink's alpha — so it reads like a solid icon at reduced opacity; opaque icon colors are unchanged. Lucide icons get this automatically; a hand-drawn single-color icon made of several strokes adds `data-ink-icon`. Don't add it to an SVG whose parts carry their own colors: the mask would fade those parts too.
+- **Twin sync**: every color carried in both hex/rgba and HSL forms (24 pairs) must stay value-identical, translucent tiers included (same alpha in both forms). Pairs follow the tier, not the token name: `text-tertiary-hsl` / `muted-foreground` serve the secondary tier (`text-secondary`), exactly as in Classic. Control outlines such as `chat-input-border-focus` keep their own values and are no longer derived from a text tier.
+- **Exempt families untouched**: `login-*` (60 tokens; since 2026-10-23 its text tokens, and since 2026-10-27 its panel, control, border, primary-button and hover/pressed tokens, take the same values as the CINDY skin, §16.1, but stay protected from theme overrides), `diff-*`, `error-*`, `overlay-*`, semantic status colors, shadows — per §10/§16 and `protected-tokens.ts`.
 - User-tuned one-offs: dark sidebar glass `rgba(5,5,5,0.85)` (2026-08-11); light sidebar glass 85% opacity (2026-08-17, aligned with dark).
 
 ### 15.17 Switch color and motion (owner decisions 2026-09-15 / 2026-09-16)
@@ -1521,65 +2042,66 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ## 16. Login Flow (登录链路)
 
-> 本节是登录全链路的设计系统规范。逐参数权威 = 同目录的 [`figma-component-spec.md`](./figma-component-spec.md)（组件 / 色板速查，nodeId 溯源）与 [`token-decision-table.md`](./token-decision-table.md)（token / 尺寸决策）——两份自 2026-07-24 起随 `docs/design-rules/` 入仓维护；`DESIGN-login`（逐屏规格）、`flow-map`（状态机）、`fidelity-matrix`（保真度验收矩阵）仍为设计阶段工作文件，不入仓库。本节不重复抄全表，只钉死设计规则与组件契约，逐参数值以 Figma 组件库及本节色板表为准。
+> 本节是登录全链路的设计系统规范，也是登录域唯一的现行规则来源：色值以 §16.1 色板表（由 `packages/design-tokens` 生成）为准，几何以 §16.2 常量表与 `loginDesignTokens.ts` / `loginSkinLayout.ts` 为准。[`token-decision-table.md`](./token-decision-table.md) 保留为 token / 尺寸的决策记录。原 `figma-component-spec.md`（Figma 组件逐态读取记录）已于 2026-10-23 移除：其现行值均已并入本节与代码常量，后续改版未再回写；代码注释里的 `figma §N` 指它的章节，可在 git 历史（移除前的提交 `70b32d7578`）查阅，Figma nodeId 仍直接写在注释里。`DESIGN-login`（逐屏规格）、`flow-map`（状态机）、`fidelity-matrix`（保真度验收矩阵）仍为设计阶段工作文件，不入仓库。
 >
-> **交付状态**：**亮色** as-built 已合并入 main；**深色**为目标规格（色值经 Figma 组件库 Dark symbol 逐个核验，见 §16.1 双态表 / §16.5），token 已注册但 dark 槽位当前为 light 占位值，待实现 PR 填入真实深色值。两模式均受 §10「Light / Dark 双模式交付门槛」约束——非可选愿景。
+> **交付状态**：亮色与深色均已落地，深色字标 / slogan 资产随模式切换，组件经 `--login-overlay-*` 消费 hover / pressed 叠层。2026-10-27 起面板、控件、描边、主按钮与叠层并入 CINDY 主界面墨水口径（§16.1 / §16.5），原「部分叠层仍为 2026-07-24 改判前旧值」的缺口随之关闭。两模式均受 §10「Light / Dark 双模式交付门槛」约束。
 >
-> 本节独立于 §1–§15 默认皮肤与 CINDY 皮肤族——登录页是独立白底 / 深底反色体系，**不消费编辑器主题的 `--surface` / `--text-*` 等 slot**，只走本节定义的 `--login-*` token（light / dark 二态已注册于 `apps/desktop/src/renderer/themes/colors.ts`；见 §10）。`--login-*` 随基础 light / dark **二态**切换，但**不跟随具体扩展主题**（登录页只认 light / dark 模式；首次亮、后续跟随见 §16.5）。
+> 本节独立于 §1–§15 默认皮肤与 CINDY 皮肤族——登录页是独立白底 / 深底反色体系，**不消费编辑器主题的 `--surface` / `--text-*` 等 slot**，只走本节定义的 `--login-*` token（文字、面板、控件、描边与主按钮的**值**与 CINDY 皮肤主界面相同，见 §16.1，但仍是独立 token，扩展主题改主界面颜色不会影响登录页）（light / dark 二态已注册于 `apps/desktop/src/renderer/themes/colors.ts`；见 §10）。`--login-*` 随基础 light / dark **二态**切换，但**不跟随具体扩展主题**（登录页只认 light / dark 模式；首次亮、后续跟随见 §16.5）。
 
 ### 16.1 视觉风格
 
-登录页是**黑白反色**体系（亮色 = 白底墨字 / 深色 = 深底米字），与编辑器主界面解耦，亮 / 深两模式镜像同构：
+登录页的颜色与 CINDY 皮肤主界面同一口径（亮色黑墨水 / 深色白墨水），但仍是独立 token 族，不跟随扩展主题：
 
-- **面板 / 控件走墨黑–米白反色，深色镜像反相**：亮色白面板 `#FBFBFB` + 米白控件 `#EEEEEE` + 墨黑主按钮 `#2A2828`；深色反相为深面板 `#312F2F` + 深控件 `#2C2A2A` + 白主按钮 `#EEEEEE`。**两模式的面板 / 控件底色与文字都不出现纯黑 `#000` 或纯白 `#fff`**（`figma-component-spec §1.1`）；细描边例外——暗色主按钮 / 圆钮的 `#FFFFFF` 白边为 figma `white_button` 实测值，不受此限。
-- **品牌红 `#DF0C27` 在登录画布内只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；画布外仅有 §15.10 登记的 Mobile Beta 渠道状态徽标例外。**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
-- **`--login-*` 调色板双态目标值** —— token 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值）。下表为深色实现的目标规格，经 Figma 组件库 Dark symbol 逐个核验；实现 PR 须将 dark 槽位更新为本表 dark 列的值：
+- **面板、控件、描边与主按钮走主界面墨水口径（2026-10-27 用户裁决）**：面板 = 主界面卡片面 `surface-elevated`（亮 `#FDFDF8` / 暗 `#1F1F1F`，深色取卡片档 = 方案 A）；输入框、方式行、返回钮、协议弹窗「不同意」钮与协议单选底 = 墨水填充 `surface-chip`（黑 5% / 白 6%，叠在面板上）；所有描边 = 墨水线 `border-default`（黑 8% / 白 10%）；聚焦 / 已填描边 = 正文档；主按钮、第三方圆钮、「同意」钮与单选选中 = 主界面反相 CTA（`#3C3F43` 底 `#FCFCFC` 字 / `#EEEEEE` 底 `#151515` 字，不另描边）；重发链接 = 正文档，hover 说明档、pressed 强调档；禁用主按钮 = 墨水填充 + 占位档文字（不叠白、不另描边）。原「墨黑–米白反色」实色（`#FBFBFB` / `#312F2F` 面板、`#EEEEEE` / `#2C2A2A` 控件、`#2A2828` 主按钮等）退役。对应关系由 `loginInkLadder.test.ts` 逐项守护，改主界面对应角色时登录页必须同步。
+- **文字走墨水阶梯（2026-10-23 用户裁决）**：标题、输入已填字、副标题 / 倒计时 / 「跳过登录」、空态占位，以及回调页标题与正文，与主界面同用 §15.16 的墨水档——亮色黑、深色白加透明度：标题与已填字 = 正文档 88% / 82%，副标题与回调正文 = 次要档 56% / 55%，占位 = 占位档 32% / 30%。不再为登录页单独挑灰（原双模同值 `#6F6F6F` 在深色面板上只有约 2.6:1，已退役）。改主界面墨水档时登录页同步改，由 `loginInkLadder.test.ts` 守护。主按钮字随主界面反相 CTA 前景取实色。Mobile 登录皮暂保留原实色，另行收拢。
+- **品牌红 `#DF0C27` 在登录画布内只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；画布外仅有 §15.10 登记的 Mobile Beta 渠道状态徽标例外。**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#F2F2ED` / 深 `#181818`，与 CINDY 皮肤页底同值，固定不随扩展主题），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
+- **`--login-*` 调色板双态值** —— 注册于 `apps/desktop/src/renderer/themes/colors.ts`，下表由 `packages/design-tokens` 生成：
 
 <!-- BEGIN GENERATED DS-8: login-colors -->
 | token | light | dark | 核验源 |
 | --- | --- | --- | --- |
-| `--login-panel-bg` | `#FBFBFB` | `#312F2F` | callback-card dark（as-built） |
-| `--login-panel-border` | `#D4D4D4` | `#434343` | callback-card dark |
-| `--login-control-bg`（输入框底） | `#EEEEEE` | `#2C2A2A` | figma `Dark_normal` 输入 symbol |
-| `--login-action-control-bg`（方式行 / 返回钮底） | `#EEEEEE` | `#2A2828` | figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23） |
-| `--login-back-border`（返回钮描边） | `#FFFFFF` | `#434343` | figma 549:897 |
-| `--login-control-border` | `#D4D4D4` | `#434343` | figma `Dark_normal` |
-| `--login-control-border-active`（focus / filled） | `#2A2828` | `#EEEEEE` | figma `Dark_highlight` |
-| `--login-control-text`（输入填充字，Bold） | `#252222` | `#EEEEEE` | figma Dark 填充 / error 态 |
-| `--login-control-placeholder`（空态字） | `#D4D4D4` | `#6F6F6F` | figma Dark 空态 |
-| `--login-title-text` | `#252222` | `#D4D4D4` | callback-title dark |
-| `--login-secondary-text`（副标题 / 倒计时） | `#6F6F6F` | `#6F6F6F` | 两模式同值 |
-| `--login-primary-button-bg` | `#2A2828` | `#EEEEEE` | figma `white_button` / callback-cta dark |
-| `--login-primary-button-border` | `#434343` | `#FFFFFF` | 同上 |
-| `--login-primary-button-text`（Bold） | `#D4D4D4` | `#2A2828` | 同上 |
-| `--login-link-text`（重发链接） | `#2A2828` | `#EEEEEE` | figma `dark_重新发送` symbol |
-| `--login-link-hover` | `#4A4848` | `#A8A8A8` | 推导值（无独立 dark hover symbol） |
-| `--login-link-pressed` | `#1A1818` | `#C0BEBE` | 推导值 |
-| `--login-disabled-button-overlay` | `rgba(255, 255, 255, 0.7)` | `rgba(255, 255, 255, 0.7)` | figma `white_button` Disable：disabled 两模式同构（见 §16.5） |
-| `--login-splash-progress-track` / `--login-splash-progress-fill` | `#D9D9D9` / `#252222` | `#434343` / `#D4D4D4` | figma Dark symbol 核验 |
-| `--login-loading-ring-track`（loading 环轨道） | `rgba(42, 40, 40, 0.18)` | `rgba(212, 212, 212, 0.18)` | 18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token） |
+| `--login-panel-bg` | `#FDFDF8` | `#1F1F1F` | 同 CINDY 主界面卡片 `surface-elevated`（2026-10-27 并入墨水口径；暗色取卡片档 = 方案 A） |
+| `--login-panel-border` | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10%（同主界面 `border-default`） |
+| `--login-control-bg`（输入框底） | `rgba(0, 0, 0, 0.05)` | `rgba(255, 255, 255, 0.06)` | 墨水填充 黑 5% / 白 6%（同主界面 `surface-chip`，叠在面板上） |
+| `--login-action-control-bg`（方式行 / 返回钮底） | `rgba(0, 0, 0, 0.05)` | `rgba(255, 255, 255, 0.06)` | 与输入框同档（2026-10-27 起不再分化） |
+| `--login-back-border`（返回钮描边） | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10% |
+| `--login-control-border` | `rgba(0, 0, 0, 0.08)` | `rgba(255, 255, 255, 0.10)` | 墨水线 黑 8% / 白 10%（同主界面 `border-default`） |
+| `--login-control-border-active`（focus / filled） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82% |
+| `--login-control-text`（输入填充字，Bold） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯，同主界面 `text-primary`） |
+| `--login-control-placeholder`（空态字） | `rgba(0, 0, 0, 0.32)` | `rgba(255, 255, 255, 0.30)` | 墨水占位档 黑 32% / 白 30%（2026-10-23 并入墨水阶梯，同主界面 `text-placeholder`） |
+| `--login-title-text` | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82%（2026-10-23 并入墨水阶梯） |
+| `--login-secondary-text`（副标题 / 倒计时） | `rgba(0, 0, 0, 0.56)` | `rgba(255, 255, 255, 0.55)` | 墨水次要档 黑 56% / 白 55%（2026-10-23 并入墨水阶梯，同主界面 `text-secondary`；原双模同值 `#6F6F6F` 退役） |
+| `--login-primary-button-bg` | `#3C3F43` | `#EEEEEE` | 同主界面反相 CTA `accent-cta-bg-pure` |
+| `--login-primary-button-border` | `#3C3F43` | `#EEEEEE` | 与底同色（不另描边） |
+| `--login-primary-button-text`（Bold） | `#FCFCFC` | `#151515` | 同主界面 `accent-pure-cta-fg` |
+| `--login-link-text`（重发链接） | `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.82)` | 墨水正文档 黑 88% / 白 82% |
+| `--login-link-hover` | `rgba(0, 0, 0, 0.70)` | `rgba(255, 255, 255, 0.66)` | 墨水说明档 黑 70% / 白 66% |
+| `--login-link-pressed` | `rgba(0, 0, 0, 0.95)` | `rgba(255, 255, 255, 1.00)` | 墨水强调档 黑 95% / 白 100% |
+| `--login-disabled-button-overlay`（已退役） | `rgba(0, 0, 0, 0.00)` | `rgba(255, 255, 255, 0.00)` | 已退役（2026-10-27）：禁用主按钮改为控件底 + 占位字，不再叠层；ID 与透明默认值保留，仅为兼容旧版导出的本地主题，组件不再消费 |
+| `--login-splash-progress-track` / `--login-splash-progress-fill` | `rgba(0, 0, 0, 0.10)` / `rgba(0, 0, 0, 0.88)` | `rgba(255, 255, 255, 0.13)` / `rgba(255, 255, 255, 0.82)` | 轨 = 墨水弱档 黑 10% / 白 13%；填充 = 墨水正文档 |
+| `--login-loading-ring-track`（loading 环轨道） | `rgba(0, 0, 0, 0.10)` | `rgba(255, 255, 255, 0.13)` | 墨水弱档 黑 10% / 白 13%；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token） |
 | `--login-error-fg` | `#D91F37` | `#D91F37` | 语义豁免不变 |
-| `--login-bg-base`（画布底） | `#EDEDED` | `#1F1F1E` | figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
+| `--login-bg-base`（画布底） | `#F2F2ED` | `#181818` | 2026-10-01 对齐 CINDY 皮肤页底（cindy-light / cindy-dark 的 `surface`，#2571 色阶改版值），登录前后背景同色；仍为固定值、不随扩展主题。两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
 <!-- END GENERATED DS-8: login-colors -->
 
 品牌保护项 `--login-brand-accent` / `--login-brand-accent-pressed` 仍按原决定保留 `#DF0C27` / `#A61629`，两模式相同；尚未接管，不由本表生成。上表已接管行从 DTCG 自动生成，核验源说明保留原批准依据。
 
-余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的**亮色**值与 callback 族**双态**值见 `token-decision-table §3`、`figma-component-spec §1.1`（注意：这两份外部 spec 只覆盖亮色 + callback 族 dark，**登录主皮 dark 值以本表为权威**，原※推导值已经 Figma 组件库核验确认，本表为目标规格）；深色反相机制与 3 处组件改动见 §16.5。
+余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的现行双态值以 `colors.ts` 为准，决策理由见 `token-decision-table §3`；深色反相机制与 3 处组件改动见 §16.5。
 
 - **社交圆钮深色 = 白圆**：与主按钮共用 `--login-primary-button-bg / -border`，深色自动反相为白圆 `#EEEEEE` + 白边，**圆内图标保持品牌色**（Google 彩 / WeChat 绿 / SSO），非反相（figma `white apple/google/wechat/SSO` symbol 核验）。
 
 ### 16.2 设计规则
 
-**Desktop 登录成功回调页当前覆盖（2026-09-02）**：成功态移除「回到 Cindy」按钮，卡片收紧为 **560×500** 的内容流布局，并在底部显示本地化 3 秒倒计时；倒计时结束先移除倒计时文字，再调用 `window.close()`。失败 / Warning 保留原 **680×680** 卡片与返回操作。该条是当前产品 UX 对旧 Figma 成功态回调帧（680×680 + CTA）的明确覆盖；`figma-component-spec.md §6` 的旧节点仍作为历史视觉来源记录，现行客户端实现以本条与代码测试为准。
+**Desktop 登录成功回调页当前覆盖（2026-09-02）**：成功态移除「回到 Cindy」按钮，卡片收紧为 **560×500** 的内容流布局，并在底部显示本地化 3 秒倒计时；倒计时结束先移除倒计时文字，再调用 `window.close()`。失败 / Warning 保留原 **680×680** 卡片与返回操作。该条是当前产品 UX 对旧 Figma 成功态回调帧（680×680 + CTA）的明确覆盖，现行客户端实现以本条与代码测试为准。
 
-**Token 体系**：`--login-*` 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值，待实现 PR 填入 §16.1 表中的目标深色值）。组件经 `LOGIN_COLORS`（桌面 `loginDesignTokens.ts`）/ `loginColors`（手机 `theme/tokens.ts`）单点消费。**禁止硬编码 hex pair**（呼应 §10）——`hardcoded-color-audit` 守护全绿才允许合入。`--login-*` 随基础 **light / dark 二态**切换（对齐 `callback-*` 族与 §15 CINDY 皮肤族的双态做法），但**不跟随具体扩展主题**——登录页只认 light / dark 模式，扩展主题不 override `--login-*`（首次亮、后续跟随上次模式见 §16.5）。
+**Token 体系**：`--login-*` 注册于 `apps/desktop/src/renderer/themes/colors.ts`（值由 `packages/design-tokens` 生成，见 §16.1）。组件经 `LOGIN_COLORS`（桌面 `loginDesignTokens.ts`）/ `loginColors`（手机 `theme/tokens.ts`）单点消费。**禁止硬编码 hex pair**（呼应 §10）——Desktop renderer 里新增的字面颜色由 `hardcoded-color-audit` 在 CI 阻断；Mobile 侧该脚本只报告，由 Mobile 自身的 token 守卫测试阻断（范围见 `design-governance.md` §8）。`--login-*` 随基础 **light / dark 二态**切换（对齐 `callback-*` 族与 §15 CINDY 皮肤族的双态做法），但**不跟随具体扩展主题**——登录页只认 light / dark 模式，扩展主题不 override `--login-*`（首次亮、后续跟随上次模式见 §16.5）。
 
-**几何 / 布局常量**：固化在两个常量文件，数值权威 = `figma-component-spec §5.1` + `token-decision-table §4`，不按截图目测补值。
+**几何 / 布局常量**：固化在两个常量文件，数值权威 = 下表与常量文件本身（决策理由见 `token-decision-table §4`），不按截图目测补值。
 
 | 常量 | 值 | 引用 |
 |---|---|---|
 | 登录整体组 | 680×**620**（面板 500 + gap 40 + 圆钮行 80）——2026-07-27 面板增高改版，原 560 作废 | figma §5.1（新稿 `700:783`） |
-| 面板 | 680×**500**，r36，`#FBFBFB` + inset 1px `--login-panel-border` —— 2026-07-27 改版，原 440 作废；增的 60 = 面板内新增的「跳过登录」槽，**面板内其余元素 y 坐标一律不动**。面板高度对登录全步骤恒定（步骤间不得跳变）；**Splash 借用同款面板时保持 440**（无该入口，见 §16.3 `LoginPanel`） | figma §4 / §5.1（新稿 `700:791` / `705:886` / `705:1062`） |
+| 面板 | 680×**500**，r36，`--login-panel-bg` + inset 1px `--login-panel-border` —— 2026-07-27 改版，原 440 作废；增的 60 = 面板内新增的「跳过登录」槽，**面板内其余元素 y 坐标一律不动**。面板高度对登录全步骤恒定（步骤间不得跳变）；**Splash 借用同款面板时保持 440**（无该入口，见 §16.3 `LoginPanel`） | figma §4 / §5.1（新稿 `700:791` / `705:886` / `705:1062`） |
 | 输入框 / 主按钮 | 540×80，r40，@(70, 158 / 300) | figma §4.1 / §4.3 |
 | SSO 最近组织候选层 | 与输入框同宽同 x，顶边恒为输入框底 + 8；作为浮层覆盖后续 hint / 主按钮，不参与文档流。最大高度收在当前端登录面板内并自行滚动（桌面面板 500、手机面板 440），不得再定位到面板下方。候选层与输入框必须处于同一登录组坐标系，随桌面窗口 placement、phone 短/长屏、pad surface scale 与手机键盘避让整体移动，不另写按设备尺寸分支 | 2026-08-22 小屏实机修正 |
 | 方式行 | 540×100，r60，@(70, 158 / 278)，左图标 24@(27,37)，右图标 @(490,40) | figma §4.9 |
@@ -1593,7 +2115,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 桌面 `loginDesignTokens.ts`（1819×2098 画布）、手机 `loginSkinLayout.ts`（750 设计 px，键名用 `font` / `radius` 避开 typography 守护扫描）。两端面板内坐标同源同值，手机由外层统一 `transform` 缩放。
 
-**平台差异**：桌面 = Web renderer（Electron，Win / Mac 同套）；手机 = React Native（iOS / Android，含 phone / pad-portrait / pad-landscape）。两端同参数源、同 token 语义（手机 `loginColors` 与桌面 `LOGIN_COLORS` 同名同值），仅实现宿主不同（RN 用 `StyleSheet` + `Animated`，桌面用 CSS + Tailwind）。
+**平台差异**：桌面 = Web renderer（Electron，Win / Mac 同套）；手机 = React Native（iOS / Android，含 phone / pad-portrait / pad-landscape）。两端同几何参数源、同 token 语义（手机 `loginColors` 与桌面 `LOGIN_COLORS` 同名）；色值自 2026-10-23 / 10-27 起桌面已并入墨水口径，手机登录皮暂保留原实色、另行收拢，在此之前两端色值不同。实现宿主也不同（RN 用 `StyleSheet` + `Animated`，桌面用 CSS + Tailwind）。
 
 **移动端 stage 几何（2026-07-27 换品牌簇基准；2026-07-29 修正：功能区落位同步取新稿标注值）**：手机的**品牌簇**（立绘 / SLOGAN / 字标）**与功能区落位 `loginY` 一并取新稿逐字段值**——两者是同一份稿的两半，必须同源。短屏 / 长屏两档之间仍走既有线性插值体系（`loginSkinLayout.resolveLoginStage`），**不另造缩放规则**。下表为设计单位（750 设计px 基准），消费时一律 × `surface.scale`（设计单位 ≠ 物理 pt，见 §16.4「几何」条）：
 
@@ -1623,7 +2145,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 **~~键盘停靠锚 = error 槽底（2026-07-27 拍板，移动端）~~〔已作废 2026-07-28：手机端跳过登录整体剥离，停靠锚仍为面板底，见本节末勘误〕**：停靠贴附锚由**面板底**改为**面板内 y=430（error 槽底）**——面板 440→500 后若继续用面板底，每次停靠会比改版前多顶 60 设计px（短屏更容易触发 clamped-fallback、把品牌层与标题挤掉）。**取舍**：键盘弹起时「跳过登录」槽（430..490）允许被遮挡——它不是输入链路的必需元素，收起键盘即可见；停靠引擎本身（10px 贴附 + safe-top 上限 + clamped-fallback 兜底）与悬浮相交判定锚（输入框 ∪ 主按钮）均不变。
 
-**交互态**：hover（仅桌面）/ pressed（双端）/ disabled / loading 五态。态叠层挂伪元素（桌面 `::after`）/ overlay View（手机），**不动图标 / 文本子节点**；disabled 叠层走 `--login-disabled-button-overlay` token。hover / pressed 叠层**暗色落地前**为 figma 实测 rgba 字面值（亮色 as-built 现状）；**暗色 PR 起 token 化为 `--login-overlay-*` 二态 token**（叠层方向随模式反转，见 §16.5），此后组件内禁止新增字面 rgba 叠层。态系细则见设计阶段工作文件 `DESIGN-login §2`(不入仓库)。
+**交互态**：hover（仅桌面）/ pressed（双端）/ disabled / loading 五态。态叠层挂伪元素（桌面 `::after`）/ overlay View（手机），文字与图标在叠层之上（`relative z-[1]`），**叠层不压文字**；全部叠层走 `--login-overlay-*` light / dark 二态 token，组件内禁止新增字面 rgba 叠层。取值口径见 §16.5 第 1 条。
 
 **常驻动画 compositor-only**：spinner / loading 环动画挂 HTML（桌面）/ `Animated.View`（手机）外层 wrapper，SVG 图形保持静态（呼应 §14.4）；`prefers-reduced-motion` 直落静止。面板入场 handoff 动画是 §14.4 容器形变的窄变体（双端冻结 420ms 升起 + 渐显，`LOGIN_HANDOFF_TIMINGS.panelMs` / `panelInMs`）。
 
@@ -1653,7 +2175,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ### 16.3 组件定义
 
-桌面 `apps/desktop/src/renderer/components/login/LoginControls.tsx`（11 组件），手机 `apps/mobile/src/components/LoginSkinControls.tsx`（13 组件）。两端同名组件同参数源。逐组件契约（逐参数规格见 `figma-component-spec §4`）：
+桌面 `apps/desktop/src/renderer/components/login/LoginControls.tsx`（11 组件），手机 `apps/mobile/src/components/LoginSkinControls.tsx`（13 组件）。两端同名组件同参数源。逐组件契约（逐参数值以组件常量与 §16.2 几何表为准）：
 
 | 组件                                               | 端      | 用途                                                                                                           | 关键 props                                                                        | token / 几何                                                                                                                                                                                                                                                                                   |
 | -------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1667,8 +2189,8 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 | `LoginSocialButton`                                | 双      | 第三方 / SSO 圆钮                                                                                              | `label`, `onClick`, `children`, `isLoading / busy`                                | 80×80 r50 `--login-primary-button-bg / -border`；icon 48 居中；仅 normal + hover（桌面）+ pressed，**无 disabled / loading 视觉态**                                                                                                                                                            |
 | `LoginSocialGlyph`                                 | 手机    | 社交图标矢量（Apple / Google / WeChat / SSO；**apple 分支仅非 iOS 场景**——iOS 走官方按钮不进圆钮行，见 §16.2） | 内部                                                                              | Google / WeChat 品牌色不变；Apple / SSO 单色随圆钮底反相（暗色白圆上 `#2A2828`）                                                                                                                                                                                                               |
 | `LoginBackButton`                                  | 双      | 返回                                                                                                           | `label`, `onClick`, `disabled`                                                    | @(20,20) 60×60 r40 `--login-action-control-bg` / `--login-back-border`；chevron 24                                                                                                                                                                                                             |
-| `LoginTextLink`（桌）/ `LoginTextLinkSlot`（手）   | 桌 / 手 | 重发链接 / 提示文案（**文字链接**，不承载「跳过登录」）                                                        | `variant`（link / countdown，桌）, `tone`, `children`                             | @(70,238) 540×50 20；link 变体 `--login-link-text` 下划线可点、hover / pressed 变色；countdown / slot `--login-control-placeholder` 不可点                                                                                                                                                     |
-| `LoginSkipEntry`（桌）/ `LoginSkipLoginLink`（手） | 桌 / 手 | 「跳过登录」入口（**文字按钮**，与上一行的文字链接是两种组件）                                                 | 桌：`children`, `onClick`, `disabled`, `testId`；手：`label`, `onPress`, `testID` | 槽 @(0,430) 680×60，文字 24 Regular + 下划线、`--login-secondary-text`（双模同值），**hover / pressed 不变色**；命中区 = 文字实宽 + 左右各扩（桌 30 / 手 50 设计px）、高占满 60 槽，容器不可点 —— 逐条口径见下方「登录文字按钮」                                                               |
+| `LoginTextLink`（桌）/ `LoginTextLinkSlot`（手）   | 桌 / 手 | 重发链接 / 提示文案（**文字链接**，不承载「跳过登录」）                                                        | `variant`（link / countdown，桌）, `tone`, `children`                             | @(70,238) 540×50 20；link 变体 `--login-link-text` 下划线可点、hover / pressed 变色；countdown 变体（桌面）`--login-secondary-text`（墨水次要档 黑 56% / 白 55%）不可点；手机 `LoginTextLinkSlot` / 倒计时暂保留 `controlPlaceholder` 实色，另行收拢                                                                                                                                                     |
+| `LoginSkipEntry`（桌）/ `LoginSkipLoginLink`（手） | 桌 / 手 | 「跳过登录」入口（**文字按钮**，与上一行的文字链接是两种组件）                                                 | 桌：`children`, `onClick`, `disabled`, `testId`；手：`label`, `onPress`, `testID` | 槽 @(0,430) 680×60，文字 24 Regular + 下划线、`--login-secondary-text`（桌面：墨水次要档 黑 56% / 白 55%；手机端该入口已剥离，见 §16.5 勘误），**hover / pressed 不变色**；命中区 = 文字实宽 + 左右各扩（桌 30 / 手 50 设计px）、高占满 60 槽，容器不可点 —— 逐条口径见下方「登录文字按钮」                                                               |
 | `LoginResendCountdown`                             | 手机    | 验证码重发（倒计时 / 重发二态）                                                                                | `deadline`, `countdownTemplate`, `resendLabel`, `onResend`                        | @(70,238)；`deadline=null` → 常驻可点无倒计时（SSO 验证码屏用）                                                                                                                                                                                                                                |
 | `LoginMethodRow`                                   | 双      | 方式选择行（企业 / 个人）                                                                                      | `top`, `title`, `subtitle`, `icon`(enterprise / person), `onClick`                | 540×100 r60 `--login-action-control-bg` / `--login-control-border`；左图标 24@(27,37) / person 18×20@(30,39)；右 share 18@(490,40)；文字 @(67) 垂直居中                                                                                                                                        |
 | `LoginErrorText`                                   | 双      | 错误提示                                                                                                       | `children`                                                                        | @(0,380) 680×50 20 `--login-error-fg`                                                                                                                                                                                                                                                          |
@@ -1679,7 +2201,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 |                 | **文字链接**（`LoginTextLink` / `LoginTextLinkSlot`）      | **文字按钮**（`LoginSkipEntry` / `LoginSkipLoginLink`）                                                                                                                                                         |
 | --------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 语义            | 链接：跳转 / 重试 / 次要说明（重发验证码、sso-org 帮助行） | 按钮：触发一次产品级动作（跳过登录 → 进入本地模式）                                                                                                                                                             |
-| 色              | `--login-link-text` 族（light `#2A2828` / dark `#EEEEEE`） | `--login-secondary-text`（`#6F6F6F`，**light / dark 同值**，零新增 token）                                                                                                                                      |
+| 色              | `--login-link-text` 族（墨水正文档） | `--login-secondary-text`（墨水次要档 黑 56% / 白 55%，零新增 token；手机端无此入口，见 §16.5 勘误）                                                                                                                                      |
 | hover / pressed | 变色（`--login-link-hover` / `-pressed`）                  | **不变色**——只靠下划线常显 + 指针形状（桌面 `cursor:pointer`）给反馈                                                                                                                                            |
 | 字号 / 槽       | 20，槽 540×50 @(70,238)                                    | 24，槽 680×60 @(0,430)                                                                                                                                                                                          |
 | 命中区          | 槽内整块                                                   | **文字实宽 + 左右各扩**（桌面 30 / 移动 50 设计px），高度占满 60 槽；680×60 容器只做居中定位、自身不可点（桌面 `pointer-events:none` + 内层 button `auto`；移动 `pointerEvents="box-none"` + 内层 `Pressable`） |
@@ -1699,11 +2221,13 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 **组件库新增（2026-07-24 登记；协议 UI 已随 consent PR 落地，游客圆钮方案已由上述「跳过登录」文字按钮取代）**：
 
-- **协议勾选 radio**（figma `radiobutton 600:627`，四态双模式）：24×24 命中区，圈 20×20 r9 + 2px 描边，选中为**对勾**（非圆点）。亮：未选 `#F1F0F1` 底 / `#434343` 边 → 选中 `#2A2828` 实底 + 白勾；暗：未选 `#2A2828` 底 / `#F1F0F1` 边 → 选中 `#F1F0F1` 底 + `#2A2828` 勾——选中反色与登录黑白反色体系同构。用于登录页 `服务条款` 协议行。
-- **服务条款弹窗小按钮**（figma `light_button_*` / `Dark_button_*` 四母版，`602:846/863/1297/1311`）：260×80 r40 文字 Bold 24；强调钮 = 模式反色（亮强调深底 `#2A2828`、暗强调浅底 `#EEEEEE`），暗模式普通钮引入新灰 `#434141` 底 / `#565454` 边。逐态值见 `figma-component-spec §11.3`。
+- **协议勾选 radio**（figma `radiobutton 600:627`，四态双模式）：24×24 命中区，圈 20×20 r9 + 2px 描边，选中为**对勾**（非圆点）。未选 = 墨水填充底 + 次要档描边，选中 = 主按钮反相实底 + 主按钮字色对勾（2026-10-27 墨水口径，见 §16.1）——选中反色与登录黑白反色体系同构。用于登录页 `服务条款` 协议行。
+- **服务条款弹窗小按钮**（figma `light_button_*` / `Dark_button_*` 四母版，`602:846/863/1297/1311`）：260×80 r40 文字 Bold 24；强调钮（同意）= 主按钮反相 CTA，普通钮（不同意）= 墨水填充 + 墨水线 + 正文档文字（2026-10-27 墨水口径）。hover / pressed 见 §16.5 第 1 条。
 - 既有组件扩容：`SSO 登录_企业` 与 `back` 均扩为含 Dark 三态的六态集（值已并入 §16.1 `--login-action-control-bg` / `--login-back-border` 口径），`white_button` 增 loading 五态。
 
 ### 16.4 登录链路逐屏
+
+验证码重发倒计时统一为 **60 秒**，与服务端单目标冷却一致；Figma 中的 42 秒仅是倒计时过程示例。只有发码请求成功才开始或重置倒计时，短信登录的 `429 / RATE_LIMITED` 显示「操作过于频繁」错误，不视为已发送。桌面端与移动端均使用绝对截止时间，休眠恢复后按剩余时间校正。实现见[桌面倒计时](../../apps/desktop/src/renderer/components/login/useResendCountdown.ts)与[移动端倒计时](../../apps/mobile/src/auth/loginSkinLayout.ts)。
 
 登录状态机权威 = `packages/auth-client` 源码（`AuthFlowState` / `LoginOutcome` 判别联合；`flow-map` 为辅助导航，个别 UI 段落滞后于区域定形态改版）。共享 step ∈ {`identifier`, `method-choice`, `verification-code`, `sso-verification`, `browser-redirect`, `account-selection`, `binding`, `completed`, `error`}（`sso-org` **不是**共享 step，是 `identifier` 下的页面局部 `ssoOrgMode` 子视图）；其中 `account-selection` / `binding` / `sso-verification` / `completed` 由服务端 `LoginOutcome.status`（`ok` / `select_account` / `binding_required` / `sso_verification_required`）分支决定，**不是固定步骤**——任意 outcome 调用都可能命中。逐屏职责与关键组件（逐屏坐标 / 文案见 `DESIGN-login §3` 国区 / `§4` 国际区 / `§5` 移动）：
 
@@ -1711,14 +2235,14 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `identifier`                                      | 输入手机号 / 邮箱（国区 phone / 国际区 email），含 social 圆钮行（Apple / Google / SSO，**无游客圆钮**）+ SSO 入口 + 协议同意行；**面板内常驻「跳过登录」入口**（2026-07-27 起，**仅桌面**；手机端 2026-07-28 剥离） | `LoginInput` / `LoginSkinPhoneInput` + `LoginPrimaryButton` + `LoginSocialRow` + `LoginConsentRow` + `LoginSkipEntry` / `LoginSkipLoginLink`                                                                                                                                                                                                                                |
 | `method-choice`                                   | 存在真正选择时：企业 SSO / 个人邮箱验证码，或多条 SSO 连接。探测结果只剩唯一 SSO 或唯一邮箱验证码时不展示本屏——前者投影 `browser-redirect`，后者直接发码进入 `verification-code`（跨区确认窗随 step 离开一并关掉）   | `LoginMethodRow`×2（top 158 / 278）+ `LoginTitleBlock`（`chooseMethod`）                                                                                                                                                                                                                                                                                                    |
-| `verification-code`                               | 输入 6 位验证码，42s 重发倒计时                                                                                                                                                                                      | `LoginInput`(center) / `CodeInput` + `LoginTextLink` / `LoginResendCountdown` + `LoginPrimaryButton`                                                                                                                                                                                                                                                                        |
+| `verification-code`                               | 输入 6 位验证码，60s 重发倒计时                                                                                                                                                                                      | `LoginInput`(center) / `CodeInput` + `LoginTextLink` / `LoginResendCountdown` + `LoginPrimaryButton`                                                                                                                                                                                                                                                                        |
 | `sso-verification`                                | SSO 登录后验证企业联系方式，两子态（`codeRequested` false = 只发码 / true = 输码 + 常驻重发，**无倒计时**）                                                                                                          | `LoginPrimaryButton`(sendCode) → `LoginInput`(center) + `LoginPrimaryButton`(completeSignIn / signIn) + `LoginTextLink` / `LoginResendCountdown`(deadline=null)                                                                                                                                                                                                             |
 | `sso-org`（`identifier` 局部子视图，非共享 step） | 输入企业 ID / 组织 slug / 已验证域名跳转 SSO（`ssoOrgMode`）                                                                                                                                                         | `LoginInput` + `LoginPrimaryButton` + `LoginTextLinkSlot`（ssoOrgHint）                                                                                                                                                                                                                                                                                                     |
 | `account-selection`                               | 服务端返回 ≥2 membership，用户选一个                                                                                                                                                                                 | account row + `LoginTitleBlock`（`chooseAccount`）                                                                                                                                                                                                                                                                                                                          |
 | `binding`                                         | 身份未绑 membership，补绑 phone / email（`codeRequested` 两子态；**无重发钮**，桌面 harness 锁定）                                                                                                                   | `LoginInput` / `LoginSkinPhoneInput` → `LoginInput`(center) + `LoginPrimaryButton`                                                                                                                                                                                                                                                                                          |
 | `account-deletion`（状态浮层）                    | 账号删除**状态展示**（发起流程在 Settings 的 `AccountDeletionSection`；登录页仅在存在删除回执时以**根层浮层气泡**展示 status，非主状态机 step；详见下方「注销状态浮层气泡」）                                        | `AccountDeletionStatusPanel`（**登录皮容器外**的根层浮层，非面板内）                                                                                                                                                                                                                                                                                                        |
 | `browser-redirect`                                | 社交 / SSO 跳浏览器验证，等待回调                                                                                                                                                                                    | `LoginLoadingRing` + Desktop `LoginBackButton`（`cancel-browser`；Mobile 保留原取消入口）+ `LoginTitleBlock`                                                                                                                                                                                                                                                                      |
-| `completed` / `error`                             | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板）                          | 成功无面板（进主界面）；error = `LoginBackButton`（仅桌面，复用 reset；普通登录与添加账号均重新加载登录入口）+ `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
+| `completed` / `error`                             | 登录成功 / 失败（含 browser 回调终态页）；`error` 步桌面另有面板下方 footer 的「跳过登录」**逃生入口**（登录服务不可用时仍能进未登录状态，与面板内入口同口径**过协议门**——2026-07-29 拍板；重试连接登录服务期间不禁用，只在切换到未登录状态的过程中禁用）                          | 成功无面板（进主界面）；error = `LoginBackButton`（仅桌面：普通登录网络错误取消当前等待，使用已取得的配置返回入口；配置尚未取得时显示「继续登录／跳过登录」的离线入口，不自动联网；添加账号则关闭流程）+ `LoginTitleBlock` + `LoginPrimaryButton`（重试）+ `LoginErrorText` + footer「跳过登录」按钮（桌面）；browser 回调页 `oauthResultPage`（系统浏览器独立 HTML，main 侧内联常量,色值与 `--login-callback-*` token 同源——renderer CSS var 不可达,改值需两处同步） |
 
 **~~配置错误屏同样承载「跳过登录」逃生入口（移动端）~~〔已作废 2026-07-28：手机端整体剥离，配置错误屏无该入口〕**：`getMobileConfigIssues()` 命中（如 auth base URL 非法）时面板切到 config 提示态，该面板内仍渲染同一个 `LoginSkipLoginLink`（同槽 @(0,430)、同 handler、同 in-flight 门）——跳过登录不发任何网络请求，配置坏掉时恰恰最需要这个入口。
 
@@ -1749,30 +2273,38 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
   - 高度**由内容撑开**,禁止固定高。
 - **视觉(同为设计单位)**:圆角 22、四边 padding 20、**不透明底**(浮层压立绘必须不透明,不靠阴影 / 模糊);描边保持 1 物理 px 细线(不随缩放,否则小系数下会消失);无图标、无阴影、无动效。标题与正文同为 20 / 行高 23 / Regular 400、全部居中(长文案居中换行),仅以颜色区分层级(标题 `--login-control-text` / 正文 `--login-secondary-text`);标题↔正文 5、正文↔「我知道了」22、**「我知道了」↔气泡底固定 20**(= 下 padding,文案拉长该距不变)。内部几何由组件子元素坐标反算自洽:figma 678:1074 标题 text @(20,20) h=23、正文 @(20,48) h=23,无钮变体总高 91 = 20+23+5+23+20。
 - **「我知道了」**(仅 `completed` 态):下划线文字链(非按钮)。热区按端处理——桌面用上下各 11 设计单位 padding + 等量负 margin 抵消视觉(缩放后约 22 CSS px 高,鼠标指针足够);触摸端 hitSlop **按气泡内可用空间钳制**:上 = min(18, 正文↔链接间距×scale)、下 = min(18, 下 padding×scale)、左右 20 物理 pt——RN 的 hitSlop 不会越过父 View 边界,写大了是虚标。**不设未缩放的 44pt 绝对下限**:整个登录系统按 stage 缩放(320pt 窗口下登录主按钮本身仅 ≈34pt 高),孤立保 44 必须打破「正文↔链接 22 / 底距 20 恒定」的拍板视觉;热区随系统同步缩放、在边界内取最大。
-- **颜色**：底 `--login-deletion-bubble-bg`（#FFFFFF / #1F1F1E）、描边 `--login-deletion-bubble-border`（#D7D7D4 / #3C3C3A），均为**固定亮 / 暗二值**——与 §16.2「`--login-*` 只分 light / dark、不随扩展主题」一致，**不得**改用 `var(--surface)` / `var(--chat-input-*)` 等会被扩展主题 override 的 alias（同 `--login-bg-base` 的改判先例）；移动端色板逐值一致。
+- **颜色**：底 `--login-deletion-bubble-bg`（同登录面板 `#FDFDF8` / `#1F1F1F`）、描边 `--login-deletion-bubble-border`（墨水线 黑 8% / 白 10%），均为**固定亮 / 暗二值**——与 §16.2「`--login-*` 只分 light / dark、不随扩展主题」一致，**不得**改用 `var(--surface)` / `var(--chat-input-*)` 等会被扩展主题 override 的 alias（同 `--login-bg-base` 的改判先例）。移动端色板暂保留原值（#FFFFFF / #1F1F1E），随手机登录皮另行收拢。
 - **状态与文案**：`pending`（预计删除日期 + 重新登录可取消）/ `processing`（等待期结束、正在删除）/ `completed`（已删除 + 「我知道了」）三态；`cancelled` 在轮询侧拦截、不渲染气泡（改为登录后的一次性「注销已取消」提示）。五语言（zh-CN / zh-TW / en / ja / ko）× light / dark 全覆盖。
+
+桌面登录恢复：准备态、错误态及离线入口的返回与「跳过登录」不因登录方式请求仍在等待而禁用；重试仍单次执行。凭证存储错误保留原有的检查与帮助流程，不绕过存储恢复限制。返回使旧请求失效，迟到结果不得覆盖新入口；「跳过登录」保留协议同意门与先切换本地会话、再保存同意的顺序。等待登录方式期间打开的跳过协议弹窗，在方式加载完成后仍可同意续接；登录完成、进入其他登录步骤或凭证存储故障仍取消续接。切换本地模式失败时保留可用表单，无表单的准备态进入可重试错误页，旧请求不得重新覆盖页面或解除新请求的等待。覆盖见 `LoginPage.initialization.test.tsx`、`LoginPage.consent.test.tsx`、`AuthContextInitializeCatch.test.tsx` 与 `authLoginBack.test.ts`。
 
 ### 16.5 深色模式与主题跟随
 
-> 深色受 §10「Light / Dark 双模式交付门槛」约束，是**必须交付**的另一模式，非可选愿景。深色色值经 Figma 组件库 Dark symbol 逐个核验（见 §16.1 双态表），为目标规格——token dark 槽位已预留，待实现 PR 填入真实值并补齐 overlay token、深色资产切换及主题跟随逻辑。落地机制如下。
+> 深色受 §10「Light / Dark 双模式交付门槛」约束，是**必须交付**的另一模式，非可选愿景。已落地：token dark 槽位、overlay token、深色资产切换及主题跟随均已实现；2026-10-27 起两模式色值取 CINDY 主界面墨水口径（§16.1）。机制如下。
 
-**深色 = 黑白反色在深底的镜像**：面板 / 控件深底、主按钮与社交圆钮反相白、文字反相米白，几何 / 布局 / props / 状态机 / i18n **零改动**——只换色值。
+**深色 = 主界面深色墨水口径**：面板取主界面深色卡片面，控件、描边与文字为白墨水，主按钮与社交圆钮反相白；几何 / 布局 / props / 状态机 / i18n **零改动**——只换色值。
 
-**大部分组件纯 token 驱动**（补 §16.1 双态表的 dark 值即自动深色，组件不动）：`LoginPanel` / `LoginInput` / `LoginPrimaryButton`（底 / 边 / 字 + spinner）/ `LoginSocialButton`（随主按钮 token 自动反相白圆）/ `LoginBackButton` / `LoginTitleBlock` / `LoginTextLink` / `LoginMethodRow` / `LoginErrorText` / `LoginLoadingRing`。
+**大部分组件纯 token 驱动**（由 §16.1 双态表的 dark 值驱动，组件不动）：`LoginPanel` / `LoginInput` / `LoginPrimaryButton`（底 / 边 / 字 + spinner）/ `LoginSocialButton`（随主按钮 token 自动反相白圆）/ `LoginBackButton` / `LoginTitleBlock` / `LoginTextLink` / `LoginMethodRow` / `LoginErrorText` / `LoginLoadingRing`。
 
 **3 处非纯 token、需组件改动**：
 
-1. **hover / pressed 叠层二态**：叠层原为组件内 figma 实测 rgba 字面值，暗色起 token 化为 `--login-overlay-*` 二态。**〔2026-07-24 组件库更新改判〕hover 统一「叠白变亮」**：全按钮族 hover = normal 底上叠白色半透明（深底 `#2A2828`/`#434141` 族 +白 8%；浅底 `#EEEEEE` 族 +白 10%；**唯一例外**：`back` 亮色 hover 维持既有白 70%），两模式同向——旧「白底钮 hover = 黑 5% 变暗」口径作废（figma `white_button 347:2529`、SSO `549:779` 已按新值改稿）。pressed 维持叠黑，alpha 分档：**深底强调钮 50%**（`log_in_button` 与亮模式强调小钮 `light_button_highlight`，不论尺寸）/ 暗普通小钮 `Dark_button_Normal` 20% / 浅底钮 10%（边 `#E5E5E5`）/ 方式行与返回钮 8%。归纳仅作速记，**落码逐组件对拍 `figma-component-spec §11.1` 的状态矩阵，不按类别名推断**。**〔落码状态〕本改判当前仅在文档层生效**：as-built 组件（含回调页 dark CTA / `oauthResultPage`）仍消费改判前的旧叠层值（浅底 hover 黑 5%、pressed 黑 10% 等），与新口径的同步随暗色实现 PR 的 `--login-overlay-*` token 化一并落地——在那之前「文档新口径 vs 代码旧值」的差异是已知且有意的，不构成实现缺陷；落地后以本段口径为准。hover 方向不再随底色反转，但 alpha 档位随组件底色深浅取值，`--login-overlay-*` 系列 light / dark 二态 token 照常承载，组件把字面 rgba 改为 `var(--login-overlay-*)`（机械替换，零行为变化）。
-2. **`--login-bg-base` 前提变更**：画布底原为「跨主题恒定白 `#EDEDED`」，深色为 `#1F1F1E`（figma 532:585 帧实测）——即 `--login-*` 从「跨主题恒定」改为「随 light / dark 二态」（见 §16.2）。
-3. **`LoginBrandStage` 资产按模式切**：深色画布用**登录专用**白字版字标 / slogan 资产（`assets/login/wordmark-dark*.png` / `slogan-dark*.png`，源自 figma 532:585 `CINDY_Standard_White` 与 SLOGAN `#FBFBFB`，由暗色实现 PR 新增；**不是** §15.7 的新页横版 `cindy-logo-dark.png`——落位与尺寸不同）；立绘两模式同资产。
+1. **hover / pressed 叠层二态（2026-10-27 用户裁决，取代 2026-07-24 Figma「叠白变亮」口径与其状态矩阵）**：叠层一律走 `--login-overlay-*` light / dark 二态 token，挂在内容之下，不压文字与图标。
+   - **墨水填充控件**（输入框、方式行、返回钮、协议弹窗「不同意」钮）：叠同色墨水加深一档——hover 叠黑 3% / 白 4%，与控件底合成约等于主界面「选中」档 8% / 10%；pressed 叠黑 5% / 白 7%，合成约等于「弱」档 10% / 13%。亮色变深、深色变亮，与主界面菜单 / 列表反馈同向。
+   - **反相主按钮与第三方圆钮**（主按钮、「同意」钮、Google / WeChat / SSO 圆钮、回调页 CTA）：叠黑——亮色 hover 20% / pressed 40%（`#3C3F43` → 约 `#303236`，对齐主界面 `accent-hover` `#2E3237`），深色 hover 5% / pressed 10%（`#EEEEEE` → `#E2E2E2` / `#D6D6D6`）。
+   - **Apple 圆钮**底色由 Apple 规范决定（亮黑 / 暗白），亮色黑圆叠黑没有反馈，故单独走 `--login-overlay-apple-*`：亮色叠白 8% / 14%，深色叠黑 5% / 10%。
+   - **disabled**：主按钮禁用 = 墨水填充 + 占位档文字，描边透明、不叠层；原「深底叠白 70%」退役；`--login-disabled-button-overlay` 保留 ID 与透明默认值（治理合同 §4：旧 Token ID 不删除），组件不再消费。
+   - **旧本地主题**：旧版「导出当前主题」会把当时所有 `login-*` 值写进本地副本，加载时优先于新默认值，升级后这些副本的登录页仍是旧样子（旧面板 / 画布 / 文字色与新色混在一起，禁用主按钮与可用态几乎相同）。`local-themes-normalize` 在**加载期**把「等于该主题模式历史默认值」的 `login-*` override 丢掉（对照表 `themes/loginLegacyDefaults.json`，取自冻结快照 `desktop-color-defaults.json` 自 2026-09-02 建档起的全部 git 历史，每个 token 出现过的旧值都在内，不逐代手补）。只比对本模式的槽位（深色主题里有意用的亮色历史值不丢），只处理确认是旧快照的主题（其中至少 10 个 `login-*` 值同时等于该模式的历史值；手写稀疏主题、或新建副本里零星几个被有意设成历史值的 override 保留），只改内存、不改写磁盘、幂等。建档之前的更早版本不在表内。
+   - **回调页**（`oauthResultPage`，系统浏览器打开，拿不到 renderer token，用内联常量）：页面底、卡片、描边与 CTA 同上取值，CTA 叠层改挂 `background-image`，不压文字。
+2. **`--login-bg-base` 前提变更**：画布底原为「跨主题恒定白 `#EDEDED`」，深色为 `#1F1F1E`（figma 532:585 帧实测）——即 `--login-*` 从「跨主题恒定」改为「随 light / dark 二态」（见 §16.2）。〔2026-10-01〕两态改为与 CINDY 皮肤页底同值 `#F2F2ED` / `#181818`，登录前后背景不再变色；仍为固定值，不随扩展主题。
+3. **`LoginBrandStage` 资产按模式切**：深色画布用**登录专用**白字版字标 / slogan 资产（`assets/login/wordmark-dark*.png` / `slogan-dark*.png`，源自 figma 532:585 `CINDY_Standard_White` 与 SLOGAN `#FBFBFB`，已随暗色实现 PR 新增；**不是** §15.7 的新页横版 `cindy-logo-dark.png`——落位与尺寸不同）；立绘两模式同资产。
 
-**disabled 态特例**：主按钮 disabled **两模式同构**——深底 `#2A2828`（独立 token `--login-disabled-button-bg`，**不随** `--login-primary-button-bg` 反相；组件需 disabled 分支切换底/字）+ 白 70% 叠层（`--login-disabled-button-overlay`）+ 边 `#B4B4B4` + 文字 `#D4D4D4`（`--login-disabled-button-text`）opacity 0.8（figma `white_button` Disable 态核验：深色 disabled 不反相为白底，仍走亮色同款灰态）。
+**disabled 态**：主按钮 disabled = 墨水填充（`--login-disabled-button-bg`，黑 5% / 白 6%）+ 占位档文字（`--login-disabled-button-text`，黑 32% / 白 30%），描边透明（`--login-control-border-disabled`）、不叠层；与可用态的反相实底拉开明显差距，一眼可辨不可点（2026-10-27 用户裁决；不沿用主界面 Button 的整体 60% 透明度，因为登录页首屏主按钮默认即为禁用态）。
 
-**双模式门槛覆盖**：深色须覆盖亮色全部态——控件 default / hover(桌) / focus / filled / active / pressed / disabled / loading / error，全部 11 屏，桌面 Win / Mac + 手机 iOS / Android（phone / pad）两端同 token 同值；`scripts/__fixtures__/login-fidelity/`（待后续补充，当前不存在于仓库中）补深色 fixture，checker 跑深色矩阵。色值以设计稿为唯一基准，1:1 还原，不引入设计稿之外的验收标准。
+**双模式门槛覆盖**：深色须覆盖亮色全部态——控件 default / hover(桌) / focus / filled / active / pressed / disabled / loading / error，全部 11 屏，桌面 Win / Mac + 手机 iOS / Android（phone / pad）。色值以 §16.1 为准（桌面取 CINDY 主界面墨水口径）。桌面组件的亮 / 深与 hover / pressed 用 `pnpm ui:check --page login-skin --case all --theme all` 截图核对（改动时加 `--compare` 出改前 / 改后）；它覆盖真实组件，不覆盖登录画布缩放与品牌层。
 
-**主题跟随（产品逻辑）**：用户**首次**打开 Cindy → **亮色**登录界面（默认）；**第二次起** → 登录界面跟随用户上一次使用的 **light / dark 模式**（登录页只认 light / dark，不随具体扩展主题，见 §16.2）。这需要持久化「上次登录模式」+ 首次默认逻辑，超出纯 token 补范围，是一段状态逻辑，在暗色实现 PR 内一并落地。
+**主题跟随（产品逻辑）**：用户**首次**打开 Cindy → **亮色**登录界面（默认）；**第二次起** → 登录界面跟随用户上一次使用的 **light / dark 模式**（登录页只认 light / dark，不随具体扩展主题，见 §16.2）。这需要持久化「上次登录模式」+ 首次默认逻辑，超出纯 token 补范围，是一段状态逻辑。**已落地**：`apps/desktop/src/renderer/hooks/useTheme.ts` 持久化首启标记（`login.firstLaunchLightShown`），bootstrap 阶段由 `initLoginFirstLaunchLightGate` 对真首启整个登录前会话按亮色解析，登录页卸载时经 `endLoginFirstLaunchLightGate` 结束并恢复存储主题，不改用户的 theme 偏好。
 
-**决策记录（2026-07-23 已定）**：(1) `--login-*`「跨主题恒定 → light / dark 二态」前提变更 + 新增 `--login-overlay-*` 二态 token——**已采纳**；(2) 深色落点 = **跟随编辑器 light / dark mode** + 上述主题跟随逻辑——**已采纳**；(3) 立绘 / 社交图标深色版——已核验（立绘两模式同资产，社交深色白圆 + 品牌色图标，见 §16.1）；本节原 ※推导值（splash 进度条 / 链接 hover / pressed）已经 Figma 组件库核验确认，§16.1 表已回填目标值。**（2026-07-24 增补）画布渐变定稿**：暗色帧红晕层（532:588/589）按 1:1 几何落地后，经实机走查拍板去除——两模式画布纯平（亮色撤渐变 = PR#104 拍板，两条决策相互独立、结论一致）；`--login-bg-gradient-*` token 保留 override 锚、值恒 `none`，红晕如需恢复须以该走查结论为基线重新与设计确认。**（2026-07-24 增补）组件库状态扩充**：hover 统一「叠白变亮」改判（本节 (1) 已按新口径改写，旧「白底钮 hover 叠黑 5%」作废）；新增协议勾选 radio 与服务条款弹窗小按钮目标规格（见 §16.3 尾注）；`SSO 登录_企业` / `back` Dark 三态、`white_button` loading 五态入库（权威逐参数 = `figma-component-spec §11`）。~~游客登录（跳过登录）样式为独立实现任务，不在本节展开~~〔**已回收（2026-07-27）**：该规格缺口已由本次改版关闭——入口定形为面板内「跳过登录」**文字按钮**（新组件类别，规格见 §16.3「登录文字按钮」；几何见 §16.2 表），游客圆钮方案与其图标资产一并退役〕。**（2026-07-24 增补·二）多语言长文本口径**：登录链路禁止以截断 / 省略号作为可见结果，文案侧按槽位长度预算约束（含 agent 翻译硬约束），说明类文本折行 ≤2 行 + 顶对齐 + 只向下伸展——规则全文见 §16.2「多语言长文本与翻译长度预算」。同日二次拍板：**副标题改判入说明类**（禁省略号、完整展示 ≤2 行，几何 540@70 对齐控件列，原 figma 单行 599@41 作废），双端已落码（桌面 `LoginTitleBlock` + 手机 `LOGIN_SUBTITLE`）。
+**决策记录（2026-07-23 已定）**：(1) `--login-*`「跨主题恒定 → light / dark 二态」前提变更 + 新增 `--login-overlay-*` 二态 token——**已采纳**；(2) 深色落点 = **跟随编辑器 light / dark mode** + 上述主题跟随逻辑——**已采纳**；(3) 立绘 / 社交图标深色版——已核验（立绘两模式同资产，社交深色白圆 + 品牌色图标，见 §16.1）；本节原 ※推导值（splash 进度条 / 链接 hover / pressed）已经 Figma 组件库核验确认，§16.1 表已回填目标值。**（2026-07-24 增补）画布渐变定稿**：暗色帧红晕层（532:588/589）按 1:1 几何落地后，经实机走查拍板去除——两模式画布纯平（亮色撤渐变 = PR#104 拍板，两条决策相互独立、结论一致）；`--login-bg-gradient-*` token 保留 override 锚、值恒 `none`，红晕如需恢复须以该走查结论为基线重新与设计确认。**（2026-07-24 增补）组件库状态扩充**：hover 统一「叠白变亮」改判（本节 (1) 已按新口径改写，旧「白底钮 hover 叠黑 5%」作废）；新增协议勾选 radio 与服务条款弹窗小按钮目标规格（见 §16.3 尾注）；`SSO 登录_企业` / `back` Dark 三态、`white_button` loading 五态入库（逐态值见 §16.5 状态矩阵）。~~游客登录（跳过登录）样式为独立实现任务，不在本节展开~~〔**已回收（2026-07-27）**：该规格缺口已由本次改版关闭——入口定形为面板内「跳过登录」**文字按钮**（新组件类别，规格见 §16.3「登录文字按钮」；几何见 §16.2 表），游客圆钮方案与其图标资产一并退役〕。**（2026-07-24 增补·二）多语言长文本口径**：登录链路禁止以截断 / 省略号作为可见结果，文案侧按槽位长度预算约束（含 agent 翻译硬约束），说明类文本折行 ≤2 行 + 顶对齐 + 只向下伸展——规则全文见 §16.2「多语言长文本与翻译长度预算」。同日二次拍板：**副标题改判入说明类**（禁省略号、完整展示 ≤2 行，几何 540@70 对齐控件列，原 figma 单行 599@41 作废），双端已落码（桌面 `LoginTitleBlock` + 手机 `LOGIN_SUBTITLE`）。
 
 **决策记录（2026-07-27 登录改版，拍板人 = 用户；依据 = figma 新稿 `705:915` / `705:799` / `700:783`）**：(1) **面板 440→500、登录组 560→620**，增的 60 全部给面板内新增的「跳过登录」槽（430..490），面板内其余元素坐标不动；圆钮行 480→540、协议行 582→642 随组顺移；error 槽回到 680×50 @380 与跳过槽首尾相接。(2) **游客圆钮退役 → 面板内「跳过登录」文字按钮**（新组件类别，见 §16.3），图标资产删除；圆钮行 `count` 动态。(3) **跳过登录 / 本地模式免协议门**（推翻 2026-07-24「个人登录一律先同意、含游客」），且不写统计同意；其它入口协议门不变（见 §16.4）。(4) **手机端新增跳过入口与无账号通路**（推翻 2026-07-24「手机 / pad 必须有账号、不加游客登录」）。(5) 移动端**键盘停靠锚改为 error 槽底**，键盘态允许遮挡跳过槽（见 §16.2）。(6) 手机短屏 / 长屏几何整档换新稿基准，短屏以下锚常量 `dh-640`→`dh-712`；**pad 竖屏为推导值（无 figma 源，用户接受推导，待设计回看）**。(7) **Splash 面板不跟随 500，保持 440**（拆出独立常量）。逐条落点见 §16.2 / §16.3 / §16.4 与 `design-decision-log.md`「2026-07-27」条。
 
@@ -1789,3 +2321,7 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 > **(6) 需拆开读**〔2026-07-29 二次修正〕：手机短屏 / 长屏的**品牌簇**（立绘 / SLOGAN / 字标）新稿基准与避脸落值**保留生效**；同条的**功能区落位**（`loginY` **622 / 827**）在 2026-07-28 曾随跳过登录剥离一并退回 main 原值（694 / 933），但那会与已换新稿的品牌簇拼出稿内不存在的 92 / 131.65 间距（实机可见空白），**2026-07-29 审图后恢复为新稿标注值**（方案 B，60 落到底部留白；详见上方 §16.2「面板 500→440 少掉的 60 去向」）。dh<1334 段**不采用**该条曾写过的 `dh-712`，而是「紧凑底距 18 + 钳到 622」（`dh-712` 会压盖窄屏字标，见 §16.2 对应条目）。**pad 竖屏推导值**（`loginY` 573.353 / `splashOffset` 206）仍然**作废**、保持 main 原值 621 / 158——pad 无 figma 新稿帧，其品牌簇也未换新稿基准，内部自洽，不受本次修正影响。
 > 手机端保持无游客 / 无账号行为不变。详见
 > [`design-decision-log.md`](./design-decision-log.md)「2026-07-28」条。
+
+## 流式正文与可组合组件（2026-10-18）
+
+用户确认的答案方向：正文由流式编辑器与共享组件库承载，模型自由组合图文、图表和交互布局；普通任务与伙伴采用同一能力。每个完整节点增量出现，局部修订保留稳定控件身份和用户操作值。视觉沿现有正文、控件和媒体规范，不以整页 HTML 预览框替代连续正文。两端主题与窄屏同等实现。协议、能力发现与当前验收边界见 [流式正文与可组合组件](../rich-answers.md)。

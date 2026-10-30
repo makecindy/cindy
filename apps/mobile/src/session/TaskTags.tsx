@@ -25,7 +25,7 @@ import Animated, {
   Easing,
   type SharedValue,
 } from 'react-native-reanimated';
-import { GripVertical, Pencil, MoreHorizontal, ArrowLeft } from 'lucide-react-native';
+import { GripVertical, Pencil, MoreHorizontal } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -41,6 +41,8 @@ import {
   type TaskTagResult,
 } from '@cindy/maker-shared';
 import { Text, TextInput } from '@/components/AppText';
+import { ScreenBackButton } from '@/components/MobilePrimitives';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useDeviceLink, subscribeRemoteTaskTagsChanged } from '@/device-link/DeviceLinkContext';
 import { useTheme, type ThemeColors } from '@/theme';
 import { radius, spacing, typeScale, iconSize, fontWeight, lineHeight, motionDuration, motionEasing } from '@/theme/tokens';
@@ -54,6 +56,24 @@ import {
   sameTaskTags,
 } from './taskTagCatalogCache';
 import type { RemoteSession } from './types';
+
+function taskTagsHeadingCollapsed(colors: ThemeColors) {
+  return {
+    color: colors.textSecondary,
+    fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.regular,
+  } as const;
+}
+
+function taskTagsHeadingExpanded(colors: ThemeColors) {
+  return {
+    color: colors.textPrimary,
+    fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
+    fontWeight: fontWeight.semibold,
+  } as const;
+}
 
 function colorFor(tag: TaskTag, colors: ThemeColors) {
   const palette = {
@@ -184,6 +204,7 @@ export function TaskTagLabels({ tags = [] }: { tags?: TaskTag[] }) {
             style={{
               color: colors.textPrimary,
               fontSize: typeScale.caption,
+              lineHeight: lineHeight.caption,
               flexShrink: 1,
             }}
           >
@@ -228,6 +249,7 @@ export function TaskMenuHeading({
             textAlign: 'center',
             color: colors.textPrimary,
             fontSize: typeScale.body,
+            lineHeight: lineHeight.body,
             fontWeight: fontWeight.semibold,
           }}
         >
@@ -251,14 +273,18 @@ export function TaskMenuHeading({
   );
 }
 
+export interface TaskTagSwatchState {
+  id: string;
+  name: string;
+  color: string;
+  checkColor: string;
+  /** White and uncolored swatches need an outline to stay visible on light surfaces. */
+  outlined: boolean;
+  selected: boolean;
+}
+
 export interface TaskTagsCompactState {
-  tags: {
-    id: string;
-    name: string;
-    color: string;
-    checkColor: string;
-    selected: boolean;
-  }[];
+  tags: TaskTagSwatchState[];
   disabled: boolean;
   message?: string;
   canRetry: boolean;
@@ -268,6 +294,44 @@ export interface TaskTagsCompactState {
   onRetry(): void;
 }
 
+export type TaskTagsPage = 'list' | 'add' | 'edit' | 'delete';
+
+/** Shared editor state for platform renderers; transport and mutations stay in the panel. */
+export interface TaskTagsExpandedState {
+  page: TaskTagsPage;
+  tags: TaskTagSwatchState[];
+  /** Mutations in flight, offline, or the panel is read-only. */
+  disabled: boolean;
+  loading: boolean;
+  message?: string;
+  canRetry: boolean;
+  canAdd: boolean;
+  onRetry(): void;
+  onToggle(id: string): void;
+  onEdit(id: string): void;
+  onAdd(): void;
+  /** Move the row at `from` so that it ends at index `to`. */
+  onMove(from: number, to: number): void;
+  form: {
+    name: string;
+    onNameChange(value: string): void;
+    locked: boolean;
+    colors: (Omit<TaskTagSwatchState, 'id' | 'selected'> & {
+      value: TaskTagColor;
+      selected: boolean;
+      available: boolean;
+    })[];
+    onColor(value: TaskTagColor): void;
+    hint: string;
+    submitLabel: string;
+    canSubmit: boolean;
+    onSubmit(): void;
+    canDelete: boolean;
+    onDelete(): void;
+  };
+  deletion?: { message: string; onConfirm(): void };
+}
+
 export function TaskTagsPanel({
   session,
   deviceId,
@@ -275,6 +339,8 @@ export function TaskTagsPanel({
   expanded,
   onExpandedChange,
   renderCompact,
+  renderExpanded,
+  onPageChange,
   showDone = true,
 }: {
   session: RemoteSession;
@@ -283,6 +349,9 @@ export function TaskTagsPanel({
   expanded: boolean;
   onExpandedChange: (value: boolean) => void;
   renderCompact?: (state: TaskTagsCompactState) => ReactNode;
+  renderExpanded?: (state: TaskTagsExpandedState) => ReactNode;
+  /** Reports the expanded page so a native sheet header can title it and go back. */
+  onPageChange?: (page: TaskTagsPage | null, back: () => void, backDisabled: boolean) => void;
   showDone?: boolean;
 }) {
   const { colors } = useTheme();
@@ -637,7 +706,7 @@ export function TaskTagsPanel({
     }
     void reorder(id, to, expectedOrder);
   }
-  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body };
+  const textStyle = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
   const action = (
     label: string,
     onPress: () => void,
@@ -658,7 +727,7 @@ export function TaskTagsPanel({
         backgroundColor: primary ? colors.cta : undefined,
         justifyContent: 'center',
         paddingHorizontal: spacing.md,
-        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? 0.75 : 1,
+        opacity: busy || (!local && blocked) || inactive ? 0.4 : pressed ? mobileInteractionStyles.pressed.opacity : 1,
       })}
     >
       <Text
@@ -682,23 +751,114 @@ export function TaskTagsPanel({
       tagIds: [tag.id],
     });
   const canManage = !busy && error !== 'unavailable' && (!blocked || hasCatalog);
+  const canSubmit =
+    Boolean(name.trim()) &&
+    (supportedColors.includes(color) || (editing?.color === 'none' && color === 'white'));
+  function submit() {
+    void (async () => {
+      if (pendingAttach) {
+        const attached = await run({
+          action: 'attach',
+          sessionIds: [session.id],
+          tagIds: [pendingAttach],
+        });
+        if (attached) closeEditor();
+        return;
+      }
+      const r = await run(
+        editing
+          ? {
+              action: 'update',
+              tagId: editing.id,
+              revision: taskTagEditRevision(editing, latestCatalog.current),
+              name: name === editName.current ? undefined : name,
+              nameCustomized: name === editName.current ? undefined : true,
+              color:
+                editing.color === 'none' && color === 'white' && !supportedColors.includes('white')
+                  ? undefined
+                  : color,
+            }
+          : { action: 'create', name, color },
+      );
+      if (r) {
+        const created = !editing
+          ? r.tags.find((tag) => tag.name === name.trim())
+          : r.tags.find((tag) => tag.id === pendingAttach);
+        if (created) {
+          setEditing(created);
+          setPendingAttach(created.id);
+          const attached = await run({
+            action: 'attach',
+            sessionIds: [session.id],
+            tagIds: [created.id],
+          });
+          if (!attached) return;
+        }
+        closeEditor();
+      }
+    })();
+  }
+  function previewDelete() {
+    if (!editing) return;
+    void run({ action: 'previewDelete', tagId: editing.id }).then((r) => {
+      if (r) setDeletion(r.deletion);
+    });
+  }
+  function confirmDelete() {
+    if (!deletion) return;
+    void run({
+      action: 'delete',
+      tagId: deletion.tagId,
+      revision: deletion.revision,
+      expectedCount: deletion.count,
+    }).then((r) => {
+      if (r) closeEditor();
+    });
+  }
+  const page: TaskTagsPage = deletion
+    ? 'delete'
+    : formOpen
+      ? editing && editing.id !== pendingAttach
+        ? 'edit'
+        : 'add'
+      : 'list';
+  const back = () => {
+    if (deletion) setDeletion(undefined);
+    else if (formOpen) {
+      if (!busy) closeEditor();
+    } else {
+      onExpandedChange(false);
+      closeEditor();
+    }
+  };
+  const backRef = useRef(back);
+  backRef.current = back;
+  const stableBack = useCallback(() => backRef.current(), []);
+  const reportedPage = expanded ? page : null;
+  // Back is a no-op while the form is saving; the header must show that, not just ignore taps.
+  const backDisabled = reportedPage !== null && formOpen && !deletion && busy;
+  const pageListener = useRef(onPageChange);
+  pageListener.current = onPageChange;
+  useEffect(() => {
+    pageListener.current?.(reportedPage, stableBack, backDisabled);
+  }, [reportedPage, stableBack, backDisabled]);
+  useEffect(() => () => pageListener.current?.(null, stableBack, false), [stableBack]);
+  const swatch = (tag: TaskTag): TaskTagSwatchState => ({
+    id: tag.id,
+    name: tagName(tag, t),
+    color: colorFor(tag, colors),
+    checkColor:
+      tag.color === 'white' || tag.color === 'none'
+        ? colors.taskTagWhiteCheck
+        : colors.taskTagWhite,
+    outlined: tag.color === 'white' || tag.color === 'none',
+    selected: selected.some((item) => item.id === tag.id),
+  });
   // The native shortcut row shares transport, cache and mutations with the editor.
   if (!expanded && renderCompact) {
     const reason = blocked ? 'offline' : error || (!hasCatalog && busy ? 'loading' : '');
     return renderCompact({
-      tags:
-        error === 'unavailable'
-          ? []
-          : tags.map((tag) => ({
-              id: tag.id,
-              name: tagName(tag, t),
-              color: colorFor(tag, colors),
-              checkColor:
-                tag.color === 'white' || tag.color === 'none'
-                  ? colors.taskTagWhiteCheck
-                  : colors.taskTagWhite,
-              selected: selected.some((item) => item.id === tag.id),
-            })),
+      tags: error === 'unavailable' ? [] : tags.map(swatch),
       disabled: busy || blocked,
       message: reason ? t(`taskTags.${reason}`) : undefined,
       canRetry: !blocked && !busy && Boolean(error) && error !== 'unavailable',
@@ -713,19 +873,91 @@ export function TaskTagsPanel({
       },
     });
   }
+  if (expanded && renderExpanded) {
+    const reason = blocked ? 'offline' : error;
+    return renderExpanded({
+      page,
+      tags: error === 'unavailable' ? [] : tags.map(swatch),
+      disabled: busy || blocked,
+      loading: !hasCatalog && busy,
+      message: reason ? t(`taskTags.${reason}`) : undefined,
+      // Retry re-reads the catalog, so only offer it for a failed read. A failed write
+      // (create / save / delete) must not look retried by a button that only refreshes.
+      canRetry:
+        !blocked &&
+        !busy &&
+        error !== 'unavailable' &&
+        (error === 'loadFailed' || error === 'remoteBusy' || (!hasCatalog && Boolean(error))),
+      canAdd: hasCatalog && error !== 'unavailable',
+      onRetry: () => {
+        void run({ action: 'get', sessionIds: [session.id] }, hasCatalog);
+      },
+      onToggle: (id) => {
+        const tag = tags.find((item) => item.id === id);
+        if (tag && !busy && !blocked) toggle(tag);
+      },
+      onEdit: (id) => {
+        const tag = tags.find((item) => item.id === id);
+        if (tag && !busy && !blocked) edit(tag);
+      },
+      onAdd: () => {
+        if (!busy && !blocked) edit(null);
+      },
+      onMove: (from, to) => {
+        const tag = tags[from];
+        if (tag && !busy && !blocked) void reorder(tag.id, to);
+      },
+      form: {
+        name,
+        onNameChange: setName,
+        locked: busy || blocked || Boolean(pendingAttach),
+        colors: TASK_TAG_COLORS.map((value) => ({
+          value,
+          name: t(`taskTags.${value}`),
+          color: colorFor({ color: value } as TaskTag, colors),
+          checkColor: value === 'white' ? colors.taskTagWhiteCheck : colors.taskTagWhite,
+          outlined: value === 'white',
+          selected: color === value,
+          available: supportedColors.includes(value),
+        })),
+        onColor: setColor,
+        hint: t(
+          supportedColors.length < TASK_TAG_COLORS.length
+            ? 'taskTags.unavailable'
+            : editing
+              ? 'taskTags.editHint'
+              : 'taskTags.addHint',
+        ),
+        submitLabel: t(page === 'edit' ? 'taskTags.save' : 'taskTags.create'),
+        canSubmit: canSubmit && !busy && !blocked,
+        onSubmit: submit,
+        canDelete: page === 'edit',
+        onDelete: previewDelete,
+      },
+      deletion: deletion
+        ? {
+            message: t('taskTags.deleteConfirm', {
+              name: editing ? tagName(editing, t) : '',
+              count: deletion.count,
+            }),
+            onConfirm: confirmDelete,
+          }
+        : undefined,
+    });
+  }
   if (!formOpen && (error === 'unavailable' || (!hasCatalog && (error || blocked || busy)))) {
     const reason = blocked ? 'offline' : error || 'loading';
     return (
       <View style={{ width: '100%', paddingVertical: spacing.md, gap: spacing.xs }}>
-        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+        <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
           {t('taskTags.title')}
         </Text>
         <Text
-          accessibilityRole={reason === 'loadFailed' ? 'alert' : 'text'}
+          accessibilityRole={reason === 'loadFailed' || reason === 'remoteBusy' ? 'alert' : 'text'}
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
           }}
         >
           {t(`taskTags.${reason}`)}
@@ -743,7 +975,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-start',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.retry')}
             </Text>
           </Pressable>
@@ -758,7 +990,7 @@ export function TaskTagsPanel({
               alignSelf: 'flex-end',
             }}
           >
-            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+            <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
               {t('taskTags.done')}
             </Text>
           </Pressable>
@@ -786,29 +1018,19 @@ export function TaskTagsPanel({
         }}
       >
         {formOpen && !deletion && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('taskTags.back')}
-            onPress={closeEditor}
-            disabled={busy}
-            style={{
-              width: 44,
-              height: 44,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: radius.pill,
-            }}
-          >
-            <ArrowLeft size={iconSize.action} color={colors.textPrimary} />
-          </Pressable>
+          // 统一返回键:共享 ScreenBackButton(44pt、ChevronLeft、统一按压态)。
+          <ScreenBackButton
+            onPress={busy ? undefined : closeEditor}
+            testID="taskTags.back"
+          />
         )}
         <Text
-          style={{
-            flex: 1,
-            color: expanded ? colors.textPrimary : colors.textSecondary,
-            fontSize: expanded ? typeScale.body : typeScale.caption,
-            fontWeight: expanded ? fontWeight.semibold : fontWeight.regular,
-          }}
+          style={[
+            { flex: 1 },
+            // 两种形态是两个角色,各自整行照抄 §3:收起 = 短元数据 12/18 · 400 · 二级色;
+            // 展开 = 面板顶栏标题 16/22 · 600 · 主色。每档都配行高。
+            expanded ? taskTagsHeadingExpanded(colors) : taskTagsHeadingCollapsed(colors),
+          ]}
         >
           {deletion
             ? t('taskTags.delete')
@@ -822,7 +1044,7 @@ export function TaskTagsPanel({
               : t(formOpen ? (editing ? 'taskTags.editTitle' : 'taskTags.add') : 'taskTags.title')}
         </Text>
         {expanded && !formOpen && (
-          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption }}>
+          <Text style={{ color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption }}>
             {t('taskTags.selectedCount', { count: selected.length })}
           </Text>
         )}
@@ -925,6 +1147,10 @@ export function TaskTagsPanel({
         <View ref={viewportRef} collapsable={false}>
           <ScrollView
             ref={listRef}
+            // This list is rendered inside the Android native action-sheet
+            // ScrollView; opt into Android's nested-scroll contract on both
+            // sides so tag scrolling remains usable at either edge.
+            nestedScrollEnabled
             scrollEnabled={!draggedId}
             scrollEventThrottle={16}
             onScroll={(event) => {
@@ -946,6 +1172,7 @@ export function TaskTagsPanel({
                   textAlign: 'center',
                   paddingVertical: spacing.xl,
                   fontSize: typeScale.body,
+                  lineHeight: lineHeight.body,
                 }}
               >
                 {t(busy ? 'taskTags.loading' : 'taskTags.empty')}
@@ -1116,6 +1343,7 @@ export function TaskTagsPanel({
                   style={{
                     color: colors.textSecondary,
                     fontSize: typeScale.caption,
+                    lineHeight: lineHeight.caption,
                   }}
                 >
                   {t(
@@ -1138,69 +1366,14 @@ export function TaskTagsPanel({
                 >
                   {action(
                     t(editing ? 'taskTags.save' : 'taskTags.create'),
-                    () => {
-                      void (async () => {
-                        if (pendingAttach) {
-                          const attached = await run({
-                            action: 'attach',
-                            sessionIds: [session.id],
-                            tagIds: [pendingAttach],
-                          });
-                          if (attached) closeEditor();
-                          return;
-                        }
-                        const r = await run(
-                          editing
-                            ? {
-                                action: 'update',
-                                tagId: editing.id,
-                                revision: taskTagEditRevision(editing, latestCatalog.current),
-                                name: name === editName.current ? undefined : name,
-                                nameCustomized:
-                                  name === editName.current ? undefined : true,
-                                color:
-                                  editing.color === 'none' &&
-                                  color === 'white' &&
-                                  !supportedColors.includes('white')
-                                    ? undefined
-                                    : color,
-                              }
-                            : { action: 'create', name, color },
-                        );
-                        if (r) {
-                          const created = !editing
-                            ? r.tags.find((tag) => tag.name === name.trim())
-                            : r.tags.find((tag) => tag.id === pendingAttach);
-                          if (created) {
-                            setEditing(created);
-                            setPendingAttach(created.id);
-                            const attached = await run({
-                              action: 'attach',
-                              sessionIds: [session.id],
-                              tagIds: [created.id],
-                            });
-                            if (!attached) return;
-                          }
-                          closeEditor();
-                        }
-                      })();
-                    },
-                    !name.trim() ||
-                      (!supportedColors.includes(color) &&
-                        !(editing?.color === 'none' && color === 'white')),
+                    submit,
+                    !canSubmit,
                     true,
                   )}
                   {action(t('taskTags.cancel'), closeEditor, false, false, 'secondary', true)}
                   {editing && (
                     <View style={{ flexDirection: 'row', marginRight: 'auto' }}>
-                      {action(t('taskTags.delete'), () => {
-                        void run({
-                          action: 'previewDelete',
-                          tagId: editing.id,
-                        }).then((r) => {
-                          if (r) setDeletion(r.deletion);
-                        });
-                      })}
+                      {action(t('taskTags.delete'), previewDelete)}
                     </View>
                   )}
                 </View>
@@ -1238,22 +1411,7 @@ export function TaskTagsPanel({
                     'secondary',
                     true,
                   )}
-                  {action(
-                    t('taskTags.delete'),
-                    () => {
-                      void run({
-                        action: 'delete',
-                        tagId: deletion.tagId,
-                        revision: deletion.revision,
-                        expectedCount: deletion.count,
-                      }).then((r) => {
-                        if (r) closeEditor();
-                      });
-                    },
-                    false,
-                    false,
-                    'danger',
-                  )}
+                  {action(t('taskTags.delete'), confirmDelete, false, false, 'danger')}
                 </View>
               </View>
             )}
@@ -1328,7 +1486,7 @@ export function TaskTagsPanel({
           style={{
             color: colors.textSecondary,
             fontSize: typeScale.caption,
-            lineHeight: lineHeight.listBody,
+            lineHeight: lineHeight.bodySmall,
             paddingVertical: spacing.xs,
             marginTop: spacing.sm,
           }}
@@ -1336,7 +1494,7 @@ export function TaskTagsPanel({
           {t(`taskTags.${blocked ? 'offline' : error}`)}
         </Text>
       )}
-      {!blocked && error === 'loadFailed' && (
+      {!blocked && (error === 'loadFailed' || error === 'remoteBusy') && (
         <Pressable
           accessibilityRole="button"
           disabled={busy}
@@ -1347,7 +1505,7 @@ export function TaskTagsPanel({
             alignSelf: 'flex-start',
           }}
         >
-          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body }}>
+          <Text style={{ color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body }}>
             {t('taskTags.retry')}
           </Text>
         </Pressable>

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { buildUserProvider, type ModelRegistry, type ProviderRuntimeModelConfig } from '@cindy/model-providers';
+import { customProviderModelConfigFromCatalogModel } from '../customProviders';
 
 import {
   firstProviderChatModel,
@@ -23,6 +25,62 @@ const fields = {
     { name: 'X-Tenant', value: 'acme' },
   ],
 };
+
+it('excludes exact public speech identities from chat probes without guessing unknown names', () => {
+  const speech = { id: 'gpt-4o-mini-tts' };
+  const unknown = { id: 'private-tts-service' };
+  expect(firstProviderChatModel([speech])).toBeUndefined();
+  expect(firstProviderChatModel([speech, unknown])).toBe(unknown);
+  expect(firstProviderChatModel([{ ...unknown, mode: 'audio_speech' }])).toBeUndefined();
+  expect(firstProviderChatModel([{ ...speech, mode: 'chat' }])?.id).toBe(speech.id);
+});
+
+describe('active catalog modes in connection probes', () => {
+  const registry: ModelRegistry = { schemaVersion: 5, updatedAt: '2026-10-12T06:00:00.000Z',
+    baseModels: [{ id: 'new-server-voice', aliases: [], defaults: { mode: 'audio_speech' } }], models: [],
+  };
+  function project(models: ProviderRuntimeModelConfig[]) {
+    return buildUserProvider({ id: 'speech', name: 'Speech', runtimes: { codex: {
+      baseUrl: fields.baseUrl.trim(), models,
+    } } }, { modelRegistry: registry }).models.codex!;
+  }
+
+  it('uses the effective mode after restoring an ID-only saved config without materializing it', () => {
+    const catalogModels = project([{ id: 'new-server-voice', name: 'Voice' }]);
+    const models = catalogModels.map(model => customProviderModelConfigFromCatalogModel(model, 'codex'));
+    expect(catalogModels[0].mode).toBe('audio_speech');
+    expect(models[0].mode).toBeUndefined();
+    expect(firstProviderChatModel(models, catalogModels)).toBeUndefined();
+    expect(firstProviderChatModel([{ ...models[0], mode: 'chat' }], catalogModels)?.id).toBe(models[0].id);
+    expect(firstProviderChatModel([{ ...models[0], discoveredMetadata: { mode: 'chat' } }], catalogModels)?.id).toBe(models[0].id);
+    expect(models).toEqual([{ id: 'new-server-voice', name: 'Voice' }]);
+  });
+
+  it('does not restore a saved explicit type after the user resets it to automatic', () => {
+    const catalogModels = project([{ id: 'private-model', name: 'Private', mode: 'audio_speech' }]);
+    const automatic = { id: 'private-model', name: 'Private' };
+    expect(firstProviderChatModel([automatic], catalogModels)).toBe(automatic);
+  });
+
+  it('uses the same active classification for route, saved-probe eligibility and request signatures', () => {
+    const models: ProviderRuntimeModelConfig[] = [
+      { id: 'new-server-voice', name: 'Voice', route: { baseUrl: 'https://speech.example.test/v1', wireProtocol: 'openai-chat' } },
+      { id: 'chat-model', name: 'Chat', route: { baseUrl: 'https://chat.example.test/v1', wireProtocol: 'openai-chat' } },
+    ];
+    const catalogModels = project(models);
+    const probe = { ...fields, wireProtocol: 'openai-responses' as const, models, catalogModels };
+    expect(firstProviderChatModel(models, catalogModels)?.id).toBe('chat-model');
+    expect(resolveProviderConnectionProbeRoute('codex', probe)).toMatchObject({
+      baseUrl: 'https://chat.example.test/v1', wireProtocol: 'openai-chat',
+    });
+    expect(connectionTestCanUseSaved(probe, { ...fields, wireProtocol: 'openai-responses',
+      authMode: 'apiKey', modelRoute: models[1].route }, 'apiKey')).toBe(true);
+    expect(JSON.parse(providerConnectionTestRequestSignature(probe, 'apiKey')).modelId).toBe('chat-model');
+    expect(providerConnectionTestRequestSignature(probe, 'apiKey')).not.toBe(
+      providerConnectionTestRequestSignature({ ...probe, catalogModels: [] }, 'apiKey'),
+    );
+  });
+});
 
 describe('providerModelFetchRequestSignature', () => {
   it('invalidates an in-flight result when the auth mode changes', () => {

@@ -9,14 +9,19 @@ let revokedControllers: string[] = [];
 vi.mock('../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
 }));
-vi.mock('../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
+const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
 }));
+// Ordinary same-account dispatch has no delegated share lease. Keep the host account
+// boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
+vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
+  delegatedProviderShareGuestAccess: () => null,
+}));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
+vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
 vi.mock('../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: vi.fn(async () => []) }));
 // media:fetch 拦截走 mediaFetch.fetchLocalMediaToOss;mock 掉避免拉起 OSS/cache-store 真实依赖。
 const fetchLocalMediaToOssMock = vi.hoisted(() => vi.fn());
@@ -48,6 +53,11 @@ import {
 } from '../device-link/invoke-context';
 import * as subscriptions from '../device-link/subscriptions';
 import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection';
+import { PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+import { initializePluginOauthHost, invalidatePluginOauth, publishedPluginOauthIdentity } from '../plugin-oauth/runtime';
+import { OauthBox } from '../plugin-oauth/box';
+import { testOauthSigningKey } from '../plugin-oauth/__tests__/fixtures';
+import { authenticateOauthController } from '../plugin-oauth/authentication';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -63,6 +73,31 @@ beforeEach(() => {
 });
 
 describe('runInvoke 双层校验', () => {
+  it('routes OAuth with the authenticated src and applies revocation before its private handler', async () => {
+    initializePluginOauthHost({
+      owner: () => 'member:g1', available: () => true,
+      bind: async () => ({ ghostId: 'p', current: () => true }), run: () => true,
+    }, () => ({deviceId:'cloud',membershipId:'member',realm:'global'}), testOauthSigningKey);
+    try {
+      const now=Date.now(), action={requestId:'card',actionId:'oauth_connect:x',expectedRevision:1};
+      let last: unknown;
+      const exchange=await authenticateOauthController({
+        target:{...(await publishedPluginOauthIdentity())!,realm:'global',deviceId:'cloud',membershipId:'member',observedAtMs:now,expiresAtMs:now+60000},
+        peer:'ctrl-a',action,ghostId:'p',assertCurrent:()=>{},trustIdentity:async()=>{},
+        invoke:async raw=>{last=raw;const reply=await runInvoke('ctrl-a',{channel:PLUGIN_OAUTH_CHANNEL,args:[raw]});
+          if(!reply.ok)throw Error('rejected');return reply.result;},
+      });
+      const started=await exchange({op:'start',...action,publicKey:new OauthBox().publicKey}) as {id:string};
+      const id=started.id;expect(id).toBeTruthy();
+      expect((await runInvoke('ctrl-b',{channel:PLUGIN_OAUTH_CHANNEL,args:[last]})).ok).toBe(false);
+      expect((await runInvoke('ctrl-a',{channel:'device-link:plugin-oauth:v1',args:[{op:'capabilities'}]}))).toMatchObject({ok:false,error:{code:'CHANNEL_NOT_ALLOWED'}});
+      revokedControllers = ['ctrl-a'];
+      await expect(runInvoke('ctrl-a', { channel: PLUGIN_OAUTH_CHANNEL, args: [{ op: 'status', id }] })).resolves.toMatchObject({
+        ok: false, error: { code: 'ACCESS_REVOKED' },
+      });
+      expect((await runInvoke('ctrl-b', { channel: PLUGIN_OAUTH_CHANNEL, args: [{ op: 'capabilities', src: 'ctrl-a' }] })).ok).toBe(false);
+    } finally { invalidatePluginOauth(); }
+  });
   it('开关关闭 → REMOTE_DISABLED', async () => {
     remoteControlEnabled = false;
     const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
@@ -474,6 +509,7 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
+  setRemoteAgentHandler,
   pushSessionActivityToController,
 } from '../device-link/dispatch';
 import {
@@ -540,6 +576,18 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
 }
 
 describe('被控端控制链路生命周期', () => {
+  // Restart recovery must not turn the provider owner's explicit disconnect into
+  // an automatic reconnect. Exercise the production dropAll entry for each cause.
+  it.each(['user', 'toggle-off', 'shutdown'] as const)('passes the teardown intent to the Agent host: %s', reason => {
+    const { client } = makeFakeClient();
+    const abortAll = vi.fn();
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll });
+    try {
+      dropAllControllers(client, reason);
+      expect(abortAll).toHaveBeenCalledExactlyOnceWith(reason === 'shutdown' ? 'app-quit' : 'navigation');
+    } finally { setRemoteAgentHandler(null); }
+  });
+
   beforeEach(() => {
     setControllersChangedListener(null);
     // 清掉可能残留的 controllers:dropAll 需要 client,改用重置 listener 后逐个 close
@@ -879,6 +927,13 @@ describe('被控端控制链路生命周期', () => {
       .not.toHaveProperty('logoKind');
   });
 
+  // Unit: host membership must survive the real projection; controllers cannot infer it.
+  it.each(['xd', 'cindy'] as const)('preserves the host Cindy AI identity: %s', async (logoKind) => {
+    registry.register('maker:provider:list', () => ({ providers: [{ id: 'xd', name: 'Cindy AI', logoKind, routing: {} }] }));
+    const result = await runInvoke('ctrl-list-only', { channel: 'maker:provider:list', args: [{ capabilities: ['provider-logo-kinds-v2'] }] });
+    expect(result).toMatchObject({ ok: true, result: { providers: [{ id: 'xd', logoKind }] } });
+  });
+
   it('listing-only invoke can negotiate new logo kinds without link-open', async () => {
     registry.register('maker:provider:list', () => ({
       providers: [{
@@ -1203,12 +1258,50 @@ describe('被控端控制链路生命周期', () => {
         },
       },
     }));
+    expect(diagnosticLog.debug).toHaveBeenCalledWith('remote invoke admission busy', expect.objectContaining({
+      executing: limit, pendingResults: 0, controllerAtLimit: true, globalAtLimit: false,
+      channels: { 'local-db:sessions:list': limit },
+    }));
     resolveList?.([{ id: 's1' }]);
     await vi.waitFor(() => {
       expect(calls.invokeResult.filter((call) => call.payload && (call.payload as { ok?: boolean }).ok === true))
         .toHaveLength(limit);
     });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  // 控制端把 16 个名额填满历史 / 列表读取后,用户正在等的发送以前会被 BACKPRESSURE 打回、
+  // 再等 ≥2s 重试;交互类写入另有少量名额,读取仍按原上限拒绝。
+  it('交互类 invoke 在 per-controller 名额用满后仍被执行,读取照旧 BACKPRESSURE', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    registry.register('local-db:sessions:list', vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    })));
+    const enqueue = vi.fn(() => ({ accepted: true }));
+    registry.register('maker:input:enqueue', enqueue);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
+    const extra = dispatchTesting.remoteInvokeInteractiveExtraPerController;
+    for (let index = 0; index < limit; index += 1) {
+      feed({ v: 1, kind: 'invoke', id: `list-${index}`, src: 'ctrl-a', payload: {
+        channel: 'local-db:sessions:list', args: [20, 'all', { fresh: true, index }],
+      } });
+    }
+    for (let index = 0; index < extra + 1; index += 1) {
+      feed({ v: 1, kind: 'invoke', id: `send-${index}`, src: 'ctrl-a', payload: {
+        channel: 'maker:input:enqueue', args: ['s1', { text: `hello ${index}` }],
+      } });
+    }
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(extra));
+    const busy = { ok: false, error: { code: 'BACKPRESSURE', message: 'remote invoke execution queue is full' } };
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: `send-${extra}`, payload: busy }));
+    feed({ v: 1, kind: 'invoke', id: 'list-late', src: 'ctrl-a', payload: {
+      channel: 'local-db:sessions:list', args: [20, 'all', { fresh: true, index: 'late' }],
+    } });
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: 'list-late', payload: busy }));
+    resolveList?.([]);
   });
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
@@ -1414,6 +1507,34 @@ describe('被控端控制链路生命周期', () => {
       },
     }));
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  // 准入给交互类请求多放了名额,它们的回包也得有位置:否则已生效的发送因回包入不了 outbox
+  // 而让控制端超时、用户重试。
+  it('交互类 invoke 的结果在 per-controller outbox 用满后仍有预留位置,读取结果照旧被拒', () => {
+    const client = {
+      sendInvokeResult: () => {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      },
+    } as never;
+    const limit = dispatchTesting.remoteInvokeResultOutboxPerControllerLimit;
+    const extra = dispatchTesting.remoteInvokeInteractiveExtraPerController;
+    for (let index = 0; index < limit; index++) {
+      expect(dispatchTesting.sendInvokeResultSafe(
+        client, 'ctrl-a', `invoke-reserve-read-${index}`, { ok: true, result: index }, 'maker:list-active',
+      )).toBe(true);
+    }
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client, 'ctrl-a', 'invoke-reserve-read-over', { ok: true, result: 'x' }, 'maker:list-active',
+    )).toBe(false);
+    for (let index = 0; index < extra; index++) {
+      expect(dispatchTesting.sendInvokeResultSafe(
+        client, 'ctrl-a', `invoke-reserve-send-${index}`, { ok: true, result: index }, 'maker:input:enqueue',
+      )).toBe(true);
+    }
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client, 'ctrl-a', 'invoke-reserve-send-over', { ok: true, result: 'x' }, 'maker:input:enqueue',
+    )).toBe(false);
   });
 
   it('多个控制端的 invoke-result outbox 仍受全局消息上限保护', () => {
@@ -2834,6 +2955,19 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it.each([['maker:set-permission-mode','ask'],['maker:set-plan-mode',true]])('%s commits inside the handler without a later duplicate write', async (channel,value) => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const response = {};
+    markRemoteSettingPersistedInsideHandler(response);
+    registry.register(channel as string, () => response);
+    const result = await runInvoke('ctrl-a', {
+      channel: channel as string, args: ['sess-1', value],
+    });
+    expect(result).toEqual({ ok: true, result: response });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
@@ -2922,6 +3056,8 @@ describe('remote subscription data reads', () => {
       ok: true, result: { providerId: 'account-2', fiveHour: { utilization: 12 } },
     });
     expect(reader).toHaveBeenCalledWith('account-2');
+    await runInvoke('ctrl', { channel, args: ['account-2', true] });
+    expect(reader).toHaveBeenLastCalledWith('account-2', { fresh: true });
     expect(ipcHandler).not.toHaveBeenCalled();
     reader.mockClear();
     await expect(runInvoke('ctrl', { channel, args: [42] })).resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[INVALID_PARAMS]') } });

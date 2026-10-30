@@ -11,7 +11,7 @@
  * 保存载荷与 IPC 与手动保存时**完全一致**,主进程零改动。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   createBotSettingsAutosave,
@@ -51,6 +51,11 @@ export interface BotSettingsAutosaveController {
   retry: () => Promise<void>;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
+  /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
+  composition: {
+    onCompositionStart: () => void;
+    onCompositionEnd: () => void;
+  };
 }
 
 export function useBotSettingsAutosave(
@@ -63,6 +68,11 @@ export function useBotSettingsAutosave(
   const payload = normalizeBotSettingsPayload(draft, fallbackName);
   const payloadRef = useRef(payload);
   payloadRef.current = payload;
+  // 输入法组合中的拼音不是已完成的编辑:组合期间所有提交路径(防抖、离散选择、
+  // blur/离开冲刷、在途续存)都只看组合开始前的快照,上屏后再追上最新值。
+  const composingRef = useRef(false);
+  const committablePayloadRef = useRef(payload);
+  if (!composingRef.current) committablePayloadRef.current = payload;
 
   // 基线 = 上次成功落库的快照。用与当前值同一个归一化函数产生,否则挂载瞬间就会
   // 因为 trim 差异被判成脏。
@@ -95,7 +105,7 @@ export function useBotSettingsAutosave(
     autosaveRef.current = createBotSettingsAutosave({
       textDelayMs,
       instantDelayMs,
-      readPayload: () => payloadRef.current,
+      readPayload: () => committablePayloadRef.current,
       readBaseline: () => baselineRef.current,
       commit: async (next) => {
         if (!enabledRef.current) return;
@@ -122,8 +132,22 @@ export function useBotSettingsAutosave(
   const onEdit = useCallback(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
+      if (trigger === 'text' && composingRef.current) return;
       autosave.schedule(trigger);
     },
+    [autosave],
+  );
+  const composition = useMemo(
+    () => ({
+      onCompositionStart: () => {
+        composingRef.current = true;
+      },
+      onCompositionEnd: () => {
+        composingRef.current = false;
+        committablePayloadRef.current = payloadRef.current;
+        if (enabledRef.current) autosave.schedule('text');
+      },
+    }),
     [autosave],
   );
 
@@ -139,5 +163,5 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty };
+  return { status, onEdit, flush, retry, isDirty, composition };
 }

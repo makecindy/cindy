@@ -1,4 +1,4 @@
-import { publicToolPhase, publicToolResultPhase, WORKING_PHASE_KEYS, type PlainAgentPhase } from '../../../../shared/workingStatus';
+import { isCompactingWorkingStatus, publicToolPhase, publicToolResultPhase, WORKING_PHASE_KEYS, type PlainAgentPhase } from '../../../../shared/workingStatus';
 import type { TFunction } from 'i18next';
 import type { ChatMessage as Message } from '@/lib/makerChatStore';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
@@ -53,6 +53,8 @@ export function resolvePlainAgentPhase(
   if (normalized === 'waiting on approval' || normalized === 'waiting on input') {
     return normalized === 'waiting on approval' ? 'waiting-approval' : 'waiting-input';
   }
+  // Runtime compaction takes priority over the preceding live text/tool block.
+  if (isCompactingWorkingStatus(status)) return 'compacting';
   let thinking = false;
   let resultToolId: string | undefined;
   let sawResult = false;

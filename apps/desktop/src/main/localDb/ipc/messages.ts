@@ -23,9 +23,12 @@ import {
   type SQL,
 } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
 import { historyViewLeaves, isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
+import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
 
-import { getDbClient } from '../client/current';
+import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
+import type { DbClient } from '../client/DbClient';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
@@ -39,6 +42,8 @@ import { throwIpcError, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
 import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
+import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
+import { restoreTaskImageRows } from '../../cindy-media/taskImageDelivery';
 import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
@@ -66,7 +71,8 @@ import { capReferenceMessageRows } from './history.js';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
-import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS } from './historyViewReader';
+import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
+import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
 
 const log = createLogger('localDb/messages');
 
@@ -81,6 +87,32 @@ const messageRowid = sql<number>`rowid`;
  */
 function notAutoResumeAgentMetaSql() {
   return sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`;
+}
+
+// Normal publication stays non-blocking. Authoritative corrections/retractions
+// settle the exact row's create/update hooks before reconciling derived state.
+const pendingPrRefWrites = new WeakMap<DbClient, Map<string, Promise<void>>>();
+const pendingMediaWrites = new WeakMap<DbClient, Map<string, Set<Promise<void>>>>();
+
+function trackMessageMediaWrite(dbClient: DbClient, rowId: string, write: Promise<void>): Promise<void> {
+  let rows = pendingMediaWrites.get(dbClient);
+  if (!rows) {
+    rows = new Map();
+    pendingMediaWrites.set(dbClient, rows);
+  }
+  let writes = rows.get(rowId);
+  if (!writes) {
+    writes = new Set();
+    rows.set(rowId, writes);
+  }
+  writes.add(write);
+  const tracked = writes;
+  const trackedRows = rows;
+  void write.then(() => {
+    tracked.delete(write);
+    if (tracked.size === 0 && trackedRows.get(rowId) === tracked) trackedRows.delete(rowId);
+  });
+  return write;
 }
 
 type MessageRow = typeof messages.$inferSelect;
@@ -173,8 +205,9 @@ async function maybeBroadcastSessionListPreview(
   sessionId: string,
   row: MessageRow,
   ownerScope?: DataOwnerBroadcastScope | null,
+  isCurrent?: () => boolean,
 ): Promise<void> {
-  if (!isVisibleSessionListPreviewRow(row)) return;
+  if (isCurrent?.() === false || !isVisibleSessionListPreviewRow(row)) return;
   let latest: Awaited<ReturnType<typeof latestVisiblePreviewRow>>;
   try {
     latest = await latestVisiblePreviewRow(sessionId);
@@ -186,7 +219,7 @@ async function maybeBroadcastSessionListPreview(
     });
     return;
   }
-  if (latest?.clientId !== row.clientId) return;
+  if (isCurrent?.() === false || latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   const preview = extractMessagePreview(row.content, row.role);
   // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
@@ -237,13 +270,17 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'thinking',
 ] as const);
 
-export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false) {
+export async function readMessagesList(sessionId: unknown, opts: unknown, skipImport = false, outline = false) {
     const sid = requireString(sessionId, 'sessionId');
-    const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
+    const limit = outline ? 1000 : clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
     const after = (opts as { after?: string } | undefined)?.after;
-    const db = getDbClient().drizzle;
+    const imageDbClient = getDbClient();
+    const db = imageDbClient.drizzle;
+    if (!before && beforeTs == null && !after && !outline) {
+      void recoverGeneratedImagesForHistory(sid).catch(() => undefined);
+    }
 
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
     // 只在首页请求跑(分页跳过,#318 性能语义;首页判定 = 无任何分页游标),
@@ -316,6 +353,7 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
     const rows = await db
       .select({
         ...getMessageSelectFields(),
+        ...(outline ? { content: historyOutlineContent(), historyContentStamp: historyOutlineContentStamp() } : {}),
         rowid: messageRowid,
       })
       .from(messages)
@@ -326,8 +364,11 @@ export async function readMessagesList(sessionId: unknown, opts: unknown, skipIm
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    const listed = hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
-    return listed;
+    const restored = await restoreTaskImageRows(imageDbClient, orderedRows);
+    const listed = await hydrateLegacyUserTurnCosts(restored.map(messageToCamelWithRowid));
+    if (!outline) return listed;
+    const stamps = new Map(orderedRows.map((row) => [row.id, (row as { historyContentStamp?: string }).historyContentStamp]));
+    return listed.map((row) => withHistoryArtifacts({ ...row, historyContentStamp: stamps.get(row.id) ?? undefined }));
 }
 
 export function registerMessageIpc(
@@ -339,10 +380,58 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    revision: async () => {
+      const current = getCurrentDbClientSnapshot();
+      if (!current) throw new Error('DbClient not ready');
+      // Own writes increment total_changes; writes through other connections
+      // increment data_version. Both run on the existing database worker.
+      const [version] = await current.client.query<{ changes: number; version: number }>(
+        'SELECT total_changes() AS changes, data_version AS version FROM pragma_data_version');
+      return `${current.clientEpoch}:${version.version}:${version.changes}`;
+    },
+    outline: (sid, opts, skipImport) => readMessagesList(sid, opts, skipImport, true),
+    hydrate: async (sid, ids) => {
+      const imageDbClient = getDbClient();
+      const db = imageDbClient.drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sid)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      const result: Message[] = [];
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const batch = ids.slice(offset, offset + 100);
+        const rows = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+          .where(and(eq(messages.sessionId, sid), inArray(messages.id, batch), isNull(messages.rewindAt),
+            session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined));
+        if (rows.length !== batch.length) throwIpcError('NOT_FOUND', 'History range changed');
+        result.push(...(await restoreTaskImageRows(imageDbClient, rows)).map(messageToCamelWithRowid));
+      }
+      return hydrateLegacyUserTurnCosts(result);
+    },
+    validate: async (sid, ids) => {
+      const db = getDbClient().drizzle;
+      const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
+        .where(eq(sessions.id, sid)).limit(1);
+      if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
+      const valid = new Set(readLive(sid).filter((row) => session.clearedAt === null || Date.parse(row.createdAt) > session.clearedAt)
+        .map((row) => row.id));
+      const pending = ids.filter((id) => !valid.has(id));
+      for (let offset = 0; offset < pending.length; offset += 100) {
+        const batch = pending.slice(offset, offset + 100);
+        const storedIds = batch.filter((id) => !id.startsWith('history-live:'));
+        const clientIds = batch.filter((id) => id.startsWith('history-live:')).map((id) => id.slice('history-live:'.length));
+        const rows = await db.select({ id: messages.id, clientId: messages.clientId }).from(messages)
+          .where(and(eq(messages.sessionId, sid), isNull(messages.rewindAt),
+            or(inArray(messages.id, storedIds), inArray(messages.clientId, clientIds)),
+            session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined));
+        for (const row of rows) { valid.add(row.id); valid.add(`history-live:${row.clientId}`); }
+      }
+      if (ids.some((id) => !valid.has(id))) throwIpcError('NOT_FOUND', 'History range changed');
+    },
     running: readRunning,
     live: readLive,
-    anchor: async (sessionId, id) => {
-      const db = getDbClient().drizzle;
+    anchor: async (sessionId, id, outline) => {
+      const imageDbClient = getDbClient();
+      const db = imageDbClient.drizzle;
       const [session] = await db.select({ clearedAt: sessions.clearedAt }).from(sessions)
         .where(eq(sessions.id, sessionId)).limit(1);
       if (!session) throwIpcError('NOT_FOUND', 'History is unavailable');
@@ -350,30 +439,40 @@ export function registerMessageIpc(
         const live = readLive(sessionId).find((row) => row.id === id);
         if (live && (session.clearedAt === null || Date.parse(live.createdAt) > session.clearedAt)) return live;
       }
-      const [row] = await db.select({ ...getMessageSelectFields(), rowid: messageRowid }).from(messages)
+      const [row] = await db.select({ ...getMessageSelectFields(), ...(outline ? { content: historyOutlineContent() } : {}), rowid: messageRowid }).from(messages)
         .where(and(eq(messages.sessionId, sessionId),
           id.startsWith('history-live:') ? eq(messages.clientId, id.slice('history-live:'.length)) : eq(messages.id, id),
           isNull(messages.rewindAt),
           session.clearedAt !== null ? gt(messages.createdAt, session.clearedAt) : undefined)).limit(1);
       if (!row) throwIpcError('NOT_FOUND', 'History range changed');
-      return messageToCamelWithRowid(row);
+      const [restored] = await restoreTaskImageRows(imageDbClient, [row]);
+      const message = messageToCamelWithRowid(restored);
+      return outline ? withHistoryArtifacts(message) : message;
     },
   });
   ipcMain.handle('local-db:messages:view', async (event, sessionId: unknown, opts: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     const sid = requireString(sessionId, 'sessionId');
     const before = (opts as { before?: unknown } | null)?.before;
-    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before')).catch((error) => {
-      if (isHistoryViewUnavailable(error)) getDeviceLinkInvokeContext()?.historyView?.disable();
+    const context = getDeviceLinkInvokeContext();
+    // Work lines and their patches serve same-account remote controllers only; a shared
+    // guest keeps the existing projection and authorization path unchanged.
+    const workLines = (opts as { workLines?: unknown } | null)?.workLines === true && !!context?.historyView && !context.sharedTask;
+    let shape: HistoryPageShape | undefined;
+    const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before'),
+      (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true,
+      workLines ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
+      if (isHistoryViewUnavailable(error)) context?.historyView?.disable();
       throw error;
     });
     if (before == null) {
       const liveKeys = historyViewLeaves(page.items)
         .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
-      getDeviceLinkInvokeContext()?.historyView?.update(liveKeys);
+      context?.historyView?.update(liveKeys, { workLines, shape });
     }
     return page;
   });
+  setHistoryWorkPageReader((sid, onShape) => historyView.page(sid, undefined, true, { workLines: true, onShape }));
   ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     requireString(sessionId, 'sessionId');
@@ -384,11 +483,12 @@ export function registerMessageIpc(
   ipcMain.handle('local-db:messages:work-details', async (event, sessionId: unknown, ref: unknown, opts: unknown) => {
     if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
     const sid = requireString(sessionId, 'sessionId');
-    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown } | null;
+    const value = ref as { key?: unknown; firstMessageId?: unknown; lastMessageId?: unknown; firstStoredMessageId?: unknown; lastStoredMessageId?: unknown; liveMessageIds?: unknown; parentToolUseId?: unknown } | null;
     const after = (opts as { after?: unknown } | null)?.after;
     if (value?.liveMessageIds != null && (!Array.isArray(value.liveMessageIds) || value.liveMessageIds.length > MAX_HISTORY_SCAN_ROWS)) throwIpcError('INVALID_PARAMS', 'Invalid live work range');
     return historyView.details(sid, {
       key: requireString(value?.key, 'key'),
+      ...(value?.parentToolUseId == null ? {} : { parentToolUseId: requireString(value.parentToolUseId, 'parentToolUseId') }),
       firstMessageId: requireString(value?.firstMessageId, 'firstMessageId'),
       lastMessageId: requireString(value?.lastMessageId, 'lastMessageId'),
       ...(value?.firstStoredMessageId == null ? {} : { firstStoredMessageId: requireString(value.firstStoredMessageId, 'firstStoredMessageId') }),
@@ -403,7 +503,8 @@ export function registerMessageIpc(
       const sid = requireString(sessionId, 'sessionId');
       const mid = requireString(messageId, 'messageId');
       const radius = clampAroundRadius((opts as { radius?: unknown } | undefined)?.radius);
-      const db = getDbClient().drizzle;
+      const imageDbClient = getDbClient();
+      const db = imageDbClient.drizzle;
 
       const [sessionRow] = await db
         .select({ clearedAt: sessions.clearedAt })
@@ -474,7 +575,7 @@ export function registerMessageIpc(
         .limit(radius);
 
       return hydrateLegacyUserTurnCosts(
-        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+        (await restoreTaskImageRows(imageDbClient, [...before.reverse(), anchor, ...after])).map(messageToCamelWithRowid),
       );
     },
   );
@@ -487,7 +588,8 @@ export function registerMessageIpc(
       const aroundOpts = opts as { radius?: unknown; contentCharLimit?: unknown } | undefined;
       const radius = clampAroundRadius(aroundOpts?.radius);
       const contentCharLimit = requireReferenceContentCharLimit(aroundOpts?.contentCharLimit);
-      const db = getDbClient().drizzle;
+      const imageDbClient = getDbClient();
+      const db = imageDbClient.drizzle;
 
       const [sessionRow] = await db
         .select({ clearedAt: sessions.clearedAt })
@@ -558,7 +660,7 @@ export function registerMessageIpc(
         .limit(radius);
 
       const rows = await hydrateLegacyUserTurnCosts(
-        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
+        (await restoreTaskImageRows(imageDbClient, [...before.reverse(), anchor, ...after])).map(messageToCamelWithRowid),
       );
       return capReferenceMessageRows(rows, contentCharLimit);
     },
@@ -783,7 +885,11 @@ export function broadcastMessageRow(
   msg: Message,
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
-  broadcastOwnedPayload('local-db:messages:created', { sessionId, message: msg }, ownerScope);
+  // Main-created rows may bypass the DB mapper. Never broadcast View-only data
+  // to top-level renderers or same-account control devices.
+  const content = projectMcpAppContent(msg.content, msg.agentMeta?.mcpApp === true);
+  const message = content === msg.content ? msg : { ...msg, content };
+  broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
@@ -1081,7 +1187,11 @@ export async function commitContextRebuild(
   handoff: string,
   meta: {
     reason:
-      'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+      | 'context-overflow'
+      | 'model-window-switch'
+      | 'pi-prompt-timeout'
+      | 'native-session-recovery'
+      | 'idle-gap';
     sourceUserClientId: string | null;
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
@@ -1378,15 +1488,113 @@ export async function supersedeRetriedUserTurn(
   return clientIds;
 }
 
+/** Settle media publication off the global message queue, using its captured DB. */
+async function reconcileAssistantMediaRefs(row: MessageRow, dbClient: DbClient): Promise<void> {
+  await Promise.all([...(pendingMediaWrites.get(dbClient)?.get(row.id) ?? [])]);
+  // Cleanup belongs to the committed mutation even if clear/owner changes while
+  // publication settles. Use its captured DB and atomic live-message predicate;
+  // never republish derived state into the replacement scope.
+  for (const hash of collectCindyMediaHashes(row.content)) {
+    try {
+      // Existing ledger lock + atomic live-message predicate protect shared blobs.
+      await removeSessionAttachmentRefIfUnreferencedByLiveMessage(
+        { sessionId: row.sessionId, hash }, dbClient.drizzle,
+      );
+    } catch (error) {
+      log.warn('assistant correction media reference reconciliation failed', {
+        sessionId: row.sessionId, clientId: row.clientId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+/** Reconcile only the corrected row's derived state against current live history. */
+async function reconcileAssistantDerivedState(
+  row: MessageRow,
+  dbClient: DbClient,
+  isCurrent: () => boolean,
+  ownerScope: DataOwnerBroadcastScope | null,
+  refreshPreview: boolean,
+): Promise<void> {
+  // Slow media publication must not hold every task's message write queue.
+  // Cleanup still waits for this row's hooks and retains the live-reference check.
+  void reconcileAssistantMediaRefs(row, dbClient).catch((error) => {
+    log.warn('assistant correction media reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  await pendingPrRefWrites.get(dbClient)?.get(row.id);
+  try {
+    if (isCurrent()) await recomputePrRefsForSession(row.sessionId, { dbClient, isCurrent });
+  } catch (error) {
+    log.warn('assistant correction PR reference reconciliation failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!refreshPreview || !isCurrent()) return;
+  try {
+    const latest = await latestVisiblePreviewRow(row.sessionId);
+    if (!isCurrent()) return;
+    broadcastOwnedPayload('local-db:sessions:patched', {
+      sessionId: row.sessionId,
+      patch: { preview: extractMessagePreview(latest?.content, latest?.role) },
+    }, ownerScope);
+  } catch (error) {
+    log.warn('assistant retraction preview refresh failed', {
+      sessionId: row.sessionId, clientId: row.clientId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Retract an assistant draft rejected by its authoritative empty final.
+ * Reuse the exact-row publication rollback so preview/count invalidation is
+ * atomic and a concurrent edit or replacement can never be removed.
+ */
+export async function discardPersistedAssistantMessage(
+  sessionId: string,
+  clientId: string,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  const ownerScope = captureOwnerBroadcastScope();
+  const dbClient = getDbClient();
+  if (!isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  const [row] = await dbClient.drizzle.select().from(messages).where(and(
+    eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+    eq(messages.role, 'assistant'), isNull(messages.rewindAt),
+  )).limit(1);
+  if (!row || !isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
+  const result = await dbClient.tx('message.insert', {
+    id: row.id, clientId: row.clientId, sessionId: row.sessionId,
+    role: row.role, content: row.content, toolUseId: row.toolUseId,
+    agentMeta: row.agentMeta, agentKind: row.agentKind, createdAt: row.createdAt,
+    guarded: false, publication: 'rollback',
+  });
+  if (result.changes === 0) return false;
+  await reconcileAssistantDerivedState(row, dbClient,
+    () => isCurrent() && isOwnerBroadcastScopeCurrent(ownerScope), ownerScope, true);
+  return true;
+}
+
 export async function updateMessageContent(
   sessionId: string,
   clientId: string,
   content: unknown,
   autoReviewAnswer?: { text: string; acceptedAt: number },
+  finalSnapshot?: { isCurrent: () => boolean },
 ): Promise<Message | null> {
   const ownerScope = captureOwnerBroadcastScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
+  const isCurrent = () => isOwnerBroadcastScopeCurrent(ownerScope) && finalSnapshot?.isCurrent() !== false;
+  const [original] = finalSnapshot
+    ? await db.select().from(messages).where(and(eq(messages.sessionId, sessionId),
+      eq(messages.clientId, clientId), eq(messages.role, 'assistant'), isNull(messages.rewindAt))).limit(1)
+    : [];
+  if (finalSnapshot && (!original || !isCurrent())) return null;
   const serialized = safeStringify(content);
   if (autoReviewAnswer !== undefined) {
     // Host-only interaction result: keep content and its authorization evidence atomic.
@@ -1419,24 +1627,29 @@ export async function updateMessageContent(
     .from(messages)
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
     .limit(1);
-  const row: MessageRow | undefined = narrow ? { ...narrow, content: serialized } : undefined;
-  if (row) {
+  const row: MessageRow | undefined = narrow
+    ? (await restoreTaskImageRows(dbClient, [{ ...narrow, content: serialized }]))[0]
+    : undefined;
+  if (row && (!finalSnapshot || isCurrent())) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
     // 挂账就永久零引用);幂等,create 时已挂的 hasRef 跳过。
-    void commitMessageMediaRefs({
+    trackMessageMediaWrite(dbClient, row.id, commitMessageMediaRefs({
       sessionId,
       role: row.role,
       content: row.content,
-    }).catch((err) => {
+    }).then(() => undefined).catch((err) => {
       log.warn('message media ref commit failed (update)', {
         sessionId,
         clientId,
         error: err instanceof Error ? err.message : String(err),
       });
-    });
-    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);
+    }));
+    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope, finalSnapshot?.isCurrent);
   }
+  // The correction already committed: settle its original publication even if
+  // clear/owner changed or another deletion removed the row during readback.
+  if (original) await reconcileAssistantDerivedState(original, dbClient, isCurrent, ownerScope, false);
   return row ? messageToCamel(row) : null;
 }
 
@@ -1527,6 +1740,11 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
+    /** Host-only admission guard, checked before and after the publication transaction.
+     * Must be repeatable. A failed final check rolls back this exact row before delivery hooks. */
+    beforePublish?: () => Promise<void>;
+    /** Host delivery owns its guarded attachment commit and compensation. */
+    deferMediaRefs?: boolean;
     /**
      * Optional clear-boundary compare-and-set for optimistic user sends.  The
      * insert is accepted only while the session still has this exact
@@ -1535,6 +1753,8 @@ export async function createMessage(
      * durable user row.
      */
     expectedClearBoundaryMs?: number | null;
+    /** Skip a host-written opening if the user has already spoken, checked in the insert transaction. */
+    requireNoUserMessage?: boolean;
     /**
      * Owner scope captured before an async main-side write.  A stale scope
      * must not broadcast a row into the next signed-in owner.
@@ -1567,6 +1787,7 @@ export async function createMessage(
     if (existing.length > 0) return messageToCamel(existing[0]);
   }
 
+  if (guarded && opts?.beforePublish) throw new Error('Publication guard cannot be combined with optimistic input');
   const id = createId();
   const now = Date.now();
   const visibleCreatedAt =
@@ -1574,20 +1795,49 @@ export async function createMessage(
       ? Math.max(body.createdAt ?? now, expected + 1)
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
+  const insertArgs = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    guarded,
+    expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    ...(opts?.requireNoUserMessage ? { requireNoUserMessage: true } : {}),
+  };
   try {
-    const inserted = await dbClient.tx('message.insert', {
-      id: insertRow.id,
-      clientId: insertRow.clientId,
-      sessionId,
-      role: insertRow.role,
-      content: insertRow.content,
-      toolUseId: insertRow.toolUseId ?? null,
-      agentMeta: insertRow.agentMeta ?? null,
-      agentKind: insertRow.agentKind ?? null,
-      createdAt: insertRow.createdAt,
-      guarded,
-      expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    const inserted = await dbClient.tx('message.insert', { ...insertArgs,
+      ...(opts?.beforePublish ? { publication: 'stage' as const } : {}),
     });
+    if (opts?.beforePublish) {
+      await opts.beforePublish();
+      try {
+        const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
+        if (published.changes !== 1) throw new Error('Message publication lost its pending row');
+      } catch (error) {
+        // The worker can commit before its receipt is lost. Recover only this
+        // exact publication, then run the same delivery/indexing hooks below.
+        const [committed] = await db.select().from(messages)
+          .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+          .limit(1);
+        if (!committed || committed.role !== insertArgs.role || committed.content !== insertArgs.content
+          || committed.toolUseId !== insertArgs.toolUseId || committed.agentMeta !== insertArgs.agentMeta
+          || committed.agentKind !== insertArgs.agentKind || committed.createdAt !== insertArgs.createdAt
+          || committed.rewindAt !== null) throw error;
+      }
+      // Keep this outside the lost-receipt recovery: a failed authorization
+      // check must never be mistaken for a successful committed publication.
+      try {
+        await opts.beforePublish();
+      } catch (error) {
+        await dbClient.tx('message.insert', { ...insertArgs, publication: 'rollback' });
+        throw error;
+      }
+    }
     if (guarded && inserted.changes === 0) {
       const [existingAfterGuard] = await db
         .select()
@@ -1619,6 +1869,10 @@ export async function createMessage(
       throw new Error('Message insert skipped without a clear-boundary change');
     }
   } catch (err) {
+    if (opts?.beforePublish) {
+      await dbClient.tx('message.insert', { ...insertArgs, publication: 'discard' });
+      throw err;
+    }
     const after = await db
       .select()
       .from(messages)
@@ -1670,7 +1924,8 @@ export async function createMessage(
     createdAt: insertRow.createdAt,
     rewindAt: null,
   };
-  const msg = messageToCamel(row);
+  const [restoredRow] = await restoreTaskImageRows(dbClient, [row]);
+  const msg = messageToCamel(restoredRow);
   // 媒体总仓挂账钩子(规则 25):消息落库是"blob 归属本会话"的
   // 确定时点,覆盖所有落库来源(renderer IPC / hook / im / agent echo / 合成
   // tool_result)。生成产物(art/mivo/codex)入仓时零引用,在这里补挂
@@ -1699,8 +1954,10 @@ export async function createMessage(
     body.role === 'user' &&
     opts !== undefined &&
     Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-  if (shouldAwaitMediaRefs) await commitMediaRefs();
-  else void commitMediaRefs();
+  if (!opts?.deferMediaRefs) {
+    const mediaWrite = trackMessageMediaWrite(dbClient, row.id, commitMediaRefs());
+    if (shouldAwaitMediaRefs) await mediaWrite;
+  }
   // Broadcast 给所有 renderer window — 用于 main 端创建消息 (e.g. feishu /ctr
   // 接管路径下 persistUserMessage / persistAssistantMessage) 时让 renderer
   // 的 makerChatStore push 到 in-memory state, 让消息流实时刷新。
@@ -1708,7 +1965,7 @@ export async function createMessage(
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
-    await maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);
+    await maybeBroadcastSessionListPreview(sessionId, restoredRow, opts?.broadcastOwnerScope);
   }
   // chat-history-embedder hook (Phase 1.2) —— fire-and-forget, 不 await。
   // 内部已有 enabled / cutoff / role / size 守卫; 关闭状态下零成本直接 return。
@@ -1719,8 +1976,17 @@ export async function createMessage(
   });
   // session-git-pr-context hook —— fire-and-forget。内部限定 user/assistant 角色,
   // 每条消息跑一次锚定正则线性扫描(开销可忽略);失败仅 log warn。
-  void recordPrRefsForMessage(msg).catch(() => {
+  const prRefsWrite = recordPrRefsForMessage(msg).catch(() => {
     // recordPrRefsForMessage 内部已 try/catch,此处兜底防御 refactor 漏网异常。
+  });
+  let pendingPrRefs = pendingPrRefWrites.get(dbClient);
+  if (!pendingPrRefs) {
+    pendingPrRefs = new Map();
+    pendingPrRefWrites.set(dbClient, pendingPrRefs);
+  }
+  pendingPrRefs.set(msg.id, prRefsWrite);
+  void prRefsWrite.then(() => {
+    if (pendingPrRefs.get(msg.id) === prRefsWrite) pendingPrRefs.delete(msg.id);
   });
   return msg;
 }
@@ -1812,6 +2078,22 @@ export function extractEstimatedSessionValueEntries(
 export interface MessageAgentMetaPatchResult {
   previous: Record<string, unknown>;
   next: Record<string, unknown>;
+}
+
+/** Stable native identity of a visible user input; do not match retries by text. */
+export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
+  const [row] = await getDbClient().drizzle
+    .select({ agentMeta: messages.agentMeta })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
+      eq(messages.role, 'user'), isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .limit(1);
+  const id = row && parseAgentMetaRecord(row.agentMeta)?.piEntryId;
+  return typeof id === 'string' && id.length > 0 && id.length <= 128 ? id : undefined;
 }
 
 /** 与 patchMessageAgentMeta 相同，但返回补丁前后的元数据供幂等账本计算。 */
@@ -1921,8 +2203,9 @@ export async function broadcastMessageAgentMetaUpdate(
 export async function readPriorUserRoundCost(
   sessionId: string,
   assistantClientId: string,
+  client: DbClient = getDbClient(),
 ): Promise<PriorUserRoundCost> {
-  const db = getDbClient().drizzle;
+  const db = client.drizzle;
   const [target] = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid })
     .from(messages)
@@ -1984,6 +2267,13 @@ export async function readPriorUserRoundCost(
     );
 
   const values: RegionalMoney[] = [];
+  const mediaCosts = parseAgentMetaRecord(boundary.agentMeta)?.mediaCosts;
+  if (Array.isArray(mediaCosts)) {
+    for (const value of mediaCosts) {
+      const cost = normalizeRegionalMoney(value);
+      if (cost?.kind === 'actual-cost' && cost.amount > 0) values.push(cost);
+    }
+  }
   const estimatedCurrencies = new Set<RegionalMoney['currency']>();
   for (const row of assistantRows) {
     const meta = parseAgentMetaRecord(row.agentMeta);
@@ -2420,7 +2710,7 @@ export async function findForkParentSessionId(sessionId: string): Promise<string
 
 /**
  * session-agent-switch:读取交接素材——本会话未被 rewind、晚于 /clear 边界的
- * 最近 limit 行(时间正序返回),只取交接需要的最小投影。
+ * 最近 limit 行(时间正序返回),只取交接需要的最小投影；null 读取边界内完整历史。
  *
  * `after`(Phase 2 增量交接):只取严格晚于该水位线(createdAt + rowid 决序,
  * 与 findPendingAgentHandoff 同 tie-break 口径)的行——即目标引擎停泊
@@ -2428,7 +2718,7 @@ export async function findForkParentSessionId(sessionId: string): Promise<string
  */
 export async function listMessagesForAgentHandoff(
   sessionId: string,
-  limit = 400,
+  limit: number | null = 400,
   after?: { createdAt: number; rowid: number },
   role?: 'user' | 'authorization',
 ): Promise<
@@ -2443,7 +2733,7 @@ export async function listMessagesForAgentHandoff(
 > {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
+    .select({ clearedAt: sessions.clearedAt, source: sessions.source, createdAt: sessions.createdAt })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
@@ -2465,12 +2755,13 @@ export async function listMessagesForAgentHandoff(
       ELSE ${messages.createdAt} END ELSE ${messages.createdAt} END`;
   // Scheduled executions are not owner messages. Exclude them before LIMIT so
   // a long-running heartbeat cannot push its authorizing request out of history.
+  // Empty human receipts can reset resource authorization; only protected typed continuations are skipped.
   // Keep malformed/unknown rows: restoration must still invalidate ambiguous consent.
   const notScheduledExecution = sql`CASE WHEN ${messages.role} = 'user'
     AND json_valid(${messages.agentMeta}) THEN CASE
-      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') = 'scheduled-continuation'
+      WHEN json_extract(${messages.agentMeta}, '$.autoReviewUserText.kind') IN ('scheduled-continuation', 'delegated-continuation')
       THEN 0 ELSE 1 END ELSE 1 END`;
-  const rows = await db
+  const query = db
     .select({
       rowid: messageRowid,
       clientId: messages.clientId,
@@ -2483,11 +2774,15 @@ export async function listMessagesForAgentHandoff(
     .from(messages)
     .where(
       and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), afterClear, afterWatermark,
+        // A copied parent instruction is context, never authorization for a side task.
+        role === 'authorization' && sessRow?.source === 'side-chat' ? gte(messages.createdAt, sessRow.createdAt) : undefined,
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
           : role ? eq(messages.role, role) : undefined),
     )
-    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid))
-    .limit(limit);
+    .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid));
+  // Authority replay must start at the clear/rewind boundary: the shared intent
+  // budget is stateful, so an arbitrary row suffix has a different projection.
+  const rows = await (limit === null ? query : query.limit(limit));
   rows.reverse();
   return rows
     .map((r) => {
@@ -2508,6 +2803,7 @@ export async function listMessagesForAgentHandoff(
           // 非法 JSON 视为无 meta
         }
       }
+      if (agentMeta?.voiceCall) return null;
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
         return null;
       }

@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +23,12 @@ export interface CindyMakePreflightProps {
   createOptions?: CindyMakeTaskOptions;
   onOpenChange: (open: boolean) => void;
 }
+
+/**
+ * Continue is offered once the official lookup finished, also when it failed: not
+ * knowing whether a similar official change exists never blocks making one.
+ */
+const LOOKUP_FINISHED = ['found', 'notFound', 'failed'];
 
 /** Checks belong to this dialog; only Continue creates a persistent task. */
 export function CindyMakePreflightDialog({
@@ -87,7 +94,7 @@ export function CindyMakePreflightDialog({
       submitting.current ||
       confirmClose ||
       report?.status !== 'completed' ||
-      !['found', 'notFound'].includes(report.upstream?.status ?? '')
+      !LOOKUP_FINISHED.includes(report.upstream?.status ?? '')
     )
       return;
     submitting.current = true;
@@ -141,19 +148,18 @@ export function CindyMakePreflightDialog({
         : report?.source?.status === 'preparing'
           ? 'source'
           : 'environment'
-      : report.status === 'completed' &&
-          ['found', 'notFound'].includes(report.upstream?.status ?? '')
+      : report.status === 'completed' && LOOKUP_FINISHED.includes(report.upstream?.status ?? '')
         ? 'ready'
         : 'incomplete';
 
   return (
     <Dialog.Root open onOpenChange={(open) => !open && requestClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           ref={contentRef}
           tabIndex={-1}
-          className="fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-xl bg-[var(--confirm-bg)] p-4 shadow-[var(--confirm-shadow)] outline-none"
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden p-4 outline-none"
           onOpenAutoFocus={(event) => {
             // The report and Continue action arrive asynchronously. Start at the
             // readable content instead of making Close the initial action.
@@ -213,14 +219,17 @@ export function CindyMakePreflightDialog({
               />
             )}
             {failed && (
-              <p role="alert" className="text-13 text-[var(--error-fg)]">
-                {t('cindyMake.code.preparationFailed')}
-              </p>
+              <ErrorNotice role="alert" message={t('cindyMake.code.preparationFailed')} />
             )}
           </div>
           {report?.status === 'completed' &&
-            ['found', 'notFound'].includes(report.upstream?.status ?? '') && (
-              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            LOOKUP_FINISHED.includes(report.upstream?.status ?? '') && (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {report.upstream?.status === 'failed' && (
+                  <p className="mr-auto text-12 text-[var(--text-secondary)]">
+                    {t('cindyMake.upstream.failedContinue')}
+                  </p>
+                )}
                 <Button
                   variant="primary"
                   className="border-[var(--border-default)] enabled:hover:border-[var(--button-primary-hover)] enabled:active:border-[var(--button-primary-pressed)]"

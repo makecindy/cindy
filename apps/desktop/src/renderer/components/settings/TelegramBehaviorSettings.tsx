@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * Telegram 个人 bot「回应与引用」设置节(设计 v3 §五点四/五点五)。
  *
@@ -82,7 +83,7 @@ function SegmentedRow<T extends string>(props: {
           label: props.optionLabel(option),
         }))}
       />
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {props.hint}
       </div>
     </div>
@@ -93,13 +94,9 @@ function SettingsRequestError(props: { message: string; retryLabel: string; onRe
   return (
     <div className="flex items-center justify-between gap-3 text-11 text-[var(--settings-section-desc)]">
       <span>{props.message}</span>
-      <button
-        type="button"
-        onClick={props.onRetry}
-        className="h-[26px] shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-3 font-medium text-[var(--settings-btn-secondary-text)] transition-colors"
-      >
+      <Button variant="secondary" size="sm" compact type="button" onClick={props.onRetry}>
         {props.retryLabel}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -403,20 +400,18 @@ export function TelegramPersonaSettings() {
         style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
       />
       <div className="flex items-center gap-2">
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
+          loading={syncState === 'syncing'}
           type="button"
           onClick={() => void syncProfile()}
           disabled={syncState === 'syncing' || !persona.botName.trim()}
-          className={cn(
-            'h-[32px] rounded-full px-4 text-12 font-medium transition-colors',
-            'border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-            'text-[var(--settings-btn-secondary-text)]',
-            (syncState === 'syncing' || !persona.botName.trim()) && 'cursor-not-allowed opacity-40',
-          )}
         >
           {t(`settings.telegramBot.persona.sync.${syncState}`)}
-        </button>
-        <span className="text-11 text-[var(--settings-section-desc)] opacity-80">
+        </Button>
+        <span className="text-11 text-[var(--text-secondary)]">
           {t('settings.telegramBot.persona.syncHint')}
         </span>
       </div>
@@ -451,7 +446,7 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
   if (enabled === null) return null;
   if (enabled) {
     return (
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.contactsOn`)}
       </div>
     );
@@ -461,7 +456,11 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
       <span className="text-11 leading-[1.5] text-[var(--settings-section-desc)]">
         {t(`${root}.groups.contactsOff`)}
       </span>
-      <button
+      <Button
+        variant="primary"
+        size="sm"
+        compact
+        loading={busy}
         type="button"
         disabled={busy}
         onClick={() => {
@@ -474,14 +473,9 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
             })
             .finally(() => setBusy(false));
         }}
-        className={cn(
-          'h-[26px] shrink-0 rounded-full border px-3 text-11 font-medium transition-colors',
-          'border-[var(--settings-input-border-focus)] bg-[var(--settings-badge-bg)] text-[var(--settings-section-title)]',
-          busy && 'cursor-not-allowed opacity-40',
-        )}
       >
         {t(`${root}.groups.contactsEnable`)}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -667,7 +661,7 @@ export function TelegramGroupActivationSettings({
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.groups.title`)}
       </div>
-      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+      <div className="text-11 leading-[1.5] text-[var(--text-secondary)]">
         {t(`${root}.groups.hint`)}
       </div>
       {error !== null && (
@@ -684,12 +678,12 @@ export function TelegramGroupActivationSettings({
         </div>
       ) : (
         groups.map((group) => (
-          <div key={group.chatId} className="flex items-center justify-between gap-3">
+          <div key={group.chatId} className="cindy-segmented-row">
             <div className="min-w-0 flex-1">
               <div className="truncate text-12 font-medium text-[var(--settings-section-title)]">
                 {group.chatName || group.chatId}
               </div>
-              <div className="text-11 text-[var(--settings-section-desc)] opacity-70">
+              <div className="text-11 text-[var(--text-secondary)]">
                 {group.chatId}
               </div>
             </div>

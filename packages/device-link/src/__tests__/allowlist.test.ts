@@ -3,6 +3,7 @@
  * 这是远程控制的安全闸门,回归必须显式。
  */
 import { describe, it, expect } from 'vitest';
+import { TASK_MIGRATION_CHANNEL } from '../taskMigration.js';
 import {
   REMOTE_INVOKE_ALLOWLIST,
   REMOTE_REVIEW_EXTERNAL_INPUT_CHANNELS,
@@ -26,6 +27,21 @@ import {
 } from '../remoteResources.js';
 
 describe('REMOTE_INVOKE_ALLOWLIST', () => {
+  it('allows the public composer projection without exposing the full installed plugin records', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:composer-list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('ghosts:list')).toBe(false);
+  });
+  it('allows Review start to run on the data-owning Desktop', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
+  });
+
+  it('allows the read-only task context-window bounds query but no generic session write', () => {
+    // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:set-context-window-budget')).toBe(true);
+    // 通用写入口不因这条查询放开。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:sessions:update')).toBe(false);
+  });
   it('allows the reduced teammate directory while keeping native configuration local', () => {
     for (const channel of ['local-db:bots:list', 'local-db:bots:get']) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
@@ -100,6 +116,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行会话未读已读回执(控制端看完会话,清被控端灵动岛 / 角标 / 侧栏未读)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('notification:clear-session-attention')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('agent-island:completion-action')).toBe(true);
     // mark 方向不放行:未读的产生真相只在被控端 main,远程不得凭空标未读。
     expect(REMOTE_INVOKE_ALLOWLIST.has('notification:mark-session-attention')).toBe(false);
   });
@@ -110,6 +127,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'maker:schedule:get-runtime-state',
       'maker:worker:create',
       'maker:worker:dispatch-ui-assignment',
+      'maker:worker:update',
       'maker:session:enable-orca',
       'maker:rewind:commit',
       'maker:fork',
@@ -125,8 +143,17 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-workflow-progress')).toBe(true);
   });
 
+  it('放行后台命令输出尾部只读(.output 文件真相在被控端,控制端本机读必落空)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:background-task:output-tail')).toBe(true);
+  });
+
   it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
+  });
+
+  it('放行后台任务停止(单个 / 全部):任务真身在被控端,控制端本机停止只会假成功', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:stop')).toBe(true);
   });
 
   it('routes durable PI Subagent reads and controls to the data-owning device', () => {
@@ -138,7 +165,6 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
     }
-    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
   });
 
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
@@ -168,9 +194,16 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:model-pricing')).toBe(true);
   });
 
+  it('放行用量历史跨设备合并的原始用量行只读读取', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:device-rows')).toBe(true);
+    // 本机聚合入口仍只对受信 renderer 开放, 不经隧道暴露。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:history')).toBe(false);
+  });
+
   it('放行 Codex 官方额度读取与 desktop 绑定的人工 reset offer', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limits')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-reset-auto-use')).toBe(true);
   });
 
   it('放行 Claude 订阅余量快照只读(远程订阅会话 chip 镜像被控端窗口剩余)', () => {
@@ -186,9 +219,21 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   });
 
   it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
+    // #6916: only the host display-name read is remotely callable; local preferences stay local.
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:set')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:delete')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
+  });
+
+  it('exposes host project aliases as a read-only snapshot and forwards invalidations', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-aliases')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:list')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:set')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:project-aliases:delete')).toBe(false);
+    expect(PUSH_FORWARD_ALLOWLIST.has('local-db:project-aliases:changed')).toBe(true);
   });
 
   it('放行 Git safety 只读查询(远程 Codex Rewind 按被控端 snapshot 设置 gate)', () => {
@@ -252,9 +297,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     for (const ch of [
       'worktree:detect-cwd',
       'worktree:list-branches',
+      'worktree:branch-sync-status',
+      'worktree:sync-branch',
       'worktree:suggest-name',
       'worktree:create',
       'worktree:discard-precreated',
+      'worktree:cancel-precreated',
       'worktree:removal-preview',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
@@ -365,7 +413,9 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     //  - `maker:api-key:present` 是 presence-only 探测:只回 { present: boolean },
     //    不回、也永不扩展为读取密钥材料(handler 见 desktop authHandlers.ts)。密钥类
     //    通用读写(api-key:save/get、safe-storage)仍被本模式看住,禁止再加同前缀通道。
-    const FORBIDDEN_EXEMPT = new Set(['maker:goal:set', 'maker:api-key:present']);
+    // 单任务迁移仅允许同账号控制端，通过校验后的快照附件与持久交接状态机执行；
+    // 不提供通用导入、调用方指定任意目标路径或裸写库接口。
+    const FORBIDDEN_EXEMPT = new Set(['maker:goal:set', 'maker:api-key:present', TASK_MIGRATION_CHANNEL]);
     for (const ch of REMOTE_INVOKE_ALLOWLIST) {
       if (FORBIDDEN_EXEMPT.has(ch)) continue;
       for (const { re, why } of FORBIDDEN) {
@@ -383,6 +433,8 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'maker:interaction-request',
       'maker:interaction-dismissed',
       'maker:auto-permission:fallback',
+      'maker:session-credential-switch-applied',
+      'maker:session-credential-switch-failed',
       'maker:provider:changed',
       'maker:agents:changed',
       'maker:schedule:event',
@@ -403,6 +455,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'local-db:messages:deleted',
       'local-db:session:error-persisted',
       'sidebar-settings:project-order-changed',
+      'local-db:project-aliases:changed',
       SESSION_ACTIVITY_CHANNEL,
     ]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch)).toBe(true);
@@ -445,6 +498,7 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:cancel-precreated']).toBeGreaterThan(30_000);
   });
 
   it('maker:compact-session 隧道超时必须大于 pi 压缩执行预算(10min + 回程余量,不 30s 截断)', () => {

@@ -58,7 +58,7 @@ describe('主 BrowserWindow 后台节流', () => {
     expect(source).toContain('const nextAllowed = !hasRunningTurn;');
     expect(source).toMatch(/setBackgroundThrottling\(\s*mainWindowBackgroundThrottlingAllowed,?\s*\)/);
     expect(source).not.toContain('isRemoteDesktopVideoActive');
-    expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);');
+    expect(source).toContain('registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender, {');
     expect(source).toContain('onAnySessionTurnKeepaliveChange: (isRunning) => {');
     expect(source).toContain('setMainWindowBackgroundThrottlingForActiveTurn(isRunning);');
     expect(source).toContain('notifyUpdateAutoRelaunchBusyStateChanged();');
@@ -181,6 +181,14 @@ describe('窗口可见性广播（装饰动画闸门的兜底信号）', () => {
    * 豁免必须显式登记并写明理由——目的是逼一次判断，而不是让人默默跳过。
    */
   const BROADCAST_EXEMPT = new Map<string, string>([
+    [
+      'region-screenshot/pageWindow.ts',
+      // index.tsx dispatches these windows to region-screenshot(-pin)-entry,
+      // not main-entry: neither installs hiddenAnimationGate or runs decorative
+      // animations. Capture timers belong to the explicit capture session;
+      // ending it unmounts the panel, while pin windows are destroyed on close.
+      '截图与贴图使用独立轻量入口，无常驻装饰动画；隐藏预热需要及时绘制首帧',
+    ],
     [
       'remote-desktop/captureWindow.ts',
       '独立捕获页不加载聊天 Renderer 或装饰动画；只在媒体连接期间存在，停止时销毁',

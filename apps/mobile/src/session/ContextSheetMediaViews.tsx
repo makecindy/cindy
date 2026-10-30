@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { Text } from '@/components/AppText';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import {
   useContextSheetMediaAssets,
   type ContextSheetMediaAsset,
@@ -244,6 +244,7 @@ function makeMediaStyles(colors: ThemeColors) {
     thumbBadgeText: {
       color: colors.ctaText,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.semibold,
     },
     thumbBusyOverlay: {
@@ -259,6 +260,7 @@ function makeMediaStyles(colors: ThemeColors) {
     emptyText: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       paddingTop: spacing.xl,
       textAlign: 'center' as const,
     },
@@ -273,6 +275,7 @@ function makeMediaStyles(colors: ThemeColors) {
       color: colors.textTertiary,
       flex: 1,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
     },
     permissionButton: {
       backgroundColor: colors.surfaceChip,
@@ -283,6 +286,7 @@ function makeMediaStyles(colors: ThemeColors) {
     permissionButtonText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.medium,
     },
   };

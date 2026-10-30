@@ -466,216 +466,224 @@ const GENERATED_DEFAULTS = {
     "dark": "var(--text-tertiary-hsl)"
   },
   "login-bg-base": {
-    "light": "#EDEDED",
-    "dark": "#1F1F1E"
+    "light": "#F2F2ED",
+    "dark": "#181818"
   },
   "login-panel-border": {
-    "light": "#D4D4D4",
-    "dark": "#434343"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-link-pressed": {
-    "light": "#1A1818",
-    "dark": "#C0BEBE"
+    "light": "rgba(0, 0, 0, 0.95)",
+    "dark": "rgba(255, 255, 255, 1.00)"
   },
   "login-callback-card-bg": {
-    "light": "#FBFBFB",
-    "dark": "#312F2F"
+    "light": "#FDFDF8",
+    "dark": "#1F1F1F"
   },
   "login-callback-card-border": {
-    "light": "#D4D4D4",
-    "dark": "#434343"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-callback-title": {
-    "light": "#252222",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-callback-body": {
-    "light": "#6F6F6F",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.56)",
+    "dark": "rgba(255, 255, 255, 0.55)"
   },
   "login-callback-cta-bg": {
-    "light": "#2A2828",
+    "light": "#3C3F43",
     "dark": "#EEEEEE"
   },
   "login-callback-cta-border": {
-    "light": "#434343",
-    "dark": "#FFFFFF"
+    "light": "#3C3F43",
+    "dark": "#EEEEEE"
   },
   "login-callback-cta-text": {
-    "light": "#D4D4D4",
-    "dark": "#2A2828"
+    "light": "#FCFCFC",
+    "dark": "#151515"
   },
   "login-panel-bg": {
-    "light": "#FBFBFB",
-    "dark": "#312F2F"
+    "light": "#FDFDF8",
+    "dark": "#1F1F1F"
   },
   "login-control-bg": {
-    "light": "#EEEEEE",
-    "dark": "#2C2A2A"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.06)"
   },
   "login-action-control-bg": {
-    "light": "#EEEEEE",
-    "dark": "#2A2828"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.06)"
   },
   "login-back-border": {
-    "light": "#FFFFFF",
-    "dark": "#434343"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-control-border": {
-    "light": "#D4D4D4",
-    "dark": "#434343"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-control-border-active": {
-    "light": "#2A2828",
-    "dark": "#EEEEEE"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-control-border-disabled": {
-    "light": "#B4B4B4",
-    "dark": "#B4B4B4"
+    "light": "rgba(0, 0, 0, 0.00)",
+    "dark": "rgba(255, 255, 255, 0.00)"
   },
   "login-control-text": {
-    "light": "#252222",
-    "dark": "#EEEEEE"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-control-placeholder": {
-    "light": "#D4D4D4",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.32)",
+    "dark": "rgba(255, 255, 255, 0.30)"
   },
   "login-title-text": {
-    "light": "#252222",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-secondary-text": {
-    "light": "#6F6F6F",
-    "dark": "#6F6F6F"
+    "light": "rgba(0, 0, 0, 0.56)",
+    "dark": "rgba(255, 255, 255, 0.55)"
   },
   "login-primary-button-bg": {
-    "light": "#2A2828",
+    "light": "#3C3F43",
     "dark": "#EEEEEE"
   },
   "login-primary-button-border": {
-    "light": "#434343",
-    "dark": "#FFFFFF"
+    "light": "#3C3F43",
+    "dark": "#EEEEEE"
   },
   "login-primary-button-text": {
-    "light": "#D4D4D4",
-    "dark": "#2A2828"
+    "light": "#FCFCFC",
+    "dark": "#151515"
   },
   "login-disabled-button-overlay": {
-    "light": "rgba(255, 255, 255, 0.7)",
-    "dark": "rgba(255, 255, 255, 0.7)"
+    "light": "rgba(0, 0, 0, 0.00)",
+    "dark": "rgba(255, 255, 255, 0.00)"
   },
   "login-disabled-button-bg": {
-    "light": "#2A2828",
-    "dark": "#2A2828"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.06)"
   },
   "login-disabled-button-text": {
-    "light": "#D4D4D4",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.32)",
+    "dark": "rgba(255, 255, 255, 0.30)"
   },
   "login-inverted-button-border": {
     "light": "#FFFFFF",
     "dark": "#FFFFFF"
   },
   "login-link-text": {
-    "light": "#2A2828",
-    "dark": "#EEEEEE"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-link-hover": {
-    "light": "#4A4848",
-    "dark": "#A8A8A8"
+    "light": "rgba(0, 0, 0, 0.70)",
+    "dark": "rgba(255, 255, 255, 0.66)"
   },
   "login-error-fg": {
     "light": "#D91F37",
     "dark": "#D91F37"
   },
   "login-deletion-bubble-bg": {
-    "light": "#FFFFFF",
-    "dark": "#1F1F1E"
+    "light": "#FDFDF8",
+    "dark": "#1F1F1F"
   },
   "login-deletion-bubble-border": {
-    "light": "#D7D7D4",
-    "dark": "#3C3C3A"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-splash-progress-track": {
-    "light": "#D9D9D9",
-    "dark": "#434343"
+    "light": "rgba(0, 0, 0, 0.10)",
+    "dark": "rgba(255, 255, 255, 0.13)"
   },
   "login-splash-progress-fill": {
-    "light": "#252222",
-    "dark": "#D4D4D4"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-overlay-button-hover": {
-    "light": "rgba(255, 255, 255, 0.08)",
+    "light": "rgba(0, 0, 0, 0.20)",
     "dark": "rgba(0, 0, 0, 0.05)"
   },
   "login-overlay-button-pressed": {
-    "light": "rgba(0, 0, 0, 0.5)",
-    "dark": "rgba(0, 0, 0, 0.1)"
+    "light": "rgba(0, 0, 0, 0.40)",
+    "dark": "rgba(0, 0, 0, 0.10)"
   },
   "login-overlay-back-hover": {
-    "light": "rgba(255, 255, 255, 0.7)",
-    "dark": "rgba(255, 255, 255, 0.08)"
+    "light": "rgba(0, 0, 0, 0.03)",
+    "dark": "rgba(255, 255, 255, 0.04)"
   },
   "login-overlay-back-pressed": {
-    "light": "rgba(0, 0, 0, 0.08)",
-    "dark": "rgba(0, 0, 0, 0.08)"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.07)"
   },
   "login-overlay-row-hover": {
-    "light": "rgba(255, 255, 255, 0.08)",
-    "dark": "rgba(255, 255, 255, 0.08)"
+    "light": "rgba(0, 0, 0, 0.03)",
+    "dark": "rgba(255, 255, 255, 0.04)"
   },
   "login-overlay-row-pressed": {
-    "light": "rgba(0, 0, 0, 0.08)",
-    "dark": "rgba(0, 0, 0, 0.08)"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.07)"
   },
   "login-overlay-input-hover": {
-    "light": "rgba(0, 0, 0, 0.05)",
-    "dark": "rgba(255, 255, 255, 0.05)"
+    "light": "rgba(0, 0, 0, 0.03)",
+    "dark": "rgba(255, 255, 255, 0.04)"
   },
   "login-loading-ring-track": {
-    "light": "rgba(42, 40, 40, 0.18)",
-    "dark": "rgba(212, 212, 212, 0.18)"
+    "light": "rgba(0, 0, 0, 0.10)",
+    "dark": "rgba(255, 255, 255, 0.13)"
   },
   "login-consent-radio-bg": {
-    "light": "#F1F0F1",
-    "dark": "#2A2828"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.06)"
   },
   "login-consent-radio-border": {
-    "light": "#434343",
-    "dark": "#F1F0F1"
+    "light": "rgba(0, 0, 0, 0.56)",
+    "dark": "rgba(255, 255, 255, 0.55)"
   },
   "login-consent-radio-checked-bg": {
-    "light": "#2A2828",
-    "dark": "#F1F0F1"
+    "light": "#3C3F43",
+    "dark": "#EEEEEE"
   },
   "login-consent-radio-check": {
-    "light": "#FFFFFF",
-    "dark": "#2A2828"
+    "light": "#FCFCFC",
+    "dark": "#151515"
   },
   "login-consent-overlay": {
     "light": "rgba(0, 0, 0, 0.85)",
     "dark": "rgba(0, 0, 0, 0.85)"
   },
   "login-secondary-button-bg": {
-    "light": "#EEEEEE",
-    "dark": "#434141"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.06)"
   },
   "login-secondary-button-border": {
-    "light": "#FFFFFF",
-    "dark": "#565454"
+    "light": "rgba(0, 0, 0, 0.08)",
+    "dark": "rgba(255, 255, 255, 0.10)"
   },
   "login-secondary-button-text": {
-    "light": "#2A2828",
-    "dark": "#EEEEEE"
+    "light": "rgba(0, 0, 0, 0.88)",
+    "dark": "rgba(255, 255, 255, 0.82)"
   },
   "login-overlay-secondary-hover": {
-    "light": "rgba(255, 255, 255, 0.1)",
-    "dark": "rgba(255, 255, 255, 0.08)"
+    "light": "rgba(0, 0, 0, 0.03)",
+    "dark": "rgba(255, 255, 255, 0.04)"
   },
   "login-overlay-secondary-pressed": {
-    "light": "rgba(0, 0, 0, 0.1)",
-    "dark": "rgba(0, 0, 0, 0.2)"
+    "light": "rgba(0, 0, 0, 0.05)",
+    "dark": "rgba(255, 255, 255, 0.07)"
+  },
+  "login-overlay-apple-hover": {
+    "light": "rgba(255, 255, 255, 0.08)",
+    "dark": "rgba(0, 0, 0, 0.05)"
+  },
+  "login-overlay-apple-pressed": {
+    "light": "rgba(255, 255, 255, 0.14)",
+    "dark": "rgba(0, 0, 0, 0.10)"
   },
   "login-apple-circle-bg": {
     "light": "#000000",
@@ -2415,14 +2423,20 @@ registerColor('welcome-text', GENERATED_DEFAULTS["welcome-text"], 'Stone #737373
 // 语义 = 跨主题恒定品牌豁免色(规则 16 豁免族):Cindy 品牌登录入口不随编辑器主题
 // 染色,任何 builtin/扩展主题都不应 override 本组 token。
 // 本组为现行登录 token(旧 `login-*` 9 token 已于 PR5 全族退役,见上方注释);
-// 禁止撞名混义。参数权威:design.md §8(wave4)/figma-component-spec.md §10/
-// token-decision-table.md(wave4 改判)。
+// 禁止撞名混义。参数权威:DESIGN.md §16 色板表(由 packages/design-tokens 生成)。
+// 文字类(title / control-text / placeholder / secondary / callback-title / -body)
+// 自 2026-10-23 起取主界面墨水阶梯同值(DESIGN §15.16);面板、控件、描边、主按钮与
+// hover/pressed 叠层自 2026-10-27 起同样取 CINDY 主界面的面阶梯与墨水档,两者均由
+// loginInkLadder.test.ts 守护。
 //
 // 底色:figma 帧 fill 标注 #F1F0F1,用户拍板 2026-07-22 改为固定 #EDEDED
 // (= PR #104 白底机制在 cindy-light 下的实际渲染值)。2026-07-20 的
 // 「消费 var(--surface)」改判作废——var(--surface) 随主题,cindy-dark 下取
 // #2A2828,登录页背景变深且与 slogan #2A2828 同色隐形(沙盒手测 MT-1/2/5)。
-registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #EDEDED / 暗色 #1F1F1E,figma 532:585 暗色帧实测;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
+// 2026-10-01 对齐 CINDY 皮肤页底:#2571 把 cindy-light/cindy-dark 的 surface 改为
+// #F2F2ED / #181818 时登录链路按豁免族未跟进,登录前后背景色不一致;本 token 同步为
+// 这两个值,仍写固定值而非 var(--surface),扩展主题照旧不染色登录页。
+registerColor('login-bg-base', GENERATED_DEFAULTS["login-bg-base"], 'Login — 画布底(亮色 #F2F2ED / 暗色 #181818,与 CINDY 皮肤页底 surface 同值、固定不随扩展主题;纯平,红渐变两层随 PR#104 拍板撤除,暗色沿用纯平口径)');
 // 两层品牌红渐变(379:518 径向 / 379:520 线性,代码复现非资产)。图层 opacity
 // 已合入色标 alpha(6%/5%)。CSS 取值为 figma 参数的最近似翻译;PR1 落码时以
 // wave4 帧(368:1375)截图对照为准,允许微调本 token 值,名称与语义冻结。
@@ -2438,7 +2452,7 @@ registerColor('login-bg-gradient-linear', {
 }, 'Login — 红线性渐变层(撤 wave4 双红渐变→none,对齐 PR #104;token 保留作 override 锚)');
 // login-window-border-outer/inner 已随撤销登录窗口双描边(LoginWindowChrome,
 // 对齐 PR #104:PR104 无窗框描边)删除,不再注册。
-registerColor('login-panel-border', GENERATED_DEFAULTS["login-panel-border"], 'Login — 面板 1px inside 描边(亮色 #D4D4D4 / 暗色 #434343;DESIGN.md §16.1)');
+registerColor('login-panel-border', GENERATED_DEFAULTS["login-panel-border"], 'Login — 面板 1px inside 描边(墨水线 黑 8% / 白 10%,同主界面 border-default;DESIGN.md §16.1)');
 // 品牌红 accent 族:wave4 改判后 #DF0C27 语义限定为 accent(区域徽标/字标
 // 红元素等品牌点缀),禁止表达页面/画板背景——命名刻意不含 bg/background
 // (token-decision-table.md 原案名 login-brand-bg 已随改判弃用)。
@@ -2452,92 +2466,97 @@ registerColor('login-brand-accent-pressed', {
 }, 'Login — 品牌红 accent pressed/hover 深红(figma §1 Color System)');
 // Text_link pressed(U-9 裁决 2026-07-20:default #2A2828 加深至 #1A1818,
 // lead 受托定值;wave3 实测节点落地后以实测替换 token 值)。
-registerColor('login-link-pressed', GENERATED_DEFAULTS["login-link-pressed"], 'Login — Text_link pressed 态(亮色 U-9 #1A1818 / 暗色 #C0BEBE 推导,待 Figma 精确)');
+registerColor('login-link-pressed', GENERATED_DEFAULTS["login-link-pressed"], 'Login — Text_link pressed 态(墨水强调档 黑 95% / 白 100%)');
 // ── 回调卡 component alias(PR3,LegacyMigrationDialog 消费——design §7.4 唯一
 // App 内表情包例外,弹窗用回调卡形式)。参数权威:callback-pages-classification.md
-// 「卡片共用参数」(figma §6.1:White #FBFBFB/#D4D4D4/#252222/#2A2828 CTA;
-// Dark #312F2F/#434343/#D4D4D4/#EEEEEE CTA)。token-decision-table 决策为
-// component alias 且「两套模式时可拆」——此处按 light/dark mode 拆分承载。
+// 「卡片共用参数」;2026-10-27 起卡底 / 描边 / CTA 与登录面板、主按钮同值(墨水口径)。
+// token-decision-table 决策为 component alias 且「两套模式时可拆」——此处按
+// light/dark mode 拆分承载。
 // 浏览器回调页本体不消费 renderer token(独立 HTML,同表决策用内联常量,见
 // oauthResultPage.ts renderBrandLoginCallbackPage);本组仅供 App 内例外消费。
 // 品牌豁免族:非默认主题不 override(与 wave4 组同口径)。
-registerColor('login-callback-card-bg', GENERATED_DEFAULTS["login-callback-card-bg"], 'Login callback card — 卡底(White/Dark 卡,figma §6.1)');
-registerColor('login-callback-card-border', GENERATED_DEFAULTS["login-callback-card-border"], 'Login callback card — 1px 卡描边');
-registerColor('login-callback-title', GENERATED_DEFAULTS["login-callback-title"], 'Login callback card — 标题');
-registerColor('login-callback-body', GENERATED_DEFAULTS["login-callback-body"], 'Login callback card — 副文案(两模式同值)');
-registerColor('login-callback-cta-bg', GENERATED_DEFAULTS["login-callback-cta-bg"], 'Login callback card — CTA 底(反相)');
-registerColor('login-callback-cta-border', GENERATED_DEFAULTS["login-callback-cta-border"], 'Login callback card — CTA 1px 描边');
-registerColor('login-callback-cta-text', GENERATED_DEFAULTS["login-callback-cta-text"], 'Login callback card — CTA 文字(反相)');
+registerColor('login-callback-card-bg', GENERATED_DEFAULTS["login-callback-card-bg"], 'Login callback card — 卡底(同 login-panel-bg:#FDFDF8 / #1F1F1F)');
+registerColor('login-callback-card-border', GENERATED_DEFAULTS["login-callback-card-border"], 'Login callback card — 1px 卡描边(墨水线 黑 8% / 白 10%)');
+registerColor('login-callback-title', GENERATED_DEFAULTS["login-callback-title"], 'Login callback card — 标题(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-callback-body', GENERATED_DEFAULTS["login-callback-body"], 'Login callback card — 副文案(墨水次要档 黑 56% / 白 55%)');
+registerColor('login-callback-cta-bg', GENERATED_DEFAULTS["login-callback-cta-bg"], 'Login callback card — CTA 底(同主按钮:#3C3F43 / #EEEEEE)');
+registerColor('login-callback-cta-border', GENERATED_DEFAULTS["login-callback-cta-border"], 'Login callback card — CTA 1px 描边(与底同色)');
+registerColor('login-callback-cta-text', GENERATED_DEFAULTS["login-callback-cta-text"], 'Login callback card — CTA 文字(同主按钮:#FCFCFC / #151515)');
 
 // ── Login 组件色 alias(暗色实现 PR:light/dark 二态,DESIGN.md §16.1)──
 // 语义 = 登录入口 100% 还原设计稿;随基础 light/dark 二态切换,不跟具体扩展主题
-// (规则 16 豁免族:扩展主题不 override)。色值经 Figma 组件库 Dark symbol 核验。
-// disabled 态两模式同构(深底#2A2828+白70%叠层+边#B4B4B4+字#D4D4D4 opacity0.8,不反相,§16.5)。
-registerColor('login-panel-bg', GENERATED_DEFAULTS["login-panel-bg"], 'Login — 面板底(亮色 #FBFBFB / 暗色 #312F2F;DESIGN.md §16.1)');
-registerColor('login-control-bg', GENERATED_DEFAULTS["login-control-bg"], 'Login — 输入框底(亮色 #EEEEEE / 暗色 #2C2A2A,figma Dark_normal 输入 symbol。暗色下与方式行/返回钮底分化,后者走 login-action-control-bg)');
-registerColor('login-action-control-bg', GENERATED_DEFAULTS["login-action-control-bg"], 'Login — 方式行/返回钮底(亮色与输入框同 #EEEEEE;暗色 #2A2828 与输入框分化;figma 549:850/549:897,组件库更新 2026-07-23)');
-registerColor('login-back-border', GENERATED_DEFAULTS["login-back-border"], 'Login — 返回钮描边(亮色白 / 暗色 #434343;figma 549:897。区域徽标白字仍走 login-inverted-button-border)');
-registerColor('login-control-border', GENERATED_DEFAULTS["login-control-border"], 'Login — 控件 default 描边(亮色 #D4D4D4 / 暗色 #434343)');
-registerColor('login-control-border-active', GENERATED_DEFAULTS["login-control-border-active"], 'Login — 控件 focus/filled 描边(亮色 #2A2828 / 暗色 #EEEEEE 反相)');
-registerColor('login-control-border-disabled', GENERATED_DEFAULTS["login-control-border-disabled"], 'Login — disabled 控件描边(两模式同构,§16.5 disabled 特例)');
-registerColor('login-control-text', GENERATED_DEFAULTS["login-control-text"], 'Login — 控件已填文本/标题(亮色 #252222 / 暗色 #EEEEEE)');
-registerColor('login-control-placeholder', GENERATED_DEFAULTS["login-control-placeholder"], 'Login — 控件 placeholder/countdown(亮色 #D4D4D4 / 暗色 #6F6F6F;figma 539:754 dark_倒计时重发)');
-registerColor('login-title-text', GENERATED_DEFAULTS["login-title-text"], 'Login — 面板标题 32 Bold(亮色 #252222 / 暗色 #D4D4D4)');
-registerColor('login-secondary-text', GENERATED_DEFAULTS["login-secondary-text"], 'Login — 副标题/说明文字(两模式同值 #6F6F6F)');
-registerColor('login-primary-button-bg', GENERATED_DEFAULTS["login-primary-button-bg"], 'Login — 主按钮/第三方圆钮底(亮色深 #2A2828 / 暗色白 #EEEEEE 反相;社交圆图标保品牌色)');
-registerColor('login-primary-button-border', GENERATED_DEFAULTS["login-primary-button-border"], 'Login — 主按钮/圆钮描边(亮色 #434343 / 暗色 #FFFFFF)');
-registerColor('login-primary-button-text', GENERATED_DEFAULTS["login-primary-button-text"], 'Login — 主按钮文字(亮色 #D4D4D4 / 暗色 #2A2828 反相)');
-registerColor('login-disabled-button-overlay', GENERATED_DEFAULTS["login-disabled-button-overlay"], 'Login — disabled 按钮白 70% 叠层(两模式同构,§16.5 disabled 特例)');
-registerColor('login-disabled-button-bg', GENERATED_DEFAULTS["login-disabled-button-bg"], 'Login — disabled 主按钮底(两模式同构深底;暗色不随 primary-button-bg 反相为白,figma white_button Disable)');
-registerColor('login-disabled-button-text', GENERATED_DEFAULTS["login-disabled-button-text"], 'Login — disabled 主按钮文字(两模式同构,配合 opacity 0.8;figma white_button Disable)');
+// (规则 16 豁免族:扩展主题不 override)。2026-10-27 起取 CINDY 主界面墨水口径:面板 =
+// 卡片面,控件 = 墨水填充,描边 = 墨水线,主按钮 = 反相 CTA;disabled 主按钮 = 控件底 +
+// 占位字(DESIGN §16.1 / §16.5)。
+registerColor('login-panel-bg', GENERATED_DEFAULTS["login-panel-bg"], 'Login — 面板底(亮色 #FDFDF8 / 暗色 #1F1F1F,同 CINDY 主界面卡片 surface-elevated;DESIGN.md §16.1)');
+registerColor('login-control-bg', GENERATED_DEFAULTS["login-control-bg"], 'Login — 输入框底(墨水填充 黑 5% / 白 6%,同主界面 surface-chip,叠在面板上)');
+registerColor('login-action-control-bg', GENERATED_DEFAULTS["login-action-control-bg"], 'Login — 方式行/返回钮底、SSO 候选高亮行(墨水填充 黑 5% / 白 6%,与输入框同档)');
+registerColor('login-back-border', GENERATED_DEFAULTS["login-back-border"], 'Login — 返回钮描边(墨水线 黑 8% / 白 10%。区域徽标白字仍走 login-inverted-button-border)');
+registerColor('login-control-border', GENERATED_DEFAULTS["login-control-border"], 'Login — 控件 default 描边(墨水线 黑 8% / 白 10%,同主界面 border-default)');
+registerColor('login-control-border-active', GENERATED_DEFAULTS["login-control-border-active"], 'Login — 控件 focus/filled 描边(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-control-border-disabled', GENERATED_DEFAULTS["login-control-border-disabled"], 'Login — disabled 主按钮描边(透明:禁用按钮只留控件底与占位字)');
+registerColor('login-control-text', GENERATED_DEFAULTS["login-control-text"], 'Login — 控件已填文本(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-control-placeholder', GENERATED_DEFAULTS["login-control-placeholder"], 'Login — 控件 placeholder(墨水占位档 黑 32% / 白 30%);倒计时与提示文本走 login-secondary-text');
+registerColor('login-title-text', GENERATED_DEFAULTS["login-title-text"], 'Login — 面板标题 32 Bold(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-secondary-text', GENERATED_DEFAULTS["login-secondary-text"], 'Login — 副标题/说明文字(墨水次要档 黑 56% / 白 55%)');
+registerColor('login-primary-button-bg', GENERATED_DEFAULTS["login-primary-button-bg"], 'Login — 主按钮/第三方圆钮底(同主界面反相 CTA accent-cta-bg-pure:#3C3F43 / #EEEEEE;社交圆图标保品牌色)');
+registerColor('login-primary-button-border', GENERATED_DEFAULTS["login-primary-button-border"], 'Login — 主按钮/圆钮描边(与底同色,同主界面 CTA 不另描边)');
+registerColor('login-primary-button-text', GENERATED_DEFAULTS["login-primary-button-text"], 'Login — 主按钮文字(同主界面 accent-pure-cta-fg:#FCFCFC / #151515)');
+// 已退役(2026-10-27):禁用主按钮改为控件底 + 占位字,不再叠层。治理合同 §4:旧 Token ID 不删除——
+// 旧版「导出当前主题」已把它写进用户本地主题,保留 ID 与透明默认值,组件不再消费。
+registerColor('login-disabled-button-overlay', GENERATED_DEFAULTS["login-disabled-button-overlay"], 'Login — 已退役的禁用叠层(透明,仅为兼容旧本地主题保留 ID;组件不再消费)');
+registerColor('login-disabled-button-bg', GENERATED_DEFAULTS["login-disabled-button-bg"], 'Login — disabled 主按钮底(墨水填充 黑 5% / 白 6%,与输入框同档)');
+registerColor('login-disabled-button-text', GENERATED_DEFAULTS["login-disabled-button-text"], 'Login — disabled 主按钮文字(墨水占位档 黑 32% / 白 30%)');
 registerColor('login-inverted-button-border', GENERATED_DEFAULTS["login-inverted-button-border"], 'Login — 浅底钮白描边/区域徽标白字(两模式同值 #FFFFFF;推导,待 Figma 精确)');
-registerColor('login-link-text', GENERATED_DEFAULTS["login-link-text"], 'Login — Text_link default 重发链接(亮色墨黑 #2A2828 / 暗色浅色 #EEEEEE 下划线;figma 539:752 dark_重新发送)');
-registerColor('login-link-hover', GENERATED_DEFAULTS["login-link-hover"], 'Login — Text_link hover(亮色 #4A4848 / 暗色 #A8A8A8 推导,待 Figma;仅桌面 hover)');
+registerColor('login-link-text', GENERATED_DEFAULTS["login-link-text"], 'Login — Text_link default 重发链接(墨水正文档 黑 88% / 白 82%)');
+registerColor('login-link-hover', GENERATED_DEFAULTS["login-link-hover"], 'Login — Text_link hover(墨水说明档 黑 70% / 白 66%;仅桌面 hover)');
 registerColor('login-error-fg', GENERATED_DEFAULTS["login-error-fg"], 'Login — 错误文本/error 描边(语义豁免,跨模式不变 #D91F37)');
-// 注销提示气泡底 + 描边(figma 678:1075「注销状态」组件集;用户拍板 2026-07-25 取
-// 「agent 输入框底/描边、main 最深深色底」的**值**:#FFFFFF / #D7D7D4 / #1F1F1E)。
+// 注销提示气泡底 + 描边(figma 678:1075「注销状态」组件集;2026-10-27 起与登录面板同值:
+// 卡片面 #FDFDF8 / #1F1F1F + 墨水线)。
 // 不用 alias(var(--chat-input-bg)/var(--chat-input-border)/var(--surface)):login skin
 // 只分亮/暗、不随扩展主题——alias 会被扩展主题 override(cindy-dark 下 --surface 取
 // #2A2828,气泡变浅且与 mobile 色板不一致),同 login-bg-base 上方注释的改判先例。
-// 与 mobile loginPalettes.deletionBubbleBg/deletionBubbleBorder 逐值一致。
-registerColor('login-deletion-bubble-bg', GENERATED_DEFAULTS["login-deletion-bubble-bg"], 'Login — 注销提示气泡底(figma 678:1075;固定值 #FFFFFF / #1F1F1E,取 agent 输入框底与最深深色底的值,不用 alias——login skin 不随扩展主题,与 mobile 逐值一致)');
-registerColor('login-deletion-bubble-border', GENERATED_DEFAULTS["login-deletion-bubble-border"], 'Login — 注销提示气泡 1px 描边(figma 678:1075;固定值 #D7D7D4 / #3C3C3A,取 agent 输入框描边的值,不用 alias——同 bubble-bg 口径,与 mobile 逐值一致)');
-// Splash 统一面板进度条(亮色 track #D9D9D9/fill #252222;暗色推导 track #434343/fill #D4D4D4,待 Figma 精确)。
-registerColor('login-splash-progress-track', GENERATED_DEFAULTS["login-splash-progress-track"], 'Login splash — 进度条轨(亮色 #D9D9D9 / 暗色 #434343 推导,待 Figma)');
-registerColor('login-splash-progress-fill', GENERATED_DEFAULTS["login-splash-progress-fill"], 'Login splash — 进度条填充(亮色 #252222 / 暗色 #D4D4D4 推导,待 Figma)');
+// Mobile loginPalettes 暂保留原值(登录皮另行收拢,DESIGN §16.1)。
+registerColor('login-deletion-bubble-bg', GENERATED_DEFAULTS["login-deletion-bubble-bg"], 'Login — 注销提示气泡底(同 login-panel-bg:#FDFDF8 / #1F1F1F;固定值不随扩展主题)');
+registerColor('login-deletion-bubble-border', GENERATED_DEFAULTS["login-deletion-bubble-border"], 'Login — 注销提示气泡 1px 描边(墨水线 黑 8% / 白 10%)');
+// Splash 统一面板进度条(墨水口径:轨 = 弱档,填充 = 正文档)。
+registerColor('login-splash-progress-track', GENERATED_DEFAULTS["login-splash-progress-track"], 'Login splash — 进度条轨(墨水弱档 黑 10% / 白 13%)');
+registerColor('login-splash-progress-fill', GENERATED_DEFAULTS["login-splash-progress-fill"], 'Login splash — 进度条填充(墨水正文档 黑 88% / 白 82%)');
 
 // ── Login overlay 叠层 token(暗色实现 PR;hover/pressed 叠层 light/dark 二态,
 // 组件 hardcode rgba → var(--login-overlay-*);DESIGN.md §16.5)──
-// 暗色叠层方向反转(亮色深底叠白 / 暗色白底叠黑),无法用单一 token 值切换,故二态。
-registerColor('login-overlay-button-hover', GENERATED_DEFAULTS["login-overlay-button-hover"], 'Login — 主按钮/圆钮 hover 叠层(亮色白8% / 暗色黑5%;figma §1.4)');
-registerColor('login-overlay-button-pressed', GENERATED_DEFAULTS["login-overlay-button-pressed"], 'Login — 主按钮/圆钮 pressed 叠层(亮色黑50% / 暗色黑10%;figma §1.4;暗色 pressed 边 #E5E5E5 待组件层裁决)');
-registerColor('login-overlay-back-hover', GENERATED_DEFAULTS["login-overlay-back-hover"], 'Login — 返回钮 hover 叠层(亮色白70% / 暗色白8% 变浅;figma 549:904)');
-registerColor('login-overlay-back-pressed', GENERATED_DEFAULTS["login-overlay-back-pressed"], 'Login — 返回钮 pressed 叠层(两模式黑8%)');
-registerColor('login-overlay-row-hover', GENERATED_DEFAULTS["login-overlay-row-hover"], 'Login — 方式行 hover 叠层(两模式白8% 变浅;figma 549:865)');
-registerColor('login-overlay-row-pressed', GENERATED_DEFAULTS["login-overlay-row-pressed"], 'Login — 方式行 pressed 叠层(两模式黑8%)');
-registerColor('login-overlay-input-hover', GENERATED_DEFAULTS["login-overlay-input-hover"], 'Login — 输入框 hover 叠层(亮色黑5% / 暗色白5% 推导,待 Figma)');
-registerColor('login-loading-ring-track', GENERATED_DEFAULTS["login-loading-ring-track"], 'Login — loading 环轨(亮色深半透 / 暗色浅半透 推导,待 Figma)');
+// 2026-10-27 起:填充类控件叠同色墨水(亮黑 / 暗白)加深一档,反相主按钮叠黑;
+// 叠层挂在内容之下(内容 relative z-[1]),不压文字与图标。两模式取值不同,故二态。
+registerColor('login-overlay-button-hover', GENERATED_DEFAULTS["login-overlay-button-hover"], 'Login — 主按钮/圆钮 hover 叠层(叠黑 亮 20% / 暗 5%:#3C3F43→≈#303236、#EEEEEE→#E2E2E2,对齐主界面 accent-hover)');
+registerColor('login-overlay-button-pressed', GENERATED_DEFAULTS["login-overlay-button-pressed"], 'Login — 主按钮/圆钮 pressed 叠层(叠黑 亮 40% / 暗 10%,比 hover 明显再深一档)');
+registerColor('login-overlay-back-hover', GENERATED_DEFAULTS["login-overlay-back-hover"], 'Login — 返回钮 hover 叠层(叠墨水 黑 3% / 白 4%,与控件底合成≈ 8% / 10% 选中档)');
+registerColor('login-overlay-back-pressed', GENERATED_DEFAULTS["login-overlay-back-pressed"], 'Login — 返回钮 pressed 叠层(叠墨水 黑 5% / 白 7%,合成≈ 10% / 13% 弱档)');
+registerColor('login-overlay-row-hover', GENERATED_DEFAULTS["login-overlay-row-hover"], 'Login — 方式行 hover 叠层(同返回钮:黑 3% / 白 4%)');
+registerColor('login-overlay-row-pressed', GENERATED_DEFAULTS["login-overlay-row-pressed"], 'Login — 方式行 pressed 叠层(同返回钮:黑 5% / 白 7%)');
+registerColor('login-overlay-input-hover', GENERATED_DEFAULTS["login-overlay-input-hover"], 'Login — 输入框 hover 叠层(同返回钮:黑 3% / 白 4%)');
+registerColor('login-loading-ring-track', GENERATED_DEFAULTS["login-loading-ring-track"], 'Login — loading 环轨(墨水弱档 黑 10% / 白 13%)');
 
 // ── Login 协议同意族(consent PR;figma wave5 radiobutton 600:627 四态 +
 // 服务条款弹窗 602:822/602:1249 + 双色小按钮四母版 602:846/863/1297/1311)──
 // 与 login-* 族同口径:随基础 light/dark 二态切换,扩展主题不 override。
 // radio 选中态为对勾(非圆点),四态双模式反色,色值经 figma SVG 源码直读核对。
-registerColor('login-consent-radio-bg', GENERATED_DEFAULTS["login-consent-radio-bg"], 'Login — 协议 radio 未选中圈底(figma white_normal 600:626 / Dark_normal 602:1091)');
-registerColor('login-consent-radio-border', GENERATED_DEFAULTS["login-consent-radio-border"], 'Login — 协议 radio 未选中 2px 描边(双模式反色)');
-registerColor('login-consent-radio-checked-bg', GENERATED_DEFAULTS["login-consent-radio-checked-bg"], 'Login — 协议 radio 选中圈底(figma white_highlight 600:628 / Dark_highlight 602:1093)');
-registerColor('login-consent-radio-check', GENERATED_DEFAULTS["login-consent-radio-check"], 'Login — 协议 radio 选中对勾(亮色白勾 / 暗色墨勾)');
+registerColor('login-consent-radio-bg', GENERATED_DEFAULTS["login-consent-radio-bg"], 'Login — 协议 radio 未选中圈底(墨水填充 黑 5% / 白 6%)');
+registerColor('login-consent-radio-border', GENERATED_DEFAULTS["login-consent-radio-border"], 'Login — 协议 radio 未选中 2px 描边(墨水次要档 黑 56% / 白 55%,非文字对比 ≥3:1)');
+registerColor('login-consent-radio-checked-bg', GENERATED_DEFAULTS["login-consent-radio-checked-bg"], 'Login — 协议 radio 选中圈底(同主按钮:#3C3F43 / #EEEEEE)');
+registerColor('login-consent-radio-check', GENERATED_DEFAULTS["login-consent-radio-check"], 'Login — 协议 radio 选中对勾(同主按钮文字:#FCFCFC / #151515)');
 registerColor('login-consent-overlay', GENERATED_DEFAULTS["login-consent-overlay"], 'Login — 协议弹窗全屏遮罩(两模式同值黑 85%;figma 602:820/602:1248 实测)');
-// 弹窗次级钮(「不同意」):亮模式浅底 light_button_Normal(602:863),暗模式
-// Dark_button_Normal(602:1311,#434141 与面板 #312F2F/描边 #434343 均不同值)。
+// 弹窗次级钮(「不同意」):墨水填充控件,与输入框同档(2026-10-27)。
 // 「同意」钮 = 强调钮,双模式恰与 login-primary-button-* 同值,直接复用不新增。
-registerColor('login-secondary-button-bg', GENERATED_DEFAULTS["login-secondary-button-bg"], 'Login — 弹窗次级钮底(亮 #EEEEEE / 暗 #434141;figma 双色小按钮 wave5)');
-registerColor('login-secondary-button-border', GENERATED_DEFAULTS["login-secondary-button-border"], 'Login — 弹窗次级钮 1px 描边(亮白 / 暗 #565454)');
-registerColor('login-secondary-button-text', GENERATED_DEFAULTS["login-secondary-button-text"], 'Login — 弹窗次级钮文字(亮墨 / 暗浅,双模式反色)');
-// wave5 hover/pressed 统一口径:hover = 底叠白(深底 8% / 浅底 10%);
-// pressed = 叠黑(浅底钮 10% / Dark_button_Normal 20%)。次级钮亮浅暗深,
-// 两模式叠层参数不同故二态注册(与 login-overlay-* 族同理)。
-registerColor('login-overlay-secondary-hover', GENERATED_DEFAULTS["login-overlay-secondary-hover"], 'Login — 弹窗次级钮 hover 叠层(亮浅底白10% / 暗深底白8%;wave5 §11.1)');
-registerColor('login-overlay-secondary-pressed', GENERATED_DEFAULTS["login-overlay-secondary-pressed"], 'Login — 弹窗次级钮 pressed 叠层(亮浅底黑10% / 暗 Dark_button_Normal 黑20%;wave5 §11.1)');
+registerColor('login-secondary-button-bg', GENERATED_DEFAULTS["login-secondary-button-bg"], 'Login — 弹窗次级钮底(墨水填充 黑 5% / 白 6%)');
+registerColor('login-secondary-button-border', GENERATED_DEFAULTS["login-secondary-button-border"], 'Login — 弹窗次级钮 1px 描边(墨水线 黑 8% / 白 10%)');
+registerColor('login-secondary-button-text', GENERATED_DEFAULTS["login-secondary-button-text"], 'Login — 弹窗次级钮文字(墨水正文档 黑 88% / 白 82%)');
+// 次级钮与返回钮、方式行同为墨水填充控件,hover / pressed 叠层同值(两模式二态注册)。
+registerColor('login-overlay-secondary-hover', GENERATED_DEFAULTS["login-overlay-secondary-hover"], 'Login — 弹窗次级钮 hover 叠层(同返回钮:黑 3% / 白 4%)');
+registerColor('login-overlay-secondary-pressed', GENERATED_DEFAULTS["login-overlay-secondary-pressed"], 'Login — 弹窗次级钮 pressed 叠层(同返回钮:黑 5% / 白 7%)');
+// Apple 圆钮底色由 Apple 规范定(亮黑 / 暗白),不能跟主按钮叠黑(亮色黑圆叠黑无反馈),
+// 单独一组叠层:hover 沿用原值(亮叠白 8% / 暗叠黑 5%),pressed 再加一档。
+registerColor('login-overlay-apple-hover', GENERATED_DEFAULTS["login-overlay-apple-hover"], 'Login — Apple 圆钮 hover 叠层(亮色黑圆叠白 8% / 暗色白圆叠黑 5%)');
+registerColor('login-overlay-apple-pressed', GENERATED_DEFAULTS["login-overlay-apple-pressed"], 'Login — Apple 圆钮 pressed 叠层(亮色叠白 14% / 暗色叠黑 10%)');
 
 // Apple 登录圆钮(App Store Guideline 4 对齐,用户标准图 2026-07-24):亮色模式 =
 // ADR Black button 配色(纯黑圆 + 白标),暗色模式 = ADR White button 配色

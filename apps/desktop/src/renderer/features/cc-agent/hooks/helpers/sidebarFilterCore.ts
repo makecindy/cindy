@@ -29,11 +29,16 @@ const log = createLogger('SidebarFilterCore');
 
 export const STATUS_KEY = 'cc-agent.sidebar.filter.status';
 export const PROJECTS_KEY = 'cc-agent.sidebar.filter.projects';
+export const CREATORS_KEY = 'cc-agent.sidebar.filter.creators';
+export type FilterCreators = 'all' | 'none' | string[];
+
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
+export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
+export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
@@ -74,7 +79,7 @@ export type FilterProjectOrder = 'activity' | 'custom';
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
  * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost' | 'tags';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -139,6 +144,41 @@ export function loadProjects(ownerId: string | null): FilterProjects {
     return cleaned;
   }
   return 'all';
+}
+
+/** Creator keys contain both the computer and Bot identity, and are scoped to the signed-in owner. */
+export function loadCreators(ownerId: string | null): FilterCreators {
+  const raw = readSidebarOwnerStorage(CREATORS_KEY, ownerId);
+  if (!raw) return 'all';
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value === 'none') return 'none';
+    if (!Array.isArray(value)) return 'all';
+    const keys = [...new Set(value.filter((key): key is string => typeof key === 'string' && key.length > 0))];
+    return keys.length ? keys : 'all';
+  } catch { return 'all'; }
+}
+
+export function persistCreators(value: FilterCreators, ownerId: string | null): void {
+  writeSidebarOwnerStorage(CREATORS_KEY, ownerId, JSON.stringify(value));
+}
+
+/** Canonicalize both per-device and older cloud-companion selections after discovery. */
+export function normalizeTaskCreators(
+  selected: FilterCreators,
+  options: readonly { filterKey?: string; filterMemberKeys?: readonly string[] }[],
+): FilterCreators {
+  if (selected === 'all' || selected === 'none') return selected;
+  const aliases = new Map(options.flatMap(bot => bot.filterKey
+    ? (bot.filterMemberKeys ?? []).map(member => [member, bot.filterKey!] as const) : []));
+  const next = [...new Set(selected.map(key => aliases.get(key) ?? key))];
+  return next.length === selected.length && next.every((key, i) => key === selected[i]) ? selected : next;
+}
+
+export function nextCreatorsAfterToggle(previous: FilterCreators, key: string): FilterCreators {
+  if (previous === 'all' || previous === 'none') return [key];
+  const next = previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key];
+  return next.length ? next : 'all';
 }
 
 /* ============================== persist ============================== */
@@ -359,8 +399,8 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
 /* ============================== groupDevice load/persist ============================== */
 
 /**
- * 「按设备分组」开关(E 期):默认开(定稿)。仅在有远程设备连接时可见/生效
- * (与顶部设备切换栏同一出现条件);仅本机时选项隐藏、效果自然为单段。
+ * 「按设备分组」开关(E 期):默认开(定稿)。有可选远程设备（含断线缓存）时可见/生效；
+ * 没有可选远程设备时选项隐藏、效果自然为单段，不改写偏好。
  */
 export function loadGroupDevice(): boolean {
   const storage = safeStorage();
@@ -380,6 +420,34 @@ export function persistGroupDevice(groupDevice: boolean): void {
     storage.setItem(GROUP_DEVICE_KEY, String(groupDevice));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupDevice:', err);
+  }
+}
+
+/* ==================== device group collapsed load/persist ==================== */
+
+/** 最外层设备段按 'local' / deviceId 记忆折叠，属于本地显示偏好，默认展开。 */
+export function loadDeviceGroupCollapsedKeys(): ReadonlySet<string> {
+  const storage = safeStorage();
+  if (!storage) return new Set();
+  try {
+    const raw = storage.getItem(DEVICE_GROUP_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read deviceGroupCollapsed:', err);
+    return new Set();
+  }
+}
+
+export function persistDeviceGroupCollapsedKeys(keys: ReadonlySet<string>): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(DEVICE_GROUP_COLLAPSED_KEY, JSON.stringify([...keys]));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist deviceGroupCollapsed:', err);
   }
 }
 
@@ -417,6 +485,31 @@ export function persistDialogueGroupCollapsedKeys(keys: ReadonlySet<string>): vo
     storage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify([...keys]));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist dialogueGroupCollapsed:', err);
+  }
+}
+
+/* ==================== pinned section collapsed load/persist ==================== */
+
+/** 置顶段整段收起，与设备段、对话组同属本地显示偏好，默认展开。 */
+export function loadPinnedSectionCollapsed(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(PINNED_SECTION_COLLAPSED_KEY) === 'true';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read pinnedSectionCollapsed:', err);
+    return false;
+  }
+}
+
+export function persistPinnedSectionCollapsed(collapsed: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (collapsed) storage.setItem(PINNED_SECTION_COLLAPSED_KEY, 'true');
+    else storage.removeItem(PINNED_SECTION_COLLAPSED_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist pinnedSectionCollapsed:', err);
   }
 }
 
@@ -556,15 +649,13 @@ const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'worktree',
   'tokens',
   'cost',
-  'tags',
 ]);
-/** 默认显示标签和最近活动时间。 */
-export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['tags', 'time'];
+/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
+export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
 
 /**
- * 旧 string[] 没有记录用户是否见过标签开关，升级时补上默认开启的标签，
- * 保留其他字段及顺序。新版本以带版本号的字段列表记录显式选择，
- * 包括关闭标签或全不选；后续启动不再覆盖这些选择。
+ * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
+ * 旧版本存下的 'tags' 已不是信息项，按未知值静默丢弃。
  */
 export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
@@ -589,7 +680,7 @@ export function loadTaskInfoFields(): TaskInfoField[] {
       seen.add(value);
       cleaned.push(value as TaskInfoField);
     }
-    return legacy && !seen.has('tags') ? ['tags', ...cleaned] : cleaned;
+    return cleaned;
   } catch (err) {
     log.warn('[useSidebarFilter] failed to parse taskInfo JSON:', err);
     return [...DEFAULT_TASK_INFO_FIELDS];
@@ -847,6 +938,23 @@ export function mergeVisibleReorder(
   // visibleNewOrder 里不在 currentFullOrder 的新置顶 id(刚 pin)→ 追加末尾。
   for (const id of queue) result.push(id);
   return result;
+}
+
+/** Build the same pinned drag request for the expanded sidebar and collapsed rail. */
+export function buildManualPinnedReorder(
+  rankedOrder: readonly string[],
+  activeEntryIds: readonly string[],
+  visibleNewOrder: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
+): { baseOrder: string[]; order: string[] } {
+  const displayOrder = normalizeManualPinnedOrder(rankedOrder, activeEntryIds, comparisonKey);
+  const rankedIdentities = new Set(rankedOrder.map(comparisonKey));
+  return {
+    // Display-only pins are new entries, not concurrently removed ranks (#6345).
+    // Keep ranks outside this status catalogue out of the base so Main retains them.
+    baseOrder: displayOrder.filter((entryId) => rankedIdentities.has(comparisonKey(entryId))),
+    order: mergeVisibleReorder(displayOrder, visibleNewOrder, comparisonKey),
+  };
 }
 
 /**

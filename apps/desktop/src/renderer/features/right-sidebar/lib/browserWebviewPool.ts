@@ -2,11 +2,10 @@
  * BrowserWebviewPool —— RSB web-browser plugin 的 webview 实例池(LRU, K=5)。
  *
  * 为什么要 pool:每个 web-browser tab 在 DOM 上有自己的 body slot,但 `<webview>`
- * 一旦被 React unmount(切到别的 tab / 切 RSB 整体卸载/重挂),guest webContents
- * 会被 detach + 销毁,下次切回来要重新加载,Cookie / form state / 浏览历史全丢。
- * 业界做法:把 webview DOM 节点保活在脱离当前 tab 子树的"停车区" container 里,
- * 切 tab 时用 vanilla `appendChild` 把同一个 DOM 节点搬到目标 slot —— 浏览器 DOM
- * 移动不会 detach iframe / webview 内部的 webContents,实现"切 tab 不重载"。
+ * 被 React unmount 或跨父节点搬动时，guest webContents 会被销毁/重建，
+ * 未提交表单、页面内存和浏览历史不能靠复用 DOM 对象保留。池用"停车区"
+ * 暂存没有 body slot 的 wrapper；已附着页面的 guest 保留依靠 Shell 让宿主
+ * 常驻并保持祖先位置稳定。正常切换只隐藏宿主，不能经过停车区。
  *
  * **关键:不要用 React Portal**。Portal 内部跨 reconcile 的搬动会触发 React 把
  * 节点 remove + insert,这中间一帧会让 webview detach 丢 webContents。所以
@@ -19,7 +18,7 @@
  *
  * 生命周期:
  *   - acquire(tabId):取/创建 entry,LRU 标 touch,超 K 淘汰最旧
- *   - getWrapper(tabId):返回 wrapper DOM(caller appendChild 到自己 slot)
+ *   - acquire / peek 的 wrapper:首次附着到 body slot，切换时留在原 slot
  *   - touch(tabId):tab 被激活时显式触发 LRU 时间戳更新
  *   - release(tabId):tab 关闭时显式销毁
  *
@@ -38,8 +37,8 @@ export type BrowserWebviewGuestFailure =
 
 interface PoolEntry {
   tabId: string;
-  /** webview 的外层 wrapper 容器,LRU 在它身上(caller 把它 appendChild 到自己
-   *  slot;切走时 caller 应把它 appendChild 回 pool container)。 */
+  /** webview 的外层 wrapper。首次附着到 caller slot 后，切换只隐藏常驻宿主。
+   *  真正卸载时可停回 pool container 暂存 DOM，但跨父节点移动不保留 guest。 */
   wrapper: HTMLDivElement;
   /** 真 `<webview>` 元素,挂在 wrapper 内部。 */
   webview: WebviewTag;
@@ -72,9 +71,9 @@ class BrowserWebviewPoolImpl {
   private pinned = new Set<string>();
 
   /**
-   * pool 的"停车区" off-screen 容器 —— 没挂到任何 tab body slot 的 wrapper
-   * 暂存在这里。位置 `left:-9999px;top:0;` 让浏览器知道节点 still attached(
-   * webview 才会保活),但用户看不见。
+   * pool 的不可见"停车区" —— 没挂到任何 tab body slot 的 wrapper 暂存在这里。
+   * 保持正常尺寸并留在宿主的合成范围内，供后台 guest 布局、接收输入和截图；
+   * 移入/移出这里不保证原 guest 或页面状态保留。
    *
    * lazy 创建:首次 acquire 时才挂到 document.body。
    */
@@ -87,11 +86,11 @@ class BrowserWebviewPoolImpl {
     }
     const div = document.createElement('div');
     div.id = POOL_CONTAINER_ID;
-    // off-screen but attached:webview webContents 只有 host wrapper attached 到
-    // document 的 render tree 才不被销毁。`position: fixed; left: -9999px` 是
-    // 标准的 off-screen 技巧,visibility: hidden 会触发部分 webview 实现把
-    // webContents 暂停 paint,不用。
-    div.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;pointer-events:none;';
+    // A 1×1 viewport breaks layout and hit testing; an off-screen guest can
+    // also fail native capturePage with UnknownVizError. Keep it transparent
+    // at the host origin without hiding or detaching its rendering surface.
+    div.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:720px;opacity:0;z-index:-1;pointer-events:none;display:grid;grid-template-columns:1280px;grid-template-rows:720px;';
+    div.setAttribute('aria-hidden', 'true');
     document.body.appendChild(div);
     this.container = div;
     return div;
@@ -115,6 +114,8 @@ class BrowserWebviewPoolImpl {
     const container = this.ensureContainer();
     const wrapper = document.createElement('div');
     wrapper.dataset.poolTabId = tabId;
+    // Park every guest in the same cell so later pages do not stack outside
+    // the host's compositor bounds. Grid placement is inert in a visible slot.
     // wrapper 自身负责把 webview 填满它 —— caller slot 给 wrapper 多大宽高,
     // webview 跟着拉伸。display:flex 让 webview 100% 填充。
     // background 用主题 surface token(规则 16:走 token,不写 hex pair):
@@ -122,7 +123,7 @@ class BrowserWebviewPoolImpl {
     // 设 surface 色让过渡帧贴近主题(light → 浅,dark → 深),guest 加载后由
     // 网页内容覆盖。Mac 实测也会有半帧灰过渡,顺手统一处理。
     wrapper.style.cssText =
-      'position:relative;width:100%;height:100%;display:flex;background-color:var(--surface);';
+      'position:relative;width:100%;height:100%;display:flex;background-color:var(--surface);grid-area:1 / 1;';
     const webview = document.createElement('webview') as WebviewTag;
     // 强制 partition —— main 端 hardener 也会兜底,但这里显式写,debug 时更明显。
     webview.setAttribute('partition', BROWSER_PARTITION);

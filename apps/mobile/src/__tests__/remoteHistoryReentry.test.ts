@@ -1,8 +1,9 @@
+import { MAX_RECENT_TASKS, rememberRecentTask } from '@/session/recentTasks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { projectHistoryView, type HistoryViewPage } from '@cindy/maker-shared/message-window';
 import { clearRemoteHistoryViews, findRemoteHistoryView, getRemoteHistoryView,
-  mountRemoteHistoryView, MAX_INACTIVE_HISTORY_VIEWS } from '../session/remoteHistoryViews';
+  mountRemoteHistoryView } from '../session/remoteHistoryViews';
 import { remoteSessionStore } from '../session/remoteSessionStore';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import type { RemoteMessage, RemoteSession } from '../session/types';
@@ -16,6 +17,7 @@ const reader = () => ({ readHistoryView: vi.fn(async () => page()),
   setHistoryExpanded: vi.fn(async () => undefined) });
 const releases: Array<() => void> = [];
 function mount(entry: ReturnType<typeof getRemoteHistoryView>, source = reader()) {
+  rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: entry.deviceId, sessionId: entry.sessionId, deviceName: 'PC' } });
   const release = mountRemoteHistoryView(entry, source, true);
   releases.push(release);
   return () => { releases.splice(releases.indexOf(release), 1); release(); };
@@ -49,6 +51,23 @@ describe('history reentry', () => {
     expect(entry.view.getSnapshot()).toMatchObject({ ready: true, items: [] });
   });
 
+  it('retries the projection when a downgraded task is entered again', async () => {
+    const source = reader();
+    source.readHistoryView.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] History view scan budget exceeded'));
+    const entry = getRemoteHistoryView('d', 'downgraded', source);
+    const release = mount(entry, source);
+    await entry.view.refresh();
+    expect(String(entry.view.getSnapshot().error)).toContain('UNSUPPORTED_CAPABILITY');
+    // Within one entry the raw fallback stays put.
+    await entry.view.refresh();
+    expect(source.readHistoryView).toHaveBeenCalledTimes(1);
+    release();
+    mount(entry, source);
+    await entry.view.refresh();
+    expect(entry.view.getSnapshot()).toMatchObject({ ready: true, error: null });
+    expect(JSON.stringify(entry.view.getSnapshot().items)).toContain('unchanged answer');
+  });
+
   it('does not register abandoned renders', () => {
     getRemoteHistoryView('d', 's', reader());
     expect(findRemoteHistoryView('d', 's')).toBeUndefined();
@@ -66,10 +85,14 @@ describe('history reentry', () => {
     const reopened = getRemoteHistoryView('d', 's', next);
     expect(reopened.view).toBe(entry.view);
     mount(reopened, next);
-    expect(reopened.view.getSnapshot()).toMatchObject({ ready: true, loading: true });
+    expect(reopened.view.getSnapshot()).toMatchObject({ ready: true, loading: false });
+    expect(next.readHistoryView).not.toHaveBeenCalled();
     expect(reopened.view.getSnapshot().items).toBe(items);
+    // Resume belongs to the session sync coordinator, which starts one read
+    // after its subscription grace period instead of activation starting another.
+    const sync = reopened.view.refresh(false, true);
     resolve(page());
-    await reopened.view.refresh();
+    await sync;
     expect(reopened.view.getSnapshot().items).toBe(items);
     expect(first.readHistoryView).toHaveBeenCalledTimes(1);
     expect(next.readHistoryView).toHaveBeenCalledTimes(1);
@@ -152,24 +175,30 @@ describe('history reentry', () => {
   it('isolates device identities and evicts oldest detached views without removing the mounted view', async () => {
     const active = getRemoteHistoryView('other', 's', reader());
     mount(active);
-    for (let i = 0; i <= MAX_INACTIVE_HISTORY_VIEWS; i++) {
+    for (let i = 0; i <= MAX_RECENT_TASKS; i++) {
       const entry = getRemoteHistoryView('d', String(i), reader());
       const release = mount(entry);
       await entry.view.refresh();
       release();
     }
     expect(findRemoteHistoryView('d', '0')).toBeUndefined();
-    expect(findRemoteHistoryView('d', String(MAX_INACTIVE_HISTORY_VIEWS))).toBeDefined();
+    expect(findRemoteHistoryView('d', String(MAX_RECENT_TASKS))).toBeDefined();
     expect(findRemoteHistoryView('other', 's')).toBe(active.view);
   });
 
-  it('does not retain an oversized history window after unmount', async () => {
+  it('keeps large histories with the five resident lists and drops them on shared eviction', async () => {
     const source = reader();
     source.readHistoryView.mockResolvedValue(page('x'.repeat(3 * 1024 * 1024)));
     const entry = getRemoteHistoryView('d', 's', source);
     const release = mount(entry, source);
     await entry.view.refresh();
     release();
+    expect(findRemoteHistoryView('d', 's')).toBe(entry.view);
+    for (let i = 0; i < MAX_RECENT_TASKS; i++) {
+      rememberRecentTask({ pathname: '/sessions/[sessionId]', params: {
+        deviceId: 'd', deviceName: 'PC', sessionId: `replacement-${i}`,
+      } });
+    }
     expect(findRemoteHistoryView('d', 's')).toBeUndefined();
   });
 
@@ -184,7 +213,7 @@ describe('history reentry', () => {
     expect(reopened.view.getSnapshot().items).toEqual([]);
   });
 
-  it('uses existing schedule reclamation while keeping a mounted background view addressable', async () => {
+  it('keeps an opened scheduled task readable after the app goes to the background', async () => {
     remoteSessionStore.upsertDeviceSession('d', 'desktop', {
       id: 's', source: 'scheduler', status: 'active', createdAt: '2026-09-08T00:00:00Z',
       updatedAt: '2026-09-08T00:00:00Z', title: 's',
@@ -193,10 +222,11 @@ describe('history reentry', () => {
     mount(entry);
     const authority = remoteSessionStore.enterSessionMessageDetail('s');
     await entry.view.refresh();
+    const items = entry.view.getSnapshot().items;
     entry.view.setActive(false);
     remoteSessionStore.leaveSessionMessageDetail('s', 'app-background', authority);
     expect(remoteSessionStore.releaseSessionRuntimeState('s', { reason: 'app-background' })).toBe(true);
-    expect(entry.view.getSnapshot()).toMatchObject({ items: [], ready: false });
+    expect(entry.view.getSnapshot()).toMatchObject({ items, ready: true });
     expect(findRemoteHistoryView('d', 's')).toBe(entry.view);
   });
 
@@ -230,7 +260,7 @@ describe('history reentry', () => {
 
   it('ordinary screen focus uses activation rather than destructive reset', () => {
     const source = readFileSync(new URL('../../app/sessions/[sessionId].tsx', import.meta.url), 'utf8');
-    const focus = source.slice(source.indexOf('const historyView = useRemoteHistoryView'), source.indexOf('const rawMessages = useSessionMessages'));
+    const focus = source.slice(source.indexOf('const unfilteredHistoryView = useRemoteHistoryView'), source.indexOf('const historyHandoff ='));
     expect(focus).toContain('historyView.view.setActive(true)');
     expect(focus).not.toContain('.reset()');
     expect(source).toContain('options.replaceMessages && historyView.view.getSnapshot().ready');

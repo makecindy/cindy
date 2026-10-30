@@ -1,3 +1,5 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
+import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, CircleAlert, LockKeyhole } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +8,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { makerApiForDevice } from '@/lib/makerTransport';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { Spinner } from '@/components/ui/spinner';
+import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -137,18 +140,14 @@ export function BotDirectMessageView() {
   if (!thread || !botId) {
     return (
       <main className="flex h-full items-center justify-center bg-[var(--surface)] p-6">
-        <section className="w-full max-w-md rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 text-center">
+        <section className="w-full max-w-md rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5 text-center">
           <CircleAlert size={24} className="mx-auto text-[var(--text-danger)]" aria-hidden />
           <p className="mt-3 text-13 text-[var(--text-secondary)]">
             {t('bots.directMessage.unavailable')}
           </p>
-          <button
-            type="button"
-            onClick={close}
-            className="mt-4 h-9 rounded-full border border-[var(--border-default)] px-4 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-          >
+          <Button variant="secondary" size="lg" type="button" onClick={close} className="mt-4">
             {t('bots.directMessage.close')}
-          </button>
+          </Button>
         </section>
       </main>
     );
@@ -174,13 +173,14 @@ export function BotDirectMessageView() {
                     {sender.name} · {formatBotMessageGroupTime(message.createdAt, i18n.language)}
                   </div>
                   <div
-                    className={`whitespace-pre-wrap break-words rounded-[12px] border px-3.5 py-2.5 text-14 leading-[1.6] text-[var(--text-primary)] ${
+                    className={`min-w-0 max-w-full break-words rounded-xl border px-3.5 py-2.5 text-14 leading-[1.6] text-[var(--text-primary)] ${
                       ownSide
                         ? 'border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]'
                         : 'border-[var(--border-default)] bg-[var(--surface-chip)]'
                     }`}
                   >
-                    {message.content}
+                    {/* Teammate-authored text: rendered like chat, never with privileged links. */}
+                    <MarkdownRenderer workingDir="" content={forwardedRequestDisplayText(message.content)} allowPrivilegedLinks={false} />
                   </div>
                 </div>
                 {ownSide ? <BotAvatar bot={sender} size="sm" /> : null}
@@ -207,13 +207,9 @@ export function BotDirectMessageView() {
             <LockKeyhole size={12} aria-hidden />
             {t('bots.directMessage.readOnly')}
           </span>
-          <button
-            type="button"
-            onClick={close}
-            className="h-8 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-          >
+          <Button variant="secondary" size="md" compact type="button" onClick={close}>
             {t('bots.directMessage.close')}
-          </button>
+          </Button>
         </div>
       </footer>
     </main>

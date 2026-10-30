@@ -13,14 +13,16 @@ import {
   STALL_ABORT_RECOVERY_GRACE_MS,
   Session,
 } from './session.js';
-import type { AgentEvent, InteractionDecision, SendOrigin } from './types/events.js';
+import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
 import type { AgentSessionHandle, BackgroundTaskSnapshot } from './agents/base-agent.js';
 
 type LoggedError = { msg: string; meta?: Record<string, unknown> };
 
-function createLogger(sink?: LoggedError[]) {
+function createLogger(sink?: LoggedError[], diagnostics?: LoggedError[]) {
   const logger = {
-    trace() {}, debug() {}, info() {}, warn() {}, fatal() {},
+    trace() {}, debug() {}, fatal() {},
+    info(msg: string, meta?: Record<string, unknown>) { diagnostics?.push({ msg, meta }); },
+    warn(msg: string, meta?: Record<string, unknown>) { diagnostics?.push({ msg, meta }); },
     error(msg: string, meta?: Record<string, unknown>) {
       sink?.push({ msg, meta });
     },
@@ -102,16 +104,18 @@ function createStubHandle(opts?: StubOptions) {
     endTurn() {
       turnRunning = false;
     },
-    callInteraction(): Promise<unknown> {
+    callInteraction(request: InteractionRequest = {
+      kind: 'permission', requestId: 'req-1', toolUseId: 'tool-1', toolName: 'test', input: {},
+    }): Promise<unknown> {
       if (!interactionResolver) throw new Error('no interaction resolver installed');
-      return interactionResolver({ kind: 'permission', requestId: 'req-1' });
+      return interactionResolver(request);
     },
   };
 }
 
 function createSession(
   stub: ReturnType<typeof createStubHandle>,
-  opts?: { turnStallMs?: number; errorSink?: LoggedError[] },
+  opts?: { turnStallMs?: number; errorSink?: LoggedError[]; diagnostics?: LoggedError[] },
 ) {
   return new Session({
     id: 'session-1',
@@ -119,12 +123,44 @@ function createSession(
     workDir: '/repo',
     handle: stub.handle,
     capabilities: {} as never,
-    logger: createLogger(opts?.errorSink) as never,
+    logger: createLogger(opts?.errorSink, opts?.diagnostics) as never,
     turnStallMs: opts?.turnStallMs ?? STALL_MS,
   });
 }
 
 describe('Session turn stall watchdog', () => {
+  it('logs bounded activity refreshes, suspension, resumption and disarming', async () => {
+    vi.useFakeTimers();
+    try {
+      const backgroundTasks: BackgroundTaskSnapshot[] = [];
+      const stub = createStubHandle({ backgroundTasks });
+      const diagnostics: LoggedError[] = [];
+      const session = createSession(stub, { turnStallMs: 120_000, diagnostics });
+      await session.send('work');
+      const tick = async () => {
+        stub.pushEvent({ type: 'text', data: { text: 'progress' }, source: 'claude-code' });
+        await vi.advanceTimersByTimeAsync(0);
+      };
+      for (let i = 0; i < 10; i++) await tick();
+      expect(diagnostics.filter(x => x.msg.endsWith('armed'))).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await tick();
+      expect(diagnostics.find(x => x.msg.endsWith('refreshed'))?.meta).toMatchObject({
+        lastActivityAt: Date.now(), deadlineWithoutSuspendAt: Date.now() + 120_000,
+      });
+      backgroundTasks.push({ taskId: 'background' } as BackgroundTaskSnapshot);
+      await tick();
+      await tick();
+      expect(diagnostics.filter(x => x.msg.endsWith('suspended'))).toEqual([
+        { msg: 'turn stall watchdog suspended', meta: { reason: 'background-task' } },
+      ]);
+      backgroundTasks.length = 0;
+      await tick();
+      expect(diagnostics.filter(x => x.msg === 'turn stall watchdog armed')).toHaveLength(2);
+      await session.close();
+      expect(diagnostics.filter(x => x.msg.endsWith('disarmed'))).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('closes an idle missing-terminal turn when stall abort never returns', async () => {
     vi.useFakeTimers();
     try {
@@ -379,7 +415,8 @@ describe('Session turn stall watchdog', () => {
     vi.useFakeTimers();
     try {
       const stub = createStubHandle();
-      const session = createSession(stub);
+      const diagnostics: LoggedError[] = [];
+      const session = createSession(stub, { diagnostics });
       const seen: AgentEvent[] = [];
       session.onEvent((ev) => seen.push(ev));
       // listener 永不回应 —— 模拟用户离开
@@ -389,11 +426,60 @@ describe('Session turn stall watchdog', () => {
       void stub.callInteraction();
       await vi.advanceTimersByTimeAsync(STALL_MS * 5);
 
+      expect(diagnostics).toContainEqual({
+        msg: 'turn stall watchdog suspended',
+        meta: { reason: 'pending-interaction' },
+      });
       expect(seen.some((ev) => ev.type === 'error')).toBe(false);
       expect(stub.abort).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each(['sync', 'async'] as const)('only suspends stall protection for a blocking question: %s', async (delivery) => {
+    vi.useFakeTimers();
+    const stub = createStubHandle();
+    const session = createSession(stub);
+    try {
+      let answer!: (decision: InteractionDecision) => void;
+      session.setInteractionListener(() => new Promise((resolve) => { answer = resolve; }));
+      await session.send('work');
+      const pending = stub.callInteraction({ kind: 'ask_user_question', requestId: 'question', toolUseId: 'question-item',
+        questions: [{ question: 'Optional scope?' }], ...(delivery === 'async' ? { delivery } : {}) });
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(delivery === 'async' ? 0 : 1);
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledTimes(delivery === 'async' ? 1 : 0);
+      answer({ kind: 'ask_user_question', answers: {} });
+      await pending;
+      if (delivery === 'sync') {
+        await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+        expect(stub.abort).toHaveBeenCalledOnce();
+      }
+    } finally { await session.close(); vi.useRealTimers(); }
+  });
+
+  it('settling an async question does not release a concurrent blocking interaction', async () => {
+    vi.useFakeTimers();
+    const stub = createStubHandle();
+    const session = createSession(stub);
+    try {
+      const answers: Array<(decision: InteractionDecision) => void> = [];
+      session.setInteractionListener(() => new Promise((resolve) => { answers.push(resolve); }));
+      await session.send('work');
+      const optional = stub.callInteraction({ kind: 'ask_user_question', requestId: 'optional', toolUseId: 'optional-item',
+        delivery: 'async', questions: [{ question: 'Optional scope?' }] });
+      const blocking = stub.callInteraction();
+      answers[0]({ kind: 'ask_user_question', answers: {} });
+      await optional;
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+      expect(stub.abort).not.toHaveBeenCalled();
+      answers[1]({ kind: 'permission', behavior: 'allow' });
+      await blocking;
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledOnce();
+    } finally { await session.close(); vi.useRealTimers(); }
   });
 
   it('交互回应之后重新起表(排除项不能变成永久豁免)', async () => {

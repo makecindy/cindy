@@ -1,11 +1,16 @@
 /** Phone-local instrumentation only. Never pass session bodies, request payloads or credentials. */
 export type MobileDebugScope =
+  | "auth"
+  | "network"
   | "device-link"
   | "recovery"
   | "lifecycle"
   | "performance"
   | "scroll"
-  | "keyboard";
+  | "keyboard"
+  | "files"
+  | "voice"
+  | "new-session";
 export type MobileDebugLevel = "debug" | "info" | "warn" | "error";
 type Sink = (
   level: MobileDebugLevel,

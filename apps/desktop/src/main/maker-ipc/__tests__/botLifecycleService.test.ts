@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
+import { RoutineEngine } from '@cindy/maker-scheduler';
 
 const h = vi.hoisted(() => ({
   broadcastRemoteResourceChanged: vi.fn(),
@@ -213,6 +214,51 @@ describe('Bot lifecycle coordinator', () => {
     expect(h.broadcastRemoteResourceChanged).toHaveBeenCalledWith('bot-1');
   });
 
+  it('retains paused routines and history across a failed profile deletion, then purges after retry commits', async () => {
+    let nextId = 0;
+    const engine = new RoutineEngine({
+      load: async () => null, save: async () => {}, execute: async () => ({}),
+      id: () => `fixture-${++nextId}`, now: () => 1000, changed: () => {},
+      onError: error => { throw error; },
+    });
+    await engine.start();
+    try {
+      const routine = await engine.put('bot-1', {
+        name: 'Report', prompt: 'Read data', enabled: true,
+        triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+      });
+      await engine.runNow('bot-1', routine.id);
+      await vi.waitFor(() => expect(engine.history(routine.id)[0].status).toBe('success'));
+      const history = engine.history(routine.id);
+      const onDeleted = vi.fn(async (botId: string) => {
+        expect(row(sqlite, 'bot_profiles', botId)).toBeUndefined();
+        await engine.removeBot(botId);
+      });
+      const lifecycle = service({
+        onBeforeDelete: botId => engine.setBotPaused(botId, true), onDeleted,
+      });
+      const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
+      deleteProfileAndDetachSessions.mockRejectedValueOnce(new Error('fixture SQLite write failure'));
+      await expect(lifecycle.run(request)).rejects.toThrow('fixture SQLite write failure');
+      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
+      expect(engine.list('bot-1')).toHaveLength(1);
+      expect(engine.history(routine.id)).toEqual(history);
+      await expect(engine.runNow('bot-1', routine.id)).rejects.toThrow('paused');
+      expect(onDeleted).not.toHaveBeenCalled();
+      await expect(lifecycle.run(request)).resolves.toMatchObject({ status: 'deleted' });
+      expect(onDeleted).toHaveBeenCalledOnce();
+      expect(engine.list('bot-1')).toEqual([]);
+      expect(engine.history(routine.id)).toEqual([]);
+    } finally { await engine.stop(); }
+  });
+
+  it('reports committed deletion truthfully when post-commit secret cleanup needs retry', async () => {
+    const onDeleted = vi.fn(async () => { throw new Error('fixture vault unavailable'); });
+    const result = await service({ onDeleted }).run({ botId: 'bot-1', action: 'delete', confirmName: 'Helper' });
+    expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeUndefined();
+    expect(result).toMatchObject({ status: 'deleted', warnings: ['IMPORTED_ENVIRONMENT_CLEANUP_PENDING'] });
+  });
+
   it('uses the canonical registry even when the compatibility mirror disagrees', async () => {
     sqlite.prepare(
       "UPDATE bot_profiles SET canonical_session_id = 'stale-mirror' WHERE id = 'bot-1'",
@@ -325,24 +371,19 @@ describe('Bot lifecycle coordinator', () => {
     "INSERT INTO bot_delegations VALUES ('shared', 'bot-1', 'other-bot')",
     "INSERT INTO bot_direct_message_threads VALUES ('shared', 'bot-1', 'other-bot')",
     "INSERT INTO bot_direct_messages VALUES ('shared', 'other-bot', 'bot-1')",
-  ])('preserves the active Bot and canonical task when shared history blocks deletion: %s', async (insert) => {
+  ])('deletes the Bot without clearing existing shared-history rows: %s', async (insert) => {
     sqlite.exec(insert);
-    const beforeProfile = row(sqlite, 'bot_profiles', 'bot-1');
-    const beforeSession = row(sqlite, 'sessions', 'canonical');
-    const beforeLink = row(sqlite, 'bot_session_links', 'link-canonical');
+    const sharedRows = sqlite.prepare('SELECT * FROM bot_delegations').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_message_threads').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_messages').all().length;
     await expect(service().run({
       botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: true,
-    })).rejects.toMatchObject({ code: 'BOT_SHARED_HISTORY_REFERENCED' });
-    expect(row(sqlite, 'bot_profiles', 'bot-1')).toEqual(beforeProfile);
-    expect(row(sqlite, 'sessions', 'canonical')).toEqual(beforeSession);
-    expect(row(sqlite, 'bot_session_links', 'link-canonical')).toEqual(beforeLink);
-    expect(closeSession).not.toHaveBeenCalled();
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
-    expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
-    expect(sqlite.prepare('SELECT * FROM bot_lifecycle_events').all()).toEqual([]);
-    // Its existing runtime was never closed, and normal lifecycle controls remain usable.
-    await expect(service().run({ botId: 'bot-1', action: 'pause' })).resolves.toMatchObject({ status: 'paused' });
-    await expect(service().run({ botId: 'bot-1', action: 'resume' })).resolves.toMatchObject({ status: 'active' });
+    })).resolves.toMatchObject({ status: 'deleted' });
+    expect(sqlite.prepare("SELECT id FROM bot_profiles WHERE id = 'bot-1'").get()).toBeUndefined();
+    expect(sqlite.prepare('SELECT * FROM bot_delegations').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_message_threads').all().length
+      + sqlite.prepare('SELECT * FROM bot_direct_messages').all().length).toBe(sharedRows);
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalled();
   });
 
   it('pauses, archives and detaches sessions when permanently deleting a Bot', async () => {

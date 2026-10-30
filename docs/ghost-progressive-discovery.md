@@ -68,7 +68,35 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   放行（见 §4 第 6 条）。Manual 正文只作为 tool-result 按需进入上下文，不进入生产
   system/developer prompt；正文是作者数据，不构成系统规则、用户意图或权限授权。
 
+
+### 2.1 namespace 寻址
+
+`ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
+
+- 省略：同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
+- 字符串：该企业的 orgSlug。
+
+调用参数必须保留发现结果中的 JSON 类型：`null` 与字符串 `"null"` 不同，后者是合法的
+企业 slug，不能自动转成 root。插件名已安装但显式 namespace 不匹配时，共用可见性入口返回
+`GHOST_NAMESPACE_MISMATCH`，消息仅列出当前账号可用、保留 namespace 缺省／null／字符串三态的安装身份，
+供 Agent 核对目标后修正参数；原调用不进入 Setup、文件交接或插件派发，也不自动改选实例。
+修正参数后同一任务即可重新查询／调用，无需重新安装或新建任务。完全没有该插件名时仍返回
+`GHOST_NOT_FOUND`；账号切换期间或同名安装均不对当前账号可用时，也返回该错误且不披露身份。
+`GHOST_NAMESPACE_MISMATCH` 属于宿主保留码，插件交卷不能冒用；管子入口将其归一化为 `INTERNAL`，
+避免已执行的操作被误判为尚未派发。此错误码不改变安装数据、权限、实例解析或跨设备协议；
+旧 Host 仍返回原错误，旧查看端可照常显示文本。实现与回归见 `ghostVisibility.ts`、
+`ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
+
+同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
 ## 3. 花名册（roster）
+
+普通任务可调用 `connect_account({kind:"plugin", id:ghost_id})`，由 Host 复用配置卡等待连接，
+不必先触发插件业务调用。等待受当前任务取消、插件可见性及原配置卡版本校验约束。
+伙伴继续使用原持久授权卡与配置策略；Host 账号入口仍只用于伙伴。显式 `reauthorize`
+只呈现已声明的 OAuth、Secret 或连接配置动作，不删除现存账号。没有 Host 配置动作的插件应使用其
+设置页或手册中的登录工具；空的配置就绪状态不能作为平台账号已登录的证据。
 
 ### 3.1 内容与口径
 
@@ -204,7 +232,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 ## 7. 明确不做的事
 
-- 不新增全局路由 Skill；不把插件手册铺成全局 Skill。新插件使用按需读取的
+- 不新增使用插件的全局路由 Skill；不把插件业务手册铺成全局 Skill。内置
+  `cindy-plugin-creator` 仅负责编写插件，不替代插件业务的渐进发现。新插件使用按需读取的
   `manual`；存量 Skill 槽处于停止新增、未来整体废弃的兼容期。
 - 不维护排他的 active plugin / active context；插件切换不做上下文替换，规则
   适用范围由 `ghost_id + category` 边界保证。
@@ -218,7 +247,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 花名册取数与过滤（`visibleChipGhosts` / `getRosterItems`）：
   `apps/desktop/src/main/mcp-integrations/ghost.ts`
 - 可见性唯一真源：`apps/desktop/src/main/cindy-brain/ghostVisibility.ts`
-- 作者契约（FORGE_GUIDE）：`apps/desktop/src/main/cindy-brain/forge.ts`
+- 作者契约：`apps/desktop/resources/system-skills/cindy-plugin-creator/references/`；
+  `apps/desktop/src/main/cindy-brain/forgeGuide.ts` 组合为兼容的 `FORGE_GUIDE`
 - 摘要与 manual 契约：本仓 `packages/plugin-protocol/src/manifest.ts`，desktop
   在 `apps/desktop/src/shared/ghost.ts` 维护完整镜像
 - 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
@@ -228,3 +258,11 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   `--append-system-prompt`）；Pi 的 host 侧装配在
   `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
   composePiSystemPrompt）
+
+### 任务内授权指引
+
+Desktop 的 Claude/Codex/Pi Host 追加同一静态授权指引，复用现有发现及市场安装工具，
+不改安装权限或来源策略。已有登录态时，用户明确要求更新授权仍调用 `reauthorize:true`；
+私密值只填原卡片，不进入工具参数或对话。先等待 Host 完成，再以最小只读调用验证平台权限。
+提示词保持原 system 前缀，无设备 ID、凭据、时间戳或动态账号状态；详见
+[远程授权契约](remote-plugin-oauth.md) 的兼容性与缓存影响。

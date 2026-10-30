@@ -528,7 +528,7 @@ renderer 的 `$` 指令展开、`ghost_list`、`ghost_info` 与 `ghost_call` 都
 | 渠道直接发给用户 | 四个 `uiText.ts` | **改**（已清零） |
 | main 抛给 renderer 的 `Error` message | 见下方「一句一句追展示路径」——**按 code 映射 i18n 的不改，原样展示的必须改**，不能按文件一刀切 |
 | 插件 / MCP / LLM 读的字符串 | `cindy-brain/*Slot.ts`、`mcp-integrations/ghost.ts` | **不改**：不是 UI 文案，且多数确实指 Agent 进程会话（§6.0.2） |
-| Orca 协同术语 | 架构代码与内部标识继续用 session；`packages/maker-shared/src/sessionIdentity.ts` 返回的手机端只读提示会直接展示给用户 | **按展示路径分开**：架构术语不改，用户可见的 Orca Lead / Worker / 协作条目仍叫「任务」（含「协作子任务」「任务写操作」） |
+| Orca 协同术语 | 架构代码与内部标识继续用 session；手机端协同标签与只读提示（`apps/mobile/src/session/collaboration.ts` + i18n）会直接展示给用户 | **按展示路径分开**：架构术语不改，用户可见的 Orca Lead / Worker / 协作条目仍叫「任务」（含「协同子任务」「任务修改」） |
 | 测试 fixture | `packages/maker-shared/src/fixtures.ts` | **不改** |
 
 另有一类**刻意保留的渠道人格用词**：discord / feishu / wechat 把 session 叫「存档」、把接管

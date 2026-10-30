@@ -9,6 +9,10 @@
  */
 
 export { registerGetCapabilitiesTool } from './get_capabilities.js';
+export { registerAppUpdateTools, type AppUpdateCallbacks } from './app_update.js';
+export { registerGrokLoginTools, type GrokLoginCallbacks, type GrokLoginState } from './grok_login.js';
+export { registerInputHandoffTool, type InputHandoffCallbacks, type InputHandoffToolRequest, type InputHandoffToolResult } from './input_handoff.js';
+export { registerSkillhubTools, type SkillhubAgentCallback, type SkillhubAgentRequest } from './skillhub.js';
 export {
   registerGetCurrentSessionIdTool,
   type GetCurrentSessionIdDeps,
@@ -37,6 +41,7 @@ export {
   type SessionStatus,
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
+  type RemoteSessionsStatusResult,
 } from './archive_sessions.js';
 // multi-worker Phase 1 control tools
 export {
@@ -59,7 +64,9 @@ export {
 } from './switch_focus.js';
 export {
   registerSendToWorkerTool,
+  type OrcaMessageDelivery,
   type SendToWorkerDeps,
+  type SteerFallbackReason,
 } from './send_to_worker.js';
 export {
   registerGetWorkerQueueStatusTool,
@@ -80,6 +87,15 @@ export {
   type MergeQueuedMessagesDeps,
 } from './merge_queued_messages.js';
 export {
+  registerSteerQueuedMessageTool,
+  type QueuedMessageSteerReason,
+  type SteerQueuedMessageDeps,
+} from './steer_queued_message.js';
+export {
+  registerMoveQueuedMessageTool,
+  type MoveQueuedMessageDeps,
+} from './move_queued_message.js';
+export {
   registerIdleWorkerTool,
   type IdleWorkerDeps,
 } from './idle_worker.js';
@@ -92,11 +108,17 @@ export {
   type ArchiveWorkerDeps,
 } from './archive_worker.js';
 export {
+  registerUpdateWorkerTool,
+  type UpdateWorkerDeps,
+} from './update_worker.js';
+export {
   registerListAvailableModelsTool,
   type ListAvailableModelsDeps,
   type ModelDescriptor,
 } from './list_available_models.js';
 // history tools (split out from xdt-helper but kept exports here)
+export { registerHistoryDevicesTool, historyPayload } from './_history_devices.js';
+export type { HistoryRemoteDeps, HistoryDevice, HistoryQueryTool } from './_history_devices.js';
 export {
   registerListWorkdirsTool,
   type ListWorkdirsToolDeps,
@@ -114,11 +136,14 @@ export {
   registerUpdateSessionQueuedMessageTool,
   registerCancelSessionQueuedMessageTool,
   registerSteerSessionTool,
+  registerSteerSessionQueuedMessageTool,
+  registerMoveSessionQueuedMessageTool,
   registerStopSessionTurnTool,
   registerGetSessionRuntimeTool,
   registerSetSessionRuntimeTool,
   type SessionControlDeps,
   type SessionQueueControlErrorCode,
+  type SessionQueueSteerReason,
   type SessionRuntimeProfile,
   type SessionRuntimeSnapshot,
   type SessionSteerErrorCode,
@@ -139,9 +164,35 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
+  registerBotWorkbenchTools,
+  glanceForModel,
+  WORKBENCH_MESSAGE_MAX_CHARS,
+  type BotGlanceWire,
+  type BotWorkbenchCallbacks,
+  type BotWorkbenchToolDeps,
+  type GlanceKindWire,
+  type GlanceRowWire,
+  type WorkbenchTranscriptWire,
+} from './bot_workbench.js';
+export {
+  registerGetTaskDigestTool,
+  boundTaskDigest,
+  TASK_DIGEST_MAX_BYTES,
+  TASK_DIGEST_TEXT_MAX,
+  type GetTaskDigestToolDeps,
+  type TaskDigestPhase,
+  type TaskDigestRoute,
+  type TaskDigestWire,
+} from './get_task_digest.js';
+export {
   registerCreateTeammateTool,
   type CreateTeammateCallbacks,
 } from './create_teammate.js';
+export {
+  registerTeammateHomeTools,
+  type TeammateHomeCallbacks,
+  type TeammateHomeComputerWire,
+} from './teammate_home.js';
 export {
   registerBotCapabilityTools,
   buildFindBotCapabilitiesDescription,
@@ -173,6 +224,7 @@ export type {
   HistoryPage,
   HistoryWorkdir,
   HistorySession,
+  HistoryCompanion,
   HistoryMessage,
   ListWorkdirsArgs,
   ListSessionsArgs,

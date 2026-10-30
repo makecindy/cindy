@@ -1,9 +1,11 @@
 export { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from './remoteTextStream.js';
 export * from './historyView.js';
-export { projectHistoryView, isHistoryDetailTool, hasVisibleHistoryResult } from './historyViewProjection.js';
+export * from './historyWorkLines.js';
+export { projectHistoryView, historySubagentScopes, isHistoryDetailTool, hasVisibleHistoryResult, completesHistoryTurn } from './historyViewProjection.js';
 export * from './historyViewController.js';
 export { renderHistoryView } from './historyViewRender.js';
-export { HistoryViewHandoff } from './historyViewHandoff.js';
+export { HistoryViewHandoff, historyViewEndMs } from './historyViewHandoff.js';
+export * from './historyViewPrefetch.js';
 
 export interface MessageScrollMetrics {
   contentHeight: number;
@@ -157,7 +159,12 @@ export function evaluateMessageWindowUpdate(args: {
     autoFollowTarget: shouldAutoFollow ? 'content-end' : 'none',
     preserveVisibleAnchor: false,
     shouldAutoFollow,
-    showNewMessageIndicator: tailChanged && !args.wasNearBottom,
+    // 列表被替换成空时没有可跳转的新消息,不能亮红点。
+    showNewMessageIndicator: shouldShowNewMessageIndicator({
+      previousLastKey,
+      nextLastKey,
+      wasNearBottom: args.wasNearBottom,
+    }),
   };
 }
 
@@ -233,3 +240,4 @@ function containsContiguousSlice(full: readonly string[], slice: readonly string
   }
   return false;
 }
+export { historyAfter } from './historyAfter.js';

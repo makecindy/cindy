@@ -50,6 +50,24 @@ function taskReport(sessionId: string): MakeDoctorReport {
 }
 
 describe('read-only Main Cindy Make state', () => {
+  it('tracks native task activity without changing the snapshot for irrelevant progress', () => {
+    subscribe();
+    const preparing = taskReport('preparing');
+    preparing.status = 'running';
+    push({ tasks: { preparing }, personalBuildSessionIds: ['building'] });
+    const running = cindyMakeState.getRunningSessionIds();
+    expect([...running].sort()).toEqual(['building', 'preparing']);
+    push({
+      tasks: { preparing: { ...preparing, task: { ...preparing.task!, dependencies: { added: 3 } } } },
+      personalBuildSessionIds: ['building'],
+    });
+    expect(cindyMakeState.getRunningSessionIds()).toBe(running);
+    push({ tasks: { preparing: { ...preparing, status: 'completed' } } });
+    expect(cindyMakeState.getRunningSessionIds().size).toBe(0);
+    push({ personalBuildSessionIds: ['building'] });
+    setDataOwnerGeneration('other-build-owner');
+    expect(cindyMakeState.getRunningSessionIds().size).toBe(0);
+  });
   it('shares one subscription between Settings, task cards and the sidebar', () => {
     const first = subscribe();
     const second = subscribe();

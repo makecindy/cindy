@@ -20,6 +20,7 @@ vi.mock("@/theme", () => ({
   radius: {},
   spacing: {},
   typeScale: {},
+  lineHeight: {},
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),

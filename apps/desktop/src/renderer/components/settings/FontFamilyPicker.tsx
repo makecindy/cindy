@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, RotateCcw } from 'lucide-react';
@@ -110,7 +111,7 @@ export function FontFamilyPicker({
           >
             {label}
           </p>
-          <p className="mt-1 text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
             {description}
           </p>
         </div>
@@ -145,7 +146,7 @@ export function FontFamilyPicker({
               'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
             )}
           >
-            <span className="truncate text-13 font-medium text-[var(--settings-input-text)]">
+            <span className="truncate text-13 text-[var(--settings-input-text)]">
               {selectedLabel}
             </span>
             <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
@@ -185,7 +186,7 @@ export function FontFamilyPicker({
             </div>
 
             <div>
-              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--settings-section-sublabel)] opacity-70">
+              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
                 {t('settings.appearance.font.presets')}
               </div>
               <div className="flex flex-col gap-[2px]" role="listbox" aria-label={ariaLabel}>
@@ -209,7 +210,7 @@ export function FontFamilyPicker({
                       )}
                     >
                       <span
-                        className="truncate text-13 font-medium text-[var(--settings-input-text)]"
+                        className="truncate text-13 text-[var(--settings-input-text)]"
                         style={{ fontFamily: buildPreviewFamily(option.family) }}
                       >
                         {option.label}
@@ -227,7 +228,7 @@ export function FontFamilyPicker({
             </div>
 
             <div className="border-t border-[var(--settings-input-border)] pt-2">
-              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--settings-section-sublabel)] opacity-70">
+              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
                 {t('settings.appearance.font.custom')}
               </div>
               <div className="flex gap-2">
@@ -242,20 +243,16 @@ export function FontFamilyPicker({
                     'focus:border-[var(--settings-input-border-focus)]',
                   )}
                 />
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  compact
                   type="button"
                   onClick={() => handleSelect(customPreview)}
                   disabled={!customPreview}
-                  className={cn(
-                    'h-9 shrink-0 rounded-xl px-3 text-13 font-medium',
-                    'border border-[var(--settings-input-border)]',
-                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                    'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                    'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-                  )}
                 >
                   {t('settings.appearance.font.applyCustom')}
-                </button>
+                </Button>
               </div>
             </div>
           </div>

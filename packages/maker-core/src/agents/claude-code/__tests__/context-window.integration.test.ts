@@ -1,9 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SDKUserMessage, type SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it } from 'vitest';
 import { buildClaudeEnv, applyClaudeContextWindow } from '../env-builder.js';
 import { createAsyncQueue } from '../../shared/async-queue.js';
@@ -12,10 +14,41 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const binary = path.join(root, 'apps/claude-code-bin', `${process.platform}-${process.arch}`,
   process.platform === 'win32' ? 'claude.exe' : 'claude');
 
+/** Query.close() requests termination; Windows retains cwd until the process closes. */
+function trackedClaudeProcess() {
+  const closed: Promise<void>[] = [];
+  return {
+    spawn(options: SpawnOptions) {
+      const child = spawn(options.command, options.args, {
+        cwd: options.cwd, env: options.env, signal: options.signal,
+        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+      // Drain stderr just as the SDK's default launcher does.
+      child.stderr.resume();
+      closed.push(new Promise<void>((resolve) => child.once('close', () => resolve())));
+      return child;
+    },
+    async waitForClose() {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.all(closed),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Claude test process did not close')), 10_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 describe.skipIf(!existsSync(binary))('Claude native context policy (isolated home, fake upstream)', () => {
   it.each([{ window: 1_000, compact: true, resume: false }, { window: 128_000, compact: false, resume: false },
     { window: 1_000, compact: true, resume: true }])(
     'uses the configured $window budget for native compaction (resume: $resume)', { timeout: 60_000 }, async ({ window, compact, resume }) => {
+    const runtime = trackedClaudeProcess();
     const home = mkdtempSync(path.join(tmpdir(), 'claude-native-compact-'));
     const bodies: string[] = [];
     const server = createServer((req, res) => {
@@ -54,6 +87,7 @@ describe.skipIf(!existsSync(binary))('Claude native context policy (isolated hom
     });
     let input = createAsyncQueue<SDKUserMessage>();
     const options = {
+      spawnClaudeCodeProcess: runtime.spawn,
       pathToClaudeCodeExecutable: binary, cwd: home, model: 'claude-opus-4-6[1m]',
       tools: [], mcpServers: {}, settingSources: [], systemPrompt: 'Context control test.',
       maxTurns: 3, env: { ...env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: home,
@@ -80,6 +114,7 @@ describe.skipIf(!existsSync(binary))('Claude native context policy (isolated hom
           if (resume && results === 2) {
             expect(compacted).toBe(false);
             q.close(); input.end();
+            await runtime.waitForClose();
             requestsBeforeResume = bodies.length;
             const resumedEnv: Record<string, string> = { ...env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: home };
             applyClaudeContextWindow(resumedEnv, window, 90);
@@ -99,12 +134,14 @@ describe.skipIf(!existsSync(binary))('Claude native context policy (isolated hom
       expect(bodies.at(-1)).toContain('CONTEXT_HISTORY_CANARY');
     } finally {
       q.close(); input.end();
+      await runtime.waitForClose();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      rmSync(home, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
   it('reads the native working window and its documented minimum for known models', { timeout: 60_000 }, async () => {
+    const runtime = trackedClaudeProcess();
     const home = mkdtempSync(path.join(tmpdir(), 'claude-context-policy-'));
     const server = createServer((req, res) => {
       req.resume();
@@ -127,6 +164,7 @@ describe.skipIf(!existsSync(binary))('Claude native context policy (isolated hom
         const pending = new Promise<void>((resolve) => { release = resolve; });
         async function* prompt(): AsyncGenerator<SDKUserMessage> { await pending; }
         const q = query({ prompt: prompt(), options: {
+          spawnClaudeCodeProcess: runtime.spawn,
           pathToClaudeCodeExecutable: binary, cwd: home, model,
           tools: [], mcpServers: {}, settingSources: [], systemPrompt: 'Context control test.',
           env: { ...env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: home,
@@ -141,11 +179,11 @@ describe.skipIf(!existsSync(binary))('Claude native context policy (isolated hom
           expect(usage.rawMaxTokens).toBe(Math.max(100_000, window));
           expect(usage.maxTokens).toBe(Math.max(100_000, window));
           expect(usage.isAutoCompactEnabled).toBe(true);
-        } finally { q.close(); release(); }
+        } finally { q.close(); release(); await runtime.waitForClose(); }
       }
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      rmSync(home, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 });

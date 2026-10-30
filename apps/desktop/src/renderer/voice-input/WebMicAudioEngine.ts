@@ -21,6 +21,8 @@ export type WebMicAudioEngineOptions = {
   audioProcessing?: boolean | AudioProcessingConfig;
   latencyMs?: number;
   keepAlive?: boolean;
+  /** Borrow a prepared session for this recording only, including device fallback. */
+  releaseAfterUse?: boolean;
   onStateChange?: (event: string, details?: Record<string, unknown>) => void;
   onInterrupted?: (message: string) => void;
 };
@@ -164,6 +166,7 @@ export function currentPowerReleaseGeneration(): number {
  */
 export function disposeVoiceInputAudioModuleForHmr(): Promise<void> {
   powerReleaseGeneration += 1;
+  lastVoiceInputUseAt = undefined;
   keepAlivePowerReleaseUnsubscribe?.();
   keepAlivePowerReleaseUnsubscribe = undefined;
   keepAlivePowerReleaseListening = false;
@@ -201,6 +204,15 @@ let keepAliveIdleDisposeTimer: number | undefined;
 // (component mount, unrelated settings changes) clear and re-arm the timer, and
 // must land on the original deadline instead of restarting the countdown.
 let keepAliveIdleDeadlineAt: number | undefined;
+// Last time the user actually dictated, on the same monotonic clock. Mounting a
+// ChatInput or the overlay is *not* use: prewarm may only (re)open the capture
+// device while this timestamp is still inside the idle window, otherwise every
+// task switch would light up a fresh 30-minute window and the OS privacy
+// indicator would never go out on a machine the user is merely working in —
+// contradicting the promise in settings.voiceInput.fastActivation.hint.
+// The MediaStream and its use window belong to this capture renderer. Another
+// window's first capture is cold; recording here does not open its microphone.
+let lastVoiceInputUseAt: number | undefined;
 
 function isSpecificMicrophoneDeviceId(deviceId?: string): deviceId is string {
   return Boolean(deviceId && deviceId !== 'default');
@@ -361,25 +373,6 @@ function readErrorString(error: unknown, key: 'name' | 'message' | 'reason'): st
   return typeof value === 'string' ? value : undefined;
 }
 
-async function assertSelectedMicrophoneAvailable(deviceId?: string): Promise<void> {
-  // Browser/Electron expose the system default microphone as the synthetic
-  // "default" device. Enumerating devices before every start adds startup
-  // latency and cannot prove that this moving target is unavailable, so let
-  // getUserMedia surface the platform error for automatic/default capture.
-  if (!isSpecificMicrophoneDeviceId(deviceId)) return;
-  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-  const audioInputs = devices.filter((device) => device.kind === 'audioinput');
-  // Before permission is granted, browsers may expose opaque/empty IDs. Only
-  // fail fast when the list has comparable IDs and the selected one is
-  // definitely absent; otherwise let getUserMedia surface the platform error.
-  if (
-    audioInputs.some((device) => Boolean(device.deviceId)) &&
-    !audioInputs.some((device) => device.deviceId === deviceId)
-  ) {
-    throw new VoiceInputSelectedMicrophoneUnavailableError();
-  }
-}
-
 function keepAliveKey(options: KeepAliveSessionOptions): KeepAliveSessionKey {
   return JSON.stringify({
     workletUrl: options.workletUrl,
@@ -416,9 +409,8 @@ function ensureKeepAliveDeviceChangeListener(): void {
  * Both mean the user walked away, so holding the capture device buys no
  * latency while still lighting the OS privacy indicator and holding an
  * idle-sleep assertion through coreaudiod. Mirrors the devicechange listener
- * above: one process-wide subscription, never torn down. Installed lazily by
- * whichever capture starts first — the keep-alive session *or* a direct
- * (keepAlive: false) capture, which relies on it just as much.
+ * above: one subscription per module, released on HMR. Installed at the first
+ * use intent or capture start, including direct (keepAlive: false) capture.
  */
 function ensureKeepAlivePowerReleaseListener(): void {
   if (keepAlivePowerReleaseListening) return;
@@ -432,6 +424,11 @@ function ensureKeepAlivePowerReleaseListener(): void {
     powerReleaseGeneration += 1;
     releaseDirectCaptureEngines(payload.reason);
     void disposeKeepAliveVoiceInputMicrophone(payload.reason);
+    // Suspend / lock means the user walked away, so the fast-activation window
+    // ends here as well: coming back half an hour later must not relight the
+    // microphone from a stale "last use", and stop() triggered by this release
+    // (which runs synchronously above) must not count as a fresh dictation.
+    lastVoiceInputUseAt = undefined;
   });
 }
 
@@ -511,12 +508,6 @@ class KeepAliveMicSession {
   private async startInternal(): Promise<void> {
     ensureKeepAliveDeviceChangeListener();
     ensureKeepAlivePowerReleaseListener();
-    // Also guarded: if a release lands while enumerating and the device then
-    // reads as absent, the raw VoiceInputSelectedMicrophoneUnavailableError
-    // would send prewarm/capture down their automatic-fallback paths and open
-    // the *default* microphone after the power event.
-    await this.awaitStartupStep(assertSelectedMicrophoneAvailable(this.options.deviceId));
-
     // A release (suspend/lock/setting off) can land while this is pending, in
     // which case bailing out avoids opening a device nothing could then close.
     const sharedState = await this.awaitStartupStep(prewarmVoiceInputAudio(this.options.workletUrl));
@@ -853,6 +844,40 @@ async function getOrCreateKeepAliveSession(
   return keepAliveSessionPromise;
 }
 
+/** Prepare an inactive microphone for one press; never activate PCM or replace another owner's device. */
+export function prepareVoiceInputMicrophone(options: WebMicAudioEngineOptions): (() => void) | undefined {
+  const normalized = normalizeKeepAliveOptions(options);
+  // A failed startup can leave its settling promise without a session. Let
+  // normal recording recover it; preparation must own a session synchronously.
+  if (keepAliveSessionPromise && !keepAliveSession) return;
+  if (keepAliveSession && (
+    keepAliveSession.isBusy() || keepAliveSession.isStaleAfterDeviceChange() ||
+    keepAliveSession.key !== keepAliveKey(normalized)
+  )) return;
+  // With no replacement needed, getOrCreate publishes the session before its
+  // first await. Retain that identity so a late cancellation cannot close a
+  // different session, including while getUserMedia is still pending.
+  const ready = getOrCreateKeepAliveSession(normalized);
+  const session = keepAliveSession;
+  void ready.then((prepared) => {
+    if (options.keepAlive && !prepared.isBusy()) {
+      scheduleKeepAliveIdleDispose(prepared, 'idle_timeout_after_prewarm', { refresh: false });
+    }
+  }).catch(() => undefined);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (options.keepAlive || !session || keepAliveSession !== session) return;
+    if (session.isBusy()) {
+      // Recording adopted it. Let its normal stop close the temporary device.
+      session.markStaleForReplacement();
+    } else {
+      void disposeKeepAliveVoiceInputMicrophone('press_preparation_cancelled').catch(() => undefined);
+    }
+  };
+}
+
 export async function prewarmVoiceInputMicrophone(options: WebMicAudioEngineOptions): Promise<void> {
   const normalized = normalizeKeepAliveOptions(options);
   // Prewarm can land mid-dictation: another ChatInput mounts, or a settings
@@ -865,6 +890,14 @@ export async function prewarmVoiceInputMicrophone(options: WebMicAudioEngineOpti
     if (keepAliveSession.key !== keepAliveKey(normalized)) {
       keepAliveSession.markStaleForReplacement();
     }
+    return;
+  }
+  if (!isWithinVoiceInputUseWindow()) {
+    // Nobody asked to dictate inside the retention window, so mounting a
+    // ChatInput must not open (or re-open) the capture device. Whatever idle
+    // session is still around is reclaimed here — the audio context and the
+    // worklet stay warm, which is the part that needs no microphone.
+    await disposeKeepAliveVoiceInputMicrophone('idle_timeout_after_use_window');
     return;
   }
   let session: KeepAliveMicSession;
@@ -954,6 +987,52 @@ function keepAliveMonotonicNow(): number {
 }
 
 /**
+ * Record that the user actually dictated.
+ *
+ * Called by an engine once capture really starts, and by the settings switch
+ * when the user turns fast activation on (that click is an explicit statement of
+ * intent). It is the only thing that re-opens the door for mount-time prewarm
+ * after the idle window has released the device; mounting components never does.
+ */
+export function noteVoiceInputUse(): void {
+  ensureKeepAlivePowerReleaseListener();
+  lastVoiceInputUseAt = keepAliveMonotonicNow();
+  // Direct capture and an enable broadcast can record use while a different
+  // session is already idle. Keep its actual timer in sync with this timestamp;
+  // otherwise it expires early, then a later mount reopens it using newer intent.
+  // A busy session keeps its owner; its stop() re-arms after releasing the claim.
+  if (keepAliveSession && !keepAliveSession.isBusy()) {
+    scheduleKeepAliveIdleDispose(keepAliveSession, 'idle_timeout_after_use', { refresh: true });
+  }
+}
+
+/**
+ * Is the user still inside the window where a warm microphone is justified?
+ *
+ * Deliberately in-memory: a restart drops the timestamp, so a fresh launch
+ * never lights the privacy indicator before the user has asked for dictation.
+ */
+function isWithinVoiceInputUseWindow(): boolean {
+  if (lastVoiceInputUseAt === undefined) return false;
+  return keepAliveMonotonicNow() - lastVoiceInputUseAt < KEEP_ALIVE_MIC_IDLE_TTL_MS;
+}
+
+/**
+ * When does the current idle window end?
+ *
+ * Always 30 minutes after the last real dictation, never 30 minutes after
+ * "now". A session is routinely rebuilt inside the window (devicechange,
+ * automatic-fallback microphone, a stale session replaced on the next press);
+ * anchoring to `now` would hand the user a fresh window he never asked for —
+ * dictating at minute 0 and switching devices at minute 29 would keep the
+ * indicator lit until minute 59.
+ */
+function keepAliveDeadlineAfterLastUse(now: number): number {
+  const useAt = lastVoiceInputUseAt ?? now;
+  return useAt + KEEP_ALIVE_MIC_IDLE_TTL_MS;
+}
+
+/**
  * Arm the bounded idle window that releases the warm microphone.
  *
  * `refresh` separates real dictation from bookkeeping. The user-facing copy
@@ -987,7 +1066,7 @@ function scheduleKeepAliveIdleDispose(
     return;
   }
   if (refresh || keepAliveIdleDeadlineAt === undefined) {
-    keepAliveIdleDeadlineAt = now + KEEP_ALIVE_MIC_IDLE_TTL_MS;
+    keepAliveIdleDeadlineAt = keepAliveDeadlineAfterLastUse(now);
   }
   const deadlineAt = keepAliveIdleDeadlineAt;
   keepAliveIdleDisposeTimer = window.setTimeout(() => {
@@ -1019,6 +1098,7 @@ export class WebMicAudioEngine {
   private readonly audioProcessing: boolean | AudioProcessingConfig;
   private readonly latencyMs?: number;
   private readonly keepAlive: boolean;
+  private readonly releaseAfterUse: boolean;
   private readonly onStateChange?: (event: string, details?: Record<string, unknown>) => void;
   private readonly onInterrupted?: (message: string) => void;
   private keepAliveSession?: KeepAliveMicSession;
@@ -1043,6 +1123,11 @@ export class WebMicAudioEngine {
   // session reuses it for fast startup.
   private usingSharedContext = false;
   private usingKeepAliveSession = false;
+  // Power-release generation when this capture started. A release during capture
+  // means the user walked away, so the forced stop() that follows must not be
+  // recorded as a fresh dictation (it would resurrect the use window the release
+  // listener just cleared).
+  private powerGenerationAtStart = 0;
   private pcmCallback: (chunk: PcmChunk) => void = () => {};
 
   constructor(options: WebMicAudioEngineOptions) {
@@ -1053,6 +1138,7 @@ export class WebMicAudioEngine {
     this.audioProcessing = options.audioProcessing ?? true;
     this.latencyMs = options.latencyMs;
     this.keepAlive = options.keepAlive ?? false;
+    this.releaseAfterUse = options.releaseAfterUse ?? false;
     this.onStateChange = options.onStateChange;
     this.onInterrupted = options.onInterrupted;
   }
@@ -1063,12 +1149,16 @@ export class WebMicAudioEngine {
 
   async start(): Promise<void> {
     if (this.context) return;
+    this.powerGenerationAtStart = currentPowerReleaseGeneration();
     if (this.keepAlive) {
       try {
         await this.startKeepAlive();
         return;
       } catch (error) {
         if (isSelectedMicrophoneUnavailableError(error)) throw error;
+        // Permission is requested by this capture, not by a disposable probe.
+        // Retrying the cold path after denial would open/request it twice.
+        if (isMicrophonePermissionDeniedError(error)) throw error;
         // Only a *power* release ends the attempt. Falling through to the cold
         // getUserMedia() below after a suspend/lock would open a brand-new
         // stream once that one-shot event has passed, with nothing left to
@@ -1107,13 +1197,8 @@ export class WebMicAudioEngine {
     const benchmarkFixturePromise = BENCHMARK_FIXTURE_ENABLED
       ? prewarmVoiceInputBenchmarkFixture().catch(() => null)
       : Promise.resolve(null);
-    await this.awaitDirectStartupStep(
-      assertSelectedMicrophoneAvailable(this.deviceId),
-      powerGenerationAtStart,
-    );
-    // The enumeration above passed its own check, but a release can land in the
-    // gap before we ask for the device. Without this the request would be made
-    // after the one-shot event and only be closed once it resolves.
+    // exact deviceId makes getUserMedia authoritative. A separate enumeration
+    // adds a serial device round trip and can become stale before opening it.
     this.assertNoPowerReleaseDuringStartup(powerGenerationAtStart);
     const streamPromise = this.awaitDirectStartupStep(
       navigator.mediaDevices.getUserMedia({
@@ -1301,11 +1386,22 @@ export class WebMicAudioEngine {
 
   async stop(): Promise<void> {
     liveDirectCaptureEngines.delete(this);
+    const wasRecording = this.ready;
     this.stopped = true;
     this.ready = false;
     this.clearWatchdog();
+    // A recording that actually delivered audio just ended — that is "use" on
+    // every path: the keep-alive session that stays warm, the one released after
+    // a devicechange, and direct capture. Recording this only on the
+    // keep-alive-stays branch left the other two timing from the *start* of the
+    // recording, so fast activation silently expired early for them. A capture
+    // interrupted by suspend/lock is not use: the user walked away.
+    if (wasRecording && currentPowerReleaseGeneration() === this.powerGenerationAtStart) {
+      noteVoiceInputUse();
+    }
     if (this.usingKeepAliveSession) {
       const session = this.keepAliveSession;
+      if (this.releaseAfterUse) session?.markStaleForReplacement();
       // Drop the claim taken in startKeepAlive, then only tear the session down
       // if nobody else still holds one. deactivate() clears the shared PCM
       // callback, sends setActive=false and detaches the output path — doing
@@ -1321,7 +1417,9 @@ export class WebMicAudioEngine {
           await disposeKeepAliveVoiceInputMicrophone('devicechange_after_recording');
         } else {
           // Real use just ended — this is the only event allowed to restart the
-          // full 30-minute window the settings copy promises.
+          // full 30-minute window the settings copy promises. The use timestamp
+          // has already moved in stop(), so the idle deadline and "last use"
+          // never disagree about when the window ends.
           scheduleKeepAliveIdleDispose(session, 'idle_timeout_after_recording', { refresh: true });
         }
       }
@@ -1604,6 +1702,11 @@ export class WebMicAudioEngine {
 
   private startWatchdog(): void {
     this.clearWatchdog();
+    // Reached by both capture paths (keep-alive and direct) once the device is
+    // actually delivering, so this is where a real dictation starts counting as
+    // "use" — the only event that lets a later mount prewarm the microphone
+    // again after the idle window has released it.
+    noteVoiceInputUse();
     this.watchdogId = window.setInterval(() => this.checkAudioHealth(), AUDIO_FRAME_WATCHDOG_INTERVAL_MS);
   }
 
@@ -1631,9 +1734,10 @@ export class WebMicAudioEngine {
     this.onInterrupted?.(message);
   }
 
-  private resample(input: Float32Array, fromRate: number, toRate: number): number[] {
+  private resample(input: Float32Array, fromRate: number, toRate: number): number[] | Float32Array {
     if (input.length === 0) return [];
-    if (fromRate === toRate) return Array.from(input);
+    // handleInputFrame consumes the values synchronously without retaining input.
+    if (fromRate === toRate) return input;
 
     const ratio = fromRate / toRate;
     const output: number[] = [];

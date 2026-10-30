@@ -14,10 +14,11 @@ vi.mock('@/hooks/useUsageHistory', () => ({
   useUsageHistory: () => ({ history: state.history, refreshing: false }),
 }));
 vi.mock('../UsageTaskTable', () => ({
-  useTopTokenSessions: (range: string) => {
+  buildUsageTaskRows: (_history: unknown, range: string) => {
     state.taskRange = range;
     return [];
   },
+  usageTaskCoverageStart: () => null,
   UsageTaskTable: () => null,
 }));
 vi.mock('../UsageStatRow', () => ({

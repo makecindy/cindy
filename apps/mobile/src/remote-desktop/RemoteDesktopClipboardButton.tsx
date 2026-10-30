@@ -14,7 +14,9 @@ import {
   usesNativePullDownMenu,
 } from "@/platform/chrome/NativePullDownMenu";
 import { Text } from "@/components/AppText";
-import { useTheme, radius, iconSize, iconStroke, spacing } from "@/theme";
+import { MainWindowActionButton } from "@/components/MobilePrimitives";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
+import { useTheme, radius, iconSize, iconStroke, lineHeight, spacing, typeScale } from "@/theme";
 
 export function RemoteDesktopClipboardButton({
   enabled,
@@ -121,6 +123,7 @@ export function RemoteDesktopClipboardButton({
     <>
     <NativePullDownMenu
       actions={actions}
+      disabled={!enabled || busy}
       onAction={(action) => {
         void run(action);
       }}
@@ -146,11 +149,8 @@ export function RemoteDesktopClipboardButton({
         }
         style={({ pressed }) => [
           styles.button,
-          {
-            borderRadius: radius.pill,
-            backgroundColor: pressed ? colors.surfaceChip : "transparent",
-            opacity: enabled ? 1 : 0.4,
-          },
+          !enabled && styles.disabled,
+          pressed && mobileInteractionStyles.pressed,
         ]}
       >
         {busy ? (
@@ -187,15 +187,13 @@ export function RemoteDesktopClipboardButton({
             {failure ?? t("remoteDesktop.clipboardTransferring")}
           </Text>
           {failure !== null && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setFailure(null)}
-              style={({ pressed }) => [styles.dismiss, {
-                backgroundColor: pressed ? colors.surfaceElevated : colors.surfaceChip,
-              }]}
-            >
-              <Text style={{ color: colors.textPrimary }}>{t("remoteDesktop.close")}</Text>
-            </Pressable>
+            <MainWindowActionButton
+              action={{
+                label: t("remoteDesktop.close"),
+                onPress: () => setFailure(null),
+              }}
+              style={styles.dismiss}
+            />
           )}
         </View>
       </View>
@@ -219,19 +217,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  loadingText: { textAlign: "center" },
-  dismiss: {
-    alignSelf: "stretch",
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-  },
+  loadingText: { fontSize: typeScale.body, lineHeight: lineHeight.body, textAlign: "center" },
+  dismiss: { alignSelf: "stretch" },
   button: {
     width: 44,
     height: 44,
+    borderRadius: radius.pill,
     justifyContent: "center",
     alignItems: "center",
   },
+  disabled: { opacity: 0.4 },
 });

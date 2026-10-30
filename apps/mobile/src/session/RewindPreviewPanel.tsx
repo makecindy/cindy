@@ -8,6 +8,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Text } from '@/components/AppText';
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { MainWindowActionGroup } from '@/components/MobilePrimitives';
 import type { RewindPreviewState } from '@/session/rewindPreview';
 import { buildRewindPreviewLayout, rewindPreviewMaxHeight } from '@/session/rewindPreviewLayout';
@@ -104,7 +105,7 @@ export function RewindPreviewPanel({
         ) : null}
 
         {state.kind === 'error' ? (
-          <Text selectable style={styles.errorText}>{state.errorText}</Text>
+          <ErrorNotice message={state.errorText} />
         ) : null}
         {state.kind !== 'loading' ? (
           <MainWindowActionGroup
@@ -140,7 +141,9 @@ function titleForState(state: RewindPreviewState, t: TFunction): string {
 function detailForState(state: RewindPreviewState, t: TFunction): string | null {
   if (state.kind === 'loading') return t('interaction.rewind.detailLoading');
   if (state.kind === 'default') return t('interaction.rewind.detailDefault');
-  if (state.kind === 'empty') return t('interaction.rewind.detailEmpty');
+  if (state.kind === 'empty') {
+    return state.note ? t('interaction.rewind.detailConversationOnly') : t('interaction.rewind.detailEmpty');
+  }
   return t('interaction.rewind.detailError');
 }
 
@@ -160,7 +163,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   scrollContent: { gap: spacing.md },
   header: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
   headerText: { flex: 1, minWidth: 0 },
-  title: { color: colors.textPrimary, fontSize: typeScale.body, fontWeight: fontWeight.medium },
+  title: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   detail: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, marginTop: 4 },
   fileList: { gap: spacing.xs },
   filePath: {
@@ -168,11 +171,12 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.container,
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    lineHeight: lineHeight.caption,
     paddingHorizontal: spacing.sm,
     paddingVertical: 6,
   },
-  moreFiles: { color: colors.textTertiary, fontSize: typeScale.caption },
-  stats: { color: colors.textSecondary, fontSize: typeScale.caption, fontWeight: fontWeight.medium },
-  note: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  errorText: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  moreFiles: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  stats: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

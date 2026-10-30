@@ -1,0 +1,57 @@
+{
+  "asOf": "2026-10-15",
+  "targets": {
+    "default": 2.0,
+    "groups": {
+      "合成-美国": 1.5
+    }
+  },
+  "minSpend": 20,
+  "terms": [
+    {
+      "id": "a1",
+      "group": "合成-美国",
+      "term": "photo editor",
+      "matchType": "exact",
+      "spend": 60,
+      "taps": 40,
+      "installs": 20
+    },
+    {
+      "id": "a2",
+      "group": "合成-美国",
+      "term": "Free Photo Editor ",
+      "matchType": "broad",
+      "spend": 30,
+      "taps": 10,
+      "installs": 0
+    },
+    {
+      "id": "a3",
+      "group": "合成-美国",
+      "term": "free photo editor",
+      "matchType": "broad",
+      "spend": 10,
+      "taps": 5,
+      "installs": 0
+    },
+    {
+      "id": "a4",
+      "group": "合成-日本",
+      "term": "写真 加工",
+      "matchType": "search-match",
+      "spend": 12,
+      "taps": 12,
+      "installs": 8
+    },
+    {
+      "id": "a5",
+      "group": "合成-日本",
+      "term": "collage",
+      "matchType": "exact",
+      "spend": null,
+      "taps": 3,
+      "installs": 1
+    }
+  ]
+}

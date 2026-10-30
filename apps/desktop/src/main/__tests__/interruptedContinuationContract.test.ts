@@ -227,7 +227,9 @@ describe('interrupted continuation enqueue contract', () => {
   it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
     expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
     expect(registerSource).toContain("source: 'enqueue'");
-    expect(registerSource).toContain('item.text || item.persistedContent');
+    // 预览给人看的落库可见正文,不是可能带来源 / 回执前缀的 agent text。
+    expect(registerSource).toContain('item.persistedContent || item.text');
+    expect(registerSource).toContain('item.origin.displayText ?? item.text');
     expect(registerSource).toContain('extractAgentIslandPromptText(content)');
     const drainableHead = coordinatorSource.indexOf(
       'if (this.getDrainableHead(sessionId, state) === item)',
@@ -382,7 +384,9 @@ describe('interrupted continuation enqueue contract', () => {
       /if \(typeof event\.turnAttemptToken === 'number'\) \{\s*autoResumeBookkeeping\.clearFailedTurnCompletionTail\(session\.id\);/,
     );
 
-    expect(registerSource).toMatch(/finalizeOrcaSuppressedTerminal:\s*\(sessionId, payload\)\s*=>/);
+    expect(registerSource).toMatch(
+      /finalizeOrcaSuppressedTerminal:\s*settleDeferredOrcaWorkerTerminal,/,
+    );
     expect(registerSource).toMatch(/status: payload\.status,\s*finalText: payload\.finalText/);
   });
 });

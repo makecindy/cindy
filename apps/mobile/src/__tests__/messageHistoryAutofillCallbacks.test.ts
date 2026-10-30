@@ -31,6 +31,7 @@ visit(source);
 function fixture() {
   const requestLoadEarlier = vi.fn();
   const bindings = {
+    historyActiveRef: { current: true },
     onLoadEarlier: () => {},
     readingOlderRef: { current: false },
     queuedLoadEarlierRef: { current: false },
@@ -58,6 +59,16 @@ const callback = ${callbackSource};`, {
 }
 
 describe('history autofill production callback', () => {
+  it('pauses hidden retained lists without consuming the paging budget', () => {
+    const { bindings, attempt, requestLoadEarlier } = fixture();
+    bindings.historyActiveRef.current = false;
+    attempt();
+    expect(requestLoadEarlier).not.toHaveBeenCalled();
+    expect(bindings.initialHistoryAutofillRemainingRef.current).toBe(3);
+    bindings.historyActiveRef.current = true;
+    attempt();
+    expect(requestLoadEarlier).toHaveBeenCalledTimes(1);
+  });
   it('continues through host pages behind an unchanged first rendered row, within the cold-open budget', () => {
     const { bindings, attempt, requestLoadEarlier } = fixture();
     attempt();

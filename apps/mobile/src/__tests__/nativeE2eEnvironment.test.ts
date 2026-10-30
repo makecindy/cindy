@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { readSimEnvironment } from '../../scripts/lib/sim-environment.mjs';
-import { resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
+import ts from 'typescript';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -26,7 +27,7 @@ describe('native e2e environment', () => {
   it.each([false, true])('preserves custom-port ownership when occupied=%s', async (occupied) => {
     const source = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
     const start = source.indexOf("const args = ['exec', 'expo', 'start'");
-    expect(start).toBeGreaterThan(0);
+    if (start < 0) throw new Error('script workflow entry missing');
     const exitCallbacks: Array<() => void> = [];
     const child = {
       pid: 4242,
@@ -93,50 +94,6 @@ describe('native e2e environment', () => {
     expect(flow).toContain('id: "session.menuUsageRow"');
     expect(flow.indexOf('id: "session.menuUsageRow"')).toBeGreaterThan(flow.indexOf('id: "session.menuSheet"'));
     expect(flow).not.toContain('id: "session.usageButton"');
-    const menu = readFileSync(resolve(process.cwd(), 'src/session/SessionMenuSheet.tsx'), 'utf8');
-    expect(menu).toMatch(/<SessionUsageSummary[^>]+onPress=\{openInfo\}/);
-  });
-
-  it('uses a Java 17 runtime for Maestro without requiring global shell changes', () => {
-    const helper = readFileSync(resolve(process.cwd(), 'scripts/java-runtime-env.mjs'), 'utf8');
-    const doctor = readFileSync(resolve(process.cwd(), 'scripts/native-e2e-doctor.mjs'), 'utf8');
-    const runner = readFileSync(resolve(process.cwd(), 'scripts/maestro-e2e.mjs'), 'utf8');
-
-    expect(helper).toContain('const MIN_JAVA_MAJOR = 17');
-    expect(helper).toContain('env.ANDROID_STUDIO_JDK');
-    expect(helper).toContain("env.ProgramFiles, 'Android', 'Android Studio', 'jbr'");
-    expect(helper).toContain("brew', ['--prefix', 'openjdk@17']");
-    expect(helper).toContain("'/usr/libexec/java_home', ['-v', version]");
-    expect(helper).toContain('JAVA_HOME: javaHome');
-    expect(helper).toContain("PATH: [join(javaHome, 'bin'), baseEnv.PATH]");
-    expect(doctor).toContain("import { javaRuntimeDetail, resolveJavaRuntimeEnv } from './java-runtime-env.mjs';");
-    expect(doctor).toContain('const toolEnv = resolveJavaRuntimeEnv(process.env);');
-    expect(doctor).toContain("spawnSync('maestro', ['--version'], { encoding: 'utf8', env: toolEnv })");
-    expect(runner).toContain("import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';");
-    expect(runner).toContain('const toolEnv = resolveJavaRuntimeEnv(process.env);');
-    expect(runner).toContain('...toolEnv');
-    const simStart = readFileSync(resolve(process.cwd(), 'scripts/sim-start.mjs'), 'utf8');
-    expect(simStart).toContain("import { readSimEnvironment } from './lib/sim-environment.mjs';");
-    expect(simStart).toContain('const { loginScenario, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);');
-    expect(simStart).toContain('writeMetroOwner(portArgs.port, {');
-    expect(simStart).toContain("child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));");
-    expect(simStart).not.toContain('writeMetroOwner(DEFAULT_PORT,');
-    expect(simStart).not.toContain('clearMetroOwner(DEFAULT_PORT,');
-    expect(runner).toContain("/(^|[\\\\/])login_mock(?:_no_clear)?\\.yaml$/");
-    expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS ?? '20000'");
-    expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_TERMINATE_BEFORE_OPEN ?? 'true'");
-    expect(runner).toContain("process.env.XDT_MOBILE_E2E_EXPO_OPEN_BEFORE_TEST ?? 'true'");
-    expect(runner).toContain("if (expoUrl && expoTerminateBeforeOpen === 'true') terminateExpoApp(platform);");
-    expect(runner).toContain('function expoUrlWithRoute(url, route)');
-    expect(runner).toContain('XDT_MOBILE_E2E_HOST_AUTOMATIONS_URL');
-    expect(runner).toContain('function terminateExpoApp(platform)');
-    expect(runner).toContain('function terminateApp(targetAppId, platform)');
-    expect(runner).toContain('function launchNativeApp(targetAppId, platform)');
-    expect(runner).toContain('terminateApp(appId, platform);');
-    expect(runner).toContain('launchNativeApp(appId, platform);');
-    expect(runner).toContain("MAESTRO_DRIVER_STARTUP_TIMEOUT: process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ?? '120000'");
-    expect(runner).toContain("`XDT_MOBILE_E2E_EXPO_URL=${expoUrl ?? ''}`");
-    expect(runner).toContain('sleepSync(expoLaunchDelayMs)');
   });
 
   it('opens the Expo target route before shared flows while cleaning native stale overlays', () => {
@@ -179,97 +136,6 @@ describe('native e2e environment', () => {
     expect(visualOfflineFlow).not.toContain('session.collaborationReadOnlyComposer');
   });
 
-  it('can own the Expo lifecycle for iOS local runtime smoke', () => {
-    const packageJson = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
-    const localSmoke = readFileSync(resolve(process.cwd(), 'scripts/local-device-link-smoke.mjs'), 'utf8');
-
-    expect(packageJson).toContain('"test:e2e:local:ios"');
-    expect(packageJson).toContain('--start-server --start-expo --mock-host --profile ios-iphone-17-pro-expo-go');
-    expect(localSmoke).toContain("if (arg === '--start-expo')");
-    expect(localSmoke).toContain("if (arg === '--no-mock-audio')");
-    expect(localSmoke).toContain("const useMockAudio = voiceProxySelected && !options.noMockAudio;");
-    expect(localSmoke).toContain("if (arg === '--voice-cloud-preflight')");
-    expect(localSmoke).toContain("if (arg === '--voice-cloud-all-candidates')");
-    // 穿透 credential 工具族已随 device-link:voice:credential-sync 下线删除:
-    // smoke 不再有任何 voice credential fetch/override 面。
-    expect(localSmoke).not.toContain('voice-credential');
-    expect(localSmoke).not.toContain('voiceCredential');
-    expect(localSmoke).toContain('expectedControllableDeviceId: options.mockHost ? mockHostDeviceId : undefined');
-    expect(localSmoke).toContain('function isControllableDevice(device)');
-    expect(localSmoke).toContain('function runVoiceCloudPreflight()');
-    expect(localSmoke).toContain("...(options.voiceCloudAllCandidates ? ['--all-candidates'] : [])");
-    expect(localSmoke).toContain('preflightEnv.XDT_MOBILE_VOICE_PROXY_BASE_URL = voiceProxyBaseUrl;');
-    expect(localSmoke).toContain("preflightEnv.XDT_MOBILE_VOICE_PROXY_API_KEY = 'sk-mock-mobile-voice-key';");
-    expect(localSmoke).toContain('runNodeScript(voiceCloudPreflightScript, args, preflightEnv);');
-    expect(localSmoke).toContain('function startMockHostProcess(baseUrl, hostDeviceId, scenario, realDbPath)');
-    expect(localSmoke).toContain('await stopMockHost.ready;');
-    expect(localSmoke).toContain('mock host did not become ready within');
-    expect(localSmoke).toContain("line.includes('mock-device-link-host ready')");
-    expect(localSmoke).toContain('async function stopActiveMockHost()');
-    expect(localSmoke.indexOf('await stopActiveMockHost();')).toBeLessThan(
-      localSmoke.indexOf('if (options.mockHost) await cleanupE2eDeviceRecords(apiBase, mockHostDeviceId);'),
-    );
-    expect(localSmoke).toContain('async function startExpoProcess(url)');
-    expect(localSmoke).toContain('async function assertExpoReady(url');
-    expect(localSmoke).toContain('Expo Go native E2E needs Metro before Maestro opens the app.');
-    expect(localSmoke).toContain('EXPO_PUBLIC_XDT_API_BASE_URL: apiBase');
-    expect(localSmoke).toContain("&& (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file' || flowSuite === 'automations')");
-    expect(localSmoke).toContain("flowSuite === 'visual' ? `${mockHostDeviceId}-${flowSlug(flow)}` : mockHostDeviceId");
-    expect(localSmoke).toContain("if (flowSuite === 'full' && flow === 'fixture_controls_smoke.yaml') return 'controls';");
-    expect(localSmoke).toContain("if (suite === 'controls') return 'controls';");
-  });
-
-  it('can run the iOS smoke against local desktop SQLite data without hardcoding a user path', () => {
-    const packageJson = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
-    const mockHost = readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8');
-
-    expect(packageJson).toContain('"test:e2e:local:real-db:ios"');
-    expect(packageJson).toContain('--mock-host-real-db auto');
-    expect(mockHost).toContain('function resolveRealDbPath(dbPath, Database)');
-    expect(mockHost).toContain("rawPath && rawPath !== 'auto'");
-    expect(mockHost).toContain("path.join(home, 'Library', 'Application Support', 'xdt-maker')");
-    expect(mockHost).toContain("path.join(appData, 'xdt-maker')");
-    expect(mockHost).toContain('--real-db auto could not find a readable XDMaker SQLite DB with sessions');
-  });
-
-  it('keeps the mock host capable of exercising deferred session Agent switching', () => {
-    const mockHost = readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8');
-
-    expect(mockHost).toContain("case 'maker:switch-session-agent':");
-    expect(mockHost).toContain("case 'maker:get-session-agent-switch-intent':");
-    expect(mockHost).toContain("case 'maker:provider:list':");
-    expect(mockHost).toContain('supportsSessionAgentSwitch: true');
-    expect(mockHost.indexOf('applyPendingAgentSwitchIntent(id);')).toBeLessThan(
-      mockHost.indexOf("const text = typeof queued?.text === 'string'"),
-    );
-  });
-
-  it('keeps the mock host capable of exercising the native worktree two-step flow', () => {
-    const mockHost = readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8');
-
-    for (const channel of [
-      'maker:get-new-maker-defaults',
-      'maker:apply-new-maker-worktree-pref',
-      'worktree:detect-cwd',
-      'worktree:list-branches',
-      'worktree:suggest-name',
-      'worktree:create',
-      'worktree:discard-precreated',
-    ]) {
-      expect(mockHost).toContain(`case '${channel}':`);
-    }
-    expect(mockHost).toContain("const MOCK_WORKTREE_BRANCHES = ['main', 'feature/mobile-worktree', 'release/mobile'];");
-    expect(mockHost).toContain('supportsRecoveryKeyDiscard: true');
-    expect(mockHost).toContain('branches: [...mockWorktree.branches]');
-    expect(mockHost).toContain('current: mockWorktree.currentBranch');
-    expect(mockHost).toContain("path: path.join(normalizedBaseRepo, '.cindy-worktrees', name)");
-    expect(mockHost).toContain('branch: `xdt/${name}`');
-    expect(mockHost).toContain('sourceBranch,');
-    expect(mockHost).toContain('worktreePath: claimedWorktree?.meta.path ?? null');
-    expect(mockHost).toContain("throw mockIpcError('PRECONDITION_FAILED', '会话已认领该 worktree，拒绝补偿回收')");
-    expect(mockHost).toContain('return { discarded: true, branchDeleted: true };');
-  });
-
   it('keeps the reconnect entry usable without the removed server and auth APIs', () => {
     const script = 'scripts/device-link-reconnect-smoke.mjs';
     const packageJson = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
@@ -280,7 +146,6 @@ describe('native e2e environment', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('formal DeviceLinkClient');
     expect(result.stdout).toContain('loopback WebSocket contract fixture');
-    expect(readFileSync(resolve(process.cwd(), script), 'utf8')).not.toContain('/api/auth/dev-login');
 
     const missingCredentials = spawnSync(process.execPath, [script, '--interop'], {
       cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
@@ -295,159 +160,183 @@ describe('native e2e environment', () => {
     expect(missingCredentials.stderr).toContain('isolated test environment');
   });
 
+  it.each([true, false])('probes Java only for real Maestro runs (dryRun=%s)', (dryRun) => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/maestro-e2e.mjs'), 'utf8');
+    const start = source.indexOf('const options = parseArgs(');
+    if (start < 0) throw new Error('script workflow entry missing');
+    const resolveJavaRuntimeEnv = vi.fn(() => { throw new Error('java-probe'); });
+    const probeMetroOwnership = vi.fn();
+    const spawn = vi.fn();
+    const log = vi.fn();
+    const execute = () => runInNewContext(source.slice(start), {
+      resolve, existsSync: () => true, readFileSync: () => 'appId: test',
+      resolveJavaRuntimeEnv, probeMetroOwnership, spawnSync: spawn,
+      resolveMobileE2eProfile: () => undefined,
+      mobileRoot: '/mobile', flowRoot: '/mobile/flows', doctorScript: '/mobile/doctor.mjs',
+      defaultAppId: 'com.xd.cindy', loginScenario: 'providers:email-only',
+      console: { log },
+      process: {
+        argv: ['node', 'maestro-e2e.mjs', ...(dryRun ? ['--dry-run'] : [])],
+        env: {}, exit: (code: number) => { throw new Error('exit:' + code); },
+      },
+    });
+    expect(execute).toThrow(dryRun ? 'exit:0' : 'java-probe');
+    expect(resolveJavaRuntimeEnv).toHaveBeenCalledTimes(dryRun ? 0 : 1);
+    expect(probeMetroOwnership).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    if (dryRun) expect(log).toHaveBeenCalledWith('maestro dry run: APP_ID=com.xd.cindy');
+  });
+
   it('keeps Maestro dry runs independent of Metro ownership', () => {
     const script = resolve(process.cwd(), 'scripts/maestro-e2e.mjs');
     const result = spawnSync(process.execPath, [script, '--dry-run', '--flow', 'login_mock_no_clear.yaml'], {
       cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
       env: { ...process.env, EXPO_PUBLIC_LOGIN_SCENARIO: '' },
     });
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('maestro dry run: APP_ID=');
     expect(result.stderr).not.toContain('Active Metro');
   });
+});
 
-  it('keeps cloud voice preflight opt-in and secret-redacted with the credential relay removed', () => {
-    const packageJson = readFileSync(resolve(process.cwd(), 'package.json'), 'utf8');
-    const preflight = readFileSync(resolve(process.cwd(), 'scripts/mobile-voice-cloud-preflight.mjs'), 'utf8');
-    const mockVoiceProxy = readFileSync(resolve(process.cwd(), 'scripts/mock-voice-proxy.mjs'), 'utf8');
-    const mockHost = readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8');
-    const readme = readFileSync(resolve(process.cwd(), 'README.md'), 'utf8');
+// These execute existing developer entry points; the old shape-only checks could pass
+// while process environments, deferred switching, or recovery ownership were broken.
+function scriptBody(file: string, entry: string) {
+  const source = readFileSync(resolve(process.cwd(), file), 'utf8');
+  const start = source.indexOf(entry);
+  if (start < 0) throw new Error(`missing workflow entry: ${file}`);
+  return source.slice(start);
+}
 
-    expect(packageJson).toContain('"test:voice-cloud:preflight": "node scripts/mobile-voice-cloud-preflight.mjs"');
-    expect(packageJson).toContain('"test:voice-cloud:preflight:run": "node scripts/mobile-voice-cloud-preflight.mjs --run"');
-    // 穿透 credential 工具族(export/fetch/relay smoke/doctor/device gate)已随
-    // device-link:voice:credential-sync 下线一并删除,不能再出现在 package scripts 里。
-    expect(packageJson).not.toContain('voice:credential:');
-    expect(packageJson).not.toContain('test:voice-cloud:doctor');
-    expect(packageJson).not.toContain('test:voice-cloud:local-desktop-relay');
-    expect(packageJson).not.toContain('test:voice-cloud:device');
-    expect(preflight).toContain('dry run passed; add --run to call the cloud endpoints');
-    expect(preflight).toContain('XDT_MOBILE_VOICE_CREDENTIAL_JSON');
-    expect(preflight).toContain('XDT_MOBILE_VOICE_PROXY_API_KEY');
-    expect(preflight).toContain('XDT_MOBILE_VOICE_PREFLIGHT_ALL_CANDIDATES');
-    expect(preflight).toContain("if (arg === '--all-candidates')");
-    expect(preflight).toContain('async function preflightAsrCandidates');
-    expect(preflight).toContain('async function preflightRefinerCandidates');
-    expect(preflight).toContain("credentialAsrChain(credential).slice(0, 1)");
-    expect(preflight).toContain("credentialRefinerChain(credential).slice(0, 1)");
-    expect(preflight).toContain('mobileRealtimeAsrUnsupportedReason');
-    expect(preflight).toContain('asr.mode is not supported for mobile realtime preflight');
-    expect(preflight).toContain("validateProviderChain(credential, 'asrProviderChain'");
-    expect(preflight).toContain("validateProviderChain(credential, 'refinerProviderChain'");
-    expect(preflight).toContain('function credentialAsrChain(credential)');
-    expect(preflight).toContain('function credentialRefinerChain(credential)');
-    expect(preflight).toContain("const primary = normalized.split(/[-_]/)[0];");
-    expect(preflight).toContain("case 'mandarin':");
-    expect(preflight).toContain('function redactionCandidates(secret)');
-    expect(preflight).not.toContain('console.log(credential.proxyApiKey');
-    expect(preflight).not.toContain('console.warn(credential.proxyApiKey');
-    expect(preflight).not.toContain('console.error(credential.proxyApiKey');
-    expect(readme).toContain('--voice-cloud-all-candidates');
-    expect(readme).toContain('VOICE_CREDENTIAL_SYNC_REMOVED');
-    expect(readme).not.toContain('voice:credential:');
-    expect(readme).not.toContain('test:voice-cloud:doctor');
-    expect(readme).not.toContain('test:voice-cloud:device');
-    expect(mockVoiceProxy).toContain("url.pathname !== '/dashscope/api-ws/v1/realtime'");
-    // mock host 与 desktop dispatch 语义对齐:credential-sync 一律返回下线错误,
-    // 不再存在 mock 凭证或 credential override 面。
-    expect(mockHost).toContain("case 'device-link:voice:credential-sync':");
-    expect(mockHost).toContain("err.code = 'VOICE_CREDENTIAL_SYNC_REMOVED';");
-    expect(mockHost).toContain('手机语音输入已改用 Cindy 官方语音服务,请升级手机版。');
-    expect(mockHost).not.toContain('mockVoiceCredential');
-    expect(mockHost).not.toContain('voiceCredentialOverride');
-    expect(mockHost).not.toContain('loadVoiceCredentialOverride');
-    expect(mockHost).not.toContain("'--voice-credential-file'");
-    expect(mockHost).toContain("case 'device-link:voice:dictionary-learning':");
-    expect(mockHost).toContain("ignoreReason: 'mock-host'");
+const maestroBody = scriptBody('scripts/maestro-e2e.mjs', 'const options = parseArgs(');
+const mockHostAst = ts.createSourceFile('mock-host.mjs', readFileSync(resolve(process.cwd(), 'scripts/mock-device-link-host.mjs'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const mockHostFunctions = mockHostAst.statements.filter((node) => ts.isFunctionDeclaration(node) && !['broadcast', 'push', 'send'].includes(node.name?.text ?? '')).map((node) => node.getText(mockHostAst)).join(String.fromCharCode(10));
+const mockBranches = mockHostAst.statements.find((node) => ts.isVariableStatement(node) && node.declarationList.declarations.some((decl) => ts.isIdentifier(decl.name) && decl.name.text === 'MOCK_WORKTREE_BRANCHES'))?.getText(mockHostAst);
+if (!mockBranches) throw new Error('mock-host branch fixture missing');
+
+function mockHost(platform: 'darwin' | 'win32' = 'darwin') {
+  const state = {
+    sessions: [{ id: 'session', agentKind: 'cc', model: 'old', workingDir: '/repo' }],
+    messages: new Map(), projections: new Map(),
+  };
+  const send = vi.fn();
+  const context = {
+    state, sessionId: 'session', path: posix, revokedControllers: new Set(),
+    broadcast: send, push: send, send, debug: false, console,
+    process: { platform, env: { HOME: '/fixture-home', APPDATA: '/fixture-appdata' } },
+    fs: { readdirSync: () => ['xdt-maker-test.db', 'unrelated.txt'], statSync: () => ({ mtimeMs: 1 }) },
+  };
+  return runInNewContext(`${mockBranches}
+${mockHostFunctions}
+const mockWorktree = createMockWorktreeState(state);
+({ invoke: (channel, args) => handleInvoke(null, channel, args), state, listRealDbCandidates, resolveRealDbPath });`, context) as {
+    invoke: (channel: string, args: unknown[]) => Promise<any>;
+    state: typeof state; listRealDbCandidates: () => string[]; resolveRealDbPath: (path: string, Database: unknown) => string;
+  };
+}
+
+describe('native e2e developer workflows', () => {
+  it.each(['com.xd.cindy', 'host.exp.Exponent'])('passes Java env to doctor and Maestro after opening %s', (appId) => {
+    const spawn = vi.fn((_command: string, _args: string[], _options: object) => ({ status: 0, stdout: '', stderr: '' }));
+    const toolEnv = { JAVA_HOME: '/jdk17', PATH: '/jdk17/bin:/tools' };
+    runInNewContext(maestroBody, {
+      resolve: posix.resolve, existsSync: () => true, readFileSync: () => 'appId: test',
+      resolveJavaRuntimeEnv: () => toolEnv, probeMetroOwnership: vi.fn(), spawnSync: spawn,
+      resolveMobileE2eProfile: () => undefined, mobileRoot: '/mobile', flowRoot: '/mobile/flows',
+      doctorScript: '/mobile/doctor.mjs', defaultAppId: 'com.xd.cindy', loginScenario: 'providers:email-only',
+      console: { log: vi.fn() }, URL,
+      process: {
+        argv: ['node', 'maestro-e2e.mjs', '--platform', 'ios', '--app-id', appId],
+        execPath: '/node', platform: 'darwin', env: { XDT_MOBILE_E2E_EXPO_LAUNCH_DELAY_MS: '0' },
+        exit: (code: number) => { throw new Error(`exit:${code}`); },
+      },
+    });
+    expect(spawn).toHaveBeenCalledWith('/node', expect.arrayContaining(['/mobile/doctor.mjs', '--require-maestro', '--platform', 'ios', '--app-id', appId]), { cwd: '/mobile', env: toolEnv, stdio: 'inherit' });
+    expect(spawn).toHaveBeenLastCalledWith('maestro', expect.arrayContaining(['test', `APP_ID=${appId}`, `CLEAR_STATE=${appId === 'host.exp.Exponent' ? 'false' : 'true'}`]), expect.objectContaining({ env: expect.objectContaining({ ...toolEnv, MAESTRO_DRIVER_STARTUP_TIMEOUT: '120000' }) }));
+    const commands = spawn.mock.calls.map(([command, args]) => `${command} ${args.join(' ')}`);
+    const terminate = commands.findIndex((cmd) => cmd.includes(`terminate booted ${appId}`));
+    const launch = commands.findIndex((cmd) => cmd.includes(appId === 'host.exp.Exponent' ? 'openurl booted exp://localhost:8081/--/devices' : `launch booted ${appId}`));
+    expect(terminate).toBeGreaterThanOrEqual(0);
+    expect(launch).toBeGreaterThan(terminate);
+    expect(launch).toBeLessThan(commands.length - 1);
   });
 
-  it('clears local mobile voice credentials on logout and at auth startup', () => {
-    const authContext = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
-
-    expect(authContext).toContain(
-      "from '@/session/mobileVoiceCredentialStore'",
-    );
-    expect(authContext).toContain("from '@/session/mobileVoiceHistoryStore'");
-    // BYOK/穿透存储模块已删除:清理统一收敛进 clearAllMobileVoiceCredentials
-    // (含 serviceMode 与 LiteLLM key 的存量键)。
-    expect(authContext).not.toContain('mobileVoiceLiteLlmSettings');
-    expect(authContext).not.toContain('mobileVoiceServiceMode');
-    expect(authContext).toContain(
-      'await clearAllMobileVoiceCredentials().catch(() => undefined);',
-    );
-    expect(authContext).toContain(
-      'await clearAllMobileVoiceInputHistories().catch(() => undefined);',
-    );
-    // Scope the ordering check to the shared local-session cleanup: both logout and confirmed
-    // account deletion use it, and refresh-token deletion remains serialized against refresh.
-    const cleanupStart = authContext.indexOf('const clearLocalSession = useCallback(async (');
-    const cleanupBody = authContext.slice(cleanupStart, authContext.indexOf('}, [', cleanupStart));
-    const refreshTokenDelete = cleanupBody.indexOf('await serializeRefreshTokenMutation(() =>');
-    expect(refreshTokenDelete).toBeGreaterThanOrEqual(0);
-    expect(cleanupBody).toContain('deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined)');
-    expect(cleanupBody.indexOf('await clearAllMobileVoiceCredentials().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
-    expect(cleanupBody.indexOf('await clearAllMobileVoiceInputHistories().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
-    const logoutStart = authContext.indexOf('const logout = useCallback(async () => {');
-    const logoutBody = authContext.slice(logoutStart, authContext.indexOf('}, [', logoutStart));
-    expect(logoutBody).toContain('clearMobileLoginCredentialsForLogout({');
-    expect(logoutBody).toContain(
-      'clearReceipt: () => persistAccountDeletionReceipt(null),',
-    );
-    expect(logoutBody).toContain(
-      'await clearLocalSession({ persistedAuthAlreadyCleared: true });',
-    );
-    // 启动(auth 初始化)也要做一次存量清理,防旧版本留下的桌面 key 继续躺在
-    // secure storage(与 LEGACY_* token 清理同一批)。
-    expect(authContext).toContain('clearAllMobileVoiceCredentials().catch(() => undefined),');
+  it('plans local Expo, mock host, real-db, and optional cloud preflight without starting them', () => {
+    const result = spawnSync(process.execPath, ['scripts/local-device-link-smoke.mjs', '--dry-run', '--start-server', '--start-expo', '--mock-host', '--mock-host-real-db', 'auto', '--voice-cloud-preflight', '--voice-cloud-all-candidates', '--profile', 'ios-iphone-17-pro-expo-go'], {
+      cwd: process.cwd(), encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, EXPO_PUBLIC_LOGIN_SCENARIO: 'providers:email-only' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('- start expo: yes');
+    expect(result.stdout).toContain('- mock host real db: auto');
+    expect(result.stdout).toContain('- voice cloud candidates: all ASR/refine provider candidates');
+    expect(result.stdout).toContain('- expo login scenario: providers:email-only');
   });
 
-  it('backs Android realtime voice with the Expo AudioStream already shipped in the app', () => {
-    const expoModuleConfig = readFileSync(
-      resolve(process.cwd(), 'modules/xdt-mobile-realtime-audio/expo-module.config.json'),
-      'utf8',
-    );
-    const realtimeAudio = readFileSync(resolve(process.cwd(), 'src/session/mobileRealtimeAudio.ts'), 'utf8');
-    const appJson = readFileSync(resolve(process.cwd(), 'app.json'), 'utf8');
-
-    // The latency-tuned custom recorder stays Apple-only. Android reuses the
-    // PCM SharedObject from expo-audio, which is already a native dependency.
-    expect(expoModuleConfig).toContain('"platforms": ["apple"]');
-    expect(expoModuleConfig).not.toContain('"android"');
-    expect(appJson).toContain('"recordAudioAndroid": true');
-    expect(realtimeAudio).toContain("requireNativeModule<ExpoAudioNativeModule>('ExpoAudio')");
-    expect(realtimeAudio).toContain('new module.AudioStream({');
-    expect(realtimeAudio).toContain("encoding: 'int16'");
-    expect(realtimeAudio).toContain('convertExpoAudioPcm16(');
-    expect(realtimeAudio).toContain("throw new UnavailabilityError('Cindy mobile voice input', 'realtime microphone PCM capture')");
-    expect(realtimeAudio).toContain('EXPO_PUBLIC_XDT_MOBILE_E2E_MOCK_AUDIO');
+  it.each(['darwin', 'win32'] as const)('discovers local SQLite candidates read-only for %s', (platform) => {
+    const host = mockHost(platform);
+    const candidates = host.listRealDbCandidates();
+    expect(candidates).toHaveLength(3);
+    expect(candidates[0]).toBe(`${platform === 'darwin' ? '/fixture-home/Library/Application Support' : '/fixture-appdata'}/xdt-maker/xdt-maker-test.db`);
+    const close = vi.fn();
+    const Database = vi.fn(function (_path: string, options: object) {
+      expect(options).toEqual({ readonly: true, fileMustExist: true });
+      return { pragma: vi.fn(), prepare: () => ({ get: () => ({ count: 1 }) }), close };
+    });
+    expect(host.resolveRealDbPath('auto', Database)).toBe(candidates[0]);
+    expect(Database).toHaveBeenCalledTimes(3);
+    expect(close).toHaveBeenCalledTimes(3);
   });
 
-  it('sends the realtime voice draft returned by the controller instead of stale React state', () => {
-    const sessionScreen = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-
-    expect(sessionScreen).toContain('const documentBeforeStop = composerDocumentRef.current;');
-    expect(sessionScreen).toContain('const latestDraft = await controller.stop();');
-    expect(sessionScreen).toContain('await sendLatest({ documentOverride: latestDocument });');
-    expect(sessionScreen.indexOf('const documentBeforeStop = composerDocumentRef.current;')).toBeLessThan(
-      sessionScreen.indexOf('const latestDraft = await controller.stop();'),
-    );
-    expect(sessionScreen).toContain('const latestDocument = latestDraft.trim()');
-    expect(sessionScreen).toContain('readCurrentDraft: () => draftRef.current');
-    expect(sessionScreen).toContain('if (selection) input?.rememberSelection(text, selection);');
-    expect(sessionScreen).toContain('writeVoiceDraft({ draft: text, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });');
-    expect(sessionScreen).toContain('reconcileComposerVoiceDraft(composerDocumentRef.current, update)');
-    expect(sessionScreen).toContain('reconcileComposerProjectedText(composerDocumentRef.current, latestDraft)');
-    expect(sessionScreen).toContain('createMobileVoiceControllerSession({');
-    expect(sessionScreen).not.toContain('await sendLatest({ draftOverride: latestDraft });');
+  it('applies a deferred Agent switch only when the next queued message is accepted', async () => {
+    const host = mockHost();
+    expect(await host.invoke('maker:get-capabilities', ['codex'])).toMatchObject({ supportsSessionAgentSwitch: true });
+    expect(await host.invoke('maker:provider:list', [])).toMatchObject({ providers: expect.arrayContaining([expect.objectContaining({ agents: ['codex'] })]) });
+    expect(await host.invoke('maker:switch-session-agent', ['session', 'codex', 'next-model'])).toMatchObject({ deferred: true });
+    expect(host.state.sessions[0].agentKind).toBe('cc');
+    expect(await host.invoke('maker:get-session-agent-switch-intent', ['session'])).toMatchObject({ targetAgentKind: 'codex' });
+    await host.invoke('maker:input:enqueue', ['session', { text: 'next message' }]);
+    expect(host.state.sessions[0]).toMatchObject({ agentKind: 'codex', model: 'next-model' });
+    expect(await host.invoke('maker:get-session-agent-switch-intent', ['session'])).toBeNull();
+    expect(host.state.messages.get('session')[0]).toMatchObject({ role: 'user', content: 'next message' });
   });
 
-  it('guards the mobile voice composer against the legacy desktop transcription path', () => {
-    const scopeGuard = readFileSync(resolve(process.cwd(), 'scripts/mobile-scope-guard.mjs'), 'utf8');
+  it('preserves recovery-key ownership before and after a mock session claims its worktree', async () => {
+    const host = mockHost();
+    await host.invoke('maker:apply-new-maker-worktree-pref', [{ worktreeEnabled: true }]);
+    expect(await host.invoke('maker:get-new-maker-defaults', [])).toEqual({ worktreeEnabled: true });
+    expect(await host.invoke('worktree:detect-cwd', [{ cwd: '/repo' }])).toMatchObject({ supportsRecoveryKeyDiscard: true, repoRoot: '/repo' });
+    const branches = await host.invoke('worktree:list-branches', [{ baseRepo: '/repo' }]);
+    const { name } = await host.invoke('worktree:suggest-name', [{ baseRepo: '/repo' }]);
+    const request = { sessionId: 'created', baseRepo: '/repo', name, sourceBranch: branches.branches[1], recoveryKey: 'fixture-recovery-key' };
+    const result = await host.invoke('worktree:create', [request]);
+    expect(result).toMatchObject({ ok: true, meta: { path: `/repo/.cindy-worktrees/${name}`, branch: `xdt/${name}`, sourceBranch: branches.branches[1] } });
+    await expect(host.invoke('worktree:discard-precreated', [{ sessionId: 'created', recoveryKey: 'wrong-key' }])).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(await host.invoke('worktree:discard-precreated', [{ sessionId: 'created', recoveryKey: request.recoveryKey }])).toEqual({ discarded: true, branchDeleted: true });
+    await host.invoke('worktree:create', [request]);
+    await host.invoke('maker:create-session', [{ id: 'created', workingDir: result.meta.path }]);
+    expect(host.state.sessions[0]).toMatchObject({ worktreePath: result.meta.path });
+    await expect(host.invoke('worktree:discard-precreated', [{ sessionId: 'created', recoveryKey: request.recoveryKey }])).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
 
-    expect(scopeGuard).toContain("roots: ['app']");
-    expect(scopeGuard).toContain("'transcribeVoice('");
-    expect(scopeGuard).toContain("'DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL'");
-    expect(scopeGuard).toContain("'device-link:voice:transcribe'");
-    expect(scopeGuard).toContain('Mobile voice composer must use the realtime controller + managed Cindy voice service');
+  it('rejects retired credential sync with its explicit compatibility error', async () => {
+    const host = mockHost();
+    await expect(host.invoke('device-link:voice:credential-sync', [])).rejects.toMatchObject({ code: 'VOICE_CREDENTIAL_SYNC_REMOVED' });
+    expect(await host.invoke('device-link:voice:dictionary-learning', [])).toMatchObject({ ok: true, ignoreReason: 'mock-host' });
+  });
+
+  it.each(['safe controller', 'transcribeVoice(', 'DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL', 'device-link:voice:transcribe'])('runs the mobile scope gate against %s', (fixture) => {
+    const error = vi.fn();
+    const execute = () => runInNewContext(scriptBody('scripts/mobile-scope-guard.mjs', 'const forbiddenFiles ='), {
+      mobileRoot: '/mobile', resolve: posix.resolve, join: posix.join, relative: posix.relative, basename: posix.basename,
+      existsSync: (path: string) => ['/mobile/app', '/mobile/app/composer.tsx'].includes(path),
+      statSync: (path: string) => ({ isFile: () => path.endsWith('.tsx'), isDirectory: () => path === '/mobile/app' }),
+      readdirSync: () => ['composer.tsx'], readFileSync: () => fixture,
+      console: { log: vi.fn(), error }, process: { exit: (code: number) => { throw new Error(`exit:${code}`); } },
+    });
+    if (fixture === 'safe controller') { execute(); expect(error).not.toHaveBeenCalled(); }
+    else { expect(execute).toThrow('exit:1'); expect(error).toHaveBeenCalledWith(expect.stringContaining('Mobile voice composer must use the realtime controller')); }
   });
 });

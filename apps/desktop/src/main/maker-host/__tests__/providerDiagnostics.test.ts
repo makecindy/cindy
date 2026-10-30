@@ -11,6 +11,11 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
+const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock('../logger-adapter', () => ({
+  createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
+}));
+
 import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
 
 import { classifyProviderError } from '../../../shared/providerErrors.js';
@@ -22,11 +27,13 @@ import {
   setDiagnosticsOAuthTokenReader,
   testProviderConnection,
 } from '../provider-diagnostics.js';
+import { probeProviderProtocols } from '../provider-protocol-probe.js';
 import { setCustomProviders } from '../active-catalog.js';
 
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  probeLog.warn.mockClear();
 });
 
 describe('classifyProviderError', () => {
@@ -128,6 +135,45 @@ describe('buildProbeRequest', () => {
     });
   });
 
+  it('adds the OpenCode Go session header to the probe request', () => {
+    const { url, init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      modelId: 'deepseek-v4.1-flash',
+      apiKey: 'go-secret',
+    });
+    expect(url).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(headers.authorization).toBe('Bearer go-secret');
+  });
+
+  it('recognizes an OpenCode Go preset on a mirror base URL', () => {
+    const { init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://mirror.example/v1',
+      catalogPresetId: 'opencode-go',
+      modelId: 'deepseek-v4.1-flash',
+      apiKey: 'go-secret',
+    });
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('leaves other presets on mirror base URLs without the session header', () => {
+    const { init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://mirror.example/v1',
+      catalogPresetId: 'moonshot',
+      modelId: 'kimi-k2',
+      apiKey: 'sk-mirror',
+    });
+    expect((init.headers as Record<string, string>)['x-opencode-session']).toBeUndefined();
+  });
+
   it('Codex Anthropic Messages probe matches runtime joining for a versioned base URL', () => {
     const { url } = buildProbeRequest({
       agent: 'codex',
@@ -205,7 +251,7 @@ describe('buildProbeRequest', () => {
     });
     expect(url).toBe(expectedUrl);
     expect(JSON.parse(String(init.body))).toMatchObject({
-      model: 'MiniMax-M3',
+      model: runtime!.models[0]!.id,
       stream: false,
       store: false,
     });
@@ -324,6 +370,57 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
       },
     );
     expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE' });
+  });
+
+  it('失败探测在主进程留痕:字段含 agent/model/上游 origin/status/分类码/脱敏摘要,不含路径与凭证(#4954)', async () => {
+    const r = await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://opencode.example/zen/go/v1?token=secret-q', modelId: 'kimi-k2', apiKey: 'sk-live-abcdef123456', wireProtocol: 'openai-chat' },
+      async () => fakeResponse(400, '{"error":{"message":"model kimi-k2 is not served by this endpoint","authorization":"Bearer sk-live-abcdef123456"}}'),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'UNKNOWN', status: 400 });
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    const [msg, ctx] = probeLog.warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(msg).toBe('provider connection probe failed');
+    expect(ctx).toMatchObject({ agent: 'codex', model: 'kimi-k2', upstream: 'https://opencode.example', wireProtocol: 'openai-chat', status: 400, code: 'UNKNOWN' });
+    expect(typeof ctx.latencyMs).toBe('number');
+    expect(String(ctx.detail)).toContain('not served by this endpoint');
+    // 路径、query 与凭证不得进入日志。
+    const serialized = JSON.stringify(ctx);
+    expect(serialized).not.toContain('/zen/go/v1');
+    expect(serialized).not.toContain('secret-q');
+    expect(serialized).not.toContain('sk-live-abcdef123456');
+  });
+
+  it('拿到 SSE 响应头后读首帧中断:异常照常抛出,但主进程已留痕(#4963 review)', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.error(new Error('socket hang up')); },
+    });
+    await expect(runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://x.example/v1', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
+      async () => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    )).rejects.toThrow('socket hang up');
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UNKNOWN', model: 'm', upstream: 'https://x.example' });
+    expect(String((probeLog.warn.mock.calls[0][1] as Record<string, unknown>).detail)).toContain('socket hang up');
+  });
+
+  it('成功探测不写 warn 日志', async () => {
+    await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(200, '{}'),
+    );
+    expect(probeLog.warn).not.toHaveBeenCalled();
+  });
+
+  it('网络层失败同样留痕(无 status,带分类码)', async () => {
+    const err = new Error('fetch failed');
+    (err as Error & { cause?: { code: string } }).cause = { code: 'ECONNREFUSED' };
+    await runProviderProbe(
+      { agent: 'codex', baseUrl: 'https://nope.example', modelId: 'm' },
+      async () => { throw err; },
+    );
+    expect(probeLog.warn).toHaveBeenCalledTimes(1);
+    expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -922,4 +1019,233 @@ it('does not replace an explicit Chat probe with the preset’s Google SDK', asy
   expect(await runProviderProbe({ agent: 'pi', baseUrl: 'https://proxy.example/v1', modelId: 'gemini-2.5-flash',
     catalogPresetId: 'google-vertex', wireProtocol: 'openai-chat', apiKey: 'fixture-key' }, fetcher)).toMatchObject({ ok: true });
   expect(fetcher).toHaveBeenCalledOnce();
+});
+
+/** Auto-probe unit tier: real Pi serializers/parsers with injected network responses.
+ * Protects one-click fallback and non-replay after ambiguous execution; legacy single-probe
+ * tests above do not cover sequencing or truncated native streams. Minimal regression:
+ * a valid content delta without finish must never trigger a second paid request.
+ */
+describe('automatic Pi protocol connection test', () => {
+  const spec = { agent: 'pi' as const, baseUrl: 'https://relay.example/v1', modelId: 'test-model',
+    authMethod: 'apiKey' as const, apiKey: 'fake-test-key' };
+  const sse = (events: unknown[]) => new Response(events.map(value => 'data: ' + JSON.stringify(value) + '\n\n').join(''), {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+  const chat = () => sse([
+    { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }] },
+    { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+  ]);
+  const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('uses native streaming and stops on the first successful generation', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => chat());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, decision: 'success', selected: { baseUrl: spec.baseUrl, wireProtocol: 'openai-chat' } });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(String(fetcher.mock.calls[0]?.[0])).toContain('/v1/chat/completions');
+    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
+  });
+
+  it('keeps preset and legacy single-probe callers on their existing route', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+    for (const request of [
+      { kind: 'adhoc' as const, spec: { ...spec, wireProtocol: 'openai-chat' as const } },
+      { kind: 'adhoc' as const, requestId: 'preset-probe', spec: { ...spec, wireProtocol: 'openai-chat' as const, catalogPresetId: 'deepseek' } },
+    ]) {
+      const result = await testProviderConnection(request, fetcher);
+      expect(result.ok).toBe(true);
+      expect(result.attempts).toBeUndefined();
+    }
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)('uses the real %s adapter and terminates fallback on success', async wire => {
+    const events = wire === 'openai-responses' ? [
+      { type: 'response.created', response: { id: 'reply' } },
+      { type: 'response.output_item.added', output_index: 0, item: { id: 'msg', type: 'message', role: 'assistant', content: [] } },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'OK' },
+      { type: 'response.completed', response: { id: 'reply', status: 'completed', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
+    ] : [
+      { type: 'message_start', message: { id: 'reply', model: 'test-model', role: 'assistant', type: 'message', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ];
+    // Anthropic's native decoder requires event names in addition to data fields.
+    const response = () => wire === 'anthropic-messages'
+      ? new Response(events.map(value => 'event: ' + value.type + '\ndata: ' + JSON.stringify(value) + '\n\n').join(''), { headers: { 'content-type': 'text/event-stream' } }) : sse(events);
+    const fetcher = vi.fn<typeof fetch>(async url => new URL(String(url)).pathname.endsWith(wire === 'openai-responses' ? '/responses' : '/v1/messages') ? response() : unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, selected: { wireProtocol: wire } });
+    expect(fetcher).toHaveBeenCalledTimes(wire === 'openai-responses' ? 2 : 3);
+  });
+
+  it('exhausts at most four explicit rejections and returns one aggregate', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: false, decision: 'next' });
+    expect(result.attempts).toHaveLength(4);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(new Set(result.attempts?.map(item => item.wireProtocol)).size).toBe(4);
+  });
+
+  it('can select Google after three explicit rejections without following redirects', async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url: Parameters<typeof fetch>[0]) => String(url).includes(':streamGenerateContent')
+      ? sse([{ candidates: [{ content: { parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] }]) : unsupported());
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: true, selected: { wireProtocol: 'google-generative-ai', baseUrl: spec.baseUrl } });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    [401, { error: { message: 'invalid api key' } }, 'AUTH_INVALID'],
+    [402, { error: { message: 'insufficient_quota' } }, 'QUOTA_EXCEEDED'],
+    [429, { error: { message: 'rate limit' } }, 'RATE_LIMITED'],
+    [404, { error: { code: 'model_not_found', message: 'model not found' } }, 'MODEL_NOT_FOUND'],
+  ])('stops on actionable upstream error %i', async (status, body, code) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'blocked', code });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    () => new Response('not found', { status: 404 }),
+    () => new Response('unexpected stream_options parameter', { status: 400 }),
+    () => new Response('<html>login</html>', { headers: { 'content-type': 'text/html' } }),
+    () => sse([]),
+    () => sse([{ choices: [{ index: 0, delta: { content: 'OK' }, finish_reason: null }] }]),
+    () => sse([{ choices: [{ index: 0, delta: { content: 'OK' } }] }, { error: { type: 'server_error', message: 'disconnected' } }]),
+    () => new Response('unavailable', { status: 503 }),
+  ])('does not replay an ambiguous or partially accepted request', async response => {
+    const fetcher = vi.fn<typeof fetch>(async () => response());
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('does not attempt candidates after cancellation', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn<typeof fetch>(async () => { controller.abort(); return unsupported(); });
+    expect(await probeProviderProtocols(spec, true, fetcher, controller.signal)).toMatchObject({ ok: false, decision: 'cancelled' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('does not replay a timed-out request', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new DOMException('timed out', 'TimeoutError'); });
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive', code: 'TIMEOUT' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('no-auth local probes cannot transmit leftover credentials or the SDK placeholder', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => chat());
+    await probeProviderProtocols({ ...spec, authMethod: 'none', baseUrl: 'http://127.0.0.1:4000/v1',
+      headers: { Authorization: 'Bearer private-leftover', 'X-API-Key': 'leftover' } }, true, fetcher);
+    const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
+    expect(headers.has('authorization')).toBe(false);
+    expect(headers.has('x-api-key')).toBe(false);
+  });
+
+  // Protect the real abort path: native SDKs may resolve an error message instead of rejecting.
+  it('classifies the candidate deadline even when the native SDK consumes the abort', async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => ms === 8_000
+      ? deadline.signal : new AbortController().signal);
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      deadline.abort(new DOMException('deadline reached', 'TimeoutError'));
+      throw init!.signal!.reason;
+    });
+    try {
+      expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({
+        ok: false, decision: 'inconclusive', code: 'TIMEOUT',
+      });
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally { timeout.mockRestore(); }
+  });
+
+  it('caps cumulative auto-detection at 15 seconds across candidates', async () => {
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('deadline', 'TimeoutError')), ms);
+      return controller.signal;
+    });
+    const fetcher = vi.fn<typeof fetch>((_input, init) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(unsupported()), 6_000);
+      init!.signal!.addEventListener('abort', () => {
+        clearTimeout(timer); reject(init!.signal!.reason);
+      }, { once: true });
+    }));
+    try {
+      const pending = probeProviderProtocols(spec, true, fetcher);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await pending;
+      expect(result).toMatchObject({ ok: false, decision: 'inconclusive', code: 'TIMEOUT', latencyMs: 15_000 });
+      expect(result.attempts).toHaveLength(3);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(timeout).toHaveBeenCalledWith(15_000);
+      expect(timeout).toHaveBeenCalledWith(8_000);
+    } finally { timeout.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('keeps explicit single-route tests on their existing time budgets', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      expect(await probeProviderProtocols(spec, false, async () => chat())).toMatchObject({ ok: true });
+      expect(timeout).toHaveBeenCalledWith(60_000);
+      expect(timeout).toHaveBeenCalledWith(20_000);
+      expect(timeout).not.toHaveBeenCalledWith(15_000);
+      expect(timeout).not.toHaveBeenCalledWith(8_000);
+    } finally { timeout.mockRestore(); }
+  });
+
+  it('does not open a connection when cancelled before the first candidate', async () => {
+    const controller = new AbortController(); controller.abort();
+    const fetcher = vi.fn<typeof fetch>();
+    expect(await probeProviderProtocols(spec, true, fetcher, controller.signal)).toMatchObject({
+      ok: false, decision: 'cancelled', attempts: [],
+    });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, 'unsupported_protocol', 'blocked', 1],
+    [429, 'unsupported_protocol', 'blocked', 1],
+    [500, 'unsupported_protocol', 'inconclusive', 1],
+    [422, 'insufficient_quota unsupported_protocol', 'blocked', 1],
+    [400, 'model not found unsupported_protocol', 'blocked', 1],
+    [400, 'invalid api key unsupported_protocol', 'blocked', 1],
+    [405, 'method not allowed', 'inconclusive', 1],
+    [415, 'unsupported media type', 'inconclusive', 1],
+    [422, 'invalid request', 'inconclusive', 1],
+    [405, 'endpoint is not supported', 'next', 4],
+    [415, 'unsupported_protocol', 'next', 4],
+    [422, 'route_not_found', 'next', 4],
+  ] as const)('prioritizes terminal errors over protocol wording: %s %s', async (status, message, decision, count) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { message } }), { status }));
+    const result = await probeProviderProtocols(spec, true, fetcher);
+    expect(result).toMatchObject({ ok: false, decision });
+    expect(result.attempts).toHaveLength(count);
+    expect(fetcher).toHaveBeenCalledTimes(count);
+  });
+
+  it.each([
+    'data: {broken}\n\n',
+    'data: [DONE]\n\n',
+    'data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n',
+    'data: ' + JSON.stringify({ value: 'x'.repeat(1024 * 1024 + 1) }) + '\n\n',
+  ])('does not replay malformed, empty or oversized accepted streams', async body => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }));
+    expect(await probeProviderProtocols(spec, true, fetcher)).toMatchObject({ ok: false, decision: 'inconclusive' });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('keeps credentials and upstream diagnostics out of the result envelope', async () => {
+    const secret = 'fake-secret-that-must-not-be-echoed';
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { message: 'invalid api key ' + secret } }), { status: 401 }));
+    const result = await probeProviderProtocols({ ...spec, apiKey: secret }, true, fetcher);
+    expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
 });

@@ -6,6 +6,8 @@ import { Search, SlidersHorizontal, X } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { TextInput } from "@/components/AppText";
+import { FilterReminderDot } from "@/components/FilterReminderDot";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import {
   NativePullDownMenu,
   type NativePullDownAction,
@@ -69,7 +71,7 @@ export function HomeSearchBar({
         size={iconSize.md}
         strokeWidth={iconStroke.regular}
       />
-      {filterActive ? <View style={styles.filterDot} /> : null}
+      {filterActive ? <FilterReminderDot offset={styles.filterDotOffset} /> : null}
     </Pressable>
   );
   return (
@@ -90,7 +92,7 @@ export function HomeSearchBar({
           autoFocus={autoFocus}
           onChangeText={onChangeQuery}
           placeholder={t("devices.list.search.placeholder")}
-          placeholderTextColor={colors.textTertiary}
+          placeholderTextColor={colors.textPlaceholder}
           style={styles.input}
           testID={testIDs?.input ?? "home.searchInput"}
           value={query}
@@ -158,10 +160,11 @@ const makeStyles = (colors: ThemeColors) =>
       paddingLeft: spacing.lg,
       paddingRight: spacing.xs,
     },
+    // §3「次级正文 · 搜索框」15;单行输入框不设行高(iOS 占位字 / 光标偏位)。
     input: {
       color: colors.textPrimary,
       flex: 1,
-      fontSize: typeScale.body,
+      fontSize: typeScale.bodySmall,
       minWidth: 0,
       paddingVertical: spacing.sm,
     },
@@ -172,16 +175,6 @@ const makeStyles = (colors: ThemeColors) =>
       position: "relative",
       width: 36,
     },
-    filterDot: {
-      backgroundColor: colors.statusAccent,
-      borderRadius: radius.pill,
-      height: 6,
-      position: "absolute",
-      right: 7,
-      top: 7,
-      width: 6,
-    },
-    pressed: {
-      opacity: 0.72,
-    },
+    filterDotOffset: { right: 7, top: 7 },
+    pressed: mobileInteractionStyles.pressed,
   });

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
@@ -9,9 +10,12 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
   sessionModelSupportsFastMode,
 } from '@cindy/model-providers';
@@ -24,7 +28,7 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 
 import {
-  getScheduleDefaultModel,
+  getScheduleDefaultRoute,
   rememberScheduleFormPrefs,
   useScheduleForm,
   deriveRunMode,
@@ -35,6 +39,7 @@ import {
   buildHookCommandForScriptFile,
   canSubmitSessionBinding,
   isExplicitScheduleModelUnavailable,
+  missingRequiredTemplateParamLabel,
   needsBoundSessionGenerationRouteResolution,
   parsePreRunHookTimeoutMs,
   resolveScheduleGenerationProviderId,
@@ -128,11 +133,9 @@ export function ScheduleFormDialog({
   editProjectSchedule = false,
   requestedByGhostName = null,
 }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const formApi = useScheduleForm(initial);
   const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
-  const caps = useAgentCapabilities(form.agentKind);
-  const { providers } = useProviders();
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -146,8 +149,31 @@ export function ScheduleFormDialog({
   const boundSessionReference = isBound
     ? boundSessionReferences.get(form.targetSessionId)
     : undefined;
+  // An explicit automation selection wins; legacy locations only seed fresh runs.
+  const boundAgentDeviceId = boundSessionReference?.agentDeviceId ?? null;
+  const selectedAgentDeviceId = form.modelAgentDeviceId !== undefined
+    ? form.modelAgentDeviceId || null
+    : isBound ? boundAgentDeviceId : form.agentDeviceId || null;
+  const caps = useAgentCapabilities(form.agentKind, selectedAgentDeviceId ?? undefined);
+  const localProviders = useProviders();
+  const deviceProviders = useDeviceProviders(selectedAgentDeviceId ?? undefined);
+  const { providers, loading: providersLoading } = selectedAgentDeviceId ? deviceProviders : localProviders;
+  // Do not calibrate saved choices against a provisional local or loading snapshot.
+  const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  useEffect(() => { setSubmitError(null); }, [open, initial]);
+  const showSubmitError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = parseAgentErrorCode(message)?.code;
+    if (code && i18n.exists(`chat.remoteError.${code}`)) {
+      setSubmitError(message);
+      // Save may be below the notice in a scrolled form. The shared alert toast
+      // stays visible above the dialog and announces the localized failure.
+      toast.error(t(`chat.remoteError.${code}`));
+    } else toast.error(message);
+  };
   const [mode, setMode] = useState<'gallery' | 'form'>('form');
   // 前置检查「测试运行」状态:结果只在弹窗内展示,不落任何记录。
   const [hookTesting, setHookTesting] = useState(false);
@@ -246,9 +272,14 @@ export function ScheduleFormDialog({
     const description = hookGenDesc.trim();
     if (!description || hookGenerating) return;
     const hasSessionTarget = hasRealBinding(form);
-    const resolveBoundSessionRoute = needsBoundSessionGenerationRouteResolution(form);
+    // 脚本在本机生成。Agent 在另一台电脑时它的模型与来源只在那台可用,改用本机的
+    // 辅助模型兜底链,不把那台的来源 id 当成本机来源。
+    const remoteAgentLocation = selectedAgentDeviceId;
+    const resolveBoundSessionRoute = !remoteAgentLocation && needsBoundSessionGenerationRouteResolution(form);
     const inheritsBoundSessionModel = usesBoundSessionGenerationModel(form);
-    const providerId = resolveBoundSessionRoute
+    const providerId = remoteAgentLocation
+      ? undefined
+      : resolveBoundSessionRoute
       ? form.providerId.trim() || undefined
       : resolveScheduleGenerationProviderId({
         providers,
@@ -256,7 +287,7 @@ export function ScheduleFormDialog({
         model: form.model,
         agentKind: form.agentKind,
       });
-    if (!resolveBoundSessionRoute && !providerId) {
+    if (!remoteAgentLocation && !resolveBoundSessionRoute && !providerId) {
       toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
       return;
     }
@@ -268,10 +299,13 @@ export function ScheduleFormDialog({
         description,
         scheduleName: form.name.trim() || undefined,
         providerId: providerId ?? undefined,
+        // Remote selections use the existing local utility-model fallback above.
+        modelAgentDeviceId: remoteAgentLocation ? undefined : form.modelAgentDeviceId,
         // bound 任务的缺省模型/来源维度由 main 按绑定会话补齐；provider/model 的显式
         // 覆盖仍原样透传。persistent 任务即使已回写 targetSessionId，也按任务级选择生成。
-        agentKind: resolveBoundSessionRoute ? undefined : form.agentKind,
-        model: inheritsBoundSessionModel ? undefined : form.model.trim() || undefined,
+        agentKind: remoteAgentLocation || (resolveBoundSessionRoute && form.modelAgentDeviceId !== '')
+          ? undefined : form.agentKind,
+        model: inheritsBoundSessionModel || remoteAgentLocation ? undefined : form.model.trim() || undefined,
         // 绑定会话任务:workingDir 不发(表单残留值可能是改绑前的过期项目目录,
         // 显式值会压过会话解析),真实 cwd 由 main 按会话 meta.workDir 解析 ——
         // 落盘目录/自测环境与生产运行一致
@@ -301,6 +335,8 @@ export function ScheduleFormDialog({
     providers,
     form.name,
     form.providerId,
+    selectedAgentDeviceId,
+    form.modelAgentDeviceId,
     form.effort,
     form.agentKind,
     form.model,
@@ -349,7 +385,7 @@ export function ScheduleFormDialog({
       setField('recurring', template.recurring);
       setField('manual', false);
     }
-    applyTemplateAgentFields(template);
+    applyTemplateAgentFields(template, localProviders.providers);
     if (template.useWorktree !== undefined) setField('useWorktree', template.useWorktree);
     // useWorktree 只在 project workspace 且无会话绑定时会被 buildScheduleInput 保留；
     // 模板要求 worktree 时把表单切到 project 模式并清掉绑定会话（绑定与 worktree
@@ -373,11 +409,18 @@ export function ScheduleFormDialog({
     setParamValues(initParams);
     setPromptDirty(false);
     setMode('form');
-  }, [setField, applyTemplateAgentFields]);
+  }, [setField, applyTemplateAgentFields, localProviders.providers]);
 
   // Must run after the open/reset effect above so template fields override fresh defaults.
+  const appliedInitialTemplate = useRef<string | null>(null);
   useEffect(() => {
-    if (!open || !initialTemplate || isEdit || isProjectAutomationMode) return;
+    if (!open || !initialTemplate || isEdit || isProjectAutomationMode) {
+      appliedInitialTemplate.current = null;
+      return;
+    }
+    // Catalog refreshes may change the callback, but must not replace a user's draft.
+    if (appliedInitialTemplate.current === initialTemplate.id) return;
+    appliedInitialTemplate.current = initialTemplate.id;
     applyTemplateToForm(initialTemplate);
   }, [open, initialTemplate, isEdit, isProjectAutomationMode, applyTemplateToForm]);
 
@@ -441,22 +484,40 @@ export function ScheduleFormDialog({
   }, [currentModel, form.agentKind, form.model, form.providerId, providers]);
 
   // form.model 为空时回填默认模型（三级回退,所见即所存）。
-  // 覆盖历史遗留的空 model 任务（编辑打开时回填）；若不回填,提交后落库是
-  // 空字符串,runner 走自己 hardcode 的兜底 —— 两边一旦漂移就会出现
-  // "任务里看着选了 Opus 4.8、实际每次跑 4.7"（2026-06 实际踩坑）。
-  // ⚠️ heartbeat 形态(targetSessionId 非空,含 '__pending__')必须跳过:
+  // 覆盖历史遗留的空 model 任务（编辑打开时回填）；第三级(新建任务默认)要等供应商
+  // 清单到位才能算出,算不出时保持留空,runner 按同一口径实时解析。
+  // ⚠️ heartbeat 跟随模式(targetSessionId 非空且无显式 Harness)必须跳过:
   // 空 model = "跟随会话"是有效语义,回填会把 MCP 建的跟随任务静默落成
   // 显式模型,下次 fire runner setModel 反向改掉绑定会话的模型。
   useEffect(() => {
-    if (form.targetSessionId.trim()) return;
-    if (!form.model) setField('model', getScheduleDefaultModel(form.agentKind));
-  }, [form.model, form.agentKind, form.targetSessionId, setField]);
+    if (form.targetSessionId.trim() && !form.modelAgentKind) return;
+    // Local recent-model preferences do not describe another computer's catalog.
+    if (selectedAgentDeviceId) return;
+    if (form.model) return;
+    // 默认路由限定在表单已选的来源内,模型与来源成对回填(已选来源保持不变)。
+    const route = getScheduleDefaultRoute(
+      form.agentKind,
+      providersLoading ? undefined : providers,
+      form.providerId,
+    );
+    if (!route.model) return;
+    setField('model', route.model);
+    if (route.providerId && !form.providerId.trim()) setField('providerId', route.providerId);
+  }, [form.model, form.modelAgentKind, form.agentKind, form.targetSessionId, form.providerId, setField, providers, providersLoading, selectedAgentDeviceId]);
+
+  // 绑定任务的显式模型属于任务所在电脑的目录。读到任务位置后让表单与之成对,之后切到
+  // 「每次新建任务」时模型与运行位置仍然一致。
+  useEffect(() => {
+    if (!isBound || !boundSessionReference || !form.model.trim() || form.modelAgentDeviceId !== undefined) return;
+    const location = boundSessionReference.agentDeviceId ?? '';
+    if ((form.agentDeviceId ?? '') !== location) setField('agentDeviceId', location);
+  }, [isBound, boundSessionReference, form.model, form.agentDeviceId, form.modelAgentDeviceId, setField]);
 
   useEffect(() => {
-    if (form.modelAgentKind || !currentModelEfforts || !form.effort) return;
+    if (!modelCatalogReady || form.modelAgentKind || !currentModelEfforts || !form.effort) return;
     const allowed = currentModelEfforts as readonly string[];
     if (!allowed.includes(form.effort)) setField('effort', '');
-  }, [form.modelAgentKind, currentModelEfforts, form.effort, setField]);
+  }, [modelCatalogReady, form.modelAgentKind, currentModelEfforts, form.effort, setField]);
 
   // Fast 模式门控：agent 级 hasFastMode × 该 (生效来源, 模型) 的 supportsFastMode（per-provider，
   // 唯一真相）。生效来源按 form.providerId 解析（空则该模型的默认来源）。Claude 当前 hasFastMode
@@ -470,12 +531,13 @@ export function ScheduleFormDialog({
   // 切到 Claude / 不支持 fast 的模型时，清掉表单里残留的 fast 态，
   // 杜绝脏值经 toInput 流向 createSession（与上面 effort 失配自动清除同思路）。
   useEffect(() => {
-    if (!form.modelAgentKind && !caps.loading && providers.length > 0 && form.fastMode && !showFastModeToggle) {
+    if (modelCatalogReady && !form.modelAgentKind && providers.length > 0 && form.fastMode && !showFastModeToggle) {
       setField('fastMode', false);
     }
-  }, [form.modelAgentKind, caps.loading, providers.length, form.fastMode, showFastModeToggle, setField]);
+  }, [modelCatalogReady, form.modelAgentKind, providers.length, form.fastMode, showFastModeToggle, setField]);
 
   const handleSubmit = async () => {
+    setSubmitError(null);
     const err = validate();
     if (err) {
       toast.warning(t(err.key, err.values));
@@ -514,7 +576,7 @@ export function ScheduleFormDialog({
         // （文案含项目名 + 增删改数量），此处不要再弹通用 toast，否则保存一次会出现两条提示。
         onOpenChange(false);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : String(e));
+        showSubmitError(e);
       } finally {
         setSubmitting(false);
       }
@@ -522,13 +584,18 @@ export function ScheduleFormDialog({
     }
     let input = toInput();
     if (selectedTemplate && !promptDirty) {
+      const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
+      if (missingLabel) {
+        toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
+        return;
+      }
       try {
         input = {
           ...input,
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
-      } catch (e) {
-        toast.warning(e instanceof Error ? e.message : String(e));
+      } catch {
+        toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
     }
@@ -538,7 +605,7 @@ export function ScheduleFormDialog({
       if (!isEdit) rememberScheduleFormPrefs(form);
       onOpenChange(false);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      showSubmitError(e);
     } finally {
       setSubmitting(false);
     }
@@ -549,10 +616,7 @@ export function ScheduleFormDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-neutral-900/40 dark:bg-neutral-950/60',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -562,9 +626,8 @@ export function ScheduleFormDialog({
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => submitting && e.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[88vh] w-[760px] flex-col overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'flex max-h-[88vh] w-[760px] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
@@ -634,6 +697,12 @@ export function ScheduleFormDialog({
           // overflow-y-auto:内容超过弹窗 max-h 时整体滚动;
           // 提示词编辑框是固定高度,不会被可展开区块挤压。
           <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto pt-[18px] pr-6 pb-[22px] pl-6">
+            {submitError && (
+              <ErrorNotice
+                message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
+                details={submitError}
+              />
+            )}
             <div className="flex flex-col gap-2">
               <label className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">{t('scheduler.editor.fields.title')}</label>
               <div className="flex h-11 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-4">
@@ -816,8 +885,8 @@ export function ScheduleFormDialog({
             <div className="flex flex-col gap-2.5">
             <div className="flex flex-wrap items-center gap-2.5">
               {/* "运行会话"三态:合并了旧 persistentSession 开关与手绑会话两个概念。
-                  fresh = 每次新建;persistent = 持续会话(首次 fire 创建后续绑,归档自动重建);
-                  bound = 绑定已有会话(picker 选,会话不可用时任务自动 pause)。
+                  fresh = 每次新建;persistent = 持续会话(首次 fire 创建后续绑,归档后恢复原任务);
+                  bound = 绑定已有会话(picker 选,归档后恢复，删除/丢失时自动 pause)。
                   project 自动化模式只显 fresh/persistent —— schedules.json 没有
                   targetSessionId 通道,bound 在该模式无法落库。 */}
               <span className="text-13 leading-none text-[var(--settings-btn-secondary-text)]">
@@ -1110,10 +1179,13 @@ export function ScheduleFormDialog({
                     >
                       <FolderOpen size={14} aria-hidden />
                     </button>
-                    {/* 超时刻意不做进 UI(规则 20:高级细节):数据层仍支持 timeoutMs
-                        (MCP / agent 可设),未设 = 不限时(无默认超时);
-                        表单状态里隐形往返,编辑不丢 MCP 设过的值。 */}
-                    <button
+                        {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                            executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                            ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
+                    <Button
+                      variant={hookGenOpen ? 'primary' : 'secondary'}
+                      size="lg"
+                      compact
                       type="button"
                       onClick={() => {
                         setHookGenOpen((v) => !v);
@@ -1121,35 +1193,24 @@ export function ScheduleFormDialog({
                         setHookGenFailure(null);
                       }}
                       aria-expanded={hookGenOpen}
-                      className={cn(
-                        'inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-full border px-3.5',
-                        'text-12 font-medium transition-colors focus:outline-none',
-                        hookGenOpen
-                          ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'
-                          : 'border-[var(--settings-input-border)] text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-                      )}
                     >
                       <Sparkles size={12} aria-hidden />
                       {form.preRunHookCommand.trim()
                         ? t('scheduler.editor.preRunHook.aiModify')
                         : t('scheduler.editor.preRunHook.aiCreate')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void runHookTest()}
-                      disabled={hookTesting || !form.preRunHookCommand.trim()}
-                      className={cn(
-                        'inline-flex h-[38px] shrink-0 items-center gap-1.5 rounded-full border border-[var(--settings-input-border)] px-3.5',
-                        'text-12 font-medium text-[var(--settings-btn-secondary-text)] transition-colors',
-                        'hover:bg-[var(--surface-hover)] focus:outline-none',
-                        'disabled:cursor-not-allowed disabled:opacity-50',
-                      )}
-                    >
-                      <Play size={12} aria-hidden />
-                      {hookTesting
-                        ? t('scheduler.editor.preRunHook.testing')
-                        : t('scheduler.editor.preRunHook.test')}
-                    </button>
+                    </Button>
+                        <Button
+                          variant="secondary"
+                          size="lg"
+                          loading={hookTesting}
+                          type="button"
+                          onClick={() => void runHookTest()}
+                          disabled={hookTesting || !form.preRunHookCommand.trim()}
+                          className="shrink-0"
+                        >
+                          <Play size={12} aria-hidden />
+                          {t('scheduler.editor.preRunHook.test')}
+                        </Button>
                   </div>
                   {/* AI 生成内联面板:描述想要的检查条件 → 生成脚本落盘 → 命令回填 */}
                   {hookGenOpen && (
@@ -1166,19 +1227,18 @@ export function ScheduleFormDialog({
                         )}
                       />
                       {hookGenFailure && (
-                        <div
+                        <ErrorNotice
                           role="alert"
-                          className="rounded-lg border border-[var(--error-border)] bg-[var(--error-bg)] px-3 py-2.5"
+                          message={t(
+                            `scheduler.editor.preRunHook.aiFailure.${hookGenFailure.reason}`,
+                          )}
                         >
-                          <p className="text-12 leading-[1.45] text-[var(--error-fg-strong)]">
-                            {t(`scheduler.editor.preRunHook.aiFailure.${hookGenFailure.reason}`)}
-                          </p>
                           {hookGenFailure.attempts.length > 0 && (
                             <div className="mt-2">
-                              <p className="text-11 text-[var(--error-fg)]">
+                              <p className="text-11 text-[var(--text-secondary)]">
                                 {t('scheduler.editor.preRunHook.aiFailure.checkedCandidates')}
                               </p>
-                              <ul className="mt-1 space-y-0.5 text-11 leading-[1.4] text-[var(--error-fg)]">
+                              <ul className="mt-1 space-y-0.5 text-11 leading-[1.4] text-[var(--text-secondary)]">
                                 {hookGenFailure.attempts.map((attempt, index) => (
                                   <li key={`${attempt.providerId}:${attempt.model}:${index}`}>
                                     <span className="font-mono">
@@ -1196,60 +1256,54 @@ export function ScheduleFormDialog({
                               </ul>
                             </div>
                           )}
-                          <button
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            compact
                             type="button"
                             onClick={() => {
                               onOpenChange(false);
                               navigate('/settings?tab=providers');
                             }}
-                            className={cn(
-                              'mt-2 inline-flex h-7 select-none items-center rounded-full border px-3 text-11 font-medium',
-                              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
-                              'text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                            )}
+                            className="mt-2 select-none"
                           >
                             {t('scheduler.editor.preRunHook.aiFailure.openProviders')}
-                          </button>
-                        </div>
+                          </Button>
+                        </ErrorNotice>
                       )}
                       <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setHookGenOpen(false);
-                            setHookGenDesc('');
-                            setHookGenFailure(null);
-                          }}
-                          disabled={hookGenerating}
-                          className={cn(
-                            'inline-flex h-8 items-center rounded-full px-3 text-12',
-                            'text-[var(--cmd-palette-item-meta)] transition-colors',
-                            'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
-                            'focus:outline-none disabled:opacity-50',
-                          )}
-                        >
-                          {t('scheduler.editor.preRunHook.aiCancel')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void runHookGenerate()}
-                          disabled={hookGenerating || !hookGenDesc.trim()}
-                          className={cn(
-                            'inline-flex h-8 items-center gap-1.5 rounded-full px-4 text-12 font-medium',
-                            'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] transition-opacity',
-                            'focus:outline-none disabled:cursor-not-allowed disabled:opacity-50',
-                          )}
-                        >
-                          {hookGenerating && (
-                            <span
-                              aria-hidden
-                              className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current"
-                            />
-                          )}
-                          {hookGenerating
-                            ? t('scheduler.editor.preRunHook.aiGenerating')
-                            : t('scheduler.editor.preRunHook.aiGenerate')}
-                        </button>
+                            <Button
+                              variant="secondary"
+                              size="md"
+                              tone="quiet"
+                              compact
+                              type="button"
+                              onClick={() => {
+                                setHookGenOpen(false);
+                                setHookGenDesc('');
+                                setHookGenFailure(null);
+                              }}
+                              disabled={hookGenerating}
+                            >
+                              {t('scheduler.editor.preRunHook.aiCancel')}
+                            </Button>
+                            <Button
+                              variant="cta"
+                              size="md"
+                              compact
+                              loading={hookGenerating}
+                              type="button"
+                              onClick={() => void runHookGenerate()}
+                              disabled={hookGenerating || !hookGenDesc.trim()}
+                            >
+                              {hookGenerating && (
+                                <span
+                                  aria-hidden
+                                  className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current"
+                                />
+                              )}
+                              {t('scheduler.editor.preRunHook.aiGenerate')}
+                            </Button>
                       </div>
                     </div>
                   )}
@@ -1290,29 +1344,33 @@ export function ScheduleFormDialog({
             </div>
             )}
 
-            {/* script 模式的提交行:agent 模式的提交按钮长在下方 prompt footer 里,
-                script 模式不渲染 prompt 区块,需要独立的提交入口。 */}
+              {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                  executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                  ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
             {isScriptMode && (
               <div className="flex shrink-0 justify-end">
-                <button
-                  type="button"
-                  aria-label={isEdit ? t('scheduler.editor.promptDialog.saveAria') : t('scheduler.editor.promptDialog.createAria')}
-                  onClick={() => void handleSubmit()}
-                  disabled={submitting}
-                  className={cn(
-                    'flex h-[34px] min-w-[68px] shrink-0 items-center justify-center rounded-full px-4',
-                    'text-sm font-medium leading-none',
-                    'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                    'disabled:opacity-50',
-                  )}
-                >
-                  {submitLabel}
-                </button>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    loading={submitting}
+                    type="button"
+                    aria-label={
+                      isEdit
+                        ? t('scheduler.editor.promptDialog.saveAria')
+                        : t('scheduler.editor.promptDialog.createAria')
+                    }
+                    onClick={() => void handleSubmit()}
+                    disabled={submitting}
+                    className="min-w-[68px] shrink-0"
+                  >
+                    {submitLabel}
+                  </Button>
               </div>
             )}
 
-            {/* 提示词编辑框固定高度(内容超出在 textarea 内滚动),不随其它区块展开被挤压;
-                弹窗整体高度随内容自适应,超过 max-h 时由 body 滚动承接 */}
+              {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                  executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                  ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
             {!isScriptMode && (
             <div className="flex shrink-0 flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -1365,14 +1423,16 @@ export function ScheduleFormDialog({
                     )}
                     <div className="min-w-0 flex-1" />
                     <ModelEffortChip
-                      onSelect={({ engine, modelId, providerId, effort, fast }) => selectModelConfiguration({
+                      onSelect={({ engine, modelId, providerId, effort, fast, agentDevice }) => selectModelConfiguration({
                         agentKind: engine === 'cc' ? 'claude-code' : engine,
                         model: modelId, providerId, effort: (effort ?? '') as typeof form.effort,
                         fastMode: fast,
+                        modelAgentDeviceId: agentDevice?.deviceId ?? '',
                       })}
                       onFollowSession={() => selectModelConfiguration(null,
                         boundSessionReference?.agentKind === 'cc' ? 'claude-code' : boundSessionReference?.agentKind)}
                       agentKind={form.agentKind}
+                      agentDeviceId={selectedAgentDeviceId ?? undefined}
                       modelValue={form.model}
                       onChangeModel={(v) => setField('model', v)}
                       effortValue={form.effort}
@@ -1389,24 +1449,27 @@ export function ScheduleFormDialog({
                       }}
                     />
                   </div>
-                  <button
-                    type="button"
-                    aria-label={isEdit ? t('scheduler.editor.promptDialog.saveAria') : t('scheduler.editor.promptDialog.createAria')}
-                    onClick={() => void handleSubmit()}
-                    disabled={submitting}
-                    className={cn(
-                      'flex h-[34px] min-w-[68px] shrink-0 items-center justify-center rounded-full px-4',
-                      'text-sm font-medium leading-none',
-                      'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
-                      'disabled:opacity-50',
-                    )}
-                  >
-                    {submitLabel}
-                  </button>
+                      <Button
+                        variant="primary"
+                        size="lg"
+                        loading={submitting}
+                        type="button"
+                        aria-label={
+                          isEdit
+                            ? t('scheduler.editor.promptDialog.saveAria')
+                            : t('scheduler.editor.promptDialog.createAria')
+                        }
+                        onClick={() => void handleSubmit()}
+                        disabled={submitting}
+                        className="min-w-[68px] shrink-0"
+                      >
+                        {submitLabel}
+                      </Button>
                 </div>
               </div>
-              {/* 绑定形态下显式选了模型:把 runner setModel 的副作用说出口 ——
-                  下次触发会把绑定会话切到该模型,这是用户决策需要的信息。 */}
+                  {/* 项目自动化(.cindy/automations/schedules.json)的 config schema 尚无
+                      executionMode/scriptConfig 字段,展示切换器会让 script 配置被静默丢弃
+                      ——该形态下隐藏,项目自动化对 script 模式的支持另行迭代。 */}
               {isBound && form.model.trim() !== '' && (
                 <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                   {t('scheduler.editor.runSession.switchModelHint')}

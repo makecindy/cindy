@@ -1,7 +1,15 @@
+import { fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
+import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
+import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
+import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
+import { createToolResultTextCap, compactToolCardResult, TOOL_RESULT_PERSIST_CONTENT_LIMIT, TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX } from '../../../shared/toolResultPersistCap.js';
 
 import {
   createDbTransportError,
@@ -17,7 +25,21 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
+const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
+const TOOL_RESULT_PERSIST_CONTENT_LIMIT = ${TOOL_RESULT_PERSIST_CONTENT_LIMIT};
+const TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX = ${JSON.stringify(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)};
+const compactToolCardResult = ${compactToolCardResult.toString()};
+const createToolResultTextCap = ${createToolResultTextCap.toString()};
+const capToolResultTextForPersist = createToolResultTextCap(extractToolResultDiagnostics);
+const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toString()};
+const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
+const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
+const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
+const recordMediaSpend = ${recordMediaSpend.toString()};
+const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
 // 这段只作为打包路径回滚口保留，后续验证 macOS / Windows packaged 后删除。
 const { parentPort, workerData } = require('node:worker_threads');
@@ -408,9 +430,17 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1000, 5000, 30000, 5 * 60000, 30 * 60000];
 
 function dispatchTx(readyDb, payload) {
+  return batchAutoReviewProjection(readyDb, expectString(asRecord(payload, 'tx args').name, 'name'), () => dispatchTransaction(readyDb, payload));
+}
+
+function dispatchTransaction(readyDb, payload) {
   const request = asRecord(payload, 'tx args');
   const name = expectString(request.name, 'name');
   switch (name) {
+    case 'usage.recordMediaSpend':
+      return recordMediaSpend(readyDb, request.args);
+    case 'authorization.readProjection':
+      return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'codex.importMessages':
       return codexImportMessages(readyDb, request.args);
     case 'claude.importMessages':
@@ -451,10 +481,13 @@ function dispatchTx(readyDb, payload) {
       return sessionsRenameTitles(readyDb, request.args);
     case 'sessions.setStatus':
       return sessionsSetStatus(readyDb, request.args);
+    case 'sessions.setTerminalStatus':
+      return sessionsSetTerminalStatus(readyDb, request.args);
     case 'recentWorkdirs.mergeWindowsIdentity':
       return recentWorkdirsMergeWindowsIdentity(readyDb, request.args);
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
+    case 'pluginUsage.execute': return runPluginUsageTransaction(readyDb, request.args);
     case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(readyDb, request.args);
@@ -727,7 +760,7 @@ function contextRebuild(readyDb, args) {
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = ?, provider_id = ?, effort = COALESCE(?, effort), fast_mode = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
         ).run(updatedAt, expectString(replacement.model, 'replacementRoute.model'),
           nullableString(replacement.providerId), nullableString(replacement.effort),
-          replacement.fastMode === true ? 1 : 0, sessionId, expectedClearedAt,
+          fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
           expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
       : readyDb.prepare(
           'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
@@ -763,7 +796,28 @@ function messageInsert(readyDb, args) {
       : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
   return readyDb.transaction(() => {
     let changes = 0;
-    if (guarded) {
+    // Connection-local stages never enter history, counts or persistent FTS.
+    // SQLite discards them automatically when this worker exits.
+    if (payload.publication) {
+      readyDb.exec('CREATE TEMP TABLE IF NOT EXISTS cindy_pending_message_publications (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER NOT NULL)');
+    }
+    if (payload.publication === 'publish') {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(id, sessionId, clientId).changes;
+      if (changes > 0) readyDb.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ?').run(id, sessionId);
+    } else if (payload.publication === 'rollback') {
+      // CAS the complete published row; never remove a replacement or edited row.
+      changes = readyDb.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ? AND role = ? AND content = ? AND tool_use_id IS ? AND agent_meta IS ? AND agent_kind IS ? AND created_at = ? AND rewind_at IS NULL',
+      ).run(id, sessionId, clientId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (payload.publication === 'discard') {
+      changes = readyDb.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?').run(id, sessionId, clientId).changes;
+    } else if (payload.publication === 'stage') {
+      changes = readyDb.prepare(
+        'INSERT INTO temp.cindy_pending_message_publications (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (guarded) {
       changes = readyDb.prepare(
         'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) ON CONFLICT(session_id, client_id) DO NOTHING',
       ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected).changes;
@@ -772,7 +826,7 @@ function messageInsert(readyDb, args) {
         'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
     }
-    if (changes > 0) {
+    if (changes > 0 && (!payload.publication || payload.publication === 'publish' || payload.publication === 'rollback')) {
       if (role === 'user' || role === 'assistant') {
         readyDb.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
@@ -1074,6 +1128,7 @@ function sessionsSetStatus(readyDb, args) {
     expectString(id, 'sessionId'),
   );
   const status = expectString(payload.status, 'status');
+  const closeSharedTasks = payload.closeSharedTasks === true;
   if (status !== 'active' && status !== 'archived') {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
@@ -1100,6 +1155,9 @@ function sessionsSetStatus(readyDb, args) {
         });
       }
       const updated = updateSession.get(status, now, sessionId);
+      if (closeSharedTasks && status === 'archived') {
+        readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+      }
       if (!updated) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       applied.push({
         sessionId: updated.id,
@@ -1115,10 +1173,49 @@ function sessionsSetStatus(readyDb, args) {
   })();
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
+// Keep this in sync with worker/opHandlers/tx.ts.
+function sessionsSetTerminalStatus(readyDb, args) {
+  const payload = asRecord(args, 'sessions.setTerminalStatus args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'archived' && status !== 'deleted') {
+    throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
+  }
+  return readyDb.transaction(() => {
+    const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
+    if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const now = Date.now();
+    readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const updated = readyDb.prepare(
+      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, now, sessionId);
+    if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
+          "WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted' " +
+          'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
+          'remote_host_id AS remoteHostId, source').all(now, sessionId)
+      : [];
+    for (const child of deletedSideChats) {
+      readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
+    }
+    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+  })();
+}
+
 function compactSessionToolResults(readyDb, args) {
   const payload = asRecord(args, 'toolResults.compactSession args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
+  readyDb.function('tool_result_diagnostics', { deterministic: true }, content => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
 
   const selectSession = readyDb.prepare(
     "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') LIMIT 1",
@@ -1142,7 +1239,7 @@ function compactSessionToolResults(readyDb, args) {
     "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
   const compactMessages = readyDb.prepare(
-    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+    "UPDATE messages SET content = json_patch(json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?), json_object('diagnostics', json(tool_result_diagnostics(content)))) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
 
   return readyDb.transaction(() => {
@@ -1209,7 +1306,7 @@ function sessionImportShare(readyDb, args) {
       expectNumber(rawSession.totalCostUsd, 'session.totalCostUsd'),
       expectNumber(rawSession.contextTokens, 'session.contextTokens'),
       expectNumber(rawSession.contextWindow, 'session.contextWindow'),
-      rawSession.fastMode ? 1 : 0,
+      fastModeToStorage(rawSession.fastMode),
       rawSession.planModeEnabled ? 1 : 0,
       expectString(rawSession.agentKind, 'session.agentKind'),
       nullableString(rawSession.orcaRole),
@@ -1247,6 +1344,7 @@ function sessionImportShare(readyDb, args) {
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+      readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
@@ -1309,13 +1407,18 @@ function orcaRemoveWorker(readyDb, args) {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = readyDb.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = readyDb.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = readyDb.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   return readyDb.transaction(() => {
     const row = selectWorker.get(workerId);
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      readyDb.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   })();
@@ -1387,9 +1490,31 @@ function orcaUpsertWorker(readyDb, args) {
     if (!activeTeam) {
       throw new Error('Orca team ' + teamId + ' is no longer active');
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+        );
+      }
+    }
     if (payload.focused === true) {
       readyDb.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      readyDb.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      readyDb.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      readyDb.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = readyDb.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id);
     if (existing) {
       readyDb.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -1404,6 +1529,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = readyDb.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId);
@@ -1419,6 +1545,7 @@ function orcaUpsertWorker(readyDb, args) {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     readyDb.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -1434,6 +1561,7 @@ function orcaUpsertWorker(readyDb, args) {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 
@@ -1629,6 +1757,22 @@ function rewindCommit(readyDb, args) {
   const requireLatestUser = payload.requireLatestUser === true;
   const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(payload.nativeForkAnchorSessionMap);
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  // Mirror worker/opHandlers/tx.ts: a Claude rewind without a prior reply
+  // clears the native session id and leaves a hidden context_rebuild marker.
+  const resetPayload = payload.nativeContextReset === undefined
+    ? null
+    : asRecord(payload.nativeContextReset, 'nativeContextReset');
+  const nativeContextReset = resetPayload
+    ? {
+        markerId: expectString(resetPayload.markerId, 'nativeContextReset.markerId'),
+        markerClientId: expectString(resetPayload.markerClientId, 'nativeContextReset.markerClientId'),
+        markerContent: expectString(resetPayload.markerContent, 'nativeContextReset.markerContent'),
+      }
+    : null;
   const rows = readyDb.prepare(
     'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
@@ -1665,6 +1809,23 @@ function rewindCommit(readyDb, args) {
     : null;
   const updateAgentMeta = readyDb.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   readyDb.transaction(() => {
+    const session = readyDb.prepare('SELECT cleared_at FROM sessions WHERE id = ?').get(sessionId);
+    if (!session) {
+      throw Object.assign(new Error('Session missing: ' + sessionId), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: clear-boundary changed for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error('CLEAR_GENERATION_CHANGED: target is at or before /clear for ' + sessionId),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
     // Mirror worker/opHandlers/tx.ts: surviving rows that still anchor the old
     // Codex thread are remapped to the replacement thread in the same transaction.
@@ -1688,7 +1849,17 @@ function rewindCommit(readyDb, args) {
       // so fail closed rather than expose work from a withdrawn branch.
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
-    if (sdkSessionId) {
+    if (nativeContextReset) {
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = NULL, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)").run(
+        nativeContextReset.markerId,
+        nativeContextReset.markerClientId,
+        sessionId,
+        nativeContextReset.markerContent,
+        now,
+        now,
+      );
+    } else if (sdkSessionId) {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ?, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sessionId);
@@ -1925,6 +2096,11 @@ function forkSession(readyDb, args) {
     'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
   );
   return readyDb.transaction(() => {
+    if (newSession.source === 'side-chat' && !readyDb.prepare(
+      "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source task changed while opening side chat');
+    }
     if (payload.recoveryMarker != null && !readyDb.prepare(
       'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
     ).get(sourceSessionId, sourceClearedAt)) {
@@ -1942,8 +2118,13 @@ function forkSession(readyDb, args) {
     if (newMessageIds.length !== sourceMessages.length) {
       throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
     }
+    const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
+    // Keep inherited history before the side-chat boundary, preserving relative order.
+    const historyTimeOffset = newSession.source === 'side-chat'
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+      : 0;
     readyDb.prepare(
-      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      'INSERT INTO sessions (id, title, working_dir, model, provider_id, effort, permission_mode, status, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at, agent_kind, workspace_kind, codex_history_has_product_prompt, parent_session_id, forked_at_message_id, agent_device_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     ).run(
       expectString(newSession.id, 'newSession.id'),
       expectString(newSession.title, 'newSession.title'),
@@ -1959,7 +2140,7 @@ function forkSession(readyDb, args) {
       expectNumber(newSession.contextTokens, 'newSession.contextTokens'),
       expectNumber(newSession.contextWindow, 'newSession.contextWindow'),
       nullableNumber(newSession.contextWindowRuntime),
-      newSession.fastMode ? 1 : 0,
+      fastModeToStorage(newSession.fastMode),
       nullableNumber(newSession.clearedAt),
       nullableNumber(newSession.pinnedAt),
       nullableNumber(newSession.userSendAt),
@@ -1968,16 +2149,24 @@ function forkSession(readyDb, args) {
       newSession.codexHistoryHasProductPrompt == null ? null : (newSession.codexHistoryHasProductPrompt ? 1 : 0),
       nullableString(newSession.parentSessionId),
       nullableString(newSession.forkedAtMessageId),
+      nullableString(newSession.agentDeviceId),
       expectNumber(newSession.createdAt, 'newSession.createdAt'),
       expectNumber(newSession.updatedAt, 'newSession.updatedAt'),
     );
+    if (newSession.source === 'side-chat') {
+      readyDb.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
+        .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
+    }
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
-      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at);
+      insertMessage.run(ids.id, ids.clientId, expectString(newSession.id, 'newSession.id'), message.role, sanitizeForkedMessageContent(message, { detachAgentSwitchSessions, resetHandoffBoundaryClientId }), message.tool_use_id, remapForkedAgentMeta(message.agent_meta, uuidMap, legacyTranscriptParentUuids, toolParentUuids, nativeForkAnchorSessionMap), message.agent_kind, message.created_at - historyTimeOffset);
     }
     if (payload.recoveryMarker != null) {
       const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      const markerCreatedAt = newSession.source === 'side-chat'
+        ? childCreatedAt
+        : expectNumber(marker.createdAt, 'recoveryMarker.createdAt');
       readyDb.prepare(
         "INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?, ?)",
       ).run(
@@ -1986,8 +2175,8 @@ function forkSession(readyDb, args) {
         expectString(newSession.id, 'newSession.id'),
         expectString(marker.content, 'recoveryMarker.content'),
         expectString(newSession.agentKind, 'newSession.agentKind'),
-        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
-        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+        markerCreatedAt,
+        markerCreatedAt,
       );
       const content = asRecord(JSON.parse(expectString(marker.content, 'recoveryMarker.content')), 'recoveryMarker content');
       insertMessage.run(
@@ -1997,7 +2186,7 @@ function forkSession(readyDb, args) {
         'assistant', '', null,
         JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
-        expectNumber(marker.createdAt, 'recoveryMarker.createdAt'),
+        markerCreatedAt,
       );
     }
     return { messageCount: sourceMessages.length };
@@ -2339,16 +2528,6 @@ function truncate(value, max) {
 function stringifyContent(value) {
   const json = JSON.stringify(value);
   return json === undefined ? 'null' : json;
-}
-
-function capToolResultTextForPersist(text) {
-  var limit = 8 * 1024;
-  var suffix = '\\n\\n[tool result truncated: stored first 8KB]';
-  if (text.length <= limit) return text;
-  var cut = Math.max(0, limit - suffix.length);
-  var lastKept = text.charCodeAt(cut - 1);
-  if (cut > 0 && lastKept >= 0xd800 && lastKept <= 0xdbff) cut -= 1;
-  return text.slice(0, cut) + suffix;
 }
 
 function stringifyImportedContent(role, content) {

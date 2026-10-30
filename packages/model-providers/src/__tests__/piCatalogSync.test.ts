@@ -18,9 +18,10 @@ const piCatalog = providerCatalogForPi();
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 
 describe("Pi catalog sync upstream precedence", () => {
-  it.each(["input", "online"] as const)(
-    "reads native public API Astra metadata through the %s sync path",
-    (source) => {
+  it.each((["input", "online"] as const).flatMap(source =>
+    (["complete", "failed", "omitted"] as const).map(state => ({ source, state }))))(
+    "preserves catalog metadata through the $source sync path ($state)",
+    ({ source, state }) => {
       const temporary = mkdtempSync(
         path.join(tmpdir(), "cindy-pi-catalog-sync #-"),
       );
@@ -59,7 +60,21 @@ describe("Pi catalog sync upstream precedence", () => {
           compat: { supportsStore: false },
           upstreamField: "preserve-native-metadata",
         };
-        const input: Record<string, unknown[]> = { ...piCatalog.providers, openai: [native] };
+        const input: Record<string, unknown> = { ...piCatalog.providers, openai: [native],
+          'new-provider': [{ ...native, id: 'future-model', provider: 'new-provider' }],
+          'partial-provider': [null, { ...native, id: 'partial-new', provider: 'partial-provider' }],
+        };
+        const snapshotPath = path.join(catalogDirectory, 'provider-models.json');
+        const oldSnapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+        const oldRow = oldSnapshot.providers.openai[0];
+        oldSnapshot.providers['new-provider'] = [{ ...oldRow, id: 'retired-model' }];
+        oldSnapshot.providers['partial-provider'] = [{ ...oldRow, id: 'partial-old' }];
+        oldSnapshot.providers['offline-provider'] = [{ ...oldRow, id: 'offline-old' }];
+        writeFileSync(snapshotPath, JSON.stringify(oldSnapshot));
+        if (state !== "complete") for (const provider of ["xai", "openai", "openai-codex"]) {
+          if (state === "failed") input[provider] = null;
+          else delete input[provider];
+        }
         const inputPath = path.join(temporary, "input.json");
         writeFileSync(inputPath, JSON.stringify(input));
         const args: string[] = [];
@@ -72,7 +87,10 @@ describe("Pi catalog sync upstream precedence", () => {
             const providers = JSON.parse(readFileSync(new URL('./input.json', import.meta.url), 'utf8'));
             globalThis.fetch = async (url) => {
               const provider = decodeURIComponent(new URL(url).pathname.split('/').at(-1));
+              if (provider === 'providers') return new Response(JSON.stringify([...Object.keys(providers), 'offline-provider']));
+              if (provider === 'offline-provider') throw new Error('Offline source');
               if (!(provider in providers)) throw new Error('Unexpected provider: ' + provider);
+              if (providers[provider] === null) return new Response("Unavailable", { status: 503 });
               return new Response(JSON.stringify(providers[provider]));
             };
           `,
@@ -92,7 +110,14 @@ describe("Pi catalog sync upstream precedence", () => {
             "utf8",
           ),
         );
-        expect(result.providers.openai).toMatchObject([{ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } }]);
+        expect(result.providers['new-provider'][0]).toMatchObject({ id: 'future-model', contextWindow: 1_060_000 });
+        expect(result.providers['new-provider']).toHaveLength(1);
+        expect(result.providers['partial-provider'].map((row: { id: string }) => row.id)).toEqual(['partial-new', 'partial-old']);
+        expect(result.providers['offline-provider'].map((row: { id: string }) => row.id)).toEqual(['offline-old']);
+        if (state === "complete") expect(result.providers.openai.find((row: { id: string }) => row.id === native.id)).toMatchObject({ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } });
+        if (state !== "complete") for (const provider of ["xai", "openai", "openai-codex"]) {
+          expect(result.providers[provider]).toEqual(expect.arrayContaining(oldSnapshot.providers[provider]));
+        }
         expect(result.providers["openai-codex"].map((m: { id: string }) => m.id).sort()).toEqual(piCatalog.providers["openai-codex"]!.map(m => m.id).sort());
       } finally {
         rmSync(temporary, { recursive: true, force: true });

@@ -23,6 +23,7 @@ import {
 import { __resetForTest, setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse } from '@cindy/model-providers';
 
 function model(id: string, contextWindow = 100_000): CatalogModel {
   return { id, name: id, contextWindow, efforts: [], defaultEffort: null } as CatalogModel;
@@ -68,6 +69,38 @@ afterEach(() => {
 });
 
 describe('buildUnionRows', () => {
+  it('classifies ElevenLabs capability declarations as TTS or other in model management', () => {
+    const projected = buildUserProvider({ id: 'elevenlabs-byok', name: 'Speech', runtimes: { codex: {
+      baseUrl: 'https://api.elevenlabs.io/v1', models: mergeDiscoveredRuntimeModels([], parseModelsListResponse([
+        { model_id: 'eleven_multilingual_v2', can_do_text_to_speech: true },
+        { model_id: 'voice-conversion', can_do_text_to_speech: false },
+      ])!),
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const rows = buildUnionRows({ ...projected, connected: true } as ProviderView);
+    expect(rows).toHaveLength(2);
+    expect(managementKindsOfRow(rows.find(row => row.id === 'eleven_multilingual_v2')!, true)).toEqual(['tts']);
+    expect(managementKindsOfRow(rows.find(row => row.id === 'voice-conversion')!, true)).toEqual(['other']);
+  });
+
+  it('groups discovered BYOK speech models as TTS and keeps the normal disabled management state', () => {
+    const projected = buildUserProvider({ id: 'speech-byok', name: 'Speech', runtimes: { codex: {
+      baseUrl: 'https://speech.example.test/v1', models: mergeDiscoveredRuntimeModels([], parseModelsListResponse({ data: [
+        { id: 'chat-model', mode: 'chat' },
+        { id: 'speech-model', mode: 'audio_speech', native_api: 'openai-audio-speech' },
+      ] })!),
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const view = { ...projected, connected: true } as ProviderView;
+    const rows = buildUnionRows(view);
+    expect(rows).toHaveLength(2);
+    const speech = rows.find(row => row.id === 'speech-model')!;
+    expect(managementKindsOfRow(speech, true)).toEqual(['tts']);
+    expect(isCapabilityRow(speech, true)).toBe(true);
+    expect(isRowDisabled(speech)).toBe(false);
+    view.models.codex![1].disabled = true;
+    view.audioModels![0].disabled = true;
+    expect(isRowDisabled(buildUnionRows(view).find(row => row.id === 'speech-model')!)).toBe(true);
+  });
+
   it('同 id 跨 agent 合并;行序 = 首 agent 目录序 + 后续 agent 独占追加', () => {
     const rows = buildUnionRows(provider);
     expect(rows.map((r) => r.id)).toEqual(['shared', 'cc-only', 'codex-only']);
@@ -389,4 +422,16 @@ it('enabling an imported Gemini row only enables Pi even when the supplier expos
   const row = buildUnionRows(p)[0]!;
   expect(modelVisibilityTargets(p, row, true)).toEqual([{ agent: 'pi', modelId: entry.id }]);
   expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
+});
+
+// Unit: settings must retain a decision filter/group, not fold it into chat or other.
+// Existing audio cases did not cover evaluation; these three modes also lock Console parity.
+it('groups and filters decision, OCR and image editing as distinct management kinds', () => {
+  const p = { ...provider, agents: ['codex'], models: { codex: [
+    { ...model('jev'), mode: 'evaluation' }, { ...model('ocr'), mode: 'ocr' }, { ...model('edit'), mode: 'image_edit' },
+  ] } } as ProviderView;
+  const rows = buildUnionRows(p);
+  expect(rows.map(row => managementKindOfRow(row, true))).toEqual(['decision', 'other', 'image']);
+  expect(rows.every(row => isCapabilityRow(row, true))).toBe(true);
+  expect(groupModelsForManagement(rows, 'model', row => managementKindOfRow(row, true)).map(group => group.key)).toEqual(['image', 'decision', 'other']);
 });

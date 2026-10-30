@@ -1,3 +1,5 @@
+import { deviceDisplayName } from '@/lib/deviceName';
+import { Button } from '@/components/ui/button';
 /**
  * LearnStatusCard —— /learn 蒸馏 run 的聊天流状态卡(systemCardType='learn')。
  *
@@ -76,7 +78,7 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
     if (cardDeviceId && distillSessionOrigin === undefined) {
       void refreshRemoteDeviceSessions(
         cardDeviceId,
-        remoteProjectsStore.getDeviceName(cardDeviceId) ?? cardDeviceId,
+        deviceDisplayName(cardDeviceId, remoteProjectsStore.getDeviceName(cardDeviceId)),
       );
       return;
     }
@@ -118,32 +120,34 @@ export function LearnStatusCard({ data, contextSessionId }: LearnStatusCardProps
           {t(statusTitleKey(run), { name: run.skillName ?? '' })}
         </span>
         {isRunning && (
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={() => void handleCancel()}
-            className="shrink-0 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
           >
             {t('learn.card.cancel')}
-          </button>
+          </Button>
         )}
         {isOriginCard && run.sessionId && (
-          <button
+          <Button
+            variant="secondary"
+            size="xs"
+            compact
+            tone="quiet"
             type="button"
             onClick={() => navigate(`/cc-agent/${run.sessionId}`)}
-            className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/50"
           >
             {t('learn.card.openSession')}
             <ArrowRight size={12} />
-          </button>
+          </Button>
         )}
         {run.status === 'awaiting-review' && (
-          <button
-            type="button"
-            onClick={() => setReviewOpen(true)}
-            className="shrink-0 rounded-md bg-[var(--accent-cta-bg)] px-2.5 py-1 text-xs text-[var(--accent-pure-cta-fg)] hover:opacity-90"
-          >
+          <Button variant="cta" size="xs" compact type="button" onClick={() => setReviewOpen(true)}>
             {t('learn.card.review')}
-          </button>
+          </Button>
         )}
       </div>
 

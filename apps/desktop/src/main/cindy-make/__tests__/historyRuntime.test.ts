@@ -2,6 +2,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CindyMakeHistoryRecord, MakeFeatureReceipt } from '../../../shared/cindyMakeHistory';
+import type { MakeTestContext } from '../testController';
+import type { CindyMakePersonalBuildState } from '../../../shared/cindyMakeSession';
 const h = vi.hoisted(() => ({
   current: true,
   running: false,
@@ -11,8 +13,14 @@ const h = vi.hoisted(() => ({
   cards: [] as any[],
   records: new Map<string, CindyMakeHistoryRecord>(),
   state: {} as any,
+  routeLocks: new Set<string>(),
   verify: vi.fn(async (_workspace: { runId: string }) => {}),
   merge: vi.fn(),
+  waitForMerge: vi.fn(),
+  finishCleanup: vi.fn(),
+  syncBuild: vi.fn(),
+  syncBeforeBuild: false,
+  git: vi.fn(),
   end: vi.fn(),
   saved: vi.fn(),
   artifactPath: vi.fn(),
@@ -26,6 +34,7 @@ const h = vi.hoisted(() => ({
   testAction: vi.fn(),
   stopTest: vi.fn(),
   retryMerge: vi.fn(),
+  historyChanged: vi.fn(),
 }));
 const store = {
   readBuildRollback: () => [],
@@ -76,11 +85,25 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => client }));
 vi.mock('../../localDb/sessionRouteLock.js', () => ({
-  withSessionRouteLock: async (_id: string, run: () => unknown) => run(),
+  withSessionRouteLock: async (id: string, run: () => unknown) => {
+    if (h.routeLocks.has(id)) throw new Error('Nested route lock');
+    h.routeLocks.add(id);
+    try {
+      return await run();
+    } finally {
+      h.routeLocks.delete(id);
+    }
+  },
 }));
 vi.mock('../upstreamMergeRuntime.js', () => ({
   integrateMakeHistory: h.merge,
   actUpstreamMerge: h.retryMerge,
+  waitForMakeHistoryMerge: h.waitForMerge,
+  finishMakeHistoryCleanup: h.finishCleanup,
+  syncSourceBeforeCindyMakeBuild: h.syncBuild,
+}));
+vi.mock('../settingsStore.js', () => ({
+  readCindyMakeSettings: () => ({ syncLatestBeforeBuild: h.syncBeforeBuild }),
 }));
 vi.mock('../taskManagement.js', () => ({ manageCindyMakeTask: h.end }));
 vi.mock('../testRuntime.js', () => ({
@@ -114,11 +137,11 @@ vi.mock('../toolchainEnvironment.js', () => ({
   resolveMakeToolEnvironment: async () => ({}),
 }));
 vi.mock('../sourceGit.js', () => ({
-  runSourceGit: async (_env: unknown, args: string[]) =>
-    args[0] === 'branch' ? 'cindy-personal' : '',
+  runSourceGit: h.git,
 }));
 import { cindyMakeManager } from '../manager';
 const realHasActiveWork = cindyMakeManager.hasActiveWork.bind(cindyMakeManager);
+const realGetState = cindyMakeManager.getState.bind(cindyMakeManager);
 import { sessions } from '../../localDb/schema';
 import {
   configureMakeHistory,
@@ -127,6 +150,8 @@ import {
   cancelHistoryPersonalVersion,
   openHistoryPersonalBuild,
   generateHistoryPersonalVersion,
+  integrateCompletionForBuild,
+  readCindyMakeBuildState,
 } from '../historyRuntime';
 const client = {
   drizzle: {
@@ -157,6 +182,7 @@ const receipt: MakeFeatureReceipt = {
   taskTree: 'e'.repeat(40),
 };
 beforeEach(() => {
+  cindyMakeManager.setVersionSwitchingProbe(() => false);
   vi.clearAllMocks();
   store.readBuild.mockReset();
   store.saveBuild.mockReset();
@@ -168,6 +194,17 @@ beforeEach(() => {
   h.testUsing = false;
   h.testStatus.mockReset();
   h.merge.mockReset();
+  h.waitForMerge.mockReset().mockResolvedValue(undefined);
+  h.finishCleanup.mockReset().mockResolvedValue(undefined);
+  h.syncBuild.mockReset().mockImplementation(async (_signal, publish) => {
+    await publish({ status: 'syncing', syncLatestSource: true });
+  });
+  h.syncBeforeBuild = false;
+  h.git
+    .mockReset()
+    .mockImplementation(async (_env: unknown, args: string[]) =>
+      args[0] === 'branch' ? 'cindy-personal' : '',
+    );
   h.build.mockReset();
   h.stopTest.mockReset();
   h.cancelTestBuild.mockReset();
@@ -175,11 +212,12 @@ beforeEach(() => {
   h.exists = true;
   h.records.clear();
   h.state = {};
+  h.routeLocks.clear();
   h.verify.mockResolvedValue(undefined);
   vi.spyOn(cindyMakeManager, 'hasActiveWork').mockImplementation(
     () => h.busy || realHasActiveWork(),
   );
-  configureMakeHistory(() => h.running);
+  configureMakeHistory(() => h.running, h.historyChanged);
   h.rows = [
     {
       id: 'session',
@@ -222,6 +260,93 @@ beforeEach(() => {
   ];
 });
 describe('history Main admission and owner boundary', () => {
+  it.each(['conflicts', 'cleanup'] as const)(
+    'retains the %s build record after restart without starting over',
+    (mergeStep) => {
+      let build: CindyMakePersonalBuildState = {
+        status: 'merging',
+        mergeStep,
+        mergeSessionId: 'resolver',
+        buildId: 'original-build',
+        startedAt: 10,
+        logs: [
+          { step: 'merging', at: 11 },
+          { step: mergeStep === 'conflicts' ? 'resolving-conflicts' : 'cleaning-merge', at: 12 },
+        ],
+      };
+      const logs = build.logs!;
+      store.readBuild.mockImplementation(() => build);
+      store.saveBuild.mockImplementation((next) => {
+        build = next;
+      });
+      expect(readCindyMakeBuildState()).toMatchObject({
+        status: 'failed',
+        error: 'interrupted',
+        buildId: 'original-build',
+        startedAt: 10,
+        mergeSessionId: 'resolver',
+      });
+      expect(build.logs?.slice(0, 2)).toEqual(logs);
+      expect(build.logs?.at(-1)?.step).toBe('failed');
+      expect(readCindyMakeBuildState()).toEqual(build);
+      expect(store.saveBuild).toHaveBeenCalledOnce();
+      expect(h.merge).not.toHaveBeenCalled();
+      expect(h.build).not.toHaveBeenCalled();
+      expect(h.finishCleanup).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['ready', 'changed', 'unreserved', 'stale-completion'])(
+    'validates the card snapshot before merging and releases its route lock before waiting: %s',
+    async (condition) => {
+      await getCindyMakeHistory('aaaa');
+      const task: MakeTestContext = {
+        userData: path.join(os.tmpdir(), 'history-runtime-profile'),
+        workingDir: h.rows[0].workingDir,
+        runId: 'aaaa',
+        sessionId: 'session',
+        completionId: 'complete',
+        commit: 'f'.repeat(40),
+        tree: 'e'.repeat(40),
+        meta: { reportedAt: 3 },
+        isCurrent: () => h.current,
+      };
+      if (condition !== 'unreserved') h.testBuild = { buildId: 'build', status: 'merging' };
+      if (condition === 'changed')
+        h.verify.mockRejectedValueOnce(Object.assign(new Error('changed'), { code: 'changed' }));
+      if (condition === 'stale-completion') task.completionId = 'older-round';
+      const operation = { id: 'merge-operation', status: 'resolving' };
+      h.merge.mockImplementationOnce(async () => {
+        expect(h.routeLocks.has('session')).toBe(true);
+        return operation;
+      });
+      h.waitForMerge.mockImplementationOnce(async () => {
+        expect(h.routeLocks.size).toBe(0);
+      });
+      const signal = new AbortController().signal;
+      const publish = vi.fn(async () => {
+        // Real card persistence re-enters this same route lock.
+        expect(h.routeLocks.has(task.sessionId)).toBe(false);
+      });
+      const result = integrateCompletionForBuild(task, signal, publish);
+      if (condition !== 'ready') {
+        await expect(result).rejects.toBeInstanceOf(Error);
+        expect(h.merge).not.toHaveBeenCalled();
+        expect(h.waitForMerge).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(h.merge).toHaveBeenCalledWith(
+          expect.objectContaining({
+            taskSessionId: 'session',
+            mergeCommit: task.commit,
+            taskTree: task.tree,
+          }),
+          expect.any(Object),
+          signal,
+        );
+        expect(h.waitForMerge).toHaveBeenCalledWith(operation, signal, publish);
+      }
+    },
+  );
   it('associates each completion with the preceding user prompt', async () => {
     const item = (await getCindyMakeHistory('aaaa')).items[0];
     expect(item.completions.at(-1)?.prompt).toBe('First round prompt');
@@ -356,6 +481,41 @@ describe('history Main admission and owner boundary', () => {
     expect(state.items[0].actions).toContain('integrate');
     cindyMakeManager.forgetTask(runId);
   });
+  it('separates retained source conflicts from work that blocks version switching', async () => {
+    h.state.upstreamMerge = { id: 'update', status: 'conflict', hasWorkspace: true };
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: false,
+      canBuild: false,
+    });
+    await expect(generateHistoryPersonalVersion()).rejects.toThrow('busy');
+    expect(h.build).not.toHaveBeenCalled();
+    h.busy = true;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: true,
+      canBuild: false,
+    });
+    h.busy = false;
+    h.testUsing = true;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: true,
+      canBuild: false,
+    });
+    h.testUsing = false;
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({
+      busy: true,
+      activeWork: false,
+      canBuild: false,
+    });
+  });
+  it('does not offer or start a personal build during a version handoff', async () => {
+    cindyMakeManager.setVersionSwitchingProbe(() => true);
+    expect(await getCindyMakeHistory('aaaa')).toMatchObject({ busy: true, canBuild: false });
+    await expect(generateHistoryPersonalVersion()).rejects.toThrow('busy');
+    expect(h.build).not.toHaveBeenCalled();
+  });
   it('keeps builds and integrations blocked until cancellation finishes even if its directory is gone', async () => {
     h.state.upstreamMerge = {
       id: 'update',
@@ -412,7 +572,40 @@ describe('history Main admission and owner boundary', () => {
         build: { status: 'failed', error: 'checksFailed' },
       });
     });
+    expect(h.historyChanged).toHaveBeenCalledOnce();
     expect(JSON.stringify(buildState)).not.toContain('private test output');
+  });
+  it('syncs the latest official source before a global build only when the setting is on', async () => {
+    let buildState: CindyMakePersonalBuildState | undefined;
+    store.readBuild.mockImplementation(() => buildState);
+    store.saveBuild.mockImplementation((value) => {
+      buildState = value;
+    });
+    h.syncBeforeBuild = true;
+    h.build.mockResolvedValueOnce({ commit: 'b'.repeat(40), tree: 'd'.repeat(40) });
+
+    await generateHistoryPersonalVersion();
+    await vi.waitFor(() => expect(h.build).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(buildState?.status).toBe('ready'));
+
+    expect(h.syncBuild).toHaveBeenCalledOnce();
+    expect(h.syncBuild.mock.invocationCallOrder[0]).toBeLessThan(h.build.mock.invocationCallOrder[0]);
+    expect(buildState).toMatchObject({ syncLatestSource: true });
+    expect(buildState?.logs?.map((entry) => entry.step)).toContain('syncing');
+  });
+  it('keeps the originating history session visibly running for a source build', async () => {
+    let finish!: (value: { commit: string; tree: string }) => void;
+    h.build.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await generateHistoryPersonalVersion(undefined, ['session']);
+    await vi.waitFor(() => expect(realGetState().personalBuildSessionIds).toEqual(['session']));
+    await vi.waitFor(() => expect(h.build).toHaveBeenCalledOnce());
+    finish({ commit: 'b'.repeat(40), tree: 'd'.repeat(40) });
+    await vi.waitFor(() => expect(realGetState().personalBuildSessionIds).toBeUndefined());
   });
   it('marks a running build as stopping and aborts only the matching build identity', async () => {
     let buildState: any;
@@ -613,6 +806,7 @@ describe('history Main admission and owner boundary', () => {
         mergeCommit: 'f'.repeat(40),
       }),
       expect.any(Object),
+      undefined,
     );
     await expect(actCindyMakeHistory('../source', 'revert')).rejects.toThrow('Invalid');
   });
@@ -647,6 +841,7 @@ async function batchFixture() {
     h.records
       .get(plan.runId)!
       .receipts.push({ ...receipt, id: 'merge-' + plan.runId, taskTree: plan.taskTree });
+    return { id: 'merge-' + plan.runId, status: 'merged', hasWorkspace: false };
   });
   h.build.mockResolvedValue({
     commit: 'b'.repeat(40),
@@ -666,6 +861,70 @@ async function batchFixture() {
 }
 
 describe('one personal version from selected history', () => {
+  it('keeps generation of an ended task alive while its restored change is resolving', async () => {
+    const f = await batchFixture();
+    const record = h.records.get('aaaa')!;
+    record.endedAt = 5;
+    h.rows.find((row) => row.id === 'session').status = 'archived';
+    h.git.mockImplementation(async (_env, args: string[]) => {
+      if (args[0] === 'branch') return 'cindy-personal';
+      if (args[0] === 'rev-parse')
+        return args.at(-1)?.endsWith('^{tree}') ? 'e'.repeat(40) : 'f'.repeat(40);
+      return '';
+    });
+    let resolved!: () => void;
+    h.merge.mockImplementationOnce(async () => {
+      h.state.upstreamMerge = {
+        id: 'conflict',
+        status: 'resolving',
+        hasWorkspace: true,
+        feature: { runId: 'aaaa', action: 'integrate', awaitingResolution: true },
+      };
+      return h.state.upstreamMerge;
+    });
+    h.waitForMerge.mockImplementationOnce(async (_state, _signal, publish) => {
+      await publish({ status: 'merging', mergeStep: 'conflicts' });
+      await new Promise<void>((resolve) => {
+        resolved = resolve;
+      });
+      record.receipts.push(receipt);
+      h.state.upstreamMerge = undefined;
+    });
+    await actCindyMakeHistory('aaaa', 'build');
+    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'));
+    expect(f.state()).toMatchObject({ status: 'merging', mergeStep: 'conflicts' });
+    expect(realGetState().personalBuildSessionIds).toEqual(['session']);
+    expect(h.testAction).not.toHaveBeenCalled();
+    expect(h.build).not.toHaveBeenCalled();
+    resolved();
+    await f.settled();
+    expect(h.build).toHaveBeenCalledOnce();
+    expect(f.state()).toMatchObject({ status: 'ready' });
+  });
+  it('persists the builder diagnostic for Settings after a history build fails', async () => {
+    const f = await batchFixture();
+    h.build.mockRejectedValueOnce(
+      Object.assign(new Error('buildFailed'), {
+        code: 'buildFailed',
+        diagnostic: {
+          kind: 'outOfMemory',
+          exitCode: 134,
+          message: 'FATAL ERROR: JavaScript heap out of memory',
+        },
+      }),
+    );
+    await generateHistoryPersonalVersion(f.pins);
+    await f.settled();
+    expect(f.state()).toMatchObject({
+      status: 'failed',
+      error: 'buildFailed',
+      diagnostic: {
+        kind: 'outOfMemory',
+        exitCode: 134,
+        message: 'FATAL ERROR: JavaScript heap out of memory',
+      },
+    });
+  });
   it('merges oldest first and packages once with both feature receipts', async () => {
     const f = await batchFixture();
     await generateHistoryPersonalVersion(f.pins);
@@ -680,6 +939,7 @@ describe('one personal version from selected history', () => {
         { runId: 'bbbb', operationId: 'merge-bbbb' },
       ],
     });
+    expect(h.historyChanged).toHaveBeenCalledOnce();
     expect(store.version).toHaveBeenCalledTimes(2);
   });
   it('validates every selected workspace before merging any of them', async () => {
@@ -713,8 +973,10 @@ describe('one personal version from selected history', () => {
     expect(h.merge).not.toHaveBeenCalled();
     expect(h.build).not.toHaveBeenCalled();
   });
-  it('keeps a conflicting prefix recoverable and never packages a partial selection', async () => {
+  it('waits for a conflict and its cleanup before merging the next item and packaging', async () => {
     const f = await batchFixture();
+    let resolved!: () => void;
+    let cleaned!: () => void;
     h.merge.mockImplementationOnce(async () => {
       h.state.upstreamMerge = {
         id: 'conflict',
@@ -722,12 +984,35 @@ describe('one personal version from selected history', () => {
         hasWorkspace: true,
         feature: { runId: 'bbbb', action: 'integrate', awaitingResolution: true },
       };
+      return h.state.upstreamMerge;
+    });
+    h.waitForMerge.mockImplementationOnce(async (_state, _signal, publish) => {
+      await publish({ status: 'merging', mergeStep: 'conflicts' });
+      await new Promise<void>((resolve) => {
+        resolved = resolve;
+      });
+      h.records.get('bbbb')!.receipts.push(receipt);
+      h.state.upstreamMerge = undefined;
+      await publish({ status: 'merging', mergeStep: 'cleanup' });
+      await new Promise<void>((resolve) => {
+        cleaned = resolve;
+      });
     });
     await generateHistoryPersonalVersion(f.pins);
-    await f.settled();
+    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'));
     expect(h.merge).toHaveBeenCalledOnce();
     expect(h.build).not.toHaveBeenCalled();
-    expect(f.state()).toMatchObject({ status: 'failed', error: 'conflict' });
+    expect(f.state()).toMatchObject({ status: 'merging', mergeStep: 'conflicts' });
+    resolved();
+    await vi.waitFor(() => expect(cleaned).toBeTypeOf('function'));
+    expect(h.merge).toHaveBeenCalledOnce();
+    expect(h.build).not.toHaveBeenCalled();
+    expect(f.state()).toMatchObject({ status: 'merging', mergeStep: 'cleanup' });
+    cleaned();
+    await f.settled();
+    expect(h.merge).toHaveBeenCalledTimes(2);
+    expect(h.build).toHaveBeenCalledOnce();
+    expect(f.state()).toMatchObject({ status: 'ready' });
   });
   it('rechecks later completions and refuses a new round that arrived while merging', async () => {
     const f = await batchFixture();
@@ -758,15 +1043,33 @@ describe('one personal version from selected history', () => {
             baselineCommit: receipt.commit,
             feature: { runId: 'aaaa', action: 'integrate', awaitingResolution: true },
           };
+          return h.state.upstreamMerge;
         }
       });
+      h.waitForMerge.mockImplementationOnce(async (_state, signal: AbortSignal, publish) => {
+        if (status !== 'failed') {
+          await publish({ status: 'merging', mergeStep: 'conflicts' });
+          await new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          );
+          signal.throwIfAborted();
+        }
+        throw Object.assign(new Error('interrupted'), { code: 'interrupted' });
+      });
       await generateHistoryPersonalVersion(f.pins);
+      if (status !== 'failed') {
+        await vi.waitFor(() => expect(f.state().mergeStep).toBe('conflicts'));
+        await cancelHistoryPersonalVersion(f.state().buildId);
+      }
       await f.settled();
       expect(h.merge.mock.calls.map(([plan]) => plan.runId)).toEqual(['bbbb', 'aaaa']);
       expect(h.build).not.toHaveBeenCalled();
       expect(project).not.toHaveBeenCalled();
       expect(h.records.get('bbbb')!.receipts).toEqual([receipt]);
-      expect(f.state()).toMatchObject({ status: 'failed', error: 'conflict' });
+      expect(f.state()).toMatchObject({
+        status: 'failed',
+        error: status === 'failed' ? 'interrupted' : 'cancelled',
+      });
       expect(h.state.upstreamMerge.baselineCommit).toBe(receipt.commit);
     },
   );
@@ -781,6 +1084,11 @@ describe('one personal version from selected history', () => {
     );
     await generateHistoryPersonalVersion(f.pins);
     await vi.waitFor(() => expect(h.merge).toHaveBeenCalledOnce());
+    const expectedSessions = f.pins.map((pin) => h.records.get(pin.runId)!.sessionId);
+    expect(realGetState().personalBuildSessionIds).toEqual(
+      expect.arrayContaining(expectedSessions),
+    );
+    expect(realGetState().personalBuildSessionIds).toHaveLength(expectedSessions.length);
     expect((await getCindyMakeHistory()).batch).toMatchObject({
       current: 1,
       total: 2,
@@ -788,8 +1096,10 @@ describe('one personal version from selected history', () => {
     });
     await expect(generateHistoryPersonalVersion()).rejects.toThrow('busy');
     await cancelHistoryPersonalVersion(f.state().buildId);
+    expect(realGetState().personalBuildSessionIds).toHaveLength(expectedSessions.length);
     finish();
     await f.settled();
+    expect(realGetState().personalBuildSessionIds).toBeUndefined();
     expect(h.merge).toHaveBeenCalledOnce();
     expect(h.build).not.toHaveBeenCalled();
     expect(f.state()).toMatchObject({ status: 'failed', error: 'cancelled' });

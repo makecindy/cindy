@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canPreviewResolvedRemoteMedia,
   formatRemoteMediaSize,
+  mediaLoadFailureKey,
   isDesktopLocalMediaUrl,
   isDirectPreviewableMediaUrl,
   isResolvedRemoteMediaFresh,
@@ -11,6 +12,101 @@ import {
 } from "@/session/remoteMedia";
 
 describe("mobile remote media", () => {
+  // Regression: video streaming forced OSS even when authenticated peer bytes
+  // were available. Retention must finish before the staging lease is released.
+  it.each([false, true])('owns peer video playback beyond its staging lifetime (copy fails=%s)', async (fails) => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const staged = { ossKey: '', mimeType: 'video/mp4', size: 3 };
+    const dispose = vi.fn();
+    recordPeerMedia(staged, 'file:///staging/clip.mp4', dispose);
+    const fetchRemoteMedia = vi.fn(async () => staged);
+    const retainLocalVideo = vi.fn(async (media: import('@/session/remoteMedia').MobileResolvedRemoteMedia) => {
+      expect(dispose).not.toHaveBeenCalled();
+      if (fails) throw new Error('disk full');
+      return { ...media, url: 'file:///retained/clip.mp4', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
+    });
+    const result = resolveMobileRemoteMedia({ kind: 'video', url: 'xdt-file://open?path=/clip.mp4' }, {
+      fetchRemoteMedia, presignGet: vi.fn(), retainLocalVideo,
+    });
+    if (fails) await expect(result).rejects.toThrow('disk full');
+    else await expect(result).resolves.toMatchObject({ url: 'file:///retained/clip.mp4', previewable: true });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith('xdt-file://open?path=/clip.mp4', expect.objectContaining({ stream: false, revalidate: true }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+  it('retains a background fallback and releases its staging copy and cloud object', async () => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const local = { ossKey: '', mimeType: 'application/pdf', size: 3 };
+    const dispose = vi.fn();
+    recordPeerMedia(local, 'file:///background/pdf', dispose);
+    let retain!: NonNullable<import('@/session/remoteMedia').MobileRemoteMediaFetchOptions['retainBackground']>;
+    const discardBackgroundOssKey = vi.fn();
+    await resolveMobileRemoteMedia({ kind: 'file', url: 'xdt-file://open?path=/a.pdf' }, {
+      fetchRemoteMedia: async (_url, options) => {
+        retain = options!.retainBackground!;
+        return { ...local, inlineBase64: 'YWJj' };
+      },
+      presignGet: async () => ({ getUrl: 'https://oss/new', expiresAt: '2099-01-01T00:00:00Z' }),
+    }, { stream: false, discardBackgroundOssKey });
+    const cacheDownload = vi.fn(async () => local);
+    await retain({ ...local, ossKey: 'oss/new', cacheDownload });
+    expect(cacheDownload).toHaveBeenCalledWith('https://oss/new');
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(discardBackgroundOssKey).toHaveBeenCalledWith('oss/new');
+  });
+  it('returns a completed fallback copy while preserving ownership of the OSS object', async () => {
+    const { recordPeerMedia, releasePeerMedia } = await import('@/device-link/peerFileRegistry');
+    const local = { ossKey: '', mimeType: 'application/pdf', size: 3 };
+    recordPeerMedia(local, 'file:///cached/pdf', () => {});
+    const cacheDownload = vi.fn(async () => local);
+    const onOssKey = vi.fn();
+    try {
+      const result = await resolveMobileRemoteMedia({ kind: 'file', url: 'xdt-file://open?path=/a.pdf' }, {
+        fetchRemoteMedia: async () => ({ ossKey: 'oss/file', size: 3, mimeType: local.mimeType, cacheDownload }),
+        presignGet: async () => ({ getUrl: 'https://oss/file', expiresAt: '2099-01-01T00:00:00Z' }),
+      }, { stream: false, onOssKey });
+      expect(result).toMatchObject({ url: 'file:///cached/pdf', ossKey: 'oss/file' });
+      expect(cacheDownload).toHaveBeenCalledWith('https://oss/file');
+      expect(onOssKey).toHaveBeenCalledExactlyOnceWith('oss/file');
+    } finally { releasePeerMedia('file:///cached/pdf'); }
+  });
+  // Unit regression: retained sent images must serve original and thumbnail requests
+  // offline. Existing tests covered only remote downloads and already-resolved copies.
+  it.each([false, true])('reads a retained sent image offline (thumbnail=%s), with forced repair bypass', async (thumbnail) => {
+    const findLocalImage = vi.fn(async () => ({ uri: 'file:///doc/sent.png', size: 100, mimeType: 'image/png' }));
+    const fetchRemoteMedia = vi.fn(async () => { throw new Error('NOT_CONNECTED'); });
+    const presignGet = vi.fn();
+    const media = { kind: 'image' as const, url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    const deps = { findLocalImage, fetchRemoteMedia, presignGet };
+    await expect(resolveMobileRemoteMedia(media, deps, { thumbnail })).resolves.toMatchObject({
+      url: 'file:///doc/sent.png', size: 100, ossKey: '', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+    });
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(presignGet).not.toHaveBeenCalled();
+    await expect(resolveMobileRemoteMedia(media, deps, { skipCache: true })).rejects.toThrow('NOT_CONNECTED');
+    expect(findLocalImage).toHaveBeenCalledOnce();
+    findLocalImage.mockRejectedValueOnce(new Error('unreadable local file'));
+    await expect(resolveMobileRemoteMedia(media, deps)).rejects.toThrow('NOT_CONNECTED');
+  });
+
+  it.each(['DEVICE_OFFLINE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'PEER_OFFLINE'])(
+    'recognizes the structured %s code even when its message has no code', (code) => {
+      expect(mediaLoadFailureKey(Object.assign(new Error('remote device is unavailable'), { code }))).toBe('message.lightbox.deviceOffline');
+      expect(mediaLoadFailureKey({ code, message: 'unavailable' })).toBe('message.lightbox.deviceOffline');
+    },
+  );
+  it('does not misclassify permission, timeout or configuration errors as offline', () => {
+    for (const code of ['REMOTE_DISABLED', 'PERMISSION_DENIED', 'TIMEOUT', 'VERSION_MISMATCH']) {
+      expect(mediaLoadFailureKey(Object.assign(new Error('request failed'), { code }))).toBe('message.lightbox.loadFailed');
+    }
+    expect(mediaLoadFailureKey({ code: 'MEDIA_SOURCE_MISSING' })).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[NOT_CONNECTED] relay closed'))).toBe('message.lightbox.deviceOffline');
+  });
+  it('classifies stable failure codes without exposing paths or assuming every failure is a missing file', () => {
+    expect(mediaLoadFailureKey(new Error('[MEDIA_SOURCE_MISSING] missing'))).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[DEVICE_LINK_NOT_CONNECTED]'))).toBe('message.lightbox.deviceOffline');
+    expect(mediaLoadFailureKey(new Error('ENOENT /private/user.png'))).toBe('message.lightbox.loadFailed');
+    expect(mediaLoadFailureKey(new Error('timeout'))).toBe('message.lightbox.loadFailed');
+  });
   it("accepts inline audio and video data URLs for the media player", () => {
     expect(isDirectPreviewableMediaUrl("https://example.com/a.mp4")).toBe(true);
     expect(isDirectPreviewableMediaUrl("data:image/png;base64,aaa")).toBe(true);

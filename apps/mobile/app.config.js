@@ -185,7 +185,7 @@ function resolveAppStoreId(region) {
   return value;
 }
 
-function withNativeAuthPlugins(plugins, env) {
+function withNativeAuthPlugins(plugins, env, region) {
   const next = [...plugins];
   if (env.googleIosUrlScheme) {
     next.push([
@@ -193,10 +193,38 @@ function withNativeAuthPlugins(plugins, env) {
       { iosUrlScheme: env.googleIosUrlScheme },
     ]);
   }
-  if (env.wechatAppId && env.wechatUniversalLink) {
+  // 微信公开配置可能残留在同一打包机的 shell 中，不能进入 Global 原生配置。
+  // 两项全空表示未启用；只填一项必须在 prebuild 阶段报错，避免发出无回跳能力的包。
+  const wechatEnabled = region === 'cn' || region === 'dev';
+  const appId = wechatEnabled ? env.wechatAppId?.trim() || '' : '';
+  const universalLink = wechatEnabled ? env.wechatUniversalLink?.trim() || '' : '';
+  if (!!appId !== !!universalLink) {
+    throw new Error(
+      'EXPO_PUBLIC_CINDY_WECHAT_APP_ID and EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must both be set or both be empty',
+    );
+  }
+  if (appId && universalLink) {
+    let parsed;
+    try {
+      parsed = new URL(universalLink);
+    } catch {
+      throw new Error('EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must be an https URL');
+    }
+    if (
+      parsed.protocol !== 'https:' ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error(
+        'EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must be an https URL without credentials, query, or fragment',
+      );
+    }
     next.push([
       'xdt-wechat-login/plugin',
-      { appId: env.wechatAppId, universalLink: env.wechatUniversalLink },
+      { appId, universalLink },
     ]);
   }
   return next;
@@ -282,6 +310,10 @@ module.exports = (context = {}) => {
     android: {
       ...baseConfig.android,
       package: regional.androidPackage,
+      // Public Firebase application configuration, supplied by the selected build profile.
+      // No file is bundled from another app identity or copied from a user's installation.
+      ...(process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE?.trim()
+        ? { googleServicesFile: process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE.trim() } : {}),
     },
     // 非自建线的 EAS Update 入口:由下发的 projectId 推导;自建分支下方会把它覆写成
     // selfhost 占位(真实地址运行时由 mobileUpdateBaseUrl 注入)。projectId 缺省则不配 OTA。
@@ -295,7 +327,7 @@ module.exports = (context = {}) => {
       wechatAppId: process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim(),
       wechatUniversalLink:
         process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim(),
-    }),
+    }, region),
     extra: {
       ...baseConfig.extra,
       ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
@@ -356,7 +388,7 @@ module.exports = (context = {}) => {
       ...next,
       android: {
         ...next.android,
-        // Only APK self-distribution requests permission to install updates.
+        // Self-hosted APK and AAB share native config; Play installs skip APK updates at runtime.
         permissions: [...new Set([
           ...(next.android.permissions || []),
           'android.permission.REQUEST_INSTALL_PACKAGES',

@@ -1,6 +1,8 @@
 import type { McpProvider, McpProviderContext } from '@cindy/maker-core';
 import type { McpTransport } from '../../shared/customMcp.js';
 import { isPiCustomMcpProviderAvailable } from '../mcp-integrations/piMcpTransport.js';
+import { CustomMcpProvider } from '../mcp-integrations/custom-mcp-provider.js';
+import { getHarnessMcpCatalog } from './harnessMcpCatalog.js';
 
 function isCustomMcpAvailable(input: {
   agentKind: McpProviderContext['agentKind'];
@@ -8,6 +10,9 @@ function isCustomMcpAvailable(input: {
   provider: McpProvider;
   custom?: { transport: McpTransport };
 }): boolean {
+  // The Apps facade is carried by the authenticated Host bridge for every
+  // harness, including SSH. Direct-transport limitations do not apply to it.
+  if (input.provider instanceof CustomMcpProvider && input.provider.supportsApps) return true;
   // SSH Codex receives only REMOTE_ALLOWED_SERVER_NAMES; user configs are not
   // written into its daemon. Remote Claude serializes http/sse into startParams.
   // Remote Pi connects to custom HTTP MCPs directly (`s.remote` is not tunneled).
@@ -30,8 +35,8 @@ export function buildBotMcpCatalog(input: {
 }) {
   const builtinNames = new Set(input.builtinNames);
   const customServers = new Map(input.customServers.map((entry) => [entry.id, entry]));
-  return [...new Map(input.providers.map((provider) => {
-    const builtin = builtinNames.has(provider.name);
+  const providers = [...new Map(input.providers.map((provider) => {
+    const builtin = builtinNames.has(provider.name) && provider.name !== 'companion_connections';
     const custom = customServers.get(provider.name);
     // Builtins retain their SDK bridge path and are not instantiated by catalog queries.
     const available = builtin || isCustomMcpAvailable({
@@ -48,4 +53,6 @@ export function buildBotMcpCatalog(input: {
         : custom ? `${custom.transport}:${custom.updatedAt}` : 'custom:unknown',
     }];
   })).values()];
+  const harness = getHarnessMcpCatalog(input);
+  return [...providers.filter((provider) => !harness.some((entry) => entry.name === provider.name)), ...harness];
 }

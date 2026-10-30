@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { normalizeDbAgentKind, dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { and, desc, eq, gt, isNull, like, or } from 'drizzle-orm';
 import { app } from 'electron';
+import { syncPersonalRemoteBeforeTask } from './personalRemoteRuntime.js';
+import {
+  hasRetainedSourceOperation,
+  syncSourceBeforeCindyMakeTask,
+} from './upstreamMergeRuntime.js';
 import { cindyMakeManager } from './manager.js';
 import {
   createMakeToolchainEnvironment,
@@ -12,6 +17,7 @@ import { prepareCindyMakeEnvironment } from './prepare.js';
 import { untilAborted } from './doctor.js';
 import { prepareCindySource, readCurrentCindySourceStatus } from './sourcePreparation.js';
 import { createCindyMakeWorktree, installCindyMakeWorktree } from './taskWorkspace.js';
+import { installScriptsTrust, remoteContentScriptsUnverified } from './installScriptsTrust.js';
 import { CINDY_MAKE_RUN_ID_PATTERN, makeSourceRoot, makeTaskWorktreePath } from './sourcePaths.js';
 import { makeToolRoot } from './toolInstaller.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -31,6 +37,7 @@ import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeCon
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import {
   isMakeEnvironmentReady,
+  type CindyMakeTaskOptions,
   type CindyMakeTaskStart,
   type MakeDoctorReport,
   type MakeTaskWorkspace,
@@ -257,6 +264,19 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
     ? await db.select().from(sessions).where(eq(sessions.id, input.originSessionId)).limit(1)
     : [];
   checkCurrent();
+  const effective = origin
+    ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
+    : undefined;
+  const preferences = origin ?? input.createOptions ?? {};
+  const taskOptions: CindyMakeTaskOptions = {
+    agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
+    model: effective?.model ?? preferences.model ?? undefined,
+    effort: effective ? (effective.effort ?? '') : preferences.effort,
+    providerId: effective ? effective.providerId : preferences.providerId,
+    fastMode: effective?.fastMode ?? preferences.fastMode,
+    planModeEnabled: preferences.planModeEnabled,
+    permissionMode: preferences.permissionMode,
+  };
   const userData = app.getPath('userData');
   const root = makeSourceRoot(userData);
   const clientId = 'cindy-make-preparation-' + input.runId;
@@ -406,10 +426,6 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
           throwIpcError('NOT_FOUND', 'Origin task is unavailable');
         if (origin?.remoteHostId)
           throwIpcError('UNSUPPORTED_CAPABILITY', 'Cindy Make requires a local task');
-        const effective = origin
-          ? getSessionRuntimeControlSnapshot(origin.id).effectiveOverride
-          : undefined;
-        const preferences = origin ?? input.createOptions ?? {};
         sessionId = createBusinessSessionId();
         const row = sessionCreateToRow(
           sessionId,
@@ -418,13 +434,7 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
             workingDir: makeTaskWorktreePath(userData, input.runId),
             workspaceKind: 'project',
             source: 'cindy-make',
-            agentKind: normalizeDbAgentKind(effective?.agentKind ?? preferences.agentKind),
-            model: effective?.model ?? preferences.model,
-            effort: effective ? (effective.effort ?? '') : preferences.effort,
-            providerId: effective ? effective.providerId : preferences.providerId,
-            fastMode: effective?.fastMode ?? preferences.fastMode,
-            planModeEnabled: preferences.planModeEnabled,
-            permissionMode: preferences.permissionMode,
+            ...taskOptions,
           },
           Date.now(),
         );
@@ -532,6 +542,39 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
       signal.throwIfAborted();
       report = { ...report, source };
       cindyMakeManager.setSourceStatus(source);
+      // The task worktree must branch from the latest verified personal source.
+      // Keep the visible task shell while this runs so conflicts and Stop remain recoverable.
+      phase('updatingSource', publish);
+      for (let attempt = 0; ; attempt += 1) {
+        // A Sync in progress finishes first; the task then starts from its result.
+        await cindyMakeManager.whenManualSourceSyncIdle(signal);
+        checkPreparationCurrent();
+        // A conflict still waiting in its task leaves the personal version as it is: the new
+        // task starts from it instead of waiting for (or failing on) that conflict.
+        if (hasRetainedSourceOperation()) break;
+        try {
+          // Changes saved from another computer come first, so the official update replays them too.
+          await untilAborted(syncPersonalRemoteBeforeTask(), signal);
+          checkPreparationCurrent();
+          await syncSourceBeforeCindyMakeTask(signal, taskOptions);
+          break;
+        } catch (error) {
+          // A Sync that started meanwhile owns the source: wait for it, then decide again.
+          if (
+            attempt < 2 &&
+            !signal.aborted &&
+            (error as { code?: string })?.code === 'busy' &&
+            cindyMakeManager.isManualSourceSyncRunning()
+          )
+            continue;
+          throw error;
+        }
+      }
+      checkPreparationCurrent();
+      signal.throwIfAborted();
+      source = await readCurrentCindySourceStatus(root, env);
+      report = { ...report, source };
+      publish(report);
       phase('workspace', publish);
       await untilAborted(
         cindyMakeManager.withProject(
@@ -549,6 +592,16 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
             signal.throwIfAborted();
             report = { ...report, source: { status: 'ready', ...workspace } };
             phase('dependencies', publish);
+            // Content taken over from the user's fork before this computer generated
+            // a personal version from it never has its lifecycle scripts run here:
+            // task creation must not execute code a collaborator pushed. Anything
+            // unclear counts as unverified (see `remoteContentScriptsUnverified`).
+            const ignoreScripts = await remoteContentScriptsUnverified(
+              workspace.baseCommit,
+              installScriptsTrust(userData, processEnvironment, signal),
+            ).catch(() => true);
+            if (ignoreScripts)
+              log.info('task install skips lifecycle scripts on unverified synced content');
             await installCindyMakeWorktree(
               userData,
               workspace,
@@ -561,6 +614,7 @@ export async function startCindyMakeTask(raw: unknown, sender: number): Promise<
                   publish(report);
                 }
               },
+              { ignoreScripts },
             );
           },
           signal,

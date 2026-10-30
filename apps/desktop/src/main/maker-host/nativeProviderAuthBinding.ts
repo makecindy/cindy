@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { platform as hostPlatform } from 'node:os';
 import path from 'node:path';
@@ -479,6 +479,21 @@ export function isNativeProviderAuthBound(provider: NativeProviderId): boolean {
   // behavior until authentication commits an owner boundary.
   if (!owner) return true;
   return bindings[provider] === owner;
+}
+
+/** Identity of the existing durable authorization record; no separate credential epoch. */
+export function captureNativeProviderAuthorizationGeneration(provider: NativeProviderId): string | null {
+  if (!isNativeProviderAuthBound(provider)) return null;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(bindingPath(), 'r');
+    const stat = fs.fstatSync(fd, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${createHash('sha256').update(fs.readFileSync(fd)).digest('hex')}`;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 /** Whether an explicit durable revocation currently suppresses this provider credential. */

@@ -23,6 +23,17 @@
 
 import { gunzipBase64ToText } from './gzipBase64';
 
+/** Historical turn snapshots use the same read-only, size-checked review tunnel. */
+export function turnChangeReadApiFor(
+  deviceId: string | null | undefined,
+): Pick<typeof window.electronAPI.maker, 'listTurnChangeSets' | 'getTurnChangeSets'> {
+  if (!deviceId) return window.electronAPI.maker;
+  return {
+    listTurnChangeSets: (sessionId) => invokeOp(deviceId, 'turn-list', { sessionId }),
+    getTurnChangeSets: (sessionId, ids) => invokeOp(deviceId, 'turn-get', { sessionId, ids }),
+  };
+}
+
 type LocalGitReview = typeof window.electronAPI.gitReview;
 
 /** 只读子集:device-link 场景可用的查询面。 */
@@ -68,7 +79,8 @@ async function invokeOp<T>(deviceId: string, op: string, payload: object): Promi
   if (res && res.ok === false && 'code' in res && res.code === 'OVERSIZE') {
     throw new Error(`${OVERSIZE_MARKER}: review payload exceeds device-link frame budget`);
   }
-  const message = res && res.ok === false && 'message' in res ? res.message : 'git-review remote-op failed';
+  const message =
+    res && res.ok === false && 'message' in res ? res.message : 'git-review remote-op failed';
   throw new Error(message);
 }
 

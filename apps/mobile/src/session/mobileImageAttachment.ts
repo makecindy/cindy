@@ -1,5 +1,5 @@
 import { i18n } from '@/i18n';
-import { MOBILE_MAX_ATTACHMENT_BYTES, extractRemoteFileExt } from '@/session/attachments';
+import { extractRemoteFileExt } from '@/session/attachments';
 import type { MobileAttachmentUploadCandidate } from '@/session/mobileAttachmentUpload';
 
 export type MobileImagePickerAssetLike = {
@@ -17,7 +17,7 @@ export type MobileImageAttachmentCandidate = MobileAttachmentUploadCandidate & {
   height?: number | null;
   /**
    * 仅 HEIC / HEIF 等非白名单格式带此钩子:任务开跑时就地转 JPEG(#3889)。
-   * 托盘预览仍用原始 uri;返回字段由上传管线覆盖到 candidate 上。
+   * 返回字段由上传管线覆盖到 candidate 上，并更新上传中预览。
    */
   resolve?: () => Promise<{ uri: string; name: string; mimeType: string; size: number }>;
 };
@@ -105,9 +105,6 @@ export async function convertMobileImageToJpegNative(uri: string): Promise<strin
 export function assertMobileImageSize(size: number): void {
   if (!Number.isFinite(size) || size <= 0) {
     throw new Error(i18n.t('composer.upload.emptyImage'));
-  }
-  if (size > MOBILE_MAX_ATTACHMENT_BYTES) {
-    throw new Error(i18n.t('composer.upload.imageTooLarge', { size: Math.round(MOBILE_MAX_ATTACHMENT_BYTES / 1024 / 1024) }));
   }
 }
 

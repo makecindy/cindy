@@ -72,7 +72,19 @@ describe("create_project MCP", () => {
         errorCode: "NO_SESSION_CONTEXT",
       });
       sessionId = "caller";
-      for (const restricted of ["bot", "restricted"] as const) {
+      // Bot surface now includes project management.
+      surface = "bot";
+      expect(
+        parse(
+          await client.callTool({ name: "list_tools", arguments: {} }),
+        ).categories ?? [],
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ name: "control" })]));
+      expect(parse(await call({ working_dir: "/project" }))).toMatchObject({
+        ok: true,
+        working_dir: "/project",
+      });
+      expect(createProject).toHaveBeenCalledTimes(2);
+      for (const restricted of ["restricted"] as const) {
         surface = restricted;
         const categories = parse(
           await client.callTool({ name: "list_tools", arguments: {} }),
@@ -84,7 +96,7 @@ describe("create_project MCP", () => {
         );
         expect((await call({ working_dir: "/project" })).isError).toBe(true);
       }
-      expect(createProject).toHaveBeenCalledTimes(1);
+      expect(createProject).toHaveBeenCalledTimes(2);
     } finally {
       await client.close();
       await server.close();

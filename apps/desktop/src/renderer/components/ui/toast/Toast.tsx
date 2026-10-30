@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { CircleCheck, CircleX, Info, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 
@@ -48,9 +49,11 @@ export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
 
 export interface ToastProps {
   item: ToastItem;
+  /** Interactive content, such as a disclosure, in place of the plain message. */
+  message?: React.ReactNode;
 }
 
-export function Toast({ item }: ToastProps) {
+export function Toast({ item, message }: ToastProps) {
   const meta = VARIANT_MAP[item.variant];
   const Icon = meta.icon;
   const panelRef = useRef<HTMLDivElement>(null);
@@ -142,18 +145,21 @@ export function Toast({ item }: ToastProps) {
           <span className="max-w-[160px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
             {item.source.name}
           </span>
-          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)] opacity-60">
+          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)]">
             ·
           </span>
         </span>
       )}
 
       {/* Preserve diagnostic newlines and allow unbroken URLs to fit. */}
-        {item.message}
+        {message ?? item.message}
       </span>
 
       {item.action && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
           type="button"
           onClick={() => {
             try {
@@ -162,14 +168,10 @@ export function Toast({ item }: ToastProps) {
               toast.dismiss(item.id);
             }
           }}
-          className={cn(
-            'ml-1 max-w-[40%] shrink-0 rounded-full px-2.5 py-1 text-12 font-medium whitespace-normal [overflow-wrap:anywhere]',
-            'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          )}
+          className="ml-1 h-auto min-h-7 max-w-[40%] whitespace-normal [overflow-wrap:anywhere] py-1"
         >
           {item.action.label}
-        </button>
+        </Button>
       )}
     </div>
   );

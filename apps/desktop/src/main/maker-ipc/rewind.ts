@@ -33,6 +33,8 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE } from './channels.js';
 import { withSessionInputStoppedForRewind } from './register.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
+import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { pruneWithdrawnWorkingMemoryForSession } from './botWorkingMemory.js';
 
 const log = createLogger('maker-ipc/rewind');
 const STOPPED_REWIND_RETRY_MS = 100;
@@ -41,7 +43,7 @@ const STOPPED_REWIND_TIMEOUT_MS = 15_000;
 async function commitAfterStopping(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean },
+  opts: { requireLatestUser: boolean; allowFileRestore?: boolean },
 ) {
   const deadline = Date.now() + STOPPED_REWIND_TIMEOUT_MS;
   while (true) {
@@ -59,7 +61,7 @@ async function commitAfterStopping(
 async function commitAfterPersistBarrier(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean },
+  opts: { requireLatestUser: boolean; allowFileRestore?: boolean },
 ) {
   // Rewind must see every chat/Subagent observation that was already queued
   // before its transaction chooses the visible tail. Otherwise a delayed
@@ -70,6 +72,9 @@ async function commitAfterPersistBarrier(
   return withSendToSessionLock(sessionId, async () => {
     const result = await commitRewindAtMessage(sessionId, clientId, opts);
     advanceSessionRewindGeneration(sessionId);
+    // 被撤回轮次产生的伙伴工作记忆条目一并清掉(与删除路径同一失效模式);提交成功
+    // 后按数据库现状对账,失败不影响 rewind,渲染时的统一过滤仍兜底。
+    await pruneWithdrawnWorkingMemoryForSession(sessionId, ownerScopedUserDataPath()).catch(() => 0);
     return result;
   });
 }
@@ -119,6 +124,15 @@ export function registerMakerRewindIpc(): void {
       const stopIfRunning =
         !!opts && typeof opts === 'object' &&
         (opts as { stopIfRunning?: unknown }).stopIfRunning === true;
+      const allowFileRestore =
+        !!opts && typeof opts === 'object' &&
+        (opts as { allowFileRestore?: unknown }).allowFileRestore === false
+          ? false
+          : undefined;
+      const commitOpts = {
+        requireLatestUser,
+        ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
+      };
       let subagentFence: SubagentRewindFence | null = null;
       // This flag controls observation-generation advancement, not whether
       // the underlying message transaction has already committed.
@@ -134,8 +148,8 @@ export function registerMakerRewindIpc(): void {
         // transaction. Edit-last-message keeps its existing direct orchestration.
         const result = stopIfRunning
           ? await withSessionInputStoppedForRewind(sid, () =>
-              commitAfterStopping(sid, cid, { requireLatestUser }))
-          : await commitAfterPersistBarrier(sid, cid, { requireLatestUser });
+              commitAfterStopping(sid, cid, commitOpts))
+          : await commitAfterPersistBarrier(sid, cid, commitOpts);
         visibleSubagentIdentitiesAfterCommit =
           await listVisibleSubagentObservationIdentities(sid);
         // The fence may advance generations only after the post-commit

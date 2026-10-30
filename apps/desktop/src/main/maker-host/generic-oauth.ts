@@ -1,5 +1,7 @@
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import { providerOAuthContract } from '@cindy/model-providers';
-import { parseModelsListResponse, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
+import { isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * generic-oauth —— 目录 `auth.oauth` 描述符驱动的通用 OAuth Runner。
  *
@@ -827,7 +829,9 @@ export function deriveModelsDiscoveryUrl(baseUrl: string): string {
   url.hash = '';
   let pathname = url.pathname;
   while (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  url.pathname = /\/v\d+$/i.test(pathname)
+  // Codex-compatible relays (including Sub2API) expose /models directly under
+  // /backend-api/codex; inserting /v1 makes discovery fail while inference works.
+  url.pathname = /(?:\/v\d+|\/backend-api\/codex)$/i.test(pathname)
     ? `${pathname}/models`
     : `${pathname === '/' ? '' : pathname}/v1/models`;
   return url.toString();
@@ -846,11 +850,13 @@ export async function discoverGenericOAuthModels(
   oauth: OAuthProviderDescriptor,
   discoveryUrl?: string,
   agent?: AgentKind,
+  isCurrent: () => boolean = () => true,
 ): Promise<DiscoveredModel[] | null> {
-  const url = discoveryUrl ?? oauth.modelsDiscoveryUrl;
-  if (!url) return null;
+  const configuredUrl = discoveryUrl ?? oauth.modelsDiscoveryUrl;
+  if (!configuredUrl || !isCurrent()) return null;
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
   if (!token) return null;
+  const url = resolveCopilotAccountUrl(configuredUrl, token);
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
   if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
   let res: Response;
@@ -869,7 +875,19 @@ export async function discoverGenericOAuthModels(
   } catch {
     return null;
   }
-  return parseModelsListResponse(json, url);
+  if (!isCurrent()) return null;
+  const pageDeadline = Date.now() + 30_000;
+  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+    // Login cancellation/account changes must stop pagination and the optional
+    // speech query before either can reuse the captured Bearer credential.
+    if (!isCurrent()) throw new Error('catalog operation is no longer current');
+    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    const page = await io.fetchImpl(nextUrl, { headers, redirect: 'error',
+      signal: AbortSignal.timeout(Math.max(1, Math.min(REFRESH_FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
+    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
+    return page.json();
+  });
+  return isCurrent() ? models : null;
 }
 
 

@@ -18,13 +18,13 @@ describe('/review command dispatch', () => {
   it('crosses the Main boundary with this invocation attachment snapshot before returning', () => {
     expect(dispatchSource).toContain("if (hit.name === 'review')");
     expect(dispatchSource).toContain('serializeAttachedFiles(files)');
-    expect(dispatchSource).toContain('.startReview({');
-    expect(dispatchSource).toContain('await window.electronAPI.maker.startReview({');
+    expect(dispatchSource).toContain('await startReviewOnDevice(request, rightSidebarDeviceLinkDeviceId)');
+    expect(dispatchSource).not.toContain('if (remoteDeviceId || session?.remoteHostId)');
     expect(dispatchSource).toContain('return { handled: true, accepted: true, message }');
     expect(dispatchSource).toContain('return { handled: true, accepted: false, message }');
     expect(sessionViewSource).toContain('if (slashDispatch.handled) {');
     expect(sessionViewSource).toContain('waitForLeadHistory: false');
-    expect(dispatchSource.indexOf('.startReview({')).toBeLessThan(
+    expect(dispatchSource.indexOf('await startReviewOnDevice(')).toBeLessThan(
       dispatchSource.indexOf('void dispatchCommand(hit'),
     );
   });

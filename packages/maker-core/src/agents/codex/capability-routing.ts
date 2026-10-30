@@ -3,6 +3,7 @@ import type {
   CapabilityRoutingPolicy,
 } from '../../types/capability-routing.js';
 import type { BotRuntimeMcpPolicy, BotRuntimeSkillPolicy } from '../base-agent.js';
+import { canonicalSkillPath } from '../shared/skill-activation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
 
 const CODEX_HARNESS_ID = 'codex';
@@ -15,6 +16,7 @@ interface CodexSkillState {
 /** Build Codex's native per-thread Skill config for a Bot allowlist. */
 export function buildCodexBotSkillConfigOverrides(
   policy: BotRuntimeSkillPolicy | undefined,
+  refreshed?: { skills: readonly { path: string; enabled?: boolean }[]; grants: ReadonlySet<string> },
 ): Record<string, unknown> {
   if (!policy) return {};
   const byPath = new Map<string, { path: string; enabled: boolean }>();
@@ -28,7 +30,16 @@ export function buildCodexBotSkillConfigOverrides(
     byPath.set(skillPath, {
       path: skillPath,
       enabled: item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (!refreshed || refreshed.grants.has(canonicalSkillPath(skillPath))) &&
         (allowed.has(item.name.trim()) || (!!runtimeName && allowed.has(runtimeName))),
+    });
+  }
+  // The refreshed native catalog can contain skills absent from the Bot's
+  // earlier catalog. Grant by frozen physical identity, never by a new name.
+  for (const item of refreshed?.skills ?? []) {
+    byPath.set(item.path, {
+      path: item.path,
+      enabled: item.enabled !== false && refreshed!.grants.has(canonicalSkillPath(item.path)),
     });
   }
   // Cindy-owned Bot Skills are outside the ambient allowlist. Codex has no
@@ -76,9 +87,14 @@ export function buildCodexBotMcpConfigOverrides(
 ): Record<string, unknown> {
   if (!policy || policy.mode !== 'allowlist') return {};
   const result: Record<string, unknown> = {};
+  // Apps is a native server without command/url. A disabled-only MCP entry is
+  // invalid in Codex; use its feature switch, and never force-enable an account feature.
+  if (!isBotMcpServerAllowed(policy, 'codex_apps')) result['features.apps'] = false;
   // Codex parses transport before enabled. Never synthesize disabled-only
   // entries for absent servers: even `enabled=false` makes thread/start fail.
   for (const name of transportServerNames) {
+    // Native Apps has no transport. A real transport with the same name must
+    // still obey the allowlist (including configs inherited from CODEX_HOME).
     const restricted = ['cindy_group_history', 'cindy_orca'].includes(name);
     if (!restricted && isBotMcpServerAllowed(policy, name)) continue;
     result[`mcp_servers.${renderThreadConfigKeySegment(name)}.enabled`] = false;
@@ -201,6 +217,93 @@ function isSkillFromPluginDistribution(
   return false;
 }
 
+function hasCodexPluginIdentity(pluginId: string | undefined): boolean {
+  return !!pluginId && parseCodexPluginCacheIdentity(pluginId) !== null;
+}
+
+/**
+ * The Skill catalog target hidden by a disabled Codex plugin or Skill route.
+ * Throws when the route lacks the plugin identity Codex needs to find it.
+ */
+function codexSkillDisableTarget(
+  directive: CapabilityRouteOverride,
+): CodexSkillDisableTarget {
+  const pluginId = directive.source.surface === 'plugin'
+    ? directive.source.id
+    : directive.source.containerId;
+  if (!pluginId) {
+    const requiredField = directive.source.surface === 'plugin'
+      ? 'source.id'
+      : 'source.containerId';
+    throw new Error(
+      `Cannot disable Codex Skill ${directive.source.id}: ${requiredField} is required`,
+    );
+  }
+  const plugin = parseCodexPluginCacheIdentity(pluginId);
+  if (!plugin) {
+    throw new Error(
+      `Cannot enforce disabled Codex Skill routing for ${directive.source.id}: expected plugin id in <name>@<marketplace> form`,
+    );
+  }
+  const skillArtifactId = directive.source.surface === 'skill'
+    ? directive.source.artifactId
+    : undefined;
+  if (directive.source.surface === 'skill' && !skillArtifactId) {
+    throw new Error(
+      `Cannot disable Codex Skill ${directive.source.id}: source.artifactId is required`,
+    );
+  }
+  return {
+    plugin,
+    ...(skillArtifactId ? { skillArtifactId } : {}),
+  };
+}
+
+/**
+ * Whether the desktop's provenance-preserving plugin overlay narrows this
+ * explicit-only route locally. The overlay builder selects routes through this
+ * same predicate.
+ */
+export function isCodexExplicitOnlyOverlayRoute(
+  directive: CapabilityRouteOverride,
+): boolean {
+  if (
+    !isCodexHarnessPluginDirective(directive) ||
+    directive.invocation !== 'explicit-only' ||
+    !hasCodexPluginIdentity(directive.source.containerId)
+  ) {
+    return false;
+  }
+  const { surface, id, artifactId } = directive.source;
+  return surface === 'skill' ||
+    (surface === 'mcp' && !!artifactId && artifactId !== id);
+}
+
+/**
+ * Whether Codex enforces a host route. Built from the same helpers the Skill
+ * config builder and the desktop overlay use, so the route support check
+ * cannot drift from what a session actually applies.
+ */
+export function isCodexCapabilityRouteEnforced(
+  directive: CapabilityRouteOverride,
+): boolean {
+  if (isDisabledCodexSkillSourceDirective(directive)) {
+    try {
+      codexSkillDisableTarget(directive);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  if (
+    isCodexHarnessPluginDirective(directive) &&
+    directive.invocation === 'disabled'
+  ) {
+    return directive.source.surface === 'mcp';
+  }
+  return isCodexExplicitOnlyOverlayRoute(directive);
+}
+
 /**
  * Remove replacement-arbitration routes that the selected Codex host cannot
  * satisfy. Compatibility-only restrictions without a replacement remain in
@@ -242,35 +345,7 @@ export function buildCodexCapabilitySkillConfigOverrides(
   const targets: CodexSkillDisableTarget[] = [];
   for (const directive of policy?.overrides ?? []) {
     if (!isDisabledCodexSkillSourceDirective(directive)) continue;
-    const pluginId = directive.source.surface === 'plugin'
-      ? directive.source.id
-      : directive.source.containerId;
-    if (!pluginId) {
-      const requiredField = directive.source.surface === 'plugin'
-        ? 'source.id'
-        : 'source.containerId';
-      throw new Error(
-        `Cannot disable Codex Skill ${directive.source.id}: ${requiredField} is required`,
-      );
-    }
-    const plugin = parseCodexPluginCacheIdentity(pluginId);
-    if (!plugin) {
-      throw new Error(
-        `Cannot enforce disabled Codex Skill routing for ${directive.source.id}: expected plugin id in <name>@<marketplace> form`,
-      );
-    }
-    const skillArtifactId = directive.source.surface === 'skill'
-      ? directive.source.artifactId
-      : undefined;
-    if (directive.source.surface === 'skill' && !skillArtifactId) {
-      throw new Error(
-        `Cannot disable Codex Skill ${directive.source.id}: source.artifactId is required`,
-      );
-    }
-    targets.push({
-      plugin,
-      ...(skillArtifactId ? { skillArtifactId } : {}),
-    });
+    targets.push(codexSkillDisableTarget(directive));
   }
   if (targets.length === 0) return {};
 

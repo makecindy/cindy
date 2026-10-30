@@ -1,5 +1,6 @@
+import { createAutoReviewIntentProjection, type AutoReviewUserIntent } from '@cindy/maker-shared/auto-review-intent';
 import type { AgentKind, UserMessage } from '../../types/common.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '../base-agent.js';
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
@@ -37,17 +38,18 @@ export type AutoReviewDecision = {
 export const AUTO_REVIEW_UNAVAILABLE_CODE = 'AUTO_REVIEW_UNAVAILABLE';
 
 /**
- * 未落地 i18n 的宿主看到的兜底英文。用词与 desktop 权限选择器的档位标签对齐
- * （Auto-review / Default permissions），避免同一件事在两处叫不同名字。
+ * 未落地 i18n 的宿主看到的兜底英文。三条 Harness 共用这一句。少打断只能指向
+ * Full access：默认权限在 Pi 上问得更多，在 Claude / Codex 上也不会少问联网和提权。
+ * 完全访问风险更高，文案必须点明。
  *
  * IM 渠道（Slack / Telegram / 飞书）**不**读它 —— 渠道文案硬编码中文、不进 renderer
  * 的 locale（见 docs/dev-rules/engineering-conventions.md §5），映射在
  * apps/desktop/src/main/im/shared/turnRetryNotice.ts。
  */
 const AUTO_REVIEW_UNAVAILABLE_FALLBACK_TEXT =
-  'Auto-review could not reach a decision (network or service hiccup), so actions that '
-  + 'need review are being handed to you to confirm. Switch this task to Default '
-  + 'permissions if you would rather not be interrupted.';
+  'Auto-review could not reach a decision, so actions that need review now need your '
+  + 'confirmation. Switch this task to Full access if you would rather not be interrupted. '
+  + 'That mode is higher risk.';
 
 /**
  * 判定一条 AgentEvent 的 error message 是否就是「自动审批不可用」提示。
@@ -230,7 +232,38 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
-/** 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。 */
+/** InteractionRequest.metadata：审阅器判定「需要用户决定」时写给用户的原因（已脱敏、限长）。 */
+export const AUTO_REVIEW_REASON_METADATA_KEY = 'autoReviewReason';
+
+export function autoReviewReasonFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const reason = metadata?.[AUTO_REVIEW_REASON_METADATA_KEY];
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+}
+
+/**
+ * 确认卡说明「为什么问你」：故障降级用固定文案；审阅器的 ask 原因挂在 metadata 上，
+ * 不覆盖 Agent／SDK 自带的 description。其余确认（Ask 档、逐次确认策略）原样返回。
+ */
+export function annotatePermissionRequestForAutoReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  if (!reason) return req;
+  return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
+}
+
+/**
+ * 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。
+ * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
+ * 附件数），只作低信任证据，审阅器单独呈现，不算用户原话、不构成授权。
+ */
 export interface AutoReviewRequest {
   sessionId?: string;
   agentKind: AgentKind;
@@ -244,6 +277,17 @@ export interface AutoReviewRequest {
     requesterAuthority: 'owner' | 'guest' | 'unknown';
     source: 'group' | 'direct';
   };
+  /** Host-resolved plugin delegation, distinct from user-authored intent. */
+  delegatedTask?: {
+    source: 'approved-plugin';
+    pluginId: string;
+    role: 'coordinator' | 'worker';
+    task: string;
+    workingDir: string;
+    authorizationRevision: string;
+  };
+  /** A recognized delegation whose current authority could not be established. */
+  authorizationError?: string;
   action: ReviewableAction;
   /** 全部可读根；首项必须是主工作目录，供相对路径解析。 */
   workspaceRoots: string[];
@@ -254,9 +298,34 @@ export interface AutoReviewRequest {
   platform: NodeJS.Platform;
 }
 
-export type AutoReviewDelegate = (
+export type AutoReviewDelegate = ((request: AutoReviewRequest) => Promise<AutoReviewDecision | null>) & {
+  /** Re-resolve live Host authority before cache lookup and after any awaited decision. */
+  prepareRequest?: (request: AutoReviewRequest) => Promise<AutoReviewRequest>;
+};
+
+export async function withAutoReviewContext(
   request: AutoReviewRequest,
-) => Promise<AutoReviewDecision | null>;
+  delegate: AutoReviewDelegate | undefined,
+  evaluate: (prepared: AutoReviewRequest) => Promise<AutoReviewDecision>,
+  finalize: (decision: AutoReviewDecision) => AutoReviewDecision = decision => decision,
+): Promise<AutoReviewDecision> {
+  try {
+    const prepared = delegate?.prepareRequest ? await delegate.prepareRequest(request) : request;
+    if (prepared.authorizationError) return { verdict: 'block', reason: prepared.authorizationError };
+    const fingerprint = JSON.stringify(prepared);
+    const decision = await evaluate(prepared);
+    if (delegate?.prepareRequest) {
+      const current = await delegate.prepareRequest(request);
+      if (current.authorizationError || JSON.stringify(current) !== fingerprint) {
+        return { verdict: 'block', reason: 'Delegated authorization changed; retry against the current scope.' };
+      }
+    }
+    // No await after the live runtime fence: Host lookup may outlive accepted input.
+    return finalize(decision);
+  } catch {
+    return { verdict: 'ask', unavailable: true, reason: 'Host could not verify the current authorization; this action needs your confirmation.' };
+  }
+}
 
 /** Preserve the actual tool identity and arguments across progressive/Host approval entrypoints. */
 export function toolAutoReviewAction(
@@ -404,12 +473,27 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return action.description?.trim()
-        ? null
-        : 'Unknown actions cannot be reviewed without concrete action details.';
+      if (!action.description?.trim()) return 'Unknown actions cannot be reviewed without concrete action details.';
+      return fileChangeWithoutPaths(action.description)
+        ? 'File-change review needs concrete paths.'
+        : null;
     default:
       return null;
   }
+}
+
+/** A risk-first reviewer would wave a pathless patch through as "low risk"; never approve unseen writes. */
+function fileChangeWithoutPaths(description: string): boolean {
+  let envelope: unknown;
+  try { envelope = JSON.parse(description); } catch { return false; }
+  if (!envelope || typeof envelope !== 'object') return false;
+  const { toolName, input } = envelope as { toolName?: unknown; input?: unknown };
+  if (toolName !== 'file_change') return false;
+  const changes = input && typeof input === 'object' ? (input as { changes?: unknown }).changes : undefined;
+  const paths = Array.isArray(changes)
+    ? changes.map((change) => (change && typeof change === 'object' ? (change as { path?: unknown }).path : undefined))
+    : changes && typeof changes === 'object' ? Object.keys(changes) : [];
+  return !paths.some((path) => typeof path === 'string' && path.trim().length > 0);
 }
 
 function oversizedReviewEvidence(action: ReviewableAction): string | null {
@@ -434,7 +518,15 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
   delegate: AutoReviewDelegate | undefined,
+  hostAutoApprove = false,
+  hostShortcutOnly = false,
 ): Promise<AutoReviewDecision> {
+  // Host trust skips model review only after live context preparation has
+  // established that this is not a delegated task with a narrower scope.
+  if (hostAutoApprove && !request.delegatedTask) return { verdict: 'allow' };
+  // Outside Auto, only establish whether Host trust can skip confirmation.
+  // A delegated request must use the existing human approval path, never AI.
+  if (hostShortcutOnly) return { verdict: 'ask' };
   // Bound untrusted input before the static classifier's command/path parsers,
   // not merely before the model request. Neither may inspect an oversized action.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
@@ -442,7 +534,9 @@ export async function resolveAutoReviewDecision(
     return { verdict: 'block', reason: oversizedEvidenceReason };
   }
   const localTier = classifyLocalAutoReviewTier(request);
-  if (localTier === 'auto-approve') return { verdict: 'allow' };
+  // The registered task can constrain reads as well as writes. No delegated
+  // action bypasses scope review merely because the workspace tier is safe.
+  if (localTier === 'auto-approve' && !request.delegatedTask) return { verdict: 'allow' };
   // Never ask the model to approve an action whose material target/text is absent.
   // It has no evidence to distinguish routine work from an unsafe side effect.
   const missingEvidenceReason = missingReviewEvidence(request.action);
@@ -505,23 +599,9 @@ export async function resolveAutoReviewDecision(
   };
 }
 
-/** Structured only by the Host. User text is never parsed as an authorization envelope. */
-export type AutoReviewUserIntent = string | {
-  readonly earlierUserMessages: readonly string[];
-  readonly currentUserMessage: string;
-  /** Omitted history may contain standing restrictions; never silently treat it as unrestricted. */
-  readonly historyOmitted?: true;
-};
-
-const MAX_USER_INTENT_CHARS = 2_000;
-const OMITTED_USER_INTENT = 'User message omitted because it exceeds the review budget; it cannot establish authorization.';
-
-function compactCurrentUserIntent(text: string, maxChars = MAX_USER_INTENT_CHARS): string {
-  const normalized = text.trim();
-  if (normalized.length <= maxChars) return normalized;
-  return OMITTED_USER_INTENT;
-}
-
+export type { AutoReviewUserIntent, AutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+const intentProjection = createAutoReviewIntentProjection();
+const compactCurrentUserIntent = intentProjection.compact;
 function userIntentText(content: UserMessage['content']): string {
   return (typeof content === 'string'
     ? content
@@ -537,20 +617,12 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
 }
 
 /** Enforce the budget without interpreting strings as Host-generated structure. */
-export function normalizeAutoReviewUserIntent(intent: AutoReviewUserIntent): AutoReviewUserIntent {
-  if (typeof intent === 'string') return compactCurrentUserIntent(intent);
-  const currentUserMessage = compactCurrentUserIntent(intent.currentUserMessage);
-  const candidate = { earlierUserMessages: [...intent.earlierUserMessages], currentUserMessage,
-    ...(intent.historyOmitted ? { historyOmitted: true as const } : {}) };
-  if (currentUserMessage !== OMITTED_USER_INTENT && JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS) return candidate;
-  // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
-  const omitted = { earlierUserMessages: [], currentUserMessage, historyOmitted: true as const };
-  return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS ? omitted
-    : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
-}
+export const normalizeAutoReviewUserIntent = intentProjection.normalize;
 
 /** Preserve chronological user messages; scope is assessed, never assumed permanent. */
-export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | undefined, content: UserMessage['content'], sendOpts?: SendOptions): AutoReviewUserIntent {
+  // A continuation is not a new human input. A live empty reset is authoritative too.
+  if (sendOpts?.[AUTO_REVIEW_DELEGATED_CONTINUATION] && previous !== undefined) return normalizeAutoReviewUserIntent(previous);
   // The authenticated Host snapshot already includes this input; never append it twice.
   if (sendOpts?.[AUTO_REVIEW_USER_INTENT] !== undefined) {
     return normalizeAutoReviewUserIntent(sendOpts[AUTO_REVIEW_USER_INTENT]);
@@ -560,11 +632,11 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent, conte
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
   // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
   const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
-  if (!latest || hasAttachments || previous === '') return compactCurrentUserIntent(latest);
-  const earlierUserMessages = typeof previous === 'string'
-    ? [previous] : [...previous.earlierUserMessages, previous.currentUserMessage];
-  return normalizeAutoReviewUserIntent({ earlierUserMessages, currentUserMessage: latest,
-    ...(typeof previous !== 'string' && previous.historyOmitted ? { historyOmitted: true as const } : {}) });
+  // References belong to this message only and travel with Main's Symbol, never a wire field.
+  return intentProjection.withReferences(
+    intentProjection.append(hasAttachments ? '' : previous, latest),
+    sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences,
+  );
 }
 
 /** Keep actual denied actions across one user follow-up, without assistant explanations or grants. */

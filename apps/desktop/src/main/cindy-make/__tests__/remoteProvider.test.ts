@@ -31,6 +31,122 @@ const project = (state: MakeRemoteSnapshot, dictionary: Record<string, unknown> 
 
 describe('portable Cindy Make cards', () => {
   it.each([en, zh, tw, ja, ko])(
+    'keeps read-only sync and PR status visible without workflow controls',
+    (dictionary) => {
+      for (const busy of [false, true]) {
+        const state = snapshot();
+        state.busy = busy;
+        state.completion = undefined;
+        state.personal = {
+          remote: { sync: 'synced' },
+          contributions: [{ number: 42, state: 'open' }],
+        };
+        const card = project(state, dictionary);
+        const body = card.blocks?.map((block) => block.fallbackMarkdown).join('\n\n');
+        expect(body).toContain(dictionary.cindyMake.storage.status.synced);
+        expect(body).toContain(
+          dictionary.cindyMake.contribution.state.open.replace('{{number}}', '42'),
+        );
+        expect(card.display.title).toBe(
+          busy ? dictionary.cindyMake.history.lifecycle.running : dictionary.cindyMake.title,
+        );
+        expect(card.blocks?.every((block) => block.primitive !== 'session-controls')).toBe(true);
+        expect(card.actions).toEqual([]);
+      }
+    },
+  );
+
+  it('does not add a status card when there is no personal status or workflow', () => {
+    const state = snapshot();
+    state.completion = undefined;
+    state.personal = {};
+    expect(project(state).blocks).toEqual([]);
+    expect(project(state).actions).toEqual([]);
+  });
+
+  it('projects personal sync and contribution status without adding remote write actions', () => {
+    const state = snapshot();
+    state.personal = {
+      remote: { sync: 'retrieved', error: 'network' },
+      personalSync: { running: true, step: 'official' },
+      contributions: [{ number: 42, state: 'open' }],
+    };
+    const card = project(state);
+    expect(card.display.subtitle).toContain(en.cindyMake.storage.status.retrieved);
+    expect(card.display.subtitle).toContain(en.cindyMake.storage.errors.network);
+    expect(card.display.subtitle).toContain(en.cindyMake.sync.step.official);
+    expect(card.display.subtitle).toContain(
+      en.cindyMake.contribution.state.open.replace('{{number}}', '42'),
+    );
+    expect(
+      card.actions?.some(
+        (action) => action.id.includes('sync') || action.id.includes('contribution'),
+      ),
+    ).toBe(false);
+  });
+
+  it('forwards the latest scrubbed line and removes it when stopped or finished', () => {
+    const state = snapshot();
+    state.sharedBuild = {
+      status: 'checking',
+      checkStep: 'tests',
+      outputLine: 'Test Files 57 passed; token=fake-secret',
+    };
+    const text = JSON.stringify(project(state));
+    expect(text).toContain('Test Files 57 passed; token=[REDACTED]');
+    expect(text).not.toContain('fake-secret');
+    state.sharedBuild.stopping = true;
+    expect(JSON.stringify(project(state))).not.toContain('Test Files');
+    state.sharedBuild = { status: 'ready', outputLine: 'Test Files 57 passed' };
+    expect(JSON.stringify(project(state))).not.toContain('Test Files');
+  });
+  it.each(['merging', 'failed', 'ready'] as const)(
+    'omits the merge task button from a %s build card',
+    (status) => {
+      const state = snapshot();
+      state.completion!.meta.lastAction = 'build';
+      state.completion!.meta.personal = { status, buildId: 'build', mergeSessionId: 'resolver' };
+      expect(project(state).links).toEqual([
+        {
+          rel: 'conversation',
+          target: { kind: 'session', sessionId: 'task' },
+        },
+      ]);
+    },
+  );
+  it.each([en, zh, tw, ja, ko])(
+    'keeps conflict processing and cleanup as active build stages on the phone',
+    (dictionary) => {
+      const state = snapshot();
+      for (const mergeStep of ['conflicts', 'cleanup'] as const) {
+        state.sharedBuild = { status: 'merging', mergeStep, buildId: 'build' };
+        const card = project(state, dictionary);
+        expect(card.display.title).toBe(dictionary.cindyMake.personal.mergeStep[mergeStep]);
+        expect(card.display.status?.tone).not.toBe('critical');
+        expect(card.blocks?.[0].data).toMatchObject({ input: 'blocked', busy: true });
+        expect(card.actions?.at(-1)).toMatchObject({ id: 'build:build:stop', disabled: false });
+      }
+    },
+  );
+  it('forwards the saved build cause to phone cards without private paths', () => {
+    const state = snapshot();
+    state.completion!.meta.lastAction = 'build';
+    state.completion!.meta.personal = {
+      status: 'failed',
+      error: 'buildFailed',
+      diagnostic: {
+        kind: 'outOfMemory',
+        exitCode: 134,
+        message: 'FATAL ERROR: JavaScript heap out of memory\n at C:/private/source.js',
+      },
+    };
+    const text = JSON.stringify(project(state, zh));
+    expect(text).toContain('内存上限');
+    expect(text).toContain('134');
+    expect(text).toContain('FATAL ERROR: JavaScript heap out of memory');
+    expect(text).not.toContain('private');
+  });
+  it.each([en, zh, tw, ja, ko])(
     'translates preparation, test steps, failure and recovery without leaking local details',
     (dictionary) => {
       const state = snapshot();
@@ -81,7 +197,10 @@ describe('portable Cindy Make cards', () => {
       state.recoverable = true;
       const resumed = project(state, dictionary);
       expect(resumed.blocks?.[0].data).toMatchObject({ input: 'available' });
-      expect(resumed.actions?.map((action) => action.id)).toEqual(['resume:revision']);
+      expect(resumed.actions?.map((action) => action.id)).toEqual([
+        'resume:revision:start',
+        'resume:revision:build',
+      ]);
     },
   );
 
@@ -91,11 +210,23 @@ describe('portable Cindy Make cards', () => {
       buildId: 'build',
       status: 'checking',
       checkStep: 'dependencies',
-      logs: [{ step: 'merging', at: 1 }, { step: 'checking-dependencies', at: 2 }],
+      logs: [
+        { step: 'merging', at: 1 },
+        { step: 'checking-dependencies', at: 2 },
+      ],
     };
     const card = project(state);
     expect(card.actions?.slice(0, 3).every((action) => action.disabled)).toBe(true);
-    expect(card.actions?.at(-1)).toMatchObject({ id: 'build:build:stop', disabled: false });
+    expect(card.actions?.at(-1)).toMatchObject({
+      id: 'build:build:stop',
+      disabled: false,
+      tone: 'destructive',
+      confirmation: {
+        title: en.cindyMake.history.stopConfirm.title,
+        body: en.cindyMake.history.stopConfirm.description,
+        confirmLabel: en.cindyMake.history.stop,
+      },
+    });
     expect(card.blocks?.[0].fallbackMarkdown).toContain(en.cindyMake.personal.buildLog.title);
     expect(card.blocks?.[0].fallbackMarkdown).toContain(
       en.cindyMake.personal.buildLog.steps['checking-dependencies'],
@@ -158,9 +289,9 @@ describe('host validates portable task actions', () => {
     const h = harness();
     h.state.completion = undefined;
     h.state.recoverable = true;
-    await expect(h.invoke('resume:old')).rejects.toThrow('Task changed');
+    await expect(h.invoke('resume:old:start')).rejects.toThrow('Task changed');
     h.changeOwner();
-    await expect(h.invoke('resume:revision')).rejects.toThrow('Task changed');
+    await expect(h.invoke('resume:revision:start')).rejects.toThrow('Task changed');
     expect(h.act).not.toHaveBeenCalled();
   });
   it('coalesces two controllers and returns only invalidation effects', async () => {

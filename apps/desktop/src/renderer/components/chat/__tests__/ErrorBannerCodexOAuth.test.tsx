@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 import { ErrorBanner } from '../ErrorBanner';
 import { ErrorTailErrorBanner } from '../InterruptedTurnBanner';
@@ -12,6 +14,18 @@ import {
   CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../../shared/claudeGatewayError';
+
+// jsdom 没有布局引擎，也尚未实现 checkVisibility；只补本组需要的 CSS 显隐语义。
+Object.defineProperty(HTMLElement.prototype, 'checkVisibility', {
+  configurable: true,
+  value(this: HTMLElement) {
+    for (let element: HTMLElement | null = this; element; element = element.parentElement) {
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    return true;
+  },
+});
 
 type AuthStateChangedPayload = {
   agentKind: 'claude-code' | 'codex';
@@ -34,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   onStateChanged: vi.fn(),
   onLoginProgress: vi.fn(),
   getCodexRateLimits: vi.fn(),
+  consumeReset: vi.fn(),
   openChatGPTApp: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -49,14 +64,19 @@ function emitCodexStateChanged(payload: Omit<AuthStateChangedPayload, 'agentKind
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en', exists: (key: string) => key === 'chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT' },
+  }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
@@ -74,6 +94,98 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 describe('ErrorBanner OpenAI connection recovery', () => {
+  const streamClosed = 'stream disconnected before completion: stream closed before response.completed';
+  it.each([undefined, 'controlled-device'])('offers manual recovery and keeps retry on device %s', async deviceLinkDeviceId => {
+    const recover = vi.fn();
+    const retry = vi.fn();
+    render(<ErrorBanner error={streamClosed} agentKind="codex" deviceLinkDeviceId={deviceLinkDeviceId}
+      silentEncryptedRetryEnabled onForkStripEncrypted={recover} onRetry={retry} retryText="original" />);
+    expect(recover).not.toHaveBeenCalled();
+    expect(screen.getByText('chat.errorBanner.readableHistoryRecoveryDescription')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.retry' }));
+    expect(retry).toHaveBeenCalledWith('original');
+    expect(recover).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.readableHistoryRecovery' }));
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  it.each(['live', 'persisted'])('preserves a hidden %s error when Escape exits sidebar maximize', (kind) => {
+    const dismiss = vi.fn();
+    const retry = vi.fn();
+    const exitMaximize = vi.fn();
+    const banner = kind === 'live'
+      ? <ErrorBanner error="hidden error" onRetry={retry} onCancel={dismiss} dismissOnEscape />
+      : <ErrorTailErrorBanner errorText="hidden error" onContinue={retry} onDismiss={dismiss} dismissOnEscape />;
+    const { rerender } = render(<main style={{ display: 'none' }}>{banner}</main>);
+    // 与 MainLayout 一样，退出最大化的监听不 preventDefault，且晚于横幅注册。
+    window.addEventListener('keydown', exitMaximize);
+    try {
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(exitMaximize).toHaveBeenCalledOnce();
+      expect(dismiss).not.toHaveBeenCalled();
+      expect(retry).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', exitMaximize);
+    }
+    rerender(<main>{banner}</main>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { isRecoverable: true }, { remoteHostId: 'ssh' }, { agentDeviceId: 'hosted' },
+    { deviceLinkDeviceId: sharedTaskHostPeer('shared-task', 'owner-device') },
+    { agentKind: 'cc' as const }, { onForkStripEncrypted: undefined },
+    { error: 'Connection reset' },
+  ])('hides manual history recovery when unavailable: %s', props => {
+    render(<ErrorBanner error={streamClosed} agentKind="codex" onRetry={vi.fn()}
+      onForkStripEncrypted={vi.fn()} {...props} />);
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.readableHistoryRecovery' })).toBeNull();
+  });
+
+  it('offers the same recovery for a persisted error and disables it while pending', () => {
+    const recover = vi.fn();
+    const retry = vi.fn();
+    const { rerender } = render(<ErrorTailErrorBanner errorText={streamClosed} agentKind="codex" onContinue={retry}
+      onDismiss={vi.fn()} onForkStripEncrypted={recover} forkStripEncryptedRunning />);
+    const button = screen.getByRole('button', { name: 'chat.errorBanner.readableHistoryRecovery' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(recover).not.toHaveBeenCalled();
+    const retryButton = screen.getByRole('button', { name: 'chat.errorBanner.retry' }) as HTMLButtonElement;
+    expect(retryButton.disabled).toBe(true);
+    fireEvent.click(retryButton);
+    expect(retry).not.toHaveBeenCalled();
+    rerender(<ErrorTailErrorBanner errorText={streamClosed} agentKind="codex" onContinue={retry}
+      onDismiss={vi.fn()} onForkStripEncrypted={recover} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.retry' }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('blocks live retry until recovery settles and restores it on recovery failure', async () => {
+    const retry = vi.fn();
+    const pending = deferred<void>();
+    function Harness() {
+      const [busy, setBusy] = useState(false);
+      return <ErrorBanner error={streamClosed} agentKind="codex" retryText="original" onRetry={retry}
+        forkStripEncryptedRunning={busy} onForkStripEncrypted={async () => {
+          setBusy(true);
+          try { await pending.promise; } catch { /* parent displays recovery error */ }
+          finally { setBusy(false); }
+        }} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.readableHistoryRecovery' }));
+    const retryButton = screen.getByRole('button', { name: 'chat.errorBanner.retry' }) as HTMLButtonElement;
+    expect(retryButton.disabled).toBe(true);
+    fireEvent.click(retryButton);
+    expect(retry).not.toHaveBeenCalled();
+    await act(async () => pending.reject(new Error('recovery unavailable')));
+    expect(retryButton.disabled).toBe(false);
+    fireEvent.click(retryButton);
+    expect(retry).toHaveBeenCalledWith('original');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.stateChangedListeners.clear();
@@ -95,8 +207,12 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     });
     mocks.cancelLogin.mockResolvedValue(undefined);
     mocks.logout.mockResolvedValue(undefined);
-    mocks.getCodexRateLimits.mockResolvedValue({ rateLimits: null, resetOffer: null });
+    mocks.getCodexRateLimits.mockResolvedValue({
+      account: { email: null, accountId: null, planType: null },
+      rateLimits: {}, rateLimitsByLimitId: null, rateLimitResetCredits: null, resetOffer: null,
+    });
     mocks.openChatGPTApp.mockResolvedValue({ success: true });
+    mocks.consumeReset.mockResolvedValue({ outcome: 'reset', rateLimits: null });
     mocks.onStateChanged.mockImplementation(
       (listener: (payload: AuthStateChangedPayload) => void) => {
         mocks.stateChangedListeners.add(listener);
@@ -116,7 +232,7 @@ describe('ErrorBanner OpenAI connection recovery', () => {
               onStateChanged: typeof mocks.onStateChanged;
               onLoginProgress: typeof mocks.onLoginProgress;
             };
-            usage: { getCodexRateLimits: typeof mocks.getCodexRateLimits };
+            usage: { getCodexRateLimits: typeof mocks.getCodexRateLimits; consumeCodexRateLimitReset: typeof mocks.consumeReset };
           };
           openChatGPTApp: typeof mocks.openChatGPTApp;
         };
@@ -131,10 +247,66 @@ describe('ErrorBanner OpenAI connection recovery', () => {
           onStateChanged: mocks.onStateChanged,
           onLoginProgress: mocks.onLoginProgress,
         },
-        usage: { getCodexRateLimits: mocks.getCodexRateLimits },
+        usage: { getCodexRateLimits: mocks.getCodexRateLimits, consumeCodexRateLimitReset: mocks.consumeReset },
       },
       openChatGPTApp: mocks.openChatGPTApp,
     };
+  });
+
+  it.each(['live', 'persisted'])('dismisses only the active %s error from the composer with Escape', (kind) => {
+    const dismiss = vi.fn();
+    const inactiveDismiss = vi.fn();
+    const retry = vi.fn();
+    const { unmount } = render(<>
+      <textarea aria-label="composer" />
+      <ErrorBanner error="inactive error" onRetry={retry} onCancel={inactiveDismiss} />
+      {kind === 'live'
+        ? <ErrorBanner error="active error" onRetry={retry} onCancel={dismiss} dismissOnEscape />
+        : <ErrorTailErrorBanner errorText="active error" onContinue={retry} onDismiss={dismiss} dismissOnEscape />}
+    </>);
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(inactiveDismiss).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+    unmount();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { key: 'Enter' }, { key: 'Escape', repeat: true },
+    { key: 'Escape', isComposing: true }, { key: 'Escape', keyCode: 229 },
+    { key: 'Escape', altKey: true }, { key: 'Escape', ctrlKey: true },
+    { key: 'Escape', metaKey: true }, { key: 'Escape', shiftKey: true },
+  ])('does not dismiss errors for an unrelated or composing key: %s', (event) => {
+    const dismiss = vi.fn();
+    render(<ErrorBanner error="error" onRetry={vi.fn()} onCancel={dismiss} dismissOnEscape />);
+    fireEvent.keyDown(window, event);
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it('lets a composer consume Escape before dismissing the error', () => {
+    const dismiss = vi.fn();
+    render(<>
+      <textarea onKeyDown={(event) => event.preventDefault()} />
+      <ErrorBanner error="error" onRetry={vi.fn()} onCancel={dismiss} dismissOnEscape />
+    </>);
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it.each(['dialog', 'alertdialog', 'menu', 'listbox', 'morph'])('lets the %s layer handle Escape first', (layer) => {
+    const dismiss = vi.fn();
+    const banner = <ErrorBanner error="error" onRetry={vi.fn()} onCancel={dismiss} dismissOnEscape />;
+    const { rerender } = render(<>
+      {banner}
+      {layer === 'morph' ? <div data-morph-side="bottom" /> : <div role={layer} />}
+    </>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dismiss).not.toHaveBeenCalled();
+    rerender(banner);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(dismiss).toHaveBeenCalledOnce();
   });
 
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
@@ -145,6 +317,19 @@ describe('ErrorBanner OpenAI connection recovery', () => {
 
     expect(screen.getByText('chat.errorBanner.codexResumeNotReady')).toBeTruthy();
     expect(screen.queryByText(error)).toBeNull();
+  });
+
+  it('replaces an unsettled account boundary error with retry guidance', () => {
+    const error =
+      'LAZY_CREATE_FAILED: Ghost skill projection is not stable for the active owner';
+    const onRetry = vi.fn();
+    render(
+      <ErrorBanner error={error} retryText="retry this turn" onRetry={onRetry} agentKind="codex" />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.accountBoundaryPending')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
   });
 
   it('uses cause-neutral Codex app-server retirement copy and does not suggest switching models', () => {
@@ -523,6 +708,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText('token_revoked')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText('token_revoked')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeNull();
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
@@ -542,6 +730,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText('token_revoked')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText('token_revoked')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeNull();
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
@@ -577,6 +768,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
   ])('does not reconnect the controller for a $label failure', (props) => {
     render(<ErrorBanner {...props} retryText="retry this turn" onRetry={vi.fn()} />);
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(props.error)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(props.error)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'chatgptAuthRecovery.relogin' })).toBeNull();
     expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
@@ -917,34 +1111,85 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
   });
 
-  it('exposes the explicit Continue After Reset action only when provided', () => {
-    const onContinueAfterUsageReset = vi.fn();
+  it('shows the automatic continuation time and a cancel action only while waiting', () => {
+    const onCancelUsageLimitWait = vi.fn();
     const { rerender } = render(
       <ErrorBanner
         error="usageLimitExceeded"
         retryText="retry this turn"
         onRetry={vi.fn()}
         agentKind="codex"
-        onContinueAfterUsageReset={onContinueAfterUsageReset}
+        usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }}
+        onCancelUsageLimitWait={onCancelUsageLimitWait}
         usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
       />,
     );
 
     expect(screen.getByText('chat.errorBanner.codexUsageLimit')).toBeTruthy();
-    expect(screen.queryByText('usageLimitExceeded')).toBeNull();
-    const continueButton = screen.getByRole('button', {
-      name: 'chat.errorBanner.continueAfterReset',
-    });
-    expect(continueButton.getAttribute('data-split-pane-route-action')).toBe('');
-    fireEvent.click(continueButton);
-    expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+    // 等待期间手动重试仍可用。
+    expect(screen.getByRole('button', { name: 'chat.errorBanner.retry' })).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
+    );
+    expect(onCancelUsageLimitWait).toHaveBeenCalledOnce();
 
     rerender(
-      <ErrorBanner error="A normal failure" retryText="retry this turn" onRetry={vi.fn()} />,
+      <ErrorBanner
+        error="usageLimitExceeded"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="codex"
+        usageLimitWait={null}
+        onCancelUsageLimitWait={onCancelUsageLimitWait}
+      />,
     );
+    expect(screen.queryByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeNull();
     expect(
-      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
+      screen.queryByRole('button', { name: 'chat.errorBanner.usageLimitAutoContinueCancel' }),
     ).toBeNull();
+  });
+
+  it('offers a confirmed reset at a local ChatGPT limit without retrying the turn', async () => {
+    const key = '00000000-0000-4000-8000-000000000001';
+    mocks.getCodexRateLimits.mockResolvedValue({
+      account: { email: 'te***@example.test', accountId: '…123456', planType: 'plus' },
+      rateLimits: { primary: { usedPercent: 100 } }, rateLimitsByLimitId: null,
+      rateLimitResetCredits: { availableCount: 2, credits: null },
+      resetOffer: { idempotencyKey: key, expiresAt: null, validUntil: Date.now() + 60_000 },
+    });
+    const retry = vi.fn();
+    render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={retry}
+      agentKind="codex" providerId="openai" usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }} />);
+    const action = await screen.findByRole('button', { name: 'codexResets.limitAction' });
+    expect(mocks.consumeReset).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(action));
+    expect(mocks.consumeReset).toHaveBeenCalledExactlyOnceWith(key, 'openai');
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it.each([{ remoteHostId: 'ssh-host' }, { deviceLinkDeviceId: 'other-device' }, { agentDeviceId: 'agent-device' }])(
+    'does not offer local reset credits in a remote task %j', async (remote) => {
+      render(<ErrorBanner error="usageLimitExceeded" retryText="retry this turn" onRetry={vi.fn()}
+        agentKind="codex" providerId="openai" usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }} {...remote} />);
+      await act(async () => {});
+      expect(screen.queryByRole('button', { name: 'codexResets.limitAction' })).toBeNull();
+      expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
+    },
+  );
+
+  // Unit regression: a pending switch still has the previous local route in its projection.
+  // Group quota exhaustion must not offer spending a reset card on that unrelated account.
+  it('keeps group quota waits without reading the previous local account reset credits', async () => {
+    render(<ErrorBanner error="[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached"
+      retryText="retry this turn" onRetry={vi.fn()} agentKind="codex" providerId="openai"
+      usageLimitRecovery={{ resetAtMs: null, isAccountUsageLimit: true }}
+      usageLimitWait={{ resumeAt: Date.now() + 60 * 60 * 1000 }} onCancelUsageLimitWait={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.getByText('chat.remoteError.REMOTE_AGENT_GROUP_USAGE_LIMIT')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.usageLimitAutoContinueAt')).toBeTruthy();
+    expect(mocks.getCodexRateLimits).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'codexResets.limitAction' })).toBeNull();
   });
 
   it('explains an organization Codex limit and keeps the raw 429 response available', () => {
@@ -998,16 +1243,15 @@ describe('ErrorBanner OpenAI connection recovery', () => {
         retryText="retry this turn"
         onRetry={vi.fn()}
         agentKind="codex"
-        onContinueAfterUsageReset={vi.fn()}
         usageLimitRecovery={{ resetAtMs: null }}
       />,
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(rawError)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(rawError)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.codexUsageLimit')).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
-    ).toBeNull();
   });
 
   it('rebuilds the organization usage-limit hint for a persisted error tail', () => {
@@ -1040,6 +1284,9 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       />,
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText("You've hit your Claude session limit")).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText("You've hit your Claude session limit")).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.codexUsageLimit')).toBeNull();
   });

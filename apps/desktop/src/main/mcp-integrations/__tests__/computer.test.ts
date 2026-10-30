@@ -1092,6 +1092,77 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
+  // 测试价值：生产入口 callComputerDriverTool 必须在 cua-driver 0.38 的闭合 schema 下
+  // 跳过无法表达的旧光标装饰，同时继续派发用户动作。#6979；旧测试只覆盖开放 schema。
+  // 最小失败输入是只声明新运动字段且缺少旧 style 工具的 tools/list；unit tier，无真实驱动。
+  it('skips incompatible optional cursor setup before dispatching the requested action', async () => {
+    mcpListToolsMock.mockResolvedValueOnce({
+      tools: [
+        ...COMPUTER_TOOLS.map((tool) => ({
+          name: tool.name,
+          inputSchema: { type: 'object', additionalProperties: true },
+        })),
+        {
+          name: 'set_agent_cursor_motion',
+          inputSchema: {
+            type: 'object',
+            properties: { arc_flow: {}, style: {}, timing: {} },
+            additionalProperties: false,
+          },
+        },
+        { name: 'end_session', inputSchema: { type: 'object', additionalProperties: true } },
+      ],
+    });
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }],
+    });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-cursor-v038' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual(['click']);
+  });
+
+  it('dispatches only cursor fields advertised by a closed driver schema', async () => {
+    mcpListToolsMock.mockResolvedValueOnce({
+      tools: [
+        ...COMPUTER_TOOLS.map((tool) => ({
+          name: tool.name,
+          inputSchema: { type: 'object', additionalProperties: true },
+        })),
+        {
+          name: 'set_agent_cursor_motion',
+          inputSchema: {
+            type: 'object',
+            properties: { cursor_color: {} },
+            additionalProperties: false,
+          },
+        },
+        { name: 'end_session', inputSchema: { type: 'object', additionalProperties: true } },
+      ],
+    });
+    mcpCallToolMock
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-cursor-partial' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual([
+      'set_agent_cursor_motion',
+      'click',
+    ]);
+    expect(mcpCallToolMock.mock.calls[0]?.[0]?.arguments).toEqual({ cursor_color: '#DF0C27' });
+  });
+
   it('names the run after its first goal and ignores later step descriptions', async () => {
     mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
     await callComputerDriverTool('list_windows', { session_goal: '提交报销申请' }, { sessionId: 'goal-a' });
@@ -1669,6 +1740,27 @@ describe('computer mcp integration', () => {
     firstChunk.resolve({ structuredContent: { ok: true, effect: 'confirmed' } });
     await Promise.all([typing, launch]);
     expect(events).toEqual(['type_text', 'type_text', 'type_text', 'launch_app']);
+  });
+
+  it('stops remaining text chunks on session close and releases input only after the in-flight call settles', async () => {
+    const first = createDeferred<unknown>();
+    const events: string[] = [];
+    mcpCallToolMock.mockImplementation(({ name }) => {
+      events.push(name);
+      if (name === 'type_text') return first.promise;
+      return { structuredContent: { ok: true, effect: 'confirmed' } };
+    });
+    const typing = callComputerDriverTool('type_text', { pid: 123, text: 'a'.repeat(850) }, { sessionId: 'closing-input' });
+    const rejected = expect(typing).rejects.toBeDefined();
+    await waitForCondition(() => events.includes('type_text'));
+    await cleanupComputerDriverSession('closing-input');
+    const next = callComputerDriverTool('launch_app', { name: 'Calculator' }, { sessionId: 'after-close' });
+    await waitForCondition(() => transportCtorMock.mock.calls.length === 2);
+    expect(events).not.toContain('launch_app');
+    first.resolve({ structuredContent: { ok: true, effect: 'confirmed' } });
+    await Promise.all([rejected, next]);
+    expect(events.filter((name) => name === 'type_text')).toHaveLength(1);
+    expect(events.filter((name) => name === 'launch_app')).toHaveLength(1);
   });
 
   it('holds ownership through failed-input teardown before admitting the next Agent', async () => {
@@ -4276,6 +4368,8 @@ describe('computer driver update check', () => {
       latestVersion: '0.7.0',
       updateAvailable: true,
       updating: false,
+      checkStatus: 'success',
+      checkedAt: expect.any(Number),
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(String(fetchImpl.mock.calls[0][0])).toContain('git/matching-refs/tags/cua-driver-rs-v');
@@ -4294,6 +4388,8 @@ describe('computer driver update check', () => {
       latestVersion: '0.7.0',
       updateAvailable: false,
       updating: false,
+      checkStatus: 'success',
+      checkedAt: expect.any(Number),
     });
     // 无更新时不拉 assets,恒定 1 个请求
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -4308,6 +4404,8 @@ describe('computer driver update check', () => {
       latestVersion: null,
       updateAvailable: false,
       updating: false,
+      checkStatus: 'error',
+      checkedAt: expect.any(Number),
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -4321,6 +4419,8 @@ describe('computer driver update check', () => {
       latestVersion: null,
       updateAvailable: false,
       updating: false,
+      checkStatus: 'error',
+      checkedAt: expect.any(Number),
     });
   });
 
@@ -4337,13 +4437,15 @@ describe('computer driver update check', () => {
       latestVersion: null,
       updateAvailable: false,
       updating: false,
+      checkStatus: 'error',
+      checkedAt: expect.any(Number),
     });
   });
 
   it('serves the cached result instantly on subsequent checks (no network wait)', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const firstFetch = mockRefsThenReleaseFetch();
-    await checkComputerDriverUpdate(firstFetch as unknown as typeof fetch);
+    const first = await checkComputerDriverUpdate(firstFetch as unknown as typeof fetch);
 
     // 第二次立即返回缓存;且距上次检查未满节流窗口,不应触发后台刷新
     // (未鉴权 GitHub API 限额有限,面板频繁开合不能放大请求量)。
@@ -4355,11 +4457,44 @@ describe('computer driver update check', () => {
       latestVersion: '0.7.0',
       updateAvailable: true,
       updating: false,
+      checkStatus: 'success',
+      checkedAt: first.checkedAt,
     });
     expect(hangingFetch).not.toHaveBeenCalled();
   });
 
-  it('keeps the cached "update available" result when a background refresh fails', async () => {
+  it('bypasses fresh cached results on manual checks and shares an in-flight request', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+    mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+    let finish!: (response: unknown) => void;
+    const fetchImpl = vi.fn().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const first = checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch, { force: true });
+    const second = checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch, { force: true });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    finish({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+    const result = await first;
+    expect(result).toMatchObject({ currentVersion: '0.7.0', updateAvailable: false, checkStatus: 'success' });
+    expect(await second).toEqual(result);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('awaits an expired cache refresh and returns the new result to the same caller', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const previous = await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+      const result = await checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch);
+      expect(result).toMatchObject({ currentVersion: '0.7.0', updateAvailable: false, checkStatus: 'success' });
+      expect(result.checkedAt).toBeGreaterThan(previous.checkedAt!);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a failed refresh while keeping the previously verified update offer', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const okFetch = mockRefsThenReleaseFetch();
     await checkComputerDriverUpdate(okFetch as unknown as typeof fetch);
@@ -4371,8 +4506,9 @@ describe('computer driver update check', () => {
       vi.setSystemTime(Date.now() + 11 * 60_000);
       mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
       const failingFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
-      await checkComputerDriverUpdate(failingFetch as unknown as typeof fetch);
-      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      await expect(checkComputerDriverUpdate(failingFetch as unknown as typeof fetch)).resolves.toMatchObject({
+        latestVersion: '0.7.0', updateAvailable: true, checkStatus: 'error', checkedAt: Date.now(),
+      });
       // 节流窗口外确实触发了后台刷新
       expect(failingFetch).toHaveBeenCalledTimes(1);
 
@@ -4380,10 +4516,20 @@ describe('computer driver update check', () => {
       const hangingFetch = vi.fn().mockReturnValue(new Promise(() => {}));
       await expect(
         checkComputerDriverUpdate(hangingFetch as unknown as typeof fetch),
-      ).resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: true });
+      ).resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: true, checkStatus: 'error' });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not turn an unverified cached tag into an update after a local downgrade and network failure', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+    await expect(checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch))
+      .resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: false });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const failedFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    await expect(checkComputerDriverUpdate(failedFetch as unknown as typeof fetch, { force: true }))
+      .resolves.toMatchObject({ currentVersion: '0.5.8', updateAvailable: false, checkStatus: 'error' });
   });
 
   it('keeps a newer verified target when its background probe transiently falls back', async () => {
@@ -4488,8 +4634,100 @@ describe('computer driver update check', () => {
       latestVersion: '0.7.0',
       updateAvailable: false,
       updating: false,
+      checkStatus: 'success',
+      checkedAt: expect.any(Number),
     });
     expect(refreshedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['0.5.8', '0.7.0'])('rechecks the installed version %s after a nonzero installer exit', async (version) => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = mockRefsThenReleaseFetch();
+    await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
+
+    mockDriverSpawn({ exitCode: 1, stderr: 'installer cleanup failed' });
+    mockDriverSpawn({ stdout: `cua-driver ${version}\n` });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is stopped\n' });
+    await expect(updateComputerDriver(undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })).rejects.toThrow('installer cleanup failed');
+
+    // Completion must invalidate the ten-minute cache even if the binary changed.
+    mockDriverSpawn({ stdout: `cua-driver ${version}\n` });
+    const refreshedFetch = mockRefsThenReleaseFetch();
+    await expect(checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch))
+      .resolves.toMatchObject({
+        currentVersion: version,
+        updateAvailable: version === '0.5.8',
+        updating: false,
+      });
+    expect(refreshedFetch).toHaveBeenCalled();
+  });
+
+  it('invalidates the cached offer when the installer cannot start', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = mockRefsThenReleaseFetch();
+    await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
+    mockDriverSpawn({ error: new Error('spawn failed') });
+    await expect(updateComputerDriver(undefined, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })).rejects.toThrow('spawn failed');
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const refreshedFetch = mockRefsThenReleaseFetch();
+    await expect(checkComputerDriverUpdate(refreshedFetch as unknown as typeof fetch))
+      .resolves.toMatchObject({ currentVersion: '0.5.8', updateAvailable: true, updating: false });
+    expect(refreshedFetch).toHaveBeenCalled();
+  });
+
+  it.each(['cached', 'pending', 'absent'])('returns post-install state to late check callers (new check: %s)', async (freshState) => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const fetchImpl = mockRefsThenReleaseFetch();
+    await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+      let finishOldCheck!: (response: unknown) => void;
+      const lateFetch = vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { finishOldCheck = resolve; }))
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ tag_name: 'cua-driver-rs-v0.7.0', assets: [currentPlatformReleaseAsset('0.7.0')] }),
+        })
+        .mockImplementation(mockRefsThenReleaseFetch());
+      const oldCheck = checkComputerDriverUpdate(lateFetch as unknown as typeof fetch);
+      await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledOnce());
+
+      mockDriverSpawn({ stdout: 'installed\n' });
+      mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+      mockDriverSpawn({ stdout: 'Cua Driver daemon is stopped\n' });
+      await updateComputerDriver(undefined, { fetchImpl: fetchImpl as unknown as typeof fetch });
+
+      mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+      let finishFreshCheck!: (response: unknown) => void;
+      const freshFetch = vi.fn().mockImplementation(() => new Promise((resolve) => { finishFreshCheck = resolve; }));
+      const freshCheck = freshState === 'absent' ? null : checkComputerDriverUpdate(
+        (freshState === 'cached' ? mockRefsThenReleaseFetch() : freshFetch) as unknown as typeof fetch,
+      );
+      if (freshState === 'cached') await freshCheck;
+      if (freshState === 'pending') await vi.waitFor(() => expect(freshFetch).toHaveBeenCalledOnce());
+      finishOldCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+      if (freshState === 'pending') {
+        await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledTimes(2));
+        finishFreshCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+      }
+      await expect(oldCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      if (freshCheck) await expect(freshCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      expect(lateFetch).toHaveBeenCalledTimes(freshState === 'absent' ? 3 : 2);
+      const unusedFetch = vi.fn();
+      await expect(checkComputerDriverUpdate(unusedFetch as unknown as typeof fetch))
+        .resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      expect(unusedFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports updating=true while a driver update install is in flight', async () => {
@@ -4974,6 +5212,8 @@ describe('review follow-ups: releases pagination and Windows idle timeout', () =
       latestVersion: '0.10.0',
       updateAvailable: false,
       updating: false,
+      checkStatus: 'success',
+      checkedAt: expect.any(Number),
     });
     const installerCallsBefore = spawnMock.mock.calls.length;
     await expect(updateComputerDriver()).rejects.toThrow(
@@ -5094,6 +5334,8 @@ describe('review follow-ups: releases pagination and Windows idle timeout', () =
       latestVersion: null,
       updateAvailable: false,
       updating: false,
+      checkStatus: 'error',
+      checkedAt: expect.any(Number),
     });
   });
 

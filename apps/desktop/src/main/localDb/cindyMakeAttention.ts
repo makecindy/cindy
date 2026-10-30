@@ -1,10 +1,12 @@
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { getCindyMakeMessageAttention } from '../../shared/cindyMakeAttention.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 
 /** Restore unresolved native Make failures even when their task has never been opened. */
 export async function listCindyMakePendingFailureSessionIds(): Promise<string[]> {
+  if (!CINDY_MAKE_ENABLED) return [];
   const rows = await getDbClient()
     .drizzle.select({
       sessionId: messages.sessionId,

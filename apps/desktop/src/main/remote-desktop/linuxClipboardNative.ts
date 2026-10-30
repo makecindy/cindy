@@ -7,6 +7,7 @@ import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import type { RemoteClipboardContent } from '@cindy/device-link';
 import { isLinuxDesktopUnlocked } from './linuxSessionLock';
+import { CLIPBOARD_IMAGE_BYTES, CLIPBOARD_IMAGE_PIXELS } from './clipboardLimits';
 
 const exec = promisify(execFile);
 export function supportsLinuxClipboard(): boolean {
@@ -18,17 +19,33 @@ export function supportsLinuxClipboard(): boolean {
     return false;
   }
 }
-async function read(args: string[], maxBuffer: number): Promise<Buffer> {
-  if (!(await isLinuxDesktopUnlocked())) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+/** Remote transfers require an unlocked compositor. A local in-app copy skips
+ * the probe: it is user-initiated, and older Hyprland lacks `solitaryBlockedBy`. */
+interface LockOptions {
+  checkLock?: boolean;
+}
+async function assertUnlocked(checkLock: boolean): Promise<void> {
+  if (checkLock && !(await isLinuxDesktopUnlocked()))
+    throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+}
+async function read(args: string[], maxBuffer: number, checkLock = true): Promise<Buffer> {
+  await assertUnlocked(checkLock);
   try {
     const result = await exec('/usr/bin/wl-paste', args, {
       timeout: 2000,
       maxBuffer,
       encoding: 'buffer',
     });
-    if (!(await isLinuxDesktopUnlocked())) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+    await assertUnlocked(checkLock);
     return result.stdout;
   } catch (error) {
+    if (
+      error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+    )
+      throw new Error('CLIPBOARD_TOO_LONG');
     // Empty selection is distinct from failed compositor access. Never propagate
     // subprocess exceptions: they can include clipboard contents in stdout.
     if (
@@ -44,10 +61,11 @@ async function read(args: string[], maxBuffer: number): Promise<Buffer> {
 }
 export async function readLinuxClipboardSnapshot(
   primary = false,
+  { checkLock = true }: LockOptions = {},
 ): Promise<{ formats: string[]; content: RemoteClipboardContent }> {
   if (!supportsLinuxClipboard()) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
   const selection = primary ? ['--primary'] : [];
-  const formats = (await read([...selection, '--list-types'], 16384))
+  const formats = (await read([...selection, '--list-types'], 16384, checkLock))
     .toString()
     .trim()
     .split('\n')
@@ -69,7 +87,7 @@ export async function readLinuxClipboardSnapshot(
       const mime = types.find((type) => formats.includes(type));
       if (mime) {
         const value = (
-          await read([...selection, '--no-newline', '--type', mime], 2 * 1024 * 1024)
+          await read([...selection, '--no-newline', '--type', mime], 2 * 1024 * 1024, checkLock)
         ).toString();
         if (value.length > 512000) throw new Error('CLIPBOARD_TOO_LONG');
         if (value) content[key] = value;
@@ -77,7 +95,11 @@ export async function readLinuxClipboardSnapshot(
     }
   }
   if (!primary && formats.includes('image/png')) {
-    const png = await read(['--no-newline', '--type', 'image/png'], 8 * 1024 * 1024);
+    const png = await read(
+      ['--no-newline', '--type', 'image/png'],
+      CLIPBOARD_IMAGE_BYTES,
+      checkLock,
+    );
     if (
       png.length < 33 ||
       !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -85,7 +107,8 @@ export async function readLinuxClipboardSnapshot(
       throw new Error('CLIPBOARD_UNSUPPORTED');
     const width = png.readUInt32BE(16),
       height = png.readUInt32BE(20);
-    if (!width || !height || width * height > 4000000) throw new Error('CLIPBOARD_TOO_LONG');
+    if (!width || !height || width > CLIPBOARD_IMAGE_PIXELS / height)
+      throw new Error('CLIPBOARD_TOO_LONG');
     content.png = png.toString('base64');
   }
   return { formats, content };
@@ -137,9 +160,10 @@ export function stopLinuxClipboardWriter(): void {
 export async function writeLinuxClipboard(
   content: RemoteClipboardContent,
   current: () => boolean,
+  { checkLock = true }: LockOptions = {},
 ): Promise<void> {
   const executable = await binary();
-  if (!(await isLinuxDesktopUnlocked())) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+  await assertUnlocked(checkLock);
   if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
   const child = spawn(executable, [], { stdio: 'pipe' });
   child.stderr.resume();
@@ -172,7 +196,7 @@ export async function writeLinuxClipboard(
         }) + '\n',
       );
     });
-    if (!(await isLinuxDesktopUnlocked())) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+    await assertUnlocked(checkLock);
     if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
     writer?.kill();
     writer = child;

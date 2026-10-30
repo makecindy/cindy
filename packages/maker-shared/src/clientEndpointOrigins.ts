@@ -29,12 +29,13 @@ export const REGION_ENDPOINT_DOMAIN: Readonly<Record<'cn' | 'global', string>> =
   };
 
 /**
- * 跨区共享的 hook 服务:两份清单(含 CN)都指向 cindy.app,所以只有这几个 hook key
- * 允许落在 Global 域。**别往这里加 key** —— 每加一个就等于允许该端点跨区,而这个集合之外
+ * 跨区共享的聊天及 hook 服务:两份清单(含 CN)都指向 cindy.app。Chat Server
+ * 显式信任两区 issuer 并按 issuer 隔离账号身份，让用户跨区互邀。这个集合之外
  * 的所有端点(尤其 auth / device-link / oauth-broker / model-access / voice)必须锁在
  * 本构建区域,否则就回到上面说的跨区 token 误发。
  */
 export const CROSS_REGION_ENDPOINT_KEYS: ReadonlySet<string> = new Set([
+  'chatApiBaseUrl',
   'slackHookWsUrl',
   'telegramHookWsUrl',
   'xHookWsUrl',

@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, afterEach, it, expect, vi } from 'vitest';
-import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import { useRemoteModelFavorites, __resetRemoteModelFavoritesCacheForTest } from '@/state/useRemoteModelFavorites';
 const item = {
   uid: 'fav-2',
   providerId: 'remote-account',
@@ -34,9 +34,34 @@ beforeEach(() => {
       },
     },
   });
+  __resetRemoteModelFavoritesCacheForTest();
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+// 回归:远控时模型面板每次打开都重新挂载，收藏从空列表开始、等读回来才出现。
+// 重新挂载先显示上次读到的收藏，后台读到新的再替换。
+it('a freshly mounted panel shows the last favorites while the fresh read is in flight', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  act(() => root.unmount());
+  root = createRoot(document.createElement('div'));
+  let resolve!: (v: unknown) => void;
+  invoke.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  await act(async () => root.render(createElement(Probe, {})));
+  expect(view.items).toEqual([item]);
+  await act(async () => resolve([{ ...item, effort: 'low' }]));
+  expect(view.items[0]?.effort).toBe('low');
+});
+it('does not refresh for an opened or administratively cleared breaker', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  invoke.mockClear();
+  await act(async () => {
+    responsive({ deviceId: 'a', unresponsive: true, recovered: false });
+    responsive({ deviceId: 'a', unresponsive: false, recovered: false });
+  });
+  expect(invoke).not.toHaveBeenCalled();
+  await act(async () => responsive({ deviceId: 'a', unresponsive: false, recovered: true }));
+  expect(invoke).toHaveBeenCalledTimes(1);
+});
 it.each(['status', 'peer', 'responsive'])('retains keyed favorites on failed %s refresh and replaces only on success', async event => {
   await act(async () => root.render(createElement(Probe, {})));
   const refresh = () => event === 'status' ? statusChanged()
@@ -49,6 +74,20 @@ it.each(['status', 'peer', 'responsive'])('retains keyed favorites on failed %s 
   await act(async () => refresh());
   expect(view.items).toEqual([]);
   expect(view.error).toBe(false);
+});
+it('records DEVICE_LINK connection error codes and clears them after a successful refresh', async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] offline'));
+  await act(async () => statusChanged());
+  expect(view.error).toBe(true);
+  expect(view.errorCode).toBe('DEVICE_LINK_NOT_CONNECTED');
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old host'));
+  await act(async () => statusChanged());
+  expect(view.errorCode).toBe('DEVICE_LINK_CHANNEL_NOT_ALLOWED');
+  invoke.mockResolvedValue([]);
+  await act(async () => statusChanged());
+  expect(view.error).toBe(false);
+  expect(view.errorCode).toBeNull();
 });
 it('remote favorite add/update/remove use remote operations, never browser storage', async () => {
   const local = vi.spyOn(Storage.prototype, 'setItem');

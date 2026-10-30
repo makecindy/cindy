@@ -13,6 +13,7 @@ let loaded = false;
 let unsubscribe: (() => void) | undefined;
 const listeners = new Set<() => void>();
 let connection = 0;
+let runningSessionIds: ReadonlySet<string> = new Set();
 
 function connect(): void {
   if (!isDataOwnerGenerationCurrent(owner)) {
@@ -105,7 +106,30 @@ export const cindyMakeState = {
       (report) => report.task?.sessionId === sessionId,
     );
   },
+  getRunningSessionIds(): ReadonlySet<string> {
+    const snapshot = cindyMakeState.getSnapshot();
+    const next = new Set(snapshot.personalBuildSessionIds);
+    for (const report of Object.values(snapshot.tasks ?? {})) {
+      if (report.status === 'running' && report.task) next.add(report.task.sessionId);
+    }
+    if (
+      next.size !== runningSessionIds.size ||
+      [...next].some((id) => !runningSessionIds.has(id))
+    )
+      runningSessionIds = next;
+    return runningSessionIds;
+  },
 };
+
+/** Display activity only: native Make work must not synthesize Agent turn transitions. */
+export function useCindyMakeRunningSessionIds(): ReadonlySet<string> {
+  const generation = getDataOwnerGeneration();
+  const subscribe = useCallback(
+    (listener: () => void) => cindyMakeState.subscribe(listener),
+    [generation.dataOwnerId, generation.generation],
+  );
+  return useSyncExternalStore(subscribe, cindyMakeState.getRunningSessionIds);
+}
 
 export function useCindyMakeState(): CindyMakeGlobalState {
   const generation = getDataOwnerGeneration();

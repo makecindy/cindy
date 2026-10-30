@@ -26,7 +26,7 @@ describe('database cleanup and upgrade startup order', () => {
       open,
     );
     const migration = source.indexOf(
-      'await runMigrations(db, filePath)',
+      'runMigrations: () => runMigrations(db, filePath)',
       schemaStartup,
     );
 

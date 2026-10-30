@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react';
 import { DeviceLinkError, type DeviceLinkErrorCode } from '@cindy/device-link';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
+import { localNetworkStore } from '@/device-link/localNetworkStatus';
 import {
   createDeviceResponsivenessBreaker,
   type BreakerSendSlot,
@@ -120,6 +121,35 @@ export function createDeviceSendCohort(deviceId: string): number {
   return breaker.createCohort(deviceId);
 }
 
+/**
+ * App 前后台生命周期观测(由 DeviceLinkContext 的 AppState 监听喂入)。
+ *
+ * iOS 退后台后挂起 JS:在途请求的超时计时器被冻结,回前台时一次性全部到点,
+ * 表现为「等了 97s 没回包」。这是手机自己被挂起,不是电脑无响应;若照常计入,
+ * 回前台瞬间就凑满连续超时把熔断打开(2026-10-05 线上:电脑全程正常,手机回
+ * 前台即显示「电脑端未响应」,且熔断还把对该电脑的重连推迟了约 15s)。
+ * 计时器到点可能早于 'active' 事件送达,所以不能只看 settle 时的状态:发出时
+ * 已不在前台,或发出后经历过任何生命周期切换的请求,其超时都按不定论处理。
+ */
+let appActive = true;
+let appLifecycleEpoch = 0;
+const slotLifecycle = new WeakMap<BreakerSendSlot, {
+  epoch: number; active: boolean; network: ReturnType<typeof localNetworkStore.getSnapshot>;
+}>();
+
+export function noteAppLifecycleState(state: string): void {
+  const active = state === 'active';
+  if (active === appActive) return;
+  appActive = active;
+  appLifecycleEpoch += 1;
+}
+
+function spansLocalInterruption(slot: BreakerSendSlot): boolean {
+  const issued = slotLifecycle.get(slot);
+  return issued !== undefined && (!issued.active || issued.epoch !== appLifecycleEpoch
+    || issued.network.status === 'unavailable' || issued.network !== localNetworkStore.getSnapshot());
+}
+
 export function acquireDeviceSendSlot(
   deviceId: string,
   cohort?: number,
@@ -127,6 +157,7 @@ export function acquireDeviceSendSlot(
 ): BreakerSendSlot {
   const slot = breaker.acquire(deviceId, cohort, options);
   if (slot.decision === 'reject') throw createDeviceUnresponsiveError(deviceId);
+  slotLifecycle.set(slot, { epoch: appLifecycleEpoch, active: appActive, network: localNetworkStore.getSnapshot() });
   return slot;
 }
 
@@ -138,7 +169,9 @@ export function settleDeviceSend(
   // 撤权竞态防护(review P1):撤权时桌面端发 link-close(revoked) 但不 resolve
   // 在途请求,它们随后超时——这不是"设备无响应",是访问被收回。已撤权设备的
   // 超时一律降级为不定论,不再计入熔断,避免 unresponsive 状态与撤权状态并存。
-  const effective = outcome === 'timeout' && revokedDevicesStore.has(deviceId)
+  // 跨越 App 挂起或手机网络状态变化的超时同理降级；离线时发出的请求也不计数。
+  const effective = outcome === 'timeout'
+    && (revokedDevicesStore.has(deviceId) || spansLocalInterruption(slot))
     ? 'inconclusive'
     : outcome;
   breaker.settle(deviceId, slot, effective);

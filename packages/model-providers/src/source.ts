@@ -1,4 +1,4 @@
-import { withClaudeProviderRuntime } from './piProviderPresets.js';
+import { withClaudeProviderRuntime } from "./piProviderPresets.js";
 /**
  * 目录源解析与加载（纯逻辑，IO 由 host 注入，零 Electron / node 依赖）。
  *
@@ -23,7 +23,7 @@ import type { AgentKind, Catalog, Provider, ProviderPreset } from "./types.js";
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH =
-  "/api/model-catalog/catalog?registrySchemaVersion=5";
+  "/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1";
 /** 旧客户端目录的 OSS 相对路径。迁移期作为公共 API 失败后的兼容回退。 */
 export const CATALOG_CFG_PATH = "/cfg/providers.json";
 
@@ -125,7 +125,9 @@ export function resolveCatalogUrl(cfg: CatalogSourceConfig): string | null {
     try {
       const url = new URL(explicit);
       if (url.pathname.endsWith("/api/model-catalog/catalog")) {
-        url.searchParams.set("registrySchemaVersion", "5");
+        url.searchParams.set("registrySchemaVersion", "6");
+        url.searchParams.set("registryMedia", "1");
+        url.searchParams.set("registryLocalRuntimes", "1");
         return url.toString();
       }
     } catch {
@@ -489,7 +491,9 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
     return remote
-      ? withClaudeProviderRuntime(backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill))
+      ? withClaudeProviderRuntime(
+          backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill),
+        )
       : bundled;
   });
   for (const preset of primaryPresets) {
@@ -640,55 +644,72 @@ export async function loadCatalogWithSource(
       ? Math.max(0, configuredBudget)
       : 0;
     const deadline = now() + budgetMs;
-    for (const { url: remoteUrl, allowLegacyModelMeta } of remoteSources) {
+    for (const source of remoteSources) {
+      let remoteUrl = source.url;
+      const { allowLegacyModelMeta } = source;
       const logUrl = catalogUrlForLog(remoteUrl);
       const remainingMs = Math.max(0, deadline - now());
       if (remainingMs > 0) {
         try {
-          const text = await io.fetchText(remoteUrl, remainingMs);
+          let text = await io.fetchText(remoteUrl, remainingMs);
           let parsed = parseRemoteCatalog(text, allowLegacyModelMeta);
+          // Older servers map an unknown schema to frozen V2. Negotiate V5 once
+          // within the same deadline and keep caches scoped to the actual response.
+          if (new URL(remoteUrl).searchParams.get('registrySchemaVersion') === '6' &&
+              (parsed.modelRegistry?.schemaVersion ?? 0) < 6) {
+            const legacyUrl = new URL(remoteUrl);
+            legacyUrl.searchParams.set('registrySchemaVersion', '5');
+            remoteUrl = legacyUrl.toString();
+            const retryBudget = Math.max(0, deadline - now());
+            if (!retryBudget) throw new Error('catalog negotiation budget exhausted');
+            text = await io.fetchText(remoteUrl, retryBudget);
+            parsed = parseRemoteCatalog(text, allowLegacyModelMeta);
+          }
           let capabilityEvidence: CatalogCapabilityEvidence =
             allowLegacyModelMeta ? "fallback" : "current";
           // Never propagate the retired compatibility block into a newly written LKG.
           let cacheText = allowLegacyModelMeta ? JSON.stringify(parsed) : text;
           const remoteRegistryUpdatedAt = registryUpdatedAt(parsed);
           if (io.readCache) {
-            try {
-              const cachedText = await io.readCache(remoteUrl);
-              if (cachedText !== null) {
-                const cached = parseRemoteCatalog(
-                  cachedText,
-                  allowLegacyModelMeta,
-                );
-                const selected = preserveNewerCachedCatalog(parsed, cached);
-                if (selected.catalog !== parsed) {
-                  parsed = selected.catalog;
-                  cacheText = JSON.stringify(selected.catalog);
-                  capabilityEvidence = "fallback";
-                  log(
-                    io,
-                    "warn",
-                    selected.tieConflict
-                      ? "remote registry republished the same updatedAt with different content; keeping LKG"
-                      : "remote catalog registry is older than LKG; preserving complete newer snapshot",
-                    {
-                      url: logUrl,
-                      remoteUpdatedAt: remoteRegistryUpdatedAt,
-                      cachedUpdatedAt: registryUpdatedAt(cached),
-                    },
+            for (const cacheUrl of new Set([remoteUrl, source.url])) {
+              try {
+                const cachedText = await io.readCache(cacheUrl);
+                if (cachedText !== null) {
+                  const cached = parseRemoteCatalog(
+                    cachedText,
+                    allowLegacyModelMeta,
                   );
+                  const selected = preserveNewerCachedCatalog(parsed, cached);
+                  if (selected.catalog !== parsed) {
+                    parsed = selected.catalog;
+                    if (parsed.modelRegistry?.schemaVersion === 6) remoteUrl = source.url;
+                    cacheText = JSON.stringify(selected.catalog);
+                    capabilityEvidence = "fallback";
+                    log(
+                      io,
+                      "warn",
+                      selected.tieConflict
+                        ? "remote registry republished the same updatedAt with different content; keeping LKG"
+                        : "remote catalog registry is older than LKG; preserving complete newer snapshot",
+                      {
+                        url: logUrl,
+                        remoteUpdatedAt: remoteRegistryUpdatedAt,
+                        cachedUpdatedAt: registryUpdatedAt(cached),
+                      },
+                    );
+                  }
                 }
+              } catch (err) {
+                log(
+                  io,
+                  "warn",
+                  "cached catalog could not be compared with remote snapshot",
+                  {
+                    url: logUrl,
+                    err: remoteErrorForLog(err, remoteUrl, logUrl),
+                  },
+                );
               }
-            } catch (err) {
-              log(
-                io,
-                "warn",
-                "cached catalog could not be compared with remote snapshot",
-                {
-                  url: logUrl,
-                  err: remoteErrorForLog(err, remoteUrl, logUrl),
-                },
-              );
             }
           }
           if (io.writeCache) {
@@ -759,27 +780,29 @@ export async function loadCatalogWithSource(
         );
       }
       if (io.readCache) {
-        try {
-          const cached = await io.readCache(remoteUrl);
-          if (cached !== null) {
-            const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
-            log(io, "info", "loaded last-known-good catalog snapshot", {
+        for (const cacheUrl of new Set([source.url, remoteUrl, source.url.replace('registrySchemaVersion=6', 'registrySchemaVersion=5')])) {
+          try {
+            const cached = await io.readCache(cacheUrl);
+            if (cached !== null) {
+              const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
+              log(io, "info", "loaded last-known-good catalog snapshot", {
+                url: logUrl,
+              });
+              return {
+                catalog: mergeWithBundled(parsed),
+                // A cached legacy OSS snapshot stays below the local Pi protocol authorities.
+                authorityCatalog: allowLegacyModelMeta ? null : parsed,
+                source: "cache",
+                capabilityEvidence: "fallback",
+                unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,
+              };
+            }
+          } catch (err) {
+            log(io, "warn", "cached catalog read/parse failed, trying fallback", {
               url: logUrl,
+              err: remoteErrorForLog(err, remoteUrl, logUrl),
             });
-            return {
-              catalog: mergeWithBundled(parsed),
-              // A cached legacy OSS snapshot stays below the local Pi protocol authorities.
-              authorityCatalog: allowLegacyModelMeta ? null : parsed,
-              source: "cache",
-              capabilityEvidence: "fallback",
-              unverifiedXdMediaKinds: ALL_XD_MEDIA_KINDS,
-            };
           }
-        } catch (err) {
-          log(io, "warn", "cached catalog read/parse failed, trying fallback", {
-            url: logUrl,
-            err: remoteErrorForLog(err, remoteUrl, logUrl),
-          });
         }
       }
     }

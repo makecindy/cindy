@@ -17,7 +17,15 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
     runtimes: { pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
       { id: 'oauth/new', name: 'OAuth New', discoveredCost: { input: 0.1, output: 0.2 } },
     ] } },
-  }), ...(['claude', 'xai'] as const).map(native => {
+  }), ...['mimo-account', 'mimo-second'].map(id => buildUserProvider({
+    id, name: 'MiMo', runtimes: Object.fromEntries(
+      (['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
+        baseUrl: `https://token-plan-cn.xiaomimimo.com/${agent === 'claude-code' ? 'anthropic' : 'v1'}`,
+        catalogPresetId: 'xiaomi-mimo-token-plan-cn',
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo' }],
+      }]),
+    ),
+  })), ...(['claude', 'xai'] as const).map(native => {
     const provider = buildUserProvider({
       id: `${native}-account`, name: 'Account', auth: { method: 'oauth', native }, runtimes: {},
     });
@@ -36,6 +44,25 @@ import { accountReferencePriceQuote } from '../accountReferencePrice.js';
 import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    'resolves MiMo %s prices through the preset while retaining account ownership', (agent) => {
+      const model = 'mimo-v2.6-pro';
+      const base = providerReferencePriceQuote('xiaomi-mimo-token-plan-cn', model,
+        BUNDLED_CATALOG.modelRegistry, { agent, officialOnly: true });
+      expect(base).toBeDefined();
+      const own = { ...base!, providerId: 'mimo-account', source: 'user-override' as const,
+        inputPerMtok: 123, outputPerMtok: 456 };
+      const pricing = { 'mimo-account': { [modelPricingKey(model, agent)]: own } };
+      expect(getCodexProviderSubscriptionValuePrice('mimo-account', model, {}, undefined, undefined, agent))
+        .toEqual({ ...base, providerId: 'mimo-account', modelId: model });
+      expect(getCodexProviderSubscriptionValuePrice('mimo-account', model, pricing, undefined, undefined, agent))
+        .toEqual(own);
+      expect(getCodexProviderSubscriptionValuePrice('mimo-second', model, pricing, undefined, undefined, agent))
+        .toEqual({ ...base, providerId: 'mimo-second', modelId: model });
+      expect(getCodexProviderSubscriptionValuePrice('mimo-account', 'unknown-model', {}, undefined, undefined, agent))
+        .toBeUndefined();
+    },
+  );
   it('publishes imported and discovered BYOK prices under the actual connection and engine', () => {
     const pricing = getReferenceModelPricing();
     expect(getModelPriceQuote(pricing, 'router-account', 'aion-labs/aion-3.0-mini', 'pi'))

@@ -1,12 +1,16 @@
 import { apiFetchRaw } from '@/api/client';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { canMobilePeerUpload, tryMobilePeerUpload } from '@/device-link/peerFileRegistry';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
   buildMobileUploadedAttachment,
+  effectiveUploadMimeType,
   assertMobileDocumentSize,
-  categorizeMobileAttachment,
+  assertMobileOssAttachmentSize,
+  isWithinMobileOssAttachmentLimit,
   extractRemoteFileExt,
 } from '@/session/attachments';
 import type { RemoteSerializedAttachment } from '@/session/types';
@@ -44,29 +48,19 @@ interface UploadDeps {
   uploadFile?: MobileAttachmentFileUploader;
   readFileChunk?: MobileAttachmentChunkReader;
   snapshotFile?: (uri: string) => Promise<{ uri: string; size: number; cleanup?: () => Promise<void> }>;
+  retainImage?: (ref: string, uri: string) => Promise<void>;
 }
 
 /** presign 是小 POST,不该吃满默认 20s 超时;弱网抖动重试一次(重复 presign 无副作用,PUT 前不产生对象)。 */
 const PRESIGN_TIMEOUT_MS = 12_000;
 const PRESIGN_MAX_ATTEMPTS = 2;
 
-/**
- * mimeType 缺失时的统一兜底。预签名的 contentType 与 PUT 实发的 Content-Type
- * 必须**逐字节一致**且**都不能缺**:缺失时预签名把 Content-Type 位签成空串,而
- * expo-file-system 原生直传层会自动补 application/octet-stream,两边不一致直接
- * OSS SignatureDoesNotMatch 403(2026-07 粘贴图片无 mimeType 实撞)。presign 与
- * buildMobileAttachmentUploadHeaders 都必须经 effectiveUploadMimeType 取值。
- */
-const FALLBACK_UPLOAD_MIME = 'application/octet-stream';
-
-export function effectiveUploadMimeType(mimeType: string | undefined): string {
-  const trimmed = mimeType?.trim();
-  return trimmed ? trimmed : FALLBACK_UPLOAD_MIME;
-}
+// Preserve the existing helper import for upload callers.
+export { effectiveUploadMimeType } from '@/session/attachments';
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
-  options: { token: string | null; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; deps?: UploadDeps },
 ): Promise<MobileAttachmentPresignResult> {
   const apiFetch = options.deps?.apiFetch ?? apiFetchRaw;
   const result = await withTransientRemoteRetry(
@@ -79,6 +73,7 @@ export async function presignMobileAttachmentUpload(
         size: candidate.size,
         contentType: effectiveUploadMimeType(candidate.mimeType),
         ext: uploadExtForName(candidate.name),
+        ...(options.sharedTaskId ? { sharedTaskId: options.sharedTaskId } : {}),
       },
     }),
     { maxAttempts: PRESIGN_MAX_ATTEMPTS },
@@ -213,8 +208,9 @@ async function putAttachmentWithRecovery(
         rejectWait(new Error(uploadTimeoutMessage()));
         controller.abort();
       };
-      const timer = setTimeout(expire, PUT_ATTEMPT_TIMEOUT_MS);
-      // fetch 没有进度事件，保留完整单次预算；原生上传只在字节停滞时提前恢复。
+      // fetch 没有进度事件，保留完整单次预算；原生上传有进度，只在字节停滞时判超时，
+      // 不设总时限——附件不限大小，持续有进度的大文件不能被固定预算掐断。
+      const timer = reportsProgress ? undefined : setTimeout(expire, PUT_ATTEMPT_TIMEOUT_MS);
       let idleTimer = setTimeout(expire, reportsProgress ? PUT_IDLE_TIMEOUT_MS : PUT_ATTEMPT_TIMEOUT_MS);
       let lastBytesSent = 0;
       let settled = false;
@@ -270,10 +266,12 @@ export async function putMobileAttachmentUploadFromFile(
   fileUri: string,
   mimeType: string | undefined,
   deps: UploadDeps = {},
-  opts: UploadRecoveryOptions = {},
+  opts: UploadRecoveryOptions & { signedHeaders?: Readonly<Record<string, string>> } = {},
 ): Promise<void> {
   const uploadFile = deps.uploadFile ?? uploadFileNative;
-  const headers = buildMobileAttachmentUploadHeaders(mimeType);
+  // Chat Server signs a different header set from device-link. Never add OSS
+  // headers to an already signed request; preserve the device-link default.
+  const headers = opts.signedHeaders ? { ...opts.signedHeaders } : buildMobileAttachmentUploadHeaders(mimeType);
   await putAttachmentWithRecovery((signal, onProgress) => uploadFile(putUrl, fileUri, headers, { signal, onProgress }), opts, true);
 }
 
@@ -294,16 +292,12 @@ export async function statMobileAttachmentFileSize(uri: string): Promise<number>
 export async function uploadMobileAttachment(
   candidate: MobileAttachmentUploadCandidate,
   body: MobileAttachmentUploadBody,
-  options: { token: string | null; id?: string; deps?: UploadDeps },
+  options: { token: string | null; sharedTaskId?: string; id?: string; deps?: UploadDeps },
 ): Promise<RemoteSerializedAttachment> {
-  // 上传前先校验类型:不支持的本机文件(如 .zip)若先 presign + PUT、再在
-  // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下一个永不被引用、
-  // 也没有 delete 回收的孤儿对象(泄漏用户数据 + 占用存储)。类型判定复用
-  // categorizeMobileAttachment 这一唯一真源,保证与下面最终校验同口径。
-  if (!categorizeMobileAttachment(candidate.name)) {
-    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
-  }
+  // presign 前先校验体积:超出 OSS 上限的文件若先 presign + PUT、再在
+  // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下永不被引用的孤儿对象。
   assertMobileDocumentSize(candidate.size);
+  assertMobileOssAttachmentSize(candidate.size);
   const sha256 = await sha256MobileAttachmentBody(body, candidate.size);
   const presigned = await presignMobileAttachmentUpload(candidate, options);
   await putMobileAttachmentUpload(presigned.putUrl, body, candidate.mimeType, options.deps);
@@ -316,7 +310,7 @@ export async function uploadMobileAttachment(
     mimeType: candidate.mimeType,
   });
   if (!attachment) {
-    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
+    throw new Error(i18n.t('composer.upload.noFileRead'));
   }
   return attachment;
 }
@@ -327,21 +321,48 @@ export async function uploadMobileAttachmentFromFile(
   fileUri: string,
   options: {
     token: string | null;
+    sharedTaskId?: string;
+    deviceId?: string;
     id?: string;
     deps?: UploadDeps;
     signal?: AbortSignal;
+    /** The outbox can remove a record without aborting its already-running upload. */
+    isActive?: () => boolean;
   },
 ): Promise<RemoteSerializedAttachment> {
-  // 同 uploadMobileAttachment:presign 前先拦不支持的类型,避免 OSS 孤儿对象。
-  if (!categorizeMobileAttachment(candidate.name)) {
-    throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
-  }
+  const owner = getMobileAuthOwner();
+  const isActive = () => !!owner.accountKey && isMobileAuthOwnerCurrent(owner)
+    && !options.signal?.aborted && (options.isActive?.() ?? true);
   assertMobileDocumentSize(candidate.size);
+  // 直连不设体积上限;超过 OSS 上限的附件只能直连——先确认直连可用(只查对端能力),
+  // 不可用就在快照和摘要之前失败,不白复制、白读一遍数 GB 的文件。
+  const peerCandidate = !!options.deviceId && !options.sharedTaskId;
+  if (
+    !isWithinMobileOssAttachmentLimit(candidate.size) &&
+    !(peerCandidate && await canMobilePeerUpload(options.deviceId!, candidate.size))
+  ) {
+    assertMobileOssAttachmentSize(candidate.size);
+  }
   const snapshot = options.deps?.snapshotFile
     ? await options.deps.snapshotFile(fileUri)
     : options.deps?.readFileChunk
       ? { uri: fileUri, size: candidate.size }
       : await snapshotMobileAttachmentFile(fileUri);
+  // Both the composer and the background outbox upload here. Keep the exact hashed
+  // snapshot before cleanup; retaining only in the composer loses background sends.
+  const retain = async (attachment: RemoteSerializedAttachment) => {
+    if (attachment.category === 'image' && isActive()) {
+      try {
+        if (options.deps?.retainImage) {
+          await options.deps.retainImage(attachment.url ?? attachment.path, snapshot.uri);
+        } else {
+          const { registerSentAttachmentThumb } = await import('@/session/sentAttachmentThumbStore');
+          await registerSentAttachmentThumb(attachment.url ?? attachment.path, snapshot.uri, undefined, isActive);
+        }
+      } catch { /* Optional local copy must not turn a completed upload into a failed send. */ }
+    }
+    return attachment;
+  };
   try {
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
@@ -350,6 +371,18 @@ export async function uploadMobileAttachmentFromFile(
       readChunk: options.deps?.readFileChunk,
       signal: options.signal,
     });
+    if (peerCandidate) {
+      const peerRef = await tryMobilePeerUpload(options.deviceId!, snapshot.uri, {
+        size: candidate.size, sha256, mimeType: candidate.mimeType, originalName: candidate.name,
+      }, options.signal);
+      if (peerRef) {
+        const attachment = buildMobileUploadedAttachment({ ...candidate, sha256, peerRef, id: options.id });
+        if (!attachment) throw new Error(i18n.t('composer.upload.noFileRead'));
+        return await retain(attachment);
+      }
+      // 直连没走通:OSS 保底只收上限以内的附件,presign 前拦下,避免孤儿对象。
+      assertMobileOssAttachmentSize(candidate.size);
+    }
     const presigned = await presignMobileAttachmentUpload(candidate, options);
     try {
       await putMobileAttachmentUploadFromFile(
@@ -375,9 +408,9 @@ export async function uploadMobileAttachmentFromFile(
       mimeType: candidate.mimeType,
     });
     if (!attachment) {
-      throw new Error(i18n.t('composer.upload.fileTypeUnsupported'));
+      throw new Error(i18n.t('composer.upload.noFileRead'));
     }
-    return attachment;
+    return await retain(attachment);
   } finally {
     await snapshot.cleanup?.()?.catch(() => undefined);
   }

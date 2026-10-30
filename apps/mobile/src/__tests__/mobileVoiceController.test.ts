@@ -10,6 +10,7 @@ import type {
   AsrEvent,
   AsrProvider,
   AudioTrace,
+  AudioGate,
   RefinementResult,
 } from '@cindy/voice-input-core';
 import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentialStore';
@@ -49,6 +50,11 @@ class FakeAsrProvider implements AsrProvider {
   emit(event: AsrEvent): void {
     this.callback(event);
   }
+}
+
+// Recognizes nothing until stop, then returns the final transcript.
+class FinalOnlyAsrProvider extends FakeAsrProvider {
+  appendAudio(_chunk: ArrayBuffer, _trace?: AudioTrace): void {}
 }
 
 class EmptyTranscriptAsrProvider extends FakeAsrProvider {
@@ -113,6 +119,17 @@ class GatedStartAsrProvider extends FakeAsrProvider {
   }
 }
 
+// A recording that captured sound: silent recordings end at stop without ASR.
+async function startAudibleAudio({ onChunk }: {
+  onChunk: (chunk: { pcm16: ArrayBuffer; trace: AudioTrace }) => void;
+}): Promise<() => Promise<void>> {
+  onChunk({
+    pcm16: new Int16Array(160).fill(1000).buffer,
+    trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 1, sampleRate: 16000, durationMs: 10 },
+  });
+  return async () => undefined;
+}
+
 function credential(): StoredMobileVoiceCredential {
   return {
     temporary: true,
@@ -148,19 +165,140 @@ function credential(): StoredMobileVoiceCredential {
 }
 
 describe('mobileVoiceController', () => {
+  // PR #7126 / discussion_r4396776891: a rejected native drain used to skip
+  // controller cancellation. Existing cancel cases only resolved native stop.
+  // Unit: real session.cancel() must abort the gate and close ASR even on error.
+  it('cleans the speaker filter and ASR when cancelling after native drain fails', async () => {
+    const asr = new FinalOnlyAsrProvider();
+    const abort = vi.fn();
+    const gate: AudioGate = {
+      begin: vi.fn(), push: vi.fn(), finish: async () => undefined, abort,
+    };
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '',
+      audioGate: gate, onDraftChanged: vi.fn(),
+      startAudio: async () => async () => { throw new Error('native drain overflow'); },
+    });
+    await session.start();
+    abort.mockClear();
+    const stopsBeforeCancel = asr.stopCalls;
+
+    await expect(session.cancel()).rejects.toThrow('native drain overflow');
+
+    expect(abort).toHaveBeenCalledOnce();
+    expect(asr.stopCalls).toBeGreaterThan(stopsBeforeCancel);
+  });
+
+  it('fails capture if pending speaker settings reject instead of uploading unfiltered audio', async () => {
+    let reject!: (error: Error) => void;
+    const asr = new FinalOnlyAsrProvider();
+    const append = vi.spyOn(asr, 'appendAudio');
+    const error = vi.fn();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '', onDraftChanged: vi.fn(), onError: error,
+      startAudio: startAudibleAudio, audioGate: new Promise((_resolve, fail) => { reject = fail; }),
+    });
+    await session.start();
+    reject(new Error('speaker settings unavailable'));
+    await Promise.resolve();
+    await expect(session.stop()).rejects.toThrow('speaker settings unavailable');
+    expect(append).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a short utterance delivered only by the stop receipt, while rejecting ordinary late events', async () => {
+    const asr = new FinalOnlyAsrProvider();
+    const append = vi.spyOn(asr, 'appendAudio');
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '', onDraftChanged: vi.fn(),
+      startAudio: async ({ onChunk }) => async () => {
+        const chunk = { pcm16: new Int16Array(160).fill(1000).buffer,
+          trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 0, sampleRate: 16000, durationMs: 10 } };
+        onChunk(chunk);
+        onChunk({ ...chunk, drained: true });
+      },
+    });
+    await session.start();
+    expect(await session.stop()).toBe('raw final');
+    expect(append).toHaveBeenCalledOnce();
+  });
+
+  it('waits for a pending native start and its drain before treating an immediate stop as silence', async () => {
+    let open!: () => void;
+    const asr = new FinalOnlyAsrProvider();
+    const append = vi.spyOn(asr, 'appendAudio');
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '', onDraftChanged: vi.fn(),
+      startAudio: ({ onChunk }) => new Promise((resolve) => {
+        open = () => resolve(async () => {
+          onChunk({ pcm16: new Int16Array(160).fill(1000).buffer, drained: true,
+            trace: { capturedAt: 1, convertedAt: 2, chunkIndex: 0, sampleRate: 16000, durationMs: 10 } });
+        });
+      }),
+    });
+    const starting = session.start();
+    const stopping = session.stop();
+    open();
+    expect(await stopping).toBe('raw final');
+    await starting;
+    expect(append).toHaveBeenCalledOnce();
+  });
+
+  it('captures while the speaker settings load, and filters every retained chunk before ASR', async () => {
+    let resolveGate!: (gate: AudioGate | undefined) => void;
+    const pendingGate = new Promise<AudioGate | undefined>((resolve) => { resolveGate = resolve; });
+    const asr = new FinalOnlyAsrProvider();
+    const append = vi.spyOn(asr, 'appendAudio');
+    let emit!: (chunk: ArrayBuffer, trace?: AudioTrace) => void;
+    const gate: AudioGate = {
+      begin: (callback) => { emit = callback; },
+      push: (chunk, trace) => emit(new ArrayBuffer(chunk.byteLength), trace),
+      finish: async () => undefined,
+      abort: vi.fn(),
+    };
+    const open = vi.fn(startAudibleAudio);
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '',
+      audioGate: pendingGate, startAudio: open, onDraftChanged: vi.fn(),
+    });
+    await session.start();
+    expect(open).toHaveBeenCalledOnce();
+    expect(append).not.toHaveBeenCalled();
+    resolveGate(gate);
+    await session.stop();
+    expect(append).toHaveBeenCalledOnce();
+    expect(new Int16Array(append.mock.calls[0][0]).every((sample) => sample === 0)).toBe(true);
+  });
+
+  it('discards pending speaker audio on cancel, including a late settings result', async () => {
+    let resolveGate!: (gate: AudioGate | undefined) => void;
+    const pendingGate = new Promise<AudioGate | undefined>((resolve) => { resolveGate = resolve; });
+    const asr = new FinalOnlyAsrProvider();
+    const append = vi.spyOn(asr, 'appendAudio');
+    const session = createMobileVoiceControllerSession({
+      credential: credential(), asr, refiner: null, initialDraft: '',
+      audioGate: pendingGate, startAudio: startAudibleAudio, onDraftChanged: vi.fn(),
+    });
+    await session.start();
+    await session.cancel();
+    resolveGate(undefined);
+    await Promise.resolve();
+    expect(append).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('removes selected quotes even when the first identical transcript arrives at stop (partials=%s)', async (partials) => {
     const initialDocument: ComposerDocument = { version: 1, nodes: [
       { type: 'quote', quote: { text: 'selected quote' } }, { type: 'text', text: 'raw final' },
     ] };
     const initialSelection = { start: 0, end: 9, atomRange: { start: 0, end: 1 } };
     let document = initialDocument;
-    const asr = new FakeAsrProvider();
+    const asr = new FinalOnlyAsrProvider();
     const config = credential();
     config.settings!.refinementEnabled = false;
     const session = createMobileVoiceControllerSession({
       credential: config, asr, initialDraft: 'raw final', initialSelection,
       readCurrentDraft: () => composerDocumentProjectedText(document),
-      startAudio: async () => async () => undefined,
+      startAudio: startAudibleAudio,
       onDraftChanged: (draft, selection, replacement) => {
         document = reconcileComposerVoiceDraft(document, { draft, initialDocument, initialSelection, insertionEnd: selection?.end, replacement });
       },
@@ -209,7 +347,8 @@ describe('mobileVoiceController', () => {
     asr.emit({ type: 'partial', text: '识别中', at: Date.now() });
     expect(draft).toBe(prefix + '识别中' + suffix);
     expect(await session.stop()).toBe(prefix + '润色完成' + suffix);
-    expect(drafts).toEqual(['识别中', 'raw final', '润色中', '润色完成'].map((text) => prefix + text + suffix));
+    // Streamed refinement partials are not shown; the validated result replaces the text once.
+    expect(drafts).toEqual(['识别中', 'raw final', '润色完成'].map((text) => prefix + text + suffix));
     expect(selections.at(-1)).toEqual({ start: prefix.length + 4, end: prefix.length + 4 });
   });
 
@@ -233,8 +372,8 @@ describe('mobileVoiceController', () => {
     let firstReplacement: { start: number; end: number; text: string } | undefined;
     const session = createMobileVoiceControllerSession({
       credential: credential(), initialDraft: draft, initialSelection: { start: 1, end: 1 },
-      asr: new FakeAsrProvider(), refiner: null,
-      startAudio: async () => async () => undefined,
+      asr: new FinalOnlyAsrProvider(), refiner: null,
+      startAudio: startAudibleAudio,
       readCurrentDraft: () => draft,
       onDraftChanged: (text, _selection, replacement) => {
         draft = text;
@@ -556,7 +695,6 @@ describe('mobileVoiceController', () => {
     expect(drafts).toEqual([
       'prefix\nraw draft',
       'prefix\nraw final',
-      'prefix\nrefined preview',
       'prefix\nrefined final',
     ]);
     expect(finalDraft).toBe('prefix\nrefined final');
@@ -564,10 +702,11 @@ describe('mobileVoiceController', () => {
     expect(states).toContain('submitting');
     expect(states).toContain('refining');
     expect(states.at(-1)).toBe('done');
+    // With pause refinement enabled, stop no longer speculates on an unconfirmed
+    // partial: it waits for the final ASR text and refines only that.
     expect(order).toEqual([
       'audio-stopped',
       'end-cue',
-      'refine:raw draft',
       'refine:raw final',
     ]);
     expect(recordedHistory).toEqual(['raw final']);
@@ -673,7 +812,9 @@ describe('mobileVoiceController', () => {
 
     expect(drafts).toEqual(['prefix\nraw draft']);
     expect(finalDraft).toBe('prefix\nmanual edit');
-    expect(refineInputs).toEqual(['raw draft']);
+    // No speculative request on the unconfirmed partial, and the final text never
+    // landed in the composer, so nothing is refined at all.
+    expect(refineInputs).toEqual([]);
     expect(recordedHistory).toEqual([]);
   });
 
@@ -1202,5 +1343,88 @@ describe('mobileVoiceController', () => {
     // Only the pre-stop chunk reached ASR; the post-stop chunk was discarded.
     expect(asr.appended).toEqual([pre]);
     expect(asr.flushCalls).toBe(1);
+  });
+
+  it('ends a silent recording at stop without waiting for the pending ASR handshake', async () => {
+    const asr = new GatedStartAsrProvider();
+    const onError = vi.fn();
+    const states: string[] = [];
+    const order: string[] = [];
+    let micStopped = false;
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: 'prefix',
+      asr,
+      refiner: null,
+      onError,
+      startAudio: async ({ onChunk }) => {
+        // Digital silence plus a noise floor well under the sound threshold.
+        onChunk({ pcm16: new Int16Array(320).buffer, trace: { capturedAt: 0, convertedAt: 0, chunkIndex: 0, sampleRate: 16_000, durationMs: 20 } });
+        onChunk({ pcm16: Int16Array.from({ length: 320 }, (_, i) => (i % 2 ? 12 : -12)).buffer, trace: { capturedAt: 1, convertedAt: 1, chunkIndex: 1, sampleRate: 16_000, durationMs: 20 } });
+        return async () => { micStopped = true; };
+      },
+      onDraftChanged: () => order.push('draft'),
+      onStateChanged: (state) => states.push(state),
+      onReadyForEndCue: () => order.push('end-cue'),
+    });
+
+    const startPromise = session.start();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The handshake never settles before stop; a silent run must not wait for it.
+    await expect(session.stop()).resolves.toBe('prefix');
+    expect(micStopped).toBe(true);
+    expect(order).toEqual(['end-cue']);
+    expect(asr.flushCalls).toBe(0);
+    expect(states.at(-1)).toBe('done');
+
+    // A handshake failing after the silent end is not an error for the caller.
+    asr.failStart(new Error('late connect failure'));
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('submits a ready pause refinement and keeps the raw transcript for dictionary learning', async () => {
+    vi.useFakeTimers();
+    try {
+      const asr = new FinalOnlyAsrProvider();
+      const refineInputs: string[] = [];
+      const drafts: string[] = [];
+      const recordedHistory: string[] = [];
+      const appliedLearning: Array<{ rawTranscriptText: string; refinedText: string }> = [];
+      const session = createMobileVoiceControllerSession({
+        credential: credential(),
+        initialDraft: '',
+        asr,
+        refiner: {
+          async refine(input): Promise<RefinementResult> {
+            refineInputs.push(input.text);
+            return { accepted: true, sourceSegmentIds: input.segmentIds, basedOnText: input.text, refinedText: 'Raw final.', elapsedMs: 1 };
+          },
+        },
+        startAudio: startAudibleAudio,
+        onDraftChanged: (draft) => drafts.push(draft),
+        recordHistory: (text) => { recordedHistory.push(text); },
+        onRefinementApplied: ({ rawTranscriptText, refinedText }) => appliedLearning.push({ rawTranscriptText, refinedText }),
+      });
+
+      await session.start();
+      asr.emit({ type: 'stable', text: 'raw final', at: Date.now() });
+      // Two quiet seconds without transcript changes trigger the pause refinement.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(refineInputs).toEqual(['raw final']);
+      expect(drafts.at(-1)).toBe('Raw final.');
+
+      const stopped = session.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(stopped).resolves.toBe('Raw final.');
+      // The same final text reuses the pause request instead of refining again.
+      expect(refineInputs).toEqual(['raw final']);
+      expect(recordedHistory).toEqual(['Raw final.']);
+      expect(appliedLearning).toEqual([{ rawTranscriptText: 'raw final', refinedText: 'Raw final.' }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

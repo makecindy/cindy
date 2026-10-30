@@ -32,36 +32,50 @@ import {
   padding,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
-import { Alert, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Alert, StyleSheet, View } from "react-native";
+import { Stack } from "expo-router";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
-import { iconSize, radius, spacing, typeScale, useTheme } from "@/theme";
+import { MainWindowActionButton } from "@/components/MobilePrimitives";
+import { SystemNavigationBack, useSystemNavigationBack } from "@/platform/chrome/SystemNavigationBack";
+import { iconSize, lineHeight, navigationChrome, radius, spacing, typeScale, useTheme } from "@/theme";
 import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import {
   HTML_BROWSER_CONTROL_SIZE as size,
   type HtmlBrowserChromeProps,
+  type DocumentPreviewChromeProps,
 } from "./HtmlBrowserChrome.types";
 
 /** Native SwiftUI controls float above the WebView; the empty space passes touches through. */
-export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
+export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChromeProps) {
   const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const glass = useLiquidGlassAvailable();
+  // A vertical system bar (Duo landscape) hosts close and the document menu as native items.
+  const systemBack = useSystemNavigationBack() && !p.standalone;
+  const sharedStatusRow = usePreviewChromeFrame().sharedStatusRow && !p.standalone;
+  // Center the document title on screen, except beside a status area sharing its row.
+  const centeredTitle = p.document && !sharedStatusRow;
   const [editing, setEditing] = useState(false);
-  const addressText = useNativeState(p.address);
+  const addressText = useNativeState(p.document ? '' : p.address);
   const addressRef = useRef<TextFieldRef>(null);
-  const beginEditing = () => { addressText.set(p.address); setEditing(true); };
-  const submitAddress = () => { if (p.onNavigate(addressText.get())) setEditing(false); };
-  const showFileInfo = () => Alert.alert(p.title, p.path);
+  const beginEditing = () => { if (!p.document) { addressText.set(p.address); setEditing(true); } };
+  const submitAddress = () => { if (!p.document && p.onNavigate(addressText.get())) setEditing(false); };
+  const showFileInfo = () => Alert.alert(p.title, [p.meta, p.path].filter(Boolean).join('\n'));
+  const website = !p.document && p.website;
   // Size the visible glass itself, not an outer frame around a system-sized label.
   // Menu and Button have different intrinsic sizes (especially ellipsis vs share).
+  // Untinted glass adapts to the page behind it: a light page in Dark mode turned it light
+  // under light icons. A theme tint keeps the controls in the app's polarity.
+  const tint = navigationChrome.pageTint[mode];
   const circle = [
     buttonStyle("plain"),
     frame({ width: size, height: size }),
     glass
       ? glassEffect({
-          glass: { variant: "regular", interactive: true },
+          glass: { variant: "regular", interactive: true, tint },
           shape: "circle",
         })
       : background(colors.surfaceElevated, shapes.circle()),
@@ -73,27 +87,117 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
     frame({ width: size, height: size }),
   ];
   const capsule = glass
-    ? glassEffect({ glass: { variant: "regular" }, shape: "capsule" })
+    ? glassEffect({ glass: { variant: "regular", tint }, shape: "capsule" })
     : background(colors.surfaceElevated, shapes.capsule());
   const host = {
     colorScheme: mode,
     seedColor: colors.textPrimary,
     ignoreSafeArea: "all" as const,
   };
+  const moreMenu = (
+        <Host {...host} style={{ width: size, height: size }}>
+          <Menu
+            label={
+              <Image
+                systemName="ellipsis"
+                size={iconSize.lg}
+                modifiers={[frame({ width: size, height: size })]}
+              />
+            }
+            testID="filePreview.browser.more"
+            modifiers={[
+              ...circle,
+              menuOrder("fixed"),
+              disabled(p.pending === true),
+              accessibilityLabel(t("files.preview.browserMore")),
+            ]}
+          >
+            {p.document ? <Button
+              label={t("files.preview.a11yShare")}
+              systemImage="square.and.arrow.up"
+              onPress={p.onShare}
+              testID="filePreview.share"
+              modifiers={[disabled(p.busy)]}
+            /> : null}
+            {!website && <Section title={p.title}>
+              <Button
+                label={t("files.preview.browserFileInfo")}
+                systemImage="doc"
+                onPress={showFileInfo}
+              />
+            </Section>}
+            {p.onToggleSource ? <Button
+              label={t(
+                website ? "files.preview.browserReturnToFile" : p.source
+                  ? p.document ? "files.preview.browserShowDocument" : "files.preview.browserShowPage"
+                  : "files.preview.browserShowSource",
+              )}
+              systemImage="chevron.left.forwardslash.chevron.right"
+              onPress={p.onToggleSource}
+              testID="filePreview.browser.source"
+            /> : null}
+            <Divider />
+            <Button
+              label={t(website ? "files.preview.browserCopyAddress" : "files.preview.copyPath")}
+              systemImage="doc.on.doc"
+              onPress={p.onCopyPath}
+              testID="filePreview.copyPath"
+              modifiers={[disabled(p.busy)]}
+            />
+            {!website && <Button
+              label={t("files.preview.browserAddToTask")}
+              systemImage="text.bubble"
+              onPress={p.onAddToTask}
+              testID="filePreview.sendToSession"
+              modifiers={[disabled(p.busy)]}
+            />}
+          </Menu>
+        </Host>
+  );
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+      {p.standalone ? null : <SystemNavigationBack
+        close
+        label={t("files.preview.done")}
+        onPress={p.onClose}
+      />}
+      {systemBack && p.document ? <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Menu icon="ellipsis" disabled={p.pending === true}
+          accessibilityLabel={t("files.preview.browserMore")}>
+          <Stack.Toolbar.MenuAction icon="square.and.arrow.up" disabled={p.busy} onPress={p.onShare}>
+            {t("files.preview.a11yShare")}
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.Menu inline title={p.title}>
+            <Stack.Toolbar.MenuAction icon="doc" onPress={showFileInfo}>
+              {t("files.preview.browserFileInfo")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+          {p.onToggleSource ? <Stack.Toolbar.MenuAction icon="chevron.left.forwardslash.chevron.right"
+            onPress={p.onToggleSource}>
+            {t(p.source ? "files.preview.browserShowDocument" : "files.preview.browserShowSource")}
+          </Stack.Toolbar.MenuAction> : null}
+          <Stack.Toolbar.Menu inline>
+            <Stack.Toolbar.MenuAction icon="doc.on.doc" disabled={p.busy} onPress={p.onCopyPath}>
+              {t("files.preview.copyPath")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="text.bubble" disabled={p.busy} onPress={p.onAddToTask}>
+              {t("files.preview.browserAddToTask")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar> : null}
       <View
         pointerEvents="box-none"
         style={{
           position: "absolute",
           top: p.top,
-          left: p.left,
-          right: p.right,
+          left: centeredTitle ? Math.max(p.left, p.right) : p.left,
+          right: centeredTitle ? Math.max(p.left, p.right) : p.right,
           flexDirection: "row",
           gap: spacing.sm,
         }}
       >
-        <Host {...host} style={{ width: size, height: size }}>
+        {systemBack ? null : <Host {...host} style={{ width: size, height: size }}>
           <Button
             onPress={p.onClose}
             testID="filePreview.done"
@@ -105,13 +209,21 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
               modifiers={[frame({ width: size, height: size })]}
             />
           </Button>
-        </Host>
+        </Host>}
         <Host {...host} style={{ flex: 1, minWidth: 0, height: size }}>
           <HStack
             spacing={0}
             modifiers={[frame({ maxWidth: Infinity, height: size }), capsule]}
           >
-            {editing ? <TextField
+            {p.document ? <NativeText
+              testID="filePreview.title"
+              modifiers={[
+                font({ size: typeScale.body, weight: "semibold" }),
+                lineLimit(1),
+                padding({ horizontal: spacing.lg }),
+                frame({ maxWidth: Infinity, height: size, alignment: "center" }),
+              ]}
+            >{p.title}</NativeText> : editing ? <TextField
               ref={addressRef}
               text={addressText}
               autoFocus
@@ -131,6 +243,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
               testID="filePreview.browser.editAddress"
               modifiers={[
                 buttonStyle("plain"),
+                disabled(p.pending === true),
                 frame({ maxWidth: Infinity, height: size }),
                 accessibilityLabel(
                   `${t("files.preview.browserAddress")}: ${p.address}`,
@@ -166,7 +279,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
                 </NativeText>
               </HStack>
             </Button>}
-            {editing ? <Button
+            {p.document ? null : editing ? <Button
               label={t("files.preview.browserCancelAddress")}
               systemImage="xmark"
               onPress={() => setEditing(false)}
@@ -190,34 +303,56 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
             )}
           </HStack>
         </Host>
+        {p.document && !systemBack ? moreMenu : null}
       </View>
       {p.notice ? (
         <View
-          pointerEvents="none"
+          pointerEvents={p.onCancelNotice ? "box-none" : "none"}
           style={{
             position: "absolute",
-            bottom: p.bottom + size + spacing.sm,
+            bottom: p.bottom + (p.document ? spacing.sm : size + spacing.sm),
             left: p.left,
             right: p.right,
             alignItems: "center",
           }}
         >
-          <Text
-            accessibilityLiveRegion="polite"
-            testID="filePreview.notice"
+          <View
             style={{
-              color: colors.textPrimary,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: spacing.sm,
               backgroundColor: colors.surfaceElevated,
               padding: spacing.sm,
-              borderRadius: radius.pill,
-              fontSize: typeScale.caption,
+              borderRadius: radius.container,
             }}
           >
-            {p.notice}
-          </Text>
+            {p.onCancelNotice ? <ActivityIndicator color={colors.textTertiary} size="small" /> : null}
+            <Text
+              accessibilityLiveRegion="polite"
+              testID="filePreview.notice"
+              style={{
+                flexShrink: 1,
+                color: colors.textPrimary,
+                fontSize: typeScale.footnote,
+                lineHeight: lineHeight.caption,
+              }}
+            >
+              {p.notice}
+            </Text>
+            {p.onCancelNotice ? (
+              <MainWindowActionButton
+                action={{
+                  label: t("files.browser.cancel"),
+                  onPress: p.onCancelNotice,
+                  testID: "filePreview.notice.cancel",
+                }}
+                density="compact"
+              />
+            ) : null}
+          </View>
         </View>
       ) : null}
-      <View
+      {!p.document ? <View
         pointerEvents="box-none"
         style={{
           position: "absolute",
@@ -228,7 +363,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
           gap: spacing.md,
         }}
       >
-        <Host {...host} style={{ width: size * 2, height: size }}>
+        {!p.document ? <Host {...host} style={{ width: size * 2, height: size }}>
           <HStack spacing={0} modifiers={[capsule]}>
             <Button
               label={t("files.preview.browserBack")}
@@ -245,7 +380,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
               modifiers={[...icon, disabled(!p.canGoForward)]}
             />
           </HStack>
-        </Host>
+        </Host> : null}
         <View pointerEvents="none" style={{ flex: 1 }} />
         <Host {...host} style={{ width: size, height: size }}>
           <Button
@@ -264,57 +399,8 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps) {
             />
           </Button>
         </Host>
-        <Host {...host} style={{ width: size, height: size }}>
-          <Menu
-            label={
-              <Image
-                systemName="ellipsis"
-                size={iconSize.lg}
-                modifiers={[frame({ width: size, height: size })]}
-              />
-            }
-            testID="filePreview.browser.more"
-            modifiers={[
-              ...circle,
-              menuOrder("fixed"),
-              accessibilityLabel(t("files.preview.browserMore")),
-            ]}
-          >
-            {!p.website && <Section title={p.title}>
-              <Button
-                label={t("files.preview.browserFileInfo")}
-                systemImage="doc"
-                onPress={showFileInfo}
-              />
-            </Section>}
-            <Button
-              label={t(
-                p.website ? "files.preview.browserReturnToFile" : p.source
-                  ? "files.preview.browserShowPage"
-                  : "files.preview.browserShowSource",
-              )}
-              systemImage="chevron.left.forwardslash.chevron.right"
-              onPress={p.onToggleSource}
-              testID="filePreview.browser.source"
-            />
-            <Divider />
-            <Button
-              label={t(p.website ? "files.preview.browserCopyAddress" : "files.preview.copyPath")}
-              systemImage="doc.on.doc"
-              onPress={p.onCopyPath}
-              testID="filePreview.copyPath"
-              modifiers={[disabled(p.busy)]}
-            />
-            {!p.website && <Button
-              label={t("files.preview.browserAddToTask")}
-              systemImage="text.bubble"
-              onPress={p.onAddToTask}
-              testID="filePreview.sendToSession"
-              modifiers={[disabled(p.busy)]}
-            />}
-          </Menu>
-        </Host>
-      </View>
+        {moreMenu}
+      </View> : null}
     </View>
   );
 }

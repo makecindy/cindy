@@ -5,14 +5,19 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { GitExecError, gitExec } from './gitExec';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { readRecycleRecord, writeRecycleRecord, worktreeGeneration } from './recycleJournal';
 import { extractRecoveryArchive, inventoryWorktree, sameWorktreeFiles, verifyRecoveryArchive } from './recoveryArchive';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
-import { assertManagedResourceLocation, assertManagedResourcePath, assertWorktreeGitIdentity } from './resourceSafety';
+import {
+  assertManagedResourceLocation, assertManagedResourcePath, assertWorktreeGitIdentity, gitMetadataUsable,
+} from './resourceSafety';
 import * as store from './worktreeStore';
 import { withLegacyWorktreeRuntimeGuard } from './legacyRuntimeGuard';
-import { readWorktreeHeadRef } from './contentSnapshot';
+import {
+  checkoutMissingSnapshotFiles, presentFilesMatchSnapshotTree, readWorktreeHeadRef, releaseSnapshotRef,
+} from './contentSnapshot';
 
 function restoreCheckoutPathIsSafe(value: string): boolean {
   if (!path.isAbsolute(value)) return false;
@@ -37,14 +42,34 @@ async function indexIsRestorable(worktreePath: string, indexTree: string): Promi
   } catch { return false; }
 }
 
-/** Restore new recovery records; return null to retain compatibility with older stash/branch recovery. */
+type RecycleRecord = NonNullable<Awaited<ReturnType<typeof readRecycleRecord>>>;
+
+/** Recovery evidence is complete: older snapshots without untracked files also need their archive. */
+export function hasRecordedRecovery(record: RecycleRecord | null | undefined): record is RecycleRecord {
+  return Boolean(record?.snapshot && (record.archive || record.snapshot.untracked));
+}
+
+/** The worktree holds the snapshot's content again; nothing can restore from it a second time. */
+async function releaseRestoredSnapshot(record: RecycleRecord): Promise<void> {
+  if (record.snapshot) await releaseSnapshotRef(record.meta.baseRepo, record.snapshot);
+}
+
+function restorableRecord(record: RecycleRecord | null): record is RecycleRecord {
+  return hasRecordedRecovery(record) && record.phase !== 'restored' && record.phase !== 'pending';
+}
+
+/**
+ * Restore recorded recycles; return null to retain compatibility with older stash/branch recovery.
+ * Records from older clients carry an encrypted archive; newer ones rebuild files from the Git
+ * snapshot, which holds tracked and new files but not ignored ones.
+ */
 export async function restoreRecordedWorktree(sessionId: string, worktreePath: string): Promise<boolean | null> {
   // Keep ordinary present/legacy lookups free of Windows helper processes.
   const pending = await readRecycleRecord(worktreePath, sessionId);
-  if (!pending?.archive || !pending.snapshot || pending.phase === 'restored' || pending.phase === 'pending') return null;
+  if (!restorableRecord(pending)) return null;
   return withWorktreeResourceLock(worktreePath, () => withLegacyWorktreeRuntimeGuard(async (legacyGuardHeld) => {
     const record = await readRecycleRecord(worktreePath, sessionId);
-    if (!record?.snapshot || !record.archive || record.phase === 'restored' || record.phase === 'pending') return null;
+    if (!record?.snapshot || !restorableRecord(record)) return null;
     if ([record.snapshot.head, record.snapshot.tree, record.snapshot.indexTree, record.snapshot.commit]
       .some((value) => typeof value !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value))) return false;
     const headRef = record.snapshot.headRef;
@@ -55,6 +80,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       // Registration was the final mutation; finish a journal write interrupted by a crash.
       record.phase = 'restored';
       await writeRecycleRecord(record);
+      await releaseRestoredSnapshot(record);
       return true;
     }
     if (registered && worktreeGeneration(registered) !== record.generation) return false;
@@ -85,13 +111,19 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
         // Snapshotting never mutates the live checkout. Cancelling recycling needs no apply.
         record.phase = 'restored';
         await writeRecycleRecord(record);
+        await releaseRestoredSnapshot(record);
         return true;
       }
       await assertManagedResourcePath(record.meta, [worktreePath]);
-      if (!sameWorktreeFiles(await inventoryWorktree(worktreePath), record.archive.files, true)) return false;
+      if (record.archive) {
+        if (!sameWorktreeFiles(await inventoryWorktree(worktreePath), record.archive.files, true)) return false;
+      } else if (await gitMetadataUsable(worktreePath)
+        && !(await presentFilesMatchSnapshotTree(worktreePath, record.snapshot.tree))) {
+        return false;
+      }
     }
     if (hasLiveSessionReference(record.meta, await loadLiveSessionPathKeys({ excludeSessionId: sessionId }))) return false;
-    await verifyRecoveryArchive(record.archive);
+    if (record.archive) await verifyRecoveryArchive(record.archive);
     if (!legacyGuardHeld()) return false;
     if (headRef) {
       try {
@@ -108,6 +140,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     }
     if (!legacyGuardHeld()) return false;
     if (identity === null) {
+      await ensureManagedWorktreeExcluded(record.meta.baseRepo, worktreePath);
       record.phase = 'restoring';
       record.restoredGeneration ??= randomUUID();
       record.directoryIdentity = null;
@@ -120,14 +153,8 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     record.restoredGeneration ??= randomUUID();
     await writeRecycleRecord(record);
     const gitLink = path.join(worktreePath, '.git');
-    let gitLinkExists = true;
-    try {
-      await fs.lstat(gitLink);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      gitLinkExists = false;
-    }
-    if (!gitLinkExists || record.restoreCheckoutPath) {
+    // A gitfile left pointing at deleted metadata is repaired like a missing one.
+    if (!(await gitMetadataUsable(worktreePath)) || record.restoreCheckoutPath) {
       // Repair a partially deleted worktree without deleting any remaining user file.
       // Persist the temporary checkout before creating it so a crash after `worktree add`
       // can resume the same checkout instead of leaving its branch permanently occupied.
@@ -158,6 +185,8 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
         // Never delete or adopt an unexpected non-empty temporary directory.
         return false;
       }
+      // Only a link to removed metadata is replaced; it holds no user bytes.
+      if (!(await gitMetadataUsable(worktreePath))) await fs.rm(gitLink, { force: true });
       try {
         await fs.copyFile(path.join(checkout, '.git'), gitLink, constants.COPYFILE_EXCL);
       } catch (error) {
@@ -175,7 +204,13 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
     if (head.trim() !== record.snapshot.head) return false;
     if (headRef !== undefined && await readWorktreeHeadRef(worktreePath) !== headRef) return false;
     if (!(await indexIsRestorable(worktreePath, record.snapshot.indexTree))) return false;
-    await extractRecoveryArchive(record.archive, worktreePath, true);
+    if (record.archive) {
+      await extractRecoveryArchive(record.archive, worktreePath, true);
+    } else {
+      // Recheck after the Git link was repaired: surviving files must still be snapshot bytes.
+      if (!(await presentFilesMatchSnapshotTree(worktreePath, record.snapshot.tree))) return false;
+      await checkoutMissingSnapshotFiles(worktreePath, record.snapshot.tree);
+    }
     if (hasLiveSessionReference(record.meta, await loadLiveSessionPathKeys({ excludeSessionId: sessionId }))) return false;
     await assertManagedResourcePath(record.meta, [worktreePath]);
     await assertWorktreeGitIdentity(record.meta);
@@ -190,6 +225,7 @@ export async function restoreRecordedWorktree(sessionId: string, worktreePath: s
       generation: record.restoredGeneration, quarantinePath: undefined });
     record.phase = 'restored';
     await writeRecycleRecord(record);
+    await releaseRestoredSnapshot(record);
     return true;
   }));
 }

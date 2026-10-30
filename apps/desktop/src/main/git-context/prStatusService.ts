@@ -100,6 +100,12 @@ export interface PrStatusServiceDeps {
   fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   /** 缓存 TTL,默认 60s。测试可注小值。 */
   cacheTtlMs?: number;
+  /**
+   * 过期后仍可直接回答的时长,默认 10 分钟:过期条目先原样返回,再后台向 GitHub 复核,
+   * 下一次查询拿到新值。PR 状态变化以分钟计,但每次 60s 过期都让侧栏 / 手机等一次
+   * ~1.2s 的 GitHub 往返(并占住远程调用名额)并不值得;超过此窗才同步等待。
+   */
+  staleTtlMs?: number;
   now?: () => number;
 }
 
@@ -114,9 +120,12 @@ export function mapRemoteToStatus(remote: PrRemoteState): PrStatusKind {
 interface CacheEntry {
   result: PrStatusResult;
   expiresAt: number;
+  /** 过期后到此刻之前仍可直接回答(后台复核);之后必须同步重查。 */
+  staleUntil: number;
 }
 
 const DEFAULT_TTL_MS = 60_000;
+const DEFAULT_STALE_TTL_MS = 10 * 60_000;
 /** 单次批量查询上限——renderer 正常只显示前几条,防御异常调用。 */
 const MAX_BATCH = 10;
 
@@ -124,13 +133,22 @@ export class PrStatusService {
   private readonly deps: Required<Pick<PrStatusServiceDeps, 'readToken' | 'fetchPr'>> &
     PrStatusServiceDeps;
   private readonly ttlMs: number;
+  private readonly staleTtlMs: number;
   private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<PrStatusResult>>();
+  private generation = 0;
+
+  invalidate(): void {
+    this.generation += 1;
+    this.cache.clear();
+    this.inFlight.clear();
+  }
 
   constructor(deps: PrStatusServiceDeps) {
     this.deps = deps;
     this.ttlMs = deps.cacheTtlMs ?? DEFAULT_TTL_MS;
+    this.staleTtlMs = Math.max(0, deps.staleTtlMs ?? DEFAULT_STALE_TTL_MS);
     this.now = deps.now ?? Date.now;
   }
 
@@ -156,25 +174,38 @@ export class PrStatusService {
   private async getOne(q: PrStatusQuery): Promise<PrStatusResult> {
     const key = `${q.owner.toLowerCase()}/${q.repo.toLowerCase()}#${q.prNumber}`;
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > this.now()) return cached.result;
+    const now = this.now();
+    if (cached && cached.expiresAt > now) return cached.result;
+    if (cached && cached.staleUntil > now) {
+      // Stale-while-revalidate: answer now, refresh once in the background.
+      void this.revalidate(key, q).catch(() => undefined);
+      return cached.result;
+    }
+    return this.revalidate(key, q);
+  }
 
+  /** One GitHub read per key at a time; both the stale and the cold path join it. */
+  private revalidate(key: string, q: PrStatusQuery): Promise<PrStatusResult> {
     const inflight = this.inFlight.get(key);
     if (inflight) return inflight;
 
+    const generation = this.generation;
     const p = this.fetchOne(q)
       .then((result) => {
         // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
         //  - gh-missing / gh-not-logged-in / no-token:用户装完 gh 或登录后,
         //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
         //  - fetch-failed:瞬时网络抖动 / 临时 5xx 不该把失败钉死满 TTL,
-        //    下次渲染触发查询时立即重试(review 反馈)。
-        if (result.ok || result.reason === 'not-found') {
-          this.cache.set(key, { result, expiresAt: this.now() + this.ttlMs });
+        //    下次渲染触发查询时立即重试(review 反馈)。过期条目遇到这类失败时
+        //    保留原值继续作为 stale 回答,直到 staleUntil。
+        if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
+          const fetchedAt = this.now();
+          this.cache.set(key, { result, expiresAt: fetchedAt + this.ttlMs, staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs });
         }
         return result;
       })
       .finally(() => {
-        this.inFlight.delete(key);
+        if (this.inFlight.get(key) === p) this.inFlight.delete(key);
       });
     this.inFlight.set(key, p);
     return p;
@@ -215,8 +246,12 @@ export class PrStatusService {
       };
     } catch (err) {
       const status = (err as { status?: unknown })?.status;
+      if (status === 401) return { ok: false, ...base, reason: 'gh-not-logged-in' };
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
-      log.warn('fetch pr status failed', { key: `${q.owner}/${q.repo}#${q.prNumber}`, err: String(err) });
+      log.warn('fetch pr status failed', {
+        key: `${q.owner}/${q.repo}#${q.prNumber}`,
+        err: String(err),
+      });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }
   }

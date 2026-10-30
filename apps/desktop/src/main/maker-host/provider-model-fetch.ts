@@ -1,3 +1,5 @@
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { collectModelDiscoveryPages } from './model-discovery-pages.js';
 import type { DiscoveredModel } from '@cindy/model-providers';
 /**
  * provider-model-fetch —— 供应商「获取模型列表」（自定义供应商表单消费）。
@@ -23,7 +25,6 @@ import {
 import { classifyProviderError, type ProviderErrorCode } from '../../shared/providerErrors.js';
 import {
   deriveModelsDiscoveryUrl,
-  parseModelsListResponse,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
 } from './generic-oauth.js';
@@ -37,6 +38,8 @@ const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without emb
 
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
+  /** Add-flow callers distinguish an empty directory from an invalid response. */
+  allowEmpty?: boolean;
   agent: AgentKind;
   /** 上游 wire protocol；用于区分 Codex 原生 OpenAI 与 Anthropic Messages 桥。 */
   wireProtocol?: ProviderWireProtocol;
@@ -97,16 +100,22 @@ export async function fetchSavedOAuthProviderModels(
   if (!isCurrent()) return { ok: false, code: 'AUTH_INVALID' };
   const token = readCachedGenericOAuthAccessToken(storageProviderId, oauth);
   if (!token) return { ok: false, code: 'AUTH_INVALID' };
+  const modelsUrl = route.modelsUrl ?? oauth.modelsDiscoveryUrl;
   const result = await fetchProviderModels({
     agent,
-    baseUrl: route.upstream,
-    modelsUrl: route.modelsUrl ?? oauth.modelsDiscoveryUrl,
+    baseUrl: resolveCopilotAccountUrl(route.upstream, token),
+    modelsUrl: modelsUrl ? resolveCopilotAccountUrl(modelsUrl, token) : modelsUrl,
     wireProtocol: route.wireProtocol,
     authMethod: 'oauth',
     apiKey: token,
     headers,
     redirect: 'error',
-  }, fetchImpl);
+  }, async (url, init) => {
+    // Pagination and the separate speech catalog may run after the first reply.
+    // Revoke the captured credentials before another request if ownership changed.
+    if (!isCurrent()) throw new Error('Provider model refresh is no longer current');
+    return fetchImpl(url, init);
+  });
   return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };
 }
 
@@ -129,7 +138,7 @@ function withoutCredentialHeaders(
   const normalized: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers ?? {})) {
     const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
+    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'xi-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
 }
@@ -173,7 +182,15 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const discoveryEndpoint = new URL(discoveryUrl);
   const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
     && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
-  if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
+  if (discoveryEndpoint.origin === 'https://api.elevenlabs.io'
+    && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/v1/models') {
+    // ElevenLabs discovery uses xi-api-key, independently of the chat runtime slot.
+    delete headers.authorization;
+    delete headers['x-api-key'];
+    delete headers['anthropic-version'];
+    delete headers['anthropic-beta'];
+    if (spec.apiKey) headers['xi-api-key'] = spec.apiKey;
+  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
     // Discovery is provider-specific, not the generation harness's wire format.
     // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
     // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
@@ -271,6 +288,14 @@ export async function fetchProviderModels(
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
+    // A configured Codex manifest may be unavailable on older compatible gateways.
+    // Retry only the same endpoint without its manifest selector; never retry auth failures.
+    const ordinaryUrl = new URL(url);
+    if ((res.status === 404 || res.status === 405) && ordinaryUrl.searchParams.has('client_version')) {
+      await res.body?.cancel().catch(() => undefined);
+      ordinaryUrl.searchParams.delete('client_version');
+      return fetchProviderModels({ ...spec, modelsUrl: ordinaryUrl.toString() }, fetchImpl);
+    }
     let bodyText = '';
     try {
       bodyText = spec.responseByteLimit === undefined
@@ -295,8 +320,14 @@ export async function fetchProviderModels(
       detail: 'models response is not JSON or exceeds the response limit',
     };
   }
-  const models = parseModelsListResponse(json, url);
-  if (!models || models.length === 0) {
+  const pageDeadline = Date.now() + 30_000;
+  const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
+    if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
+    const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
+    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
+    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
+  });
+  if (!models || (models.length === 0 && !spec.allowEmpty)) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,

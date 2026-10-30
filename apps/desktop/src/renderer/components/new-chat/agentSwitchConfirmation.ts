@@ -133,11 +133,11 @@ export type AgentSwitchAckAction =
  */
 export function isAgentSwitchEchoConfigConsistent(args: {
   /** 回声匹配时 store 里的权威意图快照;非回声路径(常规新鲜 ack)传 null,恒一致。 */
-  authoritative: { effort?: string; fastMode?: boolean } | null;
+  authoritative: { effort?: string; fastMode?: boolean | 'ultrafast' } | null;
   /** 本次请求解析后发出的 effort(空串 / undefined = 本端没指定,跟随默认解析)。 */
   requestedEffort: string | undefined;
   /** 本次请求解析后发出的 Fast。 */
-  requestedFastMode: boolean;
+  requestedFastMode: boolean | 'ultrafast';
 }): boolean {
   const { authoritative, requestedEffort, requestedFastMode } = args;
   if (!authoritative) return true;

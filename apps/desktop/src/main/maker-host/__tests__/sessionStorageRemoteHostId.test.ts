@@ -156,6 +156,22 @@ describe('DesktopSessionStorage.create remoteHostId 规范化', () => {
   });
 });
 
+describe('DesktopSessionStorage.create initial plan mode', () => {
+  beforeEach(() => {
+    h.captured = null;
+    h.rows.clear();
+  });
+
+  it.each([true, false, undefined])('persists %s in the task insert', async (planMode) => {
+    const storage = new DesktopSessionStorage();
+    await storage.create({
+      id: 'plan-session', title: 'Plan', workDir: '/repo', model: 'm', agentKind: 'codex', planMode,
+    });
+    expect(h.rows.size).toBe(1);
+    expect(h.rows.get('plan-session')).toMatchObject({ planModeEnabled: planMode ?? false });
+  });
+});
+
 describe('DesktopSessionStorage.create workspaceKind', () => {
   beforeEach(() => {
     h.captured = null;

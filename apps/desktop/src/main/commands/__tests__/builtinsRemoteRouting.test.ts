@@ -38,6 +38,7 @@ function sentPayloads(): Payload[] {
 function makeHarness(overrides?: {
   remoteInvoke?: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
   isLearnEnabled?: () => boolean;
+  isLearnEnabledForListing?: () => boolean;
 }) {
   const registry = new DesktopCommandRegistry();
   const goalController = { setGoal: vi.fn(), clearGoal: vi.fn() };
@@ -47,6 +48,7 @@ function makeHarness(overrides?: {
     getGoalController: () => goalController as never,
     getLearnController: () => learnController as never,
     isLearnEnabled: overrides?.isLearnEnabled ?? (() => true),
+    isLearnEnabledForListing: overrides?.isLearnEnabledForListing,
     remoteInvoke,
   });
   return { registry, goalController, learnController, remoteInvoke };
@@ -57,13 +59,9 @@ beforeEach(() => {
 });
 
 describe('/cindy-make composer entry', () => {
-  it('appears in the built-in catalog under the final command name', () => {
+  it('stays out of the built-in catalog while Cindy Make is disabled', () => {
     const { registry } = makeHarness();
-    expect(registry.list()).toContainEqual({
-      kind: 'desktop',
-      name: 'cindy-make',
-      description: expect.stringContaining('/cindy-make'),
-    });
+    expect(registry.list().some((command) => command.name === 'cindy-make')).toBe(false);
     expect(registry.list().some((command) => command.name === 'cindy-maker')).toBe(false);
     expect(registry.list().some((command) => command.name === 'learn')).toBe(true);
   });
@@ -73,7 +71,7 @@ describe('/cindy-make composer entry', () => {
     async (deviceId) => {
       const { registry, remoteInvoke } = makeHarness();
       await expect(registry.execute('cindy-make', { sessionId: 'source', deviceId })).rejects.toThrow(
-        '[INVALID_PARAMS]',
+        'unknown command "/cindy-make"',
       );
       expect(h.webContentsSend).not.toHaveBeenCalled();
       expect(remoteInvoke).not.toHaveBeenCalled();
@@ -100,6 +98,21 @@ describe('/learn SSH fallback', () => {
     await expect(registry.execute('learn', { sessionId: 'ssh-session' })).rejects.toThrow(
       'unknown command "/learn"',
     );
+  });
+
+  it('lists Learn from its preference and checks availability only on execution', async () => {
+    // Unit regression: task switches must not hash bundled Skills for display;
+    // a visible command still cannot execute when its integrity gate rejects it.
+    const enabled = vi.fn(() => false);
+    const { registry, learnController } = makeHarness({
+      isLearnEnabled: enabled,
+      isLearnEnabledForListing: () => true,
+    });
+    expect(registry.list()).toContainEqual(expect.objectContaining({ name: 'learn' }));
+    expect(enabled).not.toHaveBeenCalled();
+    await expect(registry.execute('learn', { sessionId: 'ssh-session' })).rejects.toThrow('unknown command');
+    expect(enabled).toHaveBeenCalledTimes(1);
+    expect(learnController.startLearn).not.toHaveBeenCalled();
   });
 
   it('keeps the remote fallback when only the controlling host disabled Learn', async () => {

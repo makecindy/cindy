@@ -27,6 +27,19 @@ class CindyAppInstallerModule : Module() {
     Function("isSupported") {
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && declaresInstallPermission()
     }
+    Function("installerPackageName") {
+      val context = appContext.reactContext ?: return@Function null
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+        } else {
+          @Suppress("DEPRECATION")
+          context.packageManager.getInstallerPackageName(context.packageName)
+        }
+      } catch (_: Exception) {
+        null
+      }
+    }
     AsyncFunction("hasPermission") { declaresInstallPermission() && canInstall() }
     AsyncFunction("requestPermission") { promise: Promise ->
       when {

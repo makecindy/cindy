@@ -13,6 +13,15 @@ const mocks = vi.hoisted(() => ({
   finishSubagentRewindFence: vi.fn(),
   primeSubagentRewindFence: vi.fn(),
   listVisibleSubagentObservationIdentities: vi.fn(),
+  pruneWithdrawnWorkingMemoryForSession: vi.fn(async () => 0),
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  ownerScopedUserDataPath: () => '/owner-root',
+}));
+
+vi.mock('../botWorkingMemory.js', () => ({
+  pruneWithdrawnWorkingMemoryForSession: mocks.pruneWithdrawnWorkingMemoryForSession,
 }));
 
 vi.mock('electron', () => ({
@@ -99,6 +108,17 @@ describe('maker rewind IPC stop-then-rewind', () => {
     }
     await rewinding;
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledOnce();
+    // 被撤回轮次的伙伴工作记忆条目在提交成功后清理,顺序在 commit 之后。
+    expect(mocks.pruneWithdrawnWorkingMemoryForSession).toHaveBeenCalledWith('session-1', '/owner-root');
+    expect(mocks.pruneWithdrawnWorkingMemoryForSession.mock.invocationCallOrder[0]!)
+      .toBeGreaterThan(mocks.commitRewindAtMessage.mock.invocationCallOrder[0]!);
+  });
+
+  it('does not prune working memory when the rewind commit fails', async () => {
+    mocks.commitRewindAtMessage.mockRejectedValueOnce(new Error('NO_LIVE_QUERY'));
+    const handler = mocks.handlers.get(MAKER_INVOKE.REWIND_COMMIT)!;
+    await expect(handler({}, 'session-1', 'message-1', {})).rejects.toThrow();
+    expect(mocks.pruneWithdrawnWorkingMemoryForSession).not.toHaveBeenCalled();
   });
 
   it('runs normal rewind inside the stopped input boundary when requested', async () => {

@@ -11,6 +11,19 @@ export function isOpenRouterModelsUrl(value: string): boolean {
   } catch { return false; }
 }
 
+/** Codex manifests use { effort, description }; Sub2API's Grok list uses { value, label }.
+ * Missing/malformed lists remain unknown; an explicit empty or none-only list stays empty.
+ */
+function declaredReasoningEfforts(value: unknown, key: "effort" | "value") {
+  if (!Array.isArray(value)) return undefined;
+  const levels = value.map((level: unknown) =>
+    typeof level === "string" ? level
+      : level && typeof level === "object" ? (level as Record<string, unknown>)[key]
+        : undefined,
+  );
+  return pickModelMetadata({ efforts: [...new Set(levels.filter(level => level !== "none"))] }).efforts;
+}
+
 /**
  * 解析 OpenAI / Anthropic「列模型」响应的三种形状（`{data:[{id}]}` / `{models:[{id|slug}]}` /
  * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
@@ -59,7 +72,9 @@ export function parseModelsListResponse(
                 ? (item as { key: string }).key
                 : typeof (item as { model_name?: unknown }).model_name === 'string'
                   ? (item as { model_name: string }).model_name
-                  : google ? google.name.slice('models/'.length) : null
+                  : typeof (item as { model_id?: unknown }).model_id === 'string'
+                    ? (item as { model_id: string }).model_id
+                    : google ? google.name.slice('models/'.length) : null
           : null;
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -72,6 +87,7 @@ export function parseModelsListResponse(
             context_window?: unknown;
             max_context_length?: unknown;
             max_input_tokens?: unknown;
+            max_context_window?: unknown;
           })
         : null;
     const name = google && typeof google.displayName === 'string' ? google.displayName :
@@ -124,11 +140,22 @@ export function parseModelsListResponse(
         ? reasoning.defaultEffort
         : reasoning?.default_effort !== undefined
           ? reasoning.default_effort
-          : record.default_effort;
+          : record.default_effort !== undefined
+            ? record.default_effort
+            : record.default_reasoning_level !== undefined
+              ? record.default_reasoning_level
+              : record.reasoningEffort;
     const modalities = record.modalities ??
       (Array.isArray(architecture?.input_modalities) && Array.isArray(architecture?.output_modalities)
         ? { input: architecture.input_modalities, output: architecture.output_modalities } : undefined);
-    const inputModalities = (modalities as { input?: unknown } | undefined)?.input;
+    const inputModalities = (modalities as { input?: unknown } | undefined)?.input ?? record.input_modalities;
+    const contextWindowMax = pickModelMetadata({ contextWindowMax: record.max_context_window ?? record.contextWindowMax }).contextWindowMax;
+    const serviceTiers = record.service_tiers;
+    const additionalSpeedTiers = record.additional_speed_tiers;
+    const declaredSpeedTiers = [
+      ...(Array.isArray(serviceTiers) ? serviceTiers.map(tier => tier?.id) : []),
+      ...(Array.isArray(additionalSpeedTiers) ? additionalSpeedTiers : []),
+    ];
     const isVercel = sourceUrl !== undefined && (() => {
       try { const url = new URL(sourceUrl); return url.origin === 'https://ai-gateway.vercel.sh'
         && url.pathname.replace(/\/+$/, '') === '/v1/models'; } catch { return false; }
@@ -136,19 +163,33 @@ export function parseModelsListResponse(
     // Vercel marks image/video/etc. as type, but Cindy chat import only executes language models.
     // Keep them out of the picker instead of saving a mode that later disappears from every list.
     if (isVercel && record.type !== undefined && record.type !== 'language') continue;
-    const discoveredMetadata = pickModelMetadata({
+    // ElevenLabs /v1/models (and compatible relays) declares TTS with a boolean,
+    // not mode. Match the response contract, never a model-name prefix or a transport API.
+    // Explicit false must replace an earlier TTS snapshot without inventing a chat/STT capability.
+    const elevenLabsMode = record.model_id === id && typeof record.can_do_text_to_speech === 'boolean'
+      ? record.can_do_text_to_speech ? 'audio_speech' : 'other'
+      : undefined;
+    // OpenRouter separates TTS (`speech`) from audio-capable chat (`audio`).
+    // This is its catalog contract, not a generic inference from model names.
+    const openRouterSpeech = sourceUrl !== undefined && isOpenRouterModelsUrl(sourceUrl)
+      && Array.isArray(architecture?.output_modalities)
+      && architecture.output_modalities.includes('speech');
+    const discoveredMetadata = { ...pickModelMetadata(record), ...pickModelMetadata({
+      nativeApi: record.nativeApi !== undefined ? record.nativeApi : record.native_api,
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
       )
         ? { name }
         : {}),
-      mode: record.mode ?? info.mode ?? (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
+      mode: record.mode ?? info.mode ?? elevenLabsMode ?? (openRouterSpeech ? 'audio_speech' : undefined) ??
+        (isVercel && record.type === 'language' ? 'chat' : isVercel ? record.type : undefined),
       modalities,
       officialDocs: record.officialDocs,
       description: record.description,
       group: record.group,
       contextWindow:
         typeof rawWindow === "number" ? Math.floor(rawWindow) : info.max_input_tokens,
+      contextWindowMax,
       maxOutputTokens:
         record.max_output_tokens ?? info.max_output_tokens ?? google?.outputTokenLimit ??
         record.maxOutputTokens ??
@@ -161,6 +202,9 @@ export function parseModelsListResponse(
           ? reasoning.supported_efforts.filter((value) => value !== "none")
           : undefined) ??
         record.supported_efforts ??
+        declaredReasoningEfforts(record.supported_reasoning_levels, "effort") ??
+        (record.supportsReasoningEffort === false
+          ? [] : declaredReasoningEfforts(record.reasoningEfforts, "value")) ??
         (isVercel && Array.isArray(record.reasoning_options)
           ? record.reasoning_options.find((option: unknown) =>
               option && typeof option === 'object' && (option as { type?: unknown }).type === 'effort')?.values
@@ -174,16 +218,30 @@ export function parseModelsListResponse(
         : info.supports_function_calling ?? capabilities.trained_for_tool_use,
       reasoningRequired: reasoning?.required ?? reasoning?.mandatory,
       defaultEffort: rawDefault === "none" ? null : rawDefault,
-      supportsFastMode: record.supports_fast_mode ?? record.supportsServiceTier,
+      supportsFastMode: record.supports_fast_mode ?? record.supportsServiceTier ??
+        (Array.isArray(serviceTiers) && serviceTiers.every(tier =>
+          tier && typeof tier === 'object' && typeof tier.id === 'string')
+          ? declaredSpeedTiers.some(tier => tier === 'priority' || tier === 'fast')
+          : Array.isArray(additionalSpeedTiers)
+            ? additionalSpeedTiers.includes('fast') : undefined),
       supportsImageInput:
         record.supports_image_input ?? info.supports_vision ?? capabilities.vision ??
-        (Array.isArray(inputModalities)
+        (Array.isArray(inputModalities) && inputModalities.every(value => typeof value === 'string')
           ? inputModalities.includes("image")
           : undefined),
-    });
-    // OpenRouter and Vercel document USD per token. Never apply these units to arbitrary proxies.
+    }) };
+    // Check the normalized pair so every spelling (including model_info) obeys
+    // the same capacity constraint, without discarding the valid working window.
+    if (discoveredMetadata.contextWindowMax !== undefined &&
+      discoveredMetadata.contextWindow !== undefined &&
+      discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
+      delete discoveredMetadata.contextWindowMax;
+    }
+    // OpenRouter speech pricing is per character or generated second, not per token.
+    // Do not project it into the chat cost fields. Other OpenRouter/Vercel entries
+    // document USD per token; never apply those units to arbitrary proxies.
     const prices =
-      sourceUrl && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
+      sourceUrl && !openRouterSpeech && (isOpenRouterModelsUrl(sourceUrl) || (isVercel && record.type === 'language'))
         ? (record.pricing as Record<string, unknown> | undefined)
         : undefined;
     const discoveredCost = Object.fromEntries(
@@ -208,6 +266,8 @@ export function parseModelsListResponse(
     );
     out.push({
       id,
+      ...(Array.isArray(serviceTiers) || Array.isArray(additionalSpeedTiers)
+        ? { supportsUltrafastMode: declaredSpeedTiers.includes('ultrafast') } : {}),
       discoveredMetadata,
       ...(Object.keys(discoveredCost).length ? { discoveredCost } : {}),
       name,

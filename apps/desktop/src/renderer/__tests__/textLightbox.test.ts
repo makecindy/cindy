@@ -6,8 +6,7 @@ import '../themes/colors';
  * Regression tests for: text-lightbox (2026-04-19)
  *
  * The component lives at components/chat/TextLightbox.tsx. Static-source
- * scanning matches the project convention (see imageLightboxCloseAnywhere.test.ts
- * and userInfoSectionHover.test.ts) — keeps tests in the Node vitest env
+ * scanning matches the project convention for small source contracts — keeps tests in the Node vitest env
  * and avoids dragging in jsdom + react-dom for these contract checks.
  *
  * Contracts asserted:
@@ -215,13 +214,12 @@ describe('TextLightbox — F5 Oversize body', () => {
     expect(matches.length).toBe(1);
   });
 
-  it('Oversize CTA pill uses --lightbox-cta-* tokens (no hard-coded #000000)', () => {
+  it('Oversize CTA delegates themed paint and interaction to the shared Button', () => {
     // Dark Oversize button must be visible on Dark Card (#2c2c2a) — that
     // means the pill cannot keep the prior `bg-[#000000]` hard-code; both
     // light and dark backgrounds need to flip together via tokens.
-    expect(source).toMatch(/bg-\[var\(--lightbox-cta-bg\)\]/);
-    expect(source).toMatch(/text-\[var\(--lightbox-cta-fg\)\]/);
-    expect(source).toMatch(/hover:bg-\[var\(--lightbox-cta-hover\)\]/);
+    expect(source).toContain("import { Button } from '@/components/ui/button'");
+    expect(source).toMatch(/<Button\s+variant="cta"[\s\S]*?onClick=\{openInSystem\}/);
     // Negative assertion: the old hard-coded black must not regress.
     expect(source).not.toMatch(/bg-\[#000000\]/);
     expect(source).not.toMatch(/hover:bg-\[#262626\]/);

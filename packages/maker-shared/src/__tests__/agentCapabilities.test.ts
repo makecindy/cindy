@@ -321,6 +321,7 @@ describe('agent capabilities shared model', () => {
     // 而这个分类名会原样出现在切换确认框的标题与说明里。
     expect(categorizeMobileModel('codex/gpt-5.5')).toBe('gpt-budget');
     expect(categorizeMobileModel('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    expect(categorizeMobileModel('openai-codex/gpt-6.1-sol')).toBe('gpt-budget');
     expect(categorizeMobileModel('gpt-5.5')).toBe('gpt');
     // 目录下发的 id 带命名空间,尾段也要认,否则整批模型掉进兜底分类。
     expect(categorizeMobileModel('anthropic/claude-opus-5')).toBe('anthropic');

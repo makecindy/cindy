@@ -9,8 +9,23 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import type { RemoteSerializedAttachment } from '@/session/types';
+import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { buildOutboxItem } from '@/session/sessionOutbox';
+import { createOutboxMessageLeases, outboxNeedsReconciliation, outboxSessionIsHidden } from '@/session/mobileOutboxSessionAdapter';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
+const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
+const editOutbox = vi.hoisted(() => ({ records: vi.fn((): DurableOutboxRecord[] => []), update: vi.fn(async (_record: DurableOutboxRecord, _patch: Partial<DurableOutboxRecord>) => {}) }));
+vi.mock('@/session/mobileDurableOutbox', () => ({
+  persistCancelledCreationDraft: persistCancelledDraft,
+  suspendCreationDraftForCleanup: vi.fn(async () => {}),
+  getCurrentMobileOutboxRecords: editOutbox.records,
+  isDurableOutboxCreationHeld: () => false,
+  mobileDurableOutbox: { update: editOutbox.update, subscribe: () => () => {}, reconcileDrafts: async () => {} },
+}));
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { returnNewSessionToEdit } from '@/session/returnNewSessionToEdit';
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
   setItem: vi.fn(async (key: string, value: string) => {
@@ -31,17 +46,24 @@ vi.mock('expo-crypto', () => ({
   getRandomBytes: (n: number) => new Uint8Array(n).fill(7),
 }));
 import {
+  completeNewSessionDurableEdit,
+  findNewSessionEditDraft,
+  appendNewSessionEditComposer,
   dismissNewSessionCreation,
+  dismissRecoveredPrecreatedSession,
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
   prepareNewSessionCreationForEdit,
   retryNewSessionCreation,
+  restoreNewSessionDurableEdit,
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
   startNewSessionCreation,
+  withNewSessionCreationRemoval,
   type NewSessionCreationParams,
 } from '@/session/newSessionCreation';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { takeOrcaStartFailure } from '@/session/orcaTeam';
 import { sessionFromCreateResult, type NewSessionDraft } from '@/session/newSession';
 import {
   __testing as recoveryTesting,
@@ -61,6 +83,30 @@ const DRAFT: NewSessionDraft = {
   firstMessage: 'hello world',
 };
 
+// Exercise the production lease manager with the real session store, including
+// hydration, cancellation cleanup and message-work lease release.
+function outboxLeaseHarness(initial: DurableOutboxRecord[]) {
+  let records = initial;
+  const visible = new Set<string>();
+  const manager = createOutboxMessageLeases({
+    isCurrent: () => true,
+    getRecords: () => records,
+    hidden: record => outboxSessionIsHidden(record, remoteSessionStore.getSessions()),
+    needsReconciliation: record => outboxNeedsReconciliation(record, visible.has(record.item.sessionId)),
+    restoreEditable: restoreNewSessionDurableEdit,
+    dismissCancelled: dismissRecoveredPrecreatedSession,
+    store: remoteSessionStore,
+  });
+  return { ...manager, visible, setRecords: (next: DurableOutboxRecord[]) => { records = next; } };
+}
+function recoveryOutboxRecord(sessionId: string): DurableOutboxRecord {
+  return { version: 1, accountId: 'owner-a', deviceId: 'dev-1', createdAt: 1, state: 'failed', uploads: [],
+    creation: { draft: DRAFT, deviceName: 'PC', planModeArm: false, restorePermissionMode: null },
+    item: buildOutboxItem({ clientId: `message-${sessionId}`, sessionId, text: DRAFT.firstMessage,
+      quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+      permissionModeAtSend: DRAFT.permissionMode, readyAttachments: [], readyPreviews: [], claimedUploads: [] }) };
+}
+
 interface MakerMock {
   createSession: ReturnType<typeof vi.fn>;
   getSession: ReturnType<typeof vi.fn>;
@@ -69,6 +115,7 @@ interface MakerMock {
   setPermissionMode: ReturnType<typeof vi.fn>;
   worktree: {
     discardPrecreated: ReturnType<typeof vi.fn>;
+    cancelPrecreated?: ReturnType<typeof vi.fn>;
   };
   input: {
     enqueue: ReturnType<typeof vi.fn>;
@@ -130,12 +177,52 @@ async function flushPipeline(): Promise<void> {
 }
 
 describe('newSessionCreation pipeline', () => {
+  it('carries unsent composer text and files through legacy memory recovery', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    await flushPipeline();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady: vi.fn() });
+    const file = { id: 'new-file', path: 'oss://new-file', category: 'image', name: 'new.png', ext: 'png', size: 1 } as RemoteSerializedAttachment;
+    await appendNewSessionEditComposer('s1', 'dev-1', { text: 'unsent addition', attachments: [file], notice: 'one pending upload' });
+    const restored = drainStashedNewSessionDraft('s1', 'dev-1')!;
+    expect(restored.draft.firstMessage).toBe(`${DRAFT.firstMessage}\n\nunsent addition`);
+    expect(restored.attachments).toEqual([file]);
+    expect(restored.notice).toBe('one pending upload');
+  });
+  it.each([false, true])('deletes a failed local task only after worktree cleanup (cleanup fails: %s)', async fails => {
+    const maker = makeMaker();
+    startNewSessionCreation(makeParams('s1', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/a' },
+      precreatedWorktree: { path: '/repo/.cindy-worktrees/a', recoveryKey: 'cleanup-a', originalWorkingDir: '/repo' },
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
+    }));
+    await flushPipeline();
+    if (fails) maker.worktree.discardPrecreated.mockRejectedValueOnce(new Error('cleanup refused'));
+    const remove = vi.fn();
+    const removal = withNewSessionCreationRemoval('s1', 'dev-1', 'deleted', remove);
+    if (fails) {
+      await expect(removal).rejects.toThrow('cleanup refused');
+      expect(getNewSessionCreationTask('s1')).toMatchObject({ status: 'create-failed', returningToEdit: false });
+      expect(remoteSessionStore.getSessions().some(row => row.id === 's1')).toBe(true);
+    } else {
+      await removal;
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+      expect(remoteSessionStore.getSessions()).toEqual([]);
+    }
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   beforeEach(async () => {
+    persistCancelledDraft.mockReset();
+    editOutbox.records.mockReset().mockReturnValue([]);
+    editOutbox.update.mockReset().mockResolvedValue(undefined);
+    setMobileAuthOwner(null);
+    setMobileAuthOwner('owner-a');
     await recoveryTesting.drainMutations();
     recoveryStorage.clear();
     recoveryTesting.resetVolatileLedgers();
     remoteSessionStore.clear();
-    drainStashedNewSessionDraft();
     // 清残留 task(上个用例失败态)。
     for (const id of [
       's1',
@@ -162,6 +249,437 @@ describe('newSessionCreation pipeline', () => {
       's22',
       's23',
     ]) dismissNewSessionCreation(id);
+  });
+
+  it('recovers the original draft and attachments from a group rejection before source metadata exists', async () => {
+    const attachments = [{ id: 'attachment-a', name: 'notes.txt', ext: '.txt', path: '/uploads/notes.txt', category: 'file' as const, mimeType: 'text/plain', size: 10 }];
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[REMOTE_AGENT_GROUP_UNAVAILABLE] group unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker, { attachments }));
+    await flushPipeline();
+    expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+    expect(remoteSessionStore.getSessions().find(s => s.id === 's1')?.source).toBeUndefined();
+    const onReady = vi.fn();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toMatchObject({ draft: DRAFT, attachments });
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', editSessionId: 's1' });
+  });
+
+  it.each([false, true])('keeps durable recovery bytes and only leaves after suspension is saved (save fails: %s)', async (fails) => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    await flushPipeline();
+    const record = { ...recoveryOutboxRecord('s1'), accountId: getMobileAuthOwner().accountKey };
+    editOutbox.records.mockReturnValue([record]);
+    if (fails) editOutbox.update.mockRejectedValueOnce(new Error('storage full'));
+    const onReady = vi.fn();
+    const recovery = returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    if (fails) {
+      await expect(recovery).rejects.toThrow('storage full');
+      expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+      expect(getNewSessionCreationTask('s1')?.returningToEdit).toBe(false);
+      expect(onReady).not.toHaveBeenCalled();
+      retryNewSessionCreation('s1');
+      await flushPipeline();
+      expect(maker.createSession).toHaveBeenCalledTimes(2);
+    } else {
+      await recovery;
+      expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+      expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', recoverySessionId: 's1' });
+      completeNewSessionDurableEdit('s1', 'another-device');
+      expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+      completeNewSessionDurableEdit('s1', 'dev-1');
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+    }
+    expect(editOutbox.update).toHaveBeenCalledWith(record, expect.objectContaining({
+      suspended: true, state: 'failed', error: '[MODEL_UNAVAILABLE] unavailable',
+    }));
+    expect(record.item.text).toBe(DRAFT.firstMessage);
+    expect(record.creation?.draft).toEqual(DRAFT);
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+  });
+
+  it.each(['editReady', 'cancelled'] as const)('restores a persisted %s edit entry after restart and keeps it until the matching form claims it', async marker => {
+    const bytes = new Map<string, string>();
+    const storage = { getAllKeys: async () => [...bytes.keys()], getItem: async (key: string) => bytes.get(key) ?? null,
+      setItem: async (key: string, value: string) => { bytes.set(key, value); },
+      removeItem: async (key: string) => { bytes.delete(key); } };
+    const owner = getMobileAuthOwner();
+    const original = recoveryOutboxRecord('s1');
+    const record = { ...original, accountId: owner.accountKey, suspended: true,
+      creation: { ...original.creation!, [marker]: true as const } };
+    const beforeRestart = createDurableOutbox(storage);
+    await beforeRestart.activate(owner.accountKey);
+    await beforeRestart.add(record);
+    const diskSnapshot = [...bytes];
+    const afterRestart = createDurableOutbox(storage);
+    await afterRestart.activate(owner.accountKey);
+    editOutbox.records.mockImplementation(() => [...afterRestart.getSnapshot()]);
+    const bridge = outboxLeaseHarness([...afterRestart.getSnapshot()]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(bridge.leases.size).toBe(0);
+    expect(getNewSessionCreationTask('s1')).toMatchObject({ readyForEdit: 'durable', draft: DRAFT });
+    expect(getNewSessionCreationTask('s1')).toBe(getNewSessionCreationTask('s1'));
+    expect(shouldBlockSessionSync('s1')).toBe(true);
+    const onReady = vi.fn();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'PC', recoverySessionId: 's1' });
+    completeNewSessionDurableEdit('s1', 'wrong-device');
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+    completeNewSessionDurableEdit('s1', 'dev-1');
+    bridge.refresh();
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect([...bytes]).toEqual(diskSnapshot);
+    expect(editOutbox.update).not.toHaveBeenCalled();
+    if (marker === 'editReady') {
+      remoteSessionStore.upsertDeviceSession('dev-1', 'PC', {
+        ...sessionFromCreateResult({ sessionId: 's1' }, DRAFT), pendingLocalCreation: false,
+      });
+      bridge.refresh();
+      expect(remoteSessionStore.getSessions().some(row => row.id === 's1')).toBe(true);
+      remoteSessionStore.clear();
+    }
+    // If the editor is lost in another restart before submitting, the saved draft is reachable again.
+    setMobileAuthOwner(null);
+    setMobileAuthOwner('owner-a');
+    const secondRestart = createDurableOutbox(storage);
+    await secondRestart.activate(owner.accountKey);
+    editOutbox.records.mockImplementation(() => [...secondRestart.getSnapshot()]);
+    bridge.setRecords([...secondRestart.getSnapshot()]);
+    bridge.refresh();
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+    setMobileAuthOwner('owner-b');
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+  });
+
+  it.each(['editReady', 'cancelled'] as const)('releases the %s claim only after the last editor leaves and can be claimed again', marker => {
+    const original = recoveryOutboxRecord('s1');
+    const record = { ...original, accountId: getMobileAuthOwner().accountKey, suspended: true,
+      creation: { ...original.creation!, [marker]: true as const } };
+    editOutbox.records.mockReturnValue([record]);
+    restoreNewSessionDurableEdit(record);
+    const releaseFirst = completeNewSessionDurableEdit('s1', 'dev-1');
+    const releaseSecond = completeNewSessionDurableEdit('s1', 'dev-1');
+    expect(releaseFirst).toBeTypeOf('function');
+    expect(releaseSecond).toBeTypeOf('function');
+    releaseFirst!();
+    releaseFirst!();
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    releaseSecond!();
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    const releaseReopened = completeNewSessionDurableEdit('s1', 'dev-1');
+    releaseSecond!();
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    releaseReopened!();
+    expect(getNewSessionCreationTask('s1')?.draft).toEqual(DRAFT);
+    expect(editOutbox.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['submitted', 'removed', 'replaced', 'account'] as const)('does not resurrect an old edit entry on form cleanup after %s', change => {
+    const original = recoveryOutboxRecord('s1');
+    const record = { ...original, accountId: getMobileAuthOwner().accountKey, suspended: true,
+      creation: { ...original.creation!, editReady: true as const } };
+    editOutbox.records.mockReturnValue([record]);
+    restoreNewSessionDurableEdit(record);
+    const release = completeNewSessionDurableEdit('s1', 'dev-1');
+    if (change === 'submitted') editOutbox.records.mockReturnValue([{ ...record, suspended: false, state: 'queued' }]);
+    if (change === 'removed') editOutbox.records.mockReturnValue([]);
+    let releaseReplacement: (() => void) | undefined;
+    if (change === 'replaced') {
+      editOutbox.records.mockReturnValue([{ ...record }]);
+      releaseReplacement = completeNewSessionDurableEdit('s1', 'dev-1');
+    }
+    if (change === 'account') setMobileAuthOwner('owner-b');
+    release!();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(editOutbox.update).not.toHaveBeenCalled();
+    releaseReplacement?.();
+  });
+
+  it.each(['cancellation-save', 'edit-save'])('keeps creation locked after worktree cleanup when %s fails, then retries only recovery', async failure => {
+    const maker = makeMaker();
+    startNewSessionCreation(makeParams('s1', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/a' },
+      precreatedWorktree: { path: '/repo/.cindy-worktrees/a', recoveryKey: 'cleanup-a', originalWorkingDir: '/repo' },
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
+    }));
+    await flushPipeline();
+    const record = { ...recoveryOutboxRecord('s1'), accountId: getMobileAuthOwner().accountKey };
+    editOutbox.records.mockReturnValue([record]);
+    if (failure === 'cancellation-save') persistCancelledDraft.mockRejectedValueOnce(new Error('disk full'));
+    else editOutbox.update.mockRejectedValueOnce(new Error('disk full'));
+    const onReady = vi.fn();
+    await expect(returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady })).rejects.toThrow('disk full');
+    expect(getNewSessionCreationTask('s1')).toMatchObject({ worktreeCleanupAcknowledged: true, returningToEdit: false });
+    expect(onReady).not.toHaveBeenCalled();
+    retryNewSessionCreation('s1');
+    await flushPipeline();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+    expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', recoverySessionId: 's1' });
+    expect(editOutbox.update).toHaveBeenLastCalledWith(record, expect.objectContaining({
+      suspended: true, creation: expect.objectContaining({ editReady: true }),
+    }));
+  });
+
+  it('lets the mounted composer stash its follow-ups before dismissing the task or navigating', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    await flushPipeline();
+    const stashDraft = vi.fn((task) => {
+      expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's1')?.status).toBe('active');
+      stashNewSessionDraftForEdit(task, { draft: { ...task.draft, firstMessage: 'hello world\n\nfollow-up' } });
+    });
+    const onReady = vi.fn(() => {
+      expect(stashDraft).toHaveBeenCalledOnce();
+      expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('memory');
+      expect(drainStashedNewSessionDraft('s1', 'dev-1')?.draft.firstMessage).toBe('hello world\n\nfollow-up');
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+    });
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, stashDraft, onReady });
+    expect(onReady).toHaveBeenCalledOnce();
+  });
+
+  it.each(['failure', 'success', 'leave', 'switch-account'])('preserves the worktree compensation gate when returning to edit: %s', async (outcome) => {
+    let resolveDiscard!: (value: { discarded: boolean }) => void;
+    let rejectDiscard!: (error: Error) => void;
+    const maker = makeMaker({ worktree: { discardPrecreated: vi.fn(() => new Promise((resolve, reject) => {
+      resolveDiscard = resolve; rejectDiscard = reject;
+    })) } });
+    startNewSessionCreation(makeParams('s1', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/new-task' },
+      precreatedWorktree: { path: '/repo/.cindy-worktrees/new-task', recoveryKey: 'edit-recovery-key', originalWorkingDir: '/repo' },
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
+    }));
+    await flushPipeline();
+    let current = true;
+    const onReady = vi.fn();
+    const recovery = returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => current, onReady });
+    await flushPipeline();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+    expect(getNewSessionCreationTask('s1')).not.toBeNull();
+    expect(getNewSessionCreationTask('s1')?.returningToEdit).toBe(true);
+    retryNewSessionCreation('s1');
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+    if (outcome === 'failure') {
+      rejectDiscard(new Error('[PRECONDITION_FAILED] cleanup pending'));
+      await expect(recovery).rejects.toThrow('cleanup pending');
+      expect(getNewSessionCreationTask('s1')?.returningToEdit).toBe(false);
+    } else {
+      if (outcome === 'leave') current = false;
+      if (outcome === 'switch-account') setMobileAuthOwner('owner-b');
+      resolveDiscard({ discarded: true });
+      await recovery;
+    }
+    if (outcome === 'success' || outcome === 'leave') {
+      expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('memory');
+      expect(drainStashedNewSessionDraft('s1', 'dev-1')?.draft.workingDir).toBe('/repo');
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+      expect(remoteSessionStore.getSessions().find(s => s.id === 's1')).toBeUndefined();
+      expect(onReady).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
+    } else {
+      expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+      if (outcome === 'switch-account') expect(getNewSessionCreationTask('s1')).toBeNull();
+      else expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+      expect(onReady).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['leave', 'switch-account'])('finishes durable edit recovery after leaving but fences account changes: %s', async (outcome) => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    await flushPipeline();
+    const record = { ...recoveryOutboxRecord('s1'), accountId: getMobileAuthOwner().accountKey };
+    editOutbox.records.mockReturnValue([record]);
+    let finishSave!: () => void;
+    editOutbox.update.mockImplementationOnce(() => new Promise<void>(resolve => { finishSave = resolve; }));
+    let current = true;
+    const onReady = vi.fn();
+    const recovery = returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => current, onReady });
+    await flushPipeline();
+    expect(editOutbox.update).toHaveBeenCalledWith(record, expect.objectContaining({ suspended: true, state: 'failed' }));
+    expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+    current = false;
+    // A fresh page has no local busy flag: the task itself must exclude both actions.
+    expect(getNewSessionCreationTask('s1')?.returningToEdit).toBe(true);
+    const createCalls = maker.createSession.mock.calls.length;
+    retryNewSessionCreation('s1');
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(createCalls);
+    expect(editOutbox.update).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+    if (outcome === 'switch-account') setMobileAuthOwner('owner-b');
+    finishSave();
+    await recovery;
+    expect(onReady).not.toHaveBeenCalled();
+    if (outcome === 'leave') {
+      expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+      expect(remoteSessionStore.getSessions().some(s => s.id === 's1')).toBe(true);
+      retryNewSessionCreation('s1');
+      expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+      await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+      expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', recoverySessionId: 's1' });
+      expect(editOutbox.update).toHaveBeenCalledTimes(1);
+      expect(maker.createSession).toHaveBeenCalledTimes(createCalls);
+      completeNewSessionDurableEdit('s1', 'dev-1');
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+    } else {
+      expect(getNewSessionCreationTask('s1')).toBeNull();
+    }
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+  });
+
+  it('keeps a cancelled durable worktree recovery visible until its form accepts it', async () => {
+    const maker = makeMaker();
+    startNewSessionCreation(makeParams('s1', maker, {
+      draft: { ...DRAFT, workingDir: '/repo/.cindy-worktrees/a' },
+      precreatedWorktree: { path: '/repo/.cindy-worktrees/a', recoveryKey: 'durable-a', originalWorkingDir: '/repo' },
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
+    }));
+    await flushPipeline();
+    const record = { ...recoveryOutboxRecord('s1'), accountId: getMobileAuthOwner().accountKey };
+    persistCancelledDraft.mockImplementationOnce(async () => { record.creation!.cancelled = true; });
+    editOutbox.records.mockReturnValue([record]);
+    let finishSave!: () => void;
+    editOutbox.update.mockImplementationOnce(() => new Promise<void>(resolve => { finishSave = resolve; }));
+    let current = true;
+    const onReady = vi.fn();
+    const recovery = returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => current, onReady });
+    await flushPipeline();
+    current = false;
+    finishSave();
+    await recovery;
+    const bridge = outboxLeaseHarness([record]);
+    bridge.refresh();
+    expect(record.creation?.cancelled).toBe(true);
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('durable');
+    expect(remoteSessionStore.getSessions().some(s => s.id === 's1')).toBe(true);
+    expect(onReady).not.toHaveBeenCalled();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady });
+    expect(onReady).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', recoverySessionId: 's1' });
+    expect(maker.worktree.discardPrecreated).toHaveBeenCalledTimes(1);
+    expect(editOutbox.update).toHaveBeenCalledTimes(1);
+    completeNewSessionDurableEdit('s1', 'dev-1');
+    bridge.refresh();
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(remoteSessionStore.getSessions().some(s => s.id === 's1')).toBe(false);
+    expect(record.item.text).toBe(DRAFT.firstMessage);
+  });
+
+  it.each([false, true])('isolates a late background edit draft from another task (other form already claimed: %s)', async claimed => {
+    let finishCleanup!: (value: { discarded: boolean }) => void;
+    const makerA = makeMaker({ worktree: { discardPrecreated: vi.fn(() => new Promise(resolve => { finishCleanup = resolve; })) } });
+    const filesA = [{ id: 'a-file', name: 'a.txt', ext: '.txt', path: '/uploads/a.txt', category: 'file' as const, mimeType: 'text/plain', size: 1 }];
+    startNewSessionCreation(makeParams('s1', makerA, {
+      draft: { ...DRAFT, firstMessage: 'draft A', workingDir: '/repo/.cindy-worktrees/a' }, attachments: filesA,
+      precreatedWorktree: { path: '/repo/.cindy-worktrees/a', recoveryKey: 'recovery-a', originalWorkingDir: '/repo' },
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }),
+    }));
+    await flushPipeline();
+    let currentA = true;
+    const onReadyA = vi.fn();
+    const recoveryA = returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => currentA, onReady: onReadyA });
+    await flushPipeline();
+    currentA = false;
+    const makerB = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s2', makerB, { draft: { ...DRAFT, firstMessage: 'draft B' } }));
+    await flushPipeline();
+    const onReadyB = vi.fn();
+    await returnNewSessionToEdit({ sessionId: 's2', deviceId: 'dev-1', isCurrent: () => true, onReady: onReadyB });
+    expect(onReadyB).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', editSessionId: 's2' });
+    const formB = claimed ? drainStashedNewSessionDraft('s2', 'dev-1') : null;
+    finishCleanup({ discarded: true });
+    await recoveryA;
+    expect(onReadyA).not.toHaveBeenCalled();
+    expect(drainStashedNewSessionDraft()).toBeNull();
+    expect(drainStashedNewSessionDraft('s1', 'another-device')).toBeNull();
+    expect((formB ?? drainStashedNewSessionDraft('s2', 'dev-1'))?.draft.firstMessage).toBe('draft B');
+    expect(getNewSessionCreationTask('s1')?.readyForEdit).toBe('memory');
+    expect(remoteSessionStore.getSessions().some(s => s.id === 's1')).toBe(true);
+    retryNewSessionCreation('s1');
+    expect(getNewSessionCreationTask('s1')?.status).toBe('create-failed');
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady: onReadyA });
+    expect(makerA.worktree.discardPrecreated).toHaveBeenCalledTimes(1);
+    expect(onReadyA).toHaveBeenCalledWith({ deviceId: 'dev-1', deviceName: 'Mac', editSessionId: 's1' });
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toMatchObject({
+      draft: { firstMessage: 'draft A', workingDir: '/repo' }, attachments: filesA,
+    });
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+  });
+
+  it('does not deliver a prepared draft to a different account or a later login generation', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('[MODEL_UNAVAILABLE] unavailable'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    await flushPipeline();
+    await returnNewSessionToEdit({ sessionId: 's1', deviceId: 'dev-1', isCurrent: () => true, onReady: vi.fn() });
+    setMobileAuthOwner('owner-b');
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+    setMobileAuthOwner('owner-a');
+    expect(drainStashedNewSessionDraft('s1', 'dev-1')).toBeNull();
+  });
+
+  it.each(['create-failed', 'enqueue-failed'] as const)('retires %s guards across account generations without changing durable recovery', async status => {
+    const maker = makeMaker(status === 'create-failed'
+      ? { createSession: vi.fn(async () => { throw new Error('INVALID_PARAMS'); }) } : {});
+    const params = makeParams('s1', maker);
+    params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(getNewSessionCreationTask('s1')?.status).toBe(status);
+    const record = { ...recoveryOutboxRecord('s1'), accountId: getMobileAuthOwner().accountKey };
+    editOutbox.records.mockReturnValue([record]);
+    const savedRecord = structuredClone(record);
+    const originalTask = getNewSessionCreationTask('s1');
+    setMobileAuthOwner('owner-a');
+    expect(getNewSessionCreationTask('s1')).toBe(originalTask);
+
+    setMobileAuthOwner('owner-b');
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(shouldBlockSessionSync('s1')).toBe(false);
+    setMobileAuthOwner('owner-a');
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(shouldBlockSessionSync('s1')).toBe(false);
+    expect(editOutbox.records()).toEqual([savedRecord]);
+    expect(editOutbox.update).not.toHaveBeenCalled();
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    retryNewSessionCreation('s1');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an old create reply after switching back and starting a replacement task', async () => {
+    let finishCreate!: (value: { sessionId: string }) => void;
+    const oldMaker = makeMaker({ createSession: vi.fn(() => new Promise(resolve => { finishCreate = resolve; })) });
+    startNewSessionCreation(makeParams('s1', oldMaker));
+    await flushPipeline();
+    setMobileAuthOwner('owner-b');
+    expect(getNewSessionCreationTask('s1')).toBeNull();
+    expect(shouldBlockSessionSync('s1')).toBe(false);
+    setMobileAuthOwner('owner-a');
+    const newMaker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVALID_PARAMS'); }) });
+    startNewSessionCreation(makeParams('s1', newMaker, { draft: { ...DRAFT, firstMessage: 'new draft' } }));
+    await flushPipeline();
+    const replacement = getNewSessionCreationTask('s1');
+    expect(replacement?.status).toBe('create-failed');
+    finishCreate({ sessionId: 's1' });
+    await flushPipeline();
+    expect(getNewSessionCreationTask('s1')).toBe(replacement);
+    expect(getNewSessionCreationTask('s1')?.draft.firstMessage).toBe('new draft');
+    expect(oldMaker.input.enqueue).not.toHaveBeenCalled();
+    expect(shouldBlockSessionSync('s1')).toBe(true);
   });
 
   it('start 同步段即入 store:合成行带 pendingLocalCreation,首条消息以排队气泡上屏', () => {
@@ -609,7 +1127,7 @@ describe('newSessionCreation pipeline', () => {
     });
 
     stashNewSessionDraftForEdit(prepared!);
-    expect(drainStashedNewSessionDraft()?.draft.workingDir).toBe('/repo');
+    expect(drainStashedNewSessionDraft('s13', 'dev-1')?.draft.workingDir).toBe('/repo');
   });
 
   it('带回创建期间后续消息时仍恢复预创建 worktree 的原项目目录', async () => {
@@ -632,6 +1150,10 @@ describe('newSessionCreation pipeline', () => {
       firstMessageClientId: 'client-override',
     };
 
+    startNewSessionCreation({ ...makeParams('s13-override', makeMaker()),
+      draft: task.draft, precreatedWorktree: task.precreatedWorktree,
+      confirmUnauthenticated: async () => ({ unauthenticated: true, fresh: null }) });
+    await flushPipeline();
     stashNewSessionDraftForEdit(task, {
       draft: {
         ...task.draft,
@@ -639,7 +1161,7 @@ describe('newSessionCreation pipeline', () => {
       },
     });
 
-    expect(drainStashedNewSessionDraft()?.draft).toMatchObject({
+    expect(drainStashedNewSessionDraft('s13-override', 'dev-1')?.draft).toMatchObject({
       workingDir: '/repo',
       firstMessage: 'hello world\n\nfollow up',
     });
@@ -795,6 +1317,153 @@ describe('newSessionCreation pipeline', () => {
     }]);
   });
 
+  it('returns the original draft after an uncertain create is cancelled by the host', async () => {
+    const record = { sessionId: 'cancel-me', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan', recoveryKey: 'recovery-cancel-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({
+      createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) },
+    });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path },
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    const task = await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(task?.draft.firstMessage).toBe(DRAFT.firstMessage);
+    expect(task?.precreatedWorktree?.originalWorkingDir).toBe('/repo');
+    expect(maker.worktree.cancelPrecreated).toHaveBeenCalledWith({ sessionId: record.sessionId, recoveryKey: record.recoveryKey });
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    expect(persistCancelledDraft).toHaveBeenCalledWith({ sessionId: record.sessionId, deviceId: record.deviceId, originalWorkingDir: '/repo' });
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+  });
+
+  it('retry reconciles a late exact-id success without another create', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }) });
+    startNewSessionCreation(makeParams('late-success', maker, {
+      precreatedWorktree: { path: '/repo/worktree', recoveryKey: 'late-recovery-key', originalWorkingDir: '/repo' },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    expect(getNewSessionCreationTask('late-success')?.status).toBe('create-failed');
+    maker.getSession.mockResolvedValue(sessionFromCreateResult({ sessionId: 'late-success', workDir: '/repo/worktree' }, DRAFT));
+    retryNewSessionCreation('late-success');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('late-success')).toBeNull();
+  });
+
+  it('keeps the edit recovery obligation when persisting the cancelled draft fails', async () => {
+    const record = { sessionId: 'cancel-save-fails', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan',
+      recoveryKey: 'recovery-cancel-save-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) } });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path }, precreatedWorktreeAccountId: 'owner-a',
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+    }));
+    await flushPipeline();
+    persistCancelledDraft.mockRejectedValueOnce(new Error('disk full'));
+    await expect(prepareNewSessionCreationForEdit(record.sessionId)).rejects.toThrow('disk full');
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toHaveLength(1);
+    expect(getNewSessionCreationTask(record.sessionId)?.status).toBe('create-failed');
+    await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+    dismissNewSessionCreation(record.sessionId);
+  });
+
+  it.each([true, false, undefined])('removes the host-confirmed cancelled row on the matching device (pendingLocalCreation=%s)', (pendingLocalCreation) => {
+    const row = { ...sessionFromCreateResult({ sessionId: 'orphan' }, DRAFT), pendingLocalCreation };
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', row);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'other-device' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(1);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(0);
+  });
+
+  it('does not dismiss a row still owned by a live creation pipeline', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('failed startup'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    dismissRecoveredPrecreatedSession({ sessionId: 's1', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's1')).toBeDefined();
+    expect(getNewSessionCreationTask('s1')).not.toBeNull();
+    await flushPipeline();
+    dismissNewSessionCreation('s1');
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('releases only a disabled %s task lease while retaining its raw metadata', source => {
+    const hidden = recoveryOutboxRecord('legacy-make');
+    const ordinary = recoveryOutboxRecord('ordinary');
+    const session = sessionFromCreateResult({ sessionId: 'legacy-make' }, DRAFT);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', { ...session, source: 'cc' });
+    const bridge = outboxLeaseHarness([hidden, ordinary]);
+    bridge.refresh();
+    expect(bridge.leases.size).toBe(2);
+    const release = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'legacy-make']))!, 'release');
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', { ...session, source });
+    bridge.refresh();
+    expect(release).toHaveBeenCalledOnce();
+    expect(bridge.leases.size).toBe(1);
+    expect(bridge.leases.has(JSON.stringify(['dev-1', 'ordinary']))).toBe(true);
+    expect(remoteSessionStore.getSessions().find(row => row.id === 'legacy-make')?.source).toBe(source);
+    bridge.setRecords([]); bridge.refresh();
+  });
+
+  it('releases hidden accepted message windows and resumes handoff on reentry', () => {
+    const accepted = { ...recoveryOutboxRecord('accepted'), state: 'host-owned' as const, retrySafe: true };
+    const sending = recoveryOutboxRecord('sending');
+    const bridge = outboxLeaseHarness([accepted, sending]);
+    bridge.refresh();
+    expect(bridge.leases.size).toBe(1);
+    bridge.visible.add('accepted');
+    bridge.refresh();
+    expect(bridge.leases.size).toBe(2);
+    const release = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'accepted']))!, 'release');
+    bridge.visible.clear();
+    bridge.refresh();
+    expect(release).toHaveBeenCalledOnce();
+    // An explicit cancel still needs remote reconciliation while the task is hidden.
+    bridge.setRecords([{ ...accepted, cancelRequested: true }]);
+    bridge.refresh();
+    expect(bridge.leases.has(JSON.stringify(['dev-1', 'accepted']))).toBe(true);
+    bridge.setRecords([]); bridge.refresh();
+  });
+
+  it('removes a cold-hydrated cancelled row and releases only its lease without resurrecting it', () => {
+    const orphan = recoveryOutboxRecord('cold-orphan');
+    const other = recoveryOutboxRecord('other-draft');
+    const bridge = outboxLeaseHarness([orphan, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'cold-orphan')?.pendingLocalCreation).toBeUndefined();
+    expect(bridge.leases.size).toBe(2);
+    const releaseOrphan = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'cold-orphan']))!, 'release');
+    const releaseOther = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'other-draft']))!, 'release');
+    const cancelled = { ...orphan, suspended: true, creation: { ...orphan.creation!, cancelled: true as const } };
+    bridge.setRecords([cancelled, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(releaseOrphan).toHaveBeenCalledOnce();
+    expect(releaseOther).not.toHaveBeenCalled();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(cancelled.item.text).toBe(DRAFT.firstMessage);
+    expect(cancelled.creation.cancelled).toBe(true);
+    bridge.setRecords([]);
+    bridge.refresh();
+  });
+
+  it('does not materialize an already cancelled draft on cold startup', () => {
+    const orphan = recoveryOutboxRecord('cancelled-before-restart');
+    const bridge = outboxLeaseHarness([{ ...orphan, creation: { ...orphan.creation!, cancelled: true } }]);
+    bridge.refresh();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(bridge.leases.size).toBe(0);
+  });
+
   it.each([
     ['null', null],
     ['empty object', {}],
@@ -835,7 +1504,7 @@ describe('newSessionCreation pipeline', () => {
     retryNewSessionCreation('s20');
     await flushPipeline();
     expect(maker.createSession).toHaveBeenCalledTimes(1);
-    expect(maker.getSession).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).toHaveBeenCalledTimes(2);
     await expect(prepareNewSessionCreationForEdit('s20')).rejects.toThrow('worktree');
     expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
     await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{
@@ -922,5 +1591,83 @@ describe('newSessionCreation pipeline', () => {
       ...record,
       phase: 'session-create-started',
     }]);
+  });
+  it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
+    const maker = makeMaker();
+    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id', planModeArm: true });
+    const handoff = vi.fn(async () => undefined);
+    params.transport.handoffFirstMessage = handoff;
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(maker.setPlanMode).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first')).toBeNull();
+    expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
+  });
+  it('keeps the creation task recoverable when saving the first-message handoff fails', async () => {
+    const maker = makeMaker(); const params = makeParams('durable-first-failed', maker, { firstMessageClientId: 'saved-id' });
+    params.transport.handoffFirstMessage = async () => { throw new Error('disk full'); };
+    startNewSessionCreation(params); await flushPipeline();
+    expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(getNewSessionCreationTask('durable-first-failed')).toMatchObject({ status: 'enqueue-failed', firstMessageClientId: 'saved-id' });
+  });
+
+  describe('collaboration on create', () => {
+    const orcaEnable = { workerAgent: 'codex' as const, role: 'developer', label: 'developer', workerPermissionMode: 'auto' as const };
+    function withOrca(maker: MakerMock, enable: ReturnType<typeof vi.fn>) {
+      return Object.assign(maker, {
+        getCapabilities: vi.fn(async () => ({ supportsOrcaWorkerPermissionMode: true })),
+        orca: { enable, listWorkers: vi.fn(async () => []) },
+      });
+    }
+
+    it('brings the collaboration draft back with the draft when a failed create returns to editing', async () => {
+      const maker = withOrca(makeMaker({
+        createSession: vi.fn(async () => { throw new Error('INVALID_PARAMS: cannot create session'); }),
+      }), vi.fn());
+      const collabDraft = {
+        role: 'reviewer', agent: 'codex' as const, model: null, permissionMode: 'auto' as const, initialTask: 'check tests',
+      };
+      startNewSessionCreation(makeParams('orca-edit', maker, { orcaEnable, collabDraft }));
+      await flushPipeline();
+      expect(getNewSessionCreationTask('orca-edit')?.status).toBe('create-failed');
+      const prepared = await prepareNewSessionCreationForEdit('orca-edit');
+      stashNewSessionDraftForEdit(prepared!);
+      expect(drainStashedNewSessionDraft('orca-edit', 'dev-1')?.collabDraft).toEqual(collabDraft);
+    });
+
+    it('starts collaboration after createSession and before the first message is queued', async () => {
+      const enable = vi.fn(async () => ({ workerSessionId: 'worker-1' }));
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-ok', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).toHaveBeenCalledWith('orca-ok', orcaEnable);
+      expect(enable.mock.invocationCallOrder[0]).toBeGreaterThan(maker.createSession.mock.invocationCallOrder[0]!);
+      expect(enable.mock.invocationCallOrder[0]).toBeLessThan(maker.input.enqueue.mock.invocationCallOrder[0]!);
+      expect(remoteSessionStore.getSessions().find((session) => session.id === 'orca-ok')?.orcaRole).toBe('lead');
+      expect(takeOrcaStartFailure('orca-ok')).toBeNull();
+    });
+
+    it('continues as a single task and hands the reason to the session page when collaboration fails', async () => {
+      const enable = vi.fn(async () => { throw new Error('[PRECONDITION_FAILED] disabled'); });
+      const maker = withOrca(makeMaker(), enable);
+      startNewSessionCreation(makeParams('orca-fail', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+      expect(getNewSessionCreationTask('orca-fail')).toBeNull();
+      expect(takeOrcaStartFailure('orca-fail')).toBeTruthy();
+    });
+
+    it('does not start collaboration twice when the authoritative row is already a Lead', async () => {
+      const enable = vi.fn(async () => ({}));
+      const maker = withOrca(makeMaker({
+        getSession: vi.fn(async () => ({ ...sessionFromCreateResult({ sessionId: 'orca-lead' }, DRAFT), orcaRole: 'lead' })),
+      }), enable);
+      startNewSessionCreation(makeParams('orca-lead', maker, { orcaEnable }));
+      await flushPipeline();
+      expect(enable).not.toHaveBeenCalled();
+      expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 });

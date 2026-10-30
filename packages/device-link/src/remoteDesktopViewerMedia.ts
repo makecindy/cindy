@@ -4,10 +4,11 @@ import {
   parseDesktopIceCandidates,
   parseDesktopIceReply,
 } from "./remoteDesktopIce.js";
-import type {
-  RemoteDesktopCapabilities,
-  RemoteDesktopLease,
-  RemoteDesktopVideoSettings,
+import {
+  remoteDesktopVideoSettingsWire,
+  type RemoteDesktopCapabilities,
+  type RemoteDesktopLease,
+  type RemoteDesktopVideoSettings,
 } from "./remoteDesktop.js";
 import type { DesktopViewerRequest } from "./remoteDesktopViewerSession.js";
 import type { DesktopIceServer } from "./remoteDesktopIceConfig.js";
@@ -97,7 +98,7 @@ export class RemoteDesktopViewerMedia {
             ...(current.caps.trickleIce ? { attemptId: attempt } : {}),
             cursorOverlay: current.caps.cursorOverlay === true,
             ...(current.caps.videoSettings
-              ? { settings: current.settings }
+              ? { settings: remoteDesktopVideoSettingsWire(current.settings) }
               : {}),
           },
           check,

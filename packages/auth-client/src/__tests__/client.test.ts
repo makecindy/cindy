@@ -33,6 +33,149 @@ function client(fetch: AuthFetch = vi.fn(async () => response(200, {}))) {
 }
 
 describe("CindyAuthClient", () => {
+  it.each(["request", "response"] as const)("reports the original %s error before mapping it", async (stage) => {
+    const original = new TypeError("socket closed", { cause: new Error("proxy rejected CONNECT") });
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => {
+        if (stage === "request") throw original;
+        return { ok: true, status: 200, json: async () => { throw original; } };
+      },
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: stage === "request" ? "NETWORK_ERROR" : "INVALID_RESPONSE",
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", stage === "request" ? 0 : 200, original,
+    );
+  });
+
+  it("ignores a failing error logger without changing the mapped request error", async () => {
+    const onRequestError = vi.fn(() => { throw new Error("logger unavailable"); });
+    const original = new TypeError("proxy refused tunnel");
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => { throw original; },
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", 0, original,
+    );
+  });
+
+  it("returns parsed HTTP error text to the caller without sending it to the exception logger", async () => {
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => response(400, { error: { code: "INVALID_PARAMS", message: "private display name rejected" } }),
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "INVALID_PARAMS", message: "private display name rejected",
+    });
+    expect(onRequestError).not.toHaveBeenCalled();
+  });
+
+  // Native SyntaxError.message includes body excerpts even when no response object is logged.
+  it.each([200, 400])("logs only the JSON error type for a malformed %s response", async (status) => {
+    const onRequestError = vi.fn();
+    const instance = new CindyAuthClient({
+      baseUrl: "https://auth.example.com", region: "cn", deviceId: "device-1", clientType: "desktop",
+      fetch: async () => new Response("private display name", { status }),
+      onRequestError,
+    });
+    await expect(instance.refresh("unused-token")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE", statusCode: status,
+    });
+    expect(onRequestError).toHaveBeenCalledExactlyOnceWith(
+      "/api/auth/refresh", status, "SyntaxError",
+    );
+  });
+
+  it.each([
+    ["120", 120_000],
+    ["Wed, 07 Oct 2026 06:02:00 GMT", 120_000],
+    ["Wed, 07 Oct 2026 05:00:00 GMT", 0],
+    ["0", 0],
+    ["-2", undefined],
+    ["1.5", undefined],
+    ["junk", undefined],
+    ["999999999999999999999999", undefined],
+    ["", undefined],
+  ])(
+    "preserves a valid Retry-After without guessing: %s",
+    async (value, delay) => {
+      const now = Date.parse("2026-10-07T06:00:00Z");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      try {
+        const fetch: AuthFetch = async () => ({
+          ...response(429, {}),
+          headers: {
+            get: (name) =>
+              name === "retry-after" ? value : "Wed, 07 Oct 2026 06:00:00 GMT",
+          },
+        });
+        await expect(
+          client(fetch).requestCode("phone", "13800138000"),
+        ).rejects.toMatchObject({
+          code: "RATE_LIMITED",
+          retryAt: delay === undefined ? undefined : now + delay,
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("keeps a non-JSON 429 actionable and corrects HTTP-date for server clock skew", async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const fetch: AuthFetch = async () => ({
+        ok: false,
+        status: 429,
+        headers: {
+          get: (name) =>
+            name === "retry-after"
+              ? "Wed, 07 Oct 2026 06:02:00 GMT"
+              : "Wed, 07 Oct 2026 06:00:00 GMT",
+        },
+        json: async () => {
+          throw new SyntaxError("HTML response");
+        },
+      });
+      await expect(client(fetch).getProviders()).rejects.toMatchObject({
+        code: "RATE_LIMITED",
+        retryAt: now + 120_000,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("propagates SMS request-code rate limits instead of reporting a successful send", async () => {
+    const fetch = vi.fn<AuthFetch>(async () =>
+      response(429, {
+        error: { code: "RATE_LIMITED", message: "Too many requests" },
+      }),
+    );
+    await expect(
+      client(fetch).requestCode("phone", "13800138000"),
+    ).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      statusCode: 429,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "https://auth.example.com/api/auth/phone/request-code",
+    );
+  });
+
   it("validates provider region and normalizes the base URL", async () => {
     const fetch = vi.fn(async () =>
       response(200, {
@@ -145,13 +288,17 @@ describe("CindyAuthClient", () => {
     const fetch = vi.fn(async () =>
       response(200, { methods: [{ type: "passkey", id: "future-1" }] }),
     );
-    await expect(client(fetch).discover("user@example.com")).rejects.toMatchObject({
+    await expect(
+      client(fetch).discover("user@example.com"),
+    ).rejects.toMatchObject({
       code: "INVALID_RESPONSE",
     });
   });
 
   it("carries captchaToken in the email request-code body only when provided", async () => {
-    const fetch = vi.fn<AuthFetch>(async () => response(200, { status: "sent" }));
+    const fetch = vi.fn<AuthFetch>(async () =>
+      response(200, { status: "sent" }),
+    );
     await client(fetch).requestCode("email", "user@example.com");
     const bare = JSON.parse(
       (fetch.mock.calls[0]?.[1] as { body: string }).body,

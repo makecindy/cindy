@@ -20,6 +20,7 @@ import {
   iconSize,
   iconStroke,
   fontWeight,
+  lineHeight,
   radius,
   spacing,
   typeScale,
@@ -40,6 +41,7 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft,
   onWorkspaceRight,
   onOmarchyMenu,
+  windowOnly,
 }: {
   landscape: boolean;
   canControl: boolean;
@@ -52,6 +54,8 @@ export function RemoteDesktopToolbar({
   onWorkspaceLeft?: () => void;
   onWorkspaceRight?: () => void;
   onOmarchyMenu?: () => void;
+  /** 代输入 window view: no desktop to navigate, so only keyboard and settings. */
+  windowOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -99,12 +103,16 @@ export function RemoteDesktopToolbar({
       selected: operations,
     },
   ];
+  // 代输入 window view: no desktop to navigate, so only keyboard and settings.
+  const shown = windowOnly
+    ? actions.filter(({ key }) => key === "keyboard" || key === "operations")
+    : actions;
   return (
     <View
       style={[styles.toolbar, landscape && styles.rail]}
       testID="remoteDesktop.toolbar"
     >
-      {(landscape ? [...actions].reverse() : actions).map(
+      {(landscape ? [...shown].reverse() : shown).map(
         ({ key, icon: Icon, press, selected, disabled }) => (
           <RemoteDesktopActionButton
             key={key}
@@ -154,6 +162,7 @@ export function RemoteDesktopPanel({
   topInset: number;
   toolbarOnLeft?: boolean;
   toolbarActionCount?: number;
+  railAnchor?: { top: number; right: number };
   title: string;
   caption: string;
   onClose(): void;
@@ -246,6 +255,7 @@ const makeStyles = (colors: ThemeColors) =>
     label: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       textAlign: "center",
     },
     selected: { backgroundColor: colors.surfaceChip },
@@ -278,9 +288,10 @@ const makeStyles = (colors: ThemeColors) =>
     title: {
       color: colors.textPrimary,
       fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
       fontWeight: fontWeight.semibold,
     },
-    caption: { color: colors.textTertiary, fontSize: typeScale.caption },
+    caption: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     close: {
       width: 44,
       height: 44,

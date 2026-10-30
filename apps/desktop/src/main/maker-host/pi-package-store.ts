@@ -1217,27 +1217,23 @@ export async function executePiNativeManagementCommand(
     let output = { stdout: '', stderr: '' };
     let listedPackages: ListedPackage[] = [];
     try {
-      // Pi --all updates packages first. Keep that phase outside core fallback:
-      // a package's stderr must never be mistaken for an unsupported updater.
+      // Pi --all updates packages first; a package failure never starts a core install.
       if (command.kind === 'all') {
         await runPiPackageCommand(['update', '--extensions', '--no-approve']);
         packagesUpdated = true;
         progress.phase = 'native-core';
       }
-      try {
-        if (command.kind === 'list') {
-          listedPackages = await runPiPackageListCommand();
-        } else {
-          output = await runPiPackageCommand(piNativeManagementArgs(command.kind === 'all'
-            ? { kind: 'self', force: command.force } : command));
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '';
-        if (!core || !/cannot self-update this installation|self-update on Windows is only supported/.test(message)) throw error;
+      if (core) {
+        // Never run an in-place native self-update against a directory used by live tasks.
         progress.phase = 'host-binary-update';
         await updateReadyPiBinary(command.force);
         execution = 'host-binary-update';
+      } else if (command.kind === 'list') {
+        listedPackages = await runPiPackageListCommand();
+      } else {
+        output = await runPiPackageCommand(piNativeManagementArgs(command));
       }
+
     } catch (error) {
       const failure = error instanceof Error ? error : new Error('Pi management command failed');
       const { phase } = progress;

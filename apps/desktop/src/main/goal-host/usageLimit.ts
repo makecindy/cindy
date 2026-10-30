@@ -1,5 +1,5 @@
 /**
- * 账号用量受限识别 —— 纯函数,零依赖,可独立单测。
+ * 账号用量受限识别 —— 纯函数,可独立单测。普通任务的限额自动续跑复用同一套判定。
  *
  * 被动检测:goal turn 以 error 收尾时,判断该错误是不是"账号/套餐限流"(rate limit /
  * quota),从而把状态置 `usageLimited`(可恢复、到点自动续)而非 `blocked`(真出错)。
@@ -8,8 +8,14 @@
  *  - Claude Code:error 事件带结构化 `data.sdkError`,限流时 = `'rate_limit'`。
  *    注意 `billing_error`(余额耗尽、无周期重置)**不算** usage limit —— 那是"去充值",
  *    保持 blocked 更合适。
- *  - Codex:error 事件只有 `data.message` 文本,限流靠文本匹配(无结构化 tag)。
+ *  - Codex:error 事件带 `codexErrorInfo: 'usageLimitExceeded'`,另有 `data.message` 文本兜底。
  */
+
+import {
+  extractUsageLimitRecoveryHint,
+  isBillingDepletionError,
+  type UsageLimitRecoveryParseOptions,
+} from '../../shared/usageLimitRecovery.js';
 
 /** turn error 的 data 是否表示"账号用量/限流"。 */
 export function classifyTurnUsageLimit(data: unknown): boolean {
@@ -19,14 +25,48 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
     message?: unknown;
     errorStatus?: unknown;
     usageLimit?: unknown;
+    codexErrorInfo?: unknown;
   };
-  // Claude:结构化 tag(权威)。
+  // 余额 / 计费耗尽要充值、不会周期重置,文案里带 quota 也不算(保持 blocked)。
+  if (isBillingDepletionError(data)) return false;
+  // 结构化 tag(权威)。
   if (d.sdkError === 'rate_limit') return true;
+  if (d.codexErrorInfo === 'usageLimitExceeded') return true;
   if (d.usageLimit === true) return true;
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
   const msg = typeof d.message === 'string' ? d.message : '';
   return /rate.?limit|usage.?limit|quota|too\s*many\s*requests/i.test(msg);
+}
+
+/**
+ * turn error 自带的结构化重置时刻(unix ms)。只有 Claude 订阅会话由 translator 从 SDK
+ * `rate_limit_event` 带上,天然属于订阅账号,可直接使用。
+ */
+export function readStructuredUsageResetAt(data: unknown): number | null {
+  if (!data || typeof data !== 'object') return null;
+  const v = (data as { usageResetAt?: unknown }).usageResetAt;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * turn error 给出的限额重置时刻(unix ms):先取结构化 `usageResetAt`,再从报错原文解析
+ * (ChatGPT 订阅的 `resets_at` / `try again at 3:05 PM` / Pi 的 `Try again in ~N min` 等)。
+ * 都没有时返回 null,调用方再退回账号快照。
+ *
+ * 只对订阅账号的会话调用:API key / Coding Plan / 网关等来源报错里的重试时刻是分钟级请求
+ * 限流,不是周期额度重置。
+ */
+export function readTurnUsageResetAt(
+  data: unknown,
+  nowMs = Date.now(),
+  opts?: UsageLimitRecoveryParseOptions,
+): number | null {
+  return (
+    readStructuredUsageResetAt(data) ??
+    extractUsageLimitRecoveryHint(data, nowMs, opts)?.resetAtMs ??
+    null
+  );
 }
 
 /**

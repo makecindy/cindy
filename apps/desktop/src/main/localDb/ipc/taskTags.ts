@@ -16,7 +16,9 @@ import { broadcastSessionPatched } from './sessions';
 
 const log = createLogger('taskTags');
 export const TASK_TAG_CHANNEL = 'local-db:task-tags:execute';
-/** All surfaces share validation, transactions and owner-scoped task patches. */
+/**
+ * All surfaces share validation, transactions and owner-scoped task patches.
+ */
 export async function executeTaskTags(
   request: TaskTagRequest,
   callerSessionId?: string,

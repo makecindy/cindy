@@ -2,7 +2,7 @@
  * Button —— DESIGN.md §4 三变体标准控件（primary / secondary / cta）。
  *
  * 升格自 ProvidersSection 的 PillButton / CtaPillButton。圆角一律胶囊（§5）。
- * 高度双档 32/36px，不设 40（DS-4 G1，拍板人 = 用户/设计师，2026-09-03）。
+ * 高度 28/32/36px；22/24px 仅用于紧凑场景，不设 40px 档。
  * hover 走换色 token，禁用透明度 hover（G2）。pressed 进最低状态矩阵（G3）。
  * hover / pressed 由 colors.ts 的 color-mix 派生（见那里的注释）：暗色下
  * surface-hover 与 surface-chip 同值，直接 alias 会让悬停不可见。
@@ -18,20 +18,52 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from './spinner';
+import './button.css';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'cta';
-export type ButtonSize = 'md' | 'lg';
+export type ButtonSize = 'xxs' | 'xs' | 'sm' | 'md' | 'lg';
+export type ButtonTone = 'default' | 'quiet' | 'danger' | 'danger-solid' | 'danger-surface';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  /** Busy actions retain their label and width, and cannot be activated again. */
+  tone?: ButtonTone;
+  /** Retain existing confirmation-dialog theme overrides in one shared place. */
+  palette?: 'default' | 'confirmation' | 'permission';
+  /** Tighter horizontal padding for toolbars, rows and narrow panels. */
+  compact?: boolean;
+  /** Hide the visible label while busy; retain its accessible name and width. */
   loading?: boolean;
+  /** A progress-view action may remain usable while its operation runs. */
+  allowWhileLoading?: boolean;
+  /** Select triggers and excluded input controls retain their stationary frame. */
+  pressFeedback?: boolean;
 }
 
+// Paint overrides must use --button-face-bg / --button-face-border (including
+// hover/active variants), not background/border-color on the hitbox. These are
+// component-local aliases of existing semantic tokens, not new theme settings.
+
 const SIZE_STYLES: Record<ButtonSize, string> = {
+  xxs: 'h-[22px]',
+  xs: 'h-6',
+  sm: 'h-7',
   md: 'h-8',
   lg: 'h-9',
+};
+
+// Semantic treatments share the same face, focus, disabled and motion contract.
+const TONE_STYLES: Record<ButtonTone, string> = {
+  default: '',
+  quiet:
+    '[--button-face-bg:transparent] [--button-face-border:transparent] text-[var(--text-secondary)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-secondary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-secondary-pressed)]',
+  danger:
+    '[--button-face-bg:transparent] [--button-face-border:transparent] text-[var(--text-danger)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--text-danger)_12%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,var(--text-danger)_20%,transparent)]',
+  // Inline confirmations cover text beneath them; keep an opaque themed face.
+  'danger-surface':
+    '[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_15%,var(--surface-elevated))] [--button-face-border:transparent] text-[hsl(var(--destructive))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_25%,var(--surface-elevated))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_35%,var(--surface-elevated))]',
+  'danger-solid':
+    '[--button-face-bg:hsl(var(--destructive))] [--button-face-border:hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_90%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:color-mix(in_srgb,hsl(var(--destructive))_90%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,hsl(var(--destructive))_80%,var(--text-primary))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:color-mix(in_srgb,hsl(var(--destructive))_80%,var(--text-primary))]',
 };
 
 /**
@@ -41,19 +73,19 @@ const SIZE_STYLES: Record<ButtonSize, string> = {
  */
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
   primary: [
-    'border border-[var(--surface-chip)] bg-[var(--surface-chip)] text-[var(--text-primary)]',
-    'enabled:hover:bg-[var(--button-primary-hover)] enabled:hover:border-[var(--button-primary-hover)]',
-    'enabled:active:bg-[var(--button-primary-pressed)] enabled:active:border-[var(--button-primary-pressed)]',
+    '[--button-face-border:var(--surface-chip)] [--button-face-bg:var(--surface-chip)] text-[var(--text-primary)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-primary-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--button-primary-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-primary-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--button-primary-pressed)]',
   ].join(' '),
   secondary: [
-    'border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-    'enabled:hover:bg-[var(--button-secondary-hover)]',
-    'enabled:active:bg-[var(--button-secondary-pressed)]',
+    '[--button-face-border:var(--border-default)] [--button-face-bg:var(--surface-elevated)] text-[var(--text-primary)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-secondary-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-secondary-pressed)]',
   ].join(' '),
   cta: [
-    'border border-[var(--accent-cta-bg-pure)] bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]',
-    'enabled:hover:bg-[var(--button-cta-hover)] enabled:hover:border-[var(--button-cta-hover)]',
-    'enabled:active:bg-[var(--button-cta-pressed)] enabled:active:border-[var(--button-cta-pressed)]',
+    '[--button-face-border:var(--accent-cta-bg-pure)] [--button-face-bg:var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]',
+    'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--button-cta-hover)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-border:var(--button-cta-hover)]',
+    'enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--button-cta-pressed)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-border:var(--button-cta-pressed)]',
   ].join(' '),
 };
 
@@ -63,9 +95,14 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       className,
       variant = 'primary',
       size = 'md',
+      tone = 'default',
+      palette = 'default',
+      compact = false,
       type = 'button',
       disabled,
       loading = false,
+      allowWhileLoading = false,
+      pressFeedback = true,
       children,
       ...props
     },
@@ -74,13 +111,22 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       type={type}
-      disabled={disabled || loading}
+      disabled={disabled || (loading && !allowWhileLoading)}
       aria-busy={loading || undefined}
+      data-press-feedback={pressFeedback && !loading ? undefined : 'none'}
       className={cn(
-        'relative inline-flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
+        'cindy-button cindy-button-frame inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full border border-transparent px-6 text-13 font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         SIZE_STYLES[size],
         VARIANT_STYLES[variant],
+        palette === 'confirmation' &&
+          (variant === 'secondary'
+            ? '[--button-face-border:var(--confirm-btn-secondary-border)] [--button-face-bg:transparent] text-[var(--confirm-btn-secondary-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--confirm-btn-secondary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--confirm-btn-secondary-hover)]'
+            : '[--button-face-border:transparent] [--button-face-bg:var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--confirm-btn-primary-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--confirm-btn-primary-hover)]'),
+        palette === 'permission' &&
+          '[--button-face-border:transparent] [--button-face-bg:var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)] enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_92%,var(--perm-allow-btn-text))] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,var(--perm-allow-btn-bg)_82%,var(--perm-allow-btn-text))]',
+        TONE_STYLES[tone],
+        compact && 'px-3',
         'disabled:cursor-not-allowed disabled:opacity-60',
         className,
       )}

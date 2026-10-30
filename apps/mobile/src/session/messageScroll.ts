@@ -30,7 +30,12 @@ export const MOBILE_MESSAGE_LIST_BOTTOM_PADDING = 132;
 export const MOBILE_NEAR_BOTTOM_THRESHOLD =
   DEFAULT_NEAR_BOTTOM_THRESHOLD + MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
 
-export function mobileMessageListBottomPadding(bottomOverlayHeight?: number): number {
+export function mobileMessageListBottomPadding(bottomOverlayHeight?: number, contentBottomInset?: number): number {
+  // An inline interaction replaces the composer; an explicit inset must not
+  // retain the fallback space reserved for that now-hidden composer.
+  if (typeof contentBottomInset === 'number' && Number.isFinite(contentBottomInset)) {
+    return Math.max(0, Math.ceil(contentBottomInset));
+  }
   if (typeof bottomOverlayHeight !== 'number' || !Number.isFinite(bottomOverlayHeight)) {
     return MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
   }
@@ -59,8 +64,11 @@ export function mobileMessageListEndOffset(metrics: MessageScrollMetrics): numbe
 // 距底仍在阈值带内 → 仍被判「近底」→ 下一帧内容增长又被拽回最底。触摸惯性
 // 大多一次就滑出阈值,所以比桌面版难触发,但结构性竞态相同。
 // 修复:「解除」看手势意图(拖动中向上位移超过死区,只有用户能产生),
-// 「恢复」保留距离判定但要求 scroll 方向明确向下——否则解除后紧跟着的上滑
-// scroll 事件(距底仍在阈值带内)会把刚解除的跟随立刻翻回去。
+// 「恢复」要求 scroll 方向明确向下——否则解除后紧跟着的上滑 scroll 事件
+// (距底仍在阈值带内)会把刚解除的跟随立刻翻回去。
+// 恢复的距离只认「真正到底」(MOBILE_FOLLOW_REPIN_END_TOLERANCE),不用 228px
+// 的近底阈值带:停在距底两三行时,手指微调或抬手那一下常有几 px 的向下位移,
+// 会被当成「滑回底部」恢复跟随,松手后的落底校验随即把列表拽到最新。
 
 /**
  * 拖动解除跟随的累计位移死区(px)。手指按住不动也有 ±2-3px 抖动,取 8px
@@ -74,6 +82,13 @@ export const MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE = 8;
  * 1px 内的增量不算「明确向下」。
  */
 export const MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE = 1;
+
+/**
+ * 已解除跟随时,恢复跟随允许的距底容差(px,相对内容末端 offset)。底部留白
+ * 已计入 contentHeight,到达末端即最后一条消息完整露出;容差约一行字,
+ * 吸收亚像素与回弹误差,但停在距底两三行处不会被判为「回到底部」。
+ */
+export const MOBILE_FOLLOW_REPIN_END_TOLERANCE = 24;
 
 /** 容器「真的可滚」的最小内容富余(px),亚像素圆整内视为不可滚。 */
 const MOBILE_FOLLOW_MIN_SCROLLABLE_PX = 1;
@@ -131,20 +146,21 @@ export interface MobileNearBottomResolveInput {
  *    assistant / 工具卡撑高不得把跟随掐死;
  *  - 阈值带内且原本在跟 → 保持 true(贴底期间程序化 scrollToEnd 产生的
  *    向下增量、以及被动微小位移都不改变状态);
- *  - 阈值带内且已解除 → 仅「明确向下」(增量 > 死区)才恢复跟随。**不能只看
- *    距离**:拖动解除后同一手势内继续到达的上滑 scroll 事件距底仍在阈值带内,
- *    无方向守卫会立即翻回跟随,解除失效(修复核心)。
+ *  - 已解除 → 仅「明确向下」(增量 > 死区)且真正到底(距末端 ≤
+ *    MOBILE_FOLLOW_REPIN_END_TOLERANCE)才恢复跟随。**不能只看距离**:拖动解除后
+ *    同一手势内继续到达的上滑 scroll 事件仍可能贴近末端,无方向守卫会立即翻回
+ *    跟随;**也不能用近底阈值带**:停在距底几行处的手指微调/抬手位移会误恢复。
  */
 export function resolveMobileNearBottomOnScroll(input: MobileNearBottomResolveInput): boolean {
   if (input.programmaticScrollInFlight) return input.wasNearBottom;
-  const { contentHeight, viewportHeight } = input.metrics;
+  const { contentHeight, offsetY, viewportHeight } = input.metrics;
   if (contentHeight <= viewportHeight) return true;
-  if (!isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) {
-    if (!input.wasNearBottom) return false;
-    return input.scrollDelta >= -MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
+  if (!input.wasNearBottom) {
+    return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE
+      && mobileMessageListEndOffset(input.metrics) - offsetY <= MOBILE_FOLLOW_REPIN_END_TOLERANCE;
   }
-  if (input.wasNearBottom) return true;
-  return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
+  if (isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) return true;
+  return input.scrollDelta >= -MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
 }
 
 export interface MobileHistoryBrowseIntentInput {
@@ -499,35 +515,6 @@ export function shouldAutoLoadEarlier(input: MobileAutoLoadEarlierDecisionInput)
   return input.lastAttemptedProgressKey !== input.progressKey;
 }
 
-export interface MobilePreviousUserJumpTarget {
-  clientId: string;
-  index: number;
-  itemKey: string;
-  preview: string;
-}
-
-export function previousUserMessageJumpTarget(
-  items: readonly MobileMessageRenderItem[],
-  firstVisibleIndex: number,
-): MobilePreviousUserJumpTarget | null {
-  if (!Number.isFinite(firstVisibleIndex)) return null;
-  const startIndex = Math.min(items.length - 1, Math.floor(firstVisibleIndex) - 1);
-  if (startIndex < 0) return null;
-  for (let index = startIndex; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.type !== 'message' || item.message.kind !== 'user') continue;
-    const clientId = mobileMessageClientId(item.message);
-    if (!clientId) continue;
-    return {
-      clientId,
-      index,
-      itemKey: item.key,
-      preview: firstNonEmptyMessageLine(item.message.body),
-    };
-  }
-  return null;
-}
-
 export function findMobileRenderItemKeyByClientId(
   items: readonly MobileMessageRenderItem[],
   clientId: string | null | undefined,
@@ -538,10 +525,6 @@ export function findMobileRenderItemKeyByClientId(
     if (key) return key;
   }
   return null;
-}
-
-export function firstNonEmptyMessageLine(raw: string): string {
-  return raw.split('\n').find((line) => line.trim().length > 0)?.trim() ?? '';
 }
 
 function findClientIdInRenderItem(

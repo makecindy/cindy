@@ -1,4 +1,6 @@
+import { hasRichAnswer } from './richAnswer';
 import { groupWorkRuns } from './workRunGrouping.js';
+import { isContinuationMessage } from './syntheticTrigger.js';
 export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
   type AgentTaskTerminalStatus,
@@ -102,8 +104,10 @@ export interface MessageRenderNormalizedMessage<
   settledAt?: string;
   /** Durable terminal lifecycle for an Agent/Task tool call. */
   agentTaskStatus?: AgentTaskTerminalStatus;
-  /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
+  /** Host 在 SDK done 边界写入。同一 user turn 的最后一次 seal 是最终答复；更早的 seal 只在带交付内容时留在工作过程外。 */
   turnCompleted?: boolean;
+  /** SDK-proven failed sampling output remains readable inside the work fold. */
+  failedSamplingAttempt?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
   media?: readonly MessageRenderToolMediaLike[];
   files?: readonly { url: string; title: string }[];
@@ -897,11 +901,12 @@ export function applyCodexPlanSnapshotOnDone<
  * (mobile 与 main 侧的原始行保持这个形状),desktop 渲染层把它投影成顶层
  * `delivery` 后丢弃原 meta。只看顶层会让 mobile / main 的所有权回扫在插话行上
  * 提前收手,全勾完的失败计划先按旧数据退场、等 main 的异步印记广播才复活
- * (断连时要等到重新加载,review P2)。计划分组边界与失败回扫共用这一个谓词,
- * 两处不再各自推导"什么算插话"。
+ * (断连时要等到重新加载,review P2)。计划分组、失败回扫与工作过程分组共用
+ * 这一个谓词,不再各自推导"什么算插话"。
  */
-function isSteerUserRow(message: MessageRenderSourceMessageLike): boolean {
-  return message.delivery === 'steer' || message.agentMeta?.delivery === 'steer';
+export function isSteerUserRow(message: { delivery?: string | null; agentMeta?: object | null }): boolean {
+  return message.delivery === 'steer'
+    || (message.agentMeta as { delivery?: unknown } | null)?.delivery === 'steer';
 }
 
 /**
@@ -1523,8 +1528,10 @@ function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
 ): MessageRenderItem<TMessage>[] {
   return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
     items, isSessionStreaming, {
-      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user' && !isSteerUserRow(item.message.source),
+      isContinuationBoundary: (item) => item.type === 'message' && isContinuationMessage(item.message.source),
       isAnswer: isAssistantAnswerCandidate,
+      canPrependToAnswer: (item) => item.type !== 'message' || item.message.source.agentMeta?.assistantPhase !== 'commentary',
       isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
       isCompactBoundary: isCompactBoundaryItem,
       isActivity: isWorkActivityItem,
@@ -1570,7 +1577,7 @@ function isRunningAgentTaskItem<
 }
 
 function isCompletedAssistantMessage(message: MessageRenderNormalizedMessage): boolean {
-  return message.turnCompleted === true;
+  return !message.failedSamplingAttempt && message.turnCompleted === true;
 }
 
 function isAssistantAnswerCandidate<
@@ -1578,6 +1585,7 @@ function isAssistantAnswerCandidate<
 >(item: MessageRenderItem<TMessage>): item is MessageRenderMessageItem<TMessage> {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && item.message.body.trim().length > 0;
 }
 
@@ -1612,17 +1620,27 @@ const MARKDOWN_LIST_ITEM_RE = /^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,3}[.)][ \t]+)\S/gm
 const DELIVERY_PROSE_MIN_LIST_ITEMS = 3;
 
 /**
+ * 正文里的图片:配一句短说明发出的图也是交付成果。两端渲染器都支持 `![alt](url)` 与
+ * 带 src 的单个 raw HTML `<img>`(桌面 remarkHtmlImages、手机 messageMarkdown)。
+ * 只决定是否折叠,偶尔多认(如代码块里的 <img>)只会多显示一条,方向安全。
+ */
+const MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\([^)\s]+(?:\s[^)]*)?\)/;
+const HTML_IMAGE_RE = /<img(?=[\s/>])[^<>]*\ssrc\s*=\s*["']?[^\s"'<>]+[^<>]*>/i;
+
+/**
  * 这段 assistant 正文是不是「交付内容」(而非进度旁白)。
  *
  * 判据刻意与位置无关:长度达阈值,或带块级 markdown 结构(标题 / 表格 /
- * ≥3 项列表)。两端共用这一份口径,不各自实现。
+ * ≥3 项列表),或内嵌图片。两端共用这一份口径,不各自实现。
  */
 export function isDeliveryProseText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false;
+  if (hasRichAnswer(trimmed)) return true;
   if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
   if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
   if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
+  if (MARKDOWN_IMAGE_RE.test(trimmed) || HTML_IMAGE_RE.test(trimmed)) return true;
   // /g 正则不用 test():lastIndex 会在调用之间残留。
   const listItems = trimmed.match(MARKDOWN_LIST_ITEM_RE);
   return (listItems?.length ?? 0) >= DELIVERY_PROSE_MIN_LIST_ITEMS;
@@ -1642,6 +1660,7 @@ function isDeliveryProseItem<TMessage extends MessageRenderNormalizedMessage>(
 ): boolean {
   return item.type === 'message'
     && item.message.kind === 'assistant'
+    && !item.message.failedSamplingAttempt
     && isDeliveryProseText(item.message.body);
 }
 
@@ -1660,12 +1679,13 @@ function isWorkChild<
   );
 }
 
-/** Assistant progress text remains visible while running and never consumes the latest-five window. */
+/** Normal progress stays visible; proven failed sampling output uses the existing fold. */
 function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
   item: MessageRenderItem<TMessage>,
-): item is MessageRenderThinkingItem<TMessage> | MessageRenderToolGroupItem<TMessage> | MessageRenderAgentTaskItem<TMessage> {
+): item is Exclude<MessageRenderWorkChildItem<TMessage>, MessageRenderWorkGroupItem<TMessage>> {
   return !isRunningAgentTaskItem(item)
-    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
+    && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task' ||
+      (item.type === 'message' && item.message.kind === 'assistant' && item.message.failedSamplingAttempt === true));
 }
 
 /** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
@@ -1712,7 +1732,7 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
   previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
-    (item) => item.type === 'message' && item.message.kind === 'assistant',
+    (item) => item.type === 'message' && item.message.kind === 'assistant' && !item.message.failedSamplingAttempt,
   );
   if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 
@@ -1769,12 +1789,43 @@ function workRunFallbackEnd<TMessage extends MessageRenderNormalizedMessage>(
   return latest;
 }
 
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
+/** Promote long durations to hours/days, always retaining minutes (including zero). */
+export function formatDuration(
+  ms: number,
+  {
+    minimumSeconds = 1,
+    alwaysShowRemainder = false,
+    padRemainder = false,
+    formatLongDuration,
+  }: {
+    minimumSeconds?: number;
+    alwaysShowRemainder?: boolean;
+    padRemainder?: boolean;
+    formatLongDuration?: (parts: { days: number; hours: string; minutes: string }) => string;
+  } = {},
+): string {
+  const totalSec = Math.max(minimumSeconds, Math.round((Number.isFinite(ms) ? ms : 0) / 1000));
   if (totalSec < 60) return `${totalSec}s`;
+  const formatRemainder = (value: number) => padRemainder ? String(value).padStart(2, '0') : String(value);
+  if (totalSec >= 3_600) {
+    const days = Math.floor(totalSec / 86_400);
+    const hours = Math.floor((totalSec % 86_400) / 3_600);
+    const minutes = Math.floor((totalSec % 3_600) / 60);
+    if (formatLongDuration) {
+      return formatLongDuration({
+        days,
+        hours: days > 0 ? formatRemainder(hours) : String(hours),
+        minutes: formatRemainder(minutes),
+      });
+    }
+    return days > 0
+      ? `${days}d ${formatRemainder(hours)}h ${formatRemainder(minutes)}m`
+      : `${hours}h ${formatRemainder(minutes)}m`;
+  }
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  if (seconds === 0 && !alwaysShowRemainder) return `${minutes}m`;
+  return `${minutes}m ${formatRemainder(seconds)}s`;
 }
 
 function itemTimestamp<

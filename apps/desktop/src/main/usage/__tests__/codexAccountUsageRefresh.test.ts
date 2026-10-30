@@ -17,6 +17,25 @@ function makeSnapshot(source: string, accountId: string | null = 'account-id'): 
 }
 
 describe('createCodexAccountUsageSnapshotReader', () => {
+  it('fresh reads wait out a pre-reset request and bypass the UI throttle', async () => {
+    // Reset recovery needs a post-reset response, not the 100% request already in flight.
+    let cached = { ...makeSnapshot('openai-web'), secondary: { usedPercent: 100 } };
+    const oldRequest = deferred<RateLimitSnapshot | null>();
+    const fresh = { ...cached, secondary: { usedPercent: 0 } };
+    const fetchWebUsageSnapshot = vi.fn().mockReturnValueOnce(oldRequest.promise).mockResolvedValue(fresh);
+    const reader = createCodexAccountUsageSnapshotReader({
+      readAccessToken: async () => 'token', readAccountId: async () => 'account-id',
+      fetchWebUsageSnapshot, recordSnapshot: async value => { cached = value as typeof cached; },
+      clearSnapshot: async () => {}, readCachedSnapshot: async () => cached,
+      now: () => 10_000, onRefreshError: vi.fn(),
+    });
+    await reader();
+    const recovery = reader({ fresh: true });
+    oldRequest.resolve(cached);
+    await expect(recovery).resolves.toBe(fresh);
+    expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it('returns cached snapshot before the web refresh settles', async () => {
     const cached = makeSnapshot('cached');
     const web = makeSnapshot('openai-web');
@@ -160,24 +179,26 @@ describe('createCodexAccountUsageSnapshotReader', () => {
     await vi.waitFor(() => expect(recordSnapshot).toHaveBeenCalledWith(makeSnapshot('openai-web')));
   });
 
-  it('clears cached usage before returning it when the account id changed', async () => {
-    const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(makeSnapshot('openai-web', 'new-account'));
-    const clearSnapshot = vi.fn().mockResolvedValue(undefined);
+  it.each([false, true])('clears cached usage when the account id changed (fresh=%s)', async fresh => {
+    let cached: RateLimitSnapshot | null = makeSnapshot('cached', 'old-account');
+    const web = makeSnapshot('openai-web', 'new-account');
+    const fetchWebUsageSnapshot = vi.fn().mockResolvedValue(web);
+    const clearSnapshot = vi.fn(async () => { cached = null; });
     const reader = createCodexAccountUsageSnapshotReader(
       {
         readAccessToken: vi.fn().mockResolvedValue('token'),
         readAccountId: vi.fn().mockResolvedValue('new-account'),
         fetchWebUsageSnapshot,
-        recordSnapshot: vi.fn().mockResolvedValue(undefined),
+        recordSnapshot: vi.fn(async (value: RateLimitSnapshot) => { cached = value; }),
         clearSnapshot,
-        readCachedSnapshot: vi.fn().mockResolvedValue(makeSnapshot('cached', 'old-account')),
+        readCachedSnapshot: async () => cached,
         now: () => 10_000,
         onRefreshError: vi.fn(),
       },
       { throttleMs: 10_000 },
     );
 
-    await expect(reader()).resolves.toBeNull();
+    await expect(reader({ fresh })).resolves.toBe(fresh ? web : null);
     expect(clearSnapshot).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(fetchWebUsageSnapshot).toHaveBeenCalledTimes(1));
   });

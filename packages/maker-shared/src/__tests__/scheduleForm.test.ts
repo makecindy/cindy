@@ -3,6 +3,7 @@ import {
   applyMobileTemplateParams,
   applyScheduleWireCompat,
   ScheduleModelSelectionUnsupportedError,
+  SchedulePreRunHookUnsupportedError,
   applyTemplateToMobileScheduleDraft,
   buildMobileScheduleInput,
   createMobileScheduleDraft,
@@ -44,6 +45,30 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  // PR #6830, unit: apply/serialize is the shared production entry point. Existing
+  // template cases had no remote location and missed an unchanged route becoming local.
+  it('preserves the shared route when a template keeps the same Harness', () => {
+    const route = { agentKind: 'claude-code' as const, modelAgentKind: 'claude-code' as const,
+      model: 'remote-model', providerId: 'remote-provider', modelAgentDeviceId: 'shared:owner' };
+    const draft = createMobileScheduleDraft(schedule(route));
+    const selected = applyTemplateToMobileScheduleDraft(draft, { id: 'same', name: 'Same Harness',
+      description: '', category: 'custom', source: 'user', agentKind: route.agentKind });
+    expect(JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)))).toMatchObject(route);
+  });
+
+  it.each([
+    { model: 'local-model' },
+    { providerId: 'local-provider' },
+  ])('does not inherit shared fields into a partial local template %j', (override) => {
+    const draft = createMobileScheduleDraft(schedule({ modelAgentKind: 'claude-code',
+      model: 'remote-model', providerId: 'remote-provider', modelAgentDeviceId: 'shared:owner' }));
+    const selected = applyTemplateToMobileScheduleDraft(draft, { id: 'local', name: 'Local route',
+      description: '', category: 'custom', source: 'user', ...override });
+    expect(selected).toMatchObject({ ...override, modelAgentDeviceId: '' });
+    expect(selected.model).not.toBe('remote-model');
+    expect(selected.providerId).not.toBe('remote-provider');
+  });
+
   it('builds a desktop-compatible create input for recurring project schedules', () => {
     const draft = createMobileScheduleDraft(null, { fallbackWorkingDir: '/repo/xdt-maker' });
     const input = buildMobileScheduleInput({
@@ -134,13 +159,20 @@ describe('mobile schedule form model', () => {
     // 90 分钟表单表达不了(非 1-59 分钟/整点小时),intervalMinutes 折叠成 ''
     const draft = createMobileScheduleDraft(schedule({ intervalMs: 90 * 60_000 }));
     expect(draft.intervalMinutes).toBe('');
+    expect(draft.sourceIntervalMs).toBe(90 * 60_000);
+
+    const nonMinuteDraft = createMobileScheduleDraft(schedule({ intervalMs: 7.5 * 60_000 }));
+    expect(nonMinuteDraft.intervalMinutes).toBe('');
+    expect(nonMinuteDraft.sourceIntervalMs).toBe(7.5 * 60_000);
 
     // 只改 prompt:间隔原值回传,不因「表单显示不了」被顺手清空
     const untouched = buildMobileScheduleInput({ ...draft, prompt: 'new prompt' });
     expect(untouched.intervalMs).toBe(90 * 60_000);
 
     // 用户经编辑入口清空 → 明确清空
-    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(draft, ''));
+    const clearedDraft = updateDraftIntervalMinutes(draft, '');
+    expect(clearedDraft.intervalMinutesTouched).toBe(true);
+    const cleared = buildMobileScheduleInput(clearedDraft);
     expect(cleared.intervalMs).toBeNull();
 
     // 切 manual 是显式 cadence 操作:切回 recurring 也不复活旧间隔
@@ -155,6 +187,16 @@ describe('mobile schedule form model', () => {
     expect(
       buildMobileScheduleInput(updateDraftTimezone(draft, 'America/New_York')).intervalMs,
     ).toBeNull();
+  });
+
+  it.each([90_000, 84_000])('preserves a sub-minute interval when only other fields are edited: %sms', (intervalMs) => {
+    const draft = createMobileScheduleDraft(schedule({ intervalMs }));
+    expect(draft.intervalMinutes).toBe('');
+    expect(draft.sourceIntervalMs).toBe(intervalMs);
+
+    // 非整分钟间隔即使四舍五入后受支持，也不能被表单伪装成可编辑分钟。
+    const untouched = buildMobileScheduleInput({ ...draft, prompt: 'new prompt' });
+    expect(untouched.intervalMs).toBe(intervalMs);
   });
 
   it('writes an explicit false when mobile disables WeCom group notifications', () => {
@@ -238,8 +280,11 @@ describe('mobile schedule form model', () => {
 
   it('keeps codex fast mode explicit and clears it when switching back to Claude', () => {
     const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'codex');
-    expect(buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true }))
-      .toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true });
+    // 不写死默认模型:留空交给运行电脑按新建任务口径解析,序列化时省略。
+    expect(draft.model).toBe('');
+    const input = buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true });
+    expect(input).toMatchObject({ agentKind: 'codex', fastMode: true });
+    expect(input).not.toHaveProperty('model');
 
     const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');
@@ -300,6 +345,14 @@ describe('mobile schedule form model', () => {
     })).toMatchObject({
       field: 'intervalMinutes',
     });
+    for (const intervalMinutes of ['7', '28', '59']) {
+      expect(validateMobileScheduleDraft({
+        ...draft,
+        name: 'Bad',
+        prompt: 'run',
+        intervalMinutes,
+      })).toMatchObject({ field: 'intervalMinutes' });
+    }
     expect(validateMobileScheduleDraft({
       ...draft,
       name: 'Manual',
@@ -348,6 +401,29 @@ describe('mobile schedule form model', () => {
       silentWhenIdle: false,
     });
     expect(input.targetSessionId).toBe('sess-oops');
+  });
+
+  // Unit regression: mobile edits must retain the complete unsupported route
+  // for host validation, instead of dropping only its remote location.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', effort: 'xhigh', fastMode: 'ultrafast' as const },
+    { modelAgentDeviceId: '', effort: 'low', fastMode: true },
+    { modelAgentDeviceId: '', effort: '', fastMode: false },
+  ])('preserves complete script routes across mobile edits (%j)', (choice) => {
+    const remote = {
+      modelAgentKind: 'codex' as const,
+      modelAgentDeviceId: 'shared:owner',
+      model: 'same-model',
+      providerId: 'openai',
+      effort: 'xhigh' as const,
+      fastMode: 'ultrafast' as const,
+    };
+    const draft = createMobileScheduleDraft(schedule({ executionMode: 'script', ...remote }));
+    const selected = { ...remote, ...choice,
+      ...(!choice.modelAgentDeviceId ? { model: 'local-model', providerId: 'local-provider' } : {}) };
+    // Empty effort and false Fast must survive JSON transport to clear old values.
+    const wire = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, ...selected, name: 'Renamed' })));
+    expect({ ...remote, ...wire }).toMatchObject(selected);
   });
 
   it('still requires a prompt for a regular agent-mode schedule', () => {
@@ -500,11 +576,14 @@ describe('mobile explicit Harness round-trip', () => {
       targetSessionId, providerId: 'old-source', effort: 'high', fastMode: true }));
     const selected = updateDraftAgentKind(draft, 'codex');
     expect(selected.modelAgentKind).toBe('codex');
+    // 换 Harness 不写死模型,由用户在选择器里挑。
+    expect(selected.model).toBe('');
     // Complete the pending picker before simulating the device-link JSON boundary.
-    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, targetSessionId: 'bound' })));
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'gpt-6-astra',
+      targetSessionId: 'bound' })));
     expect(input).toMatchObject({ targetSessionId: 'bound',
       agentKind: targetSessionId === 'bound' ? 'claude-code' : 'codex', modelAgentKind: 'codex',
-      model: 'gpt-5.5', providerId: '', effort: '', fastMode: false });
+      model: 'gpt-6-astra', providerId: '', effort: '', fastMode: false });
     expect(draft.modelAgentKind).toBeUndefined();
     expect(updateDraftAgentKind(draft, 'claude-code')).toBe(draft);
   });
@@ -559,8 +638,9 @@ describe('mobile explicit Harness round-trip', () => {
     const draft = createMobileScheduleDraft(schedule({ agentKind: 'codex', modelAgentKind: 'pi',
       model: 'pi-model', providerId: 'pi-only', fastMode: true, targetSessionId: 'bound' }));
     const selected = updateDraftAgentKind(draft, 'codex');
-    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput(selected)));
-    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.5',
+    expect(selected).toMatchObject({ model: '', providerId: '', effort: '', fastMode: false });
+    const input = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...selected, model: 'gpt-6-astra' })));
+    expect(input).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-6-astra',
       providerId: '', effort: '', fastMode: false });
   });
   it('keeps older schedules without an override in follow mode', () => {
@@ -571,6 +651,18 @@ describe('mobile explicit Harness round-trip', () => {
 
 
 describe('mixed-version scheduled model selections', () => {
+  // Unit: JSON round trips retain the location; an old host must not accept
+  // a shared selection and silently create it with its own local credentials.
+  it.each(['', 'shared:owner'])('preserves location %j and requires peer support', (modelAgentDeviceId) => {
+    const draft = createMobileScheduleDraft(schedule({ modelAgentKind: 'pi', agentKind: 'pi',
+      model: 'remote-model', providerId: 'remote-provider', modelAgentDeviceId }));
+    const input = buildMobileScheduleInput(draft);
+    expect(JSON.parse(JSON.stringify(input)).modelAgentDeviceId).toBe(modelAgentDeviceId);
+    const compat = { supportsIntervalNullClear: true, supportsModelSelection: true };
+    expect(() => applyScheduleWireCompat(input, compat)).toThrow(ScheduleModelSelectionUnsupportedError);
+    expect(applyScheduleWireCompat(input, { ...compat, supportsAgentDeviceSelection: true })).toBe(input);
+    expect(buildMobileScheduleInput({ ...draft, model: '' }).modelAgentDeviceId).toBe('');
+  });
   it.each([null, 600_000])('rejects an explicit bound selection on old/unknown hosts with interval %s', (intervalMs) => {
     const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())),
       targetSessionId: 'bound', modelAgentKind: 'pi' as const, agentKind: 'pi' as const,
@@ -596,4 +688,38 @@ describe('mixed-version scheduled model selections', () => {
     const input = { ...buildMobileScheduleInput(createMobileScheduleDraft(schedule())), targetSessionId: 'bound' };
     expect(applyScheduleWireCompat(input, { supportsIntervalNullClear: true })).toBe(input);
   });
+});
+
+
+it('round trips advanced check configuration without changing legacy quiet choices', () => {
+  expect(createMobileScheduleDraft(null).silentWhenIdle).toBe(false);
+  expect(createMobileScheduleDraft(schedule()).silentWhenIdle).toBe(false);
+  const hook = { command: 'node check.mjs', timeoutMs: 7000 };
+  const draft = createMobileScheduleDraft(schedule({ silentWhenIdle: false, preRunHook: hook }));
+  expect(buildMobileScheduleInput(draft)).toMatchObject({ silentWhenIdle: false, preRunHook: hook });
+  expect(buildMobileScheduleInput({ ...draft, preRunHook: null })).toHaveProperty('preRunHook', null);
+});
+
+it('requires a positive safe-integer timeout before saving a mobile pre-run check', () => {
+  const draft = createMobileScheduleDraft(schedule());
+  for (const timeoutMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(validateMobileScheduleDraft({ ...draft, preRunHook: { command: 'node check.mjs', timeoutMs } }))
+      .toMatchObject({ field: 'preRunHook', messageKey: 'devices.automations.presentation.validation.preRunHookTimeout' });
+  }
+  for (const timeoutMs of [undefined, 1, 7000]) {
+    expect(validateMobileScheduleDraft({ ...draft, preRunHook: { command: 'node check.mjs', timeoutMs } })).toBeNull();
+  }
+  expect(validateMobileScheduleDraft({ ...draft, preRunHook: null })).toBeNull();
+});
+
+it('rejects pre-run install and removal when an older host cannot persist either', () => {
+  const draft = createMobileScheduleDraft(schedule());
+  const base = buildMobileScheduleInput(draft);
+  const options = { supportsIntervalNullClear: true, supportsModelSelection: true };
+  expect(applyScheduleWireCompat(base, options)).toBe(base);
+  for (const preRunHook of [{ command: 'node check.mjs' }, null]) {
+    const input = { ...base, preRunHook };
+    expect(() => applyScheduleWireCompat(input, options)).toThrow(SchedulePreRunHookUnsupportedError);
+    expect(applyScheduleWireCompat(input, { ...options, supportsPreRunHook: true })).toBe(input);
+  }
 });

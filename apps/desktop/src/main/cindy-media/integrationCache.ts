@@ -78,7 +78,7 @@ export async function integrationCacheGet(
     log.warn('integration cache hit in ledger but blob file missing', { cacheKey, hash });
     return null;
   }
-  void ledger.touchBlob(hash, db);
+  void ledger.touchBlob(hash, db).catch(() => undefined);
   return {
     url: blobStore.blobUrl(hash, info.ext),
     absPath: resolved.absPath,
@@ -89,12 +89,13 @@ export async function integrationCacheGet(
 
 /** 写缓存:字节入仓(isCache=true)+ 登记 token→指纹索引(同指纹幂等)。 */
 export async function integrationCachePut(
-  params: {
+  params: blobStore.BlobSource & {
     cacheKey: string;
     /** 集成名(出生信息 originId;从 cacheKey 冒号前段传或显式给)。 */
     integration: string;
-    buffer: Uint8Array;
     mimeType: string;
+    /** Capture db and owner together; late work must never enter the next account. */
+    assertStillValid?: () => void;
     /**
      * 性质标记,默认 true(可再生缓存,吃回收器总量上限 + LRU)。IM 入站
      * **用户附件**必须传 false:它语义上是会话附件而非可再生缓存——discord
@@ -106,14 +107,16 @@ export async function integrationCachePut(
 ): Promise<IntegrationCacheWrite> {
   const written = await ingestMedia(
     {
-      buffer: params.buffer,
+      ...(params.filePath !== undefined ? { filePath: params.filePath } : { buffer: params.buffer }),
       mimeType: normalizeIntegrationMime(params.mimeType),
       isCache: params.isCache ?? true,
       refs: [],
+      assertStillValid: params.assertStillValid,
     },
     db,
   );
   const existing = await ledger.getIntegrationCacheHash(params.cacheKey, db);
+  params.assertStillValid?.();
   let addedRefId: string | null = null;
   if (existing !== written.hash) {
     // 新登记 / token 复用换内容:追加索引行,cacheGet 取最新。
@@ -127,6 +130,12 @@ export async function integrationCachePut(
       },
       db,
     );
+  }
+  try {
+    params.assertStillValid?.();
+  } catch (error) {
+    if (addedRefId) await ledger.removeRefById(addedRefId, db).catch(() => undefined);
+    throw error;
   }
   const resolved = blobStore.resolveHashRef(written.hash, written.ext);
   return {

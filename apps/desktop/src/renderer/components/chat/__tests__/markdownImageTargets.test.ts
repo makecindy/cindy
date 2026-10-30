@@ -73,4 +73,12 @@ describe('extractRenderedMarkdownImageTargets', () => {
       empty,
     );
   });
+
+  it('does not count managed video Markdown targets as images', () => {
+    expect(
+      extractRenderedMarkdownImageTargets(
+        '![video](cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp4)',
+      ),
+    ).toEqual([]);
+  });
 });

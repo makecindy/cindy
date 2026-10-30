@@ -15,7 +15,7 @@
  *
  * GitHub token 只用本地 gh CLI 登录态(`gh auth token`,零配置)——agent 干活
  * 本来就靠 gh,凭证天然就有;拿不到时按原因降级 gh-missing / gh-not-logged-in,
- * 徽标点击引导 agent 安装或登录。不做 app 级 PAT 绑定(设计收敛,见 PR #94 讨论)。
+ * 徽标点击打开内置 gh 安装和设备码登录。不做 app 级 PAT 绑定。
  */
 
 import { BrowserWindow, ipcMain } from 'electron';
@@ -28,6 +28,7 @@ import { sessions } from '../localDb/schema.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
+import { registerGithubSetupIpc } from './githubSetupIpc.js';
 import { GitContextService } from './GitContextService.js';
 import {
   findLiveLinkedWorktreeLive,
@@ -53,6 +54,7 @@ import {
   filterPrStatusQueriesForRefs,
   PrStatusService,
   type PrStatusQuery,
+  type PrStatusResult,
   type PrRemoteState,
 } from './prStatusService.js';
 
@@ -153,6 +155,7 @@ export function registerGitContextIpc(): void {
     readToken: readGithubToken,
     fetchPr: fetchPrRemote,
   });
+  registerGithubSetupIpc(() => prStatusService?.invalidate());
   setPrRefsChangedListener((sessionId) =>
     broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId }),
   );
@@ -325,6 +328,17 @@ export function registerGitContextIpc(): void {
     }
     return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
   });
+}
+
+/**
+ * 任务摘要（get_task_digest）用：本机任务最近提到的几个 PR 的远端状态。与 PR_STATUS
+ * 同一服务与缓存；服务未就绪或任务没有 PR 时返回空数组。只读本机已记录的 PR 引用。
+ */
+export async function readSessionPrStatuses(sessionId: string, limit = 3): Promise<PrStatusResult[]> {
+  if (!prStatusService) return [];
+  const refs = (await listPrRefs(sessionId)).slice(0, limit);
+  if (refs.length === 0) return [];
+  return prStatusService.getStatuses(refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })));
 }
 
 /** 应用退出时清理 watcher 订阅。 */

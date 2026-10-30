@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TgMessage } from '../api.js';
-import { detectGroupTrigger, groupWindowEntryOf, laneThreadIdOf, replyContextOf } from '../inbound.js';
+import {
+  detectGroupTrigger,
+  groupWindowEntryOf,
+  laneThreadIdOf,
+  replyContextOf,
+} from '../inbound.js';
 
 const BOT_ID = 999;
 const BOT_USERNAME = 'my_cindy_bot';
@@ -18,6 +23,33 @@ function msg(overrides: Partial<TgMessage> = {}): TgMessage {
 }
 
 describe('detectGroupTrigger', () => {
+  it.each([
+    'Cindy 赞助',
+    'Cindy 现在也有',
+    'cindy 帮我看看',
+    'Cindy',
+    ' Cindy？',
+    '我问过 Cindy 了',
+  ])('仅提到显示名不触发：%s', (text) => {
+    expect(detectGroupTrigger(msg({ text }), BOT_ID, BOT_USERNAME, 'Cindy')).toBeNull();
+    expect(
+      detectGroupTrigger(msg({ text: undefined, caption: text }), BOT_ID, BOT_USERNAME, 'Cindy'),
+    ).toBeNull();
+  });
+
+  it.each(['@CindyOther', '@Cindy_bot', '@Cindy2'])(
+    '提及以显示名开头的其它账号不触发：%s',
+    (text) => {
+      expect(detectGroupTrigger(msg({ text }), BOT_ID, BOT_USERNAME, 'Cindy')).toBeNull();
+    },
+  );
+
+  it('保留显式 @显示名的兼容入口', () => {
+    expect(
+      detectGroupTrigger(msg({ text: '@Cindy 帮我看看' }), BOT_ID, BOT_USERNAME, 'Cindy'),
+    ).toEqual({ text: '帮我看看' });
+  });
+
   it('@bot 提及触发并剥掉提及', () => {
     const m = msg({
       text: `@${BOT_USERNAME} 部署一下`,
@@ -68,9 +100,318 @@ describe('detectGroupTrigger', () => {
     });
     expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '看看这个' });
   });
+
+  it('提及在句尾同样触发', () => {
+    const text = `你应该站在这个角度重新思考下。@${BOT_USERNAME}`;
+    const m = msg({
+      text,
+      entities: [{ type: 'mention', offset: text.indexOf('@'), length: BOT_USERNAME.length + 1 }],
+    });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({
+      text: '你应该站在这个角度重新思考下。',
+    });
+  });
+
+  it('纯 @bot 保留触发结果，正文保持为空', () => {
+    // 2026-10-03 群内实测: 只发一句 "@bot" 让它看上文, 剥完为空后被业务层当空消息
+    // 静默丢弃, 表现为「@ 了没反应」。
+    const m = msg({
+      text: `@${BOT_USERNAME}`,
+      entities: [{ type: 'mention', offset: 0, length: BOT_USERNAME.length + 1 }],
+    });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '' });
+
+    const caption = msg({
+      text: undefined,
+      caption: ` @${BOT_USERNAME} `,
+      caption_entities: [{ type: 'mention', offset: 1, length: BOT_USERNAME.length + 1 }],
+    });
+    expect(detectGroupTrigger(caption, BOT_ID, BOT_USERNAME)).toEqual({
+      text: '',
+    });
+  });
+
+  it('text_mention 按 user id 认本 bot, 不看字面文本', () => {
+    const m = msg({
+      text: 'Cindy 帮我看看',
+      entities: [
+        {
+          type: 'text_mention',
+          offset: 0,
+          length: 5,
+          user: { id: BOT_ID, is_bot: true, first_name: 'Cindy' },
+        },
+      ],
+    });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '帮我看看' });
+
+    const other = msg({
+      text: 'Bob 帮我看看',
+      entities: [
+        {
+          type: 'text_mention',
+          offset: 0,
+          length: 3,
+          user: { id: 222, is_bot: false, first_name: 'Bob' },
+        },
+      ],
+    });
+    expect(detectGroupTrigger(other, BOT_ID, BOT_USERNAME)).toBeNull();
+  });
+
+  it('纯 text_mention 保留召唤结果，正文为空', () => {
+    const m = msg({
+      text: 'Cindy',
+      entities: [
+        {
+          type: 'text_mention',
+          offset: 0,
+          length: 5,
+          user: { id: BOT_ID, is_bot: true, first_name: 'Cindy' },
+        },
+      ],
+    });
+    expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '' });
+  });
 });
 
 describe('replyContextOf', () => {
+  // Regression: rich bot replies have no text/caption. Exercise the production
+  // reply/window projections; prior tests only used ordinary messages (unit).
+  it('preserves canonical rich blocks in references and history', () => {
+    const rich = msg({
+      text: undefined,
+      rich_message: {
+        blocks: [
+          {
+            type: 'paragraph',
+            text: ['示例城市税率 ', { type: 'bold', text: '7%' }],
+          },
+          {
+            type: 'paragraph',
+            text: { type: 'url', text: '来源', url: 'https://example.com/tax' },
+          },
+          {
+            type: 'table',
+            cells: [
+              [
+                { text: '城市', align: 'left', valign: 'top' },
+                { text: '税率', align: 'left', valign: 'top' },
+              ],
+              [
+                { align: 'left', valign: 'top' },
+                { text: '7%', align: 'left', valign: 'top' },
+              ],
+            ],
+            caption: '表格说明',
+          },
+          {
+            type: 'details',
+            summary: ['折叠', { type: 'bold', text: '标题' }],
+            blocks: [{ type: 'paragraph', text: '详情' }],
+          },
+          { type: 'list', items: [{ label: '1.', blocks: [{ type: 'paragraph', text: '注释' }] }] },
+          {
+            type: 'photo',
+            caption: { text: '图注', credit: '作者' },
+            photo: [{ file_id: 'not-visible' }],
+          },
+          { type: 'pullquote', text: '引文', credit: '出处' },
+          { type: 'buttons', buttons: [{ text: '按钮', callback_data: 'not-visible' }] },
+          {
+            type: 'paragraph',
+            text: { type: 'button', button: { text: '行内按钮', callback_data: 'not-visible' } },
+          },
+        ],
+      },
+    });
+    const expected =
+      '示例城市税率 7%\n来源 (https://example.com/tax)\n城市\t税率\n\t7%\n表格说明\n折叠标题\n详情\n1. 注释\n图注\n作者\n引文\n出处\n按钮\n行内按钮';
+    expect(replyContextOf(msg({ reply_to_message: rich }))?.text).toBe(expected);
+    expect(groupWindowEntryOf(rich).text).toBe(expected);
+  });
+
+  it('preserves leading and trailing empty table cells in replies and history', () => {
+    const rich = msg({
+      text: undefined,
+      rich_message: {
+        blocks: [
+          {
+            type: 'table',
+            cells: [
+              [{}, { text: 'B1' }],
+              [{ text: 'A2' }, {}],
+            ],
+          },
+        ],
+      },
+    });
+    const expected = '\tB1\nA2\t';
+    expect(groupWindowEntryOf(rich).text).toBe(expected);
+    const m = msg({ reply_to_message: rich });
+    expect(replyContextOf(m)?.text).toBe(expected);
+    m.quote = { text: expected };
+    expect(replyContextOf(m)?.text).toBe(expected);
+  });
+
+  // Media-only blocks used to disappear even though their type/name is visible.
+  // Exercise the same unit entry points as text, including nested containers;
+  // these markers describe references and do not assert attachment delivery.
+  it('keeps non-text block labels and safe filenames in references and nested history', () => {
+    const rich = msg({
+      text: undefined,
+      rich_message: {
+        blocks: [
+          {
+            type: 'document',
+            document: { file_name: 'report.pdf', file_id: 'hidden-id', mime_type: 'hidden-mime' },
+          },
+        ],
+      },
+    });
+    const reply = msg({ reply_to_message: rich });
+    expect(replyContextOf(reply)).toMatchObject({ messageId: '1', text: '[文件: report.pdf]' });
+    expect(groupWindowEntryOf(rich).text).toBe('[文件: report.pdf]');
+
+    const map = {
+      type: 'map',
+      location: { latitude: 12.5, longitude: 45.25 },
+      zoom: 8,
+      width: 640,
+      height: 360,
+      map: { file_name: 'hidden-map-name' },
+    };
+    rich.rich_message = { blocks: [map] };
+    expect(replyContextOf(reply)).toMatchObject({ messageId: '1', text: '[地图]' });
+    expect(groupWindowEntryOf(rich).text).toBe('[地图]');
+
+    rich.rich_message = {
+      blocks: [
+        {
+          type: 'details',
+          summary: '附件',
+          blocks: [
+            {
+              type: 'collage',
+              blocks: [
+                { type: 'photo', photo: [{ file_id: 'hidden-id' }], caption: { text: '  ' } },
+                {
+                  type: 'audio',
+                  audio: {
+                    file_name: 'song.mp3',
+                    file_id: 'hidden-id',
+                    performer: 'hidden-performer',
+                  },
+                },
+              ],
+            },
+            {
+              type: 'slideshow',
+              blocks: [
+                { type: 'video', video: { file_name: 'clip.mp4', file_id: 'hidden-id' } },
+                { type: 'animation', animation: { file_name: 'loop.gif', file_id: 'hidden-id' } },
+              ],
+            },
+            { type: 'voice_note', voice_note: { file_id: 'hidden-id' } },
+            { type: 'document', document: { file_id: 'hidden-id' } },
+            map,
+            { type: 'divider' },
+            { type: 'unknown', document: { file_name: 'hidden-name' } },
+          ],
+        },
+      ],
+    };
+    const expected =
+      '附件\n[图片]\n[音频: song.mp3]\n[视频: clip.mp4]\n[动画: loop.gif]\n[语音消息]\n[文件]\n[地图]\n[分隔线]';
+    expect(replyContextOf(reply)?.text).toBe(expected);
+    expect(groupWindowEntryOf(rich).text).toBe(expected);
+    rich.has_protected_content = true;
+    expect(replyContextOf(reply)).toBeNull();
+  });
+
+  it('uses an explicit quote and still respects protection of the original', () => {
+    const m = msg({
+      quote: { text: '选中的片段' },
+      reply_to_message: msg({ text: '完整正文' }),
+    });
+    expect(replyContextOf(m)?.text).toBe('选中的片段');
+    m.reply_to_message!.has_protected_content = true;
+    expect(replyContextOf(m)).toBeNull();
+  });
+
+  it('keeps 500 paragraphs with 16 levels of inline formatting in replies and history', () => {
+    const lines = Array.from({ length: 500 }, (_, i) => `段落 ${i}`);
+    const rich = msg({
+      text: undefined,
+      rich_message: {
+        blocks: lines.map((text) => {
+          let formatted: unknown = text;
+          for (let i = 0; i < 16; i++) formatted = { type: 'bold', text: [formatted] };
+          return { type: 'paragraph', text: formatted };
+        }),
+      },
+    });
+    expect(replyContextOf(msg({ reply_to_message: rich }))?.text).toBe(lines.join('\n'));
+    expect(groupWindowEntryOf(rich).text).toBe(lines.join('\n'));
+  });
+
+  it('preserves checkbox state and merged table coordinates in replies and history', () => {
+    const rich = msg({
+      text: undefined,
+      rich_message: {
+        blocks: [
+          {
+            type: 'list',
+            items: [
+              {
+                label: '-',
+                has_checkbox: true,
+                is_checked: true,
+                blocks: [{ type: 'paragraph', text: 'Done' }],
+              },
+              { label: '-', has_checkbox: true, blocks: [{ type: 'paragraph', text: 'Todo' }] },
+              { label: '1.', is_checked: true, blocks: [{ type: 'paragraph', text: 'Plain' }] },
+            ],
+          },
+          {
+            type: 'table',
+            cells: [
+              [{ text: 'A', colspan: 2, rowspan: 2 }, { text: 'C1' }],
+              [{ text: 'C2' }],
+              [{ text: 'A3' }, {}, { text: 'C3' }],
+            ],
+          },
+        ],
+      },
+    });
+    const expected = '- [x] Done\n- [ ] Todo\n1. Plain\nA\t\tC1\n\t\tC2\nA3\t\tC3';
+    expect(replyContextOf(msg({ reply_to_message: rich }))?.text).toBe(expected);
+    expect(groupWindowEntryOf(rich).text).toBe(expected);
+  });
+
+  it('reports unreadable rich references and bounds deeply nested or long content', () => {
+    const rich = msg({
+      text: undefined,
+      rich_message: { blocks: [{ type: 'unknown' }] },
+    });
+    expect(replyContextOf(msg({ reply_to_message: rich }))?.text).toContain('无法读取');
+    let nested: unknown = 'too deep';
+    for (let i = 0; i < 100; i++) nested = { type: 'bold', text: nested };
+    rich.rich_message = { blocks: [{ type: 'paragraph', text: nested }] };
+    expect(groupWindowEntryOf(rich).text).toBe('');
+    rich.rich_message = {
+      blocks: [
+        ...Array(3000).fill({ type: 'unknown', metadata: 'not-visible' }),
+        { type: 'paragraph', text: 'past budget' },
+      ],
+    };
+    expect(groupWindowEntryOf(rich).text).toBe('');
+    rich.rich_message = {
+      blocks: [{ type: 'paragraph', text: 'x'.repeat(100_000) }],
+    };
+    expect(groupWindowEntryOf(rich).text.length).toBeLessThanOrEqual(16_384);
+  });
+
   it('文本回复带作者与正文', () => {
     const m = msg({
       reply_to_message: msg({
@@ -78,7 +419,11 @@ describe('replyContextOf', () => {
         text: '昨天的部署日志在这',
       }),
     });
-    expect(replyContextOf(m)).toEqual({ author: 'Bob', text: '昨天的部署日志在这' });
+    expect(replyContextOf(m)).toEqual({
+      messageId: '1',
+      author: 'Bob',
+      text: '昨天的部署日志在这',
+    });
   });
 
   it('回复 bot 的消息标 isBot', () => {
@@ -88,10 +433,15 @@ describe('replyContextOf', () => {
         text: '已完成',
       }),
     });
-    expect(replyContextOf(m)).toEqual({ author: 'Cindy', text: '已完成', isBot: true });
+    expect(replyContextOf(m)).toEqual({
+      messageId: '1',
+      author: 'Cindy',
+      text: '已完成',
+      isBot: true,
+    });
   });
 
-  it('纯附件回复给类型占位; 无内容的服务消息返回 null', () => {
+  it('纯附件回复给类型占位; 正文不可读仍保留原消息 ID', () => {
     const photoReply = msg({
       reply_to_message: msg({
         text: undefined,
@@ -106,8 +456,11 @@ describe('replyContextOf', () => {
       }),
     });
     expect(replyContextOf(docReply)?.text).toBe('[文件: a.pdf]');
-    const empty = msg({ reply_to_message: msg({ text: undefined }) });
-    expect(replyContextOf(empty)).toBeNull();
+    const empty = msg({ reply_to_message: msg({ message_id: 42, text: undefined }) });
+    expect(replyContextOf(empty)).toMatchObject({
+      messageId: '42',
+      text: '[引用消息的正文无法读取]',
+    });
     expect(replyContextOf(msg())).toBeNull();
   });
 
@@ -164,5 +517,24 @@ describe('groupWindowEntryOf / laneThreadIdOf', () => {
     expect(entry.author).toEqual({ name: 'OtherBot', isBot: true });
     expect(entry.fileNames).toEqual(['a.pdf']);
     expect(entry.text).toBe('');
+  });
+});
+
+// Durable history locators must select the largest photo, without preserving protected content.
+describe('history image references', () => {
+  it('records only the largest photo and drops protected message references', () => {
+    const input = {
+      message_id: 42,
+      date: 1,
+      chat: { id: -100, type: 'supergroup' as const },
+      photo: [
+        { file_id: 'small', file_unique_id: 'u1', width: 1, height: 1 },
+        { file_id: 'large', file_unique_id: 'u2', width: 100, height: 100 },
+      ],
+    };
+    expect(groupWindowEntryOf(input).imageRefs).toEqual([
+      { fileId: 'large', name: 'photo.jpg', mimeType: 'image/jpeg' },
+    ]);
+    expect(groupWindowEntryOf({ ...input, has_protected_content: true }).imageRefs).toEqual([]);
   });
 });

@@ -214,26 +214,29 @@ describe('isolated Make test runner', () => {
     expect(h.cleanTemp).toHaveBeenCalledOnce();
   });
 
-  it('records a wrapper failure code across chunks without raw output or free-form messages', async () => {
-    const h = await processHarness();
-    h.emit(
-      'compiler output with private data\r\nDESKTOP_DEV_STEP=launching\r\nDESKTOP_DEV_VERDICT=failed\r\n',
-    );
-    expect(h.kill).not.toHaveBeenCalled();
-    h.emit('co');
-    h.emit('de=DEV_PROCESS_EXITED\r\nmessage=private credentials and paths\r\n');
-    await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
-    expect(h.diagnostics).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'failed',
-        reason: 'wrapperFailed',
-        step: 'launching',
-        wrapperCode: 'DEV_PROCESS_EXITED',
-      }),
-    );
-    expect(JSON.stringify(h.diagnostics.mock.calls)).not.toMatch(/private|credentials|compiler/);
-    expect(h.kill).toHaveBeenCalledOnce();
-  });
+  it.each(['DEV_PROCESS_EXITED', 'WHOAMI_UNAVAILABLE', 'PROCESS_SCAN_FAILED'])(
+    'records %s across chunks without raw output or free-form messages',
+    async (code) => {
+      const h = await processHarness();
+      h.emit(
+        'compiler output with private data\r\nDESKTOP_DEV_STEP=launching\r\nDESKTOP_DEV_VERDICT=failed\r\n',
+      );
+      expect(h.kill).not.toHaveBeenCalled();
+      h.emit('co');
+      h.emit(`de=${code}\r\nmessage=private credentials and paths\r\n`);
+      await expect(h.process.ready).rejects.toMatchObject({ code: 'launchFailed' });
+      expect(h.diagnostics).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'failed',
+          reason: 'wrapperFailed',
+          step: 'launching',
+          wrapperCode: code,
+        }),
+      );
+      expect(JSON.stringify(h.diagnostics.mock.calls)).not.toMatch(/private|credentials|compiler/);
+      expect(h.kill).toHaveBeenCalledOnce();
+    },
+  );
   it('bounds incomplete failure verdicts and rejects unknown diagnostic codes', async () => {
     vi.useFakeTimers();
     const h = await processHarness();
@@ -308,6 +311,22 @@ describe('isolated Make test runner', () => {
         CODEX_HOME: '/host/codex',
       }),
     ).toEqual({ PATH: '/tools', HOME: '/user', TERM: 'xterm-256color', FORCE_COLOR: '0' });
+  });
+  it('preserves the Windows system drive needed by MSBuild inside ConPTY', () => {
+    const env = makeTestEnvironment({
+      SystemDrive: 'C:',
+      SystemRoot: 'C:\\Windows',
+      ProgramData: 'C:\\ProgramData',
+      NODE_OPTIONS: '--require private-hook',
+      OPENAI_API_KEY: 'fake-secret',
+    });
+    expect(env).toMatchObject({
+      SystemDrive: 'C:',
+      SystemRoot: 'C:\\Windows',
+      ProgramData: 'C:\\ProgramData',
+    });
+    expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
   });
   it('uses the existing wrapper, explicit isolation and a real PTY without a shell command', async () => {
     const h = await processHarness();

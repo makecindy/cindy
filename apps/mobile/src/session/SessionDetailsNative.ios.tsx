@@ -1,3 +1,4 @@
+import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonStyle.ios";
 import { Host } from "@expo/ui";
 import {
   BottomSheet,
@@ -86,12 +87,17 @@ export function SessionDetailsNative({
                   >
                     {children}
                   </ScrollView>
-                  {footer ? (
-                    <View style={{ padding: spacing.lg }}>{footer}</View>
-                  ) : null}
                 </View>
               </RNHostView>
             </Group>
+            {/* Let SwiftUI reserve the footer's intrinsic height above its keyboard
+                safe area. A footer inside the filling RN host can overflow the
+                native viewport when the sheet changes detents. */}
+            {footer ? (
+              <RNHostView matchContents>
+                <View style={{ padding: spacing.lg }}>{footer}</View>
+              </RNHostView>
+            ) : null}
           </VStack>
         </Group>
       </BottomSheet>
@@ -174,6 +180,7 @@ export function SessionDetailsNativeHeading({
   backLabel,
   onBack,
 }: Pick<SessionDetailsNativeProps, 'title' | 'backLabel' | 'onBack'>) {
+  const glassStyle = useNativeGlassButtonStyle({ shape: 'circle' });
   return (
     <HStack
       modifiers={[
@@ -192,7 +199,7 @@ export function SessionDetailsNativeHeading({
           onPress={onBack}
           modifiers={[
             labelStyle('iconOnly'),
-            buttonStyle('glass'),
+            ...glassStyle,
             frame({ width: 44, height: 44 }),
           ]}
         />

@@ -15,6 +15,19 @@ import {
 } from '../topics.js';
 
 describe('topicForPush', () => {
+  it('routes historical file summaries only to the owning task', () => {
+    expect(topicForPush('maker:turn-change-set:updated', { sessionId: 's1' })).toBe('session:s1');
+    expect(topicForPush('maker:turn-change-set:updated', {})).toBeNull();
+  });
+  it('routes delayed model-provider outcomes to the owning task', () => {
+    expect(topicForPush('maker:session-credential-switch-applied', {
+      sessionId: 's1', model: 'model', providerId: 'xd',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', {
+      sessionId: 's1', reason: 'apply-failed',
+    })).toBe('session:s1');
+    expect(topicForPush('maker:session-credential-switch-failed', { reason: 'apply-failed' })).toBeNull();
+  });
   it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
     expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();
@@ -38,8 +51,10 @@ describe('topicForPush', () => {
   });
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
+    expect(topicForPush('local-db:project-aliases:changed', {})).toBe('sessions');
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
     expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
+    expect(topicForPush('local-db:project-aliases:changed', undefined)).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');
     // 被控端当前草稿全量变更(无 sessionId)→ 并入 sessions topic。

@@ -37,6 +37,18 @@ export interface PanelDefinition {
 }
 
 const registry = new Map<string, PanelDefinition>();
+/**
+ * 注册表版本与订阅:页签组 pane 的 kind 随「组里有没有页签」动态注册 / 注销
+ * (features/right-sidebar/tabGroupPanes.ts),布局引擎靠订阅感知在场面板变化,
+ * 不再只依赖插件装卸广播。
+ */
+let version = 0;
+const subscribers = new Set<() => void>();
+
+function bump(): void {
+  version += 1;
+  for (const cb of [...subscribers]) cb();
+}
 
 /**
  * 注册一种面板。重复注册同 kind 采取"覆盖 + dev 告警"而非抛错 —— 注册走
@@ -48,6 +60,7 @@ export function registerPanelKind(definition: PanelDefinition): void {
     console.warn(`[panels] duplicate registration overwrites kind: ${definition.kind}`);
   }
   registry.set(definition.kind, definition);
+  bump();
 }
 
 /**
@@ -55,7 +68,20 @@ export function registerPanelKind(definition: PanelDefinition): void {
  * "未安装意识"隐藏 —— 树数据保留,重装即原位复活。幂等。
  */
 export function unregisterPanelKind(kind: PanelKind): void {
-  registry.delete(kind);
+  if (registry.delete(kind)) bump();
+}
+
+/** 注册表变更订阅(注册 / 注销都会通知);返回退订函数。 */
+export function subscribePanelRegistry(cb: () => void): () => void {
+  subscribers.add(cb);
+  return () => {
+    subscribers.delete(cb);
+  };
+}
+
+/** 单调递增的注册表版本:放进 memo / effect deps 即可感知在场面板变化。 */
+export function getPanelRegistryVersion(): number {
+  return version;
 }
 
 /** 查面板定义;未注册(如未安装的意识)返回 null,由调用方决定隐藏策略。 */
@@ -75,4 +101,6 @@ export function listPanelKinds(): string[] {
 /** 仅测试用:清空注册表,保证用例间隔离。 */
 export function __resetPanelRegistryForTest(): void {
   registry.clear();
+  subscribers.clear();
+  version = 0;
 }

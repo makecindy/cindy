@@ -7,6 +7,9 @@
  *   4. authEnv 最后合并（确保不被 behaviorFlags 误覆盖）
  *   5. CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1 锁定 provider 路由
  *      （阻止 workdir/.claude/settings.json env 字段覆盖 app 注入的 key/baseUrl）
+ *
+ * 例外:Claude 订阅会话(`nativeCliAuth`)不走 3 / 5 —— CLI 用自己登录的凭证直连
+ * Anthropic,host 不接管连接,见 ClaudeEnvBuildOptions.nativeCliAuth。
  */
 
 import type { AgentCredentialMode, AuthAdapter } from '../../interfaces/auth-adapter.js';
@@ -45,12 +48,29 @@ interface ClaudeEnvBuildOptions {
   /**
    * 'remote': 远端 cc-mgr daemon 跑 SDK 的 env —— 从空字典起,绝不继承 desktop
    * 进程 OS env(Windows HOME=C:\... 透到远端会让 cc CLI 落怪目录)。daemon 自身
-   * process.env 的真实远端 HOME/PATH 由 SDK spawn merge 提供。
+   * process.env 的真实远端 HOME/PATH 由 daemon 在调用 SDK 前显式合并。
    * 'local'(默认): 继承 cleanProcessEnv() —— 本地子进程需本地 PATH/HOME 才能跑。
    */
   mode?: 'local' | 'remote';
   /** 本次子进程明确要走的凭证形态。undefined 时保持 adapter 既有 fallback。 */
   credentialMode?: AgentCredentialMode;
+  /**
+   * Claude 订阅会话:CLI 自己读取、刷新本机登录凭证并直连 Anthropic。
+   *
+   * Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**,不允许第三方应用
+   * 收集、存储或中转订阅凭证。所以这类 spawn:
+   *   - 不写 ANTHROPIC_BASE_URL —— 请求不经本地 loopback proxy;
+   *   - 不设 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST —— 该 flag 会让 CLI 不读本机凭证;
+   *   - host 的 getAuthEnv 不递任何凭证(见 desktop auth-adapters)。
+   * 其余 env(行为开关、窗口、subagent 等)与其它形态一致。仅本机 spawn 有效,
+   * 远端 cc-mgr 会话恒为 false。
+   */
+  nativeCliAuth?: boolean;
+  /**
+   * 会话模型,仅在未指定来源(credentialMode 为 undefined)时随 getAuthEnv 递给 adapter
+   * (AuthAdapterOptions.model),让它判断能否交给本机 Claude Code 登录。
+   */
+  authModel?: string;
   /**
    * 本次 spawn 的会话来源(显式 providerId;null/undefined = 隐式默认路由)。
    * 供 runtimeConfig.subagentModelForRoute 按父会话来源判定 subagent 覆写是否可路由
@@ -141,6 +161,9 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   // 配置目录重定向
   'CLAUDE_CONFIG_DIR',
+  // host 接管标记:非订阅会话由 buildClaudeEnv 显式写 '1';继承来的残留(终端里的 cc
+  // 会话跑 dev)会让订阅会话的 CLI 不读自己的登录凭证,而 SDK merge 只能覆盖、删不掉。
+  'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
   // 子代理派发覆盖:这是 host 独占的键(值由「Subagent 模型」设置经
   // subagent-model-default.ts 解析决定),继承来的残留会以最高优先级盖掉用户手写 agent 的
   // `model:`,而且**盖得静默**。典型泄漏路径:终端里的 cc 会话跑 dev,Electron 从
@@ -158,7 +181,7 @@ export const SENSITIVE_ANTHROPIC_ENV_KEYS = [
  * claude-code/index.ts startSession 远端分支)。
  *
  * 刻意不复用 SENSITIVE_ANTHROPIC_ENV_KEYS:那是「继承残留清洗」超集,含 route 覆盖时
- * 必须保留的字段(如 dev 多实例的 CLAUDE_CONFIG_DIR)。
+ * 必须保留的字段(如 CLAUDE_CONFIG_DIR:远端由 cc-manager 自己决定)。
  */
 export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -173,41 +196,30 @@ export const REMOTE_ROUTE_OVERRIDE_ENV_KEYS = [
 ] as const;
 
 /**
- * 订阅 token 的 401 续命回调有 entrypoint 白名单闸门(cc 反编译):
- *   if (CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH && Set(["claude-desktop","local-agent",
- *       "claude-vscode"]).has(CLAUDE_CODE_ENTRYPOINT)) 才注册 requestOAuthTokenRefresh。
- * agent SDK 默认填 CLAUDE_CODE_ENTRYPOINT=sdk-ts(不在白名单)——不覆盖的话
- * getOAuthToken 回调**静默失效**(不报错不打日志, 长 turn 过期照样死)。必须选
- * claude-vscode: 另两个值在 cc 的桌面宿主集合里, 会连带切换整套 desktop-host 语义
- * (settings 过滤策略 / remote managed settings 等), 影响面未审。
- * 硬覆盖而非 if-undefined: dev 下 Electron 可能由终端 cc 启动, 继承来的
- * CLAUDE_CODE_ENTRYPOINT=sdk-ts/cli 同样会关掉闸门。仅 oauth-spawn(实际注入了
- * 订阅 token)时生效, gateway-key 会话保持 SDK 默认。
+ * 对齐 Claude Desktop Code 的入口标记,覆盖从终端继承或路由注入的旧身份。
+ * 本机登录、API Key 与远端会话共用此规则;不以是否注入 OAuth token 区分入口。
  *
- * buildClaudeEnv 末段与远端路由 materialization(claude-code/index.ts,route 覆盖后
- * 才出现 CLAUDE_CODE_OAUTH_TOKEN 的场景)共用 —— 闸门规则只此一份。
+ * claude-desktop 也在 CLI 的 OAuth 刷新回调白名单内,并启用原生 desktop-host
+ * 配置过滤(项目级设置不能改写上游 / 鉴权)。凭证来源仍由 nativeCliAuth /
+ * CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST 决定,不因此注入凭证或改变认证路由。
+ * 远端路由 materialization 后再次调用,避免 route.env 覆盖入口。
  */
-export function applyOAuthSpawnEntrypointGate(env: Record<string, string>): void {
-  if (!env.CLAUDE_CODE_OAUTH_TOKEN) return;
-  env.CLAUDE_CODE_ENTRYPOINT = 'claude-vscode';
-  // claude-vscode 身份的防御性收口: 禁掉 IDE 扩展自动安装类副作用(headless 会话
-  // 不需要; env 在 cc 内存在, 用户显式覆盖优先)。
-  if (env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL === undefined) {
-    env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = '1';
-  }
+export function applyClaudeDesktopEntrypoint(env: Record<string, string>): void {
+  env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop';
 }
 
 /**
  * !! 主防线 !! 必须由 host 在 boot 最早期(任何动态 import / spawn 之前)调用一次。
  *
- * 背景: @anthropic-ai/claude-agent-sdk 在 spawn CLI 时强制做
+ * 背景: Claude Agent SDK <= 0.2.112 在 spawn CLI 时强制做
  *   `F6 = { ...process.env, ...userEnv }`
  * 我们传给 SDK 的 env 字典只能"覆盖"process.env 里的同名字段,**无法删除**它们。
  * 用户系统(HKCU / shell rc)若设了 ANTHROPIC_AUTH_TOKEN 之类,会从 process.env
  * 直接漏到 CC CLI 子进程,子进程的 Anthropic 客户端优先用 Bearer authToken,
  * 导致 401(用了用户那把过期/无效 key)。
  *
- * 唯一的根治办法是在 boot 时就把根上的 process.env 清干净。
+ * 新版 SDK 的 options.env 替代进程环境;boot 清洗仍保护未显式传 env 的调用方。
+ * 旧版 SDK 的根治办法是在 boot 时就把根上的 process.env 清干净。
  * cleanProcessEnv 只能作副防线(只动我们手里的字典)。
  *
  * 返回值: 实际清掉的 key 列表(给 host 打日志用)。
@@ -227,7 +239,7 @@ export function stripSensitiveAnthropicEnv(env: NodeJS.ProcessEnv = process.env)
  * 副防线: 剥离 process.env 里的敏感字段,只作用于本函数返回的字典副本。
  *
  * !! 警告: 不能单独依赖 !!
- * SDK 在 spawn 时会做 `{ ...process.env, ...userEnv }` 二次 merge — 即使我们的
+ * 旧版 SDK 在 spawn 时会做 `{ ...process.env, ...userEnv }` 二次 merge — 即使我们的
  * 字典里没有这些字段,process.env 上还有就会漏给子进程。真正的根治在
  * stripSensitiveAnthropicEnv()(host boot 阶段调)。
  *
@@ -400,14 +412,14 @@ export function exploreInheritCapEnvNeedsSync(
  *   API_TIMEOUT_MS / CLAUDE_ENABLE_STREAM_WATCHDOG 等)。
  *
  *   **为什么必须**: 远端 cc-mgr daemon 收到 startParams.env 后转给远端 SDK,
- *   SDK spawn cc CLI 时 `{...process.env, ...userEnv}`。如果继承了 desktop 的
+ *   daemon 在调用 SDK 前合并自己的进程环境。如果继承了 desktop 的
  *   `HOME=C:\Users\REMOTE_USER`(Windows) 或 `HOME=/Users/local-user`(mac), 远端
  *   POSIX 的 cc CLI 就拿到了**错误的 HOME** — Windows 字面字符串带 `C:` 和反斜
  *   杠在 macOS 当相对路径,被拼到 cwd 后面,session/memory/snapshot 全落到
  *   `<cwd>/C:\Users\REMOTE_USER/.claude/...` 这种怪目录里, 用户彻底找不到。
  *   PATH/APPDATA/TMP 等也类似 — 跨平台 + 跨机器透传必出事。
  *
- *   零继承后, 远端 SDK spawn 用的就是 daemon 自己 process.env 的真实 POSIX
+ *   零继承后, daemon 显式合并自己 process.env 的真实 POSIX
  *   `HOME=/Users/<remote-user>` 和正确的 `PATH`, cc CLI 落到正确位置。
  *
  * 调试开关: 设置 host process.env.XDT_CC_DEBUG_NET=1 开启 cc 子进程网络日志,
@@ -421,6 +433,7 @@ export async function buildClaudeEnv(
   options: ClaudeEnvBuildOptions = {},
 ): Promise<Record<string, string>> {
   const mode = options.mode ?? 'local';
+  const nativeCliAuth = options.nativeCliAuth === true && mode === 'local';
   // remote mode: 从空字典起,绝不继承 desktop 进程的 OS env(详见函数 doc)。
   // local mode: 继承 cleanProcessEnv() — 本地子进程需要本地 PATH/HOME 才能跑。
   const cleanEnv = mode === 'remote' ? {} : cleanProcessEnv();
@@ -446,7 +459,10 @@ export async function buildClaudeEnv(
     mode === 'remote' && runtimeConfig.remoteEndpoint
       ? runtimeConfig.remoteEndpoint
       : runtimeConfig.endpoint;
-  if (endpoint) {
+  if (nativeCliAuth) {
+    // behaviorFlags 也不许把订阅会话改道(CLI 缺省即 api.anthropic.com)。
+    delete env.ANTHROPIC_BASE_URL;
+  } else if (endpoint) {
     env.ANTHROPIC_BASE_URL = endpoint;
   }
   const authOptions = options.credentialMode
@@ -457,11 +473,13 @@ export async function buildClaudeEnv(
           ? { providerId: options.sessionProviderId }
           : {}),
       }
-    : undefined;
+    : options.authModel
+      ? { model: options.authModel }
+      : undefined;
   const authEnv = { ...(await auth.getAuthEnv(authOptions)) };
   if (mode === 'remote') {
-    // CLAUDE_CONFIG_DIR is a host-local path. Desktop dev sandboxes inject a
-    // Windows/macOS userData path through the auth adapter; forwarding that
+    // CLAUDE_CONFIG_DIR is a host-local path. If an auth adapter injects one
+    // (older Desktop dev sandboxes used a userData path), forwarding that
     // literal path to a different POSIX host makes Claude resolve it relative
     // to the remote cwd and write configuration data into the repository.
     // The remote cc-manager owns this path and replaces it with its isolated
@@ -469,6 +487,10 @@ export async function buildClaudeEnv(
     delete authEnv.CLAUDE_CONFIG_DIR;
   }
   Object.assign(env, authEnv);
+  if (nativeCliAuth) {
+    // fail-closed:订阅会话只用 CLI 自己的登录,host 递来的任何鉴权 / 上游字段一律不带。
+    for (const key of REMOTE_ROUTE_OVERRIDE_ENV_KEYS) delete env[key];
+  }
 
   // Claude Code's documented child-agent model override.
   //
@@ -513,9 +535,16 @@ export async function buildClaudeEnv(
   // 凭证必须由 host 经上面的 authEnv 显式递入 —— 订阅模式对应 CLAUDE_CODE_OAUTH_TOKEN
   // (desktop auth-adapters getAuthEnv 注入), API 模式对应 ANTHROPIC_API_KEY。
   // 若 host 只设 flag 不递凭证, cc 毫秒级判 "Not logged in"(2026-07-03 线上事故)。
-  env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  // 订阅会话(nativeCliAuth)反过来必须**不设**:CLI 要读自己的登录凭证。代价是 CLI 不再
+  // 剥掉工作区设置里的上游 / 鉴权键(SDK 模式也没有终端的工作区信任确认),所以每次拉起
+  // CLI 前与会话中途热加载设置时,都由 workspace-settings-guard 拒绝会改写它们的设置。
+  if (nativeCliAuth) {
+    delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
+  } else {
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  }
 
-  applyOAuthSpawnEntrypointGate(env);
+  applyClaudeDesktopEntrypoint(env);
 
   // xdt-maker 自己托管会话生命周期和自动任务。Claude Code 原生 cron 会读取
   // workdir/.claude/scheduled_tasks.json，并把到期任务作为隐藏 meta prompt 注入

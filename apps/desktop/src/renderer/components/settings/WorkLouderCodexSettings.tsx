@@ -1,9 +1,10 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Slider } from '@/components/ui/slider';
+import { Button, type ButtonProps } from '@/components/ui/button';
 import {
   useEffect,
   useMemo,
   useState,
-  type ButtonHTMLAttributes,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
@@ -21,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useCodexMicroGuard } from '@/hooks/useCodexMicroGuard';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
@@ -966,18 +967,16 @@ export function WorkLouderCodexSettings({
       </WorkLouderCodexPartEditor>
 
       {error && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--error-border)] bg-[var(--error-bg)] px-4 py-3 text-12 text-[var(--error-fg)]">
-          <span>{t(workLouderCopyKey(model, `errors.${error}`))}</span>
-          {error === 'load' && (
-            <button
-              type="button"
-              onClick={() => void reload()}
-              className="font-medium underline underline-offset-2"
-            >
-              {t('settings.shortcuts.workLouderCodex.retry')}
-            </button>
-          )}
-        </div>
+        <ErrorNotice
+          message={t(workLouderCopyKey(model, `errors.${error}`))}
+          actions={
+            error === 'load' && (
+              <Button size="sm" compact onClick={() => void reload()}>
+                {t('settings.shortcuts.workLouderCodex.retry')}
+              </Button>
+            )
+          }
+        />
       )}
 
       {state?.device.inputMonitoringPermission === 'denied' && (
@@ -988,13 +987,15 @@ export function WorkLouderCodexSettings({
               `settings.shortcuts.workLouderCodex.device.inputMonitoring.${state?.device.inputMonitoringPermission ?? 'unknown'}`,
             )}
             control={
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
                 type="button"
                 onClick={() => void openInputMonitoringSettings()}
-                className="rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
               >
                 {t('settings.shortcuts.workLouderCodex.device.inputMonitoring.open')}
-              </button>
+              </Button>
             }
           />
         </SettingsGroup>
@@ -1065,13 +1066,23 @@ export function WorkLouderCodexSettings({
                   </span>
                 )}
               {guardState?.status === 'recovery-required' ? (
-                <SettingsSecondaryButton disabled={guardSaving} onClick={() => void recoverGuard()}>
+                <SettingsSecondaryButton
+                  loading={guardSaving}
+                  disabled={guardSaving}
+                  onClick={() => void recoverGuard()}
+                >
                   {t('settings.shortcuts.workLouderCodex.codexGuard.recover')}
                 </SettingsSecondaryButton>
               ) : (
                 <Switch
                   checked={guardState?.enabled ?? false}
-                  disabled={guardLoading || guardSaving || !guardState || !guardState.supported}
+                  disabled={
+                    guardLoading ||
+                    guardSaving ||
+                    !guardState ||
+                    !guardState.supported ||
+                    guardState.status === 'paused'
+                  }
                   onCheckedChange={(checked) => void setGuardEnabled(checked)}
                   aria-label={t('settings.shortcuts.workLouderCodex.codexGuard.aria')}
                 />
@@ -1105,14 +1116,17 @@ function KeyMergeControls({
         label={t('settings.shortcuts.workLouderCodex.layout.merge.split')}
         description={t('settings.shortcuts.workLouderCodex.layout.merge.splitDescription')}
         control={
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             disabled={disabled}
             onClick={onSplit}
-            className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="shrink-0"
           >
             {t('settings.shortcuts.workLouderCodex.layout.merge.split')}
-          </button>
+          </Button>
         }
       />
     );
@@ -1127,14 +1141,16 @@ function KeyMergeControls({
           label={t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}`)}
           description={t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}Description`)}
           control={
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               disabled={disabled}
               onClick={() => onMerge(direction)}
-              className="inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t(`settings.shortcuts.workLouderCodex.layout.merge.${direction}`)}
-            </button>
+            </Button>
           }
         />
       ))}
@@ -1262,7 +1278,7 @@ function SelectControl({
         className={cn(
           'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
           'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
           className,
         )}
@@ -1305,7 +1321,6 @@ function SelectControl({
                     className={cn(
                       'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
                       'text-[var(--text-primary)]',
-                      'data-[highlighted]:bg-[var(--surface-hover)]',
                       'data-[state=checked]:font-medium',
                       'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
                     )}
@@ -1347,23 +1362,18 @@ function SettingsResetButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
+      variant="secondary"
+      size="md"
+      compact
       type="button"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-12 font-medium',
-        'border border-[var(--settings-input-border)]',
-        'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-        'transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)]',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-      )}
     >
       <RotateCcw size={13} aria-hidden />
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -1444,18 +1454,11 @@ function SettingsDivider() {
   return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
 }
 
-function SettingsSecondaryButton({
-  children,
-  ...props
-}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'className' | 'type'>) {
+function SettingsSecondaryButton({ children, ...props }: Omit<ButtonProps, 'className' | 'type'>) {
   return (
-    <button
-      {...props}
-      type="button"
-      className="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2 text-12 text-[var(--settings-input-text)] transition-colors enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-    >
+    <Button variant="secondary" size="md" compact {...props} type="button" className="shrink-0">
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -1561,6 +1564,8 @@ function guardDescriptionKey(
 ): string {
   if (requestFailed) return 'error';
   switch (status) {
+    case 'paused':
+      return 'paused';
     case 'unsupported':
       return 'unsupported';
     case 'protecting':

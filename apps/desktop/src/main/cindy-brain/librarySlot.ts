@@ -26,6 +26,7 @@ import {
   GHOST_LIBRARY_CAPABILITIES_V1,
   GHOST_LIBRARY_OPS,
   GHOST_PICK_MIN_INTERVAL_MS,
+  ghostInstallApprovalToken,
   type GhostLibraryErrorReason,
   type GhostPipeLibraryResult,
   type InstalledGhost,
@@ -34,12 +35,22 @@ import { LibraryVault, validateLibraryRelPath, DEFAULT_LIBRARY_LIMITS, type Libr
 import { LibraryBindingStore, type LibraryLocationResolution } from './libraryBinding.js';
 import { LibrarySqlService, type LibrarySqlServiceDeps } from './librarySqlService.js';
 import type { LibraryDbResult } from './libraryDbCore.js';
+import {
+  isGhostLibraryStagingOp,
+  LibraryStagingStore,
+  type LibraryStagingAck,
+  type LibraryStagingDeps,
+  type LibraryStagingFailure,
+} from './libraryStaging.js';
 
 /** 正本相对键:assets/<hash 前 2 位>/<64-hex>/blob.<ext>(不是 <hash>.<ext>)。 */
 const LIBRARY_BLOB_REL_RE = /^assets\/([0-9a-f]{2})\/([0-9a-f]{64})\/blob\.([A-Za-z0-9]+)$/i;
 const LIBRARY_SIDECAR_BASENAME = new Set(['meta.json', 'preview.webp']);
-/** clipboardWrite 单次 PNG 上限:与 library 单次 write 同为 16MiB,必须是有限整数。 */
-export const LIBRARY_CLIPBOARD_WRITE_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * clipboardWrite 单次 PNG 上限:十进制 20MB(20,000,000 字节,不是 20MiB),必须是有限整数。
+ * 只管剪贴板;library 单次 write 的 16MiB 分块阈值独立,不随此变。
+ */
+export const LIBRARY_CLIPBOARD_WRITE_MAX_BYTES = 20_000_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PNG_IHDR = Buffer.from('IHDR', 'ascii');
 const PNG_IEND = Buffer.from('IEND', 'ascii');
@@ -157,6 +168,7 @@ export function mintLibraryEpochIdentity(input: {
 /** 单插件的库会话(vault + sql 绑定到同一根与 owner scope)。 */
 interface GhostLibrarySession {
   ghostId: string;
+  requestTarget: GhostLibraryRequestTarget;
   vault: LibraryVault;
   sql: LibrarySqlService;
   /** 会话创建时捕获的 owner scope key;每请求比对,变了就整会话作废。 */
@@ -170,8 +182,18 @@ interface GhostLibrarySession {
   identity: string;
 }
 
+interface GhostLibraryRequestTarget {
+  relocationGeneration: number;
+  ownerScopeKey: string | null;
+  ghostTarget: string | null;
+}
+
+class GhostLibraryRequestCancelled extends Error {}
+
 export interface GhostLibrarySlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  /** Host work that must settle before this plugin's library request opens a root; undefined when none is due. */
+  prepareRequest?(ghostId: string): Promise<void> | undefined;
   /** 自定义位置 binding 存储(owner-scoped;生产注入)。 */
   bindingStore: LibraryBindingStore;
   /** 系统默认库根(生产 = ownerScopedUserDataPath('libraries', ghostId))。 */
@@ -185,6 +207,8 @@ export interface GhostLibrarySlotDeps {
   getDiskFreeBytes?(root: string): Promise<number | null>;
   workerScriptPath(): string;
   betterSqliteModulePath(): string;
+  /** Host-selected Electron ABI binding; never supplied by the plugin. */
+  betterSqliteNativeBinding?(): string | undefined;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -207,6 +231,12 @@ export interface GhostLibrarySlotDeps {
     ghostId: string,
     root: string | null,
   ): Promise<boolean | 'granted' | 'not-granted' | 'superseded' | void>;
+  /** owner-scoped staging 根(生产 = ownerScopedUserDataPath('library-staging', ghostId))。 */
+  getStagingRoot?(ghostId: string): string;
+  createStagingStore?(deps: LibraryStagingDeps): LibraryStagingStore;
+  /** Capture owner before staging awaits; beginMutation holds the lease across verify+release. */
+  captureMutationOwner?(): unknown;
+  beginMutation?(expected?: unknown): () => void;
 }
 
 const fail = (
@@ -225,6 +255,7 @@ export class GhostLibrarySlot {
   private readonly sessions = new Map<string, GhostLibrarySession>();
   /** 迁移进行中的插件:全部写操作只读化(切换与 grace 前不再有写入落旧根)。 */
   private readonly relocating = new Set<string>();
+  private readonly relocationGenerations = new Map<string, number>();
   /** 插件 id → 上次 reveal 尝试时刻(按尝试记账;对齐 pick/confirm 骚扰钳制)。 */
   private readonly lastRevealAttemptAt = new Map<string, number>();
   /** 插件 id → 上次 saveAs 尝试时刻(按尝试记账;对齐 pick/confirm 骚扰钳制)。 */
@@ -246,13 +277,132 @@ export class GhostLibrarySlot {
     libraryGeneration: number;
     libraryIdentity: string;
   }>();
+  /** owner-scoped staging,独立于可迁移 Library 根;按 owner×ghost 隔离,根捕获后不漂移。 */
+  private readonly stagingStores = new Map<string, LibraryStagingStore>();
+  /** In-flight staging.release per ghost. disposeGhost drains these so bind/relocate cannot cut the Library mid-transaction. */
+  private readonly stagingReleaseInflight = new Map<string, { count: number; drain: Promise<void> | null; resolveDrain: (() => void) | null }>();
+  /** Mutating Library ops and staging.release share one chain per ghost so hash-then-delete cannot race a concurrent write/delete/rename. */
+  private readonly ghostExclusive = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
   /** 迁移期只读闸(设置页迁移在 copying 前置位、结束后清除)。 */
   setRelocating(ghostId: string, on: boolean): void {
-    if (on) this.relocating.add(ghostId);
-    else this.relocating.delete(ghostId);
+    if (on) {
+      this.advanceRelocationGeneration(ghostId);
+      this.relocating.add(ghostId);
+    } else this.relocating.delete(ghostId);
+  }
+
+  private advanceRelocationGeneration(ghostId: string): void {
+    this.relocationGenerations.set(ghostId, (this.relocationGenerations.get(ghostId) ?? 0) + 1);
+  }
+
+  private ghostRequestTarget(ghostId: string, ghost = this.deps.getGhost(ghostId)): string | null {
+    return ghost ? JSON.stringify([
+      ghost.manifest.id, ghost.dir, ghost.namespace ?? null, ghost.enabled !== false,
+      ghostInstallApprovalToken(ghost.approval),
+    ]) : null;
+  }
+
+  private captureRequestTarget(ghostId: string, ownerScopeKey = this.deps.captureOwnerScope()): GhostLibraryRequestTarget {
+    const relocationGeneration = this.relocationGenerations.get(ghostId) ?? 0;
+    this.relocationGenerations.set(ghostId, relocationGeneration);
+    return { relocationGeneration, ownerScopeKey, ghostTarget: this.ghostRequestTarget(ghostId) };
+  }
+
+  private isRequestCurrent(ghostId: string, target: GhostLibraryRequestTarget): boolean {
+    return !this.relocating.has(ghostId)
+      && target.relocationGeneration === this.relocationGenerations.get(ghostId)
+      && target.ownerScopeKey === this.deps.captureOwnerScope()
+      && this.isCurrentGhostTarget(ghostId, target.ghostTarget);
+  }
+
+  /** One lookup serves both checks: eligibility and the captured target must see the same ghost. */
+  private isCurrentGhostTarget(ghostId: string, ghostTarget: string | null): boolean {
+    const ghost = this.deps.getGhost(ghostId);
+    return this.checkEligibility(ghostId, ghost) && ghostTarget === this.ghostRequestTarget(ghostId, ghost);
+  }
+
+  private assertRequestCurrent(ghostId: string, target: GhostLibraryRequestTarget, session?: GhostLibrarySession): void {
+    if (!this.isRequestCurrent(ghostId, target) || (session && this.sessions.get(ghostId) !== session)) {
+      throw new GhostLibraryRequestCancelled('Library 请求目标已变化,操作已取消');
+    }
+  }
+
+  private beginStagingRelease(ghostId: string): () => void {
+    let state = this.stagingReleaseInflight.get(ghostId);
+    if (!state) {
+      state = { count: 0, drain: null, resolveDrain: null };
+      this.stagingReleaseInflight.set(ghostId, state);
+    }
+    if (state.count === 0) {
+      state.drain = new Promise<void>((resolve) => {
+        state.resolveDrain = resolve;
+      });
+    }
+    state.count += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const live = this.stagingReleaseInflight.get(ghostId);
+      if (!live) return;
+      live.count -= 1;
+      if (live.count === 0) {
+        live.resolveDrain?.();
+        live.resolveDrain = null;
+        live.drain = null;
+        this.stagingReleaseInflight.delete(ghostId);
+      }
+    };
+  }
+
+  private async waitForStagingReleases(ghostId: string): Promise<void> {
+    for (;;) {
+      const state = this.stagingReleaseInflight.get(ghostId);
+      if (!state || state.count === 0 || !state.drain) return;
+      await state.drain;
+    }
+  }
+
+  private runGhostExclusive<T>(ghostId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.ghostExclusive.get(ghostId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    this.ghostExclusive.set(ghostId, next.then(() => undefined, () => undefined));
+    return next;
+  }
+
+  private async confirmReleaseLibrary(
+    ghostId: string,
+    session: GhostLibrarySession,
+    ack: Extract<LibraryStagingAck, { ok: true }>,
+  ): Promise<LibraryStagingFailure | null> {
+    const live = this.sessions.get(ghostId);
+    if (
+      this.deps.captureOwnerScope() !== session.ownerScopeKey
+      || !live
+      || live !== session
+      || live.identity !== ack.libraryIdentity
+      || live.generation !== ack.libraryGeneration
+    ) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library epoch 已变化,原件已保留' };
+    }
+    const hashed = await session.vault.hashFile(ack.path);
+    if (!hashed.ok || hashed.sha256 !== ack.sha256 || hashed.bytes !== ack.bytes) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library 正本已变化,原件已保留' };
+    }
+    return null;
+  }
+
+  /** Relocate/delete/account-boundary gate: reject new release, drain inflight, then teardown. */
+  async invalidateGhost(ghostId: string): Promise<void> {
+    this.setRelocating(ghostId, true);
+    try {
+      await this.disposeGhost(ghostId);
+    } finally {
+      this.setRelocating(ghostId, false);
+    }
   }
 
   /** 处理一条 library-request(ghost-pipe:send 的 invoke 返回值即本结果)。 */
@@ -260,6 +410,9 @@ export class GhostLibrarySlot {
     try {
       return await this.dispatch(ghostId, payload);
     } catch (err) {
+      if (err instanceof GhostLibraryRequestCancelled) {
+        return fail('LIBRARY_UNAVAILABLE', err.message, 'CANCELLED');
+      }
       this.deps.log?.warn('ghost library-request unexpected failure', {
         ghostId,
         error: err instanceof Error ? err.message : String(err),
@@ -286,51 +439,116 @@ export class GhostLibrarySlot {
         capabilities: {
           version: GHOST_LIBRARY_CAPABILITIES_V1.version,
           operations: [...GHOST_LIBRARY_CAPABILITIES_V1.operations],
+          staging: { ...GHOST_LIBRARY_CAPABILITIES_V1.staging },
         },
       };
     }
-    // 迁移期只读:写类操作在 copying 全程拒绝(读与状态查询照常)。
+    // Host work such as an unfinished reattach settles only for a request that
+    // will really open the library.
+    const preparing = this.deps.prepareRequest?.(ghostId);
+    if (preparing) {
+      await preparing;
+      if (!this.checkEligibility(ghostId)) {
+        return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
+      }
+    }
+    if (isGhostLibraryStagingOp(op)) {
+      if (op === 'staging.release') {
+        if (this.relocating.has(ghostId)) {
+          return fail('ACK_MISMATCH', 'Library 正在迁移到新位置,原件已保留');
+        }
+        return this.runGhostExclusive(ghostId, () => this.dispatchStaging(ghostId, op, req));
+      }
+      return this.dispatchStaging(ghostId, op, req);
+    }
+    // 迁移期只读:写类操作在 copying 全程拒绝。
+    const writeOps: ReadonlySet<string> = new Set([
+      'write', 'writeBegin', 'writeChunk', 'writeCommit', 'writeAbort',
+      'mkdir', 'delete', 'rename',
+      'db.open', 'db.exec', 'db.batch', 'db.migrate', 'db.backup',
+    ]);
     if (this.relocating.has(ghostId)) {
-      const writeOps: ReadonlySet<string> = new Set([
-        'write', 'writeBegin', 'writeChunk', 'writeCommit', 'writeAbort',
-        'mkdir', 'delete', 'rename',
-        'db.open', 'db.exec', 'db.batch', 'db.migrate', 'db.backup',
-      ]);
       if (writeOps.has(op)) {
         return fail('LIBRARY_READONLY', 'Library 正在迁移到新位置,写入已暂停;请稍后重试');
       }
     }
 
-    // 会话获取/作废:owner scope 变了(切换在途或已切),旧会话的根与连接
-    // 一并作废——绝不把上个 owner 的库当成本 owner 的库继续用。
-    const scopeKey = this.deps.captureOwnerScope();
-    const session = await this.getOrCreateSession(ghostId, scopeKey);
-    return this.runOp(ghostId, session, op, req);
+    const target = this.captureRequestTarget(ghostId);
+    const runSessionOp = async (): Promise<GhostPipeLibraryResult> => {
+      this.assertRequestCurrent(ghostId, target);
+      const session = await this.getOrCreateSession(ghostId, target.ownerScopeKey, target);
+      this.assertRequestCurrent(ghostId, target, session);
+      const result = await this.runOp(ghostId, session, op, req);
+      this.assertRequestCurrent(ghostId, target, session);
+      return result;
+    };
+    if (writeOps.has(op)) return this.runGhostExclusive(ghostId, runSessionOp);
+    return runSessionOp();
   }
 
-  private async getOrCreateSession(ghostId: string, scopeKey: string | null): Promise<GhostLibrarySession> {
+  private async getOrCreateSession(
+    ghostId: string,
+    scopeKey: string | null,
+    target = this.captureRequestTarget(ghostId, scopeKey),
+  ): Promise<GhostLibrarySession> {
+    this.assertRequestCurrent(ghostId, target);
     let session = this.sessions.get(ghostId);
+    const capturedScope = session;
+    if (session && !this.isRequestCurrent(ghostId, session.requestTarget)) {
+      await this.teardownSession(ghostId, capturedScope);
+      this.assertRequestCurrent(ghostId, target);
+      session = this.sessions.get(ghostId);
+      if (session === capturedScope) session = undefined;
+    }
+    const resolved = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
+    this.assertRequestCurrent(ghostId, target);
+    const resolution = await this.confirmLiveCustomRoot(resolved);
+    this.assertRequestCurrent(ghostId, target);
+    session = this.sessions.get(ghostId);
     if (session && session.ownerScopeKey !== scopeKey) {
-      await this.teardownSession(ghostId);
-      session = undefined;
+      const staleScope = session;
+      await this.teardownSession(ghostId, staleScope);
+      this.assertRequestCurrent(ghostId, target);
+      session = this.sessions.get(ghostId);
+      if (session === staleScope) session = undefined;
+    }
+    if (session && !this.sessionMatchesResolution(session, resolution)) {
+      const staleRoot = session;
+      await this.teardownSession(ghostId, staleRoot);
+      this.assertRequestCurrent(ghostId, target);
+      session = this.sessions.get(ghostId);
+      if (session === staleRoot) session = undefined;
     }
     if (!session) {
-      const resolution = await this.deps.bindingStore.resolveLibraryRoot(ghostId);
-      session = this.createSession(ghostId, resolution, scopeKey);
+      session = this.createSession(ghostId, resolution, scopeKey, target);
       this.sessions.set(ghostId, session);
       // 会话建立即自动 open vault(幂等):消除"write 前忘 open"的脚枪。
       // extraDirs 只在显式 open 时挂,status / 首次任意请求不得抢槽。
       if (session.drift === null) {
-        await session.vault.open();
-        // 重装自愈:能走到这里 = 插件已装入且启用,清掉卸载时留的 orphaned
-        // 标记(best-effort,失败不影响使用)。
-        if (session.vault.getMeta()?.orphaned) {
-          await session.vault.clearOrphaned().catch(() => {});
+        const opened = await session.vault.open();
+        this.assertRequestCurrent(ghostId, target, session);
+        if (
+          opened.ok
+          && opened.state === 'unavailable'
+          && (opened.reason === 'disk-missing' || opened.reason === 'binding-moved')
+        ) {
+          await this.latchCustomUnavailable(session, ghostId, opened.reason);
+        } else {
+          if (opened.ok && opened.state === 'ready' && resolution.kind === 'custom' && resolution.root !== null) {
+            await this.deps.bindingStore.markLibraryReady(ghostId).catch(() => {});
+            this.assertRequestCurrent(ghostId, target, session);
+          }
+          if (session.vault.getMeta()?.orphaned) {
+            // 重装自愈:能走到这里 = 插件已装入且启用,清掉卸载时留的 orphaned
+            // 标记(best-effort,失败不影响使用)。
+            await session.vault.clearOrphaned().catch(() => {});
+          }
         }
       } else if (this.extraDirGrant?.ghostId === ghostId) {
         await this.syncAgentReadonlyExtraDir(ghostId, null);
       }
     }
+    this.assertRequestCurrent(ghostId, target, session);
     return session;
   }
 
@@ -340,10 +558,10 @@ export class GhostLibrarySlot {
    * 与 read 同源校验——面板与电子脑看到同一个库。
    */
   /** 资格审:装入 + 启用 + 声明 library 能力(dispatch 与面板投影共用)。 */
-  private checkEligibility(ghostId: string): boolean {
-    const ghost = this.deps.getGhost(ghostId);
+  private checkEligibility(ghostId: string, ghost = this.deps.getGhost(ghostId)): boolean {
     if (!ghost) return false;
     if (ghost.enabled === false) return false;
+    if (ghost.approval && ghost.approval.state !== 'approved') return false;
     return ghost.manifest.library === true;
   }
 
@@ -355,18 +573,80 @@ export class GhostLibrarySlot {
   async resolvePanelFilePath(ghostId: string, relPath: string): Promise<string | null> {
     try {
       if (!this.checkEligibility(ghostId)) return null;
+      const preparing = this.deps.prepareRequest?.(ghostId);
+      if (preparing) await preparing;
+      if (!this.checkEligibility(ghostId)) return null;
       const session = await this.getOrCreateSession(ghostId, this.deps.captureOwnerScope());
       if (session.drift !== null) return null;
-      return await session.vault.resolveExistingFile(relPath);
+      const resolved = await session.vault.resolveExistingFile(relPath);
+      this.assertRequestCurrent(ghostId, session.requestTarget, session);
+      return resolved;
     } catch {
       return null;
     }
+  }
+
+  /** Stale custom resolution after the user parent vanished or was replaced must not open/mkdir. */
+  private async confirmLiveCustomRoot(
+    resolution: LibraryLocationResolution,
+  ): Promise<LibraryLocationResolution> {
+    if (resolution.kind !== 'custom' || resolution.root === null) return resolution;
+    const parent = path.dirname(resolution.root);
+    try {
+      const st = await fs.promises.lstat(parent);
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        return { kind: 'custom', root: null, drift: 'disk-missing', record: resolution.record };
+      }
+      let real: string;
+      try {
+        real = await fs.promises.realpath(parent);
+      } catch {
+        return { kind: 'custom', root: null, drift: 'disk-missing', record: resolution.record };
+      }
+      if (real !== resolution.record.realPathAtGrant) {
+        return { kind: 'custom', root: null, drift: 'binding-moved', record: resolution.record };
+      }
+      const identity = resolution.record.identity;
+      if (identity && identity.ino !== 0 && (st.dev !== identity.dev || st.ino !== identity.ino)) {
+        return { kind: 'custom', root: null, drift: 'binding-moved', record: resolution.record };
+      }
+    } catch {
+      return { kind: 'custom', root: null, drift: 'disk-missing', record: resolution.record };
+    }
+    return resolution;
+  }
+
+  private async latchCustomUnavailable(
+    session: GhostLibrarySession,
+    ghostId: string,
+    reason: 'disk-missing' | 'binding-moved',
+  ): Promise<void> {
+    session.drift = reason;
+    if (this.extraDirOpenerGhostId === ghostId) this.extraDirOpenerGhostId = null;
+    await this.syncAgentReadonlyExtraDir(ghostId, null);
+  }
+
+  /** Cached sessions must re-check the live binding; a missing custom root is unavailable, not an empty mkdir. */
+  private sessionMatchesResolution(
+    session: GhostLibrarySession,
+    resolution: LibraryLocationResolution,
+  ): boolean {
+    const drift = 'drift' in resolution && resolution.root === null ? resolution.drift : null;
+    if (session.drift !== drift || session.locationKind !== resolution.kind) return false;
+    const record = 'record' in resolution ? resolution.record : undefined;
+    if (session.generation !== (record?.generation ?? 0)) return false;
+    if (drift !== null) return true;
+    const root = resolution.kind === 'custom' && resolution.root !== null
+      ? resolution.root
+      : this.deps.getDefaultRoot(session.ghostId);
+    return session.vault.getRootDir() === root;
   }
 
   private createSession(
     ghostId: string,
     resolution: LibraryLocationResolution,
     scopeKey: string | null,
+    requestTarget: GhostLibraryRequestTarget,
   ): GhostLibrarySession {
     const drift = 'drift' in resolution && resolution.root === null ? resolution.drift : null;
     const root = resolution.kind === 'custom' && resolution.root !== null
@@ -378,11 +658,17 @@ export class GhostLibrarySlot {
       ghostId,
       getDiskFreeBytes: this.deps.getDiskFreeBytes,
       locationKind: resolution.kind,
-      log: this.deps.log,
+      customParentGrant: resolution.kind === 'custom' && resolution.root !== null
+        ? { realPathAtGrant: resolution.record.realPathAtGrant, identity: resolution.record.identity }
+        : undefined,
+      allowCustomInit: resolution.kind === 'custom' && resolution.root !== null
+        ? resolution.record.libraryReady === false
+        : undefined,      log: this.deps.log,
     });
     const sql = this.deps.createSqlService({
       workerScriptPath: this.deps.workerScriptPath,
       betterSqliteModulePath: this.deps.betterSqliteModulePath,
+      betterSqliteNativeBinding: this.deps.betterSqliteNativeBinding,
       log: this.deps.log,
     });
     const record = 'record' in resolution ? resolution.record : undefined;
@@ -396,6 +682,7 @@ export class GhostLibrarySlot {
     });
     return {
       ghostId,
+      requestTarget,
       vault,
       sql,
       ownerScopeKey: scopeKey,
@@ -481,9 +768,223 @@ export class GhostLibrarySlot {
     }
   }
 
-  private async teardownSession(ghostId: string): Promise<void> {
+  private stagingStoreKey(ownerScopeKey: string, ghostId: string): string {
+    return `${ownerScopeKey}\0${ghostId}`;
+  }
+
+  private getOrCreateStagingStore(ghostId: string, ownerScopeKey: string): LibraryStagingStore {
+    const key = this.stagingStoreKey(ownerScopeKey, ghostId);
+    const existing = this.stagingStores.get(key);
+    if (existing) return existing;
+    const rootDir = this.deps.getStagingRoot
+      ? this.deps.getStagingRoot(ghostId)
+      : path.join(this.deps.getDefaultRoot(ghostId), '..', '..', 'library-staging', ghostId);
+    const create = this.deps.createStagingStore ?? ((deps: LibraryStagingDeps) => new LibraryStagingStore(deps));
+    const store = create({
+      rootDir,
+      ownerScopeKey,
+      ghostId,
+      captureOwnerScope: () => this.deps.captureOwnerScope(),
+      createVault: (vaultDeps) => this.deps.createVault(vaultDeps),
+      getDiskFreeBytes: this.deps.getDiskFreeBytes,
+      log: this.deps.log,
+    });
+    this.stagingStores.set(key, store);
+    return store;
+  }
+
+  private stagingFail(r: LibraryStagingFailure): GhostPipeLibraryResult {
+    return r.errorCode === 'LIBRARY_UNAVAILABLE'
+      ? fail(r.errorCode, r.message, 'LIBRARY_UNAVAILABLE')
+      : { ok: false, errorCode: r.errorCode, message: r.message };
+  }
+
+  private async verifyLibraryAck(
+    ghostId: string,
+    req: Record<string, unknown>,
+  ): Promise<LibraryStagingAck | LibraryStagingFailure> {
+    const pathRel = typeof req.path === 'string' ? req.path : '';
+    const sha256 = typeof req.sha256 === 'string' ? req.sha256 : '';
+    const bytes = typeof req.bytes === 'number' ? req.bytes : NaN;
+    const libraryIdentity = typeof req.libraryIdentity === 'string' ? req.libraryIdentity : '';
+    const libraryGeneration = typeof req.libraryGeneration === 'number' ? req.libraryGeneration : NaN;
+    if (!isLibraryBlobRelPath(pathRel) || !/^[0-9a-f]{64}$/.test(sha256) || !Number.isInteger(bytes) || bytes < 0) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library ACK 字段非法,原件已保留' };
+    }
+    const ext = pathRel.split('.').pop() ?? '';
+    if (libraryBlobRelPath(sha256, ext) !== pathRel) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library ACK 不是 content-addressed 正本路径,原件已保留' };
+    }
+    if (!/^[0-9a-f]{64}$/.test(libraryIdentity) || !Number.isInteger(libraryGeneration) || libraryGeneration < 0) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library epoch 非法,原件已保留' };
+    }
+    const scopeKey = this.deps.captureOwnerScope();
+    if (scopeKey === null) {
+      return { ok: false, errorCode: 'OWNER_CHANGED', message: '当前没有有效账号,staging 已拒绝' };
+    }
+    const session = await this.getOrCreateSession(ghostId, scopeKey);
+    if (session.drift !== null) {
+      return { ok: false, errorCode: 'LIBRARY_UNAVAILABLE', message: `Library 不可用(${session.drift})` };
+    }
+    if (session.identity !== libraryIdentity || session.generation !== libraryGeneration) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library epoch 与当前库不一致,原件已保留' };
+    }
+    const opened = await session.vault.open();
+    if (this.deps.captureOwnerScope() !== scopeKey) {
+      return { ok: false, errorCode: 'OWNER_CHANGED', message: '账号已切换,staging 操作已取消' };
+    }
+    if (!opened.ok) return { ok: false, errorCode: 'LIBRARY_UNAVAILABLE', message: opened.message };
+    if (opened.state === 'unavailable') {
+      return { ok: false, errorCode: 'LIBRARY_UNAVAILABLE', message: `Library 不可用(${opened.reason ?? 'io'})` };
+    }
+    const hashed = await session.vault.hashFile(pathRel);
+    if (this.deps.captureOwnerScope() !== scopeKey) {
+      return { ok: false, errorCode: 'OWNER_CHANGED', message: '账号已切换,staging 操作已取消' };
+    }
+    if (!hashed.ok) {
+      return hashed.errorCode === 'LIBRARY_UNAVAILABLE'
+        ? { ok: false, errorCode: 'LIBRARY_UNAVAILABLE', message: hashed.message }
+        : { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library ACK 目标不存在或无法核验,原件已保留' };
+    }
+    if (hashed.sha256 !== sha256 || hashed.bytes !== bytes) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library ACK 与 staging 原件不一致,原件已保留' };
+    }
+    const live = this.sessions.get(ghostId);
+    if (
+      this.relocating.has(ghostId)
+      || this.deps.captureOwnerScope() !== scopeKey
+      || !live
+      || live !== session
+      || live.identity !== libraryIdentity
+      || live.generation !== libraryGeneration
+    ) {
+      return { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library epoch 已变化,原件已保留' };
+    }
+    return { ok: true, path: pathRel, sha256, bytes, libraryIdentity, libraryGeneration };
+  }
+
+  private async dispatchStaging(
+    ghostId: string,
+    op: string,
+    req: Record<string, unknown>,
+  ): Promise<GhostPipeLibraryResult> {
+    const ownerScopeKey = this.deps.captureOwnerScope();
+    if (ownerScopeKey === null) {
+      return fail('OWNER_CHANGED', '当前没有有效账号,staging 已拒绝');
+    }
+    let expectedOwner: unknown;
+    try {
+      expectedOwner = this.deps.captureMutationOwner?.();
+    } catch (err) {
+      return fail('OWNER_CHANGED', err instanceof Error ? err.message : '账号切换中,staging 已拒绝');
+    }
+    let releaseLease: (() => void) | undefined;
+    if (this.deps.beginMutation) {
+      try {
+        releaseLease = this.deps.beginMutation(expectedOwner);
+      } catch (err) {
+        return fail('OWNER_CHANGED', err instanceof Error ? err.message : '账号已切换,staging 已拒绝');
+      }
+    }
+    try {
+    const store = this.getOrCreateStagingStore(ghostId, ownerScopeKey);
+    switch (op) {
+      case 'staging.begin': {
+        const r = await store.begin({
+          ghostId,
+          taskId: req.taskId,
+          sourceRevision: req.sourceRevision,
+          totalBytes: req.totalBytes,
+          sha256: req.sha256,
+          mime: req.mime,
+          recovery: req.recovery,
+        });
+        if (!r.ok) return this.stagingFail(r);
+        return { ok: true, op: 'staging.begin', stagingId: r.stagingId };
+      }
+      case 'staging.chunk': {
+        const r = await store.chunk({
+          ghostId,
+          stagingId: req.stagingId,
+          seq: req.seq,
+          content: req.content,
+          encoding: req.encoding,
+        });
+        if (!r.ok) return this.stagingFail(r);
+        return { ok: true, op: 'staging.chunk', accepted: r.accepted };
+      }
+      case 'staging.commit': {
+        const r = await store.commit({ ghostId, stagingId: req.stagingId });
+        if (!r.ok) return this.stagingFail(r);
+        return {
+          ok: true, op: 'staging.commit',
+          stagingId: r.stagingId, taskId: r.taskId, sourceRevision: r.sourceRevision,
+          sha256: r.sha256, bytes: r.bytes, mime: r.mime, durable: true,
+        };
+      }
+      case 'staging.list': {
+        const r = await store.list({ ghostId, cursor: req.cursor, limit: req.limit });
+        if (!r.ok) return this.stagingFail(r);
+        return { ok: true, op: 'staging.list', items: r.items, hasMore: r.hasMore, nextCursor: r.nextCursor };
+      }
+      case 'staging.read': {
+        const r = await store.read({
+          ghostId,
+          stagingId: req.stagingId,
+          offset: req.offset,
+          length: req.length,
+        });
+        if (!r.ok) return this.stagingFail(r);
+        return {
+          ok: true, op: 'staging.read',
+          stagingId: r.stagingId, content: r.content, encoding: r.encoding,
+          bytes: r.bytes, sha256: r.sha256,
+        };
+      }
+      case 'staging.abort': {
+        const r = await store.abort({ ghostId, stagingId: req.stagingId });
+        if (!r.ok) return this.stagingFail(r);
+        return { ok: true, op: 'staging.abort', aborted: r.aborted };
+      }
+      case 'staging.release': {
+        if (this.relocating.has(ghostId)) {
+          return fail('ACK_MISMATCH', 'Library 正在迁移到新位置,原件已保留');
+        }
+        const releaseDone = this.beginStagingRelease(ghostId);
+        try {
+          const ack = await this.verifyLibraryAck(ghostId, req);
+          if (this.relocating.has(ghostId)) {
+            return fail('ACK_MISMATCH', 'Library 正在迁移到新位置,原件已保留');
+          }
+          const session = ack.ok === true ? this.sessions.get(ghostId) : undefined;
+          const r = await store.release({
+            ghostId,
+            stagingId: req.stagingId,
+            ack,
+            confirmLibrary: ack.ok !== true
+              ? undefined
+              : () => (session
+                ? this.confirmReleaseLibrary(ghostId, session, ack)
+                : { ok: false, errorCode: 'ACK_MISMATCH', message: 'Library epoch 已变化,原件已保留' }),
+          });
+          if (!r.ok) return this.stagingFail(r);
+          return { ok: true, op: 'staging.release', stagingId: r.stagingId, released: r.released };
+        } finally {
+          releaseDone();
+        }
+      }
+      default:
+        return fail('PATH_INVALID', `op 必须是 ${GHOST_LIBRARY_OPS.join(' / ')}`, 'INVALID_REQUEST');
+    }
+    } finally {
+      releaseLease?.();
+    }
+  }
+
+  private async teardownSession(ghostId: string, expected?: GhostLibrarySession): Promise<void> {
     const session = this.sessions.get(ghostId);
     if (!session) return;
+    if (expected && session !== expected) return;
     this.sessions.delete(ghostId);
     for (const [streamId, epoch] of this.writeEpochByStream) {
       if (epoch.ghostId === ghostId) this.writeEpochByStream.delete(streamId);
@@ -498,12 +999,35 @@ export class GhostLibrarySlot {
 
   /** 停用/卸载/owner 切换收口:作废全部会话(commit 5 的生命周期接线点)。 */
   async disposeGhost(ghostId: string): Promise<void> {
+    this.advanceRelocationGeneration(ghostId);
+    await this.waitForStagingReleases(ghostId);
     await this.teardownSession(ghostId);
+    await this.disposeStagingStores(ghostId);
   }
 
   async disposeAll(): Promise<void> {
-    for (const id of Array.from(this.sessions.keys())) {
-      await this.teardownSession(id);
+    const ids = new Set([...this.sessions.keys(), ...this.stagingReleaseInflight.keys(), ...this.relocationGenerations.keys()]);
+    for (const key of this.stagingStores.keys()) {
+      const ghostId = key.split('\0')[1];
+      if (ghostId) ids.add(ghostId);
+    }
+    for (const id of ids) this.setRelocating(id, true);
+    try {
+      for (const id of ids) await this.disposeGhost(id);
+      await this.disposeStagingStores();
+    } finally {
+      for (const id of ids) this.setRelocating(id, false);
+    }
+  }
+
+  private async disposeStagingStores(ghostId?: string): Promise<void> {
+    const entries = [...this.stagingStores.entries()].filter(([key]) => {
+      if (!ghostId) return true;
+      return key.split('\0')[1] === ghostId;
+    });
+    for (const [key, store] of entries) {
+      this.stagingStores.delete(key);
+      await store.dispose().catch(() => {});
     }
   }
 
@@ -520,7 +1044,7 @@ export class GhostLibrarySlot {
     if (!this.checkEligibility(ghostId)) {
       return fail('NOT_DECLARED', '插件未装入、已停用或未声明 "library" 能力', 'PERMISSION_DENIED');
     }
-    if (this.deps.captureOwnerScope() !== session.ownerScopeKey) {
+    if (!this.isRequestCurrent(ghostId, session.requestTarget)) {
       return fail('LIBRARY_UNAVAILABLE', cancelledMessage, 'CANCELLED');
     }
     const live = this.sessions.get(ghostId);
@@ -571,6 +1095,7 @@ export class GhostLibrarySlot {
     op: string,
     req: Record<string, unknown>,
   ): Promise<GhostPipeLibraryResult> {
+    this.assertRequestCurrent(ghostId, session.requestTarget, session);
     // 漂移占位会话:open/status 如实报 unavailable+reason,其余操作全拒
     // (绝不当空库、绝不落默认根冒充)。
     if (session.drift !== null && op !== 'open' && op !== 'status') {
@@ -591,7 +1116,33 @@ export class GhostLibrarySlot {
     switch (op) {
       case 'open': {
         const r = await vault.open();
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!r.ok) return vaultFail(r);
+        if (r.state === 'unavailable' && (r.reason === 'disk-missing' || r.reason === 'binding-moved')) {
+          await this.latchCustomUnavailable(session, ghostId, r.reason);
+          const drifted = {
+            ok: true as const, op: 'open' as const, state: 'unavailable' as const,
+            reason: r.reason, usedBytes: 0, fileCount: 0, location: session.locationKind,
+          };
+          return { ...drifted, ...this.handshakeFields(session, 'unavailable') } as GhostPipeLibraryResult;
+        }
+        if (session.locationKind === 'custom') {
+          const live = await this.confirmLiveCustomRoot(
+            await this.deps.bindingStore.resolveLibraryRoot(ghostId),
+          );
+          this.assertRequestCurrent(ghostId, session.requestTarget, session);
+          if (live.kind !== 'custom' || live.root === null) {
+            const reason = live.kind === 'custom' && live.root === null && live.drift === 'binding-moved'
+              ? 'binding-moved'
+              : 'disk-missing';
+            await this.latchCustomUnavailable(session, ghostId, reason);
+            const drifted = {
+              ok: true as const, op: 'open' as const, state: 'unavailable' as const,
+              reason, usedBytes: 0, fileCount: 0, location: session.locationKind,
+            };
+            return { ...drifted, ...this.handshakeFields(session, 'unavailable') } as GhostPipeLibraryResult;
+          }
+        }
         this.extraDirOpenerGhostId = ghostId;
         await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
         const body = {
@@ -602,6 +1153,7 @@ export class GhostLibrarySlot {
       }
       case 'status': {
         const r = await vault.status();
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!r.ok) return vaultFail(r);
         if (this.extraDirOpenerGhostId === ghostId) {
           await this.syncAgentReadonlyExtraDir(ghostId, vault.getRootDir());
@@ -867,9 +1419,11 @@ export class GhostLibrarySlot {
       }
       case 'db.open': {
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         // 父目录由宿主建好(better-sqlite3 只建文件不建目录)。
         await fs.promises.mkdir(path.dirname(resolved.abs), { recursive: true }).catch(() => {});
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         const r = await session.sql.open(resolved.abs);
         return this.dbResultToPipe(op, r);
       }
@@ -877,6 +1431,7 @@ export class GhostLibrarySlot {
         const diskGate = await this.dbDiskGate(session);
         if (diskGate) return diskGate;
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         const r = await session.sql.exec(resolved.abs, req.sql as string, req.params);
         return this.dbResultToPipe(op, r);
@@ -885,6 +1440,7 @@ export class GhostLibrarySlot {
         const diskGate = await this.dbDiskGate(session);
         if (diskGate) return diskGate;
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         const r = await session.sql.batch(resolved.abs, (req.statements as Array<{ sql: string; params?: unknown }>) ?? []);
         return this.dbResultToPipe(op, r);
@@ -893,6 +1449,7 @@ export class GhostLibrarySlot {
         const diskGate = await this.dbDiskGate(session);
         if (diskGate) return diskGate;
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         // 迁移前自动在线备份(宿主命名空间,插件路径语法写不进);备份失败
         // 是硬前置——报错中止,不带伤迁移。
@@ -901,7 +1458,9 @@ export class GhostLibrarySlot {
           `pre-migrate-${Date.now()}-${Math.floor(Math.random() * 1e6)}.db`,
         );
         await fs.promises.mkdir(path.dirname(backupDest), { recursive: true }).catch(() => {});
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         const bak = await session.sql.backup(resolved.abs, backupDest);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!bak.ok) return this.dbResultToPipe('db.backup', bak);
         const r = await session.sql.migrate(
           resolved.abs,
@@ -912,21 +1471,25 @@ export class GhostLibrarySlot {
       }
       case 'db.backup': {
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         const label = typeof req.label === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(req.label) ? req.label : 'manual';
         const dest = path.join(session.vault.getRootDir(), '.cindy-library', 'backups', `${label}-${Date.now()}.db`);
         await fs.promises.mkdir(path.dirname(dest), { recursive: true }).catch(() => {});
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         const r = await session.sql.backup(resolved.abs, dest);
         return this.dbResultToPipe(op, r);
       }
       case 'db.check': {
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         const r = await session.sql.check(resolved.abs);
         return this.dbResultToPipe(op, r);
       }
       case 'db.userVersion': {
         const resolved = await this.resolveDbPath(session, req.dbPath);
+        this.assertRequestCurrent(ghostId, session.requestTarget, session);
         if (!('abs' in resolved)) return resolved;
         const r = await session.sql.userVersion(resolved.abs);
         return this.dbResultToPipe(op, r);

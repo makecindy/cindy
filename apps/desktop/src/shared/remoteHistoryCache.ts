@@ -1,5 +1,5 @@
 import type { HistoryMessageSource, HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
-import { historyWorkSummaries } from '@cindy/maker-shared/message-window';
+import { historyWorkSummaries, isHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 
 /** One eligibility rule for write admission, serialization and old cache reads. */
 export function currentRemoteHistoryDetails<T extends HistoryMessageSource>(snapshot: HistoryViewSnapshot<T>) {
@@ -47,6 +47,13 @@ function validSummary(value: unknown, depth: number): boolean {
       (key) => typeof value[key] === 'number' && Number.isFinite(value[key]),
     ) &&
     typeof value.isStreaming === 'boolean' &&
+    (value.parentToolUseId === undefined || typeof value.parentToolUseId === 'string') &&
+    (value.model === undefined || typeof value.model === 'string') &&
+    (value.artifacts === undefined || Array.isArray(value.artifacts) && value.artifacts.every((file) =>
+      record(file) && typeof file.path === 'string' && typeof file.createdAt === 'string'
+      && (file.source === 'tool' || file.source === 'command')
+      && (file.ready === undefined || typeof file.ready === 'boolean')
+      && (file.exclude === undefined || file.exclude === 'all' || file.exclude === 'command'))) &&
     (value.preview === undefined || validSummary(value.preview, depth + 1))
   );
 }
@@ -60,7 +67,7 @@ function validItems(value: unknown, depth = 0): boolean {
         record(item) &&
         typeof item.key === 'string' &&
         (item.type === 'messages'
-          ? validRows(item.messages)
+          ? validRows(item.messages) && (item.deferred === undefined || validSummary(item.deferred, depth))
           : item.type === 'work' &&
             validSummary(item.summary, depth) &&
             (item.children === undefined || validItems(item.children, depth + 1))),
@@ -104,6 +111,7 @@ export function decodeRemoteHistory<T extends HistoryMessageSource>(
       expanded: new Set(value.expanded),
       hasMore: value.hasMore,
       nextCursor: value.nextCursor,
+      ...(isHistoryCacheReceipt(value.readReceipt) ? { readReceipt: value.readReceipt } : {}),
       ready: true,
       loading: false,
       error: null,
@@ -125,6 +133,7 @@ export function encodeRemoteHistory<T extends HistoryMessageSource>(
       expanded: [...snapshot.expanded],
       hasMore: snapshot.hasMore,
       nextCursor: snapshot.nextCursor,
+      readReceipt: snapshot.readReceipt,
     },
     (key, value) => {
       // A cached transcript may be read offline. Never revive a live indicator or send payload.

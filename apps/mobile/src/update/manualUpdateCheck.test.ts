@@ -198,10 +198,21 @@ describe('runManualUpdateCheck', () => {
 });
 
 describe('manualUpdateCheckMessage', () => {
+  it('does not claim the Google Play app package is current after checking only content updates', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const options = { isTestFlightBuild: false, isGooglePlayInstallation: true, t: i18n.t };
+    // 结果只说内容更新;「新版本请在 Google Play 中更新」常驻在版本分组的 footer。
+    expect(manualUpdateCheckMessage({ kind: 'up-to-date' }, options))
+      .toBe('当前没有可用的内容更新。');
+    expect(manualUpdateCheckMessage({ kind: 'ota-unavailable' }, options))
+      .toBe('当前构建无法检查内容更新。');
+    expect(i18n.t('settings.version.googlePlayUpdateManaged')).toBe('新版本请在 Google Play 中更新。');
+  });
+
   it('tells the user to fully reopen the app when reload was rejected', async () => {
     await i18n.changeLanguage('zh-CN');
     expect(manualUpdateCheckMessage({ kind: 'restart-required' }, { isTestFlightBuild: false, t: i18n.t }))
-      .toBe('更新已下载，完全退出 App 后重新打开即可生效');
+      .toBe('更新已下载，完全退出并重新打开 App 后生效。');
   });
 
   it('uses the current language for an already completed TestFlight check', async () => {
@@ -209,10 +220,10 @@ describe('manualUpdateCheckMessage', () => {
 
     await i18n.changeLanguage('zh-CN');
     expect(manualUpdateCheckMessage(outcome, { isTestFlightBuild: true, t: i18n.t }))
-      .toBe('当前没有可用的内容更新。新测试版本请在 TestFlight 中查看。');
+      .toBe('当前没有可用的内容更新。');
 
     await i18n.changeLanguage('en');
     expect(manualUpdateCheckMessage(outcome, { isTestFlightBuild: true, t: i18n.t }))
-      .toBe('No content updates are available. Check TestFlight for new test builds.');
+      .toBe('No content update available.');
   });
 });

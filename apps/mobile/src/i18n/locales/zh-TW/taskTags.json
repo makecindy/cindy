@@ -1,4 +1,5 @@
 {
+  "remoteBusy": "遠端忙碌中，請稍後再試。",
   "title": "標籤",
   "more": "更多標籤",
   "settings": "標籤設定",
@@ -33,6 +34,9 @@
   "editLabel": "編輯「{{name}}」",
   "reorderLabel": "調整「{{name}}」的順序",
   "reorderHint": "長按把手並拖曳排序",
+  "reorder": "排序標籤",
+  "reorderDone": "完成排序",
+  "reorderFooter": "點「排序標籤」後拖曳控制柄調整順序。",
   "pink": "粉紅色",
   "coral": "珊瑚色",
   "teal": "青色",

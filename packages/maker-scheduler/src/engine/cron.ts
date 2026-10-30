@@ -184,15 +184,57 @@ function tzOffsetMs(epochMs: number, tz: string): number {
   return wallAsUtc - epochSec;
 }
 
-// Convert wall-clock (y,mo,d,h,mi) in tz back to epoch ms. Handles DST edges by re-checking offset.
+// Whether the epoch instant reads exactly (y,mo,d,h,mi) on the wall clock in tz.
+function wallClockEquals(
+  epochMs: number,
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+  tz: string,
+): boolean {
+  const w = wallClock(epochMs, tz);
+  return w.y === y && w.mo === mo && w.d === d && w.h === h && w.mi === mi;
+}
+
+// Convert wall-clock (y,mo,d,h,mi) in tz back to epoch ms.
+//
+// DST edges:
+//  - Overlap (fall-back, wall time occurs twice): resolves to the LATER
+//    occurrence. nextRun/nextMonthlyFire compare candidates against a strictly
+//    increasing "from" instant; the earlier occurrence can lie in the past when
+//    `from` is already inside the repeated hour, which made the scheduler
+//    re-fire a finished schedule every tick until the wall clock left the
+//    repeated hour.
+//  - Gap (spring-forward, wall time never occurs): returns the instant the wall
+//    clock reads the requested time plus the gap size (the post-transition
+//    interpretation). Returning the pre-transition side made nextRun re-derive
+//    the missing slot forever and exhaust MAX_ITERATIONS (~4.4s of blocking
+//    Intl calls), quarantining the schedule and stalling the host tick loop.
 // Exported for sibling use (see wallClock comment above).
 export function fromWallClock(y: number, mo: number, d: number, h: number, mi: number, tz: string): number {
   const guess = Date.UTC(y, mo - 1, d, h, mi, 0);
   const off1 = tzOffsetMs(guess, tz);
   const candidate = guess - off1;
   const off2 = tzOffsetMs(candidate, tz);
-  if (off2 === off1) return candidate;
-  return guess - off2;
+  if (off2 === off1) {
+    // Offsets agree, but a fall-back transition within the next hour can make
+    // this wall time occur a second time; prefer that later occurrence.
+    const offAfter = tzOffsetMs(candidate + 3600_000, tz);
+    if (offAfter !== off1) {
+      const later = guess - offAfter;
+      if (wallClockEquals(later, y, mo, d, h, mi, tz)) return later;
+    }
+    return candidate;
+  }
+  const corrected = guess - off2;
+  if (wallClockEquals(corrected, y, mo, d, h, mi, tz)) return corrected;
+  // Nonexistent wall time: spring-forward gaps shrink the day, so the offset
+  // that applies after the jump is the larger one — clamping there guarantees
+  // the returned instant is at/after the transition, letting walkers exit the
+  // gap instead of re-entering it.
+  return guess - Math.min(off1, off2);
 }
 
 // ---------- nextRun ----------
@@ -243,11 +285,38 @@ export function nextRun(expr: string, fromMs: number, tz: string): number {
       if (next > w.mi) {
         cur = fromWallClock(w.y, w.mo, w.d, w.h, next, tz);
       } else {
-        // wrap into next hour. +1h on UTC then re-derive wall components handles DST jumps:
-        // spring-forward jumps the wall hour past the missing slot; fall-back may land us
-        // back in the same wall hour, which the outer loop will then advance again.
-        const soh = fromWallClock(w.y, w.mo, w.d, w.h, 0, tz) + 3600_000;
-        const w2 = wallClock(soh, tz);
+        // A sub-hour fall-back can leave us in the same wall-clock hour after
+        // the UTC +1h hop below. Try every cron minute in the current wall
+        // hour only for this wrap case: fromWallClock resolves an overlap to
+        // its later occurrence, so a minute that wrapped numerically (for
+        // example 01:45 after 01:50) can still be future in the repeated
+        // segment. Gap conversion is accepted only when it round-trips to the
+        // requested wall minute; otherwise the same clamped instant would be
+        // selected on every iteration.
+        const sameHourCandidates = cron.minute
+          .map((minute) => fromWallClock(w.y, w.mo, w.d, w.h, minute, tz))
+          .filter(
+            (candidate, index) =>
+              candidate > fromMs &&
+              wallClockEquals(candidate, w.y, w.mo, w.d, w.h, cron.minute[index], tz),
+          );
+        if (sameHourCandidates.length > 0) {
+          cur = Math.min(...sameHourCandidates);
+          continue;
+        }
+
+        // Wrap into the next distinct wall-clock hour. A plain +1h UTC hop
+        // can remain inside a repeated hour after a 30-minute fall-back, so
+        // advance by at most four hourly probes until the wall hour changes.
+        // The bound covers the DST transitions supported by this walker while
+        // preventing an unbounded search inside a malformed schedule.
+        const nextHourStart = fromWallClock(w.y, w.mo, w.d, w.h, 0, tz) + 3600_000;
+        let probe = nextHourStart;
+        let w2 = wallClock(probe, tz);
+        for (let step = 0; step < 4 && sameWallHour(w2, w); step++) {
+          probe += 3600_000;
+          w2 = wallClock(probe, tz);
+        }
         cur = fromWallClock(w2.y, w2.mo, w2.d, w2.h, next, tz);
       }
       continue;
@@ -270,6 +339,10 @@ function matchesDay(cron: ParsedCron, w: WallClock): boolean {
 function nextOrWrap(list: CronField, current: number): number {
   for (const x of list) if (x > current) return x;
   return list[0];
+}
+
+function sameWallHour(a: WallClock, b: WallClock): boolean {
+  return a.y === b.y && a.mo === b.mo && a.d === b.d && a.h === b.h;
 }
 
 // ---------- cronToHuman ----------

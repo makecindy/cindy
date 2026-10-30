@@ -17,7 +17,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs, renameSync } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 
@@ -30,6 +30,58 @@ const CACHE_DIR_NAME = 'remote-file-cache';
 const CHAT_ATTACHMENT_CACHE_DIR_NAME = 'chat-attachment-cache';
 /** LRU 字节上限:4GB——够放两个 2GB 文件,超出按最旧访问逐出。 */
 const MAX_CACHE_BYTES = 4 * 1024 * 1024 * 1024;
+
+/** Version-validated transport copies share this store's disk budget and startup sweep.
+ * Both identities are SHA-256 digests; no remote path becomes a local path. */
+function versionedCachePath(source: string, version: string): string {
+  if (!/^[a-f0-9]{64}$/.test(source) || !/^[a-f0-9]{64}$/.test(version))
+    throw new Error('INVALID_CACHE_IDENTITY');
+  return path.join(cacheDir(), `peer-${source}-${version}.bin`);
+}
+
+export async function readVersionedRemoteFile(source: string, version: string, size: number): Promise<string | null> {
+  const file = versionedCachePath(source, version);
+  const stat = await fs.lstat(file).catch(() => null);
+  if (!stat?.isFile() || stat.size !== size) return null;
+  const now = new Date();
+  await fs.utimes(file, now, now).catch(() => undefined);
+  return file;
+}
+
+export async function removeVersionedRemoteFile(source: string, version: string): Promise<void> {
+  await fs.rm(versionedCachePath(source, version), { force: true });
+}
+
+export async function writeVersionedRemoteFile(
+  source: string, version: string, from: string | Buffer, size: number, assertCurrent: () => void,
+): Promise<void> {
+  if (size > MAX_CACHE_BYTES) return;
+  const destination = versionedCachePath(source, version);
+  assertCurrent();
+  await fs.mkdir(cacheDir(), { recursive: true });
+  // Make room before allocating the new copy, rather than temporarily exceeding
+  // the existing disk quota and failing the write on a nearly full volume.
+  await evictLru(undefined, MAX_CACHE_BYTES - size);
+  assertCurrent();
+  const temporary = path.join(cacheDir(), `${randomUUID()}.part`);
+  try {
+    if (typeof from === 'string') await fs.copyFile(from, temporary, constants.COPYFILE_FICLONE);
+    else await fs.writeFile(temporary, from, { flag: 'wx', mode: 0o600 });
+    if ((await fs.stat(temporary)).size !== size) return;
+    await fs.chmod(temporary, 0o600);
+    assertCurrent();
+    renameSync(temporary, destination);
+    // A changed source replaces its previous versions, regardless of their age.
+    const names = await fs.readdir(cacheDir());
+    for (const name of names) {
+      if (name.startsWith(`peer-${source}-`) && name !== path.basename(destination))
+        await fs.rm(path.join(cacheDir(), name), { force: true }).catch(() => undefined);
+    }
+    await evictLru(destination);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
 
 export interface RemoteFileIdentity {
   /** Capture before any await so a switched account cannot share an in-flight read. */
@@ -50,7 +102,11 @@ export type FetchProgressFn = (
 ) => void;
 
 /** 取回执行体:把远端文件完整写到 destPath(临时路径),完成返回。 */
-export type FetchExecutor = (destPath: string, onProgress: FetchProgressFn, signal?: AbortSignal) => Promise<void>;
+export type FetchExecutor = (
+  destPath: string,
+  onProgress: FetchProgressFn,
+  signal?: AbortSignal,
+) => Promise<void>;
 
 function cacheDir(): string {
   return path.join(app.getPath('userData'), CACHE_DIR_NAME);
@@ -152,23 +208,38 @@ function sanitizeBaseName(name: string): string {
   return name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '');
 }
 
-/** 截短到 maxLen 且**保留扩展名**:缓存副本的应用内预览(xdt-file:// 白名单、
+/** 截短到 maxBytes UTF-8 字节且**保留扩展名**:缓存副本的应用内预览(xdt-file:// 白名单、
  *  图片/视频分派)按缓存文件名的扩展名判定,截断丢了 .png/.mp4 会 415。
  *  超长"扩展名"(最后一个点离结尾很远)按无扩展名处理,不为它牺牲主干。 */
-function shortenKeepExt(name: string, maxLen: number): string {
-  if (name.length <= maxLen) return name;
+function shortenKeepExt(name: string, maxBytes: number): string {
+  if (Buffer.byteLength(name, 'utf8') <= maxBytes) return name;
+  const truncate = (text: string, budget: number) => {
+    let result = '';
+    for (const character of text) {
+      const bytes = Buffer.byteLength(character, 'utf8');
+      if (bytes > budget) break;
+      result += character;
+      budget -= bytes;
+    }
+    return result;
+  };
   const ext = path.extname(name);
-  if (ext.length > 1 && ext.length <= 16) {
-    return name.slice(0, Math.max(1, maxLen - ext.length)) + ext;
+  const extBytes = Buffer.byteLength(ext, 'utf8');
+  if (ext.length > 1 && extBytes <= 16) {
+    return truncate(name.slice(0, -ext.length), maxBytes - extBytes) + ext;
   }
-  return name.slice(0, maxLen);
+  return truncate(name, maxBytes);
 }
 
 function cachePathFor(id: RemoteFileIdentity): string {
-  // 两段式:<路径身份>-<size>-<mtime 取整>-<basename>。版本段变 = 新文件;
-  // 前缀段稳定 = 断线时可按它找"最近一次成功取回的副本"。
+  // Keep the path prefix for offline lookup, but hash the exact version. The v2
+  // marker prevents rounded legacy versions from being mistaken for exact hits.
   const base = shortenKeepExt(sanitizeBaseName(path.basename(id.relPath)) || 'file', 80);
-  return path.join(cacheDir(), `${prefixHashFor(id)}-${id.size}-${Math.round(id.mtimeMs)}-${base}`);
+  const version = createHash('sha256')
+    .update(JSON.stringify([id.size, id.mtimeMs]))
+    .digest('hex')
+    .slice(0, 20);
+  return path.join(cacheDir(), `${prefixHashFor(id)}-v2-${version}-${base}`);
 }
 
 function assertCacheOwner(scope: string): void {
@@ -243,7 +314,8 @@ export async function putCachedContent(id: RemoteFileIdentity, content: string):
 type InflightRead = {
   promise: Promise<string>;
   controller: AbortController;
-  consumers: Set<symbol>;
+  consumers: Map<symbol, FetchProgressFn>;
+  lastProgress?: Parameters<FetchProgressFn>;
 };
 const inflight = new Map<string, InflightRead>();
 
@@ -256,21 +328,47 @@ export async function fetchRemoteFileToCache(
   executor: FetchExecutor,
   onProgress: FetchProgressFn,
   signal?: AbortSignal,
+  options: { revalidate?: boolean } = {},
 ): Promise<string> {
   const scope = id.scope ?? activeOwnerScopeKey();
   assertCacheOwner(scope);
+  if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
   id = { ...id, scope };
-  const report: FetchProgressFn = (...args) => {
-    assertCacheOwner(scope);
-    onProgress(...args);
-  };
   const dest = cachePathFor(id);
+  const consumerProgress: FetchProgressFn = (...args) => {
+    if (signal?.aborted) return;
+    try {
+      onProgress(...args);
+    } catch {
+      // A closed UI consumer must not fail the shared transfer for other readers.
+      log.debug('cache progress consumer unavailable');
+    }
+  };
+  // Only real fills enter inflight: a revalidation must never join a plain cache hit.
+  // Join an active fill synchronously so another consumer's cancellation cannot abort it.
+  const pendingFill = inflight.get(dest);
+  if (!options.revalidate && (!pendingFill || pendingFill.controller.signal.aborted)) {
+    const st = await fs.stat(dest).catch(() => null);
+    assertCacheOwner(scope);
+    if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+    if (st?.isFile() && st.size === id.size) {
+      const now = new Date();
+      await fs.utimes(dest, now, now).catch(() => undefined);
+      assertCacheOwner(scope);
+      if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      consumerProgress(id.size, id.size);
+      assertCacheOwner(scope);
+      if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      return dest;
+    }
+  }
   const existing = inflight.get(dest);
-  if (existing) {
+  if (existing && !existing.controller.signal.aborted) {
     const consumer = Symbol('remote-file-consumer');
-    existing.consumers.add(consumer);
+    existing.consumers.set(consumer, consumerProgress);
     try {
       if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      if (existing.lastProgress) consumerProgress(...existing.lastProgress);
       const result = await raceWithAbort(existing.promise, signal);
       assertCacheOwner(scope);
       return result;
@@ -283,68 +381,65 @@ export async function fetchRemoteFileToCache(
   }
 
   const controller = new AbortController();
+  const assertActive = () => {
+    assertCacheOwner(scope);
+    if (controller.signal.aborted) throw new Error('FILE_PEER_CANCELLED');
+  };
+  const report: FetchProgressFn = (...args) => {
+    assertCacheOwner(scope);
+    if (controller.signal.aborted) return;
+    owner.lastProgress = args;
+    for (const progress of owner.consumers.values()) {
+      assertCacheOwner(scope);
+      if (controller.signal.aborted) return;
+      progress(...args);
+    }
+  };
   const firstConsumer = Symbol('remote-file-consumer');
   const run = (async () => {
-    try {
-      const st = await fs.stat(dest);
-      if (st.size === id.size) {
-        // 命中:touch 更新 LRU 位次,秒回。
-        const now = new Date();
-        await fs.utimes(dest, now, now).catch(() => undefined);
-        report(id.size, id.size);
-        assertCacheOwner(scope);
-        return dest;
-      }
-      assertCacheOwner(scope);
-      await fs.rm(dest, { force: true });
-    } catch {
-      // miss
-    }
-    assertCacheOwner(scope);
+    assertActive();
     await fs.mkdir(cacheDir(), { recursive: true });
-    const tmp = `${dest}.part`;
+    // An abandoned executor can still be unwinding when its replacement starts.
+    const tmp = path.join(cacheDir(), `${randomUUID()}.part`);
     try {
-      assertCacheOwner(scope);
+      assertActive();
       await executor(tmp, report, controller.signal);
-      assertCacheOwner(scope);
+      assertActive();
       const got = await fs.stat(tmp);
-      assertCacheOwner(scope);
+      assertActive();
       if (got.size !== id.size) {
         // 远端文件在取回途中变化(size 对不上)——废弃,让 caller 报错重试。
         throw new Error(`fetched size mismatch: got ${got.size}, expect ${id.size}`);
       }
-      await fs.rename(tmp, dest);
-      if (scope !== activeOwnerScopeKey()) await fs.rm(dest, { force: true });
-      assertCacheOwner(scope);
+      // Only the same-directory metadata publication is synchronous: cancellation
+      // cannot interleave between the active check and rename and let an abandoned
+      // publisher overwrite a replacement. Download/write/stat remain asynchronous.
+      assertActive();
+      renameSync(tmp, dest);
     } finally {
       await fs.rm(tmp, { force: true }).catch(() => undefined);
     }
     assertCacheOwner(scope);
-    // 新版本落地即清同路径旧版本(前缀同、文件名不同):被更新文件的历史
-    // 副本不再占位等 LRU,断线兜底也只会捞到最新成功副本。
-    void (async () => {
-      const prefix = `${prefixHashFor(id)}-`;
-      const names = await fs.readdir(cacheDir()).catch(() => [] as string[]);
-      for (const n of names) {
-        // .part 是并发取回(同路径新版本)的活跃临时文件,删了会让那次
-        // rename 失败、更新中的文件回落旧内容——只清已完成的旧版本副本。
-        if (n.endsWith('.part')) continue;
-        if (n.startsWith(prefix) && path.join(cacheDir(), n) !== dest) {
-          await fs.rm(path.join(cacheDir(), n), { force: true }).catch(() => undefined);
-        }
-      }
-      await evictLru(dest);
-    })().catch((err) => log.warn('cache cleanup failed', { error: String(err) }));
+    // Other versions may already be in use by another preview. Retain them until
+    // the existing capacity-based LRU needs space, regardless of completion order.
+    void evictLru(dest).catch((err) => log.warn('cache cleanup failed', { error: String(err) }));
     return dest;
   })();
 
-  const owner: InflightRead = { promise: run, controller, consumers: new Set([firstConsumer]) };
+  const owner: InflightRead = {
+    promise: run,
+    controller,
+    consumers: new Map([[firstConsumer, consumerProgress]]),
+  };
   inflight.set(dest, owner);
-  void run.then(() => {
-    if (inflight.get(dest) === owner) inflight.delete(dest);
-  }, () => {
-    if (inflight.get(dest) === owner) inflight.delete(dest);
-  });
+  void run.then(
+    () => {
+      if (inflight.get(dest) === owner) inflight.delete(dest);
+    },
+    () => {
+      if (inflight.get(dest) === owner) inflight.delete(dest);
+    },
+  );
   try {
     const result = await raceWithAbort(run, signal);
     assertCacheOwner(scope);
@@ -414,7 +509,7 @@ export async function stageLocalFileToCache(params: {
  *   MAX + 保护文件超出部分(SSH 通路对单文件大小无上限是产品要求),不会
  *   随多次取回持续漂移超容。
  */
-async function evictLru(protectPath?: string): Promise<void> {
+async function evictLru(protectPath?: string, limitBytes = MAX_CACHE_BYTES): Promise<void> {
   const dir = cacheDir();
   let names: string[];
   try {
@@ -438,10 +533,10 @@ async function evictLru(protectPath?: string): Promise<void> {
       // 竞态删除,忽略
     }
   }
-  if (total <= MAX_CACHE_BYTES) return;
+  if (total <= limitBytes) return;
   files.sort((a, b) => a.mtimeMs - b.mtimeMs);
   for (const f of files) {
-    if (total <= MAX_CACHE_BYTES) break;
+    if (total <= limitBytes) break;
     try {
       await fs.rm(f.p, { force: true });
       total -= f.size;

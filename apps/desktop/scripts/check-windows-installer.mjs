@@ -43,7 +43,7 @@ try {
     config: {
       appId: 'app.cindy.installer-test',
       productName: 'CindyInstallerProbe',
-      electronVersion: '41.10.3',
+      electronVersion: '42.11.12',
       compression: 'store',
       directories: { output: path.join(root, 'out'), buildResources: resources },
       win: { signAndEditExecutable: false, sign: async () => {} },

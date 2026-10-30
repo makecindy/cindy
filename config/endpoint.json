@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "authApiBaseUrl": "https://auth.cindy.com.cn",
+  "chatApiBaseUrl": "https://chat.cindy.app",
   "deviceLinkApiBaseUrl": "https://device-link.cindy.com.cn",
   "oauthBrokerApiBaseUrl": "https://oauth-broker.cindy.com.cn",
   "ossApiBaseUrl": "https://oss.cindy.com.cn",
@@ -18,5 +19,6 @@
   "cdnBaseUrl": "https://hotfix.cindy.com.cn/cindy",
   "mobileUpdateBaseUrl": "https://mobile-update.cindy.com.cn",
   "authDesktopCallbackUrl": "https://auth.cindy.com.cn/api/auth/desktop/callback",
-  "review": "0.1.0"
+  "review": "0.1.0",
+  "shareBaseUrl": "https://share.cindy.com.cn"
 }

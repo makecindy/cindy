@@ -1,6 +1,14 @@
+import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
+import { historyAfter } from './historyAfter';
+import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
+import { animateFocusScroll } from './animateFocusScroll';
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
+import { MessageViewport, type MessageViewportApi } from './MessageViewport';
+import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
 export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
+import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
  * MessageStream
  * ---------------------------------------------------------------------------
@@ -33,9 +41,12 @@ import {
 } from 'react';
 import {
   HistoryViewHandoff,
+  type HistoryViewController,
+  type HistoryViewSnapshot,
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
+  historyWorkSummaries,
 } from '@cindy/maker-shared/message-window';
 import {
   getRemoteHistoryView,
@@ -44,7 +55,7 @@ import {
 } from '@/lib/makerChatStore';
 import { isCindyMakeCompletionMessage, isCindyMakePreparationMessage } from '@/lib/cindyMakeComposer';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import {
@@ -76,7 +87,11 @@ import {
 } from './markdownImageTargets';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
 // (PI 的 subagent)加进共享判据也到不了 AgentTaskCard,会静默落进普通工具组(codex review)。
-import { isAgentTaskToolName } from '@cindy/maker-shared/agent-task';
+import {
+  isAgentTaskToolName,
+  lookupSubagentRunStatus,
+  type SubagentRunStatusIndex,
+} from '@cindy/maker-shared/agent-task';
 
 import type {
   AgentTaskUpdate,
@@ -84,6 +99,7 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
+import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 export { findLastUserInputClientId, isAutoResumeRowInFlight } from '@/lib/autoResumePresentation';
 import { Spinner } from '@/components/ui/spinner';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
@@ -92,6 +108,12 @@ import { projectRemoteUsers } from '@/lib/remoteUserHandoff';
 import { resolveToolFilePath, type KnownLocalFileRef } from '@/lib/localPathResolver';
 import type { GeneratedFileRef } from '@/lib/generatedFiles';
 import { collectCachedGeneratedFiles } from './generatedFilesProjection';
+import {
+  createMessageMetadataProjection,
+  createRenderItemMetadataProjection,
+  createStreamingMessageProjection,
+  createStreamingWorkGroupProjection,
+} from './streamingMessageProjection';
 import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
@@ -110,16 +132,33 @@ import {
   saveSessionScroll,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
-import { SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
+import {
+  SHARE_EXCLUDE_ATTR,
+  SHARE_MESSAGE_ATTR,
+  SHARE_SESSION_ATTR,
+} from '@/lib/shareConversationImage';
 import { ShareMessageCheckbox } from './ShareMessageCheckbox';
-import { isShareableMessage, useShareSelectionActive } from './shareSelectionStore';
+import {
+  isShareableMessage,
+  isShareableToolMedia,
+  useShareSelectionActive,
+} from './shareSelectionStore';
+import {
+  parsePluginInstanceId,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
+  pluginStoragePart,
+} from '../../../shared/pluginIdentity';
+import { isValidGhostId } from '../../../shared/ghost';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 
 // perf-baseline: 大 session 切换 first-paint 性能基线,保留用于回归监测。
 // 历史:commit ffff3603 (render-window 首引入) 因 687 条 session first-paint
 // 80–300ms 卡顿引入临时探针;render-window 重构到 item 轴后(本次)转正成常驻
 // 基线日志 — 任何动 MessageStream 渲染路径的改动可直接对比 `stream:first-paint
 // elapsed=` 字段做回归判定。日志级 debug:DevTools 默认级别下不显示(归 Verbose),
-// dev 的文件日志(main 侧 dev 默认 trace)仍落盘可查;生产(main 默认 info)不落。无 PII。
+// dev 的文件日志(main 侧 dev 默认 trace)仍落盘可查。仅 DEV 打点:生产构建里
+// logToMain 照样走 IPC 再被 main 按级别丢弃,每次切换白付两次 IPC。无 PII。
 const perfLog = createLogger('perf/session-switch');
 
 // jump-down chip 静止隐藏时长 — 用户向下滚动停止后多久淡出。2s 是用户要求,
@@ -291,11 +330,14 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
+import { MessageSourceLabels } from './MessageSourceLabels';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
 import { ToolCallCard, getToolSummary } from './ToolCallCard';
+import { McpAppCard } from './McpAppCard';
 import { InlinePlanCard } from './TodoListCard';
 import { SystemCard } from './SystemCard';
 import { NewMessageIndicator } from './NewMessageIndicator';
@@ -342,9 +384,9 @@ import { MessageNavRail } from './MessageNavRail';
 import {
   NAV_RAIL_BACKFILL_MAX_ROUNDS,
   NAV_RAIL_JUMP_TOP_OFFSET_PX,
-  deriveNavRailEntries,
   shouldBackfillForNavRail,
 } from './messageNavRailModel';
+import { createMessageNavigationProjection } from './messageNavigationProjection';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
 import { resolveMessageStreamIndicatorBottomOffset } from './messageStreamIndicatorPosition';
@@ -379,7 +421,9 @@ import {
   shouldUnpinOnWheel,
   isUpwardWheelIntent,
 } from './autoFollowIntent';
-import { countUnreadAdded } from './unreadCount';
+import { collectUnreadKeys } from './unreadCount';
+
+const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
 import {
   collectBotMessageTimeGroups,
   findFirstUnreadBotReplyClientId,
@@ -396,6 +440,10 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  /** Content before history, sharing its scrolling and measured content height. */
+  header?: ReactNode;
+  historyVisibleAfter?: number;
+  onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
   sessionId?: string;
   /** Active session title, forwarded to handoff cards for return navigation. */
@@ -407,6 +455,9 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
+  /** Task origin. Personal WeChat must not be told to switch to Full access. */
+  sessionSource?: string | null;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
    *  (text-lightbox-trigger-extension F1 / F2). Stable within a session
@@ -427,7 +478,10 @@ interface MessageStreamProps {
   simplifiedBotConversation?: boolean;
   /** Bot read position captured before entry marks the conversation read. */
   botUnreadBoundaryAt?: number | null;
+  onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
+  /** The ongoing call appears only in its transcript popover, including history replays. */
+  activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
   cindyMakeSessionId?: string;
   cindyMakeCompletionInComposer?: boolean;
@@ -435,6 +489,8 @@ interface MessageStreamProps {
   /** The task shell remains, but all prior message content was intentionally cleared. */
   historyCleared?: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
+  /** Host `subagent_runs` status of this task's Subagents (local tasks only). */
+  subagentRunStatuses?: SubagentRunStatusIndex;
   /** Kept for API compatibility. v2 — no longer threaded into render items
    *  (AgentActionsBlock + ThinkingCard manage their own per-block expand
    *  state via useExpandedBlockMemory). The session-level "is streaming"
@@ -759,7 +815,9 @@ export function collectGhostCallsByUserTurn(
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
-      const gid = (m.toolInput as Record<string, unknown>).ghost_id as string;
+      const input = m.toolInput as Record<string, unknown>;
+      const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
+      if (!gid) continue;
       const set = out.get(currentUserClientId) ?? new Set<string>();
       set.add(gid);
       out.set(currentUserClientId, set);
@@ -1423,9 +1481,10 @@ export function selectVisibleMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /**
- * A Cindy Make card is appended as a local assistant system message, but it
- * represents a new command turn for the visible timeline. Treating it as a
- * boundary keeps artifacts from the preceding user turn before the card.
+ * Cindy Make and /review cards are appended as local assistant system messages,
+ * but each represents a new command turn for the visible timeline. Treating them
+ * as boundaries keeps the preceding turn's artifacts and change summary before
+ * the card instead of below it.
  */
 function isRenderTurnBoundary(message: ChatMessage): boolean {
   if (message.role === 'user') {
@@ -1433,8 +1492,35 @@ function isRenderTurnBoundary(message: ChatMessage): boolean {
   }
   return (
     message.role === 'assistant' &&
-    (message.systemCardType === 'cindy-make' || message.systemCardType === 'cindy-make-doctor')
+    (message.systemCardType === 'cindy-make' ||
+      message.systemCardType === 'cindy-make-doctor' ||
+      message.systemCardType === 'review')
   );
+}
+
+function ghostCardInstanceId(ghostId: string, namespace: unknown): string | null {
+  if (!isValidGhostId(ghostId)) {
+    const identity = parsePluginInstanceId(ghostId);
+    return identity && namespace === undefined ? pluginStoragePart(identity) : null;
+  }
+  if (namespace === null || namespace === undefined) return ghostId;
+  return typeof namespace === 'string' && isValidPluginNamespace(namespace)
+    ? pluginStoragePart({ namespace, ghostId })
+    : null;
+}
+
+/** Summon labels retain explicit root identity; card/media anchoring keeps its existing keys. */
+function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | null {
+  const id = ghostCardInstanceId(ghostId, namespace);
+  if (!id) return null;
+  const explicitRoot =
+    namespace === null ||
+    (namespace === undefined &&
+      !isValidGhostId(ghostId) &&
+      parsePluginInstanceId(ghostId)?.namespace === null);
+  return explicitRoot
+    ? pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId: id }))
+    : id;
 }
 
 export function buildRenderItems(
@@ -1442,6 +1528,8 @@ export function buildRenderItems(
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
   opts?: {
+    /** Live cards must belong to this task; explicit result IDs support history/forks. */
+    sessionId?: string;
     /**
      * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
@@ -1451,13 +1539,17 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    historyArtifacts?: readonly import('@cindy/maker-shared/message-window').HistoryFileArtifact[];
     /** Bot-owned Session: show newly created files as deliverables, not an engineering diff card. */
     botSessionId?: string;
+    activeVoiceCallId?: string | null;
     /** Reuse image Markdown extraction for completed assistant messages across stream batches. */
     markdownImageTargetCache?: MarkdownImageTargetCache;
     /** Keep the stored preparation report out of its own task's visible timeline. */
     cindyMakeSessionId?: string;
     cindyMakeCompletionInComposer?: boolean;
+    /** Durable Subagent status; a terminal record outranks the paired result text. */
+    subagentRunStatuses?: SubagentRunStatusIndex;
   },
 ): {
   items: RenderItem[];
@@ -1467,6 +1559,9 @@ export function buildRenderItems(
   // shared store for the dialog to observe, but never enter the chat timeline.
   allMessages = allMessages.filter(
     (message) =>
+      // History snapshots bypass the task view's raw-list filter. Keep this
+      // rule at the shared render boundary, before time/turn/work grouping.
+      isVisibleVoiceCallMessage(message, opts?.activeVoiceCallId) &&
       message.systemCardData?.modalOnly !== true &&
       !(opts?.cindyMakeCompletionInComposer && isCindyMakeCompletionMessage(message)) &&
       !isCindyMakePreparationMessage(message, opts?.cindyMakeSessionId),
@@ -1579,30 +1674,66 @@ export function buildRenderItems(
   // Task session。不能只检查整窗「最新」计划：后面若已有可解析的新 session，
   // 较早的半截 Task 卡仍会漏出来。逐个 Task insertion 用其前缀复核，等 prepend
   // 补齐标题/早期 TaskCreate 后再由同一 stable key 插回。
+  let needsTaskHistoryValidation = false;
   if (opts?.historyWindowIncomplete === true) {
+    for (const insertion of planInsertAt.values()) {
+      if (insertion.source === 'task') {
+        needsTaskHistoryValidation = true;
+        break;
+      }
+    }
+  }
+  // Ordinary tool history and TodoWrite/update_plan need no Task prefix validation.
+  if (needsTaskHistoryValidation) {
+    // Build the indexes once. The old validation path rescanned the whole
+    // prefix and filtered the whole suffix for every Task insertion. A paged
+    // history window can contain many task rows, so keep message order while
+    // looking up only plan ids and their late results.
+    const planToolUseCountAtInsertion = new Map<number, number>();
+    const toolResultsByUseId = new Map<
+      string,
+      Array<{ index: number; message: ChatMessage }>
+    >();
+    const planToolUseIds: string[] = [];
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+      const message = messages[messageIndex];
+      if (message.role === 'tool_result' && typeof message.toolUseId === 'string') {
+        const results = toolResultsByUseId.get(message.toolUseId) ?? [];
+        results.push({ index: messageIndex, message });
+        toolResultsByUseId.set(message.toolUseId, results);
+      }
+      if (
+        isAgentPlanToolName(message.toolName)
+        && typeof message.toolUseId === 'string'
+        && message.toolUseId.length > 0
+      ) {
+        planToolUseIds.push(message.toolUseId);
+      }
+      if (planInsertAt.has(messageIndex)) {
+        planToolUseCountAtInsertion.set(messageIndex, planToolUseIds.length);
+      }
+    }
+
     for (const [index, insertion] of planInsertAt) {
       if (insertion.source !== 'task') continue;
       const prefix = messages.slice(0, index + 1);
-      const prefixPlanToolUseIds = new Set(
-        prefix
-          .filter((message) => isAgentPlanToolName(message.toolName))
-          .map((message) => message.toolUseId)
-          .filter((toolUseId): toolUseId is string => Boolean(toolUseId)),
-      );
+      const prefixPlanToolUseIds = new Set<string>();
+      const planToolUseCount = planToolUseCountAtInsertion.get(index) ?? 0;
+      for (let planIndex = 0; planIndex < planToolUseCount; planIndex += 1) {
+        prefixPlanToolUseIds.add(planToolUseIds[planIndex]);
+      }
       // TaskList / TaskGet 的权威内容在后续 tool_result 行里。只切到工具行会把
       // 已完整的 snapshot 重新判成半截；保留当前前缀中计划调用的匹配结果，但
       // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
-      const validationMessages = [
-        ...prefix,
-        ...messages
-          .slice(index + 1)
-          .filter(
-            (message) =>
-              message.role === 'tool_result' &&
-              typeof message.toolUseId === 'string' &&
-              prefixPlanToolUseIds.has(message.toolUseId),
-          ),
-      ];
+      const lateResults: Array<{ index: number; message: ChatMessage }> = [];
+      for (const toolUseId of prefixPlanToolUseIds) {
+        for (const result of toolResultsByUseId.get(toolUseId) ?? []) {
+          if (result.index > index) lateResults.push(result);
+        }
+      }
+      if (lateResults.length > 1) lateResults.sort((left, right) => left.index - right.index);
+      const validationMessages = prefix;
+      for (const result of lateResults) validationMessages.push(result.message);
       const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
         taskHistoryMayBeIncomplete: true,
       });
@@ -1679,6 +1810,18 @@ export function buildRenderItems(
   let pendingSegmentGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
+  const sessionLiveCards = opts?.sessionId
+    ? ghostCards?.liveCards.filter(lc => lc.sessionId === opts.sessionId) ?? []
+    : [];
+  // Mail is a finished document, not plugin progress. Without an exact tool ID,
+  // wait for its result rather than attach it to a schema/read call by guesswork.
+  const guessableLiveCards = sessionLiveCards.filter(lc => {
+    const entry = ghostCards?.byCallId.get(lc.callId);
+    return !(entry?.status === 'ready' && readMailCard(entry.html));
+  });
+  // Old partial history may omit a tool result. It cannot claim a new card just
+  // because the same plugin was used there. Exact IDs still work across turns.
+  const latestTurnStart = messages.findLastIndex(isRenderTurnBoundary);
   // 媒体回锚:本次 build 已上屏的 ghost_card item 按 callId 索引。后续调用的
   // tool_result 带 xdt_anchor_card_id 时按此把媒体挂回对应卡下方(item 是引用,
   // flush 进 items 后追加 media 仍然生效)。
@@ -1812,10 +1955,40 @@ export function buildRenderItems(
     }
     const workingDir = opts?.workingDir ?? '';
     if (workingDir) {
+      const start = Date.parse(messages[lo]?.createdAt ?? '');
+      const end = Date.parse(messages[hi]?.createdAt ?? '');
+      const artifacts = (opts?.historyArtifacts ?? []).filter((artifact) => {
+        const time = Date.parse(artifact.createdAt);
+        return !(Number.isFinite(start) && time < start || Number.isFinite(end) && time >= end);
+      });
+      const editedPaths = new Set(artifacts.filter((file) => file.exclude && file.ready)
+        .map((file) => pathKey(resolveToolFilePath(file.path, workingDir))));
+      for (const artifact of artifacts) {
+        const path = resolveToolFilePath(artifact.path, workingDir);
+        const normalized = pathKey(path);
+        if (artifact.exclude) {
+          if (artifact.exclude === 'all' && artifact.ready) generatedByPath.delete(normalized);
+          continue;
+        }
+        if (artifact.source === 'command' && editedPaths.has(normalized)) continue;
+        if (exactPaths.has(normalized) && changeSets.length > 0) continue;
+        const previous = generatedByPath.get(normalized);
+        if (previous?.source === 'tool' && artifact.source === 'command') continue;
+        generatedByPath.set(normalized, { path, name: basename(path), source: artifact.source, ready: artifact.ready });
+      }
       for (const file of collectCachedGeneratedFiles(slice, workingDir)) {
         const normalized = pathKey(file.path);
         if (exactPaths.has(normalized) && changeSets.length > 0) continue;
         generatedByPath.set(normalized, file);
+      }
+      // Delivery tools stay as visible source rows. Preserve their existing
+      // intermediate-file suppression for paths produced by deferred tools too.
+      for (const message of slice) {
+        if (message.role !== 'tool_use') continue;
+        const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+        for (const path of sourcePathCandidatesFromDescriptor(descriptor)) {
+          generatedByPath.delete(pathKey(resolveToolFilePath(path, workingDir)));
+        }
       }
     }
     const generatedFiles = [...generatedByPath.values()];
@@ -1922,6 +2095,11 @@ export function buildRenderItems(
           j++;
         }
         const update = findTaskUpdate(taskUpdates, msg);
+        const durableStatus = lookupSubagentRunStatus(
+          opts?.subagentRunStatuses,
+          msg.toolUseId,
+          update,
+        );
         if (msg.toolUseId) renderedTaskKeys.add(msg.toolUseId);
         if (update?.taskId) renderedTaskKeys.add(update.taskId);
         if (update?.parentToolUseId) renderedTaskKeys.add(update.parentToolUseId);
@@ -1931,6 +2109,7 @@ export function buildRenderItems(
           toolCall: msg,
           update,
           ...(msg.agentTaskStatus ? { persistedStatus: msg.agentTaskStatus } : {}),
+          ...(durableStatus ? { durableStatus } : {}),
           ...(result !== undefined && !shouldHideToolResult(toolName, result) ? { result } : {}),
           ...(resultTsMs !== undefined ? { resultTsMs } : {}),
         });
@@ -1953,6 +2132,7 @@ export function buildRenderItems(
         if (!ghostCards || !isGhostCallToolName(toolName)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
+        const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
         const toolFromInput = typeof inp?.tool === 'string' ? inp.tool : '';
         if (result !== undefined) {
           const cardId = extractGhostCardId(result);
@@ -1962,11 +2142,12 @@ export function buildRenderItems(
           suppressMediaForCard = true;
           hideRowForCard = true;
           if (entry?.status === 'ready') {
+            if (readMailCard(entry.html)?.supersededBy) return;
             const cardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
               callId: cardId,
-              ghostId: ghostIdFromInput || entry.ghostId,
+              ghostId: entry.ghostId,
               tool: toolFromInput,
               toolCall: msg,
               settled: true,
@@ -1982,7 +2163,7 @@ export function buildRenderItems(
         }
         // in-flight:只认已 ready 的活卡(推送带 html 全量到,ready 是常态)。
         const live =
-          ghostCards.liveCards.find(
+          sessionLiveCards.find(
             (lc) =>
               !claimedLiveCallIds.has(lc.callId) &&
               !settledCardIds.has(lc.callId) &&
@@ -1990,24 +2171,28 @@ export function buildRenderItems(
               typeof msg.toolUseId === 'string' &&
               lc.toolUseId === msg.toolUseId,
           ) ??
-          (ghostIdFromInput
-            ? ghostCards.liveCards.find(
+          (candidateGhostId && i >= latestTurnStart
+            ? guessableLiveCards.find(
                 (lc) =>
                   !claimedLiveCallIds.has(lc.callId) &&
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
-                  lc.ghostId === ghostIdFromInput,
+                  ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
+                    (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
+                      lc.ghostId === candidateGhostId)),
               )
             : undefined);
         if (!live) return;
-        if (ghostCards.byCallId.get(live.callId)?.status !== 'ready') return;
+        const liveEntry = ghostCards.byCallId.get(live.callId);
+        if (liveEntry?.status !== 'ready') return;
         claimedLiveCallIds.add(live.callId);
         hideRowForCard = true;
+        if (readMailCard(liveEntry.html)?.supersededBy) { suppressMediaForCard = true; return; }
         const liveCardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
           callId: live.callId,
-          ghostId: ghostIdFromInput || live.ghostId,
+          ghostId: live.ghostId,
           tool: toolFromInput,
           toolCall: msg,
           settled: false,
@@ -2030,9 +2215,18 @@ export function buildRenderItems(
           const anchor = extractAnchorCardId(result);
           const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
           const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
+          const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
           const target = anchor ? ghostCardItemByCallId.get(anchor) : undefined;
-          const sameGhostTarget =
-            target && ghostIdFromInput && target.ghostId === ghostIdFromInput ? target : undefined;
+          const targetInput = target?.toolCall.toolInput as Record<string, unknown> | undefined;
+          const targetGhostId = typeof targetInput?.ghost_id === 'string'
+            ? ghostCardInstanceId(targetInput.ghost_id, targetInput.namespace)
+            : null;
+          const physicalOwnerMatches = target && (target.ghostId === ghostIdFromInput ||
+            ((inp?.namespace !== undefined || !isValidGhostId(ghostIdFromInput)) &&
+              ghostCardInstanceId(target.ghostId, undefined) === candidateGhostId));
+          const sameGhostTarget = target && candidateGhostId !== null && candidateGhostId === targetGhostId &&
+            inp?.namespace === targetInput?.namespace && physicalOwnerMatches
+            ? target : undefined;
           // 音频入卡令牌(audioInCard)= 意识的**待验证声明**:锚到的同意识卡
           // 确实 ready 且 html 真含对应 data-ghost-audio 插槽(播放器已由卡内
           // 受信桥渲染)才压掉基座音频卡,防同一首歌双播放器;验证不过(远程
@@ -2211,10 +2405,12 @@ export function buildRenderItems(
         continue;
       }
       seenTaskIds.add(update.taskId);
+      const durableStatus = lookupSubagentRunStatus(opts?.subagentRunStatuses, undefined, update);
       const item: AgentTaskRenderItem = {
         type: 'agent_task',
         key: `task-update-${primaryKey}`,
         update,
+        ...(durableStatus ? { durableStatus } : {}),
       };
       const itemMs = renderItemStartMs(item);
       if (itemMs === null) {
@@ -2261,10 +2457,16 @@ export function buildCachedRenderItems(
     taskUpdates,
     ghostCards,
     ghostCards?.version,
+    opts?.sessionId,
     opts?.historyWindowIncomplete,
     opts?.turnChangeSets,
     opts?.workingDir,
     opts?.botSessionId,
+    opts?.activeVoiceCallId,
+    opts?.subagentRunStatuses,
+    opts?.historyArtifacts,
+    opts?.cindyMakeSessionId,
+    opts?.cindyMakeCompletionInComposer,
   ];
   const index = recentRenderProjections.findIndex((entry) =>
     entry.dependencies.every((value, i) => Object.is(value, dependencies[i])),
@@ -2290,6 +2492,140 @@ export function buildCachedRenderItems(
     }
   }
   return projection;
+}
+
+/** Build the displayed remote history without evaluating the raw transcript fallback. */
+export function buildMessageStreamRenderProjection({
+  historyView,
+  historySnapshot,
+  historyLiveMessages,
+  isSessionStreaming,
+  handoff,
+  taskUpdates,
+  ghostCardSnapshot,
+  renderOptions,
+  generatedFilesItemCache,
+  historyProjection,
+  buildRaw,
+}: {
+  historyView: HistoryViewController<HistoryChatMessage> | null | undefined;
+  historySnapshot: HistoryViewSnapshot<HistoryChatMessage> | null;
+  historyLiveMessages: readonly HistoryChatMessage[];
+  isSessionStreaming: boolean;
+  handoff?: ReturnType<HistoryViewHandoff<HistoryChatMessage>['reconcile']> | null;
+  taskUpdates?: Parameters<typeof buildRenderItems>[1];
+  ghostCardSnapshot?: Parameters<typeof buildRenderItems>[2];
+  renderOptions?: Parameters<typeof buildRenderItems>[3];
+  generatedFilesItemCache: Map<string, GeneratedFilesRenderItemRef>;
+  /** Mounted-view cache for ready history, separate from the raw fallback. */
+  historyProjection?: ReturnType<typeof createStreamingMessageProjection>;
+  buildRaw: () => RenderProjection;
+}): RenderProjection {
+  if (historyView && historySnapshot?.ready) {
+    const buildHistory = (): RenderProjection => {
+      // Build only the displayed projection; the raw fallback is lazy below.
+      const results = new Map<string, string>();
+      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+        view: historyView,
+        snapshot: historySnapshot,
+        liveMessages: historyLiveMessages,
+        streaming: isSessionStreaming,
+        isLive: (row) => row.isStreaming === true,
+        pendingHandoff: handoff?.pending,
+        staleTail: handoff?.tail,
+        isLocalMessage: (row) => row.isLocalSystemCard === true,
+        isLocalUser: (row) =>
+          row.role === 'user' &&
+          (row.isPendingPersist === true ||
+            !!row.blockedByGhost ||
+            !!row.localSendPrecedingClientIds),
+        build: (rows, _streaming, historyArtifacts) => {
+          // History chunks are freshly assembled arrays, not reusable source snapshots.
+          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+            ...renderOptions,
+            historyWindowIncomplete: true,
+            historyArtifacts,
+          });
+          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+          return groupWorkRuns(chunk.items, isSessionStreaming);
+        },
+        structure: {
+          placeholder: (summary) => ({
+            id: summary.firstMessageId,
+            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+            role: 'thinking',
+            content: '',
+            createdAt: new Date(summary.startedAtMs).toISOString(),
+            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+            thinkingRedacted: true,
+            isStreaming: summary.isStreaming,
+          }),
+          children: (item) => (item.type === 'work_group' ? item.children : undefined),
+          sourceIds: (item) =>
+            item.type === 'message'
+              ? [item.message.clientId]
+              : item.type === 'tool_segment'
+                ? item.toolCalls.map((tool) => tool.clientId)
+                : item.type === 'agent_task' && item.toolCall
+                  ? [item.toolCall.clientId]
+                  : [],
+          rebuild: (item, children, deferred) =>
+            item.type === 'work_group'
+              ? { ...item, children: children as WorkGroupChildItem[], deferred }
+              : item,
+        },
+      });
+      const keys = new Set<string>();
+      const unique = items.filter((item) => {
+        if (keys.has(item.key)) return false;
+        keys.add(item.key);
+        return true;
+      });
+      return {
+        items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
+        singleResultMap: results,
+      };
+    };
+    if (!historyProjection) return buildHistory();
+    const tail = historyLiveMessages.at(-1);
+    return historyProjection(
+      historyLiveMessages,
+      [
+        getDataOwnerGeneration(),
+        historyView,
+        historySnapshot,
+        isSessionStreaming,
+        taskUpdates,
+        ghostCardSnapshot,
+        ghostCardSnapshot?.version,
+        renderOptions?.sessionId,
+        renderOptions?.turnChangeSets,
+        renderOptions?.workingDir,
+        renderOptions?.botSessionId,
+        renderOptions?.activeVoiceCallId,
+        renderOptions?.subagentRunStatuses,
+        renderOptions?.cindyMakeSessionId,
+        renderOptions?.cindyMakeCompletionInComposer,
+        handoff?.pending.size,
+        ...(handoff?.pending ?? []),
+        handoff?.tail.size,
+        ...(handoff?.tail ?? []),
+      ],
+      buildHistory,
+      // Already-grouped history can only replace a standalone unsealed tail.
+      // Bot ordering and completed-answer grouping remain content dependent.
+      isSessionStreaming &&
+        !renderOptions?.botSessionId &&
+        !!tail &&
+        !isCompletedAssistantMessage(tail),
+      true,
+    );
+  }
+  const built = buildRaw();
+  return {
+    items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCache),
+    singleResultMap: built.singleResultMap,
+  };
 }
 
 type GeneratedFilesRenderItemRef = Extract<RenderItem, { type: 'generated_files' }>;
@@ -2417,9 +2753,14 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
             </div>
           );
         }
+        // 视频 / 音频画不进静态分享图,克隆时剔除;同一行的图片照常进图。
         if (m.kind === 'video') {
           return (
-            <div key={mediaKey} className="flex flex-col gap-1.5">
+            <div
+              key={mediaKey}
+              {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+              className="flex flex-col gap-1.5"
+            >
               <ChatVideoView
                 src={m.url}
                 filename={`tool-video-${i + 1}`}
@@ -2437,16 +2778,52 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
         // Track must be present (extractToolResultMedia synthesises
         // an empty one if only xdt_audio_urls came in defensively).
         if (m.audioTrack) {
-          if (m.audioTrack.kind === 'sound_effect') {
-            return (
-              <ChatSoundEffectCard key={mediaKey} track={m.audioTrack} sessionId={sessionId} />
-            );
-          }
-          return <ChatAudioCard key={mediaKey} track={m.audioTrack} sessionId={sessionId} />;
+          return (
+            <div key={mediaKey} {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="contents">
+              {m.audioTrack.kind === 'sound_effect' ? (
+                <ChatSoundEffectCard track={m.audioTrack} sessionId={sessionId} />
+              ) : (
+                <ChatAudioCard track={m.audioTrack} sessionId={sessionId} />
+              )}
+            </div>
+          );
         }
         return null;
       })}
     </>
+  );
+}
+
+/**
+ * 工具产物行的分享壳:含图片时与消息行一样挂分享定位属性和复选框,否则 AI 截图、
+ * 出图等渲染在气泡外的图片永远选不进分享图。shareId 取 render item key,与消息
+ * clientId 不同形,不会撞号。复选框只在选择模式渲染,进出选择模式不重挂媒体。
+ */
+function ShareableToolMedia({
+  shareId,
+  renderItemKey,
+  items,
+  sessionId,
+  selectionActive,
+}: {
+  shareId: string;
+  renderItemKey?: string;
+  items: ToolMediaItem[];
+  sessionId?: string;
+  selectionActive: boolean;
+}) {
+  const shareable = Boolean(sessionId) && isShareableToolMedia(items);
+  return (
+    <div
+      {...(renderItemKey ? { 'data-render-item-key': renderItemKey } : {})}
+      {...(shareable && sessionId
+        ? { [SHARE_SESSION_ATTR]: sessionId, [SHARE_MESSAGE_ATTR]: shareId }
+        : {})}
+      className={cn('flex flex-col gap-2', shareable && 'relative')}
+    >
+      {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
+      <ToolMediaList items={items} sessionId={sessionId} />
+    </div>
   );
 }
 
@@ -2458,6 +2835,8 @@ function renderWorkGroupChild(
     sessionTitle?: string | null;
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
+    sessionSource?: string | null;
+    onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
@@ -2482,6 +2861,7 @@ function renderWorkGroupChild(
         update={item.update}
         result={item.result}
         persistedStatus={item.persistedStatus}
+        durableStatus={item.durableStatus}
         sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
@@ -2505,6 +2885,8 @@ function renderWorkGroupChild(
         sessionTitle={props.sessionTitle}
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
+        sessionSource={props.sessionSource}
+        onDiagnoseError={props.onDiagnoseError}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
           props.isSessionStreaming,
@@ -2531,27 +2913,114 @@ function renderWorkGroupChild(
 // Component
 // ---------------------------------------------------------------------------
 
+type WorkGroupRenderContext = Parameters<typeof renderWorkGroupChild>[1];
+
+/** Stable completed groups skip child mapping, summary projection and React work. */
+export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
+  item,
+  context,
+  compact,
+  replyColumnSpacer,
+}: {
+  item: Extract<RenderItem, { type: 'work_group' }>;
+  context: WorkGroupRenderContext;
+  compact: boolean;
+  /** 伙伴聊天：隐形头像占位，让工作过程与回复正文同列对齐。 */
+  replyColumnSpacer?: ReactNode;
+}) {
+  // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
+  // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
+  const toWorkGroupChild = (child: WorkGroupChildItem): WorkGroupChild => {
+    if (child.type === 'work_group') {
+      return {
+        kind: 'group',
+        key: child.key,
+        blockId: `work:${child.key.slice('work-'.length)}`,
+        durationMs: child.durationMs,
+        isStreaming: child.isStreaming,
+        startedAtMs: child.startedAtMs,
+        deferred: child.deferred,
+        childItems: child.children.map(toWorkGroupChild),
+      };
+    }
+    if (child.type === 'tool_segment') {
+      return {
+        kind: 'tools',
+        key: child.key,
+        toolCalls: child.toolCalls,
+        resultMap: child.resultMap,
+        settledIds: child.settledIds,
+      };
+    }
+    if (child.type === 'message' && child.message.role === 'thinking') {
+      return { kind: 'thinking', key: child.key, message: child.message };
+    }
+    return {
+      kind: 'rendered',
+      key: child.key,
+      renderNode: () => renderWorkGroupChild(child, context),
+    };
+  };
+  const childItems = item.children.map(toWorkGroupChild);
+  const block = (
+    <WorkGroupBlock
+      // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
+      // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
+      blockId={`work:${item.key.slice('work-'.length)}`}
+      durationMs={item.durationMs}
+      isStreaming={item.isStreaming}
+      startedAtMs={item.startedAtMs}
+      childItems={childItems}
+      compact={compact}
+      deferred={item.deferred}
+      fitHeader={Boolean(replyColumnSpacer)}
+    />
+  );
+  return (
+    // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
+    // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
+    // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+    // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
+    <div
+      key={item.key}
+      data-render-item-key={item.key}
+      className="scroll-mt-20"
+      data-message-client-ids={collectWorkGroupClientIds(item.children).join(' ')}
+    >
+      {replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}
+    </div>
+  );
+});
+
 export function MessageStream({
+  header,
+  onAskInSideChat,
+  historyVisibleAfter,
   sessionId,
   sessionTitle,
   agentKind,
   remoteHostId,
+  sessionSource,
+  onDiagnoseError,
   workingDir,
   assistantAvatar,
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
+  onBotReadThrough,
   messages,
+  activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
   historyLoaded,
   historyCleared = false,
   taskUpdates,
+  subagentRunStatuses,
   isSessionStreaming = false,
   continuationTurnClientId = null,
   continuationInFlightProjectionCapability = 'unknown',
   onLoadMore,
   isLoadingMore,
-  hasMoreMessages,
+  hasMoreMessages: fullHasMoreMessages,
   historyWindowHasIsland = false,
   bottomPadding,
   bottomCenterClearanceOffset,
@@ -2567,11 +3036,14 @@ export function MessageStream({
 }: MessageStreamProps) {
   const { i18n, t } = useTranslation();
   const historyView = sessionId ? getRemoteHistoryView(sessionId) : undefined;
-  const historySnapshot = useSyncExternalStore(
+  const fullHistorySnapshot = useSyncExternalStore(
     historyView?.subscribe ?? (() => () => undefined),
     historyView?.getSnapshot ?? (() => null),
     historyView?.getSnapshot ?? (() => null),
   );
+  const historySnapshot = useMemo(() => historyAfter(fullHistorySnapshot, historyVisibleAfter), [fullHistorySnapshot, historyVisibleAfter]);
+  const hasMoreMessages = historyVisibleAfter !== undefined && historySnapshot
+    ? historySnapshot.hasMore : fullHasMoreMessages;
   const displayMessages = useMemo(() => {
     if (!historySnapshot) return messages;
     const historyIds = new Set(
@@ -2740,9 +3212,13 @@ export function MessageStream({
     keysAtJump: readonly string[];
     messageClientIdsAtJump: readonly string[];
     scrollGeneration: number;
+    settling?: boolean;
+    cancelAnimation?: () => void;
   } | null>(null);
   useEffect(
     () => () => {
+      focusJumpRef.current?.cancelAnimation?.();
+      focusJumpRef.current = null;
       if (focusScrollTimerRef.current !== null) {
         window.clearTimeout(focusScrollTimerRef.current);
       }
@@ -2780,10 +3256,24 @@ export function MessageStream({
   // findLastUserMessageClientId 注释)。按子代理归属反查的派生(buildSubagentModelMap)
   // 仍吃原始 messages —— 它要的正是这些被隐藏的行。
   const visibleMessages = useMemo(() => selectVisibleMessages(displayMessages), [displayMessages]);
+  // Text keeps flowing through visibleMessages. Only metadata consumers reuse this snapshot.
+  const metadataProjection = useMemo(createMessageMetadataProjection, [sessionId]);
+  const metadataMessages = metadataProjection(displayMessages);
+  const rawMetadataProjection = useMemo(createMessageMetadataProjection, [sessionId]);
+  const rawMetadataMessages = rawMetadataProjection(messages);
+  const visibleMetadataMessages = useMemo(
+    () => selectVisibleMessages(metadataMessages),
+    [metadataMessages],
+  );
+  const streamProjection = useMemo(createStreamingMessageProjection, [sessionId]);
+  const historyProjection = useMemo(createStreamingMessageProjection, [sessionId]);
+  const workGroupProjection = useMemo(createStreamingWorkGroupProjection, [sessionId]);
+  const renderMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
+  const visibleMetadataProjection = useMemo(createRenderItemMetadataProjection, [sessionId]);
+  const navigationProjection = useMemo(createMessageNavigationProjection, [sessionId]);
 
-  // 全量 build:折叠 / 丢弃 / 反向膨胀的所有规则一次性吸收 — 窗口看到的就是
-  // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
-  // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
+  // A plain text-only stream update replaces its row in the previous projection.
+  // Every structural/metadata change still runs the complete history rules below.
   const generatedFilesItemCacheRef = useRef(
     new Map<string, Extract<RenderItem, { type: 'generated_files' }>>(),
   );
@@ -2792,86 +3282,57 @@ export function MessageStream({
   // MessageStream scope so history pagination and live deltas can share the
   // parsed image targets without retaining state beyond the session mount.
   const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
-  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
-    const built = buildCachedRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
-      historyWindowIncomplete: !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
-      turnChangeSets,
-      workingDir,
+  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => buildMessageStreamRenderProjection({
+    historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
+    taskUpdates, ghostCardSnapshot,
+    historyProjection,
+    generatedFilesItemCache: generatedFilesItemCacheRef.current,
+    renderOptions: {
+      sessionId, turnChangeSets, workingDir,
       botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      activeVoiceCallId,
       markdownImageTargetCache: markdownImageTargetCacheRef.current,
-      cindyMakeSessionId,
-      cindyMakeCompletionInComposer,
-    });
-    if (historyView && historySnapshot?.ready) {
-      const results = new Map(built.singleResultMap);
-      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
-        view: historyView,
-        snapshot: historySnapshot,
-        liveMessages: historyLiveMessages,
-        streaming: isSessionStreaming,
-        isLive: (row) => row.isStreaming === true,
-        pendingHandoff: handoff?.pending,
-        isLocalUser: (row) =>
-          row.role === 'user' &&
-          (row.isPendingPersist === true ||
-            !!row.blockedByGhost ||
-            !!row.localSendPrecedingClientIds),
-        build: (rows) => {
-          // History chunks are freshly assembled arrays, not reusable source snapshots.
-          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
-            historyWindowIncomplete: true,
-            workingDir,
-            botSessionId: simplifiedBotConversation ? sessionId : undefined,
-            markdownImageTargetCache: markdownImageTargetCacheRef.current,
-            cindyMakeSessionId,
-            cindyMakeCompletionInComposer,
-          });
-          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
-          return groupWorkRuns(chunk.items, isSessionStreaming);
-        },
-        structure: {
-          placeholder: (summary) => ({
-            id: summary.firstMessageId,
-            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
-            role: 'thinking',
-            content: '',
-            createdAt: new Date(summary.startedAtMs).toISOString(),
-            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
-            thinkingRedacted: true,
-            isStreaming: summary.isStreaming,
-          }),
-          children: (item) => (item.type === 'work_group' ? item.children : undefined),
-          sourceIds: (item) =>
-            item.type === 'message'
-              ? [item.message.clientId]
-              : item.type === 'tool_segment'
-                ? item.toolCalls.map((tool) => tool.clientId)
-                : item.type === 'agent_task' && item.toolCall
-                  ? [item.toolCall.clientId]
-                  : [],
-          rebuild: (item, children, deferred) =>
-            item.type === 'work_group'
-              ? { ...item, children: children as WorkGroupChildItem[], deferred }
-              : item,
-        },
-      });
-      const keys = new Set<string>();
-      const unique = items.filter((item) => {
-        if (keys.has(item.key)) return false;
-        keys.add(item.key);
-        return true;
-      });
-      return {
-        items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCacheRef.current),
-        singleResultMap: results,
-      };
-    }
-    return {
-      items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
-      singleResultMap: built.singleResultMap,
-    };
-  }, [
+      cindyMakeSessionId, cindyMakeCompletionInComposer, subagentRunStatuses,
+    },
+    buildRaw: () => streamProjection(
+      displayMessages,
+      [
+        getDataOwnerGeneration(),
+        taskUpdates,
+        ghostCardSnapshot,
+        ghostCardSnapshot.version,
+        historyLoaded,
+        hasMoreMessages,
+        historyWindowHasIsland,
+        turnChangeSets,
+        workingDir,
+        simplifiedBotConversation,
+        activeVoiceCallId,
+        sessionId,
+        cindyMakeSessionId,
+        cindyMakeCompletionInComposer,
+        subagentRunStatuses,
+        historyView,
+      ],
+      () =>
+        buildCachedRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
+          sessionId,
+          historyWindowIncomplete:
+            !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
+          turnChangeSets,
+          workingDir,
+          botSessionId: simplifiedBotConversation ? sessionId : undefined,
+          activeVoiceCallId,
+          markdownImageTargetCache: markdownImageTargetCacheRef.current,
+          cindyMakeSessionId,
+          cindyMakeCompletionInComposer,
+          subagentRunStatuses,
+        }),
+      !simplifiedBotConversation && !historyView,
+    ),
+  }), [
     displayMessages,
+    activeVoiceCallId,
     cindyMakeSessionId,
     cindyMakeCompletionInComposer,
     historyView,
@@ -2880,6 +3341,7 @@ export function MessageStream({
     handoff,
     isSessionStreaming,
     taskUpdates,
+    subagentRunStatuses,
     ghostCardSnapshot,
     historyLoaded,
     hasMoreMessages,
@@ -2888,19 +3350,29 @@ export function MessageStream({
     workingDir,
     simplifiedBotConversation,
     sessionId,
+    streamProjection,
+    historyProjection,
   ]);
   const assistantsWithFollowingUserBoundary = useMemo(
-    () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
-    [visibleMessages],
+    () => collectAssistantsWithFollowingUserBoundary(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // action bar 只挂每个 turn 的收尾 assistant 正文(见 collectTurnFinalAssistantClientIds)。
   const turnFinalAssistantClientIds = useMemo(
-    () => collectTurnFinalAssistantClientIds(visibleMessages),
-    [visibleMessages],
+    () => collectTurnFinalAssistantClientIds(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
-  const subagentModelByToolUseId = useMemo(() => buildSubagentModelMap(messages), [messages]);
+  const subagentModelByToolUseId = useMemo(() => {
+    const models = buildSubagentModelMap(rawMetadataMessages);
+    for (const summary of historyWorkSummaries(historySnapshot?.items ?? [])) {
+      if (summary.parentToolUseId && summary.model && !models.has(summary.parentToolUseId)) {
+        models.set(summary.parentToolUseId, summary.model);
+      }
+    }
+    return models;
+  }, [rawMetadataMessages, historySnapshot?.items]);
 
   // work-group pass:把最终回答前的工作过程折叠成 work_group,无最终回答时
   // 继续走旧的 tool_segment + thinking 折叠兼容路径。
@@ -2909,9 +3381,11 @@ export function MessageStream({
     useBotGeneratedFileDeliveries(ungroupedRenderItems, sessionFileValue);
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
-      historySnapshot?.ready
-        ? ungroupedRenderItems
-        : groupWorkRuns(ungroupedRenderItems, isSessionStreaming),
+      workGroupProjection(
+        ungroupedRenderItems,
+        isSessionStreaming,
+        Boolean(historySnapshot?.ready),
+      ),
       forkOrigin,
     );
     return simplifiedBotConversation
@@ -2924,7 +3398,9 @@ export function MessageStream({
     simplifiedBotConversation,
     historySnapshot?.ready,
     visibleGeneratedFileKeys,
+    workGroupProjection,
   ]);
+  const renderMetadataItems = renderMetadataProjection(allRenderItems);
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -3032,9 +3508,25 @@ export function MessageStream({
     anchoredForwardItems,
   ]);
 
+  const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
+
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
   const visibleRenderItemsRef = useRef(visibleRenderItems);
   visibleRenderItemsRef.current = visibleRenderItems;
+  // Keep complex/stateful cards alive. Plain historical message bodies can be
+  // replaced by measured-height placeholders without browser display locking.
+  const viewportEntries = useMemo(() => visibleRenderItems.map(item => ({
+    key: item.key,
+    retain: item.type !== 'message' || item.message.isStreaming === true || Boolean(item.message.systemCardType) ||
+      (item.message.role !== 'user' && item.message.role !== 'assistant') ||
+      item.message.clientId === focusMessageClientId,
+  })), [visibleRenderItems, focusMessageClientId]);
+  const messageViewportRef = useRef<MessageViewportApi>(null);
+  // Child layout effects run before this ancestor's DOM ref attaches on mount.
+  // Connecting here schedules the initial measurement before the first paint.
+  useLayoutEffect(() => { messageViewportRef.current?.connect(); });
+  const syncMessageViewport = useCallback(() => messageViewportRef.current?.syncViewport(), []);
+  const reconcileMessageViewport = useCallback(() => messageViewportRef.current?.reconcileViewport(), []);
   // 量出当前视口顶端 render-item；若它内部还有已渲染的子消息，再记实际跨过视口顶边
   // 的 message clientId。折叠工作组 / 折叠工具块的聚合 data-message-client-ids 只给
   // focus 回退用，不参与视口快照，避免把隐藏 child 当成活锚点。
@@ -3267,6 +3759,7 @@ export function MessageStream({
     } = {}): boolean => {
       const jump = focusJumpRef.current;
       if (!jump) return false;
+      jump.cancelAnimation?.();
       focusJumpRef.current = null;
       if (focusScrollTimerRef.current !== null) {
         window.clearTimeout(focusScrollTimerRef.current);
@@ -3276,7 +3769,7 @@ export function MessageStream({
         window.clearTimeout(focusHighlightTimerRef.current);
         focusHighlightTimerRef.current = null;
       }
-      // 只终止仍由这次 focus 拥有的原生 smooth 动画；过期 focus 不得打断后发滚动。
+      // 只终止仍由这次 focus 拥有的滚动；过期 focus 不得打断后发滚动。
       if (jump.scrollGeneration === programmaticScrollGenerationRef.current) {
         const root = scrollRef.current;
         if (root) root.scrollTo({ top: root.scrollTop, behavior: 'auto' });
@@ -3289,15 +3782,17 @@ export function MessageStream({
     },
     [finishProgrammaticScroll, refreshViewportAnchor],
   );
-  // focus 跳转落定收尾(scrollend 主路径与兜底 timer 共用,幂等):途中布局变化
-  // (删除 / 流式)会让 smooth 落点偏离目标,先瞬时校正回目标;目标在跳转途中被删时
+  // focus 跳转落定收尾(逐帧动画结束与兜底 timer 共用,幂等):动画已跟踪途中高度变化，
+  // 此处只处理最终布局与所有权交接；目标在跳转途中被删时
   // 锚到跳转时序列中它之后第一条存活 item(与删除补偿同语义,落点在窗口外则走窗口
   // 重建 + pending 复位);用户已接管则不校正。下一帧再清 programmatic 标记并刷新
   // 删除前快照——半途量测会把跳变中的位置误存为锚点。
   const settleFocusJump = useCallback(() => {
     const jump = focusJumpRef.current;
-    if (!jump) return;
-    focusJumpRef.current = null;
+    if (!jump || jump.settling) return;
+    jump.cancelAnimation?.();
+    jump.cancelAnimation = undefined;
+    jump.settling = true;
     if (focusScrollTimerRef.current !== null) {
       window.clearTimeout(focusScrollTimerRef.current);
       focusScrollTimerRef.current = null;
@@ -3306,7 +3801,10 @@ export function MessageStream({
       window.clearTimeout(focusHighlightTimerRef.current);
       focusHighlightTimerRef.current = null;
     }
-    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) return;
+    if (jump.scrollGeneration !== programmaticScrollGenerationRef.current) {
+      focusJumpRef.current = null;
+      return;
+    }
     // settle 前已观察到的删除由当前目标校正消费；同帧后续删除仍走通用重放。
     deferredDeleteCompensationRef.current = false;
     // 邻居锚定分支会显式写入快照(窗口重建的 DOM 下一提交才就绪),此时不得再用
@@ -3319,6 +3817,7 @@ export function MessageStream({
       const target = queryFocusElement(root, jump.clientId);
       if (target) {
         target.scrollIntoView({ block: 'center' });
+        syncMessageViewport();
         const measured = refreshViewportAnchor();
         const rootTop = root.getBoundingClientRect().top;
         const targetRect = target.getBoundingClientRect();
@@ -3377,13 +3876,32 @@ export function MessageStream({
         }
       }
     }
-    requestAnimationFrame(() => {
-      const activeJump = focusJumpRef.current;
-      if (activeJump && activeJump.requestKey !== jump.requestKey) return;
+    let stableFrames = 0;
+    let frames = 0;
+    const finishAfterLayout = () => {
+      if (focusJumpRef.current !== jump) return;
+      if (!snapshotPinned && jump.scrollGeneration === programmaticScrollGenerationRef.current && root) {
+        const target = queryFocusElement(root, jump.clientId);
+        if (target) {
+          const before = root.scrollTop;
+          target.scrollIntoView({ block: 'center' });
+          syncMessageViewport();
+          stableFrames = Math.abs(root.scrollTop - before) <= 1 ? stableFrames + 1 : 0;
+          // A native height/scroll update can arrive after the first scrollend.
+          // Keep ownership while checking consecutive paints, and respect user
+          // cancellation/replacement on every frame. Bound live-stream settling.
+          if (++frames < 8 && stableFrames < 3) {
+            requestAnimationFrame(finishAfterLayout);
+            return;
+          }
+        }
+      }
+      focusJumpRef.current = null;
       const replayingDelete = finishProgrammaticScroll(jump.scrollGeneration);
       if (!snapshotPinned && replayingDelete === false) refreshViewportAnchor();
-    });
-  }, [finishProgrammaticScroll, refreshViewportAnchor, restoreViewportSnapshotOrRebuildWindow]);
+    };
+    requestAnimationFrame(finishAfterLayout);
+  }, [finishProgrammaticScroll, refreshViewportAnchor, restoreViewportSnapshotOrRebuildWindow, syncMessageViewport]);
   // 接管 / 落定监听挂载级注册一次,读 focusJumpRef 判定,无活跃跳转时空转。挂在下面
   // 的 reactive effect 里会被流式重渲染的 cleanup 拆掉且早退分支不再重挂,导致接管
   // 失灵、兜底 timer 落定时把用户拽回目标。
@@ -3403,13 +3921,23 @@ export function MessageStream({
       if (isEditableKeyboardTarget(event.target)) return;
       onUserInput();
     };
-    const onScrollEnd = () => settleFocusJump();
+    let disposed = false;
+    const onScrollEnd = () => {
+      const jump = focusJumpRef.current;
+      if (!jump || jump.cancelAnimation) return;
+      // Per-frame writes also emit scrollend. The live-target animation owns
+      // completion until it releases its handle; then drain pending layout.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!disposed && focusJumpRef.current === jump) settleFocusJump();
+      }));
+    };
     root.addEventListener('wheel', onUserInput, { passive: true });
     root.addEventListener('touchstart', onUserInput, { passive: true });
     root.addEventListener('mousedown', onUserInput);
     window.addEventListener('keydown', onNavigationKey);
     root.addEventListener('scrollend', onScrollEnd);
     return () => {
+      disposed = true;
       root.removeEventListener('wheel', onUserInput);
       root.removeEventListener('touchstart', onUserInput);
       root.removeEventListener('mousedown', onUserInput);
@@ -3455,6 +3983,11 @@ export function MessageStream({
       return;
     }
     lastMissingFocusRef.current = null;
+    // A search owns the reading position even while rebuilding its window.
+    // Otherwise a newly clamped history window can be mistaken for tail follow.
+    restoringRef.current = false;
+    isNearBottomRef.current = false;
+    setIsNearBottom(false);
     if (!visibleRenderItems.some((item) => item.key === targetKey)) {
       setFirstVisibleItemKey(targetKey);
       setAnchoredForwardItems(RENDER_WINDOW_FIRST_PAINT_ITEMS);
@@ -3464,12 +3997,8 @@ export function MessageStream({
     if (!root) return;
     const el = queryFocusElement(root, focusMessageClientId);
     if (!el) return;
-    restoringRef.current = false;
-    isNearBottomRef.current = false;
-    setIsNearBottom(false);
     const scrollGeneration = beginProgrammaticScroll();
-    // 新跳直接覆盖未落定的旧跳(用户快速连点两条结果):旧跳转态被替换,旧兜底
-    // timer 一并重设,浏览器的旧 smooth 动画由新 scrollIntoView 接管。
+    // 新请求已取消旧动画；保留目标身份与删除前快照，直到逐帧动画完成。
     focusJumpRef.current = {
       requestKey: focusRequestKey,
       clientId: focusMessageClientId,
@@ -3478,7 +4007,17 @@ export function MessageStream({
       messageClientIdsAtJump: collectDeleteAnchorClientIds(allRenderItems),
       scrollGeneration,
     };
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const jump = focusJumpRef.current;
+    jump.cancelAnimation = animateFocusScroll({
+      root,
+      getTarget: () => queryFocusElement(root, jump.clientId),
+      reconcile: syncMessageViewport,
+      onFinish: () => {
+        if (focusJumpRef.current !== jump) return;
+        jump.cancelAnimation = undefined;
+        settleFocusJump();
+      },
+    });
     lastAppliedFocusRef.current = focusRequestKey;
     if (focusScrollTimerRef.current !== null) {
       window.clearTimeout(focusScrollTimerRef.current);
@@ -3486,11 +4025,10 @@ export function MessageStream({
     if (focusHighlightTimerRef.current !== null) {
       window.clearTimeout(focusHighlightTimerRef.current);
     }
-    // 落定主路径是挂载级 scrollend 监听;有 scrollend 时兜底只是安全网(长距离
-    // smooth 常 >800ms,给足 2.5s),无 scrollend 的环境用 800ms 近似落定。
+    // 动画主动完成；timer 仅作为安全网，不依赖原生 scrollend 的到达时机。
     focusScrollTimerRef.current = window.setTimeout(
       settleFocusJump,
-      'onscrollend' in window ? 2500 : 800,
+      2500,
     );
     // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
     // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
@@ -3506,6 +4044,7 @@ export function MessageStream({
     beginProgrammaticScroll,
     cancelFocusJump,
     settleFocusJump,
+    syncMessageViewport,
   ]);
 
   // 会话内全部图片的有序 src(全量,来自未裁剪的 allRenderItems),下发给
@@ -3523,12 +4062,12 @@ export function MessageStream({
   const sessionImageSrcs = useMemo(
     () =>
       collectSessionImageSrcs(
-        allRenderItems,
+        renderMetadataItems,
         galleryMediaOrigin,
         ghostCardSnapshot,
         isSessionStreaming,
       ),
-    [allRenderItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
+    [renderMetadataItems, galleryMediaOrigin, ghostCardSnapshot, isSessionStreaming],
   );
 
   // 把可见窗口往前(更早)推 RENDER_WINDOW_GROWTH_ITEMS 个 item,用于滚到顶时的客户端扩窗。
@@ -3617,7 +4156,7 @@ export function MessageStream({
     if (coverageLossAction === 'handoff-to-tail') {
       isNearBottomRef.current = true;
       setIsNearBottom(true);
-      setUnreadCount(0);
+      setUnreadKeys(NO_UNREAD_KEYS);
       setFirstVisibleItemKey(null);
       return;
     }
@@ -3629,14 +4168,17 @@ export function MessageStream({
     // 锚定窗向下扩到真正盖住尾部,且用户已经贴在当前窗口底 → 切回默认尾窗并
     // 恢复跟随。扩窗发生在本次 scroll 之后,同一帧的 handleScroll 还看不到
     // windowCoversEnd=true,没有下一次滚动时会永远停在「已到底、但不跟」。
-    if (!restoringRef.current && !wasCovering && windowCoversEnd && firstVisibleItemKey !== null) {
+    if (
+      !restoringRef.current && !programmaticScrollRef.current &&
+      !wasCovering && windowCoversEnd && firstVisibleItemKey !== null
+    ) {
       const el = scrollRef.current;
       if (!el) return;
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       if (distanceFromBottom <= REPIN_AT_BOTTOM_PX) {
         isNearBottomRef.current = true;
         setIsNearBottom(true);
-        setUnreadCount(0);
+        setUnreadKeys(NO_UNREAD_KEYS);
         setFirstVisibleItemKey(null);
       }
     }
@@ -3865,6 +4407,7 @@ export function MessageStream({
   const perfFirstPaintLoggedRef = useRef<boolean>(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only perf baseline；父组件按 sessionId key 重挂载，依赖变化不应重复打 mount 日志。
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     perfLog.debug(
       `stream:mount sid=${sessionId ?? 'null'} initialMsgs=${messages.length} initialItems=${allRenderItems.length} renderedItems=${visibleRenderItems.length}`,
     );
@@ -3898,6 +4441,7 @@ export function MessageStream({
     // 通过 ref 镜像在 cleanup 时读到最新的位置 / 锚点 / nearBottom。
   }, [saveScrollSnapshot]);
   useLayoutEffect(() => {
+    if (!import.meta.env.DEV) return;
     if (!perfFirstPaintLoggedRef.current && visibleRenderItems.length > 0) {
       perfFirstPaintLoggedRef.current = true;
       perfLog.debug(
@@ -4025,10 +4569,35 @@ export function MessageStream({
   // ── F2 / new-message-indicator ──
   // `isNearBottomRef` 驱动 auto-follow 判定；`isNearBottom` state 只驱动按钮
   // 显隐（两者同步更新，任何路径都不允许只更新其中一个）。
-  // `unreadCount` 在"已离底 + 新 assistant/ask_user/plan_review 消息到达"时递增，
-  // 点击按钮 / 自动回底 / 切换会话 → 归零。
-  const [isNearBottom, setIsNearBottom] = useState<boolean>(true);
-  const [unreadCount, setUnreadCount] = useState<number>(0);
+  // `unreadCount` = 离底期间累计的未读键数（同一回合的回复只算一条，见
+  // unreadCount.ts），点击按钮 / 自动回底 / 切换会话 → 归零。
+  // Restored history starts unfollowed. Initialize the indicator from the same
+  // snapshot as the scroll gate: later input may correctly leave false unchanged.
+  const [isNearBottom, setIsNearBottom] = useState<boolean>(() => isNearBottomRef.current);
+  const [unreadKeys, setUnreadKeys] = useState<ReadonlySet<string>>(NO_UNREAD_KEYS);
+  const unreadCount = unreadKeys.size;
+  // Only the rendered tail of a canonical Bot chat acknowledges replies. History
+  // navigation, background windows and streaming work never move its read position.
+  useEffect(() => {
+    if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
+    const acknowledge = () => {
+      if (restoringRef.current || document.visibilityState !== 'visible' || !document.hasFocus() || !isNearBottomRef.current) return;
+      const at = allRenderItems.reduce((latest, item) => {
+        if (item.type !== 'message' || item.message.role !== 'assistant' || item.message.isStreaming) return latest;
+        const stamp = new Date(item.message.createdAt ?? '').getTime();
+        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
+      }, 0);
+      if (at > 0) onBotReadThrough(at);
+    };
+    const frame = requestAnimationFrame(acknowledge);
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [onBotReadThrough, historyLoaded, isNearBottom, isSessionStreaming, allRenderItems]);
   /** 上一次 render 已见过的 clientId 集合，用于 O(n) diff 出"首次出现"的消息。 */
   const prevMessageIdsRef = useRef<Set<string>>(new Set());
 
@@ -4059,7 +4628,7 @@ export function MessageStream({
     if (isNearBottomRef.current) return;
     isNearBottomRef.current = true;
     setIsNearBottom(true);
-    setUnreadCount(0);
+    setUnreadKeys(NO_UNREAD_KEYS);
     setFirstVisibleItemKey(null);
   }, []);
 
@@ -4225,9 +4794,38 @@ export function MessageStream({
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
+    const navigateText = (event: Event) => {
+      const range = (event as CustomEvent<Range>).detail;
+      const element = range?.startContainer?.parentElement?.closest<HTMLElement>('[data-message-client-id]');
+      const clientId = element?.dataset.messageClientId;
+      if (!element || !clientId || !root.contains(element)) return;
+      event.preventDefault();
+      cancelFocusJump({ consumeDeferredDelete: true });
+      unpinAutoFollowForUserUpIntent();
+      // Keep the exact text below the find bar. Reuse message navigation's
+      // ownership, cancellation and settling, so reaching the oldest loaded
+      // row is not misread as user intent to fetch another history page.
+      scrollRangeIntoView(range, root);
+      const topOffset = Math.min(80, root.clientHeight / 3)
+        - (range.getBoundingClientRect().top - element.getBoundingClientRect().top);
+      beginChipJump({ clientId, selector: 'message', topOffset });
+      root.scrollTop = resolveChipJumpTargetScrollTop({
+        scrollTop: root.scrollTop, containerTop: root.getBoundingClientRect().top,
+        targetTop: element.getBoundingClientRect().top, topOffset,
+      });
+      syncMessageViewport();
+    };
+    root.addEventListener(PAGE_TEXT_NAVIGATION_EVENT, navigateText);
+    return () => root.removeEventListener(PAGE_TEXT_NAVIGATION_EVENT, navigateText);
+  }, [beginChipJump, cancelFocusJump, syncMessageViewport, unpinAutoFollowForUserUpIntent]);
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
     const onScrollEnd = () => {
       settleChipJump();
-      if (chipJumpGenerationRef.current !== null) return;
+      // Each navigation owner finishes its own generation after correcting its
+      // target. Generic scrollend must not invalidate a pending focus settle.
+      if (chipJumpGenerationRef.current !== null || focusJumpRef.current !== null) return;
       if (!programmaticScrollRef.current) return;
       const generation = programmaticScrollGenerationRef.current;
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor(true);
@@ -4475,7 +5073,7 @@ export function MessageStream({
   ]);
   useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions);
 
-  const pinToBottom = useCallback(() => {
+  const pinToBottom = useCallback((fromLayout = false) => {
     const el = scrollRef.current;
     if (!el) return;
     // 滚动条拖拽中不要钉回,否则滑块上移会被下一帧 pin 吃掉。
@@ -4483,6 +5081,10 @@ export function MessageStream({
     const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
     el.scrollTop = el.scrollHeight;
+    // Layout effects already flush their state updates before paint. Observer
+    // and input callbacks need an explicit commit before the next scroll event.
+    if (fromLayout) reconcileMessageViewport();
+    else syncMessageViewport();
     // Clear the flag on the next frame — after the browser has dispatched
     // the resulting scroll event. We use rAF (not a microtask) because the
     // scroll event is dispatched asynchronously.
@@ -4491,7 +5093,7 @@ export function MessageStream({
         refreshViewportAnchor();
       }
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport]);
   pinToBottomRef.current = pinToBottom;
 
   // Composer send is an explicit "show me the result" intent. Don't wait for
@@ -4511,8 +5113,8 @@ export function MessageStream({
     restoringRef.current = false;
     isNearBottomRef.current = true;
     setIsNearBottom(true);
-    setUnreadCount(0);
-    pinToBottom();
+    setUnreadKeys(NO_UNREAD_KEYS);
+    pinToBottom(true);
   }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
   // F3: 平滑滚到底的按钮回调。
@@ -4530,13 +5132,14 @@ export function MessageStream({
     if (chipJumpGeneration !== null) {
       finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
     }
-    setUnreadCount(0);
+    setUnreadKeys(NO_UNREAD_KEYS);
     setIsNearBottom(true);
     isNearBottomRef.current = true;
     const generation = beginProgrammaticScroll();
     // render-window-bidirectional: 清除锚点回到默认尾部窗口（chip/jump-down 语义）。
-    setFirstVisibleItemKey(null);
+    flushSync(() => setFirstVisibleItemKey(null));
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    syncMessageViewport();
     window.setTimeout(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     }, CHIP_JUMP_SAFETY_MS);
@@ -4546,6 +5149,7 @@ export function MessageStream({
     finishChipJump,
     finishProgrammaticScroll,
     refreshViewportAnchor,
+    syncMessageViewport,
   ]);
 
   // ── Codex Micro 摇杆:按住持续滚动 ──
@@ -4591,6 +5195,7 @@ export function MessageStream({
           } else {
             el.scrollTop += delta;
           }
+          syncMessageViewport();
           joystickScrollFrameRef.current = requestAnimationFrame(step);
         };
         joystickScrollFrameRef.current = requestAnimationFrame(step);
@@ -4623,24 +5228,30 @@ export function MessageStream({
     scrollToBottomSmooth,
     stopJoystickScroll,
     unpinAutoFollowForUserUpIntent,
+    syncMessageViewport,
   ]);
 
-  // F2: messages diff → 按角色累计 unreadCount
-  //   - 计数规则抽成纯函数 countUnreadAdded（见 unreadCount.ts）：新 clientId 才计、
-  //     贴底不计、assistant/ask_user/plan_review 计；#2194 起非本端发送的 user 也计。
+  // F2: messages diff → 累计未读键
+  //   - 计数规则抽成纯函数 collectUnreadKeys（见 unreadCount.ts）：新 clientId 才计、
+  //     贴底不计、同一回合的回复只算一条；#2194 起非本端发送的 user 也计。
   useEffect(() => {
     const prev = prevMessageIdsRef.current;
     const currentIds = new Set<string>();
     for (const m of messages) currentIds.add(m.clientId);
 
-    const addedVisible = countUnreadAdded({
+    const { keys: addedKeys, supersedes } = collectUnreadKeys({
       prevIds: prev,
       messages,
       nearBottom: isNearBottomRef.current,
       isLocalUserSend,
     });
-    if (addedVisible > 0) {
-      setUnreadCount((c) => c + addedVisible);
+    if (addedKeys.length > 0) {
+      setUnreadKeys((keys) => {
+        const next = new Set(keys);
+        for (const key of supersedes) next.delete(key);
+        for (const key of addedKeys) next.add(key);
+        return next.size === keys.size && addedKeys.every((key) => keys.has(key)) ? keys : next;
+      });
     }
     prevMessageIdsRef.current = currentIds;
   }, [messages, isLocalUserSend]);
@@ -4711,7 +5322,7 @@ export function MessageStream({
       setFirstVisibleItemKey(null);
       isNearBottomRef.current = true;
       setIsNearBottom(true);
-      setUnreadCount(0);
+      setUnreadKeys(NO_UNREAD_KEYS);
     }
 
     if (userMessageObservation.isNewUserSend && lastUserMsg) {
@@ -4721,7 +5332,7 @@ export function MessageStream({
       restoringRef.current = false;
       isNearBottomRef.current = true;
     }
-    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom();
+    if (decision.pinToBottom && !windowHandoff.deferPinToNextRender) pinToBottom(true);
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
@@ -5302,13 +5913,16 @@ export function MessageStream({
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);
-        if (effectiveNearBottom) setUnreadCount(0);
-      }
-      // render-window-bidirectional P1 fix: 锚定窗口覆盖末尾 + 用户到达底部 →
-      // 切回默认尾窗。必须在 handleScroll 里而不是 layout effect 里做——
-      // 用户从"向上扩窗"滚回底部时 wasCovering 从始至终为 true，layout effect 捕不到。
-      if (effectiveNearBottom && firstVisibleItemKey !== null && windowCoversEnd) {
-        setFirstVisibleItemKey(null);
+        if (effectiveNearBottom) {
+          setUnreadKeys(NO_UNREAD_KEYS);
+          // Only shrink history when the reader resumes following the tail.
+          // Ctrl+F / Ctrl+A mount offscreen text and change scroll geometry at
+          // an already-followed tail; those scroll events must preserve the
+          // existing logical window, otherwise find/selection loses its text.
+          if (firstVisibleItemKey !== null && windowCoversEnd) {
+            setFirstVisibleItemKey(null);
+          }
+        }
       }
       if (effectiveNearBottom) {
         // 到底了:无论方向都隐藏 chip,清掉 timer
@@ -5380,11 +5994,11 @@ export function MessageStream({
     // "穿过顶部区间"与"停在顶部继续上滚"的完整触发面)
     if (el.scrollTop >= TOP_HISTORY_TRIGGER_PX) return;
 
-    // chip jump 期间抑制 — chip click 是导航语义不是"想加载更多",而且 smooth
+    // chip / 搜索 focus 期间抑制 — 定位是导航语义不是"想加载更多",而且 smooth
     // 路径穿过顶部时叠加 F-SYNC-2 的 scrollTop+=delta 可能把 viewport 拽飞
     // (长距离跳转踹回底嫌疑)。用户主动 wheel/touch/keydown 会立刻清掉这个 ref
     // (见 mount effect 里的监听),所以"跳完立刻继续往上翻"完全 OK。
-    if (chipJumpInProgressRef.current) {
+    if (chipJumpInProgressRef.current || focusJumpRef.current !== null) {
       return;
     }
 
@@ -5444,7 +6058,7 @@ export function MessageStream({
   const { userMessageIds, previewById } = useMemo(() => {
     const ids: string[] = [];
     const map = new Map<string, string>();
-    for (const it of visibleRenderItems) {
+    for (const it of visibleMetadataItems) {
       if (it.type !== 'message' || it.message.role !== 'user') continue;
       // 合成指令行渲染 null,没有对应 DOM 元素,chip 指向它 scrollIntoView 会
       // 静默失效(review P2)。
@@ -5453,7 +6067,7 @@ export function MessageStream({
       map.set(it.message.clientId, resolveUserDisplayText(it.message));
     }
     return { userMessageIds: ids, previewById: map };
-  }, [visibleRenderItems]);
+  }, [visibleMetadataItems]);
 
   const { displayId: prevUserMsgId, suppressAfterClick } = usePrevUserMessageInView({
     scrollRef,
@@ -5497,11 +6111,16 @@ export function MessageStream({
   // 派生 —— 导航条要给整段历史画刻度)。目标可能在渲染窗口外,跳转走下面的
   // layout effect:复用 focus-jump 的"先扩窗到目标、下一轮再滚动"两段式,
   // 以及 chip-jump 的 expandWindow/onLoadMore 抑制协议。
-  // 导航条是个性化可选功能(Settings → 个性化 → 小技巧),默认关闭;关闭时
+  // 导航条是普通任务的个性化可选功能(Settings → 个性化 → 小技巧)。
+  // 伙伴长期对话不显示逐条刻度，也不为导航条派生条目或空闲补页。关闭时
   // 不挂载组件(卸载时组件自会把 navRailCoversNav 报回 false,chip 兜底回归),
   // 也不做下面的空闲补页。
-  const { enabled: navRailEnabled } = useMessageNavRailPreference();
-  const navRailEntries = useMemo(() => deriveNavRailEntries(visibleMessages), [visibleMessages]);
+  const { enabled: navRailPreferenceEnabled } = useMessageNavRailPreference();
+  const navRailEnabled = navRailPreferenceEnabled && !simplifiedBotConversation;
+  const navRailEntries = useMemo(
+    () => navigationProjection(visibleMessages, navRailEnabled),
+    [navigationProjection, visibleMessages, navRailEnabled],
+  );
 
   // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
   // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
@@ -5515,8 +6134,8 @@ export function MessageStream({
   // shouldBackfillForNavRail 一族常量注释)。与"跳转补齐"同属程序化翻页,
   // prepend 的滚动补偿照走 F-SYNC-2 协议:调用前快照 scrollHeight/scrollTop。
   // 即使当下窗口太窄导航条没出场,补到的历史对搜索/上滚阅读同样有用,
-  // 且有轮数预算封顶,不做 eligible 门控。但**用户显式关闭导航条**(个性化
-  // 开关,默认关)时跳过:为一个不存在的 UI 自动翻页不符合默认克制,开关
+  // 且有轮数预算封顶,不做 eligible 门控。但伙伴对话或用户显式关闭导航条
+  // 时跳过:为一个不存在的 UI 自动翻页不符合默认克制,开关
   // 打开后本 effect 依赖变化会重新评估补页。
   // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
   // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
@@ -5625,15 +6244,14 @@ export function MessageStream({
     root.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
   }, [railJumpRequest, allRenderItems, visibleRenderItems, beginChipJump]);
 
-  // 第一条 user 消息没有"上一条 assistant"作为 resumeSessionAt 锚点，
-  // rewind 必然抛 NO_PRIOR_ASSISTANT。直接在 UI 层把按钮藏掉，避免无效点击。
+  // 第一条 user 消息没有可 fork 的前文(fork 出来等价于复制整条任务),UI 层藏掉 fork 入口。
   // 注意:这里要用全量 messages 而不是 visibleRenderItems —— "首条 user" 的语义
   // 是整段对话的首条,不是当前窗口的首条;且 messages 本身也只是已加载的尾部
   // 切片,还有老页未加载(hasMoreMessages)时不能把切片首条误判为对话首条
   // (判定逻辑与陷阱见 findFirstUserMessageClientId 注释)。
   const firstUserMessageClientId = useMemo(
-    () => findFirstUserMessageClientId(displayMessages, Boolean(hasMoreMessages)),
-    [displayMessages, hasMoreMessages],
+    () => findFirstUserMessageClientId(metadataMessages, Boolean(hasMoreMessages)),
+    [metadataMessages, hasMoreMessages],
   );
 
   // edit-last-message: 最后一条 user 消息才显示编辑入口(编辑 = rewind 到该条
@@ -5643,23 +6261,23 @@ export function MessageStream({
   // 会把编辑入口从真实的最后一条可见气泡上抢走 —— 与该 helper 里 isSyntheticTrigger
   // 那条同源(review: codex P2)。
   const lastUserMessageClientId = useMemo(
-    () => findLastUserMessageClientId(visibleMessages),
-    [visibleMessages],
+    () => findLastUserMessageClientId(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
   // 同样走可见序列:子代理内部的 user 行不是父会话某个 turn 的发起者,算进来会让
   // 在飞的重连行被"夺走归属"、提前停转。
   const lastUserInputClientId = useMemo(
-    () => findLastUserInputClientId(visibleMessages),
-    [visibleMessages],
+    () => findLastUserInputClientId(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
 
   // 使用未过滤子代理的 displayMessages,不走 visibleMessages:子代理消耗的 token 是这个 turn 的
   // 真实花费,过滤掉等于把子代理的账从用量里抹掉(成本失真,比显示问题更糟)。
   // 归属键 turnFinalAssistantClientIds 已按可见序列算出,聚合区间仍落在正确的 turn 内。
   const userTurnUsageDetailsByAssistantId = useMemo(() => {
-    return collectAssistantTurnUsageDetails(displayMessages, turnFinalAssistantClientIds);
-  }, [displayMessages, turnFinalAssistantClientIds]);
+    return collectAssistantTurnUsageDetails(metadataMessages, turnFinalAssistantClientIds);
+  }, [metadataMessages, turnFinalAssistantClientIds]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。走可见序列:尾部挂着子代理内部行时,
@@ -5668,11 +6286,67 @@ export function MessageStream({
     visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].clientId : undefined;
   const previousLocalFileRefsRef = useRef<readonly KnownLocalFileRef[]>([]);
   const localFileRefs = useMemo<readonly KnownLocalFileRef[]>(() => {
-    return collectStableLocalFileRefs(messages, previousLocalFileRefsRef.current);
-  }, [messages]);
+    return collectStableLocalFileRefs(rawMetadataMessages, previousLocalFileRefsRef.current);
+  }, [rawMetadataMessages]);
   useEffect(() => {
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
+
+  // 伙伴聊天的工作过程与回复正文同列：只占头像宽度，不重复画脸。memo 住以保持
+  // WorkGroupRenderItemView 的 memo 比较成立。
+  const botReplyColumnSpacer = useMemo(
+    () =>
+      simplifiedBotConversation && assistantAvatar ? (
+        <span aria-hidden="true" className="invisible">
+          {assistantAvatar}
+        </span>
+      ) : undefined,
+    [assistantAvatar, simplifiedBotConversation],
+  );
+  const workGroupRenderContext = useMemo<WorkGroupRenderContext>(
+    () => ({
+      workingDir,
+      sessionId,
+      sessionTitle,
+      agentKind,
+      remoteHostId,
+      sessionSource,
+      onDiagnoseError,
+      isSessionStreaming,
+      firstUserMessageClientId,
+      lastUserMessageClientId,
+      lastUserInputClientId,
+      continuationTurnClientId,
+      continuationInFlightProjectionCapability,
+      localFileRefs,
+      singleResultMap,
+      assistantsWithFollowingUserBoundary,
+      turnFinalAssistantClientIds,
+      subagentModelByToolUseId,
+      userTurnUsageDetailsByAssistantId,
+    }),
+    [
+      workingDir,
+      sessionId,
+      sessionTitle,
+      agentKind,
+      remoteHostId,
+      sessionSource,
+      onDiagnoseError,
+      isSessionStreaming,
+      firstUserMessageClientId,
+      lastUserMessageClientId,
+      lastUserInputClientId,
+      continuationTurnClientId,
+      continuationInFlightProjectionCapability,
+      localFileRefs,
+      singleResultMap,
+      assistantsWithFollowingUserBoundary,
+      turnFinalAssistantClientIds,
+      subagentModelByToolUseId,
+      userTurnUsageDetailsByAssistantId,
+    ],
+  );
 
   // chip 垂直位置：优先使用父层实测的底部中央避让边界。普通状态行不占中央槽，
   // 步骤 / 接管胶囊在场时则把按钮抬到它们上方；旧调用方保留历史兜底。
@@ -5757,8 +6431,8 @@ export function MessageStream({
   // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
   // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMessages),
-    [visibleMessages],
+    () => collectGhostCallsByUserTurn(visibleMetadataMessages),
+    [visibleMetadataMessages],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
@@ -5774,7 +6448,7 @@ export function MessageStream({
             {/* chat-text-quote:选中消息文字 → 浮出"添加到对话"按钮(portal 到 body)。
           绑定本流的滚动容器:协同模式多流并存时,选区归属按各自容器判定。 */}
             {sessionId ? (
-              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} />
+              <SelectionQuoteButton sessionId={sessionId} containerRef={scrollRef} onAskInSideChat={onAskInSideChat} />
             ) : null}
             {/*
         原生滚动容器:overflow-y-auto + overflow-x-hidden。
@@ -5804,6 +6478,7 @@ export function MessageStream({
                   maxWidth: contentWidth ?? 880,
                 }}
               >
+                {header ? <div className="mb-3.5">{header}</div> : null}
                 {historyLoaded && historyCleared && <HistoryClearedMarker />}
                 {/* Keep pagination feedback inside the existing top padding so
                     toggling it never changes message positions or scrollHeight. */}
@@ -5818,15 +6493,21 @@ export function MessageStream({
               React `key` 一律取 item.key — stable across builds(派生约定见
               RenderItem 类型注释 / buildRenderItems),复用 DOM 节点避免折叠
               态丢失 / 滚动锚点漂走。 */}
-                <div
+                <MessageViewport apiRef={messageViewportRef} options={{
+                  entries: viewportEntries, scrollRef, itemsRef, followRef: isNearBottomRef,
+                  initialAnchor: restoreSnapshotRef.current?.viewportTopKey,
+                  initialHeights: restoreSnapshotRef.current?.itemHeights?.byKey,
+                  disabled: shareSelectionActive,
+                  // Refresh ownership before virtualization mutates the DOM.
+                  onProgrammaticScroll: () => handleScroll(),
+                }}>{messageViewport => <div
                   ref={itemsRef}
                   data-share-selection-active={shareSelectionActive ? '' : undefined}
                   className={cn(
-                    // msg-stream-items:直接子元素(每条 render item 的根节点)带
-                    // content-visibility:auto(globals.css)—— 视口外条目跳过布局
-                    // 与绘制,切入长 session 的首帧成本从「整个窗口 80 条」降到
-                    // 「一屏」。滚动恢复按条目锚定 + ResizeObserver 纠偏,估高
-                    // (240px)与真实高度的偏差在条目进入视口后被自动纠正。
+                    // #5406: normal layout avoids the row display-locking condition
+                    // reproduced in Blink AX text-fragment serialization.
+                    // Historical bodies mount near the viewport; keyed height
+                    // placeholders preserve the existing scroll/restore geometry.
                     'msg-stream-items flex flex-col gap-3.5',
                     // 分享选择模式:整列内容右移,左侧让出复选框那一列。缩进加在
                     // 容器上(不是逐条消息),工具卡等不可选的 item 也跟着移,
@@ -5835,7 +6516,16 @@ export function MessageStream({
                     'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
                   )}
                 >
-                  {visibleRenderItems.map((item) => {
+                  {visibleRenderItems.map((item, itemIndex) => {
+                    if (!messageViewport.shouldMount(viewportEntries[itemIndex])) {
+                      return <div key={item.key} data-render-item-key={item.key}
+                        data-message-client-id={item.type === 'message' ? item.message.clientId : undefined}
+                        // Previous-question navigation must still find offscreen user rows.
+                        data-user-msg-id={item.type === 'message' && item.message.role === 'user'
+                          && !item.message.isSyntheticTrigger ? item.message.clientId : undefined}
+                        data-message-placeholder="" aria-hidden="true"
+                        style={{ height: messageViewport.placeholderHeight(item.key), flexShrink: 0 }} />;
+                    }
                     if (item.type === 'fork_origin') {
                       return (
                         <ForkOriginMarker
@@ -5916,6 +6606,7 @@ export function MessageStream({
                           update={item.update}
                           result={item.result}
                           persistedStatus={item.persistedStatus}
+                          durableStatus={item.durableStatus}
                           sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
@@ -5928,84 +6619,16 @@ export function MessageStream({
                     }
 
                     if (item.type === 'work_group') {
-                      // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
-                      // 具体折叠 / 直接详情逻辑全部复用 WorkGroupBlock。
-                      const toWorkGroupChild = (child: WorkGroupChildItem): WorkGroupChild => {
-                        if (child.type === 'work_group') {
-                          return {
-                            kind: 'group',
-                            key: child.key,
-                            blockId: `work:${child.key.slice('work-'.length)}`,
-                            durationMs: child.durationMs,
-                            isStreaming: child.isStreaming,
-                            startedAtMs: child.startedAtMs,
-                            deferred: child.deferred,
-                            childItems: child.children.map(toWorkGroupChild),
-                          };
-                        }
-                        if (child.type === 'tool_segment') {
-                          return {
-                            kind: 'tools',
-                            key: child.key,
-                            toolCalls: child.toolCalls,
-                            resultMap: child.resultMap,
-                            settledIds: child.settledIds,
-                          };
-                        }
-                        if (child.type === 'message' && child.message.role === 'thinking') {
-                          return { kind: 'thinking', key: child.key, message: child.message };
-                        }
-                        return {
-                          kind: 'rendered',
-                          key: child.key,
-                          renderNode: () =>
-                            renderWorkGroupChild(child, {
-                              workingDir,
-                              sessionId,
-                              sessionTitle,
-                              agentKind,
-                              remoteHostId,
-                              isSessionStreaming,
-                              firstUserMessageClientId,
-                              lastUserMessageClientId,
-                              lastUserInputClientId,
-                              continuationTurnClientId,
-                              continuationInFlightProjectionCapability,
-                              localFileRefs,
-                              singleResultMap,
-                              assistantsWithFollowingUserBoundary,
-                              turnFinalAssistantClientIds,
-                              subagentModelByToolUseId,
-                              userTurnUsageDetailsByAssistantId,
-                            }),
-                        };
-                      };
-                      const childItems = item.children.map(toWorkGroupChild);
                       return (
-                        // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
-                        // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
-                        // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
-                        // 视口子锚点不读这个聚合列表，只认已渲染的 data-message-client-id。
-                        <div
+                        <WorkGroupRenderItemView
                           key={item.key}
-                          data-render-item-key={item.key}
-                          className="scroll-mt-20"
-                          data-message-client-ids={collectWorkGroupClientIds(item.children).join(
-                            ' ',
-                          )}
-                        >
-                          <WorkGroupBlock
-                            // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
-                            // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
-                            blockId={`work:${item.key.slice('work-'.length)}`}
-                            durationMs={item.durationMs}
-                            isStreaming={item.isStreaming}
-                            startedAtMs={item.startedAtMs}
-                            childItems={childItems}
-                            compact={simplifiedBotConversation}
-                            deferred={item.deferred}
-                          />
-                        </div>
+                          item={item}
+                          context={workGroupRenderContext}
+                          // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
+                          // 组头按内容宽；最终答复后保留折叠过程，按需展开。
+                          compact={false}
+                          replyColumnSpacer={botReplyColumnSpacer}
+                        />
                       );
                     }
 
@@ -6016,6 +6639,7 @@ export function MessageStream({
                       // 下一次 store 变更自愈。
                       const entry = ghostCardSnapshot.byCallId.get(item.callId);
                       if (!entry || entry.status !== 'ready') return null;
+                      if (readMailCard(entry.html)?.supersededBy) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
                       return (
@@ -6036,7 +6660,12 @@ export function MessageStream({
                             sessionId={sessionId}
                           />
                           {item.media && item.media.length > 0 ? (
-                            <ToolMediaList items={item.media} sessionId={sessionId} />
+                            <ShareableToolMedia
+                              shareId={`${item.key}:media`}
+                              items={item.media}
+                              sessionId={sessionId}
+                              selectionActive={shareSelectionActive}
+                            />
                           ) : null}
                         </div>
                       );
@@ -6046,13 +6675,14 @@ export function MessageStream({
                       // tool-result-media: 跳出 tool_segment 折叠卡片,渲染体在
                       // ToolMediaList(与 ghost_card 回锚媒体共用单一来源)。
                       return (
-                        <div
+                        <ShareableToolMedia
                           key={item.key}
-                          data-render-item-key={item.key}
-                          className="flex flex-col gap-2"
-                        >
-                          <ToolMediaList items={item.items} sessionId={sessionId} />
-                        </div>
+                          renderItemKey={item.key}
+                          shareId={item.key}
+                          items={item.items}
+                          sessionId={sessionId}
+                          selectionActive={shareSelectionActive}
+                        />
                       );
                     }
 
@@ -6110,6 +6740,9 @@ export function MessageStream({
                         localFileRefs={localFileRefs}
                         assistantAvatar={assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
+                        starterOptionsLocked={Boolean(lastUserMessageClientId)}
+                        sessionSource={sessionSource}
+                        onDiagnoseError={onDiagnoseError}
                       />
                     );
                     const highlightClass =
@@ -6123,7 +6756,11 @@ export function MessageStream({
                         }
                       : {};
                     if (simplifiedBotConversation) {
-                      const groupTimestamp = botMessageTimeGroups.get(msg.clientId);
+                      // Call cards carry their own date/time in the compact header.
+                      const groupTimestamp =
+                        msg.systemCardType === 'voice-call'
+                          ? undefined
+                          : botMessageTimeGroups.get(msg.clientId);
                       const startsUnread = botUnreadBoundaryClientId === msg.clientId;
                       return (
                         <div
@@ -6185,7 +6822,7 @@ export function MessageStream({
                       </div>
                     );
                   })}
-                </div>
+                </div>}</MessageViewport>
               </div>
             </div>
 
@@ -6210,7 +6847,7 @@ export function MessageStream({
             />
 
             {/* message-nav-rail: 左缘提问导航条(每条提问一根刻度,当前项加深,
-          hover 预览,点击跳转)。个性化开关(默认关)决定挂不挂载;挂载后的
+          hover 预览,点击跳转)。仅普通任务按个性化开关挂载;挂载后的
           显隐仍由组件自判:提问数 ≥4 且内容列左侧留白足够;窄窗口 / 嵌入面板
           自然隐藏,绝不压在气泡上。 */}
             {navRailEnabled && (
@@ -6295,6 +6932,9 @@ const MessageItem = memo(function MessageItem({
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
+  starterOptionsLocked,
+  sessionSource,
+  onDiagnoseError,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -6346,9 +6986,17 @@ const MessageItem = memo(function MessageItem({
   assistantAvatar?: ReactNode;
   /** 伙伴对话消息操作栏使用轻量常显变体。 */
   simplifiedBotConversation?: boolean;
+  /** True once the user has written anything in this task, which retires the opening's starter buttons. */
+  starterOptionsLocked?: boolean;
+  sessionSource?: string | null;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
+  if (message.role === 'user' && message.systemCardType === 'input-handoff') {
+    const record = readInputHandoffRecordData(message.systemCardData);
+    return record ? <InputHandoffRecordRow record={record} at={message.createdAt} /> : null;
+  }
   if (message.role === 'user' && message.systemCardType) {
     return (
       <SystemCard
@@ -6373,33 +7021,54 @@ const MessageItem = memo(function MessageItem({
   switch (message.role) {
     case 'user':
       return (
-        <UserMessage
-          workingDir={workingDir}
-          content={message.content}
-          sessionReferences={message.sessionReferences}
-          quotesEncoded={message.quotesEncoded}
-          agentReferences={message.agentReferences}
-          pastedTextRanges={message.pastedTextRanges}
-          slashCommandRanges={message.slashCommandRanges}
-          images={message.images}
-          files={message.files}
-          createdAt={message.createdAt}
-          sessionId={sessionId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          messageClientId={message.clientId}
-          sessionRunning={sessionRunning}
-          isFirstUserMessage={isFirstUserMessage}
-          isLastUserMessage={isLastUserMessage}
-          automationOrigin={message.automationOrigin}
-          hookSource={message.hookSource}
-          delivery={message.delivery}
-          goalBadge={message.goalBadge}
-          blockedByGhost={message.blockedByGhost}
-          simplifiedBotConversation={simplifiedBotConversation}
-        />
+        <>
+          <UserMessage
+            sharedAuthorName={message.sharedAuthorName}
+            sharedAuthorMemberId={message.sharedAuthorMemberId}
+            workingDir={workingDir}
+            content={message.content}
+            quotesEncoded={message.quotesEncoded}
+            agentReferences={message.agentReferences}
+            pastedTextRanges={message.pastedTextRanges}
+            slashCommandRanges={message.slashCommandRanges}
+            images={message.images}
+            files={message.files}
+            createdAt={message.createdAt}
+            sessionId={sessionId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            messageClientId={message.clientId}
+            sessionRunning={sessionRunning}
+            isFirstUserMessage={isFirstUserMessage}
+            isLastUserMessage={isLastUserMessage}
+            automationOrigin={message.automationOrigin}
+            hookSource={message.hookSource}
+            sourceDevice={message.sourceDevice}
+            sourcePlugin={message.sourcePlugin}
+            delivery={message.delivery}
+            goalBadge={message.goalBadge}
+            blockedByGhost={message.blockedByGhost}
+            simplifiedBotConversation={simplifiedBotConversation}
+            replyQuote={message.replyQuote}
+          />
+          {message.usageLimitAutoResumeInfo && (
+            <SystemCard
+              cardType="auto-resume"
+              data={message.usageLimitAutoResumeInfo}
+              sessionId={sessionId}
+              workingDir={workingDir}
+            />
+          )}
+        </>
       );
     case 'assistant':
+      if (message.systemCardType === 'mcp-app') {
+        return sessionId ? (
+          <McpAppCard sessionId={sessionId} clientId={message.clientId}
+            title={String(message.systemCardData?.title ?? '')}
+            fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
+        ) : null;
+      }
       if (message.systemCardType) {
         const card = (
           <SystemCard
@@ -6409,7 +7078,10 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
-        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+        return simplifiedBotConversation && (message.systemCardType === 'bot-session-task'
+          || message.systemCardType === 'bot-session-task-result'
+          || message.systemCardType === 'bot-session-task-message'
+          || message.systemCardType === 'bot-direct-message')
           ? withAssistantAvatar(
               assistantAvatar ? (
                 <span aria-hidden="true" className="invisible">
@@ -6423,6 +7095,7 @@ const MessageItem = memo(function MessageItem({
       return withAssistantAvatar(
         assistantAvatar,
         <>
+          <MessageSourceLabels sourceGroup={message.sourceGroup} align="start" />
           <AssistantMessage
             workingDir={workingDir}
             localFileRefs={localFileRefs}
@@ -6432,6 +7105,7 @@ const MessageItem = memo(function MessageItem({
             isStreaming={message.isStreaming}
             createdAt={message.createdAt}
             messageClientId={message.clientId}
+            replyToClientId={message.replyToClientId}
             agentKind={agentKind}
             remoteHostId={remoteHostId}
             forkBlocked={assistantForkBlocked}
@@ -6448,8 +7122,13 @@ const MessageItem = memo(function MessageItem({
             turnUsageDetails={message.turnUsageDetails}
             userTurnUsageDetails={userTurnUsageDetails}
             modelMismatch={message.modelMismatch}
+            failedSamplingAttempt={message.failedSamplingAttempt}
             ghostReplyPending={message.ghostReplyPending}
             simplifiedBotConversation={simplifiedBotConversation}
+            botLearning={message.botLearning}
+            botStarterOptions={message.botStarterOptions}
+            starterOptionsLocked={starterOptionsLocked}
+            botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
           />
         </>,
       );
@@ -6500,6 +7179,8 @@ const MessageItem = memo(function MessageItem({
           reason={message.errorReason}
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
+          sessionSource={sessionSource}
+          onDiagnose={onDiagnoseError}
         />
       );
     case 'thinking':

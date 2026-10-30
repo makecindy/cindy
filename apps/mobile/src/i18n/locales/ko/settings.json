@@ -1,7 +1,6 @@
 {
   "localLogs": {
     "upload": "로그 업로드",
-    "uploadHint": "선별된 실행 기록과 앱 및 OS 버전만 전송합니다. 상세 로그는 내보내기를 사용하세요.",
     "uploadResult": {
       "unavailable": "이 빌드에는 로그 업로드가 설정되지 않았습니다.",
       "consentRequired": "로그를 업로드하기 전에 개인정보 처리방침에 동의해 주세요.",
@@ -9,23 +8,55 @@
       "failed": "업로드하지 못했습니다. 로그는 휴대폰에 보관되어 있습니다."
     },
     "title": "디버그 로그",
-    "record": "디버그 로그 기록",
-    "hint": "휴대폰 연결, 복구, 스크롤, 키보드 및 성능 세부 정보를 기록합니다. 기본 꺼짐이며 최대 7일, 8 MB를 보관합니다. 자동 업로드하지 않습니다.",
-    "export": "디버그 로그 내보내기",
+    "record": "로그 기록",
+    "export": "로그 내보내기",
     "clear": "로그 지우기",
     "busy": "처리 중…",
     "failed": "로그를 저장하거나 공유할 수 없습니다. 다시 시도해 주세요.",
     "clearHint": "저장된 진단 로그를 삭제할까요?",
     "cancel": "취소",
-    "exportHint": "문제 해결을 위해 상세 로컬 로그를 공유합니다. 대화 내용이나 인증 정보는 포함하지 않습니다.",
-    "options": "로그 옵션",
-    "uploadCopied": "업로드했습니다. 번호 {{code}}를 복사했습니다.",
-    "uploadSucceeded": "업로드했습니다. 번호 {{code}}."
+    "uploadCopied": "로그를 업로드했습니다. 번호 {{code}}를 복사했습니다",
+    "uploadSucceeded": "로그를 업로드했습니다. 번호 {{code}}",
+    "footer": "로그는 휴대폰에 최대 7일, 8MB까지 저장되며 자동으로 업로드되지 않습니다. 내보낸 로그에는 대화 본문과 자격 증명이 포함되지 않고, 업로드 시에는 필터링된 실행 기록과 버전 정보만 보냅니다."
   },
   "title": "설정",
+  "appearance": {
+    "title": "외관",
+    "modeLabel": "표시 모드",
+    "options": {
+      "system": "자동 (시스템 따르기)",
+      "light": "라이트",
+      "dark": "다크"
+    },
+    "saveFailed": "표시 모드를 저장하지 못했습니다. 다시 열면 이전 설정으로 돌아갑니다.",
+    "userBubble": {
+      "title": "내 메시지 말풍선 색상",
+      "presets": "색상",
+      "default": "기본값",
+      "peach": "초안",
+      "yellow": "새벽빛",
+      "sage": "영감",
+      "blue": "꿈결",
+      "lavender": "밤고양이",
+      "red": "목걸이",
+      "custom": "사용자 지정 색상",
+      "hue": "색조",
+      "preview": "메시지 미리보기",
+      "sampleUser": "오늘 떠오른 아이디어를 정리해 줘.",
+      "sampleAssistant": "좋아요, 함께 아이디어를 정리해 봐요.",
+      "hint": "라이트·다크 모드에 맞춰 밝기가 자동 조정됩니다. 이 기기에만 저장됩니다.",
+      "customHint": "색상 막대를 좌우로 드래그해 색을 고르세요. 밝기는 자동 조정되며 이 기기에만 저장됩니다.",
+      "saveFailed": "색상은 적용되었지만 저장하지 못했습니다.",
+      "retry": "다시 시도",
+      "cancel": "취소",
+      "reset": "기본값으로 복원",
+      "apply": "적용",
+      "hex": "색상 코드"
+    }
+  },
   "language": {
     "title": "언어",
-    "hint": "앱 UI에만 영향을 줍니다. Agent 응답 언어는 Agent 자체 설정에 따릅니다.",
+    "hint": "화면과 AI 오류 안내에 사용하는 언어입니다. 일반 답변은 메시지나 요청한 언어를 따릅니다.",
     "options": {
       "system": "자동 (시스템 따르기)",
       "zh-CN": "简体中文",
@@ -37,49 +68,55 @@
   },
   "version": {
     "sectionTitle": "버전",
-    "currentLabel": "현재 버전",
-    "bundleVersion": "앱 패키지 {{version}}",
-    "otaVersion": "OTA 버전 {{version}}",
-    "pairedDesktopVersion": "연동 대상 데스크톱 버전 {{version}}",
-    "devNoOta": "개발 빌드에서는 OTA 업데이트를 사용할 수 없습니다",
+    "updateMethodInApp": "앱에서 업데이트하며, 다시 시작하면 적용됩니다.",
+    "updateMethodPackage": "새 버전을 내려받아 설치해 주세요.",
+    "updateMethodUnavailable": "개발 빌드는 앱에서 업데이트할 수 없습니다.",
     "checkAction": "업데이트 확인",
     "testFlightCheckAction": "콘텐츠 업데이트 확인",
     "checking": "확인 중",
-    "updating": "업데이트 중",
     "checkingAccessibility": "업데이트를 확인하는 중",
     "testFlightCheckingAccessibility": "콘텐츠 업데이트를 확인하는 중",
-    "testFlightUpdateManaged": "테스트 빌드 업데이트는 TestFlight에서 관리합니다",
-    "testFlightNoContentUpdate": "사용 가능한 콘텐츠 업데이트가 없습니다. 새 테스트 빌드는 TestFlight에서 확인해 주세요.",
-    "testFlightContentUpdateUnavailable": "이 빌드에서는 콘텐츠 업데이트를 확인할 수 없습니다. 새 테스트 빌드는 TestFlight에서 확인해 주세요.",
+    "testFlightUpdateManaged": "새 테스트 빌드는 TestFlight에서 설치하세요.",
+    "testFlightNoContentUpdate": "사용 가능한 콘텐츠 업데이트가 없습니다.",
+    "testFlightContentUpdateUnavailable": "이 빌드에서는 콘텐츠 업데이트를 확인할 수 없습니다.",
+    "googlePlayUpdateManaged": "새 버전은 Google Play에서 업데이트하세요.",
+    "googlePlayNoContentUpdate": "사용 가능한 콘텐츠 업데이트가 없습니다.",
+    "googlePlayContentUpdateUnavailable": "이 빌드에서는 콘텐츠 업데이트를 확인할 수 없습니다.",
     "bundleUpdateFound": "앱 패키지 업데이트가 있습니다",
     "upToDate": "이미 최신 버전입니다",
-    "bundleUpToDateNoOta": "앱 패키지는 최신입니다. 현재 버전은 OTA 업데이트를 지원하지 않습니다",
+    "bundleUpToDateNoOta": "최신 버전입니다. 이 버전은 핫 업데이트를 지원하지 않습니다.",
     "downloadedRestarting": "업데이트를 다운로드했습니다. 다시 시작하는 중",
-    "downloadedRestartRequired": "업데이트를 다운로드했습니다. 앱을 완전히 종료한 뒤 다시 열면 적용됩니다.",
+    "downloadedRestartRequired": "업데이트를 내려받았습니다. 앱을 완전히 종료한 뒤 다시 열면 적용됩니다.",
     "bundleCheckFailed": "앱 패키지 업데이트를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
     "checkFailedDetail": "업데이트 확인에 실패했습니다: {{detail}}",
-    "checkFailed": "업데이트 확인에 실패했습니다. 잠시 후 다시 시도해 주세요."
+    "checkFailed": "업데이트 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+    "currentLabel": "현재 버전",
+    "pairedDesktopLabel": "연결된 데스크톱 버전"
   },
   "betaChannel": {
     "title": "베타 채널",
     "badge": "Beta",
-    "description": "베타 채널에 참여하면 출시 예정인 클라이언트 업데이트를 먼저 받을 수 있습니다.",
-    "restartHint": "베타 채널은 앱을 재시작해야 적용됩니다. 앱을 다시 시작해 주세요.",
-    "ok": "확인",
+    "description": "출시 예정인 클라이언트 업데이트를 먼저 받습니다. 콘텐츠 업데이트는 다음 업데이트 확인 시 다운로드되며 앱을 다시 시작하면 적용됩니다.",
     "saveFailed": "베타 채널 설정 저장 실패",
     "unavailable": "베타 채널을 사용할 수 없습니다. 베타 업데이트 서버에 연결할 수 없습니다."
   },
   "notifications": {
     "sectionTitle": "알림",
-    "taskDone": "작업 완료 알림",
-    "taskDoneHint": "컴퓨터의 작업이 완료되거나 실패하거나 회신이 필요할 때 이 휴대폰으로 알림을 보냅니다. 완료·회신 알림에는 최신 응답 내용이 포함됩니다.",
-    "permissionDenied": "시스템 알림 권한이 꺼져 있습니다. iOS 설정 → 알림 → {{appName}}에서 알림을 허용한 뒤 다시 시도해 주세요.",
-    "unregisterQueued": "껐습니다. 현재 네트워크에서는 등록 해제가 완료되지 않았으며, 다음에 온라인이 되면 자동으로 완료됩니다."
+    "taskDone": "메시지 및 작업 알림",
+    "taskDoneHint": "새 채팅 메시지와 작업 완료, 오류, 답변 대기를 알려줍니다.",
+    "permissionDenied": "시스템 설정에서 Cindy 알림을 허용해 주세요.",
+    "unregisterQueued": "껐습니다. 다시 온라인이 되면 등록 해제가 완료됩니다.",
+    "preview": "채팅 내용 미리 보기",
+    "background": "백그라운드 채팅 연결 유지",
+    "backgroundActive": "백그라운드에서 채팅 메시지 수신 중",
+    "backgroundStop": "수신 중지",
+    "backgroundHint": "Google 없이 연결하며 상시 알림이 표시됩니다. 알림에서 언제든 중지할 수 있습니다.",
+    "googleUnavailable": "Google 푸시를 사용할 수 없습니다. 백그라운드 채팅 연결로 메시지를 받을 수 있습니다."
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",
     "deviceName": "기기 이름",
-    "deviceNameDetail": "컴퓨터의 승인 목록에 이 이름이 표시됩니다.",
+    "deviceNameDetail": "컴퓨터의 승인 목록에 표시되는 이름입니다.",
     "platform": "플랫폼",
     "editAccessibility": "{{label}} 수정"
   },
@@ -134,7 +171,8 @@
     "runtime": "Runtime",
     "otaMarker": "OTA 마커",
     "emergencyLaunch": "긴급 실행",
-    "emergencyLaunchYes": "예 (이번 실행에서는 OTA를 적용할 수 없음)"
+    "emergencyLaunchYes": "예 (이번 실행에서는 OTA를 적용할 수 없음)",
+    "otaVersion": "OTA 버전"
   },
   "legal": {
     "sectionTitle": "법적 정보",
@@ -145,13 +183,15 @@
     "openUserAgreement": "이용약관 열기",
     "appFilingNumber": "앱 등록 번호",
     "analytics": "사용 통계",
-    "analyticsHint": "Cindy의 실행 및 지속 사용 현황을 파악하는 데 사용합니다. 기기 모델, OS 버전, 앱 버전, 기기 식별자 등 기기 및 사용 환경 정보를 전송하며 로그인 후에는 계정 ID도 포함됩니다. 대화 내용, 파일, 프롬프트는 전혀 포함하지 않습니다.",
+    "analyticsHint": "실행 및 지속 사용 현황 파악에 사용합니다. 기기 모델, OS·앱 버전, 기기 식별자 등의 정보와 로그인 후 계정 ID를 전송하며, 대화·파일·프롬프트는 포함하지 않습니다.",
     "analyticsSaveFailed": "설정을 저장하지 못했습니다. 다시 시작하면 이전 값으로 되돌아갈 수 있습니다.",
     "analyticsReset": "기본값으로 되돌리기",
     "analyticsResetAction": "되돌리기"
   },
   "account": {
-    "logoutHint": "로그아웃하면 이 휴대폰에 저장된 모든 계정과 로컬 원격 미러가 삭제됩니다. 컴퓨터의 세션에는 영향이 없습니다.",
+    "logoutConfirmTitle": "로그아웃할까요?",
+    "logoutConfirmRunning": "실행 중인 세션이 있습니다. 세션은 컴퓨터에서 계속 실행되지만 이 휴대폰에서는 더 이상 받거나 제어할 수 없으며, 저장된 계정과 로컬 원격 미러도 삭제됩니다.",
+    "logoutHint": "이 휴대폰의 모든 계정과 원격 미러를 삭제합니다. 컴퓨터의 세션에는 영향이 없습니다.",
     "logout": "로그아웃",
     "loggingOut": "로그아웃 중",
     "loggingOutAccessibility": "로그아웃하는 중"
@@ -164,7 +204,7 @@
   "voiceDictionary": {
     "sectionTitle": "음성 사전",
     "label": "사전 보기",
-    "hint": "사전은 컴퓨터에 저장되며 내 컴퓨터끼리 자동으로 동기화됩니다. 휴대폰에서는 보기만 가능하고, 추가와 삭제는 컴퓨터에서 해주세요.",
+    "hint": "사전은 컴퓨터에서 편집하며 자동으로 동기화됩니다. 휴대폰에서는 보기만 가능합니다.",
     "openAccessibility": "음성 사전 보기",
     "screenTitle": "음성 사전",
     "entryCount": "{{count}}개 단어",
@@ -173,9 +213,97 @@
     "refresh": "새로고침",
     "refreshing": "새로고치는 중…",
     "refreshAccessibility": "사전 새로고침",
-    "readOnlyHint": "휴대폰에서는 보기만 가능합니다. 추가와 삭제는 컴퓨터에서 해주세요.",
-    "offlineHint": "온라인 상태인 컴퓨터가 없습니다. 마지막으로 휴대폰에 동기화된 내용을 표시합니다.",
-    "noDesktops": "아직 동기화할 컴퓨터가 없습니다. 같은 계정으로 컴퓨터에 로그인하면 사전이 여기에 표시됩니다."
+    "readOnlyHint": "휴대폰에서는 보기만 가능합니다. 단어 추가와 삭제는 컴퓨터에서 하세요.",
+    "offlineHint": "컴퓨터가 오프라인입니다. 마지막으로 동기화한 사전을 표시합니다.",
+    "noDesktops": "컴퓨터에서 같은 계정으로 로그인하면 사전이 동기화됩니다."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
+    "title": "내 목소리 인식",
+    "sectionTitle": "성문 필터",
+    "label": "내 목소리 인식",
+    "entryHint": "음성 입력 중 주변 사람의 목소리를 음소거합니다. 성문은 이 휴대폰에만 저장됩니다.",
+    "openAccessibility": "내 목소리 인식 설정 열기",
+    "on": "켜짐",
+    "off": "꺼짐",
+    "hint": "음성 입력 중 주변 사람의 목소리를 음소거하고 내 말만 인식합니다. 동시에 말한 소리는 완전히 걸러지지 않습니다. 성문은 이 휴대폰에 암호화되어 저장되며 업로드하거나 동기화하지 않습니다.",
+    "unsupported": "현재 설치된 버전은 성문을 지원하지 않습니다. 최신 버전으로 업데이트하세요.",
+    "model": {
+      "title": "인식 모델",
+      "needed": "처음 사용할 때 약 {{size}}의 인식 모델을 내려받습니다. Wi-Fi 연결을 권장합니다.",
+      "download": "인식 모델 다운로드",
+      "downloading": "다운로드 중({{done}} / {{total}})",
+      "cancel": "다운로드 취소",
+      "retry": "다시 다운로드",
+      "failed": {
+        "network": "인식 모델을 다운로드하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
+        "disk": "인식 모델을 저장하지 못했습니다. 휴대폰 저장 공간을 확인한 후 다시 시도하세요.",
+        "checksum": "다운로드한 인식 모델의 검증에 실패했습니다. 다시 시도하세요.",
+        "unavailable": "지금은 인식 모델을 가져올 수 없습니다. 잠시 후 다시 시도하세요."
+      }
+    },
+    "profile": {
+      "title": "성문",
+      "missing": "등록된 성문이 없습니다",
+      "missingHint": "성문을 등록하면 적용됩니다.",
+      "enrolled": "성문 등록됨",
+      "enrolledAt": "{{date}} 등록",
+      "enroll": "성문 등록",
+      "reenroll": "다시 등록",
+      "delete": "성문 삭제",
+      "deleteConfirm": {
+        "title": "성문을 삭제할까요?",
+        "description": "삭제하면 다시 등록할 때까지 음성 입력에서 주변 사람의 목소리를 걸러내지 않습니다.",
+        "confirm": "삭제",
+        "cancel": "취소"
+      }
+    },
+    "strictness": {
+      "label": "엄격도",
+      "hint": "엄격할수록 다른 목소리를 더 잘 막지만, 시끄러운 곳에서는 내 말도 잘릴 수 있습니다.",
+      "restoreDefault": "기본값으로 복원",
+      "options": {
+        "relaxed": "느슨하게",
+        "standard": "표준",
+        "strict": "엄격하게"
+      }
+    },
+    "enroll": {
+      "description": "아래 {{clips}}개 문장을 평소 목소리로 읽어 주세요. 각 녹음은 최대 {{seconds}}초이며, 다 읽으면 녹음을 종료하세요. 평소 음성 입력을 사용하는 장소에서 다른 사람이 동시에 말하지 않도록 녹음하세요.",
+      "step": "{{current}} / {{total}}번째 문장",
+      "record": "읽기 시작",
+      "stop": "녹음 종료",
+      "rerecord": "이 문장 다시 녹음",
+      "recording": "녹음 중…{{seconds}}초 남음",
+      "saving": "성문 만드는 중…",
+      "submit": "등록 완료",
+      "cancel": "취소",
+      "passages": {
+        "p1": "오늘 오전에는 이번 주 업무 일정을 정리하고, 오후에는 논의할 문제를 정리해서 모두에게 미리 보내 두겠습니다.",
+        "p2": "내일 날씨가 좋으면 조금 일찍 출발해서 가는 길에 과일과 간식을 사고, 점심은 공원에서 먹어요.",
+        "p3": "이 내용을 좀 더 간결하게 다듬고, 중요한 숫자와 결론은 남긴 다음 핵심을 세 문장에서 다섯 문장으로 요약해 주세요."
+      },
+      "errors": {
+        "too_short": "{{index}}번째 녹음에서 감지된 음성이 너무 짧습니다. 다시 녹음하세요.",
+        "no_embedding": "{{index}}번째 녹음에서 성문을 읽지 못했습니다. 다시 녹음하세요.",
+        "inconsistent": "{{index}}번째 녹음이 다른 녹음과 같은 사람의 목소리로 들리지 않습니다. 다른 사람의 목소리나 소음이 섞였을 수 있으니 다시 녹음하세요.",
+        "models_missing": "인식 모델 다운로드가 아직 끝나지 않았습니다. 잠시 후 다시 시도하세요.",
+        "storage_unavailable": "시스템 키체인을 사용할 수 없어 성문을 암호화해 저장할 수 없습니다. 잠시 후 다시 시도하세요.",
+        "failed": "성문을 만들지 못했습니다. 다시 시도하세요.",
+        "microphone": "마이크를 사용할 수 없습니다. 마이크 권한을 확인한 후 다시 시도하세요.",
+        "noAudio": "마이크에서 소리가 들어오지 않습니다. 확인한 후 다시 시도하세요."
+      },
+      "stepChoice": "{{index}}번째 문장, {{status}}",
+      "stepStatus": {
+        "pending": "녹음 전",
+        "recorded": "녹음됨",
+        "retry": "다시 녹음",
+        "recording": "녹음 중"
+      },
+      "rerecordStep": "{{index}}번째 문장 다시 녹음",
+      "readHint": "준비되면 읽기를 시작하고, 다 읽으면 녹음을 종료하세요.",
+      "otherClipsKept": "다른 녹음은 유지됩니다."
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "기기 이름",
@@ -183,9 +311,17 @@
     "resetAccessibility": "기본 기기 이름 복원",
     "emptyError": "기기 이름을 입력해 주세요.",
     "deviceInitializing": "기기를 초기화하는 중입니다. 잠시 후 다시 시도해 주세요.",
-    "saving": "저장 중…",
-    "saved": "저장했습니다.",
-    "restoringDefault": "기본 이름을 복원하는 중…",
-    "restoredDefault": "기본 이름을 복원했습니다."
+    "restoredDefault": "기본 이름을 복원했습니다.",
+    "resetAction": "기본 이름 복원",
+    "clearAccessibility": "이름 지우기",
+    "discardTitle": "변경 사항을 버릴까요?",
+    "discardBody": "기기 이름 변경 사항이 아직 저장되지 않았습니다.",
+    "discardConfirm": "변경 사항 버리기",
+    "keepEditing": "계속 편집"
+  },
+  "developer": {
+    "title": "개발자",
+    "identity": "식별 정보",
+    "updateInfo": "업데이트 정보"
   }
 }

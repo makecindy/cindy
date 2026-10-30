@@ -55,7 +55,10 @@ export function OAuthDeviceCodeCard({
             {deviceCode.userCode}
           </code>
           <div className="flex flex-wrap items-center gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => {
                 void Promise.resolve()
@@ -67,16 +70,14 @@ export function OAuthDeviceCodeCard({
                     toast.error(t('settings.providers.wizard.deviceCodeCopyFailed')),
                   );
               }}
-              className="flex h-8 items-center gap-1.5 rounded-full border px-3 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-              style={{
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
             >
               <Copy size={13} />
               {t('settings.providers.wizard.copyDeviceCode')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => {
                 void window.electronAPI
@@ -90,11 +91,6 @@ export function OAuthDeviceCodeCard({
                     toast.error(t('settings.providers.wizard.verificationPageOpenFailed')),
                   );
               }}
-              className="flex h-8 items-center gap-1.5 rounded-full border px-3 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-              style={{
-                borderColor: 'var(--settings-btn-secondary-border)',
-                color: 'var(--settings-btn-secondary-text)',
-              }}
             >
               <ExternalLink size={13} />
               {t('settings.providers.wizard.openVerificationPage')}
@@ -103,7 +99,7 @@ export function OAuthDeviceCodeCard({
                   · {verificationHost}
                 </span>
               )}
-            </button>
+            </Button>
           </div>
           <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
             {t('settings.providers.wizard.deviceCodeWaiting')}

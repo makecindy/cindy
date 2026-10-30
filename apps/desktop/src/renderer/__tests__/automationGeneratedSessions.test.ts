@@ -106,6 +106,7 @@ describe('automation-generated sessions', () => {
     // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
     // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
+      'side-chat',
       'desktop',
       'feishu',
       'slack',
@@ -120,9 +121,6 @@ describe('automation-generated sessions', () => {
       'review',
       'shared',
       'plugin',
-      // /cindy-make 制作个人版创建的代码任务:按源码 workingDir 归入项目分组。
-      'cindy-make',
-      'cindy-make-merge',
     ]);
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
@@ -131,6 +129,8 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make-merge');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -409,6 +409,75 @@ describe('automation-generated sessions', () => {
     if (entries[1].kind !== 'automation-group') throw new Error('expected automation group');
     expect(entries[1].group.sessions.map((session) => session.id)).toEqual(['jira-2', 'jira-1']);
     expect(entries[2]).toEqual({ kind: 'session', session: sessions[3] });
+  });
+
+  it('keeps remote schedule state and the owning device on remote automation groups', () => {
+    // 侧栏把远程设备镜像的索引并入分组索引:远程组拿到暂停态 / 下次运行,
+    // 并记住所属设备,让分组操作发到那台电脑而不是本机。
+    const remoteIndex = new Map([
+      ['remote-1', makeScheduleSessionInfo({ scheduleId: 'sched-remote', scheduleName: 'Remote', scheduleStatus: 'paused', nextFireAt: 1_767_225_600_000 })],
+      ['remote-2', makeScheduleSessionInfo({ scheduleId: 'sched-remote', scheduleName: 'Remote', scheduleStatus: 'paused', nextFireAt: 1_767_225_600_000 })],
+    ]);
+    const sessions = ['remote-2', 'remote-1'].map((id) =>
+      makeSession({ id, source: 'scheduler', deviceLinkDeviceId: 'device-b' }),
+    );
+
+    const [entry] = groupAutomationSidebarEntries(sessions, {
+      notifications: new Set(),
+      scheduleSessionIndex: remoteIndex,
+    });
+
+    expect(entry).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'schedule:sched-remote:device:device-b',
+        scheduleId: 'sched-remote',
+        scheduleStatus: 'paused',
+        nextFireAt: 1_767_225_600_000,
+        deviceLinkDeviceId: 'device-b',
+        title: 'Remote',
+      },
+    });
+  });
+
+  it('folds runs of one teammate routine together and leaves older-host routine rows flat', () => {
+    // 伙伴例行任务不是 schedule：按「伙伴 + 规则」成组，不同规则 / 伙伴各自成组；
+    // 旧主机不投影 routineId 时保持平铺，不误并。
+    const routineRun = (id: string, botId: string, routineId?: string) =>
+      makeSession({
+        id,
+        title: 'Morning brief',
+        source: 'bot',
+        workspaceKind: 'dialogue',
+        companion: { id: botId, role: 'routine', ...(routineId ? { routineId } : {}) },
+      });
+    const sessions = [
+      routineRun('brief-2', 'bot-a', 'brief'),
+      routineRun('brief-1', 'bot-a', 'brief'),
+      routineRun('other-bot', 'bot-b', 'brief'),
+      routineRun('legacy-1', 'bot-a'),
+      routineRun('legacy-2', 'bot-a'),
+    ];
+
+    const entries = groupAutomationSidebarEntries(sessions, { notifications: new Set() });
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      'automation-group',
+      'session',
+      'session',
+      'session',
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'routine:bot-a:brief',
+        title: 'Morning brief',
+        teammateRoutine: { botId: 'bot-a', routineId: 'brief' },
+      },
+    });
+    if (entries[0].kind !== 'automation-group') throw new Error('expected automation group');
+    expect(entries[0].group.scheduleId).toBeUndefined();
+    expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
   });
 
   it('shows every recent run as its own row when expanded (primary not hidden into header)', () => {
@@ -1002,7 +1071,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain("group.scheduleStatus === 'active'");
     // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
     expect(source).toMatch(
-      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
+      /hasHoverActions &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');

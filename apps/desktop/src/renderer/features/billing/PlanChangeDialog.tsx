@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as QRCode from 'qrcode';
@@ -180,12 +181,12 @@ export function PlanChangeTargetDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[9990] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[9990]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           aria-describedby={undefined}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[9991] flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] focus:outline-none',
+            'modal-panel fixed left-1/2 top-1/2 z-[9991] flex max-h-[calc(100dvh-48px)] w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none',
             choosingOffer ? 'max-w-[600px]' : 'max-w-[1120px]',
           )}
         >
@@ -444,13 +445,12 @@ export function PlanChangeStatusDialog({
   return (
     <Dialog.Root open={state.open} onOpenChange={(open) => !open && !busy && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
-            '-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl',
-            'border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[calc(100dvh-40px)] w-[calc(100vw-40px)] max-w-[600px] flex-col',
+            '-translate-x-1/2 -translate-y-1/2 overflow-hidden',
             'text-[var(--text-primary)] focus:outline-none',
           )}
           aria-describedby={undefined}
@@ -582,14 +582,16 @@ export function PlanChangeStatusDialog({
                     <ExternalLink size={22} />
                   </div>
                   <p className="mt-4 text-sm font-medium">{t('billing.checkout.redirectHint')}</p>
-                  <button
+                  <Button
+                    variant="cta"
+                    size="lg"
                     type="button"
                     onClick={() => void billingApi.openPaymentRedirect(action.url)}
-                    className="mt-5 inline-flex h-9 items-center gap-2 rounded-full bg-[var(--text-primary)] px-5 text-sm font-medium text-[var(--surface)]"
+                    className="mt-5"
                   >
                     <ExternalLink size={14} />
                     {t('billing.checkout.openPayment')}
-                  </button>
+                  </Button>
                 </>
               )}
 
@@ -628,9 +630,11 @@ export function PlanChangeStatusDialog({
                   </div>
                   <p className="mt-4 max-w-[340px] text-sm text-[var(--text-secondary)]">
                     {state.error
-                      ? state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
-                        ? t('billing.planChange.quoteRejected')
-                        : t('billing.planChange.requestFailed')
+                      ? state.quoteFailureReason === 'RENEWAL_PREPAID'
+                        ? t('billing.planChange.renewalPrepaid')
+                        : state.quoteFailureReason === 'TARGET_NOT_ALLOWED'
+                          ? t('billing.planChange.quoteRejected')
+                          : t('billing.planChange.requestFailed')
                       : state.phase === 'CANCELED'
                         ? t('billing.planChange.canceledBody')
                         : state.phase === 'EXPIRED'
@@ -645,56 +649,42 @@ export function PlanChangeStatusDialog({
           <div className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-6 py-3">
             <div>
               {state.phase === 'QUOTE_READY' && change?.status === 'QUOTED' && !state.stale && (
-                <button
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  tone="quiet"
                   type="button"
                   onClick={onAbandon}
-                  className="h-9 rounded-full px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)]"
                 >
                   {t('billing.planChange.abandon')}
-                </button>
+                </Button>
               )}
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {state.phase === 'FAILED' && state.quoteFailureReason === 'TARGET_NOT_ALLOWED' && (
-                <button
-                  type="button"
-                  onClick={onReselect}
-                  className="h-9 rounded-full bg-[var(--text-primary)] px-5 text-13 font-medium text-[var(--surface)]"
-                >
+                <Button variant="cta" size="lg" type="button" onClick={onReselect}>
                   {t('billing.planChange.chooseAnotherPlan')}
-                </button>
+                </Button>
               )}
               {(state.phase === 'AWAITING_PAYMENT' ||
                 state.phase === 'PENDING_PROVIDER' ||
                 (state.phase === 'QUOTE_READY' && state.stale)) && (
-                <button
-                  type="button"
-                  onClick={onRefresh}
-                  className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover-soft)]"
-                >
+                <Button variant="secondary" size="lg" type="button" onClick={onRefresh}>
                   <RotateCcw size={14} />
                   {t('billing.actions.refresh')}
-                </button>
+                </Button>
               )}
               {/* A stale snapshot must never be confirmable; the refresh action
                   above (plus background polling) re-reads the server first. */}
               {state.phase === 'QUOTE_READY' && change?.status === 'QUOTED' && !state.stale && (
-                <button
-                  type="button"
-                  onClick={onConfirm}
-                  className="inline-flex h-9 items-center gap-2 rounded-full bg-[var(--text-primary)] px-5 text-13 font-medium text-[var(--surface)]"
-                >
+                <Button variant="cta" size="lg" type="button" onClick={onConfirm}>
                   {t('billing.planChange.confirm')}
-                </button>
+                </Button>
               )}
               {settled && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="h-9 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium transition-colors hover:bg-[var(--surface-hover-soft)]"
-                >
+                <Button variant="secondary" size="lg" type="button" onClick={onClose}>
                   {t('billing.actions.close')}
-                </button>
+                </Button>
               )}
             </div>
           </div>

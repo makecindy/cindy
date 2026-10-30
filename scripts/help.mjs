@@ -84,6 +84,8 @@ export function printHelp(log = console.log) {
   log('    pnpm test:unit');
   log('    # 排查并发相关问题时，可把 workspace runner 临时退回串行');
   log('    pnpm test:unit -- --workspace-concurrency=1');
+  log('    # 仅在需要跨 worktree 排队时主动开启；默认各任务独立运行');
+  log('    pnpm test:unit:related -- --lock');
   log('    pnpm benchmark:desktop-workers -- --workers=1,2,4,8 --output=<report.json>');
   log('    pnpm test:all');
   log('    pnpm test:db');

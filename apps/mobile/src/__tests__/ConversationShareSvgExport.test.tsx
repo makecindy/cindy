@@ -18,6 +18,7 @@ import { lightColors, darkColors } from "@/theme/tokens";
 
 const native = vi.hoisted(() => ({
   os: "ios",
+  density: 1,
   nextId: 0,
   svgLoads: new Map<number, () => void>(),
   imageLoads: new Map<string, () => void>(),
@@ -56,6 +57,7 @@ vi.mock("react-native", async () => {
   );
   return {
     Image,
+    PixelRatio: { get: () => native.density },
     Platform: {
       get OS() {
         return native.os;
@@ -91,9 +93,9 @@ vi.mock("react-native-svg", async () => {
     createElement("span", null, children);
   return {
     default: forwardRef(
-      ({ children }: { children?: import("react").ReactNode }, ref) => {
+      ({ children, height, width }: { children?: import("react").ReactNode; height: number; width: number }, ref) => {
         useImperativeHandle(ref, () => ({ toDataURL: native.capture }), []);
-        return createElement("section", { "data-svg": "true" }, children);
+        return createElement("section", { "data-svg": "true", "data-height": height, "data-width": width }, children);
       },
     ),
     ClipPath: element,
@@ -174,6 +176,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   native.os = "ios";
+  native.density = 1;
   native.svgLoads.clear();
   native.imageLoads.clear();
   native.imageErrors.clear();
@@ -195,14 +198,18 @@ afterEach(async () => {
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
 });
-function render(width = 390, dark = false) {
+function render(
+  width = 390,
+  dark = false,
+  messages: readonly ConversationShareMessage[] = [message],
+) {
   const colors = dark ? darkColors : lightColors;
   root.render(
     <StrictMode>
       <ConversationShareSvg
         ref={ref}
-        messages={[message]}
-        allShareableIds={["m"]}
+        messages={messages}
+        allShareableIds={messages.map((entry) => entry.clientId)}
         colors={{
           ...colors,
           dark,
@@ -242,6 +249,23 @@ async function start() {
 }
 
 describe("SVG export lifecycle", () => {
+  it("keeps a tall Android conversation below the physical bitmap limit", async () => {
+    native.os = "android";
+    native.density = 3;
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      clientId: `long-${index}`,
+      kind: "assistant" as const,
+      body: "A message in a long conversation",
+    }));
+    await act(async () => render(390, false, messages));
+    const svg = host.querySelector<HTMLElement>('[data-svg="true"]')!;
+    const width = Number(svg.dataset.width);
+    const height = Number(svg.dataset.height);
+    expect(height).toBeGreaterThan(2_500);
+    expect(height).toBeGreaterThan(width * 8);
+    expect(width * height * native.density ** 2).toBeLessThanOrEqual(12_000_000);
+  });
+
   it.each([false, true])(
     "waits for each cold iOS occurrence, then captures once after native layout (dark=%s)",
     async (dark) => {
@@ -281,8 +305,12 @@ describe("SVG export lifecycle", () => {
     expect(native.capture).not.toHaveBeenCalled();
     expect(svgNodes(bad)).toHaveLength(0);
     expect(svgNodes(good)).toEqual(goodNodes);
-    expect(host.textContent).toContain("broken attachment");
-    expect(host.textContent).toContain("broken inline");
+    expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+      "broken attachment",
+    );
+    expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+      "broken inline",
+    );
     expect(host.textContent).not.toContain("cindy-media://bad");
     await act(async () => {
       lateLoads.forEach((load) => load());
@@ -315,7 +343,9 @@ describe("SVG export lifecycle", () => {
       });
       expect(svgNodes(good)).toHaveLength(2);
       expect(svgNodes(bad)).toHaveLength(0);
-      expect(host.textContent).toContain("broken inline");
+      expect(host.textContent?.replace(/\u00a0/g, " ")).toContain(
+        "broken inline",
+      );
       // Bundled resource names are not queryable via Android's URI-only cache API.
       expect(
         native.queryCache.mock.calls.every(([uris]) =>

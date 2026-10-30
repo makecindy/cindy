@@ -2,9 +2,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools, linuxUserDesktopName } from '../linuxInstallation';
+import { promisify } from 'node:util';
+import {
+  checkDebianManagedInstallation,
+  findLinuxUserInstallation,
+  isDebianManagedInstallation,
+  missingLinuxUserInstallTools,
+  linuxUserDesktopName,
+} from '../linuxInstallation';
 import { stageLinuxBuildInfo } from '../../../forge-linux';
 import { buildLinuxUpdateScript } from '../updateScriptLinux';
 import { allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
@@ -17,6 +24,44 @@ describe('Linux install routing', () => {
     expect(isDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'unrelated: /usr/lib/cindy/Cindy\n')).toBe(false);
     expect(isDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw new Error('no dpkg'); })).toBe(false);
   });
+
+  it('distinguishes a failed ownership query from confirmed non-ownership', () => {
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'unrelated: /usr/lib/cindy/Cindy\n'))
+      .toEqual({ status: 'not-managed' });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => 'cindy: /usr/lib/cindy/Cindy\n'))
+      .toEqual({ status: 'managed' });
+    const timeout = Object.assign(new Error('dpkg-query timed out'), { code: 'ETIMEDOUT', signal: 'SIGTERM' });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw timeout; }))
+      .toEqual({ status: 'error', error: timeout });
+    const denied = Object.assign(new Error('spawnSync /usr/bin/dpkg-query EACCES'), {
+      code: 'EACCES', status: null, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw denied; }))
+      .toEqual({ status: 'error', error: denied });
+    const queryFailed = Object.assign(new Error('Command failed: /usr/bin/dpkg-query -S /usr/lib/cindy/Cindy'), {
+      status: 2, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw queryFailed; }))
+      .toEqual({ status: 'error', error: queryFailed });
+  });
+
+  it('maps dpkg-query exit status 1 to confirmed non-ownership', () => {
+    const noMatch = Object.assign(
+      new Error('Command failed: /usr/bin/dpkg-query -S /home/devuser/custom-builds/Cindy'),
+      { status: 1, signal: null },
+    );
+    expect(checkDebianManagedInstallation('/home/devuser/custom-builds/Cindy', () => { throw noMatch; }))
+      .toEqual({ status: 'not-managed' });
+  });
+
+  it('maps a missing dpkg-query binary to confirmed non-ownership', () => {
+    const missingBinary = Object.assign(new Error('spawnSync /usr/bin/dpkg-query ENOENT'), {
+      code: 'ENOENT', status: null, signal: null,
+    });
+    expect(checkDebianManagedInstallation('/usr/lib/cindy/Cindy', () => { throw missingBinary; }))
+      .toEqual({ status: 'not-managed' });
+  });
+
   it('reports missing portable dependencies', () => {
     expect(missingLinuxUserInstallTools(() => true)).toEqual([]);
     expect(missingLinuxUserInstallTools((name) => name !== 'bsdtar')).toEqual(['bsdtar']);
@@ -30,13 +75,22 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
   let prefix: string;
   const installer = path.resolve(__dirname, '../../../resources/linux/install-user.sh');
   const packages = new Map<string, { file: string; digest: string; size: number }>();
-  // Six bsdtar+ar fixtures under a contended Linux unit shard exceed vitest's
-  // 10s hookTimeout (CI: 10758ms). Spawn timeouts below are already 15s.
-  beforeAll(() => {
+  const execFileAsync = promisify(execFile);
+  // These two short-name members need only the standard 60-byte ar header and
+  // even-byte padding. Build the fixture in-process instead of launching six ar
+  // children; the installer still parses and extracts the real archive via bsdtar.
+  function arMember(name: string, data: Buffer): Buffer {
+    const header = [
+      `${name}/`.padEnd(16), '0'.padEnd(12), '0'.padEnd(6), '0'.padEnd(6),
+      '100644'.padEnd(8), String(data.length).padEnd(10), '`\n',
+    ].join('');
+    return Buffer.concat([Buffer.from(header, 'ascii'), data, Buffer.from(data.length % 2 ? '\n' : '')]);
+  }
+  beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-install-test-'));
     prefix = path.join(root, 'home', "Cindy's space $literal");
     fs.mkdirSync(path.join(root, 'home'));
-    for (const version of ['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5']) {
+    const results = await Promise.allSettled(['1.0.0', '1.0.1', '1.0.2', '1.0.3', '1.0.4', '1.0.5'].map(async (version) => {
       const pkg = path.join(root, version);
       const appDir = path.join(pkg, 'usr', 'lib', 'cindy');
       fs.mkdirSync(path.join(appDir, 'resources'), { recursive: true });
@@ -49,12 +103,18 @@ describe.skipIf(process.platform !== 'linux')('user installer transaction smoke 
       fs.writeFileSync(path.join(appDir, 'resources', 'app.asar'), 'fake archive');
       stageLinuxBuildInfo(appDir, 'linux', process.arch, version, 'global');
       if (version === '1.0.3') fs.symlinkSync('/etc/passwd', path.join(appDir, 'escape'));
-      execFileSync('bsdtar', ['-czf', 'data.tar.gz', './usr'], { cwd: pkg });
-      fs.writeFileSync(path.join(pkg, 'debian-binary'), '2.0\n');
+      await execFileAsync('bsdtar', ['-czf', 'data.tar.gz', './usr'], { cwd: pkg, timeout: 15_000 });
       const file = path.join(pkg, 'package.deb');
-      execFileSync('ar', ['rc', file, 'debian-binary', 'data.tar.gz'], { cwd: pkg });
-      const bytes = fs.readFileSync(file);
+      const bytes = Buffer.concat([
+        Buffer.from('!<arch>\n'),
+        arMember('debian-binary', Buffer.from('2.0\n')),
+        arMember('data.tar.gz', fs.readFileSync(path.join(pkg, 'data.tar.gz'))),
+      ]);
+      fs.writeFileSync(file, bytes);
       packages.set(version, { file, digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length });
+    }));
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason;
     }
   }, 30_000);
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));

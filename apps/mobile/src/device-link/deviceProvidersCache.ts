@@ -40,30 +40,36 @@ export function isDeviceProvidersUnsupportedError(error: unknown): boolean {
   return code === 'CHANNEL_NOT_ALLOWED' || code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
 }
 
+/**
+ * Apply the host-owned display order (Desktop semantics): explicitly ordered ids first,
+ * new ids append in catalog order. Payloads without an order are returned unchanged.
+ */
+export function orderDeviceProviders(payload: DeviceProvidersPayload): DeviceProvidersPayload {
+  if (!Array.isArray(payload.providerOrder)) return payload;
+  const byId = new Map(payload.providers.map(provider => [provider.id, provider]));
+  const providers: ProviderView[] = [];
+  const seen = new Set<string>();
+  for (const id of payload.providerOrder) {
+    const provider = byId.get(id);
+    if (!provider || seen.has(id)) continue;
+    seen.add(id);
+    providers.push(provider);
+  }
+  for (const provider of payload.providers) {
+    if (seen.has(provider.id)) continue;
+    seen.add(provider.id);
+    providers.push(provider);
+  }
+  return { ...payload, providers };
+}
+
 async function requestDeviceProviders(
   fetcher: DeviceProvidersFetcher,
   isCurrent: () => boolean,
 ): Promise<DeviceProvidersPayload> {
   for (let attempt = 0; ; attempt++) {
     try {
-      const payload = await fetcher();
-      if (!Array.isArray(payload.providerOrder)) return payload;
-      // Match Desktop: explicitly ordered ids first, new ids append in catalog order.
-      const byId = new Map(payload.providers.map(provider => [provider.id, provider]));
-      const providers: ProviderView[] = [];
-      const seen = new Set<string>();
-      for (const id of payload.providerOrder) {
-        const provider = byId.get(id);
-        if (!provider || seen.has(id)) continue;
-        seen.add(id);
-        providers.push(provider);
-      }
-      for (const provider of payload.providers) {
-        if (seen.has(provider.id)) continue;
-        seen.add(provider.id);
-        providers.push(provider);
-      }
-      return { ...payload, providers };
+      return orderDeviceProviders(await fetcher());
     } catch (error) {
       if (!isDeviceProvidersVisibilityNotReadyError(error) || attempt >= 2 || !isCurrent()) throw error;
       await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));

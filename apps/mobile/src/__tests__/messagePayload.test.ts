@@ -218,9 +218,9 @@ describe('messagePayload', () => {
     };
 
     expect(formatMediaActionNotice(media)).toBe([
-      '桌面端为这个媒体提供了后续操作。',
+      '电脑端为这个媒体提供了后续操作。',
       '可用操作：U1 / V2',
-      '手机版 V1 只安全展示这些操作，暂不远程触发。请回到电脑端点击。',
+      '手机上暂时只能查看这些操作，请在电脑端操作。',
     ].join('\n'));
     expect(buildMediaPayload(media, 'a.png').body).toContain('可用操作：U1 / V2');
   });

@@ -7,19 +7,29 @@
  * 路由器只关心三件事：
  *   - text         有没有文本（拼进 prompt）
  *   - attachments  有没有可下载的资源（image_key / file_key）
- *   - unsupported  有没有用户**显式**发了但模型一定处理不了的（音频/视频）
+ *   - unsupported  有没有用户**显式**发了但模型一定处理不了的（语音）
  *
  * 设计取舍：
  *   1. 解析阶段**不**判断附件文件能否进模型——那需要扩展名判断 + 下载后落盘
- *      路径，是 attachmentDownloader 的事。这里 audio/media 这种"消息类型本身
- *      就是音视频"才直接进 unsupported。
+ *      路径，是 attachmentDownloader 的事。这里只有 audio(语音)这种"消息类型
+ *      本身"处理不了的才直接进 unsupported; 视频(media)作为文件附件下载。
  *   2. sticker/location 这种用户大概率是**误发**或仅为表达情绪 → silently drop。
  *   3. post（富文本）按"扁平化"处理。
  */
 
-export type AttachmentRef =
+export type AttachmentRef = {
+  /** Resource owner for attachments inside a merged forward. */
+  messageId?: string;
+} & (
   | { kind: 'image'; imageKey: string }
-  | { kind: 'file'; fileKey: string; fileName: string; fileSize?: number };
+  | {
+      kind: 'file';
+      fileKey: string;
+      fileName: string;
+      fileSize?: number;
+      /** 视频消息(msg_type=media / 富文本 media 节点): 下载后入媒体总仓。 */
+      video?: boolean;
+    });
 
 export interface UnsupportedEntry {
   type: string;
@@ -42,6 +52,11 @@ export function parseIncoming(
   msgType: string,
   rawContent: string,
 ): ParsedIncoming {
+  // Feishu's merge envelope may contain a literal string rather than JSON.
+  // Its children must be fetched with message.get, never inferred from content.
+  if (msgType === 'merge_forward') {
+    return { text: '[合并转发消息]', attachments: [], unsupported: [] };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawContent);
@@ -91,12 +106,20 @@ export function parseIncoming(
       };
     }
     case 'media': {
+      const fileKey = typeof c.file_key === 'string' ? c.file_key : '';
       const fileName =
-        typeof c.file_name === 'string' ? c.file_name : '视频';
+        typeof c.file_name === 'string' && c.file_name ? c.file_name : '视频.mp4';
+      if (!fileKey) {
+        return {
+          text: '',
+          attachments: [],
+          unsupported: [{ type: 'media', label: `视频文件 ${fileName}` }],
+        };
+      }
       return {
         text: '',
-        attachments: [],
-        unsupported: [{ type: 'media', label: `视频文件 ${fileName}` }],
+        attachments: [{ kind: 'file', fileKey, fileName, video: true }],
+        unsupported: [],
       };
     }
     case 'post': {
@@ -106,8 +129,7 @@ export function parseIncoming(
     case 'location':
     case 'share_chat':
     case 'share_user':
-    case 'system':
-    case 'merge_forward': {
+    case 'system': {
       return EMPTY_RESULT;
     }
     case 'card':
@@ -155,12 +177,17 @@ function parsePost(c: Record<string, unknown>): ParsedIncoming {
           break;
         }
         case 'media': {
+          const fileKey = typeof n.file_key === 'string' ? n.file_key : '';
           const fileName =
-            typeof n.file_name === 'string' ? n.file_name : '视频';
-          unsupported.push({
-            type: 'post.media',
-            label: `视频文件 ${fileName}`,
-          });
+            typeof n.file_name === 'string' && n.file_name ? n.file_name : '视频.mp4';
+          if (fileKey) {
+            attachments.push({ kind: 'file', fileKey, fileName, video: true });
+          } else {
+            unsupported.push({
+              type: 'post.media',
+              label: `视频文件 ${fileName}`,
+            });
+          }
           break;
         }
         default:

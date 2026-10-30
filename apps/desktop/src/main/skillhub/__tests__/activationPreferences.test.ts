@@ -8,7 +8,7 @@ vi.mock('electron', () => ({ app: { getPath: () => root } }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 beforeAll(async () => {
   const bundledRoot = path.join(root, 'bundled');
-  for (const name of ['cindy-skill-creator', 'learn']) {
+  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator']) {
     fs.mkdirSync(path.join(bundledRoot, name), { recursive: true });
     fs.writeFileSync(path.join(bundledRoot, name, 'SKILL.md'), `# ${name}\n`);
   }
@@ -22,6 +22,27 @@ beforeAll(async () => {
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe('Skill activation preferences', () => {
+  // Unit regression: a listing already verifies its descriptor snapshot. Reading
+  // activation intent must preserve live toggles/aliases without hashing that same
+  // bundle again for each item. Existing tests only cover standalone readers.
+  it('uses a verified listing snapshot while still reading current activation preferences', async () => {
+    const prefs = await import('../activationPreferences');
+    const descriptors = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root);
+    const learn = descriptors.find((descriptor) => descriptor.name === 'learn')!;
+    await prefs.setCindySkillEnabled(learn.absolutePath, false);
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      expect(prefs.readDisabledSkillPaths(descriptors)).toContain(prefs.skillActivationKey(learn.absolutePath));
+      expect(read.mock.calls.filter(([file]) => typeof file === 'string' && path.basename(file) === 'SKILL.md'))
+        .toHaveLength(0);
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+      expect(prefs.readDisabledSkillPaths(descriptors)).not.toContain(prefs.skillActivationKey(learn.absolutePath));
+    } finally {
+      read.mockRestore();
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+    }
+  });
+
   it('clears only captured disabled intent, preserving later toggles and unrelated paths', async () => {
     const prefs = await import('../activationPreferences');
     const source = path.join(root, 'intent-source');
@@ -63,10 +84,49 @@ describe('Skill activation preferences', () => {
     const descriptors = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root);
     const learn = descriptors.find((descriptor) => descriptor.name === 'learn')!;
     expect(prefs.isCindyLearnSkillEnabled()).toBe(true);
+    expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(true);
     await prefs.setCindySkillEnabled(learn.absolutePath, false);
     expect(prefs.isCindyLearnSkillEnabled()).toBe(false);
+    expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(false);
     await prefs.setCindySkillEnabled(learn.absolutePath, true);
     expect(prefs.isCindyLearnSkillEnabled()).toBe(true);
+    expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(true);
+  });
+  // Unit regression: the command listing must follow the current Learn toggle.
+  // Existing toggle coverage had no historical profile key alongside shared Learn.
+  it('shows reenabled shared Learn despite a historical profile disable', async () => {
+    const prefs = await import('../activationPreferences');
+    const descriptors = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root);
+    const learn = descriptors.find((descriptor) => descriptor.name === 'learn')!;
+    const historical = path.join(root, 'system-skills', 'learn');
+    try {
+      await prefs.setCindySkillEnabled(historical, false);
+      await prefs.setCindySkillEnabled(learn.absolutePath, false);
+      expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(false);
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+      expect(prefs.isCindyLearnSkillEnabled()).toBe(true);
+      expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(true);
+      expect(prefs.isCindySkillEnabled(historical)).toBe(false);
+    } finally {
+      await prefs.setCindySkillEnabled(historical, true);
+      await prefs.setCindySkillEnabled(learn.absolutePath, true);
+    }
+  });
+  // Unit: listing is a preference projection; only execution checks Skill bytes.
+  // The toggle-only cases cannot distinguish this from a full integrity scan.
+  it('defers built-in Learn validity checks until execution', async () => {
+    const prefs = await import('../activationPreferences');
+    const descriptors = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root);
+    const learn = descriptors.find((descriptor) => descriptor.name === 'learn')!;
+    const skillFile = path.join(learn.absolutePath, 'SKILL.md');
+    const original = fs.readFileSync(skillFile);
+    try {
+      fs.writeFileSync(skillFile, '# Changed Learn\n');
+      expect(prefs.isCindyLearnSkillEnabledForCommandListing()).toBe(true);
+      expect(prefs.isCindyLearnSkillEnabled()).toBe(false);
+    } finally {
+      fs.writeFileSync(skillFile, original);
+    }
   });
   it('keeps built-in activation intent across immutable bundle revisions', async () => {
     const prefs = await import('../activationPreferences');
@@ -112,7 +172,7 @@ describe('Skill activation preferences', () => {
     const descriptor = (await import('../../maker-host/built-in-skills')).builtInSkillDescriptors(root, root)[0]!;
     fs.mkdirSync(descriptor.absolutePath, { recursive: true });
     fs.mkdirSync(path.dirname(descriptor.nativeClaudePath), { recursive: true });
-    fs.rmSync(descriptor.nativeClaudePath, { force: true });
+    fs.rmSync(descriptor.nativeClaudePath, { recursive: true, force: true });
     fs.symlinkSync(
       descriptor.absolutePath,
       descriptor.nativeClaudePath,

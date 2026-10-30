@@ -3,13 +3,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildUserProvider, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 
 import {
+  assertProviderImportModels,
   beginProviderImportConfirm,
   cancelProviderImport,
   clearProviderImportDraftsForTest,
   createProviderImportDraftFromRest,
+  createProviderImportDraftFromFile,
+  createProviderImportDraftsFromFile,
   finishProviderImportConfirm,
   previewProviderImport,
 } from '../providerImport.js';
+
+import { validateCustomProviderConfig } from '../../maker-host/custom-provider-store.js';
+import { applyRuntimeFillFields, type RuntimeFillDraft } from '../../../renderer/lib/customProviderRuntimeFill.js';
+import { PROVIDER_IMPORT_EXAMPLE_JSON, PROVIDER_IMPORT_BATCH_EXAMPLE_JSON } from '../../../shared/providerImportExample.js';
 
 const SCOPE = { dataOwnerId: 'owner-a', generation: 1 };
 
@@ -74,7 +81,119 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// #7760: unit coverage of the real file parser -> preview -> confirm lifecycle.
+// Existing URL cases cannot carry >24 KiB or >256 models. A 257-model file with
+// metadata is the smallest case crossing both limits; no real credentials or network.
+// Measured standalone on Windows: 1.80s (85 tests, 2026-10-29).
+describe('provider configuration files', () => {
+  // Batch import contract: one file creates independently owned drafts, with no
+  // surviving partial batch after a validation error. Existing cases only cover one draft.
+  it('accepts the shipped batch example and independently previews, confirms or cancels its entries', () => {
+    const ids = createProviderImportDraftsFromFile(Buffer.from(PROVIDER_IMPORT_BATCH_EXAMPLE_JSON), SCOPE);
+    expect(ids).toHaveLength(2);
+    expect(ids.map(id => previewProviderImport(id, SCOPE, []).name)).toEqual(['Example AI', 'Example AI 2']);
+    expect(() => previewProviderImport(ids[1], { ...SCOPE, generation: 2 }, [])).toThrow(/account changed/);
+    beginProviderImportConfirm(ids[0], SCOPE, []);
+    finishProviderImportConfirm(ids[0], true);
+    expect(() => previewProviderImport(ids[0], SCOPE, [])).toThrow(/expired/);
+    expect(previewProviderImport(ids[1], SCOPE, []).runtimes[0].modelCount).toBe(1);
+    cancelProviderImport(ids[1]);
+    expect(() => previewProviderImport(ids[1], SCOPE, [])).toThrow(/expired/);
+  });
+
+  it.each([
+    { providers: [] },
+    { providers: Array.from({ length: 51 }, () => customPayload()) },
+    { providers: [customPayload()], extra: true },
+    { providers: [customPayload({ id: 'same' }), customPayload({ id: ' same ' })] },
+    { providers: [{ kind: 'builtin', provider: 'gemini', apiKey: 'FAKE-ONE' }, { kind: 'builtin', provider: 'gemini', apiKey: 'FAKE-TWO' }] },
+  ])('rejects invalid batch bounds, envelope or repeated identities', payload => {
+    expect(() => createProviderImportDraftsFromFile(Buffer.from(JSON.stringify(payload)), SCOPE)).toThrow();
+  });
+
+  it('does not exhaust the draft budget when a later batch entry is invalid', () => {
+    const bytes = Buffer.from(JSON.stringify({ providers: [customPayload(), { kind: 'unsupported' }] }));
+    // More failures than the global 128-draft budget must still leave room for a valid file.
+    for (let i = 0; i < 129; i++) expect(() => createProviderImportDraftsFromFile(bytes, SCOPE)).toThrow();
+    const ids = createProviderImportDraftsFromFile(Buffer.from(PROVIDER_IMPORT_EXAMPLE_JSON), SCOPE);
+    expect(ids).toHaveLength(1);
+    expect(previewProviderImport(ids[0], SCOPE, []).name).toBe('Example AI');
+  });
+
+  // The downloadable example is a public input contract, not a second schema.
+  // Existing hand-built payloads cannot catch a shipped template that stops importing.
+  it('accepts the shipped JSON example through preview and confirmation without losing model metadata', () => {
+    const id = createProviderImportDraftFromFile(Buffer.from(PROVIDER_IMPORT_EXAMPLE_JSON), SCOPE);
+    expect(previewProviderImport(id, SCOPE, []).runtimes).toMatchObject([
+      { agent: 'pi', modelCount: 1, willFetchModels: false, hasApiKey: true },
+    ]);
+    const { draft } = beginProviderImportConfirm(id, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('expected custom example');
+    expect(validateCustomProviderConfig(draft.config)).toMatchObject({ ok: true });
+    expect(draft.config.runtimes.pi?.models[0]).toMatchObject({
+      id: 'your-model-id', group: 'custom:example', maxOutputTokens: 32000,
+      contextWindow: 200000, efforts: ['low', 'high'], defaultEffort: 'high',
+    });
+  });
+  it('preserves a large UTF-8/BOM catalog and secrets through the existing confirmation lifecycle', () => {
+    const models = Array.from({ length: 257 }, (_, i) => ({
+      id: `model-${i}`, name: `模型 ${i}`, group: 'custom:acme', maxOutputTokens: 32000,
+      contextWindow: 200000, efforts: ['low', 'high'], defaultEffort: 'high',
+    }));
+    const payload = customPayload({ endpoints: [{ protocol: 'openai-chat',
+      baseUrl: 'https://api.acme.test/v1', targets: ['pi'], models,
+      headers: { 'X-Acme-Tenant': 'FAKE-HEADER-SECRET' },
+    }] });
+    const bytes = Buffer.from('\uFEFF' + JSON.stringify(payload));
+    expect(bytes.length).toBeGreaterThan(24 * 1024);
+    expect(createProviderImportDraftFromRest(importRest(payload))).toBeNull();
+    const id = createProviderImportDraftFromFile(bytes, SCOPE);
+    expect(() => beginProviderImportConfirm(id, SCOPE, [])).toThrow(/preview/);
+    const preview = previewProviderImport(id, SCOPE, []);
+    expect(preview.runtimes).toMatchObject([{ modelCount: 257, willFetchModels: false, hasApiKey: true }]);
+    expect(JSON.stringify(preview)).not.toContain('sk-import-secret');
+    expect(JSON.stringify(preview)).not.toContain('FAKE-HEADER-SECRET');
+    const { draft } = beginProviderImportConfirm(id, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('expected custom import');
+    expect(draft.config.runtimes.pi?.models).toEqual(models);
+    expect(draft.keys.pi).toBe('sk-import-secret');
+    expect(validateCustomProviderConfig(draft.config)).toMatchObject({ ok: true });
+    finishProviderImportConfirm(id, true);
+    expect(() => previewProviderImport(id, SCOPE, [])).toThrow(/expired/);
+  });
+
+  it.each([
+    ['malformed JSON', Buffer.from('{"apiKey":"FAKE-SECRET"')],
+    ['invalid UTF-8', Buffer.from([0xff])],
+    ['empty', Buffer.alloc(0)],
+    ['oversized', Buffer.alloc(4 * 1024 * 1024 + 1, 32)],
+    ['unknown field', Buffer.from(JSON.stringify(customPayload({ extra: true })))],
+    ['cross-origin discovery', Buffer.from(JSON.stringify(customPayload({ endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://other.test/models',
+    }] })))],
+    ['too many models', Buffer.from(JSON.stringify(customPayload({ endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1',
+      models: Array.from({ length: 10001 }, (_, i) => `model-${i}`),
+    }] })))],
+  ])('rejects %s without making a draft', (_label, bytes) => {
+    expect(() => createProviderImportDraftFromFile(bytes, SCOPE)).toThrow();
+  });
+
+  it('binds the file draft before its first preview and supports cancellation', () => {
+    const id = createProviderImportDraftFromFile(Buffer.from(JSON.stringify(customPayload())), SCOPE);
+    expect(() => previewProviderImport(id, { ...SCOPE, generation: 2 }, [])).toThrow(/account changed/);
+    cancelProviderImport(id);
+    expect(() => previewProviderImport(id, SCOPE, [])).toThrow(/expired/);
+  });
+});
+
 describe('provider import URL parsing', () => {
+  it.each(['cindy-local-ollama', 'cindy-local-llamacpp'])(
+    'reserves the managed provider identity on import: %s', (id) => {
+      expect(createProviderImportDraftFromRest(importRest(customPayload({ id })))).toBeNull();
+    },
+  );
+
   it.each(['Bad Header', 'Foo:Bar', 'X-\u0000-Key', 'X-中文'])(
     'rejects invalid HTTP header names before creating a draft: %j', (name) => {
       expect(createProviderImportDraftFromRest(importRest(customPayload({
@@ -133,7 +252,7 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
-  it('keeps an explicit defaultEnabled override on imported compatibility routes', () => {
+  it('does not treat a model enabled in a link as compatibility-engine consent', () => {
     const importId = createDraft(customPayload({
       endpoints: [{
         protocol: 'openai-chat',
@@ -146,8 +265,9 @@ describe('provider import URL parsing', () => {
     const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
     expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).toMatchObject({
       id: 'compat-model',
-      defaultEnabled: true,
     });
+    expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).not.toHaveProperty('defaultEnabled');
+
   });
 
   it('imports Google generateContent endpoints for all three engines', () => {
@@ -762,4 +882,115 @@ describe('provider import draft lifecycle', () => {
       resolution: { action: 'create', providerId: preview.providerId },
     });
   });
+});
+
+
+it('imports complete metadata and explicit off into all three engines', () => {
+  const model = { id: 'gpt-7-sol', nativeApi: 'openai-responses', maxOutputTokens: 32000,
+    contextWindowMax: 1000000, supportsFastMode: false, supportsToolCalls: false,
+    supportsImageInput: false, reasoning: false, efforts: [], defaultEffort: null };
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'], models: [model],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  expect(draft.kind).toBe('custom');
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  const provider = buildUserProvider(draft.config);
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(draft.config.runtimes[agent]?.models[0]).toMatchObject(model);
+    expect(provider.models[agent]?.[0]).toMatchObject({ maxOutput: 32000,
+      supportsFastMode: false, supportsImageInput: false, supportsToolCalls: false,
+      efforts: [], defaultEnabled: agent !== 'claude-code' });
+  }
+});
+
+it('accepts a discovered catalog larger than the inline-link limit', () => {
+  expect(() => assertProviderImportModels(Array.from({ length: 1000 }, (_, index) =>
+    ({ id: `model-${index}`, name: `Model ${index}` })))).not.toThrow();
+});
+
+it.each([
+  [['minimal', 'low', 'high'], 'minimal', ['low', 'high'], undefined],
+  [['minimal', 'low', 'high'], 'high', ['low', 'high'], 'high'],
+  [['minimal'], 'minimal', [], undefined],
+] as const)('imports per-engine reasoning settings through the actual save validator: %j',
+  (efforts, defaultEffort, fixedEfforts, fixedDefault) => {
+    const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+      baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+      models: [{ id: 'new-model', reasoning: true, reasoningEfforts: efforts, reasoningDefaultEffort: defaultEffort }],
+    }] }));
+    previewProviderImport(importId, SCOPE, []);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    if (draft.kind !== 'custom') throw new Error('wrong import kind');
+    expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      const model = draft.config.runtimes[agent]!.models[0];
+      expect(model.reasoning).toBe(true);
+      expect(model.reasoningEfforts).toEqual(agent === 'pi' ? efforts : fixedEfforts);
+      expect(model.reasoningDefaultEffort).toBe(agent === 'pi' ? defaultEffort : fixedDefault);
+    }
+  });
+
+
+it.each([
+  { efforts: ['minimal', 'low', 'ultra', 'max'], defaultEffort: 'ultra', fixed: ['low', 'max'], fixedDefault: undefined },
+  { efforts: ['minimal', 'high'], defaultEffort: 'high', fixed: ['high'], fixedDefault: 'high' },
+  { efforts: [], defaultEffort: null, fixed: [], fixedDefault: null },
+  { defaultEffort: 'minimal', fixedDefault: undefined },
+])('filters canonical imported efforts at both metadata layers: %j', ({ fixed, fixedDefault, ...metadata }) => {
+  const importId = createDraft(customPayload({ endpoints: [{ protocol: 'openai-responses',
+    baseUrl: 'https://relay.example/v1', targets: ['claude-code', 'codex', 'pi'],
+    models: [{ id: 'new-model', ...metadata, discoveredMetadata: metadata }],
+  }] }));
+  previewProviderImport(importId, SCOPE, []);
+  const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+  if (draft.kind !== 'custom') throw new Error('wrong import kind');
+  expect(validateCustomProviderConfig(draft.config)).toEqual({ ok: true });
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const model = draft.config.runtimes[agent]!.models[0];
+    for (const layer of [model, model.discoveredMetadata!]) {
+      expect(layer.efforts).toEqual(agent === 'pi' ? metadata.efforts : fixed);
+      expect(layer.defaultEffort).toBe(agent === 'pi' ? metadata.defaultEffort : fixedDefault);
+    }
+    if (agent !== 'pi') {
+      const projected = buildUserProvider(draft.config).models[agent]![0];
+      expect(projected.efforts).not.toContain('minimal');
+      expect(projected.efforts).not.toContain('ultra');
+    }
+  }
+});
+
+
+it.each(['claude-code', 'codex'] as const)('saves Pi models filled into %s with target-compatible efforts', agent => {
+  const source: RuntimeFillDraft = { baseUrl: 'https://relay.example/v1', requestPath: '', apiKey: '',
+    wireProtocol: 'openai-responses', headers: [], modelsUrl: '', models: [
+      { id: 'future', name: 'Future', reasoning: true, reasoningEfforts: ['minimal', 'high'], reasoningDefaultEffort: 'minimal',
+        efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra',
+        discoveredMetadata: { efforts: ['minimal', 'high', 'ultra'], defaultEffort: 'ultra' } },
+      { id: 'empty', name: 'Empty', reasoning: true, reasoningEfforts: ['minimal'], reasoningDefaultEffort: 'minimal',
+        efforts: [], defaultEffort: null, discoveredMetadata: { efforts: [], defaultEffort: null } },
+      { id: 'sparse', name: 'Sparse', reasoning: true, reasoningEfforts: ['low'], efforts: ['low'] },
+    ] };
+  const target: RuntimeFillDraft = { ...source, models: [{ id: 'sparse', name: 'Old', reasoning: true,
+    reasoningEfforts: ['high'], reasoningDefaultEffort: 'high', efforts: ['high'], defaultEffort: 'high', defaultEnabled: true }] };
+  const before = structuredClone({ source, target });
+  const filled = applyRuntimeFillFields(target, source, ['models'], { sourceAgent: 'pi', targetAgent: agent });
+  const config = { id: 'filled-provider', name: 'Filled', runtimes: { [agent]: {
+    baseUrl: filled.baseUrl, wireProtocol: filled.wireProtocol, models: filled.models,
+  } } };
+  expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+  expect(filled.models.map(model => model.id)).toEqual(['future', 'empty', 'sparse']);
+  expect(filled.models[0]).toMatchObject({ reasoningEfforts: ['high'], efforts: ['high'], discoveredMetadata: { efforts: ['high'] } });
+  expect(filled.models[0].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[0].defaultEffort).toBeUndefined();
+  expect(filled.models[0].discoveredMetadata!.defaultEffort).toBeUndefined();
+  expect(filled.models[1]).toMatchObject({ reasoningEfforts: [], efforts: [], defaultEffort: null,
+    discoveredMetadata: { efforts: [], defaultEffort: null } });
+  expect(filled.models[2]).toMatchObject({ reasoningEfforts: ['low'], efforts: ['low'], defaultEnabled: true });
+  expect(filled.models[2].reasoningDefaultEffort).toBeUndefined();
+  expect(filled.models[2].defaultEffort).toBeUndefined();
+  expect(buildUserProvider(config).models[agent]?.some(model => model.efforts.some(effort => effort === 'minimal' || effort === 'ultra'))).toBe(false);
+  expect({ source, target }).toEqual(before);
+  expect(applyRuntimeFillFields({ ...target, models: [] }, source, ['models'], { sourceAgent: 'pi', targetAgent: 'pi' }).models).toEqual(source.models);
 });

@@ -7,6 +7,7 @@ import type {
   CindyMakePersonalBuildState,
 } from '../../shared/cindyMakeSession.js';
 import { parseCindyMakeBuildError } from '../../shared/cindyMakeSession.js';
+import { makeBuildErrorDiagnostic } from './buildDiagnostic.js';
 import type { PersonalArtifact } from './personalBuild.js';
 import { makeTestError, type MakeTestProcess, type MakeTestWorkspace } from './testRunner.js';
 
@@ -38,7 +39,9 @@ export interface MakeTestControllerDeps {
   openBuild?(context: MakeTestContext): Promise<void>;
   /** Publish the same build receipt to Settings and the completion card. */
   onBuildState?(context: MakeTestContext, state: CindyMakePersonalBuildState): void;
-  claimBuild?(): () => void;
+  /** Invalidate Settings after the terminal receipt is saved and the build lease is released. */
+  onBuildSettled?(context: MakeTestContext): void;
+  claimBuild?(context: MakeTestContext): () => void;
   now?: () => number;
 }
 
@@ -61,7 +64,9 @@ interface TestJob {
 export function createMakeTestController(deps: MakeTestControllerDeps) {
   const jobs = new Map<string, TestJob>();
   const stop = (job: TestJob) => {
-    job.controller.abort();
+    job.controller.abort(
+      job.cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : undefined,
+    );
     job.process?.stop();
   };
   const waitForStopped = async (job: TestJob) => {
@@ -168,7 +173,14 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
                   ? 'cancelled'
                   : 'interrupted'
                 : parseCindyMakeBuildError(code);
-          await saveBuild(job, { status: 'failed', error: failure }).catch(() => {});
+          const diagnostic = controller.signal.aborted
+            ? undefined
+            : makeBuildErrorDiagnostic(error);
+          await saveBuild(job, {
+            status: 'failed',
+            error: failure,
+            ...(diagnostic ? { diagnostic } : {}),
+          }).catch(() => {});
           return;
         }
         const errorCode =
@@ -190,6 +202,12 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
       clearInterval(ownerWatch);
       if (jobs.get(context.sessionId) === job) jobs.delete(context.sessionId);
       job.releaseBuild?.();
+      if (
+        job.kind === 'build' &&
+        context.isCurrent() &&
+        ['ready', 'failed'].includes(context.meta.personal?.status ?? '')
+      )
+        deps.onBuildSettled?.(context);
     }
   };
   return {
@@ -265,7 +283,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         if (['starting', 'ready'].includes(context.meta.test?.status ?? ''))
           patch.test = { ...context.meta.test, status: 'stopped', error: 'interrupted' };
         if (
-          ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(
+          ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
             context.meta.personal?.status ?? '',
           )
         )
@@ -317,7 +335,7 @@ export function createMakeTestController(deps: MakeTestControllerDeps) {
         accepted: Promise.resolve(context.meta),
         finished: Promise.resolve(),
         persistence: Promise.resolve(),
-        releaseBuild: kind === 'build' ? deps.claimBuild?.() : undefined,
+        releaseBuild: kind === 'build' ? deps.claimBuild?.(context) : undefined,
         ...(kind === 'build' ? { buildId: randomUUID(), startedAt: (deps.now ?? Date.now)() } : {}),
       };
       jobs.set(sessionId, job);

@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -177,6 +178,7 @@ describe('executeCodexFileRewindPlan', () => {
     const savepoint = await editedSavepoint();
     const rewindPlan = await plan(savepoint);
     let queuedRan = false;
+    let rollbackFinished = false;
     let queuedTask: Promise<void> | undefined;
 
     const result = await executeCodexFileRewindPlanWithThreadRollback(
@@ -185,10 +187,12 @@ describe('executeCodexFileRewindPlan', () => {
       {
         commitThreadRollback: async () => {
           queuedTask = enqueueGitRepoWrite(repoPath, async () => {
+            expect(rollbackFinished).toBe(true);
             queuedRan = true;
           });
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          await setImmediate();
           expect(queuedRan).toBe(false);
+          rollbackFinished = true;
           return { sdkSessionId: 'thread-ok' };
         },
       },
@@ -196,7 +200,8 @@ describe('executeCodexFileRewindPlan', () => {
     );
 
     expect(result.threadRollback).toEqual({ sdkSessionId: 'thread-ok' });
-    expect(queuedRan).toBe(false);
+    // The lock protects rollback, not the caller's later promise continuation.
+    // A queued writer may already run after rollback succeeds and before this await.
     await queuedTask;
     expect(queuedRan).toBe(true);
   }, REAL_GIT_TEST_TIMEOUT_MS);

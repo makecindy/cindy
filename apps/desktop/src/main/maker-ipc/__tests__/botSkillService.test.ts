@@ -11,6 +11,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  authorizeChannelLaneSkillAccess,
   collectBotOwnSkillMounts,
   deleteBotSkillForBot,
   listBotSkillsForBot,
@@ -18,6 +19,11 @@ import {
   readBotSkillForBot,
   saveBotSkillForSession,
 } from '../botSkillService';
+import {
+  beginChannelToolScope,
+  readChannelToolScope,
+  type LaneTurnScope,
+} from '../../im/shared/channelToolScope';
 
 let userDataDir = '';
 
@@ -160,7 +166,7 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect(cindy.baseline.skill.name).toBe('teammate-guide');
     expect(cindy.baseline.pluginRoot).not.toContain('bot-cindy');
     const source = await fs.readFile(fresh.baseline.skill.filePath, 'utf8');
-    for (const tool of ['start_session_task', 'send_to_agent', 'create_teammate', 'get_app_default_model', 'set_app_default_model', 'save_teammate_skill', 'ghost_call'])
+    for (const tool of ['start_session_task', 'send_to_agent', 'create_teammate', 'get_app_default_model', 'set_app_default_model', 'save_teammate_skill', 'ghost_call', 'routine_list', 'schedule_set_pre_run_hook', 'schedule_notify_current_run'])
       expect(source).toContain(tool);
     expect(cindy.skills).toEqual([]);
     expect(fresh.skills).toEqual([]);
@@ -195,5 +201,41 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
   it('returns nothing to mount for a Bot that never learned anything', async () => {
     const mounts = await collectBotOwnSkillMounts('bot-fresh', { userDataDir });
     expect(mounts.skills).toEqual([]);
+  });
+});
+
+describe('authorizeChannelLaneSkillAccess', () => {
+  // IM lanes share the Bot's Profile, so skills learned there belong to the same Bot;
+  // writes follow the channel-tool management rule (owner-triggered turns only).
+  it('lets an owner-triggered lane turn save and list, a member turn only list, and nothing without a lease', () => {
+    expect(authorizeChannelLaneSkillAccess({ requesterIsOwner: true }, false)).toEqual({ ok: true });
+    expect(authorizeChannelLaneSkillAccess({ requesterIsOwner: true }, true)).toEqual({ ok: true });
+    expect(authorizeChannelLaneSkillAccess({ requesterIsOwner: false }, true)).toEqual({ ok: true });
+    expect(authorizeChannelLaneSkillAccess({ requesterIsOwner: false }, false)).toMatchObject({
+      ok: false, errorCode: 'BOT_SKILL_OWNER_ONLY',
+    });
+    expect(authorizeChannelLaneSkillAccess(null, false)).toMatchObject({ ok: false, errorCode: 'BOT_SESSION_READ_ONLY' });
+    expect(authorizeChannelLaneSkillAccess(null, true)).toMatchObject({ ok: false, errorCode: 'BOT_SESSION_READ_ONLY' });
+  });
+
+  // 回归(PR #6289 review): 企业微信 / 钉钉 / Discord 没有渠道直通工具, 之前专线轮次不登记作用域,
+  // 主人触发也读不到租约而被判只读。现在登记不带 transport 的 LaneTurnScope, 同一判据按触发者授权。
+  it('authorizes WeCom / DingTalk / Discord companion lane turns from their transport-less lease', () => {
+    for (const [channel, requesterIsOwner, expected] of [
+      ['wecom', true, { ok: true }],
+      ['discord', false, { ok: false, errorCode: 'BOT_SKILL_OWNER_ONLY' }],
+    ] as const) {
+      const scope: LaneTurnScope = {
+        channel, botId: 'ctx-1', laneUserId: 'group/abc', chatId: 'chat-1', chatKind: 'group', requesterIsOwner, companion: true,
+      };
+      const release = beginChannelToolScope({ sessionId: 'lane-1', sessionInstanceId: 'inst-1', scope });
+      try {
+        const lease = readChannelToolScope({ sessionId: 'lane-1', sessionInstanceId: 'inst-1' });
+        expect(authorizeChannelLaneSkillAccess(lease, false)).toMatchObject(expected);
+        expect(authorizeChannelLaneSkillAccess(lease, true)).toEqual({ ok: true });
+      } finally {
+        release();
+      }
+    }
   });
 });

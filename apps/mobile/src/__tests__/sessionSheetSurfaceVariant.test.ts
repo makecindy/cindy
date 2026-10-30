@@ -36,7 +36,7 @@ describe('mobile session sheet styling variants', () => {
 
     expect(sessionMenu).toContain('backgroundColor: colors.sheetActionSurface');
     expect(sessionMenu).toContain('borderColor: colors.sheetActionBorder');
-    expect(sessionMenu).toContain('color: colors.sheetActionText');
+    expect(sessionMenu.match(/\n\s*actionLabel: \{[^{}]*\}/)?.[0] ?? '').toContain('color: colors.textPrimary');
     expect(sessionMenu).toContain('color: colors.destructive');
     expect(actionSheet).toContain('colors.sheetActionSurface');
     expect(actionSheet).toContain('colors.sheetActionBorder');

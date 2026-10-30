@@ -58,7 +58,7 @@ test('DS-8: every desktop globals.css surface includes its generated token style
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   const consumers = surfaces.filter(surface => surface.platform === 'desktop'
     && surface.styleSources.includes('apps/desktop/src/renderer/styles/globals.css'));
-  assert.equal(consumers.length, 6);
+  assert.equal(consumers.length, 9);
   for (const surface of consumers) {
     assert.ok(surface.styleSources.includes('apps/desktop/src/renderer/styles/generated/tokens.css'), surface.id);
   }
@@ -81,7 +81,6 @@ function tinySurface(id = 'desktop.test.surface') {
 
 function renderWithCoverage(surfaces, routerSource, extra = {}) {
   return renderGeneratedBlock(surfaces, {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: productionRouterCoverage(routerSource, extra.catalog ?? catalogSurfaces()),
     redirects: listRedirectExclusions(routerSource),
@@ -118,8 +117,12 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/bots/:botId/direct/:threadId BotDirectMessageView',
     '/bots/:botId/history/:sessionId BotHistorySessionView',
     '/bots/:botId/session/:sessionId BotSessionView',
+    '/bots/groups/:groupId BotGroupChatView',
     '/bots/list BotsListView',
+    '/bots/market/:packageId? BotMarketRoute',
     '/bots/remote/:deviceId/:botId RemoteBotSessionView',
+    '/bots/remote/:deviceId/:botId/history/:sessionId BotHistorySessionView',
+    '/bots/remote/:deviceId/:botId/session/:sessionId RemoteBotSessionView',
     '/bots/roster BotRosterView',
     '/cc-agent/:sessionId CCAgentSessionView',
     '/cc-agent/boot SecondaryWindowBootGate',
@@ -127,7 +130,6 @@ test('extractRouterFacts: 真实 router.tsx 的三类去向逐条钉死', () => 
     '/cc-agent/new NewMakerDraftRoute',
     '/cc-agent/orca/:sessionId OrcaWorkflowRoute',
     '/cc-agent/scheduled SchedulerPage',
-    '/ghost-panel-window GhostPanelWindowLayout',
     '/issues IssueTrackerFeatureLayout',
     '/login LoginPage',
     '/maker-experimental MakerExperimentalView',
@@ -261,7 +263,6 @@ test('排序用码点序而非 localeCompare——跨平台字节一致', () => 
 
 test('人工区块被改后 merge 仍原样保留', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -270,7 +271,6 @@ test('人工区块被改后 merge 仍原样保留', () => {
     '\n## 人工标注\n\n| ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |\n| --- | --- | --- | --- | --- | --- |\n| `desktop.test.surface` | kiro | pilot | 手改标签 | 手改道路 | 手改动作 |\n';
   const existing = `# Cindy 生产 UI 台账\n${generated}${human}`;
   const nextGenerated = renderGeneratedBlock([{ ...tinySurface(), bareColors: 99 }], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -285,7 +285,6 @@ test('人工区块被改后 merge 仍原样保留', () => {
 
 test('compareGenerated: 最新通过、过期失败', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -337,13 +336,12 @@ test('router.tsx 每条生产路由都能映射到 surface,布局壳在排除清
 
 test('GENERATED 含 §2.1 六项字段,裸颜色与 audit 共用匹配器', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
   });
   assert.equal(generated.includes('| ID | 平台 | 标题 | 生产入口 | 可达组件 | 样式来源 | Token 数 | 裸颜色 | 裸圆角 |'), true);
-  assert.equal(generated.includes('计数快照日期：2026-08-30'), true);
+  assert.equal(generated.includes('计数快照日期'), false);
   assert.equal(generated.includes('生成命令：`pnpm design:inventory`'), true);
   assert.equal(generated.includes('hardcoded-color-match.mjs'), true);
 
@@ -359,7 +357,6 @@ test('GENERATED 含 §2.1 六项字段,裸颜色与 audit 共用匹配器', () =
 
 test('孤儿人工行只报告不删除', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -402,19 +399,16 @@ test('fixture 新增或删除一条生产路由会改变 GENERATED,使 compare �
   ];
   const surfaces = [tinySurface()];
   const base = renderGeneratedBlock(surfaces, {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: productionRouterCoverage(baseRouter, catalog),
     redirects: listRedirectExclusions(baseRouter),
   });
   const added = renderGeneratedBlock(surfaces, {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: productionRouterCoverage(addedRouter, catalog),
     redirects: listRedirectExclusions(addedRouter),
   });
   const removed = renderGeneratedBlock(surfaces, {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: productionRouterCoverage(removedRouter, catalog),
     redirects: listRedirectExclusions(removedRouter),
@@ -817,6 +811,8 @@ test('skillhub.local 纳入保留列表布局及直接渲染子组件的样式�
   const generated = surfaces.find((surface) => surface.id === 'desktop.skillhub.local');
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubLocalLayout.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('SkillhubHomeView.tsx')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('skillhub-home.css')));
+  assert.ok(generated.styleSources.some((file) => file.endsWith('SkillCategoryFilterBar.tsx')));
   assert.ok(generated.styleSources.some((file) => file.endsWith('PluginManagementLayout.tsx')));
   assert.ok(generated.tokenCount > 33, `子组件并入后 token 数应高于只扫路由组件(实际 ${generated.tokenCount})`);
 });
@@ -828,7 +824,7 @@ test('plugins.installed 纳入直接渲染子组件与 plugin-motion.css', () =>
   for (const component of [
     'PluginManagementLayout',
     'MarketPluginDetailView',
-    'PluginScopePicker',
+    'PluginProjectMenu',
     'MyPublishesSection',
     'AddMarketplaceDialog',
     'UpdateAllDialog',
@@ -937,15 +933,13 @@ test('设置页纳入 sortable.css（providers tab 拖拽行样式）', () => {
 });
 
 test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
-  // resource-usage-entry.tsx:9 / sidebar-window-entry.tsx:19 /
-  // ghost-panel-window-entry.tsx:21 都直接导入 globals.css,body/#root 基础
+  // resource-usage-entry.tsx / sidebar-window-entry.tsx 都直接导入 globals.css,body/#root 基础
   // 样式与窗口专用规则在这些窗口实际生效。
   const globalsPath = 'apps/desktop/src/renderer/styles/globals.css';
   const catalog = catalogSurfaces();
   for (const surfaceId of [
     'desktop.window.resource-usage',
     'desktop.window.sidebar',
-    'desktop.window.ghost-panel',
   ]) {
     const surface = catalog.find((entry) => entry.id === surfaceId);
     assert.ok(surface, surfaceId);
@@ -958,7 +952,6 @@ test('独立窗口 surface 纳入各自 entry 导入的 globals.css', () => {
   for (const surfaceId of [
     'desktop.window.resource-usage',
     'desktop.window.sidebar',
-    'desktop.window.ghost-panel',
   ]) {
     const generated = surfaces.find((entry) => entry.id === surfaceId);
     assert.ok(
@@ -1018,12 +1011,15 @@ test('裸圆角统计覆盖 React style 对象的 camelCase borderRadius', () =>
 
 test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块映射必须与 catalog 一致', () => {
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
-  // 与源码实况钉死:当前 3 个参数各自加载的入口模块。
+  // 治理合同 §2.1：独立编辑／回放窗口也必须登记，避免入口扫描错位或遗漏样式。
   assert.deepEqual(Object.fromEntries(actualEntries), {
+    recordingPreview: './recording-preview-entry',
     remoteDesktopViewer: './remote-desktop-viewer-entry',
     resourceUsageWindow: './resource-usage-entry',
     sidebarWindow: './sidebar-window-entry',
-    ghostPanelWindow: './ghost-panel-window-entry',
+    regionScreenshot: './region-screenshot-entry',
+    regionScreenshotEditor: './region-screenshot-entry',
+    regionScreenshotPin: './region-screenshot-pin-entry',
   });
   const covered = new Map(
     catalogSurfaces().flatMap((surface) =>
@@ -1133,7 +1129,6 @@ test('真实台账文件含 GENERATED 标记,人工区覆盖全部 surface ID', 
 
 test('ensureHumanRows 补行后人工表仍按 surface ID 有序', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -1212,8 +1207,7 @@ test.describe('CLI', { concurrency: false }, () => {
     );
   });
 
-  test('CLI generate 刷新快照日期为当天;--check 沿用文件内既有日期不跨日假红', () => {
-    const today = new Date().toISOString().slice(0, 10);
+  test('CLI generate 不写日期:连续生成字节一致,--check 通过', () => {
     // 在临时目录拷贝上跑 CLI（CINDY_INVENTORY_DOC 重定向写读）：统计仍扫真实源码，
     // 但 generate 不再改写受版本控制的真实台账——跨日跑 test:runner 不留脏工作区。
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'design-inventory-cli-'));
@@ -1226,27 +1220,17 @@ test.describe('CLI', { concurrency: false }, () => {
         env: { ...process.env, CINDY_INVENTORY_DOC: sandboxDoc },
       });
     try {
-      // generate 用当天日期写盘。
+      // GENERATED 只取决于源码树:不写生成日期,不同日期各自重新生成的分支
+      // 不会在日期行上合并冲突。
       const gen = run([]);
       assert.equal(gen.status, 0, gen.stderr || gen.stdout);
       const doc = fs.readFileSync(sandboxDoc, 'utf8');
-      assert.match(doc, new RegExp(`计数快照日期：${today}。`));
-      // 把日期改成 2020(早于任何真实快照),--check 必须沿用文件里的日期重渲染
-      // → 不因跨日误报。
-      const aged = doc.replace(
-        /计数快照日期：\d{4}-\d{2}-\d{2}。/,
-        '计数快照日期：2020-01-01。',
-      );
-      fs.writeFileSync(sandboxDoc, aged, 'utf8');
-      const agedCheck = run(['--check']);
-      assert.equal(agedCheck.status, 0, agedCheck.stderr || agedCheck.stdout);
-      // 再 generate 一次,确认写回的是当天(证明日期不是从旧文件继承的)。
-      const restore = run([]);
-      assert.equal(restore.status, 0, restore.stderr || restore.stdout);
-      assert.match(
-        fs.readFileSync(sandboxDoc, 'utf8'),
-        new RegExp(`计数快照日期：${today}。`),
-      );
+      assert.doesNotMatch(doc, /计数快照日期/);
+      const again = run([]);
+      assert.equal(again.status, 0, again.stderr || again.stdout);
+      assert.equal(fs.readFileSync(sandboxDoc, 'utf8'), doc);
+      const check = run(['--check']);
+      assert.equal(check.status, 0, check.stderr || check.stdout);
     } finally {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
@@ -1255,7 +1239,6 @@ test.describe('CLI', { concurrency: false }, () => {
 
 test('os.tmpdir 仅作隔离证明:测试不得把绝对路径写进 GENERATED', () => {
   const generated = renderGeneratedBlock([tinySurface()], {
-    snapshotDate: '2026-08-30',
     generateCommand: 'pnpm design:inventory',
     routerCoverage: { mapped: [], missing: [] },
     redirects: [],
@@ -1276,6 +1259,7 @@ test('Mobile actual route families and shared visible consumers are discoverable
     ['mobile.chat.session', ['MessageRenderer.tsx', 'CompanionMessageCard.tsx', 'AuthorizationMessageCard.tsx', 'FailedScheduleNotice.tsx']],
     ['mobile.remote-desktop', ['RemoteDesktopScreen.tsx', 'viewerHtml.ts']],
     ['mobile.settings', ['settings.tsx']],
+    ['mobile.plugins', ['PluginsScreen.tsx', 'PluginPage.tsx', 'PluginDetailView.ios.tsx', 'PluginToolChips.tsx', 'PluginNativeIntent.tsx']],
     ['mobile.overlay.connection-startup', ['ConnectionNoticeOverlay.tsx', 'ConnectionBanner.tsx']],
   ]) {
     const surface = surfaces.find(s=>s.id===id);
@@ -1301,6 +1285,11 @@ test('Mobile new, removed, renamed routes and missing dev gates cannot silently 
   assert.deepEqual(mobileRouteCoverage(temp,catalog).stale,['resources/[id].tsx']);
   fs.writeFileSync(path.join(app,'listperf.tsx'),'export default function LiveScreen() { return <View />; }');
   assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/listperf.tsx'));
+  const pluginPreview = path.join(app, 'plugin-management-preview.tsx');
+  fs.writeFileSync(pluginPreview, 'export default function Preview() { return <View />; }');
+  assert.ok(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'));
+  fs.writeFileSync(pluginPreview, 'const demosEnabled = __DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"; export default function Preview() { if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled) return <Redirect href="/" />; return <View />; }');
+  assert.equal(mobileRouteCoverage(temp,catalog).missing.includes('apps/mobile/app/plugin-management-preview.tsx'), false);
 });
 
 test('Mobile reexports, embedded viewer HTML, platform variants and codepoint ordering survive closure', async (t) => {

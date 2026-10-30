@@ -77,11 +77,14 @@ describe("medium-first defaults", () => {
       rawRegistry as unknown as ModelRegistry,
     )) {
       if (!model.efforts?.length) continue;
-      // Kimi Code documents max as K2.8 Preview's default, unlike our
-      // medium-first fallback for models without this official default.
+      // Preserve the configured Kimi K2.8/K3.1 max defaults and Grok 4.7 high;
+      // other entries use the medium-first fallback over their supported efforts.
       expect(model.defaultEffort, model.id).toBe(
-        model.id === "moonshotai/kimi-k2.8-preview"
+        ["moonshotai/kimi-k2.8-preview", "moonshotai/kimi-k3.1-pro",
+          "moonshot-kimi-code/k3.1-pro", "moonshotai/kimi-k3.1-pro-highspeed",
+          "moonshot-kimi-code/k3.1-pro-highspeed"].includes(model.id)
           ? "max"
+          : ["xai/grok-4.7", "xai/grok-4.7-build-fast"].includes(model.id) ? "high"
           : defaultEffortForCapabilities(model.efforts),
       );
       for (const override of Object.values(model.perAgent ?? {})) {

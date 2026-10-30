@@ -1,10 +1,11 @@
+import { Button } from '@/components/ui/button';
 /**
  * BoundSessionCard — 任务编辑表单里"持续会话已绑定"形态的展示卡片。
  *
  * 仅用于 persistent 已绑(runner 回写 targetSessionId):该形态没有会话选择器,
  * 需要卡片承载绑定信息。bound(手绑)形态由 ThreadPickerInline 单行选择器
  * 承担,不用本卡片。内容:会话标题 + vendor 图标 + 打开会话 + 解除绑定 +
- * "归档后自动重建续绑"说明。
+ * "归档后恢复原任务"说明。
  *
  * 标题与生命周期由 main 层批量解析。project 自动化模式不传 onUnbind
  * (loader 的 update input 不含 targetSessionId key,解绑无法落库,提供按钮只会
@@ -54,34 +55,32 @@ export function BoundSessionCard({ sessionId, onUnbind, onOpen, reference }: Bou
         )}
       </span>
       {!unavailable && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          tone="quiet"
           type="button"
           onClick={onOpen}
           title={t('scheduler.editor.runSession.card.open')}
-          className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-            'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-            'transition-colors focus:outline-none',
-          )}
         >
           <ExternalLink size={12} strokeWidth={1.75} aria-hidden />
           {t('scheduler.editor.runSession.card.open')}
-        </button>
+        </Button>
       )}
       {onUnbind && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          compact
+          tone="quiet"
           type="button"
           onClick={onUnbind}
           title={t('scheduler.editor.runSession.card.unbind')}
-          className={cn(
-            'inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium',
-            'text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)]',
-            'transition-colors focus:outline-none',
-          )}
         >
           <Unlink size={12} strokeWidth={1.75} aria-hidden />
           {t('scheduler.editor.runSession.card.unbind')}
-        </button>
+        </Button>
       )}
     </div>
   );

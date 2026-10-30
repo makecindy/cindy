@@ -25,6 +25,7 @@ import {
 
 export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
   name?: 'cindy-make-doctor' | 'cindy-make';
+  isVisible?: DesktopCommandDefinition['isVisible'];
   environment: (ctx: DesktopCommandContext) => T | Promise<T>;
   allowInstallTest?: () => boolean;
   prepare?: (
@@ -47,6 +48,7 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
   const name = deps.name ?? 'cindy-make-doctor';
   return {
     name,
+    ...(deps.isVisible ? { isVisible: deps.isVisible } : {}),
     get description() {
       return deps.description();
     },

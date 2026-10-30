@@ -1,0 +1,135 @@
+import type { PluginMessageAttachment } from './pluginAttachments.js';
+/** Ordinary local Session API. Identity and permission grants remain Host-owned. */
+export interface PluginTaskRoute {
+  agentKind: 'cc' | 'codex' | 'pi';
+  providerId: string;
+  model: string;
+  effort: string;
+  fastMode: boolean | 'ultrafast';
+}
+export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
+export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
+export function isPluginTaskPermissionMode(value: unknown): value is PluginTaskPermissionMode {
+  return typeof value === 'string' && (PLUGIN_TASK_PERMISSION_MODES as readonly string[]).includes(value);
+}
+export type PluginTaskRunStatus =
+  | 'queued'
+  | 'running'
+  | 'stopping'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'reconciling';
+export interface PluginTaskView {
+  taskId: string;
+  title: string;
+  status: 'active' | 'archived' | 'deleted';
+  revision: number;
+  resolvedConfig: PluginTaskRoute;
+  workingDir?: string;
+  permissionMode?: string;
+  /** Independent Plan Mode; the stored permission remains available after it ends. */
+  planModeEnabled?: boolean;
+  /**
+   * Background task: omitted from the task list, search, notifications and Agent Island.
+   * Only plugins declaring `agent.hiddenTasks` can set it; the user can still open or
+   * reveal it from the plugin detail page. The task service always returns a boolean;
+   * the field is optional only for Host-internal readers that predate it.
+   */
+  hidden?: boolean;
+}
+/** Plugin detail page「后台任务」row (Desktop-only IPC; never sent to the plugin sandbox). */
+export interface PluginBackgroundTask {
+  taskId: string;
+  title: string;
+  status: 'active' | 'archived';
+  /** Last activity, unix ms. */
+  updatedAt: number;
+  /** A turn is running in this Desktop process. */
+  running: boolean;
+}
+export interface PluginTaskRun {
+  runId: string;
+  taskId: string;
+  inputMessageId: string;
+  status: PluginTaskRunStatus;
+  acceptedAt: number;
+  /** Opaque Host invocation correlation; never a permission grant. */
+  invocationId?: string;
+  acceptedConfig: PluginTaskRoute;
+  execution?: { instanceId: string; generation: number };
+  /** Host-observed retry input aliases; never supplied by the plugin. */
+  inputClientIds?: string[];
+  outputMessageId?: string;
+  completedAt?: number;
+  error?: string;
+  usage: { status: 'unavailable'; reason: string };
+}
+export interface PluginTeamPlan {
+  concurrency: number | null;
+  /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
+  task?: string;
+  items: Array<{label: string; workingDir: string; route: PluginTaskRoute; task?: string}>;
+}
+/** UTF-16 JSON characters, including escaping; reject rather than truncate scope. */
+export const PLUGIN_TEAM_PLAN_MAX_JSON_CHARS = 1_048_576;
+export const PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS = PLUGIN_TEAM_PLAN_MAX_JSON_CHARS + 65_536;
+export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
+  try {
+    const json = JSON.stringify(plan);
+    return typeof json === 'string' && json.length <= PLUGIN_TEAM_PLAN_MAX_JSON_CHARS;
+  } catch { return false; }
+}
+export type PluginTaskRequest = (
+  | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
+  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
+  | {
+      type: 'tasks-request';
+      kind: 'create';
+      /** Optional active tool-call context; Host resolves its task and checks plugin ownership. */
+      callId?: string;
+      requestKey: string;
+      title?: string;
+      /** Opt in to Host naming after the first accepted message; omit title. */
+      autoTitle?: boolean;
+      route?: PluginTaskRoute;
+      /** New task only; the plugin's Host card ceiling applies only when enabled. */
+      permissionMode?: PluginTaskPermissionMode;
+      isolatedWorkspace?: boolean;
+      /** Requires `agent.hiddenTasks`; creates the task as a background task. */
+      hidden?: boolean;
+    }
+  | { type: 'tasks-request'; kind: 'setHidden'; taskId: string; hidden: boolean }
+  /** Archive this plugin's own idle task; the user can unarchive it from the task list or plugin page. */
+  | { type: 'tasks-request'; kind: 'archive'; taskId: string }
+  | { type: 'tasks-request'; kind: 'list'; after?: string; limit?: number }
+  | { type: 'tasks-request'; kind: 'get'; taskId: string }
+  | { type: 'tasks-request'; kind: 'startTeam' | 'getTeam'; taskId: string }
+  | { type: 'tasks-request'; kind: 'setTeamPlan'; taskId: string; plan: PluginTeamPlan }
+  | { type: 'tasks-request'; kind: 'releaseWorker'; taskId: string; workerId: string; completedAt: number }
+  | { type: 'tasks-request'; kind: 'requestWriteAccess'; taskId: string; mode?: 'acceptEdits' | 'auto' }
+  | { type: 'tasks-request'; kind: 'readMessages'; taskId: string; after?: string; limit?: number }
+  | {
+      type: 'tasks-request';
+      kind: 'send';
+      taskId: string;
+      requestKey: string;
+      expectedRevision: number;
+      text: string;
+      /** Supplementary material, collapsed in the conversation but sent to the Agent. */
+      context?: string;
+      attachments?: PluginMessageAttachment[];
+      /** Optional Host-issued parent invocation; correlation only, not execution authority. */
+      invocationId?: string;
+    }
+  | { type: 'tasks-request'; kind: 'getRun'; runId: string }
+  | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }
+  | { type: 'tasks-request'; kind: 'cancel'; runId: string; requestKey: string }
+) & { /** Opaque page origin; never a permission grant. */ mobilePageId?: string };
+export type PluginTaskResult =
+  | { ok: true; data: unknown }
+  | {
+      ok: false;
+      error: { code: string; message: string; retryable: boolean };
+    };

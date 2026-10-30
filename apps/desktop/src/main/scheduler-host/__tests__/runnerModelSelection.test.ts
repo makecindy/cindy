@@ -17,6 +17,17 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-scheduler-test' } }));
+vi.mock('electron-store', () => ({ default: class {
+  get(): unknown { return undefined; }
+  set(): void {}
+  delete(): void {}
+} }));
+vi.mock('original-fs', async () => {
+  const fs = await import('node:fs');
+  return { ...fs, default: fs };
+});
+
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
 import {
@@ -26,7 +37,9 @@ import {
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
+  rewindPersistedUserMessageAfterClear: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  getSessionFsSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
@@ -52,10 +65,12 @@ vi.mock('../../maker-host/session-effort-store.js', () => ({
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
+  rewindPersistedUserMessageAfterClear: mocks.rewindPersistedUserMessageAfterClear,
 }));
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionFsSnapshot: mocks.getSessionFsSnapshot,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -79,7 +94,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
-import { applyScheduledModelSelection, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import type { Scheduler } from '@cindy/maker-scheduler';
 
@@ -101,6 +116,8 @@ function createSessionHarness(): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
   const send = vi.fn<SendImpl>(async (_message, opts) => {
     await opts?.onAccepted?.();
+    await opts?.resolveAutoReviewUserIntent?.();
+    opts?.onDispatching?.();
     return { accepted: true };
   });
   // setModel 声明 string 入参(签名与真实 Session.setModel 一致),下面 mockImplementation 才能
@@ -113,6 +130,8 @@ function createSessionHarness(): FakeSessionHarness {
     id: 'scheduler-session',
     agentKind: 'claude-code',
     model: 'claude-sonnet-4-6',
+    stablePermissionModeState: { mode: 'ask' },
+    stablePlanModeState: { enabled: false },
     remoteHostId: null,
     send,
     setModel,
@@ -202,6 +221,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
   {
@@ -216,6 +236,7 @@ const schedulerImageGenerationRoutes: readonly CodexCustomProviderRoute[] = [
       authStrategy: 'none',
     },
     responseRoutingByModel: {},
+    responseEffortsByModel: {},
     credentialRevision: 1,
   },
 ];
@@ -233,6 +254,11 @@ function createRunnerHarness(
   opts: {
     sessionAlive?: boolean;
     acquirePendingAgentSwitch?: ConstructorParameters<typeof MakerScheduleRunner>[0]['acquirePendingAgentSwitch'];
+    prepareModelPreferences?: ConstructorParameters<typeof MakerScheduleRunner>[0]['prepareModelPreferences'];
+    onModelDispatched?: ConstructorParameters<typeof MakerScheduleRunner>[0]['onModelDispatched'];
+    beforeDispatchUserTurn?: ConstructorParameters<typeof MakerScheduleRunner>[0]['beforeDispatchUserTurn'];
+    readAutoReviewHistory?: ConstructorParameters<typeof MakerScheduleRunner>[0]['readAutoReviewHistory'];
+    applyPiModelSelectionUnderLock?: ConstructorParameters<typeof MakerScheduleRunner>[0]['applyPiModelSelectionUnderLock'];
     resolveModelSelection?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveModelSelection'];
     activeSessions?: Session[];
     availableModels?: Array<{
@@ -241,19 +267,21 @@ function createRunnerHarness(
       defaultEffort?: string | null;
     }>;
     checkModelRoute?: ConstructorParameters<typeof MakerScheduleRunner>[0]['checkModelRoute'];
+    isAgentOnOtherDevice?: ConstructorParameters<typeof MakerScheduleRunner>[0]['isAgentOnOtherDevice'];
     resolveRouteCopyCapabilities?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveRouteCopyCapabilities'];
     resolveDefaultModelRoute?: ConstructorParameters<
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
+    getSessionMeta?: () => Promise<typeof meta>;
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
   const closeSession = vi.fn(async () => undefined);
   const maker = {
     createSession,
-    getSessionMeta: vi.fn(async () => meta),
+    getSessionMeta: vi.fn(opts.getSessionMeta ?? (async () => meta)),
     getSession: vi.fn(() => h.session),
     listActiveSessions: vi.fn(() => opts.activeSessions ?? [h.session]),
     closeSession,
@@ -270,7 +298,16 @@ function createRunnerHarness(
     notifier,
     logger: createLogger(),
     checkModelRoute: opts.checkModelRoute,
+    ...(opts.isAgentOnOtherDevice ? { isAgentOnOtherDevice: opts.isAgentOnOtherDevice } : {}),
     acquirePendingAgentSwitch: opts.acquirePendingAgentSwitch,
+    prepareModelPreferences: opts.prepareModelPreferences,
+    onModelDispatched: opts.onModelDispatched,
+    beforeDispatchUserTurn: opts.beforeDispatchUserTurn,
+    readAutoReviewHistory: opts.readAutoReviewHistory,
+    applyPiModelSelectionUnderLock: opts.applyPiModelSelectionUnderLock ?? (async (_id, targetModel, providerId) => {
+      await h.session.setModel(targetModel, { providerId });
+      return { status: 'applied' as const };
+    }),
     resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
@@ -296,16 +333,265 @@ describe('MakerScheduleRunner model selection', () => {
     setCodexAppliedCustomProviderRoutes([]);
     vi.clearAllMocks();
     mocks.createMessage.mockResolvedValue(undefined);
+    mocks.rewindPersistedUserMessageAfterClear.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/work' });
     mocks.getSessionProvider.mockReturnValue(null);
     mocks.setSessionFastMode.mockReset();
     mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
+  });
+
+  // Integration: a new automation must pass the remote route to createSession,
+  // retain its workspace and avoid consulting a conflicting local provider copy.
+  it.each(['claude-code', 'codex', 'pi'] as const)('creates a remote %s automation on the chosen source', async (agentKind) => {
+    const h = createSessionHarness();
+    Object.assign(h.session, { agentKind, model: 'remote-model', setFastMode: vi.fn() });
+    const checkModelRoute = vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const }));
+    const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0]) => ({ ...choice, effort: 'high' as const }));
+    const harness = createRunnerHarness(h, null, { resolveModelSelection, checkModelRoute });
+    const schedule = baseSchedule({ agentKind, modelAgentKind: agentKind, modelAgentDeviceId: 'shared:owner',
+      model: 'remote-model', providerId: 'remote-source', effort: 'high' });
+    const saved = structuredClone(schedule);
+    const opts = await fireToCompletion(harness, h, schedule);
+    expect(opts).toMatchObject({ agentDeviceId: 'shared:owner', agentKind, model: 'remote-model',
+      providerId: 'remote-source', workingDir: '/work', effort: 'high' });
+    expect(resolveModelSelection).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'shared:owner' }),
+      { agentDeviceId: 'shared:owner' });
+    expect(checkModelRoute).not.toHaveBeenCalled();
+    expect(schedule).toEqual(saved);
+  });
+
+  // Integration: follow the production runner from model override through completion/failure.
+  // The previous route tests asserted the automation model only, never the next user's choice.
+  // 2026-10-23 regression: completion restored the runtime and rebuilt a finished
+  // task's context. Unit tier: real runner success/failure must leave the native
+  // model untouched; the persisted owner preference is applied by the next send.
+  it.each([
+    ['legacy', 'success'], ['explicit', 'success'],
+    ['legacy', 'failure'], ['explicit', 'failure'],
+  ] as const)('keeps the native context after %s dispatch %s', async (route, outcome) => {
+    const h = createSessionHarness();
+    const original = h.session.model;
+    const release = vi.fn();
+    let baseline: string | null = null;
+    const restore = vi.fn(async (_id, profile) => {
+      await h.session.setModel(profile.model);
+    });
+    const scope = createScheduledModelScope({
+      createId: () => 'owner-scope',
+      read: async () => ({ baseline, profile: {
+        agentKind: 'claude-code', model: h.session.model, providerId: null,
+        effort: 'high', fastMode: false,
+      } }),
+      write: async (_id, saved) => { baseline = saved ? JSON.stringify(saved) : null; },
+      isBusy: () => false,
+      apply: restore,
+    });
+    const preserve = vi.fn(async () => { await scope.begin(h.session.id); });
+    const onModelDispatched = vi.fn(() => {
+      expect(h.session.model).toBe('claude-opus-4-8');
+    });
+    const harness = createRunnerHarness(h, {
+      agentKind: 'claude-code', model: original, effort: 'high', workDir: '/work',
+    }, {
+      sessionAlive: true,
+      prepareModelPreferences: preserve,
+      onModelDispatched,
+      acquirePendingAgentSwitch: async (_id, _signal, selection, scheduledModelOverride) => {
+        if (!selection) {
+          // Legacy model overrides must bypass owner restoration too.
+          expect(scheduledModelOverride).toBe(true);
+          return release;
+        }
+        await scope.begin(h.session.id);
+        await h.session.setModel(selection.model);
+        return { release, selection };
+      },
+    });
+    const schedule = baseSchedule({
+      targetSessionId: h.session.id, model: 'claude-opus-4-8',
+      ...(route === 'explicit' ? { modelAgentKind: 'claude-code' as const } : {}),
+    });
+    if (outcome === 'failure') {
+      h.send.mockRejectedValueOnce(new Error('dispatch failed'));
+      await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow('Session send failed before dispatch');
+      expect(onModelDispatched).not.toHaveBeenCalled();
+    } else {
+      await fireToCompletion(harness, h, schedule);
+      expect(onModelDispatched).toHaveBeenCalledWith(h.session.id, expect.any(String));
+    }
+    expect(restore).not.toHaveBeenCalled();
+    expect(h.session.model).toBe('claude-opus-4-8');
+    expect(preserve).toHaveBeenCalledTimes(route === 'legacy' ? 1 : 0);
+    expect(JSON.parse(baseline!).model).toBe(original);
+    // Only the next ordinary send restores the user's route, including after
+    // an automation failed before dispatch. Completion itself cannot do it.
+    await scope.restore(h.session.id);
+    expect(h.session.model).toBe(original);
+    expect(baseline).toBeNull();
   });
 
   describe('resolved automation selection survives the full fire', () => {
-    it.each(['active', 'archived', 'missing'] as const)('uses the explicit Pi route for a %s Codex target', async (status) => {
+    // PR #6830 / unit: existing remote cases only checked the initial catalog.
+    // Suspend the selected source during accepted-turn preparation; fire must
+    // fail before vendor dispatch, including for a reused remote task. A rejected
+    // accepted prompt must be rewound by its exact ID, while fire still fails.
+    it.each(['accepted', 'intent'])('rejects a remote source suspended during direct dispatch preparation (%s)', async (stage) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentDeviceId: 'studio' });
+      mocks.getSessionProvider.mockReturnValue('remote-sub');
+      const providers = [{ id: 'remote-sub', name: 'Remote', connected: true,
+        agents: ['claude-code'], routing: { 'claude-code': {} }, suspended: false,
+        models: { 'claude-code': [{ id: h.session.model, name: 'Sonnet' }] },
+      }] as unknown as ProviderView[];
+      const onModelDispatched = vi.fn();
+      h.send.mockImplementation(async (_message, options) => {
+        await options?.onAccepted?.();
+        await options?.resolveAutoReviewUserIntent?.();
+        options?.onDispatching?.();
+        h.emit({ type: 'done', data: {} });
+        return { accepted: true };
+      });
+      const harness = createRunnerHarness(h, { model: h.session.model, workDir: '/work' }, {
+        sessionAlive: true, onModelDispatched,
+        resolveModelSelection: async (choice, location) => {
+          expect(location).toEqual({ agentDeviceId: 'studio' });
+          return resolveScheduledModelSelection(choice, providers);
+        },
+        beforeDispatchUserTurn: async () => { if (stage === 'accepted') providers[0].suspended = true; },
+        readAutoReviewHistory: async () => {
+          if (stage === 'intent') providers[0].suspended = true;
+          return [];
+        },
+      });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentDeviceId: 'studio' });
+      await expect(harness.runner.fire(baseSchedule({ targetSessionId: h.session.id }), createFireContext()))
+        .rejects.toThrow('Session send failed before dispatch');
+      expect(providers[0].suspended).toBe(true);
+      expect(onModelDispatched).not.toHaveBeenCalled();
+      expect(mocks.createMessage).toHaveBeenCalledOnce();
+      const acceptedClientId = mocks.createMessage.mock.calls[0][1].clientId;
+      expect(acceptedClientId).toEqual(expect.any(String));
+      expect(mocks.rewindPersistedUserMessageAfterClear)
+        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId);
+    });
+
+    // Merge regression, unit: a legacy remote default must not mask an explicit
+    // local override. Cover fresh creation and persistent replacement via fire.
+    it.each([false, true])('honors local selection over a saved remote default (replacement=%s)', async (replacement) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.5' });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'deleted', agentDeviceId: 'relocated' });
+      const resolveModelSelection = vi.fn(async (choice) => choice);
+      const harness = createRunnerHarness(h, null, { resolveModelSelection,
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => ({ release: vi.fn(), selection: selection! }),
+      });
+      harness.runner.attachScheduler({ update: vi.fn(), isRunSilenced: () => false } as unknown as Scheduler);
+      await fireToCompletion(harness, h, baseSchedule({ agentKind: 'codex', modelAgentKind: 'codex',
+        agentDeviceId: 'studio', modelAgentDeviceId: '', model: 'gpt-5.5', providerId: 'local-provider',
+        ...(replacement ? { targetSessionId: h.session.id, persistentSession: true } : {}),
+      }));
+      expect(harness.createSession.mock.calls[0][0].agentDeviceId).toBeUndefined();
+      expect(resolveModelSelection).toHaveBeenCalledWith(expect.objectContaining({
+        agentDeviceId: null, providerId: 'local-provider',
+      }));
+    });
+
+    // PR #6832: fire must resolve a replacement at the saved location from the saved
+    // preferences, not the relocated target's clamped copy. Existing replacement cases
+    // used identical catalogs. Minimal input: deleted persistent target on another
+    // device, with different effort/Fast support. Tier: unit (in-memory host).
+    // Windows standalone: 14.30s (collection 10.08s, 72 tests 3.85s). Reuses the
+    // existing file-level imports/fixture; no module resets or new real I/O.
+    it.each([
+      { agentDeviceId: undefined, target: { status: 'deleted' } },
+      { agentDeviceId: 'studio', target: { status: 'deleted' } },
+      { agentDeviceId: undefined, target: { status: 'archived', source: 'bot' } },
+      { agentDeviceId: undefined, target: { status: 'archived', orcaRole: 'worker' as const } },
+      { agentDeviceId: undefined, target: { status: 'archived', orcaRemoteLead: '{"leadSessionId":"lead"}' } },
+      { agentDeviceId: undefined, target: { status: 'archived', source: 'review' } },
+    ])('preserves persistent replacement routing for an unavailable managed/deleted target: %j', async ({ agentDeviceId, target }) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.5' });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ ...target, agentDeviceId: 'relocated' });
+      const resolveModelSelection = vi.fn(async (choice) => ({ ...choice, effort: 'high' as const }));
+      const harness = createRunnerHarness(h, null, {
+        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection: {
+          agentKind: 'codex', model: 'gpt-5.5', providerId: 'relocated-provider',
+          effort: 'low', fastMode: false,
+        } }),
+        resolveModelSelection,
+      });
+      harness.runner.attachScheduler({ update: vi.fn(), isRunSilenced: () => false } as unknown as Scheduler);
+      const schedule = baseSchedule({ targetSessionId: h.session.id, persistentSession: true,
+        agentDeviceId, agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.5',
+        providerId: 'saved-provider', effort: 'ultra', fastMode: true });
+      const opts = await fireToCompletion(harness, h, schedule);
+      expect(resolveModelSelection.mock.calls[0]).toEqual([
+        expect.objectContaining({ providerId: 'saved-provider', effort: 'ultra', fastMode: true }),
+        ...(agentDeviceId ? [{ agentDeviceId }] : []),
+      ]);
+      expect(opts).toMatchObject({ providerId: 'saved-provider', effort: 'high' });
+      expect(harness.createSession.mock.calls[0][0].agentDeviceId).toBe(agentDeviceId);
+    });
+
+    // PR #6832: the old rebinding fixture returned a successful catalog snapshot.
+    // Exercise the real selection entry with an unavailable old catalog; fire must
+    // still create at the saved location with its route (unit, in-memory host).
+    it.each([undefined, 'studio'])('rebinds at %s when the deleted target catalog is unavailable', async (agentDeviceId) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.5' });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'deleted', agentDeviceId: 'relocated' });
+      const oldCatalog = vi.fn(async () => { throw new Error('old target offline or share revoked'); });
+      const resolveModelSelection = vi.fn(async (choice) => ({ ...choice, effort: 'high' as const }));
+      const harness = createRunnerHarness(h, null, {
+        acquirePendingAgentSwitch: async (_id, _signal, selection) => ({
+          release: vi.fn(),
+          selection: await applyScheduledModelSelection(selection!, {
+            getTarget: async () => ({ agentKind: 'codex', status: 'deleted' }),
+            isBusy: () => false,
+            resolveSelection: oldCatalog,
+            switchHarness: async () => ({ engineReady: true }),
+            applyModel: async () => {},
+          }),
+        }),
+        resolveModelSelection,
+      });
+      harness.runner.attachScheduler({ update: vi.fn(), isRunSilenced: () => false } as unknown as Scheduler);
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        targetSessionId: h.session.id, persistentSession: true, agentDeviceId,
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-5.5', providerId: 'saved-provider',
+      }));
+      expect(opts).toMatchObject({ providerId: 'saved-provider', effort: 'high' });
+      expect(harness.createSession.mock.calls[0][0].agentDeviceId).toBe(agentDeviceId);
+      expect(oldCatalog).not.toHaveBeenCalled();
+      expect(resolveModelSelection.mock.calls[0]).toEqual([
+        expect.objectContaining({ providerId: 'saved-provider' }),
+        ...(agentDeviceId ? [{ agentDeviceId }] : []),
+      ]);
+    });
+
+    // PR #6832: existing remote coverage only created new tasks. Cold resume and
+    // model-triggered rebuild must dispatch at the bound row's current location,
+    // even when the automation still saves its original location. Tier: unit.
+    it.each(['cold', 'rebuild'] as const)('keeps the bound task location during %s resume', async (mode) => {
+      const h = createSessionHarness();
+      if (mode === 'rebuild') Object.assign(h.session, { requiresModelSwitchRebuild: async () => true });
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentDeviceId: 'relocated' });
+      const harness = createRunnerHarness(h, { model: h.session.model, workDir: '/work', sdkSessionId: 'native-history' }, {
+        sessionAlive: mode === 'rebuild',
+        resolveModelSelection: async (choice) => choice,
+      });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        targetSessionId: h.session.id, persistentSession: true, agentDeviceId: 'original',
+      }));
+      expect(opts).toMatchObject({ agentDeviceId: 'relocated', resumeSessionId: 'native-history' });
+      expect(harness.closeSession).toHaveBeenCalledTimes(mode === 'rebuild' ? 1 : 0);
+    });
+
+    it.each(['active', 'deleted', 'missing'] as const)('uses the explicit Pi route for a %s Codex target', async (status) => {
       const h = createSessionHarness();
       Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
       const release = vi.fn();
@@ -317,6 +603,7 @@ describe('MakerScheduleRunner model selection', () => {
       mocks.getSessionRowSnapshot.mockResolvedValue(status === 'missing' ? null : { status });
       const harness = createRunnerHarness(h, { agentKind: 'pi', model: 'shared-model', effort: 'high', fastMode: false, workDir: '/work' }, {
         sessionAlive: status === 'active',
+        resolveModelSelection: async (choice) => resolveScheduledModelSelection(choice, providers),
         // The merged copy deliberately conflicts with the selected provider copy.
         availableModels: [{ id: 'shared-model', efforts: ['low'], defaultEffort: 'low' }],
         acquirePendingAgentSwitch: async (_id, _signal, selection) => ({
@@ -341,6 +628,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionEffort).toHaveBeenLastCalledWith(h.session.id, 'high');
       expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(expect.anything(), h.session.id,
         expect.objectContaining({ effort: 'high', fastMode: false, providerId: 'selected' }), expect.anything());
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith(h.session.id, 'selected');
       expect(h.setEffort.mock.calls.flat()).not.toContain('low');
       expect(schedule).toEqual(saved);
       expect(release).toHaveBeenCalledTimes(1);
@@ -356,11 +644,11 @@ describe('MakerScheduleRunner model selection', () => {
       Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
       const selectedEfforts = effort === 'none' ? [] : ['medium', 'high'];
       const providers = [{
-        id: 'selected', name: 'Selected', connected: true, agents: ['pi'],
+        id: 'selected', name: 'Selected', connected: true, agents: ['pi'], routing: { pi: {} },
         models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: selectedEfforts,
           defaultEffort: effort === 'none' ? null : 'high', supportsFastMode: false }] },
       }, {
-        id: 'other', name: 'Other', connected: true, agents: ['pi'],
+        id: 'other', name: 'Other', connected: true, agents: ['pi'], routing: { pi: {} },
         models: { pi: [{ id: 'shared-model', name: 'Shared', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] },
       }] as unknown as ProviderView[];
       const resolveModelSelection = vi.fn(async (choice) => resolveScheduledModelSelection(choice, providers));
@@ -401,6 +689,38 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setEffort).not.toHaveBeenCalled();
       expect(mocks.setSessionEffort).toHaveBeenLastCalledWith(h.session.id, null);
       expect(mocks.backfillSessionMeta.mock.calls.at(-1)?.[2].effort).toBeUndefined();
+    });
+
+    // 自动化选了另一台电脑上的供应商:新建任务必须带上运行位置,并按那台的目录解析;本机停用轴
+    // 与默认路由不参与(修复前本机裁决把那台的来源判成不可用,且任务建在本机)。
+    it.each(['resolved', 'unavailable'] as const)('creates a fresh remote-agent task on its computer (%s)', async (outcome) => {
+      const h = createSessionHarness();
+      const remoteProviders = [{
+        id: 'remote-sub', name: 'Remote', connected: true, agents: ['claude-code'], routing: { 'claude-code': {} },
+        models: { 'claude-code': [{ id: 'claude-opus-5-5', name: 'Opus', efforts: ['high'], defaultEffort: 'high' }] },
+      }] as unknown as ProviderView[];
+      const resolveModelSelection = vi.fn(async (choice: Parameters<typeof resolveScheduledModelSelection>[0],
+        location?: { agentDeviceId: string }) => {
+        if (outcome === 'unavailable') throw new Error('[REMOTE_AGENT_UNAVAILABLE] Selected remote provider or model is unavailable.');
+        expect(location).toEqual({ agentDeviceId: 'studio' });
+        return resolveScheduledModelSelection(choice, remoteProviders);
+      });
+      const checkModelRoute = vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-unavailable' as const }));
+      const resolveDefaultModelRoute = vi.fn(async () => null);
+      // 建好的任务行带运行位置,派发前复核按那台电脑处理(生产 isAgentOnOtherDevice 读 sessions 行)。
+      const harness = createRunnerHarness(h, null, { resolveModelSelection, checkModelRoute, resolveDefaultModelRoute,
+        isAgentOnOtherDevice: async () => true });
+      const schedule = baseSchedule({ modelAgentKind: 'claude-code', model: 'claude-opus-5-5',
+        providerId: 'remote-sub', agentDeviceId: 'studio' });
+      if (outcome === 'unavailable') {
+        await expect(harness.runner.fire(schedule, createFireContext())).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+        expect(harness.createSession).not.toHaveBeenCalled();
+      } else {
+        const opts = await fireToCompletion(harness, h, schedule);
+        expect(opts).toMatchObject({ agentDeviceId: 'studio', providerId: 'remote-sub', model: 'claude-opus-5-5', effort: 'high' });
+      }
+      expect(checkModelRoute).not.toHaveBeenCalled();
+      expect(resolveDefaultModelRoute).not.toHaveBeenCalled();
     });
   });
 
@@ -479,9 +799,10 @@ describe('MakerScheduleRunner model selection', () => {
   });
 
   describe('Pi 派发前路由重裁决', () => {
-    it('晚到 reroute 跨 Pi proxy 身份时本轮失败，留给下次 fire 关进程重建', async () => {
+    it('Pi 完成准备后来源再变化时拒绝本次发送，保留当前会话', async () => {
       const checkModelRoute = vi
         .fn()
+        .mockResolvedValueOnce({ kind: 'pass' as const })
         .mockResolvedValueOnce({ kind: 'pass' as const })
         .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' });
       const h = createSessionHarness();
@@ -495,26 +816,95 @@ describe('MakerScheduleRunner model selection', () => {
           createFireContext(),
         ),
       ).rejects.toThrow(/Session send failed before dispatch/);
-      expect(checkModelRoute).toHaveBeenCalledTimes(2);
+      expect(checkModelRoute).toHaveBeenCalledTimes(3);
       expect(h.setModel).not.toHaveBeenCalled();
       expect(mocks.setSessionProvider).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
     });
   });
 
+  it('leaves route decisions for a task whose agent runs on another computer to that computer', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'spark/qwen';
+    const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+    const checkModelRoute = vi.fn()
+      .mockResolvedValueOnce({ kind: 'pass' as const })
+      .mockResolvedValue({ kind: 'reject' as const, reason: 'model-unavailable' });
+    const isAgentOnOtherDevice = vi.fn(async (sessionId: string) => sessionId === 'scheduler-session');
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute, isAgentOnOtherDevice, applyPiModelSelectionUnderLock: transaction,
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    // 新建任务时的那一次照常裁决(定时任务新建的任务在本机运行)；绑定到这个任务之后不再用本机目录裁决。
+    expect(checkModelRoute).toHaveBeenCalledTimes(1);
+    expect(isAgentOnOtherDevice).toHaveBeenCalledWith('scheduler-session');
+    expect(transaction).not.toHaveBeenCalled();
+    expect(h.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps deciding routes here when the lookup fails', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+    const checkModelRoute = vi.fn(async () => ({ kind: 'pass' as const }));
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute,
+      isAgentOnOtherDevice: vi.fn(async () => {
+        throw new Error('db closed');
+      }),
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    expect(checkModelRoute.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('prepares a late Pi reroute before binding the result listener or sending', async () => {
+    const h = createSessionHarness();
+    (h.session as { agentKind: string }).agentKind = 'pi';
+    (h.session as { model: string }).model = 'chatgpt/gpt-5.6-sol';
+    const listener = vi.spyOn(h.session, 'onEvent');
+    const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+    const checkModelRoute = vi.fn()
+      .mockResolvedValueOnce({ kind: 'pass' as const })
+      .mockResolvedValueOnce({ kind: 'reroute' as const, providerId: 'byom-b' })
+      .mockResolvedValue({ kind: 'pass' as const });
+    const harness = createRunnerHarness(h, null, {
+      checkModelRoute, applyPiModelSelectionUnderLock: transaction,
+    });
+    await fireToCompletion(harness, h, baseSchedule({ agentKind: 'pi', model: h.session.model }));
+    expect(transaction).toHaveBeenCalledWith('scheduler-session', h.session.model, 'byom-b',
+      { model: h.session.model, providerId: null }, { refreshPiConfiguration: true, source: 'agent' });
+    expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(listener.mock.invocationCallOrder[0]);
+    expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(h.send.mock.invocationCallOrder[0]);
+    expect(harness.closeSession).not.toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
+  });
+
   describe('non-heartbeat (每次新建 session)', () => {
-    it('schedule.model 留空时 Claude 兜底 claude-sonnet-4-6（成本保守,与 UI 空值回退一致）', async () => {
+    it('schedule.model 留空时 Claude 按新建任务默认实时解析 model + 来源,不写死型号', async () => {
       const h = createSessionHarness();
-      const harness = createRunnerHarness(h);
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'claude-opus-5-5',
+        providerId: 'anthropic',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
 
       const opts = await fireToCompletion(harness, h, baseSchedule({ model: undefined }));
 
-      expect(opts.model).toBe('claude-sonnet-4-6');
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith('claude-code', null);
+      expect(opts.model).toBe('claude-opus-5-5');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'anthropic' }),
+      );
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'anthropic');
     });
 
-    it('schedule.model 留空时 Codex 兜底 gpt-5.5', async () => {
+    it('schedule.model 留空时 Codex 按新建任务默认实时解析,并把来源写入会话', async () => {
       const h = createSessionHarness();
-      const harness = createRunnerHarness(h);
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'gpt-6-astra',
+        providerId: 'openai',
+      }));
+      const harness = createRunnerHarness(h, null, { resolveDefaultModelRoute });
 
       const opts = await fireToCompletion(
         harness,
@@ -522,7 +912,25 @@ describe('MakerScheduleRunner model selection', () => {
         baseSchedule({ model: undefined, agentKind: 'codex' }),
       );
 
-      expect(opts.model).toBe('gpt-5.5');
+      expect(resolveDefaultModelRoute).toHaveBeenCalledWith('codex', null);
+      expect(opts.model).toBe('gpt-6-astra');
+      expect(harness.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'openai' }),
+      );
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'openai');
+    });
+
+    it('schedule.model 留空且没有可用来源时在创建会话前明确失败,不落到写死的型号', async () => {
+      const h = createSessionHarness();
+      const harness = createRunnerHarness(h, null, {
+        resolveDefaultModelRoute: vi.fn(async () => null),
+      });
+
+      await expect(
+        harness.runner.fire(baseSchedule({ model: undefined }), createFireContext()),
+      ).rejects.toThrow('claude-code has no connected model source');
+      expect(harness.createSession).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
     });
 
     it('Pi 空模型按同一已连接来源解析 model + providerId，不能落到 Cindy 的 Sonnet 路由', async () => {
@@ -591,7 +999,7 @@ describe('MakerScheduleRunner model selection', () => {
           baseSchedule({ agentKind: 'pi', model: undefined, providerId: undefined }),
           createFireContext(),
         ),
-      ).rejects.toThrow('Pi has no connected model source');
+      ).rejects.toThrow('pi has no connected model source');
       expect(harness.createSession).not.toHaveBeenCalled();
       expect(h.send).not.toHaveBeenCalled();
     });
@@ -1089,10 +1497,10 @@ describe('MakerScheduleRunner model selection', () => {
       expect(h.setEffort).not.toHaveBeenCalledWith('max');
     });
 
-    it('冷 resume + follow-effort + setEffort 失败 → 不落库 effort,留待下次重试(PR #479 review)', async () => {
-      // 冷 resume(会话不在进程内,reusedLiveSession=false):createSession 只拿到 undefined effort
-      // (follow → schedule.effort 空),真正要落的 clamp 后档只经 setEffort 生效。setEffort 抛错 = 没生效,
-      // 必须跳过落库,否则 DB 记了假值、下次 fire 判"已同步"不再重试(effortSwitchApplied 旧逻辑只护复用路径)。
+    it('冷 resume 已应用 follow-effort 时，幂等 setEffort 失败仍保留实际档位', async () => {
+      // #7256 实跑修复：冷恢复现在把跟随档位直接传入 createSession，避免默认为高档。
+      // unit：max 在目标模型下 clamp 为 xhigh，初始化已应用；后续幂等 setEffort 失败不能丢掉这个事实。
+      // 原用例只覆盖“createSession effort=undefined”的旧路径；复用会话真正切档失败仍由相邻用例保护。
       const h = createSessionHarness();
       h.setEffort.mockRejectedValue(new Error('setEffort rejected'));
       const harness = createRunnerHarness(
@@ -1126,24 +1534,32 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      // follow 的 max 按新模型 clamp 到 xhigh,经 setEffort 下发但失败。
+      expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'claude-opus-4-8', effort: 'xhigh',
+      }));
+      // 初始化已经应用 xhigh；后续幂等同步失败不把持久化档位变回未知。
       expect(h.setEffort).toHaveBeenCalledWith('xhigh');
-      // setEffort 是本次 effort 的唯一生效通道(createSession 只拿到 undefined)→ 失败不落库,下次重试。
       expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
         expect.anything(),
         'scheduler-session',
-        expect.objectContaining({ effort: undefined }),
+        expect.objectContaining({ effort: 'xhigh' }),
         expect.anything(),
       );
     });
 
-    it('legacy session meta 无 model 时落兜底 Sonnet 并 setModel + 落库（显式锁定静默升级契约）', async () => {
-      // 历史持续会话可能从未存过 model（meta.model undefined）。此时:
-      // rawModel=undefined → defaultModelFor='claude-sonnet-4-6',
-      // heartbeatModelChanged=true → setModel + backfill 落库。
-      // 这是有意行为（兜底必须与 UI 空值回退一致）,本用例防止未来误改。
+    it('legacy session meta 无 model 时按新建任务默认解析并 setModel + 落库', async () => {
+      // 历史持续会话可能从未存过 model（meta.model undefined）。此时 rawModel=undefined →
+      // 按新建任务口径实时解析默认模型,heartbeatModelChanged=true → setModel + backfill 落库。
       const h = createSessionHarness();
-      const harness = createRunnerHarness(h, { workDir: '/work', sdkSessionId: 'sdk-1' });
+      const resolveDefaultModelRoute = vi.fn(async () => ({
+        model: 'claude-opus-5-5',
+        providerId: 'anthropic',
+      }));
+      const harness = createRunnerHarness(
+        h,
+        { workDir: '/work', sdkSessionId: 'sdk-1' },
+        { resolveDefaultModelRoute },
+      );
 
       const opts = await fireToCompletion(
         harness,
@@ -1151,12 +1567,14 @@ describe('MakerScheduleRunner model selection', () => {
         baseSchedule({ model: undefined, targetSessionId: 'scheduler-session' }),
       );
 
-      expect(opts.model).toBe('claude-sonnet-4-6');
-      expect(h.setModel).toHaveBeenCalledWith('claude-sonnet-4-6');
+      expect(opts.model).toBe('claude-opus-5-5');
+      expect(h.setModel).toHaveBeenCalledWith('claude-opus-5-5');
+      // 解析出的来源与模型成对写入会话,重启后的下一次运行不会退回隐式来源。
+      expect(mocks.setSessionProvider).toHaveBeenCalledWith('scheduler-session', 'anthropic');
       expect(mocks.backfillSessionMeta).toHaveBeenCalledWith(
         expect.anything(),
         'scheduler-session',
-        expect.objectContaining({ model: 'claude-sonnet-4-6' }),
+        expect.objectContaining({ model: 'claude-opus-5-5', providerId: 'anthropic' }),
         expect.anything(),
       );
     });
@@ -1210,6 +1628,38 @@ describe('MakerScheduleRunner model selection', () => {
   //   - 留空 + heartbeat → hydrate 绑定会话的 provider_id(只在内存无条目时写,不覆盖)。
   //   - 显式设置 → setSessionProvider 覆盖 + backfill 落 sessions.provider_id。
   describe('provider (来源) 注入', () => {
+    it('cold Pi heartbeat verifies the target window before resuming native history', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
+      mocks.getSessionProvider.mockReturnValue('byom-a');
+      const h = createSessionHarness();
+      (h.session as { agentKind: string }).agentKind = 'pi';
+      const transaction = vi.fn(async () => ({ status: 'applied' as const }));
+      const previous = {
+        agentKind: 'pi' as const, model: 'old-model', effort: 'high', workDir: '/work',
+        sdkSessionId: 'old-native-history',
+      };
+      const harness = createRunnerHarness(h, previous, {
+        sessionAlive: false,
+        applyPiModelSelectionUnderLock: transaction,
+        getSessionMeta: vi.fn()
+          .mockResolvedValueOnce(previous)
+          .mockResolvedValue({ ...previous, sdkSessionId: 'prepared-native-history' }),
+      });
+
+      await fireToCompletion(harness, h, baseSchedule({
+        agentKind: 'pi', model: 'new-model', providerId: 'byom-b',
+        targetSessionId: 'scheduler-session',
+      }));
+      expect(transaction).toHaveBeenCalledWith('scheduler-session', 'new-model', 'byom-b',
+        { model: 'old-model', providerId: 'byom-a' },
+        { refreshPiConfiguration: true, source: 'agent' });
+      expect(transaction.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0]);
+      expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'new-model', providerId: 'byom-b', resumeSessionId: 'prepared-native-history',
+      }));
+      expect(h.setModel).not.toHaveBeenCalled();
+    });
     it('非 heartbeat Claude + 留空 providerId → 物化当前 Claude 订阅来源并落库', async () => {
       const h = createSessionHarness();
       const resolveDefaultModelRoute = vi.fn(async () => ({
@@ -1341,7 +1791,7 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
-    it('heartbeat 复用 Pi 跨 proxy 身份时先关闭再按新来源重建', async () => {
+    it('heartbeat 复用 Pi 跨 proxy 身份时在同一会话上热切来源', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'byom-a' });
       mocks.getSessionProvider.mockReturnValue('byom-a');
       const h = createSessionHarness();
@@ -1368,14 +1818,9 @@ describe('MakerScheduleRunner model selection', () => {
         }),
       );
 
-      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session', 'runtime-refresh');
-      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
-        harness.createSession.mock.invocationCallOrder[0],
-      );
-      expect(h.setModel).not.toHaveBeenCalled();
-      expect(harness.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ providerId: 'byom-b', model: 'gpt-5.6-sol' }),
-      );
+      expect(harness.closeSession).not.toHaveBeenCalled();
+      expect(h.setModel).toHaveBeenCalledWith('gpt-5.6-sol', { providerId: 'byom-b' });
+      expect(harness.createSession).toHaveBeenCalledTimes(1);
     });
 
     it('heartbeat 复用 Pi 同身份时即使模型不变也把 provider-model 原子同步到原生进程', async () => {

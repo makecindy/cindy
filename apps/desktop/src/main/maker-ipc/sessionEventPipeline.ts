@@ -1,3 +1,5 @@
+import { observeBotLearningTurn } from './botLearningFeedback.js';
+import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { prepareSessionEvent, type PrepareSessionEventDeps } from './sessionEventPreparation.js';
 import {
@@ -29,7 +31,10 @@ export type SessionEventDependencies = PrepareSessionEventDeps &
   FinishSessionTerminalEventDeps &
   RecordSessionClaudeTurnUsageDeps &
   RecordSessionCodexTurnUsageDeps &
-  RecordSessionPiTurnUsageDeps;
+  RecordSessionPiTurnUsageDeps & {
+    /** 按供应商记「本机」用量(远程与分享页的按使用方用量)。不提供 = 不记。 */
+    readonly recordProviderPartyUsage?: (session: Session, event: AgentEvent) => void;
+  };
 
 /** Synchronous delivery boundary. Accepted asynchronous writes retain their original turn. */
 export function handleSessionEvent(
@@ -39,6 +44,16 @@ export function handleSessionEvent(
 ): void {
   const prepared = prepareSessionEvent(deps, session, event);
   if (!prepared) return;
+  const project = projectQuietScheduledOutput;
+  const projected = project(prepared.event);
+  if (!projected) return;
+  if (projected !== prepared.event) {
+    prepared.event = projected;
+    prepared.attributedEvent = project(prepared.attributedEvent) ?? prepared.attributedEvent;
+    // Project the already-redacted event independently; never copy raw fields back into it.
+    prepared.broadcastEvent = project(prepared.broadcastEvent) ?? prepared.broadcastEvent;
+  }
+  if (event.type === 'tool_use' && event.turnScope !== 'background') observeBotLearningTurn(session, event.sessionTurnGeneration);
   const stream = persistSessionStreamEvent(deps, session, prepared);
   const delivery = deliverSessionEvent(deps, session, prepared, stream);
   const terminal = finishSessionTerminalEvent(deps, session, prepared, delivery);
@@ -53,4 +68,5 @@ export function handleSessionEvent(
   );
   recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
   recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+  deps.recordProviderPartyUsage?.(session, event);
 }

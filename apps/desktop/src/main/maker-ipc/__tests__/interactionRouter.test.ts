@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 
 import {
   beginInteractionRoute,
+  getActiveInteractionRoute,
   requestHostInteraction,
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
+  noteInteractionRouteSteer,
   type InteractionHandler,
 } from '../interactionRouter';
+import { beginUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
+import { takeUnattendedPlanReviewDeclines } from '../../mcp-integrations/unattendedTurn';
 
 function permission(requestId: string): InteractionRequest {
   return {
@@ -27,8 +31,8 @@ function ask(requestId: string): InteractionRequest {
 }
 
 function makeSession() {
-  let listener: InteractionHandler | null = null;
-  const setInteractionListener = vi.fn((next: InteractionHandler | null) => {
+  let listener: InteractionResolver | null = null;
+  const setInteractionListener = vi.fn((next: InteractionResolver | null) => {
     listener = next;
   });
   return {
@@ -42,9 +46,39 @@ function makeSession() {
 }
 
 describe('session interaction router', () => {
+  it('resolves questions and plan reviews for an unattended scheduled turn instead of opening a card', async () => {
+    const host = makeSession();
+    const desktop = vi.fn<InteractionHandler>(async (): Promise<InteractionDecision> => ({
+      kind: 'permission', behavior: 'allow',
+    }));
+    installDesktopInteractionHandler(host.session, desktop);
+    const release = beginUnattendedTurn(host.session.id);
+    try {
+      await expect(requestHostInteraction(host.session, ask('ask-1'), new AbortController().signal))
+        .resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+      await expect(requestHostInteraction(
+        host.session,
+        { kind: 'plan_review', requestId: 'plan-1', plan: 'do it' } as InteractionRequest,
+        new AbortController().signal,
+      )).resolves.toEqual({
+        kind: 'plan_review', behavior: 'deny', dismissed: true, reason: 'unattended_scheduled_run',
+      });
+      // 拒绝要能被 run 结果引用，否则 plan 模式的定时任务看起来就像“什么也没做”。
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(1);
+      expect(takeUnattendedPlanReviewDeclines(host.session.id)).toBe(0);
+      expect(desktop).not.toHaveBeenCalled();
+      // Permissions keep their own card and timeout semantics.
+      await expect(requestHostInteraction(host.session, permission('perm-1'), new AbortController().signal))
+        .resolves.toMatchObject({ kind: 'permission', behavior: 'allow' });
+      expect(desktop).toHaveBeenCalledOnce();
+    } finally {
+      release();
+    }
+  });
+
   it('routes Host download permissions through the active channel without replacing the listener', async () => {
     const host = makeSession();
-    const desktop = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' }));
+    const desktop = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
     const remote = vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
     installDesktopInteractionHandler(host.session, desktop);
     const lease = beginInteractionRoute(host.session, {
@@ -55,8 +89,87 @@ describe('session interaction router', () => {
       await expect(requestHostInteraction(host.session, permission('download-1'), new AbortController().signal))
         .resolves.toMatchObject({ behavior: 'allow' });
       expect(remote).toHaveBeenCalledOnce();
-      expect(desktop).not.toHaveBeenCalled();
+      expect(desktop).toHaveBeenCalledOnce();
       expect(host.setInteractionListener).toHaveBeenCalledOnce();
+    } finally { lease.release(); }
+  });
+
+  it('exposes the live route and its owner evidence for owner-only Host actions', async () => {
+    const host = makeSession();
+    installDesktopInteractionHandler(host.session, vi.fn<InteractionHandler>((_request, shared) => shared!.result));
+    expect(getActiveInteractionRoute(host.session)).toBeNull();
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-owner', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    expect(getActiveInteractionRoute(host.session)).toMatchObject({
+      origin: { kind: 'im', channel: 'telegram' }, requesterAuthority: 'owner',
+    });
+    lease.release();
+    expect(getActiveInteractionRoute(host.session)).toBeNull();
+  });
+
+  it('stops vouching for the IM sender once other input is steered into the turn', () => {
+    const host = makeSession();
+    installDesktopInteractionHandler(host.session, vi.fn<InteractionHandler>((_request, shared) => shared!.result));
+    noteInteractionRouteSteer(host.session);
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-steered', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      // A steer before this route began does not touch it.
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+      noteInteractionRouteSteer(host.session);
+      expect(getActiveInteractionRoute(host.session)).toMatchObject({
+        origin: { kind: 'im', channel: 'telegram' }, requesterAuthority: 'unknown',
+      });
+      expect(lease.route.requesterAuthority).toBe('owner');
+    } finally { lease.release(); }
+    const next = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-next', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: vi.fn(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'deny' })),
+    });
+    try {
+      expect(getActiveInteractionRoute(host.session)?.requesterAuthority).toBe('owner');
+    } finally { next.release(); }
+  });
+
+  it('lets the phone/Desktop or the IM card answer an app update card; the first answer wins', async () => {
+    const host = makeSession();
+    let desktopShared: Parameters<InteractionHandler>[1];
+    const desktop = vi.fn<InteractionHandler>((_request, shared) => {
+      desktopShared = shared;
+      return shared!.result;
+    });
+    const channel = vi.fn<InteractionHandler>((_request, shared) => shared!.result);
+    installDesktopInteractionHandler(host.session, desktop);
+    const lease = beginInteractionRoute(host.session, {
+      route: {
+        sessionId: host.session.id, turnId: 'turn-update', origin: { kind: 'im', channel: 'telegram' },
+        interactionSurface: 'channel-card', requesterAuthority: 'owner',
+      },
+      handle: channel,
+    });
+    try {
+      const request = { ...permission('app-update-1'), toolName: 'cindy.app.update', input: { from: '1', to: '2' } } as InteractionRequest;
+      const pending = requestHostInteraction(host.session, request, new AbortController().signal);
+      await vi.waitFor(() => { expect(channel).toHaveBeenCalledOnce(); });
+      // Same-account phone answers through the Desktop pending entry; a late IM click cannot override it.
+      desktopShared!.decide({ kind: 'permission', behavior: 'allow' });
+      const [, channelShared] = channel.mock.calls[0]!;
+      expect(channelShared!.decide({ kind: 'permission', behavior: 'deny' })).toBe(false);
+      await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+      expect(desktop).toHaveBeenCalledOnce();
     } finally { lease.release(); }
   });
 
@@ -90,7 +203,7 @@ describe('session interaction router', () => {
 
   it('routes only the admitted turn to its channel surface', async () => {
     const harness = makeSession();
-    const desktop = vi.fn(async (): Promise<InteractionDecision> => ({
+    const desktop = vi.fn<InteractionHandler>(async (_request, shared) => shared ? shared.result : ({
       kind: 'permission',
       behavior: 'deny',
       reason: 'desktop',
@@ -119,7 +232,7 @@ describe('session interaction router', () => {
       reason: 'desktop',
     });
     expect(channel).toHaveBeenCalledTimes(1);
-    expect(desktop).toHaveBeenCalledTimes(1);
+    expect(desktop).toHaveBeenCalledTimes(2);
     expect(harness.setInteractionListener).toHaveBeenCalledTimes(1);
   });
 

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { get } from 'node:http';
+import { runInNewContext } from 'node:vm';
 import { statEntry } from '@cindy/file-browser-core';
 import { HTML_SNAPSHOT_CSP, withSnapshotHtmlCsp } from '@cindy/maker-shared/file-preview';
 import {
@@ -45,6 +46,73 @@ async function fixture() {
   };
 }
 describe('directory HTML preview', () => {
+  // Unit/loopback integration: a cached HTML response must arrive before remote
+  // validation; only different bytes from that check permit the page to reload.
+  // The existing fixture has no stale-cache/update handshake coverage.
+  it.each(['changed', 'unchanged', 'offline'] as const)('checks cached HTML once without blocking its first response (%s)', async (outcome) => {
+    const { dir, source, args } = await fixture();
+    const oldHtml = '\uFEFF<!doctype html><h1>old</h1>';
+    const nextHtml = outcome === 'changed' ? '<h1>new</h1>' : oldHtml;
+    const cached = path.join(dir, 'cached.html');
+    const cachedScript = path.join(dir, 'cached.js');
+    await fs.writeFile(cached, oldHtml);
+    await fs.writeFile(cachedScript, 'old script');
+    await fs.writeFile(args.absPath, nextHtml);
+    let finish!: () => void;
+    const check = new Promise<void>(resolve => { finish = resolve; });
+    const read = vi.fn(async (root: string, file: { relPath: string }) => {
+      await check;
+      if (outcome === 'offline') throw new Error('offline');
+      return path.join(root, file.relPath);
+    });
+    const preview = await createHtmlPreview(args, {
+      ...source, read,
+      cached: async (_root, rel) => rel === 'index.html' ? cached : cachedScript,
+    });
+    cleanups.push(preview.close);
+    const entry = await fetch(preview.url, { redirect: 'manual' });
+    const cookie = entry.headers.get('set-cookie')!.split(';')[0];
+    const headers = { Cookie: cookie };
+    const origin = new URL(preview.url).origin;
+    const first = await (await fetch(origin + '/index.html', { headers })).text();
+    expect(first).toContain(oldHtml.slice(1));
+    // fetch.text strips the leading BOM; no second BOM may be inserted in the body.
+    expect(first).not.toContain('\uFEFF');
+    const updatePath = /fetch\("([^"\n]+\/updated)"/.exec(first)?.[1];
+    expect(updatePath).toBeTruthy();
+    expect((await fetch(origin + updatePath)).status).toBe(403);
+    const script = /<script>(\(\(\)=>\{const page=[\s\S]*?)<\/script>/.exec(first)![1];
+    const reload = vi.fn();
+    let onLoad!: () => Promise<void>;
+    let observed!: Promise<unknown>;
+    const checkFetch = vi.fn((url: string) => {
+      observed = fetch(origin + url, { headers }).then(async response => {
+        const changed = await response.json();
+        expect(changed).toBe(outcome === 'changed');
+        return { ok: true, json: () => Promise.resolve(changed) };
+      });
+      return observed;
+    });
+    const addEventListener = vi.fn((_event: string, callback: typeof onLoad) => { onLoad = callback; });
+    runInNewContext(script, { location: { pathname: '/index.html', reload }, addEventListener, fetch: checkFetch });
+    expect(checkFetch).not.toHaveBeenCalled();
+    expect(addEventListener).toHaveBeenCalledWith('load', expect.any(Function), { once: true });
+    onLoad();
+    finish();
+    await observed;
+    // Drain the response.json/reload promise chain without a wall-clock delay.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(checkFetch).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledTimes(outcome === 'changed' ? 1 : 0);
+    const reopened = await (await fetch(origin + '/index.html', { headers })).text();
+    if (outcome === 'changed') {
+      expect(reopened).toBe(withSnapshotHtmlCsp(nextHtml));
+      expect(await (await fetch(origin + '/dist/app.js', { headers })).text()).toBe('export const test = true;');
+    } else expect(reopened).toBe(first);
+    expect(read.mock.calls.filter(([, file]) => file.relPath === 'index.html')).toHaveLength(1);
+    expect(await (await fetch(origin + updatePath, { headers })).json()).toBe(false);
+  });
+
   it('bounds copies and refuses links instead of reading their targets', async () => {
     const { dir } = await fixture();
     const source = path.join(dir, 'index.html');
@@ -155,7 +223,7 @@ describe('directory HTML preview', () => {
     cleanups.push(preview.close);
     expect(read).not.toHaveBeenCalled();
     expect(stat).toHaveBeenCalledTimes(1);
-    expect(stat).toHaveBeenCalledWith(args.workdir, 'index.html');
+    expect(stat).toHaveBeenCalledWith(args.workdir, 'index.html', expect.any(AbortSignal));
     const initial = await fetch(preview.url, { redirect: 'manual' });
     const cookie = initial.headers.get('set-cookie')!.split(';')[0];
     const load = (p: string) => fetch(new URL(p, preview.url), { headers: { cookie } });

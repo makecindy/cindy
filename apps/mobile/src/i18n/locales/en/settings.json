@@ -1,7 +1,6 @@
 {
   "localLogs": {
     "upload": "Upload logs",
-    "uploadHint": "Send only filtered run records and app/system versions. Export for detailed debug logs.",
     "uploadResult": {
       "unavailable": "Log upload is unavailable in this build.",
       "consentRequired": "Accept the Privacy Policy before uploading logs.",
@@ -9,23 +8,55 @@
       "failed": "Upload failed. Logs are still saved on this phone."
     },
     "title": "Debug logs",
-    "record": "Record debug logs",
-    "hint": "Record phone connection, recovery, scrolling, keyboard and performance details. Off by default; keeps up to 7 days and 8 MB. Never uploaded automatically.",
-    "export": "Export debug logs",
+    "record": "Record logs",
+    "export": "Export logs",
     "clear": "Clear logs",
     "busy": "Working…",
     "failed": "Unable to save or share logs. Please try again.",
     "clearHint": "Delete the saved diagnostic logs?",
     "cancel": "Cancel",
-    "exportHint": "Share detailed local logs for troubleshooting. No conversation content or credentials.",
-    "options": "Log options",
-    "uploadCopied": "Uploaded. Code {{code}} copied.",
-    "uploadSucceeded": "Uploaded. Code {{code}}."
+    "uploadCopied": "Logs uploaded. Code {{code}} copied",
+    "uploadSucceeded": "Logs uploaded. Code {{code}}",
+    "footer": "Logs stay on this phone for up to 7 days or 8 MB and are never uploaded automatically. Exported logs exclude conversation text and credentials; uploads send only filtered run records and version info."
   },
   "title": "Settings",
+  "appearance": {
+    "title": "Appearance",
+    "modeLabel": "Appearance Mode",
+    "options": {
+      "system": "Auto (follow system)",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "saveFailed": "Failed to save appearance mode. The previous setting will return after restart.",
+    "userBubble": {
+      "title": "My message bubble color",
+      "presets": "Color",
+      "default": "Default",
+      "peach": "First Draft",
+      "yellow": "Daybreak",
+      "sage": "Spark",
+      "blue": "Dreamscape",
+      "lavender": "Night Cat",
+      "red": "Red Collar",
+      "custom": "Custom color",
+      "hue": "Hue",
+      "preview": "Message preview",
+      "sampleUser": "Help me organize today’s ideas.",
+      "sampleAssistant": "Sure, let’s work through your ideas together.",
+      "hint": "Adjusts for light and dark mode so text stays readable. Saved on this device only.",
+      "customHint": "Drag the color strip to pick a hue. Adjusts for light and dark mode; saved on this device only.",
+      "saveFailed": "The color is applied for now but could not be saved.",
+      "retry": "Retry",
+      "cancel": "Cancel",
+      "reset": "Reset to default",
+      "apply": "Apply",
+      "hex": "Color value"
+    }
+  },
   "language": {
     "title": "Language",
-    "hint": "Affects the app UI only. Agent replies follow the agent's own language settings.",
+    "hint": "Used for the interface and AI error reports. Other replies follow your message or language request.",
     "options": {
       "system": "Auto (follow system)",
       "zh-CN": "简体中文",
@@ -37,49 +68,55 @@
   },
   "version": {
     "sectionTitle": "Version",
-    "currentLabel": "Current Version",
-    "bundleVersion": "App package {{version}}",
-    "otaVersion": "OTA version {{version}}",
-    "pairedDesktopVersion": "Matching desktop release {{version}}",
-    "devNoOta": "Development build; OTA updates unavailable",
+    "updateMethodInApp": "Updates install in the app and apply after a restart.",
+    "updateMethodPackage": "Download and install the new version to update.",
+    "updateMethodUnavailable": "Development builds can’t update in the app.",
     "checkAction": "Check for Updates",
     "testFlightCheckAction": "Check for Content Updates",
     "checking": "Checking",
-    "updating": "Updating",
     "checkingAccessibility": "Checking for updates",
     "testFlightCheckingAccessibility": "Checking for content updates",
-    "testFlightUpdateManaged": "TestFlight manages test build updates",
-    "testFlightNoContentUpdate": "No content updates are available. Check TestFlight for new test builds.",
-    "testFlightContentUpdateUnavailable": "This build cannot check for content updates. Check TestFlight for new test builds.",
+    "testFlightUpdateManaged": "Install new test builds from TestFlight.",
+    "testFlightNoContentUpdate": "No content update available.",
+    "testFlightContentUpdateUnavailable": "This build can’t check for content updates.",
+    "googlePlayUpdateManaged": "Update to new versions from Google Play.",
+    "googlePlayNoContentUpdate": "No content update available.",
+    "googlePlayContentUpdateUnavailable": "This build can’t check for content updates.",
     "bundleUpdateFound": "App package update available",
     "upToDate": "Already up to date",
-    "bundleUpToDateNoOta": "App package is up to date; this version does not support OTA updates",
+    "bundleUpToDateNoOta": "Up to date. This version doesn’t support hot updates.",
     "downloadedRestarting": "Update downloaded, restarting",
-    "downloadedRestartRequired": "Update downloaded. Fully quit the app and reopen it to apply.",
+    "downloadedRestartRequired": "Update downloaded. Fully quit and reopen the app to apply it.",
     "bundleCheckFailed": "Could not check for app package updates. Try again later.",
     "checkFailedDetail": "Update check failed: {{detail}}",
-    "checkFailed": "Update check failed. Try again later."
+    "checkFailed": "Update check failed. Try again later.",
+    "currentLabel": "Current version",
+    "pairedDesktopLabel": "Paired desktop version"
   },
   "betaChannel": {
     "title": "Beta channel",
     "badge": "Beta",
-    "description": "Join the beta channel to receive upcoming client updates early.",
-    "restartHint": "The beta channel takes effect after restarting the app. Please restart to apply.",
-    "ok": "Got it",
+    "description": "Get upcoming client updates early. Content updates are downloaded on the next update check and take effect after an app restart.",
     "saveFailed": "Failed to save beta channel setting",
     "unavailable": "The beta channel is unavailable — could not reach the beta update server."
   },
   "notifications": {
     "sectionTitle": "Notifications",
-    "taskDone": "Task Completion Notifications",
-    "taskDoneHint": "Get a push on this phone when a task on your computer finishes, fails, or needs your reply. Completion and reply alerts include the latest response.",
-    "permissionDenied": "Notifications are turned off in system settings. Allow notifications in iOS Settings → Notifications → {{appName}}, then try again.",
-    "unregisterQueued": "Turned off. Could not unregister on the current network; it will finish automatically next time you're online."
+    "taskDone": "Message and task notifications",
+    "taskDoneHint": "Get notified about chat messages and tasks that finish, fail, or need your reply.",
+    "permissionDenied": "Allow Cindy notifications in your system settings.",
+    "unregisterQueued": "Turned off. Unregistering will finish once you’re back online.",
+    "preview": "Show chat previews",
+    "background": "Keep chat connected in background",
+    "backgroundActive": "Receiving chat messages in background",
+    "backgroundStop": "Stop receiving",
+    "backgroundHint": "The background connection works without Google and shows an ongoing notification. You can stop it from that notification.",
+    "googleUnavailable": "Google push is unavailable. Enable the background chat connection to receive messages."
   },
   "about": {
     "sectionTitle": "About This Phone",
     "deviceName": "Device Name",
-    "deviceNameDetail": "This name appears in the authorization list on your computer.",
+    "deviceNameDetail": "Shown in the computer’s authorization list.",
     "platform": "Platform",
     "editAccessibility": "Edit {{label}}"
   },
@@ -134,7 +171,8 @@
     "runtime": "Runtime",
     "otaMarker": "OTA Marker",
     "emergencyLaunch": "Emergency Launch",
-    "emergencyLaunchYes": "Yes (OTA cannot apply in this run)"
+    "emergencyLaunchYes": "Yes (OTA cannot apply in this run)",
+    "otaVersion": "OTA version"
   },
   "legal": {
     "sectionTitle": "Legal",
@@ -145,13 +183,15 @@
     "openUserAgreement": "Open the user agreement",
     "appFilingNumber": "App Filing Number",
     "analytics": "Usage statistics",
-    "analyticsHint": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts.",
+    "analyticsHint": "Helps us understand launches and retention. Reports device info such as model, OS and app version, and a device identifier, plus your account ID once signed in; never conversations, files, or prompts.",
     "analyticsSaveFailed": "Couldn't save this setting; it may revert after a restart.",
     "analyticsReset": "Reset to default",
     "analyticsResetAction": "Reset"
   },
   "account": {
-    "logoutHint": "Signing out clears every account saved on this phone and its local remote mirror. Sessions on your computer are not affected.",
+    "logoutConfirmTitle": "Sign out?",
+    "logoutConfirmRunning": "Some sessions are still running. They keep running on your computer, but this phone stops receiving and controlling them, and every account and local mirror saved on this phone is cleared.",
+    "logoutHint": "Clears every account and the remote mirror on this phone. Sessions on your computer are not affected.",
     "logout": "Sign Out",
     "loggingOut": "Signing out",
     "loggingOutAccessibility": "Signing out"
@@ -164,7 +204,7 @@
   "voiceDictionary": {
     "sectionTitle": "Voice dictionary",
     "label": "View dictionary",
-    "hint": "Your dictionary lives on your computers and syncs between them automatically. This is a read-only view — add or remove terms on a computer.",
+    "hint": "Edit the dictionary on a computer; it syncs automatically. Read-only on this phone.",
     "openAccessibility": "View voice dictionary",
     "screenTitle": "Voice dictionary",
     "entryCount": "{{count}} terms",
@@ -173,9 +213,97 @@
     "refresh": "Refresh",
     "refreshing": "Refreshing…",
     "refreshAccessibility": "Refresh dictionary",
-    "readOnlyHint": "Read-only here — add or remove terms on a computer.",
-    "offlineHint": "None of your computers are online. Showing what was last synced to your phone.",
-    "noDesktops": "No computers yet. Sign in on a computer with the same account and your dictionary will show up here."
+    "readOnlyHint": "View on your phone; add or remove entries on a computer.",
+    "offlineHint": "Your computers are offline. Showing the last synced dictionary.",
+    "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "The change could not be saved. Please try again.",
+    "title": "Recognize my voice",
+    "sectionTitle": "Voiceprint filter",
+    "label": "Recognize my voice",
+    "entryHint": "Mutes other people during voice input. Your voiceprint stays on this phone.",
+    "openAccessibility": "Open recognize my voice settings",
+    "on": "On",
+    "off": "Off",
+    "hint": "Mutes other people during voice input so only your speech is transcribed; speech overlapping yours can’t be fully removed. Your voiceprint is encrypted on this phone and never uploaded or synced.",
+    "unsupported": "This version of the app does not support voiceprints. Update to the latest version.",
+    "model": {
+      "title": "Recognition model",
+      "needed": "First use downloads a recognition model of about {{size}}. Wi-Fi recommended.",
+      "download": "Download recognition model",
+      "downloading": "Downloading ({{done}} / {{total}})",
+      "cancel": "Cancel download",
+      "retry": "Download again",
+      "failed": {
+        "network": "The recognition model failed to download. Check your network and try again.",
+        "disk": "The recognition model could not be saved. Check your phone's free storage and try again.",
+        "checksum": "The downloaded recognition model failed verification. Try again.",
+        "unavailable": "The recognition model is unavailable right now. Try again later."
+      }
+    },
+    "profile": {
+      "title": "Voiceprint",
+      "missing": "No voiceprint yet",
+      "missingHint": "Record your voiceprint to enable filtering.",
+      "enrolled": "Voiceprint recorded",
+      "enrolledAt": "Recorded {{date}}",
+      "enroll": "Record voiceprint",
+      "reenroll": "Record again",
+      "delete": "Delete voiceprint",
+      "deleteConfirm": {
+        "title": "Delete voiceprint?",
+        "description": "Voice input will stop filtering out other people until you record your voiceprint again.",
+        "confirm": "Delete",
+        "cancel": "Cancel"
+      }
+    },
+    "strictness": {
+      "label": "Strictness",
+      "hint": "Stricter keeps out more voices but may also cut your own words in noisy places.",
+      "restoreDefault": "Restore default",
+      "options": {
+        "relaxed": "Relaxed",
+        "standard": "Standard",
+        "strict": "Strict"
+      }
+    },
+    "enroll": {
+      "description": "Read the {{clips}} passages below in your normal voice. Each recording lasts up to {{seconds}} seconds; stop recording when you finish reading. Record where you usually use voice input, with no one else talking.",
+      "step": "Passage {{current}} of {{total}}",
+      "record": "Start reading",
+      "stop": "Stop Recording",
+      "rerecord": "Record this one again",
+      "recording": "Recording… {{seconds}} seconds left",
+      "saving": "Creating voiceprint…",
+      "submit": "Finish",
+      "cancel": "Cancel",
+      "passages": {
+        "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
+        "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
+        "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+      },
+      "errors": {
+        "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
+        "no_embedding": "No voiceprint could be read from passage {{index}}. Record it again.",
+        "inconsistent": "Passage {{index}} does not sound like the same person as the others; another voice or noise may have been picked up. Record it again.",
+        "models_missing": "The recognition model has not finished downloading. Try again shortly.",
+        "storage_unavailable": "The system keychain is unavailable, so the voiceprint cannot be stored encrypted. Try again later.",
+        "failed": "The voiceprint could not be created. Try again.",
+        "microphone": "The microphone cannot be used. Check microphone permission and try again.",
+        "noAudio": "No sound came from the microphone. Check it and try again."
+      },
+      "stepChoice": "Passage {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Not recorded",
+        "recorded": "Recorded",
+        "retry": "Record again",
+        "recording": "Recording"
+      },
+      "rerecordStep": "Record Passage {{index}} Again",
+      "readHint": "Start when you are ready. Stop recording when you finish reading.",
+      "otherClipsKept": "Your other recordings have been kept."
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "Device Name",
@@ -183,9 +311,17 @@
     "resetAccessibility": "Restore the default phone name",
     "emptyError": "Device name cannot be empty.",
     "deviceInitializing": "The device is still initializing. Try again later.",
-    "saving": "Saving…",
-    "saved": "Saved.",
-    "restoringDefault": "Restoring the default name…",
-    "restoredDefault": "Restored the default name."
+    "restoredDefault": "Restored the default name.",
+    "resetAction": "Restore Default Name",
+    "clearAccessibility": "Clear name",
+    "discardTitle": "Discard Changes?",
+    "discardBody": "Your changes to the device name haven’t been saved.",
+    "discardConfirm": "Discard Changes",
+    "keepEditing": "Keep Editing"
+  },
+  "developer": {
+    "title": "Developer",
+    "identity": "Identifiers",
+    "updateInfo": "Update info"
   }
 }

@@ -32,7 +32,7 @@ export function useRemoteDesktopSafety(
   const [privacy, setPrivacy, privacyLoaded] = useRemoteDesktopPreference(
     deviceId,
     "privacy-screen",
-    false,
+    true,
   );
   const [sync, setSync, syncLoaded] = useRemoteDesktopPreference(
     deviceId,
@@ -227,7 +227,9 @@ export function useRemoteDesktopSafety(
             setClipboardNotice("clipboardSyncSkipped");
           if (
             stage === "phone-to-computer-complete" ||
-            stage === "computer-to-phone-complete"
+            stage === "computer-to-phone-complete" ||
+            stage === "unchanged-content" ||
+            stage === "content-empty"
           )
             setClipboardNotice(null);
         },

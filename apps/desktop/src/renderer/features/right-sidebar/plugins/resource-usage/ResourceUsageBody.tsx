@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /** 「资源用量」：单层紧凑进程表，数据与终止授权均由 main 提供。 */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -89,15 +90,21 @@ function entryDetails(entry: ProcessUsageEntry, t: TFunction): string | null {
     const processCount = entry.processCount > 1
       ? t('rightSidebar.resourceUsage.processCount', { count: entry.processCount })
       : null;
-    if (entry.agentRole === 'task-host') {
-      const role = t('rightSidebar.resourceUsage.agentRoleDetails.task');
-      return processCount ? `${role} · ${processCount}` : role;
-    }
-    if (entry.agentRole === 'control-plane-service') {
-      const role = t('rightSidebar.resourceUsage.agentRoleDetails.service');
-      return processCount ? `${role} · ${processCount}` : role;
-    }
-    return processCount;
+    // 归属任务标题（main 采样时解析）与角色/树规模并列；多任务并行时用户
+    // 靠它区分同名的 Pi / Claude Code 行。
+    const parts = [
+      entry.sessionLabel
+        ? t('rightSidebar.resourceUsage.sessionDetail', { title: entry.sessionLabel })
+        : null,
+      entry.agentRole === 'task-host'
+        ? t('rightSidebar.resourceUsage.agentRoleDetails.task')
+        : null,
+      entry.agentRole === 'control-plane-service'
+        ? t('rightSidebar.resourceUsage.agentRoleDetails.service')
+        : null,
+      processCount,
+    ].filter((part): part is string => part !== null);
+    return parts.length > 0 ? parts.join(' · ') : null;
   }
   return entry.label ? t(`rightSidebar.resourceUsage.kinds.${entry.kind}`) : null;
 }
@@ -194,7 +201,7 @@ function EntryRow({
         <div className="resource-usage-name-copy">
           <div className="resource-usage-name" title={name}>{name}</div>
           {details ? (
-            <div className="resource-usage-details">
+            <div className="resource-usage-details" title={details}>
               <span>{details}</span>
               <span className="resource-usage-pid-inline"> · PID {entry.pid}</span>
             </div>
@@ -393,16 +400,18 @@ function LocalResourceUsageBody({
 
       <div className="resource-usage-footer">
         <div className="resource-usage-action-hint" title={actionHint}>{actionHint}</div>
-        <button
+        <Button
+          variant="secondary"
+          size="md"
+          compact
           type="button"
-          className="resource-usage-terminate"
           disabled={!selected?.terminable}
           onClick={() => {
             if (selected?.terminable) setPendingKill(selected);
           }}
         >
           {t('rightSidebar.resourceUsage.terminate')}
-        </button>
+        </Button>
       </div>
 
       <ConfirmDialog

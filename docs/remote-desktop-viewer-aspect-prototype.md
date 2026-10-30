@@ -33,7 +33,15 @@ continue to offer matching only.
 - Resizing preserves the lease and input sequence; old video/input are stopped,
   queued old-geometry input is discarded, and the viewer negotiates video and
   reacquires control on the confirmed new display. Shared Device Link connections
-  are not restarted.
+  are not restarted. Hosts advertising `liveDisplaySwitch` instead keep the
+  existing video connection when the Mobile viewer asks with `keepVideo`; the
+  viewer only updates its layout (`displayGeometry`) and reacquires control.
+- Mobile remembers the last choice per computer and monitor (system mode, or the
+  fitted size with the viewport and app window it was fitted in) and reapplies
+  it before the first frame of the next connection. A fit is reused early only
+  in the same app window; after a rotation, fold, split view or resize it is
+  refitted from a fresh measurement after the first frame. Choosing the
+  computer's own mode or restoring forgets it.
 - Failure ends only this remote-desktop lease and restores its temporary display.
   The viewer's existing recovery remains responsible for reconnecting.
 - On hosts advertising both viewer-display capabilities, the resolution dropdown

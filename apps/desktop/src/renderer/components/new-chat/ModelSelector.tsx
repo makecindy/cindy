@@ -1,3 +1,9 @@
+import { deviceDisplayName } from '@/lib/deviceName';
+import { ProviderShareQuotaViewingContext, useProviderShareQuotaViewing } from '@/features/provider-share/useProviderShareWeeklyQuota';
+import { SpeedIcon } from './SpeedIcon';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
+import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, matchesModelName } from '@/lib/modelDisplayNames';
 import {
@@ -45,10 +51,20 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { MorphPopover } from '@/components/ui/morph-popover';
+import { currentFocusedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  menuSkipAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
-import { XDIncMark } from '@/components/icons/XDIncMark';
+import { CindyMark } from '@/components/icons/CindyMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { agentOptionOf } from './agentOptions';
 import type { SelectableVendor } from '@/lib/agentVendors';
@@ -58,6 +74,8 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
+import type { ProviderGroupUsageOf, ProviderUsageScope } from './useProviderWeeklyQuota';
 import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
@@ -72,12 +90,25 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
 import { useProviders } from '@/hooks/useProviders';
+import { LocalModelCatalogNotice } from './LocalModelCatalogNotice';
 import { providerDisplayName as sharedProviderDisplayName } from '@/lib/providerDisplayName';
 import {
   evictDeviceProviders,
   prefetchDeviceProviders,
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
+import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
+import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
+import {
+  collectRemoteProviderGroups,
+  providerGroupMemberOfRoute,
+  remoteProviderEntryKey,
+  type RemoteProviderGroupEntry,
+} from '@/lib/remoteProviderGroups';
+import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
+import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
+import { readProviderShareGroupSize } from '@cindy/device-link';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -90,15 +121,18 @@ import {
 } from '@/lib/providerModels';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { SessionRuntimeProfileProjection } from '@/lib/ccAgent.types';
+import { isProviderShareAgentDeviceId, providerShareIdOfAgentDeviceId } from '../../../shared/providerShare';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
   isSubscriptionDirectModel,
 } from '../../../shared/subscriptionModels';
+import { extractIpcError } from '@/utils/ipcError';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { seedDefaultFavorite } from '@/state/modelFavorites';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
+import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
 import {
   connectedProvidersForAgent,
   chatEligibleSourcesForModel,
@@ -107,6 +141,8 @@ import {
   findCatalogModel,
   nativeDefaultSourceId,
   getModel,
+  isCustomRoutedProvider,
+  isCodexGatewayWireModel,
   modelSupportsFastMode,
   providerOffersModel,
   resolveModelIconKind,
@@ -122,6 +158,7 @@ import type { ModelAccessAccountTier } from '../../../shared/modelAccess';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
+import type { ModelPickerPreferenceStore } from './modelPickerPreferences';
 
 // 短刷新（尤其 auto-refresh cooldown 命中）不应让状态行参与 MorphPopover 的首帧量高：
 // 否则它在 220ms 开场内消失后，settle 补量会把面板再缩一次，形成“先变大再变小”。
@@ -129,15 +166,34 @@ import { buildProviderSections } from './sourceSwitch';
 const MODEL_DISCOVERY_INDICATOR_DELAY_MS = 300;
 
 /**
+ * 工具栏紧凑统一面板宽度。规格 `docs/product-rules/model-selector-unified.md` §1.2：
+ * max-content，下限 300px，上限 min(460px, 100vw-48px)。完整 class 字面量必须留在
+ * 源码里给 Tailwind 扫描；改数字时同步规格。
+ */
+export const UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX = 460;
+export const UNIFIED_COMPACT_PANEL_WIDTH_CLASS =
+  'w-max min-w-[300px] max-w-[min(460px,calc(100vw-48px))]';
+
+/**
  * 标签降级按选择器 pane 宽度生效。这里的 width 是整个 pane 宽度，不是模型名
  * 实际可用宽度；行还要扣掉左右 padding、来源图标、effort 和选中勾选。因此不能把
  * 300px 当成“能放下全部标签”的阈值，否则英文 Subscription 会先把模型名压成省略号。
  * 模型名优先：促销标签先收起，订阅标签随后收起，只保留「已隐藏」和选中勾选。
+ * full 只在宽过紧凑面板上限时启用，避免 460px 触顶时促销标签把刚留给长模型名的空间吃回去。
  */
 export type ModelTagDensity = 'full' | 'subscription' | 'hidden';
 
+/** 改深度的附加信息。 */
+export interface EffortChangeOptions {
+  /**
+   * 由统一面板发起:面板已保证同一时刻只提交一笔,调用方不必为防并发写入而锁住 selector。
+   * 其余入口(平铺选择器、快捷键)缺省为 false,仍按原样锁定。
+   */
+  serializedByPanel?: boolean;
+}
+
 export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
-  if (width === null || width >= 450) return 'full';
+  if (width === null || width > UNIFIED_COMPACT_PANEL_MAX_WIDTH_PX) return 'full';
   if (width >= 370) return 'subscription';
   return 'hidden';
 }
@@ -160,8 +216,8 @@ export interface ModelMemoryAccessors {
   setEffort: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   /** 真正选中 / 使用模型时同时更新该来源 lastModel;只编辑非选中行不调用。 */
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
-  getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
-  setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | 'ultrafast' | undefined;
+  setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean | 'ultrafast') => void;
   getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
   /**
@@ -293,6 +349,9 @@ function ModelOptionsFloatingPanel({
             data-state="open"
             data-side={placedSide}
             data-testid="model-options-floating-panel"
+            // 与统一面板同因:portal 在 body,模态对话框里滚轮会被 react-remove-scroll
+            // 拦掉;stopPropagation 放行原生滚动(见 stopWheelPropagation 注释)。
+            onWheel={stopWheelPropagation}
             onPointerEnter={onCancelClose}
             onPointerLeave={onScheduleClose}
             onFocusCapture={onCancelClose}
@@ -301,8 +360,8 @@ function ModelOptionsFloatingPanel({
               onScheduleClose();
             }}
             className={cn(
-              'w-full overflow-hidden rounded-[12px] p-2 shadow-[var(--shadow-menu)] outline-none duration-100',
-              'animate-float-in border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              'w-full overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] outline-none duration-100',
+              'animate-float-in border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               className,
             )}
             style={{ transformOrigin: placedSide === 'left' ? 'right center' : 'left center' }}
@@ -367,7 +426,7 @@ export function ProviderMark({
         logoKind={logoKind}
         size={markSize}
         className={
-          providerId === 'xd'
+          logoKind === 'xd'
             ? cn(dense ? 'h-[8.4px] w-[14.2px]' : 'h-[9px] w-[15px]', common)
             : common
         }
@@ -424,9 +483,9 @@ export function ModelIconMark({
     if (kind === 'claude') return <AnthropicMark size={markSize} className={common} />;
     if (kind === 'codex') return <OpenAIMark size={markSize} className={common} />;
     return (
-      <XDIncMark
+      <CindyMark
         size={markSize}
-        className={cn(dense ? 'h-[8.4px] w-[14.2px]' : 'h-[9px] w-[15px]', common)}
+        className={common}
       />
     );
   }
@@ -522,10 +581,13 @@ function RemoteModelLoadNotice({
   status,
   onRetry,
   compact = false,
+  message,
 }: {
   status: 'loading' | 'error';
   onRetry: () => void;
   compact?: boolean;
+  /** 失败时代替笼统的「读取失败」，说明具体原因(例如分享者需要更新 Cindy)。 */
+  message?: string;
 }) {
   const { t } = useTranslation();
   if (status === 'loading') {
@@ -544,28 +606,17 @@ function RemoteModelLoadNotice({
     );
   }
   return (
-    <div
+    <ErrorNotice
       role="alert"
-      className={cn(
-        'flex items-start gap-2 border border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]',
-        compact ? 'mx-1 rounded-[8px] px-3 py-2' : 'mx-1 rounded-[8px] px-3 py-3',
-      )}
-    >
-      <CircleAlert size={14} className="mt-0.5 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
-          {t('newChat.modelSelector.remoteLoadFailed')}
-        </p>
-        <button
-          type="button"
-          onClick={onRetry}
-          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
-        >
+      className="mx-1"
+      message={message ?? t('newChat.modelSelector.remoteLoadFailed')}
+      actions={
+        <Button size="sm" compact onClick={onRetry}>
           <RefreshCw size={12} />
           {t('newChat.modelSelector.retryRemoteModels')}
-        </button>
-      </div>
-    </div>
+        </Button>
+      }
+    />
   );
 }
 
@@ -597,9 +648,73 @@ export function resolveModelSelectorAgentIdentity(
   };
 }
 
+/** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
+export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
+
+/** 「配置模型」打开设置 → 模型供应商时直接选中的一项;不传 = 只打开供应商页。 */
+export interface ProvidersNavigationTarget {
+  /** 分享来的供应商:选中「分享给我的供应商」里的这一条(provider-sharing.md §5.2)。 */
+  shareId: string;
+}
+
+/** 已建任务里选中了另一台电脑(或本机)目录里的一行:连 Agent 的运行位置一起换。 */
+export interface RemoteAgentRelocation {
+  providerId: string;
+  /** 目标引擎的 wire model id。 */
+  modelId: string;
+  agent: AgentKind;
+  /** 该行生效档位;不可调档时为 undefined。 */
+  effort?: Effort;
+  fast: boolean | 'ultrafast';
+  /** 这一行所属的电脑;null = 本机。 */
+  agentDevice: UnifiedSelectionAgentDevice;
+}
+
+/**
+ * 远程 Agent 的选择入口(本机新任务草稿、本机已建任务,以及远程控制的被控电脑上的已建任务与
+ * 建到被控电脑的新任务草稿传)。
+ * 模型面板的左侧栏在任务所在电脑的供应商之后列出这些电脑上的供应商;选中那台电脑上的模型 =
+ * Agent 在那台电脑运行,任务和文件仍在任务所在电脑。
+ */
+export interface RemoteAgentSelectorOptions {
+  /** 可以运行 Agent 的其他电脑(已配对、在线);不含任务所在电脑。 */
+  devices: readonly { deviceId: string; name: string }[];
+  /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 任务所在电脑。 */
+  selectedDeviceId: string | null;
+  /**
+   * 任务所在电脑:远程控制的被控电脑上的任务(含草稿)传那台的 deviceId,它的目录照远程控制列出全部供应商;
+   * 不传 = 本机任务,用本机目录。
+   */
+  homeDeviceId?: string;
+  /** homeDeviceId 那台电脑的名字(供应商组那一项的悬停写任务在哪台运行时用)。 */
+  homeDeviceName?: string;
+  /** 本机的设备 id:供应商组里的组员就是本机时,按任务所在电脑比对任务在哪台运行。 */
+  selfDeviceId?: string | null;
+  /** 任务所在电脑目录的模型记忆。Agent 当前在其他电脑时,浏览那份目录用它显示各行的档位。 */
+  localModelMemory?: ModelMemoryAccessors;
+  /**
+   * 本机为某台电脑记的模型记忆。浏览不是 Agent 当前所在的那台电脑的目录时,用它显示 / 记住
+   * 各行的档位与 Fast(当前所在那台走 modelMemory)。
+   */
+  deviceModelMemory?: (deviceId: string) => ModelMemoryAccessors;
+  /**
+   * 已建任务传:选中的行不在 Agent 落点那台电脑的目录里 = 把 Agent 挪过去(与跨引擎同一套意图,
+   * 下一条消息发送时生效)。返回 false = 没有执行(确认被取消 / 登记失败),面板留在原地。
+   * 草稿不传(草稿走 onUnifiedSelect,行带 agentDevice)。
+   */
+  onRelocate?: (selection: RemoteAgentRelocation) => Promise<boolean>;
+  /**
+   * 已建任务传:这个任务此刻归哪个供应商组(组那一项的位置,provider-groups.md §10)。面板每次打开读一次。
+   * 归组的任务在组那一项下显示为「正在用的」,在组那一项里选模型 = 留在此刻运行的那台、只换模型,
+   * 不把 Agent 挪到组所在电脑。不传 / 读到 null = 没归组。
+   */
+  readProviderGroup?: () => Promise<RemoteProviderGroupEntry | null>;
+}
+
 interface ModelSelectorProps {
   /** Authoritative surface-specific allowlist (e.g. one-shot or vision routes). */
   providersOverride?: ProviderView[];
+  providersOverrideState?: { status: 'loading' | 'error' | 'ready'; refresh: () => void };
   currentSelection?: SessionRuntimeProfileProjection;
   /** Open recovery for the selected source; generic Add model navigation stays separate. */
   onReconnectSource?: () => void;
@@ -611,13 +726,17 @@ interface ModelSelectorProps {
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
    * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
    */
-  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
+  onEffortChange: (
+    effort: Effort,
+    options?: EffortChangeOptions,
+  ) => void | boolean | Promise<void | boolean>;
   /**
    * per-session 来源选择(B · Provider-first)。
    *   - currentProviderId:本会话当前显式选定的供应商 id(null = 跟随默认路由)。
    *   - onProviderChange:选某行(供应商, 模型)时调用,第 2 参为该行模型 id,第 3 参为该来源该模型的
    *     当前 effort(无 effort 档时为空串),由各调用方一次性落下 provider/model/effort。
-   *   - onNavigateToProviders:0 个可连来源时空态 CTA / 列表底部「连接来源」跳设置→供应商页。
+   *   - onNavigateToProviders:0 个可连来源时空态 CTA / 列表底部「配置模型」跳设置→供应商页;
+   *     正在看分享来的供应商时带上它(ProvidersNavigationTarget),设置页直接选中那一条。
    * 三者都不传 → 单栏纯列表(无供应商分段),选行只 onModelChange(老入口 / CreateWorkerPopover)。
    */
   currentProviderId?: string | null;
@@ -631,9 +750,9 @@ interface ModelSelectorProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-    reconciledFast?: boolean,
+    reconciledFast?: boolean | 'ultrafast',
   ) => void | boolean | Promise<void | boolean>;
-  onNavigateToProviders?: () => void;
+  onNavigateToProviders?: (target?: ProvidersNavigationTarget) => void;
   /**
    * 会话显式选中的来源已断开(由 ChatInput 按 sessionId / deviceLink scoping 计算,见
    * isSelectedSourceDisconnected)。true → trigger 显示**真实选中来源** + 「已断开」错误态,
@@ -643,10 +762,12 @@ interface ModelSelectorProps {
   sourceDisconnected?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
+  /** 语义同 ModelSelectorContentProps.taskStarted。 */
+  taskStarted?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 语义同 onEffortChange(含返回值口径)。 */
-  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
@@ -661,6 +782,13 @@ interface ModelSelectorProps {
   agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
+  /** 远程 Agent 选择入口(语义见 RemoteAgentSelectorOptions;传了它 deviceId 不再生效)。 */
+  remoteAgent?: RemoteAgentSelectorOptions;
+  /**
+   * 任务的 Agent 在另一台电脑运行:trigger 的来源图标换成带信号波纹的远程供应商 Logo,
+   * 读屏 / 悬停名带上那台电脑。只影响展示。
+   */
+  agentDevice?: { deviceId: string; name: string | null } | null;
   /**
    * SSH 远程会话(remoteHostId)传 true:隐藏订阅直连模型(chatgpt/ / xai/)——bridge 只挂在
    * 本地 compat-proxy,远程模式不经它,选了必失败(见 selectVisibleModels 同名参数)。
@@ -686,8 +814,8 @@ interface ModelSelectorProps {
   compactToolbar?: boolean;
   /** 极窄 composer 进一步隐藏模型文字，只保留模型图标和下拉箭头。 */
   ultraCompactToolbar?: boolean;
-  /** Trigger presentation: toolbar keeps the compact chat pill; field renders a settings input-like control. */
-  triggerVariant?: 'toolbar' | 'field';
+  /** Toolbar/field stay compact; settings allows the complete model name to wrap. */
+  triggerVariant?: 'toolbar' | 'field' | 'settings';
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
   /** 仅普通 composer 显式开启 chip → panel 容器形变；设置页/worker 等维持 Radix。 */
@@ -716,6 +844,8 @@ interface ModelSelectorProps {
   unifiedAgents?: readonly AgentKind[];
   /** 统一面板是否只采用目录官方推荐配置，不读取个人引擎偏好与收藏配置。 */
   unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  /** 语义同 ModelSelectorContentProps.recordRecentUsage（选中成功后记入「最近使用」）。 */
+  recordRecentUsage?: boolean;
   /**
    * composer pill 尾部的**引擎小标**(model-selector-unified §1.1)。
    *
@@ -753,6 +883,8 @@ interface ModelSelectorProps {
    * 供展示已持久化偏好的调用方给出诊断性文案，避免把「存过但当前不可用」显示成「没选过」。
    */
   unknownModelLabel?: (modelId: string) => string;
+  /** Optional separate status below an unknown model, retaining unknownModelLabel for accessible text. */
+  unknownModelDescription?: string;
   /**
    * 可及名上下文前缀(如「模型 · chat」)。多实例同屏(IM 目录偏好逐行一个)时前置到
    * trigger 的 aria-label,行与行才能被读屏区分 —— 与 VendorSegmentedSwitcher.ariaLabel
@@ -791,6 +923,7 @@ interface ModelSelectorProps {
 
 interface ModelSelectorContentProps {
   providersOverride?: ProviderView[];
+  providersOverrideState?: ModelSelectorProps['providersOverrideState'];
   modelId: string;
   effort: Effort;
   onModelChange: (modelId: string) => void | boolean | Promise<void | boolean>;
@@ -799,16 +932,23 @@ interface ModelSelectorContentProps {
    * 调用方视为落了)。统一面板的三个「先应用、后清存储」入口(恢复推荐 / 删选中收藏 /
    * 编辑选中收藏)靠它决定要不要收尾;其余调用方照旧无视返回值。
    */
-  onEffortChange: (effort: Effort) => void | boolean | Promise<void | boolean>;
-  fastMode?: boolean;
+  onEffortChange: (
+    effort: Effort,
+    options?: EffortChangeOptions,
+  ) => void | boolean | Promise<void | boolean>;
+  fastMode?: boolean | 'ultrafast';
   /** 语义同 onEffortChange(含返回值口径)。 */
-  onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  onFastModeChange?: (enabled: boolean | 'ultrafast') => void | boolean | Promise<void | boolean>;
   thinkingEnabled?: boolean;
   onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
+  /** Request-owned preferences; edits never reach the user's saved defaults. */
+  preferenceStore?: ModelPickerPreferenceStore;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
   deviceId?: string;
+  /** 远程 Agent 选择入口(语义同 ModelSelectorProps.remoteAgent)。 */
+  remoteAgent?: RemoteAgentSelectorOptions;
   /** SSH 远程会话隐藏订阅直连模型(语义同 ModelSelectorProps 同名字段)。 */
   excludeSubscriptionDirect?: boolean;
   /** SSH 远程会话隐藏 Chat 桥接的 Codex 供应商模型(语义同 ModelSelectorProps 同名字段)。 */
@@ -824,6 +964,11 @@ interface ModelSelectorContentProps {
    * (PR #744 review 第十轮)。
    */
   actualRoute?: boolean;
+  /**
+   * 任务已经运行过(有 Agent 回复)。供应商组在任务第一次运行时选好电脑(provider-groups.md §6),
+   * 之后组那一项的用量按任务实际运行的那台显示;草稿与还没运行过的任务不传。
+   */
+  taskStarted?: boolean;
   /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
   maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
@@ -834,9 +979,9 @@ interface ModelSelectorContentProps {
     providerId: string | null,
     reconciledModelId?: string,
     reconciledEffort?: Effort,
-    reconciledFast?: boolean,
+    reconciledFast?: boolean | 'ultrafast',
   ) => void | boolean | Promise<void | boolean>;
-  onNavigateToProviders?: () => void;
+  onNavigateToProviders?: (target?: ProvidersNavigationTarget) => void;
   /**
    * 可选「跟随会话」行(opt-in)。仅 scheduler 的 heartbeat(绑定会话)任务传入:
    * 在模型列表顶部加一行,选中 = model 留空(跟随绑定会话的模型 / 来源)。
@@ -875,6 +1020,13 @@ interface ModelSelectorContentProps {
    */
   unifiedAgents?: readonly AgentKind[];
   unifiedSelectionPolicy?: UnifiedModelPanelProps['selectionPolicy'];
+  /**
+   * 选择真的应用成功后,把该模型记进「最近使用」(见 state/recentModels 的语义边界)。
+   * **默认关**:统一面板被对话之外的入口共用(定时任务 / IM 默认 / Bot / Hook /
+   * Worker / 子代理 / 设置页),那些选择是配置动作;只有对话侧真正的两个入口
+   * (ChatInput 的新任务草稿与会话内)开启,且 SSH / device-link 远程不开启。
+   */
+  recordRecentUsage?: boolean;
   /**
    * 统一面板里被选中的**收藏锚点** uid(规格 §1.5:选中的是那一条收藏副本,不是模型本体)。
    * 由调用方持有(草稿层),因为它与 (来源, 模型) 一样属于「当前选了什么」这份状态。
@@ -920,10 +1072,15 @@ interface ModelSelectorContentProps {
     /** 该行生效档位;该 (模型, 引擎) 不可调档时为 undefined。 */
     effort?: Effort;
     engine: 'cc' | 'codex' | 'pi';
-    fast: boolean;
+    fast: boolean | 'ultrafast';
     favoriteUid: string | null;
     /** 配置浮层「恢复推荐」的应用动作；调用方应删除 override，不得重新记忆推荐值。 */
     resetToRecommended?: true;
+    /**
+     * 只在传了 `remoteAgent` 时出现:这一行属于哪台电脑的目录(null = 本机)。与草稿
+     * 当前的 Agent 所在电脑不同时,调用方要连 Agent 运行位置一起换。
+     */
+    agentDevice?: UnifiedSelectionAgentDevice;
   }) => void | boolean | Promise<void | boolean>;
   /** 语义同 ModelSelectorProps.reselectEmitsChange(点当前行照常回调)。 */
   reselectEmitsChange?: boolean;
@@ -1038,6 +1195,7 @@ export function ModelSelectorContent(props: ModelSelectorContentProps) {
 
 function ModelSelectorContentView({
   providersOverride,
+  providersOverrideState,
   modelId,
   effort,
   onModelChange,
@@ -1046,13 +1204,16 @@ function ModelSelectorContentView({
   onFastModeChange,
   thinkingEnabled = true,
   onThinkingChange,
-  modelMemory,
+  modelMemory: modelMemoryProp,
+  preferenceStore,
   vendorKey,
-  deviceId,
+  deviceId: deviceIdProp,
+  remoteAgent,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
   actualRoute = false,
+  taskStarted = false,
   maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
@@ -1065,6 +1226,7 @@ function ModelSelectorContentView({
   sessionEngineFilter,
   unifiedAgents: requestedUnifiedAgents,
   unifiedSelectionPolicy = 'personalized',
+  recordRecentUsage = false,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -1088,6 +1250,57 @@ function ModelSelectorContentView({
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t, i18n } = useTranslation();
+  // ── 远程 Agent:面板在本机目录与其他电脑的目录之间切换浏览 ─────────────────────
+  // 打开时停在草稿当前的落点(Agent 在哪台电脑就先列哪台);左侧栏点到另一台电脑的供应商时,
+  // 下面整套目录(能力 / 供应商 / 可见性 / 用量 / 收藏)都随 deviceId 换成那台电脑的。
+  const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
+  const [remoteBrowse, setRemoteBrowse] = useState<{
+    deviceId: string;
+    /** null = 还不知道该落在哪个供应商格(等那台的目录到了再按当前来源 / 首个供应商定)。 */
+    providerId: string | null;
+  } | null>(() =>
+    remoteAgentDeviceId ? { deviceId: remoteAgentDeviceId, providerId: currentProviderId ?? null } : null,
+  );
+  // 落点在面板之外变了(那台电脑被解除配对而回到本机等):跟到新落点,不停在旧目录上。
+  const lastRemoteAgentDeviceIdRef = useRef(remoteAgentDeviceId);
+  useEffect(() => {
+    if (lastRemoteAgentDeviceIdRef.current === remoteAgentDeviceId) return;
+    lastRemoteAgentDeviceIdRef.current = remoteAgentDeviceId;
+    setRemoteBrowse((current) =>
+      (current?.deviceId ?? null) === remoteAgentDeviceId
+        ? current
+        : remoteAgentDeviceId
+          ? { deviceId: remoteAgentDeviceId, providerId: null }
+          : null,
+    );
+  }, [remoteAgentDeviceId]);
+  // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
+  const homeDeviceId = remoteAgent?.homeDeviceId;
+  const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
+  /**
+   * 「最近」记录没有设备字段:面板正在浏览**其他电脑**的目录时(远程 Agent 入口的模型格 /
+   * device-link 被控电脑)选中不得写进本机历史 —— 两台电脑若存在同来源同模型 id,回到本机会把
+   * 这条远程记录解析成本机模型,点击就用错运行位置;只在那台存在的记录也白占本机容量
+   * (2026-10-08 review P1)。任务归属判不出草稿(本机草稿的 deviceLinkDeviceId 是 null),
+   * 所以按**当前浏览的目录**再禁一次。
+   */
+  const recordRecentModelsOnSelect = recordRecentUsage && !deviceId;
+  /** 正在浏览的就是草稿当前落点的目录 —— 选中态、档位记忆与引擎集合只对它成立。 */
+  const browsingSelectedCatalog =
+    !remoteAgent || (remoteBrowse?.deviceId ?? null) === remoteAgentDeviceId;
+  const modelMemory =
+    !remoteAgent || browsingSelectedCatalog
+      ? (preferenceStore?.memory ?? modelMemoryProp)
+      : remoteBrowse
+        ? remoteAgent.deviceModelMemory?.(remoteBrowse.deviceId)
+        : remoteAgent.localModelMemory;
+  // 列表底部「配置模型」:本机目录照旧;分享来的供应商在本机设置里有详情页(provider-sharing.md §5.2),
+  // 带上分享直达那一条。被控电脑与自己其他电脑上的目录要到那台电脑上改,不显示。
+  const browsingShareId =
+    remoteAgent && !homeDeviceId ? providerShareIdOfAgentDeviceId(deviceId) : null;
+  const showProvidersEntry = !!onNavigateToProviders && (!deviceId || browsingShareId !== null);
+  const navigateToProviders = () =>
+    onNavigateToProviders?.(browsingShareId ? { shareId: browsingShareId } : undefined);
   // 列表样式试用开关(本机偏好):footer 的切换按钮 + 面板行样式共用。
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   const [paneElement, setPaneElement] = useState<HTMLDivElement | null>(null);
@@ -1141,7 +1354,8 @@ function ModelSelectorContentView({
     ? vendorKeyToAgentKind(browseVendor)
     : vendorKeyToAgentKind(vendorKey);
   // A field that only persists a model must not offer another Harness.
-  const unifiedAgents = requestedUnifiedAgents ??
+  // 调用方给的引擎集合是**草稿当前落点**那台电脑上已注册的;浏览另一台时不套用(fail-open)。
+  const unifiedAgents = (browsingSelectedCatalog ? requestedUnifiedAgents : undefined) ??
     (vendorKey && agentKind && !onUnifiedSelect && !sessionEngineFilter ? [agentKind] : undefined);
   const browseTargetLabel =
     browseVendor === 'codex' ? 'Codex' : browseVendor === 'pi' ? 'Pi' : 'Claude Code';
@@ -1167,7 +1381,23 @@ function ModelSelectorContentView({
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
-  const providers = deviceId ? remoteProviders.providers : providersOverride ?? localProviders.providers;
+  // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
+  // 浏览被控电脑自己的目录时也一样)。
+  const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
+  const remoteCatalogProviders = useMemo(
+    () =>
+      remoteAgentBrowsing
+        ? remoteAgentProviders(remoteProviders.providers)
+        : remoteProviders.providers,
+    [remoteAgentBrowsing, remoteProviders.providers],
+  );
+  const providers = deviceId ? remoteCatalogProviders : providersOverride ?? localProviders.providers;
+  // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
+  // 外部注入的目录(providersOverride)归属不明,不显示任何账号用量。
+  const providerUsageScope = useMemo<ProviderUsageScope | null>(
+    () => (deviceId ? { deviceId } : providersOverride ? null : { deviceId: null }),
+    [deviceId, providersOverride],
+  );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
   const providersLoading = deviceId ? remoteProviders.loading : !providersOverride && localProviders.loading;
@@ -1179,6 +1409,17 @@ function ModelSelectorContentView({
     pi,
     providers: remoteProviders,
   });
+  // 分享来的供应商：分享者电脑上的 Cindy 太旧，只答得了模型目录、答不了 Agent 能力
+  // (新版受邀者才会读它)。如实说要对方更新，不报笼统的「读取失败」。
+  const remoteFailureMessage =
+    isProviderShareAgentDeviceId(deviceId) &&
+    [cc.error, codex.error, pi.error].some(
+      (error) =>
+        error != null &&
+        extractIpcError(new Error(error))?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+    )
+      ? t('providerShare.picker.hostOutdated')
+      : undefined;
   const retryRemoteModels = useCallback(() => {
     if (!deviceId) return;
     evictDeviceCapabilities(deviceId);
@@ -1201,13 +1442,28 @@ function ModelSelectorContentView({
   const [editTick, setEditTick] = useState(0);
   const bump = () => setEditTick((n) => n + 1);
   // 跨进程 / 远程改动:device-link push 会直接改底层 store(providerModelMemory /
-  // deviceLinkModelMirror),不经本组件的 editTick。订阅两份 store 的版本号,任一变化即重渲染、
-  // 重算行 effort/fast 显示(本机用 providerModelMemory,远程用被控端镜像)。
+  // deviceLinkModelMirror),不经本组件的 editTick。订阅三份 store 的版本号,任一变化即重渲染、
+  // 重算行 effort/fast 显示(本机用 providerModelMemory,远程控制用被控端镜像,远程 Agent 用
+  // agentDeviceModelMemory)。
   const storeVersion =
-    editTick + useProviderModelMemoryVersion() + useDeviceLinkModelMirrorVersion();
+    editTick +
+    useProviderModelMemoryVersion() +
+    useDeviceLinkModelMirrorVersion() +
+    useAgentDeviceModelMemoryVersion();
   void storeVersion;
 
-  const listRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Classic list and options panel: one glide highlight each, following the pointer, the
+  // keyboard-focused row or the row whose options are open (MorphPopover owns the width).
+  const highlightOptions = {
+    current: (rows: readonly HTMLElement[]) =>
+      currentFocusedRow(rows) ?? rows.find((r) => r.getAttribute('data-state') === 'open'),
+  };
+  const legacyListHighlightRef = useMenuPanel(listRef, { lockWidth: false, options: highlightOptions });
+  const configHighlightRef = useMenuPanel<HTMLDivElement>(undefined, {
+    lockWidth: false,
+    options: { current: currentFocusedRow },
+  });
   const configPanelRef = useRef<HTMLDivElement>(null);
   const previousSelectionRef = useRef<{ modelId: string; sourceId: string | null } | null>(null);
   // 选中行对齐是程序化滚动,它触发的 scroll 事件不代表用户意图,不应收起行配置浮层。
@@ -1329,6 +1585,276 @@ function ModelSelectorContentView({
   );
   const unifiedScope: 'draft' | 'session' = actualRoute ? 'session' : 'draft';
   const unifiedAgentsKey = unifiedAgents ? unifiedAgents.join(',') : 'all';
+
+  // ── 远程 Agent 的左侧栏数据 ──────────────────────────────────────────────────
+  // 栏位要同时列出本机与各台电脑的供应商,而列表此刻只装着其中一份目录:本机格与远程格
+  // 各自按**自己的**目录与可见性派生,不借用正在浏览的那一份。
+  const remoteAgentDevices = remoteAgent?.devices;
+  const remoteAgentDeviceIds = useMemo(
+    () => (remoteAgentDevices ?? []).map((device) => device.deviceId),
+    [remoteAgentDevices],
+  );
+  const remoteDeviceCatalogs = useDevicesProviders(remoteAgentDeviceIds);
+  // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
+  // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
+  const homeDeviceProviders = useDeviceProviders(homeDeviceId);
+  const localProviderGroups = useLocalProviderGroups();
+  // 供应商组(provider-groups.md §10)：组里的电脑与分享收起，只列组那一项。组可以在其他电脑上
+  // (看它们目录里的组摘要)，也可以是任务所在电脑自己建的(本机任务读本机设置，被控电脑上的任务看那台的
+  // 目录)。任务此刻正在组员上运行也照样收起，显示在组那一项下(2026-10-11 用户要求：组里的都聚合成一项)。
+  const remoteProviderGroups = useMemo(
+    () => collectRemoteProviderGroups(
+      [
+        ...(remoteAgentDevices ?? []).flatMap((device) => {
+          const catalog = remoteDeviceCatalogs.get(device.deviceId);
+          return catalog ? [{ deviceId: device.deviceId, providers: catalog.providers }] : [];
+        }),
+        ...(homeDeviceId ? [{ deviceId: homeDeviceId, providers: homeDeviceProviders.providers }] : []),
+      ],
+      homeDeviceId ? {} : localProviderGroups,
+    ),
+    [remoteAgentDevices, remoteDeviceCatalogs, homeDeviceId, homeDeviceProviders.providers, localProviderGroups],
+  );
+  // 组那一项在面板里的位置：任务所在电脑自己的供应商(被控电脑上的任务即被控电脑的)在本机那一栏，记为 null。
+  const groupEntryAt = useCallback(
+    (entry: RemoteProviderGroupEntry | undefined | null): RemoteProviderGroupEntry | null =>
+      entry ? (entry.deviceId === homeDeviceId ? { deviceId: null, providerId: entry.providerId } : entry) : null,
+    [homeDeviceId],
+  );
+  // 这个任务此刻归哪个组(面板每次打开读一次，位置或来源变了再读)。
+  const readProviderGroup = remoteAgent?.readProviderGroup;
+  const [boundGroup, setBoundGroup] = useState<RemoteProviderGroupEntry | null>(null);
+  useEffect(() => {
+    if (!readProviderGroup) {
+      setBoundGroup(null);
+      return;
+    }
+    let cancelled = false;
+    readProviderGroup().then(
+      (entry) => !cancelled && setBoundGroup(entry),
+      () => !cancelled && setBoundGroup(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [readProviderGroup, remoteAgentDeviceId, currentProviderId]);
+  // 归的组那一项此刻在列表里(组所在电脑在线、组还在)才按组显示；不然照常列出任务实际所在的那台。
+  // 任务所在电脑自己建的组：本机任务看本机设置，被控电脑上的任务看那台目录里的组摘要。
+  const boundEntry = useMemo(() => {
+    if (!boundGroup) return null;
+    const visible = boundGroup.deviceId === null
+      ? homeDeviceId
+        ? remoteProviderGroups.groups.has(remoteProviderEntryKey(homeDeviceId, boundGroup.providerId))
+        : localProviderGroups[boundGroup.providerId] !== undefined
+      : remoteProviderGroups.groups.has(remoteProviderEntryKey(boundGroup.deviceId, boundGroup.providerId));
+    return visible ? boundGroup : null;
+  }, [boundGroup, homeDeviceId, localProviderGroups, remoteProviderGroups]);
+  /**
+   * 任务归组、此刻却不在组那一项本身上运行(被组分到或换到了组里另一台)：在组那一项里选模型 = 留在那台只换
+   * 模型，组那一项显示为正在用的(§10)。
+   */
+  const stayInGroup =
+    boundEntry !== null &&
+    !(boundEntry.deviceId === remoteAgentDeviceId && boundEntry.providerId === currentProviderId);
+  // 面板不停在收起的组员上：任务正跑在组员上时打开即停在组那一项(没归组的任务只是这样显示，选它照旧是
+  // 把 Agent 挪过去)；归组的任务即使就在这台运行，第一次打开也先停在组那一项。用户自己点过别的格之后不再挪。
+  const [remoteBrowseTouched, setRemoteBrowseTouched] = useState(false);
+  const [groupBrowseShown, setGroupBrowseShown] = useState<string | null>(null);
+  const browseHiddenEntry = remoteBrowse
+    ? groupEntryAt(remoteProviderGroups.memberOf.get(remoteProviderEntryKey(
+        remoteBrowse.deviceId,
+        remoteBrowse.providerId ?? (remoteBrowse.deviceId === remoteAgentDeviceId ? (currentProviderId ?? '') : ''),
+      )))
+    : null;
+  const boundEntryKey = boundEntry ? remoteProviderEntryKey(boundEntry.deviceId ?? '', boundEntry.providerId) : null;
+  const groupBrowseTarget =
+    browseHiddenEntry ??
+    (stayInGroup && !remoteBrowseTouched && groupBrowseShown !== boundEntryKey ? boundEntry : null);
+  if (groupBrowseTarget) {
+    if (boundEntryKey !== null && groupBrowseShown !== boundEntryKey) setGroupBrowseShown(boundEntryKey);
+    setRemoteBrowse(
+      groupBrowseTarget.deviceId
+        ? { deviceId: groupBrowseTarget.deviceId, providerId: groupBrowseTarget.providerId }
+        : null,
+    );
+  }
+  /** 正在浏览归的组那一项所在的目录：那一项里的模型显示为正在用的，选中时留在此刻运行的那台。 */
+  const browsingBoundGroupEntry =
+    stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
+  const remoteAgentGroups = useMemo(() => {
+    if (!remoteAgentDevices) return [];
+    return remoteAgentDevices.flatMap((device) => {
+      const catalog = remoteDeviceCatalogs.get(device.deviceId);
+      // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
+      const shared = catalog
+        ? remoteAgentProviders(catalog.providers).filter(
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+        )
+        : [];
+      if (!catalog || shared.length === 0) return [];
+      const entries = unifiedModelEntries({
+        providers: shared,
+        isVisible: (providerId, model, agent) =>
+          isDeviceModelVisible(catalog.modelVisibilityOverrides, agent, providerId, model),
+        includePaymentRequired: true,
+        scope: 'draft',
+      });
+      const providerIds = [...new Set(entries.map((entry) => entry.providerId))];
+      return providerIds.length > 0
+        ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
+        : [];
+    });
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
+  // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
+  const remoteAgentUnavailableDeviceIds = useMemo(
+    () =>
+      (remoteAgentDevices ?? []).flatMap((device) => {
+        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
+        const catalog = remoteDeviceCatalogs.get(device.deviceId);
+        return !catalog || catalog.loading || catalog.error ? [device.deviceId] : [];
+      }),
+    [remoteAgentDevices, remoteDeviceCatalogs],
+  );
+  const hasRemoteAgent = remoteAgent !== undefined;
+  const homeProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
+  const homeModelVisibilityOverrides = homeDeviceProviders.modelVisibilityOverrides;
+  const remoteAgentLocalRailItems = useMemo(() => {
+    if (!hasRemoteAgent) return undefined;
+    void visibilityVersion;
+    const entries = unifiedModelEntries({
+      providers: homeProviders,
+      isVisible: homeDeviceId
+        ? (providerId, model, agent) =>
+            isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
+        : (providerId, model, agent) => isModelEnabled(agent, providerId, model),
+      includePaymentRequired: true,
+      scope: 'draft',
+    });
+    return buildUnifiedRail(entries, undefined, homeDeviceId ? undefined : localProviders.providerOrder);
+  }, [
+    hasRemoteAgent,
+    homeDeviceId,
+    homeProviders,
+    homeModelVisibilityOverrides,
+    localProviders.providerOrder,
+    visibilityVersion,
+  ]);
+  // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
+  // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。远程 Agent 面板正在浏览
+  // 另一台电脑的目录时，左栏本机那几格仍是本机的供应商，照样带台数。
+  const localGroupsApply = (remoteAgent ? true : !deviceId) && !homeDeviceId && !providersOverride;
+  const withLocalGroupSize = useCallback(
+    (providerId: string, label: string): string => {
+      const config = localGroupsApply ? localProviderGroups[providerId] : undefined;
+      return config
+        ? t('newChat.modelSelector.unified.providerGroupLabel', {
+          provider: label,
+          group: t('settings.providers.remote.groupBadge', { count: providerGroupDeviceCount(config.members) }),
+        })
+        : label;
+    },
+    [localGroupsApply, localProviderGroups, t],
+  );
+  const remoteAgentLocalLabel = useCallback(
+    (providerId: string): string => {
+      const provider = homeProviders.find((entry) => entry.id === providerId);
+      return withLocalGroupSize(providerId, provider ? providerDisplayName(provider, t) : providerId);
+    },
+    [homeProviders, t, withLocalGroupSize],
+  );
+  const remoteAgentLabelOf = useCallback(
+    (targetDeviceId: string, providerId: string): string => {
+      const device = remoteAgentDevices?.find((entry) => entry.deviceId === targetDeviceId);
+      const provider = remoteAgentGroups
+        .find((group) => group.deviceId === targetDeviceId)
+        ?.providers.find((entry) => entry.id === providerId);
+      // 组只写有几台，不写是哪几台(2026-10-10 用户要求)；分享来的组目录里本来就只有台数。
+      // 台数按电脑算：一台电脑上的几个账号算一台。
+      const groupMembers = remoteProviderGroups.groups.get(remoteProviderEntryKey(targetDeviceId, providerId))?.members;
+      const groupSize = groupMembers ? providerGroupDeviceCount(groupMembers) : readProviderShareGroupSize(provider);
+      const values = {
+        provider: provider ? providerDisplayName(provider, t) : providerId,
+        device: deviceDisplayName(targetDeviceId, device?.name),
+      };
+      return groupSize != null
+        ? t('newChat.modelSelector.unified.railRemoteProviderGroup', {
+          ...values,
+          group: t('settings.providers.remote.groupBadge', { count: groupSize }),
+        })
+        : t('newChat.modelSelector.unified.railRemoteProvider', values);
+    },
+    [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
+  );
+  // 供应商组那一项的用量跟着任务实际运行的那台(provider-groups.md §10)：组分好电脑后任务记录改成那台的
+  // 位置与供应商，与输入框下方的用量同一份；还没分到电脑(草稿、没运行过、用的不是这个组)时不显示某一台
+  // 的配额，免得把组所在电脑一台的余量看成整个组的。
+  const selfDeviceId = remoteAgent?.selfDeviceId ?? null;
+  const providerGroupUsage = useCallback<ProviderGroupUsageOf>(
+    (directoryDeviceId, providerId) => {
+      if (providersOverride) return null;
+      let config: ProviderGroupConfig | undefined;
+      if (directoryDeviceId !== null) {
+        config = remoteProviderGroups.groups.get(remoteProviderEntryKey(directoryDeviceId, providerId));
+      } else if (homeDeviceId) {
+        config = remoteProviderGroups.groups.get(remoteProviderEntryKey(homeDeviceId, providerId));
+      } else if (remoteAgent || !deviceIdProp) {
+        config = localProviderGroups[providerId];
+      }
+      if (!config) return null;
+      if (!taskStarted || !currentProviderId) return { kind: 'unassigned' };
+      // 读到了任务归哪个组时只认那个组：同一台电脑可能同时在几个组里。
+      if (boundEntry && !(boundEntry.deviceId === directoryDeviceId && boundEntry.providerId === providerId)) {
+        return { kind: 'unassigned' };
+      }
+      const member = providerGroupMemberOfRoute(
+        config,
+        directoryDeviceId,
+        { agentDeviceId: remoteAgentDeviceId, providerId: currentProviderId },
+        homeDeviceId ?? selfDeviceId,
+      );
+      if (!member) return { kind: 'unassigned' };
+      const location = member.agentDeviceId;
+      if (location === null) {
+        const provider = (homeDeviceId ? homeDeviceProviders.providers : localProviders.providers).find(
+          (entry) => entry.id === member.providerId,
+        );
+        return {
+          kind: 'running',
+          deviceName: homeDeviceId ? deviceDisplayName(homeDeviceId, remoteAgent?.homeDeviceName) : null,
+          usage: provider ? { provider, scope: { deviceId: homeDeviceId ?? null } } : null,
+        };
+      }
+      const deviceName =
+        remoteAgentDevices?.find((device) => device.deviceId === location)?.name || location;
+      // 别人分享的电脑：分享者的配额不对受邀者开放(模型列表里那一项本来也不显示)。
+      if (isProviderShareAgentDeviceId(location)) return { kind: 'running', deviceName, usage: null };
+      const provider = remoteDeviceCatalogs
+        .get(location)
+        ?.providers.find((entry) => entry.id === member.providerId);
+      return {
+        kind: 'running',
+        deviceName,
+        usage: provider ? { provider, scope: { deviceId: location } } : null,
+      };
+    },
+    [
+      providersOverride,
+      remoteProviderGroups,
+      homeDeviceId,
+      remoteAgent,
+      deviceIdProp,
+      localProviderGroups,
+      taskStarted,
+      currentProviderId,
+      boundEntry,
+      remoteAgentDeviceId,
+      selfDeviceId,
+      homeDeviceProviders.providers,
+      localProviders.providers,
+      remoteAgentDevices,
+      remoteDeviceCatalogs,
+    ],
+  );
 
   // 官方默认推荐 → 一次性**种子收藏**(Chris 2026-08-16 裁决,替代列表里的「默认」
   // 小节):服务端目录用 `newSessionDefault` 标记推荐模型(gateway 下发),首个命中
@@ -1562,12 +2088,12 @@ function ModelSelectorContentView({
   const modelDisabledOf = (provider: ProviderView | null, id: string, rowAgent?: AgentKind): boolean => {
     if (!deviceId) {
       if (subscriptionDirectDisabledReason(id)) return true;
-      // codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
+      // openai-codex/ 与 codex/ 的本机 key gate 只属于 XD 网关折扣路由。自定义(user)供应商目录里的
       // 同前缀模型由该供应商自身配置路由(codex-proxy-host 按会话显式供应商解析,
       // 不按前缀落网关),不依赖 Cindy 登录/网关 key(#1568)。flat 列表(provider
       // 为 null,无供应商概念)与内置来源保持原前缀判定。
-      if (provider?.source === 'user') return false;
-      return id.startsWith('codex/') && !hasSavedKey;
+      if (isCustomRoutedProvider(provider)) return false;
+      return isCodexGatewayWireModel(id) && !hasSavedKey;
     }
     if (remoteModelListStatus !== 'ready') return true;
     if (remoteProviders.error) return remoteProviders.unsupported ? false : true;
@@ -1751,7 +2277,7 @@ function ModelSelectorContentView({
 
   // 行内 Fast 闪电:选中行 → 调用方 fastMode(会话 = live;首页草稿 = 全局预设派生);其余行 → (agent,model) 全局预设(本机 =
   // providerModelMemory / 远程 = 被控端镜像),并由 fastEditable 按当前来源 capability 过滤。
-  const fastOnOf = (providerId: string | null, m: RowModel): boolean => {
+  const fastOnOf = (providerId: string | null, m: RowModel): boolean | 'ultrafast' => {
     if (!fastEditable(providerId, m)) return false;
     if (isSelectedRow(providerId, m.id)) return fastMode;
     if (!currentAgentKind || !providerId) return false;
@@ -1822,7 +2348,7 @@ function ModelSelectorContentView({
     id: string,
     dismiss = true,
     effortOverride?: Effort,
-    fastOverride?: boolean,
+    fastOverride?: boolean | 'ultrafast',
   ): void | boolean | Promise<void | boolean> => {
     if (interactionDisabled) return false;
     const dismissAfterSelection = () => {
@@ -1930,7 +2456,7 @@ function ModelSelectorContentView({
    */
   const applyLiveRowConfig = async (
     targetEffort: Effort | undefined,
-    targetFast: boolean,
+    targetFast: boolean | 'ultrafast',
   ): Promise<boolean> => {
     const previousEffort = effort;
     let effortWritten = false;
@@ -2074,7 +2600,7 @@ function ModelSelectorContentView({
   const editEffortValue: Effort | null = editingModel
     ? rowEffortOf(editingProviderId, editingModel)
     : null;
-  const editFastValue: boolean = editingModel
+  const editFastValue: boolean | 'ultrafast' = editingModel
     ? editingIsActive
       ? fastMode
       : ((currentAgentKind && editingProviderId
@@ -2130,6 +2656,8 @@ function ModelSelectorContentView({
     currentProviderId,
     resolveCurrentSourceId,
   ]);
+  const editingDisplayPricingModel = editingProvider && editingModel && currentAgentKind
+    ? findCatalogModel(editingProvider, editingModel.id, currentAgentKind, { exact: true }) : undefined;
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
@@ -2153,12 +2681,15 @@ function ModelSelectorContentView({
   const editingDescription = editingModel ? localizedModelDescription(editingModel, t) : undefined;
   const configPanel = editingModel ? (
     <div
+      ref={configHighlightRef}
       role="group"
       aria-label={`${localizedModelName(editingModel.displayName, t)} ${t('newChat.modelSelector.options')}`}
-      className="flex flex-col gap-0.5"
+      {...menuPanelAttrs}
+      className="relative flex flex-col gap-0.5"
     >
+      <MenuHighlightLayer />
       {/* 名字 / 简介先帮助确认模型；面板整体居中后，操作区仍贴近当前 hover 行。 */}
-      <div className="flex flex-col gap-1 px-2 py-1.5">
+      <div {...menuSkipAttrs} className="flex flex-col gap-1 px-2 py-1.5">
         <span className="min-w-0 text-14 font-medium text-[var(--model-item-text)]">
           {localizedModelName(editingModel.displayName, t)}
         </span>
@@ -2172,10 +2703,10 @@ function ModelSelectorContentView({
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editShowFast && (
-        <div className="px-0.5">
+        <div {...menuSkipAttrs} className="px-0.5">
           {/* 遵循设计稿:单色反色(轨/文字 --text-primary,钮 --surface-on-card),不用品牌橙。 */}
           <FastModeToggle
-            enabled={editFastValue}
+            enabled={!!editFastValue}
             onToggle={() => handleEditFast(!editFastValue)}
             hideIcon
             accentVar="var(--text-primary)"
@@ -2187,7 +2718,7 @@ function ModelSelectorContentView({
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editThinkingToggle && editingModel && (
-        <div className="px-0.5">
+        <div {...menuSkipAttrs} className="px-0.5">
           <ThinkingToggle
             enabled={
               editingIsActive
@@ -2234,7 +2765,7 @@ function ModelSelectorContentView({
       {editHasEfforts && (
         <>
           <div className="px-2 pb-0.5 pt-1">
-            <span className="text-11 font-medium text-[var(--text-tertiary)]">
+            <span className="text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
               {t('newChat.modelSelector.effortLabel')}
             </span>
           </div>
@@ -2249,22 +2780,17 @@ function ModelSelectorContentView({
                 onClick={() => available && handleEditEffort(e)}
                 role="option"
                 aria-selected={selected}
+                // Shared menu row (DESIGN §4 Composer dropdown rows): glide highlight. Model
+                // menu exception: the chosen effort keeps its whole-row fill and the check.
+                {...menuRowAttrs({ checked: selected, disabled: !available })}
                 className={cn(
-                  // 行内边距/圆角/hover 与选中底统一到 --model-item-hover(见 §Select 菜单行规约),
-                  // 与一级模型行、权限、+ 菜单一致;px-3 对齐其它菜单行的横向内边距。
-                  'flex w-full items-center justify-between rounded-[8px] px-3 py-2 text-left transition-colors duration-100',
-                  available ? 'hover:bg-[var(--model-item-hover)]' : 'cursor-not-allowed opacity-45',
-                  selected && 'bg-[var(--model-item-hover)]',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center justify-between px-3 py-2 text-left',
+                  selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
+                  !available && 'cursor-not-allowed opacity-45',
                 )}
               >
-                <span
-                  className={cn(
-                    'truncate text-14 text-[var(--model-item-text)]',
-                    selected ? 'font-medium' : 'font-normal',
-                  )}
-                >
-                  {effortLabelFor(editingModel, e)}
-                </span>
+                {withMenuLabels(<span className="truncate">{effortLabelFor(editingModel, e)}</span>)}
                 {selected && (
                   <Check size={15} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
                 )}
@@ -2276,9 +2802,14 @@ function ModelSelectorContentView({
       {(editShowFast || editHasEfforts) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
-      {editingPricePresentation && (
+      {editingDisplayPricingModel?.displayPricing && editingDisplayPricingModel.currency && (
+        <div {...menuSkipAttrs} className="max-h-72 overflow-y-auto border-t border-[var(--model-dropdown-border)] pt-2.5">
+          <DisplayPricingDetails model={editingDisplayPricingModel} />
+        </div>
+      )}
+      {!editingDisplayPricingModel?.displayPricing && editingPricePresentation && (
         <>
-          <div className="px-2 pb-1 pt-1">
+          <div {...menuSkipAttrs} className="px-2 pb-1 pt-1">
             <div
               className={cn(
                 'flex items-center gap-1.5 text-11 font-medium text-[var(--text-tertiary)]',
@@ -2528,13 +3059,16 @@ function ModelSelectorContentView({
               ev.preventDefault();
               handleRowSelect(providerId, model.id);
             }}
+            // Shared menu row (DESIGN §4 Composer dropdown rows): the list's glide highlight
+            // marks the pointer / keyboard-focused row and the row whose options are open.
+            {...menuRowAttrs()}
+            data-state={isEditingThis ? 'open' : isSelected ? 'checked' : undefined}
             className={cn(
-              'group/row flex w-full cursor-pointer items-center justify-between rounded-[8px] px-3 py-2',
+              COMPOSER_MENU_ROW,
+              'group/row flex w-full cursor-pointer items-center justify-between px-3 py-2',
+              // Model menu exception (DESIGN §4): the chosen row keeps its whole-row fill.
+              isSelected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
               constrainedListMaxHeight !== undefined && 'min-h-9',
-              'transition-colors duration-100 hover:bg-[var(--model-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              isSelected && 'bg-[var(--model-item-hover)]',
-              isEditingThis &&
-                'bg-[var(--surface-hover)] ring-1 ring-inset ring-[var(--model-dropdown-border)]',
               (disabled || paymentRequired) && 'opacity-50',
             )}
           >
@@ -2553,7 +3087,7 @@ function ModelSelectorContentView({
               )}
               <span className="flex min-w-0 flex-1 items-center gap-1.5">
                 <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <span className="truncate text-14 font-medium leading-5 text-[var(--model-item-text)]">
+                  <span className="truncate font-medium leading-5">
                     {localizedModelName(model.displayName, t)}
                   </span>
                   {rowEffort && (
@@ -2645,8 +3179,8 @@ function ModelSelectorContentView({
               scheduleOptionsClose();
             }}
             className={cn(
-              'w-[248px] overflow-hidden rounded-[12px] p-2 shadow-[var(--shadow-menu)] duration-100',
-              'border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              'w-[248px] overflow-hidden rounded-[12px] p-2 shadow-[shadow:var(--shadow-menu)] duration-100',
+              'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               overlayContentClassName,
             )}
           >
@@ -2684,7 +3218,7 @@ function ModelSelectorContentView({
           <button
             type="button"
             disabled={interactionDisabled}
-            onClick={onNavigateToProviders}
+            onClick={() => onNavigateToProviders()}
             className={cn(
               'flex h-[34px] w-full items-center justify-center rounded-[8px]',
               'bg-[var(--accent-cta-bg)] transition-opacity hover:opacity-90',
@@ -2710,6 +3244,11 @@ function ModelSelectorContentView({
     },
     [providers, t],
   );
+  // 分组标题与左栏提示：本机建的组带上台数，每行的来源名不带。
+  const unifiedProviderHeading = useCallback(
+    (providerId: string): string => withLocalGroupSize(providerId, unifiedProviderLabel(providerId)),
+    [unifiedProviderLabel, withLocalGroupSize],
+  );
   // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
   // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
   const unifiedEffortLabel = useCallback(
@@ -2734,6 +3273,22 @@ function ModelSelectorContentView({
     [cc.capabilities, codex.capabilities, pi.capabilities, onFastModeChange, onUnifiedSelect, fastModeConfigurable],
   );
 
+  if (providersOverrideState && providersOverrideState.status !== 'ready') {
+    return <RemoteModelLoadNotice status={providersOverrideState.status} onRetry={providersOverrideState.refresh} />;
+  }
+
+  const localCatalogNotice = !deviceId && !providersOverride && localProviders.error
+    ? <LocalModelCatalogNotice failure={localProviders.error} onRetry={localProviders.refetch} /> : null;
+  // 后续刷新失败时,快照里可能仍没有当前引擎的已连接来源。emptyState 不得盖住恢复提示;
+  // 有引导卡时叠在下方,连接入口仍可用。
+  if (localCatalogNotice && (localProviders.loading || emptyState)) {
+    return (
+      <div className="flex w-[320px] max-w-full flex-col">
+        <div className={emptyState ? 'p-2 pb-0' : 'p-2'}>{localCatalogNotice}</div>
+        {emptyState}
+      </div>
+    );
+  }
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
@@ -2775,8 +3330,8 @@ function ModelSelectorContentView({
         className={cn(
           'min-w-0 flex-1 bg-transparent text-14 outline-none',
           interactionDisabled
-            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+            ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
+            : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
         )}
         aria-label={t('newChat.modelSelector.search.placeholderAll')}
       />
@@ -2791,6 +3346,149 @@ function ModelSelectorContentView({
   if (unifiedPanel) {
     // 可见性 / 排除谓词与 scope 一律从组件作用域取(见 unifiedIsVisible 的定义处):
     // 种子收藏 effect 用的是同一份,两边不能各写一遍。
+    //
+    // 远程 Agent:正在浏览的远程供应商格。打开时只知道落点电脑,供应商格按当前来源 /
+    // 那台的首个供应商补齐;那台的目录到齐之前列表只显示加载态。
+    const remoteActiveProviderId = remoteBrowse
+      ? (remoteBrowse.providerId ??
+        (browsingSelectedCatalog ? activeSourceId : null) ??
+        remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)?.providerIds[0] ??
+        null)
+      : null;
+    const remoteBrowseDevice: UnifiedSelectionAgentDevice = remoteBrowse
+      ? {
+          deviceId: remoteBrowse.deviceId,
+          name:
+            remoteAgentDevices?.find((device) => device.deviceId === remoteBrowse.deviceId)?.name ||
+            remoteBrowse.deviceId,
+        }
+      : null;
+    // 选中直通带上这一行属于哪台电脑(仅远程 Agent 入口);落点不同由调用方连运行位置一起换。
+    const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
+    // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
+    const panelSelection = browsingSelectedCatalog
+      ? { providerId: activeSourceId, modelId }
+      : browsingBoundGroupEntry
+        ? { providerId: boundEntry!.providerId, modelId }
+        : { providerId: null, modelId: '' };
+    const browsingLiveCatalog = browsingSelectedCatalog || browsingBoundGroupEntry;
+    // 归组的任务在组那一项里选模型:留在此刻运行的那台(换成那台上这个供应商的 id),只换模型,不挪 Agent。
+    const currentAgentDevice: UnifiedSelectionAgentDevice = remoteAgentDeviceId
+      ? {
+          deviceId: remoteAgentDeviceId,
+          name:
+            remoteAgentDevices?.find((device) => device.deviceId === remoteAgentDeviceId)?.name ||
+            remoteAgentDeviceId,
+        }
+      : null;
+    // 已建任务浏览的不是 Agent 落点那台的目录:选中的行要连运行位置一起换,同引擎 / 跨引擎
+    // 两条会话链路都按当前落点的目录工作,这里一律改道给 onRelocate。
+    const relocate =
+      remoteAgent?.onRelocate && !onUnifiedSelect && !browsingSelectedCatalog
+        ? remoteAgent.onRelocate
+        : undefined;
+    const relocateRow = (
+      row: { providerId: string; modelId: string; agent: AgentKind; effort?: Effort; fast: boolean | 'ultrafast' },
+      dismiss: boolean,
+    ): Promise<boolean> =>
+      runLiveWrite(() =>
+        relocate!(
+          browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
+            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
+            : { ...row, agentDevice: remoteBrowseDevice },
+        ),
+      ).then((applied) => {
+        if (applied && dismiss) {
+          closeOptionsPanel();
+          onDismiss?.();
+        }
+        return applied;
+      });
+    /**
+     * 收藏区里另一台电脑上的收藏(浏览任务所在电脑的目录时列出):效果与左侧栏切到那台电脑再选中它相同。
+     *   - 草稿:整行带着那台电脑交给 onUnifiedSelect(同浏览那台时的 withAgentDevice);
+     *   - 已建任务、Agent 不在那台:连运行位置一起换(onRelocate,同浏览那台时的 relocate);
+     *   - 已建任务、Agent 已在那台 / 那一项是任务归的供应商组:这一选择要走那台目录里的会话链路
+     *     (同引擎直切 / 跨引擎事务 / 组内留在原处),这里不另起一套 —— 切到那台的目录,同一条收藏在
+     *     那里照样列出,由用户在那里选。
+     */
+    const selectDeviceFavorite: NonNullable<
+      NonNullable<UnifiedModelPanelProps['remoteSources']>['onSelectDeviceFavorite']
+    > = ({ deviceId: targetDeviceId, providerId, modelId: id, effort: rowEffort, config: rowConfig }) => {
+      const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
+      const agentDevice = {
+        deviceId: targetDeviceId,
+        name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
+      };
+      const dismissIfApplied = (applied: boolean) => {
+        if (applied) {
+          closeOptionsPanel();
+          onDismiss?.();
+        }
+        return applied;
+      };
+      if (onUnifiedSelect) {
+        return runLiveWrite(() =>
+          onUnifiedSelect({
+            providerId,
+            modelId: id,
+            ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+            engine: rowConfig.engine,
+            fast: rowConfig.fast,
+            favoriteUid: rowConfig.favoriteUid,
+            agentDevice,
+          }),
+        ).then(dismissIfApplied);
+      }
+      const agent = vendorKeyToAgentKind(rowConfig.engine);
+      const inBoundGroup =
+        stayInGroup && boundEntry?.deviceId === targetDeviceId && boundEntry.providerId === providerId;
+      const onRelocate = remoteAgent?.onRelocate;
+      if (onRelocate && agent && targetDeviceId !== remoteAgentDeviceId && !inBoundGroup) {
+        return runLiveWrite(() =>
+          onRelocate({
+            providerId,
+            modelId: id,
+            agent,
+            ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+            fast: rowConfig.fast,
+            agentDevice,
+          }),
+        ).then(dismissIfApplied);
+      }
+      closeOptionsPanel();
+      setRemoteBrowseTouched(true);
+      setRemoteBrowse({ deviceId: targetDeviceId, providerId });
+      return false;
+    };
+    const panelSessionEngineFilter =
+      sessionEngineFilter && relocate
+        ? {
+            ...sessionEngineFilter,
+            onCrossEngineSelect: (args: Parameters<NonNullable<typeof sessionEngineFilter>['onCrossEngineSelect']>[0]) =>
+              relocateRow(
+                {
+                  providerId: args.providerId,
+                  modelId: args.modelId,
+                  agent: args.targetAgent,
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  fast: (args.fast === 'ultrafast' ? 'ultrafast' : args.fast === true),
+                },
+                true,
+              ),
+            onCrossEngineConfigure: (args: Parameters<NonNullable<typeof sessionEngineFilter>['onCrossEngineSelect']>[0]) =>
+              relocateRow(
+                {
+                  providerId: args.providerId,
+                  modelId: args.modelId,
+                  agent: args.targetAgent,
+                  ...(args.effort ? { effort: args.effort } : {}),
+                  fast: (args.fast === 'ultrafast' ? 'ultrafast' : args.fast === true),
+                },
+                false,
+              ),
+          }
+        : sessionEngineFilter;
     return (
       // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
       // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
@@ -2813,11 +3511,8 @@ function ModelSelectorContentView({
             // popover 裁掉超出部分,用户就翻不到最后几行(2026-08-13 实测)。列表侧配
             // min-h-0 + flex-1 收缩并内部滚动,搜索框与底部 footer 始终露着。
             'max-h-[min(560px,calc(100vh-120px))]',
-            // 紧凑内容宽度：长模型名在 420px 上限内省略，不为完整名称撑大面板。
-            // field 入口仍绑定字段宽度；窄窗口继续受视口与 morph 锚点约束。
-            fluidWidth
-              ? 'w-full min-w-0'
-              : 'w-max min-w-[300px] max-w-[min(420px,calc(100vw-48px))]',
+            // 紧凑宽度契约见 UNIFIED_COMPACT_PANEL_WIDTH_CLASS；field 入口仍绑 trigger。
+            fluidWidth ? 'w-full min-w-0' : UNIFIED_COMPACT_PANEL_WIDTH_CLASS,
           )}
         >
           {/* 设计稿 .search-wrap:无框平铺行 + 底部 hairline(不是独立的胶囊输入框)。 */}
@@ -2839,15 +3534,28 @@ function ModelSelectorContentView({
               className={cn(
                 'min-w-0 flex-1 bg-transparent text-13 outline-none',
                 interactionDisabled
-                  ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
-                  : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+                  ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled)]'
+                  : 'text-[var(--model-item-text)] placeholder:text-[var(--text-placeholder)]',
               )}
               aria-label={t('newChat.modelSelector.search.placeholderAll')}
             />
           </div>
+          {localCatalogNotice && <div className="shrink-0 p-2">{localCatalogNotice}</div>}
           <UnifiedModelPanel
+            {...(!remoteAgent && deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
+              ? {
+                  catalogNotice: (
+                    <RemoteModelLoadNotice
+                      status={remoteModelListStatus}
+                      onRetry={retryRemoteModels}
+                      message={remoteFailureMessage}
+                    />
+                  ),
+                }
+              : {})}
             deviceId={deviceId}
-            localProviderUsage={!deviceId && !providersOverride}
+            providerUsage={providerUsageScope}
+            providerGroupUsage={providerGroupUsage}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
@@ -2865,15 +3573,67 @@ function ModelSelectorContentView({
             query={query}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
-            selected={{ providerId: activeSourceId, modelId }}
-            selectedFavoriteUid={selectedFavoriteUid}
-            liveAgentKind={unifiedSelectionPolicy === 'official' ? null : currentAgentKind}
-            fastMode={unifiedSelectionPolicy === 'official' ? false : fastMode}
-            selectedEffort={unifiedSelectionPolicy === 'official' ? undefined : effort}
+            selected={panelSelection}
+            selectedFavoriteUid={browsingSelectedCatalog ? selectedFavoriteUid : null}
+            liveAgentKind={
+              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
+            }
+            fastMode={unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? false : fastMode}
+            selectedEffort={
+              unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? undefined : effort
+            }
             {...(modelMemory ? { modelMemory } : {})}
+            {...(preferenceStore ? { preferenceStore } : {})}
+            {...(remoteAgent && remoteAgentLocalRailItems
+              ? {
+                  remoteSources: {
+                    localRailItems: remoteAgentLocalRailItems,
+                    localProviders: homeProviders,
+                    localUsageDeviceId: homeDeviceId ?? null,
+                    localProviderLabel: remoteAgentLocalLabel,
+                    groups: remoteAgentGroups,
+                    labelOf: remoteAgentLabelOf,
+                    // 远程收藏按任务所在电脑共享(§1.5):被控电脑上的任务读写那台的收藏,本机任务读写本机。
+                    ...(homeDeviceId ? { favoritesDeviceId: homeDeviceId } : {}),
+                    homeDeviceId: homeDeviceId ?? selfDeviceId,
+                    unavailableDeviceIds: remoteAgentUnavailableDeviceIds,
+                    onSelectDeviceFavorite: selectDeviceFavorite,
+                    active: remoteBrowse
+                      ? { deviceId: remoteBrowse.deviceId, providerId: remoteActiveProviderId ?? '' }
+                      : null,
+                    ready:
+                      remoteBrowse === null ||
+                      (remoteModelListStatus === 'ready' && remoteActiveProviderId !== null),
+                    ...(remoteBrowse && remoteModelListStatus === 'error'
+                      ? {
+                          failure: (
+                            <RemoteModelLoadNotice
+                              status="error"
+                              onRetry={retryRemoteModels}
+                              compact
+                              message={remoteFailureMessage}
+                            />
+                          ),
+                        }
+                      : {}),
+                    onActivate: (target: { deviceId: string; providerId: string } | null) => {
+                      closeOptionsPanel();
+                      setRemoteBrowseTouched(true);
+                      setRemoteBrowse(target);
+                    },
+                  },
+                }
+              : {})}
             agentFastModeCapable={unifiedAgentFastCapable}
             priceOf={(providerId, id, agent) => pricePresentationOf(providerId, id, agent)}
-            providerLabel={unifiedProviderLabel}
+            // 浏览其他电脑的目录时,分组标题带上电脑名(「Claude 订阅 · 工作室 Mac」)。
+            providerLabel={
+              remoteBrowse
+                ? (providerId: string) => remoteAgentLabelOf(remoteBrowse.deviceId, providerId)
+                : unifiedProviderLabel
+            }
+            // 供应商组的分组标题与左栏提示带上台数(其他电脑的组已在 remoteAgentLabelOf 里带上)。
+            {...(remoteBrowse ? {} : { providerHeading: unifiedProviderHeading })}
             effortLabelOf={unifiedEffortLabel}
             {...(constrainedListMaxHeight !== undefined
               ? { listMaxHeight: constrainedListMaxHeight }
@@ -2885,8 +3645,9 @@ function ModelSelectorContentView({
             onPaymentRequired={showPaymentRequired}
             configurationEnabled={configurationEnabled}
             selectionPolicy={unifiedSelectionPolicy}
+            recordRecentUsage={recordRecentModelsOnSelect}
             isRouteDisabled={(providerId, id, rowAgent) => providersOverride ? false : modelDisabledOf(providers.find((provider) => provider.id === providerId) ?? null, id, rowAgent)}
-            {...(sessionEngineFilter ? { sessionEngineFilter } : {})}
+            {...(panelSessionEngineFilter ? { sessionEngineFilter: panelSessionEngineFilter } : {})}
             {...(followSession ? { followSession: {
               ...followSession,
               onFollow: async () => {
@@ -2912,6 +3673,7 @@ function ModelSelectorContentView({
                     ...(rowConfig.resetToRecommended
                       ? { resetToRecommended: true as const }
                       : {}),
+                    ...withAgentDevice,
                   }),
                 ).then((applied) => {
                   if (applied) {
@@ -2920,6 +3682,20 @@ function ModelSelectorContentView({
                   }
                   return applied;
                 });
+              }
+              if (relocate) {
+                const agent = vendorKeyToAgentKind(rowConfig.engine);
+                if (!agent) return false;
+                return relocateRow(
+                  {
+                    providerId,
+                    modelId: id,
+                    agent,
+                    ...(rowEffortValue ? { effort: rowEffortValue } : {}),
+                    fast: rowConfig.fast,
+                  },
+                  true,
+                );
               }
               // 已建会话(M6):同引擎行照旧走 onProviderChange 直切;跨引擎行在 selectRow
               // 里就已经改道 sessionEngineFilter.onCrossEngineSelect,到不了这里。
@@ -2941,8 +3717,24 @@ function ModelSelectorContentView({
                   ...(nextEffort ? { effort: nextEffort } : {}),
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
-                  favoriteUid: null,
+                  favoriteUid: rowConfig.favoriteUid,
+                  ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
+                  ...withAgentDevice,
                 });
+              }
+              if (relocate) {
+                const agent = vendorKeyToAgentKind(rowConfig.engine);
+                if (!agent) return false;
+                return relocateRow(
+                  {
+                    providerId,
+                    modelId: id,
+                    agent,
+                    ...(nextEffort ? { effort: nextEffort } : {}),
+                    fast: rowConfig.fast,
+                  },
+                  false,
+                );
               }
               return applyUnifiedSessionSelect({
                 providerId,
@@ -2967,24 +3759,33 @@ function ModelSelectorContentView({
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
                   favoriteUid: null,
+                  ...withAgentDevice,
                 });
               }
+              // 浏览别的电脑的目录时没有「正在用的那一行」,也就没有锚点可清。
+              if (relocate) return;
               onSessionFavoriteAnchorChange?.(null);
             }}
-            {...(onEffortChange ? { onEffortChangeLive: onEffortChange } : {})}
+            {...(onEffortChange
+              ? {
+                  // 统一面板自己保证同一时刻只提交一笔(在途点击排队),调用方无需再锁 selector。
+                  onEffortChangeLive: (effort: Effort) =>
+                    onEffortChange(effort, { serializedByPanel: true }),
+                }
+              : {})}
             {...(onFastModeChange ? { onFastModeChangeLive: onFastModeChange } : {})}
             panelElement={paneElement}
             {...(overlayContentClassName !== undefined
               ? { overlayClassName: overlayContentClassName }
               : {})}
           />
-          {/* 连接来源入口只对本机展示。 */}
-          {onNavigateToProviders && !deviceId && (
+          {/* 「配置模型」只对本机目录与分享来的供应商展示(见 showProvidersEntry)。 */}
+          {showProvidersEntry && (
             <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--model-dropdown-border)] px-3.5 py-[9px]">
               <button
                 type="button"
                 disabled={interactionDisabled}
-                onClick={onNavigateToProviders}
+                onClick={navigateToProviders}
                 className={cn(
                   'flex min-w-0 items-center gap-1.5 text-13 text-[var(--text-secondary)]',
                   'transition-colors hover:text-[var(--text-primary)]',
@@ -3045,15 +3846,15 @@ function ModelSelectorContentView({
             }}
             role="option"
             aria-selected={followSession.active}
+            data-state={followSession.active ? 'checked' : undefined}
             className={cn(
-              'flex w-full items-center justify-between rounded-[8px] px-3 py-2 transition-colors',
-              'hover:bg-[var(--model-item-hover)]',
-              followSession.active && 'bg-[var(--model-item-hover)]',
+              COMPOSER_MENU_ROW,
+              'flex w-full items-center justify-between px-3 py-2',
+              'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
+              followSession.active && 'bg-sidebar-item-hover',
             )}
           >
-            <span className="text-14 font-medium text-[var(--model-item-text)]">
-              {followSession.label}
-            </span>
+            {withMenuLabels(<span>{followSession.label}</span>)}
             {followSession.active && (
               <Check size={16} className="ml-2 shrink-0 text-[var(--model-item-check)]" />
             )}
@@ -3062,13 +3863,15 @@ function ModelSelectorContentView({
         </>
       )}
       {searchField}
+      {localCatalogNotice}
 
       {/* 模型列表 —— 单栏;分段(供应商)或 flat。 */}
       <div
-        ref={listRef}
+        ref={legacyListHighlightRef}
+        {...menuPanelAttrs}
         // -mr-2 把滚动条挪进面板右侧 8px 留白;scrollbar-gutter:stable 让无滚动时
         // 行宽与有滚动时一致(否则行会比搜索框宽 8px);细滚动条见 globals.css
-        className="morph-panel-list-scroll -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        className="morph-panel-list-scroll relative -mr-2 flex max-h-[300px] flex-col gap-0.5 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         style={
           constrainedListMaxHeight === undefined
             ? undefined
@@ -3085,11 +3888,16 @@ function ModelSelectorContentView({
           if (editing) closeOptionsPanel();
         }}
       >
+        <MenuHighlightLayer />
         {!hasAnyModel ? (
           // 发现还在途、且用户没在搜索时不摆「无结果」:那句话和下方的「正在获取」自相矛盾,
           // 而用户看到「没有模型」就会走。搜索无命中是本地过滤的确定结论,照常显示。
           remoteStatusInList && trimmedQuery.length === 0 ? (
-            <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} />
+            <RemoteModelLoadNotice
+              status={remoteStatusInList}
+              onRetry={retryRemoteModels}
+              message={remoteFailureMessage}
+            />
           ) : discoveringModels && trimmedQuery.length === 0 ? null : (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {t(
@@ -3110,7 +3918,7 @@ function ModelSelectorContentView({
                 aria-label={providerDisplayName(sec.provider, t)}
               >
                 {index > 0 && <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />}
-                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
+                <div className="flex min-w-0 items-center gap-2 px-3 pb-0.5 pt-1 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   <span className="min-w-0 truncate">{providerDisplayName(sec.provider, t)}</span>
                   {!deviceId && sec.provider.id === 'xd' && modelAccessAccountTier === 'free' && (
                     <span
@@ -3132,7 +3940,12 @@ function ModelSelectorContentView({
       </div>
 
       {showRemoteStatusFooter && remoteStatusInList && (
-        <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} compact />
+        <RemoteModelLoadNotice
+          status={remoteStatusInList}
+          onRetry={retryRemoteModels}
+          compact
+          message={remoteFailureMessage}
+        />
       )}
 
       {/* 发现在途提示 —— 追加在列表下方,不接管列表(见 discoveringModels 注释)。
@@ -3146,18 +3959,19 @@ function ModelSelectorContentView({
         </div>
       )}
 
-      {/* 连接来源入口只对本机展示。 */}
-      {onNavigateToProviders && !deviceId && (
+      {/* 「配置模型」只对本机目录与分享来的供应商展示(见 showProvidersEntry)。 */}
+      {showProvidersEntry && (
         <>
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
           <div className="flex items-center justify-between gap-2">
             <button
               type="button"
               disabled={interactionDisabled}
-              onClick={onNavigateToProviders}
+              onClick={navigateToProviders}
               className={cn(
-                'flex min-w-0 items-center gap-1.5 rounded-[8px] px-3 py-2',
-                'transition-colors hover:bg-[var(--model-item-hover)]',
+                COMPOSER_MENU_ROW,
+                'flex min-w-0 items-center gap-1.5 px-3 py-2',
+                'hover:bg-sidebar-item-hover focus-visible:bg-sidebar-item-hover',
               )}
             >
               <Plus size={14} className="shrink-0 text-[var(--text-tertiary)]" />
@@ -3189,6 +4003,7 @@ function ModelSelectorContentView({
 
 export function ModelSelector({
   providersOverride,
+  providersOverrideState,
   modelId,
   currentSelection,
   onReconnectSource,
@@ -3203,6 +4018,8 @@ export function ModelSelector({
   vendorKey,
   agentIdentity,
   deviceId,
+  remoteAgent,
+  agentDevice = null,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   switching = false,
@@ -3223,6 +4040,7 @@ export function ModelSelector({
   unifiedAgents,
   unifiedSelectionPolicy = 'personalized',
   engineMarkVendor = null,
+  recordRecentUsage = false,
   selectedFavoriteUid = null,
   onSessionFavoriteAnchorChange,
   onUnifiedSelect,
@@ -3230,10 +4048,12 @@ export function ModelSelector({
   reselectEmitsChange = false,
   selectedRowClickOpensConfiguration = false,
   unknownModelLabel,
+  unknownModelDescription,
   ariaContext,
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
+  taskStarted = false,
   onProviderChange,
   onNavigateToProviders,
   agentSwitch,
@@ -3242,6 +4062,7 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  useProviderShareQuotaViewing(open || keepOpenForAgentConfirmation);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
   const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
@@ -3288,7 +4109,9 @@ export function ModelSelector({
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
-      if (nextOpen && !wasOpen && !deviceId) {
+      if (nextOpen && !wasOpen && providersOverrideState) {
+        providersOverrideState.refresh();
+      } else if (nextOpen && !wasOpen && !deviceId && !providersOverride) {
         discovery.begin(() =>
           window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
         );
@@ -3299,7 +4122,7 @@ export function ModelSelector({
       }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery, resetDiscoveryPresentation],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation, providersOverride, providersOverrideState],
   );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
@@ -3324,7 +4147,7 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁。成功后关掉选单(确认已经变成「下一条才生效」的意图,应露出 composer 提示);
+  // 保命锁。模型行选中成功后关掉选单；配置浮层切换成功后保持展开；
   // 取消 / 失败留在原地,方便重选。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
@@ -3342,23 +4165,29 @@ export function ModelSelector({
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
+    const switchEngine = async (
+      args: Parameters<typeof onCrossEngineSelect>[0],
+      configuring: boolean,
+    ): Promise<boolean> => {
+      setKeepOpenForAgentConfirmation(true);
+      try {
+        const applied = await onCrossEngineSelect(args);
+        // 配置浮层里的切换保持展开；选中模型行成功后才收起。
+        setOpenWithoutAutoRefresh(configuring || applied === false);
+        return applied !== false;
+      } catch {
+        setOpenWithoutAutoRefresh(true);
+        return false;
+      } finally {
+        setKeepOpenForAgentConfirmation(false);
+      }
+    };
     return {
       ...sessionEngineFilter,
-      onCrossEngineSelect: async (
-        args: Parameters<typeof onCrossEngineSelect>[0],
-      ): Promise<boolean> => {
-        setKeepOpenForAgentConfirmation(true);
-        try {
-          const applied = await onCrossEngineSelect(args);
-          // 成功后收起选单:确认切换已经落成「下一条才生效」的意图,胶囊用「下条：」标明;
-          // 窗口留着会让轨跟着意图翻到目标 Harness,再点任意模型又弹一次确认。
-          // 取消 / 失败留在原地,方便重选。
-          setOpenWithoutAutoRefresh(applied === false);
-          return applied !== false;
-        } finally {
-          setKeepOpenForAgentConfirmation(false);
-        }
-      },
+      onCrossEngineSelect: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, false),
+      onCrossEngineConfigure: (args: Parameters<typeof onCrossEngineSelect>[0]) =>
+        switchEngine(args, true),
     };
   }, [sessionEngineFilter, setOpenWithoutAutoRefresh]);
 
@@ -3384,10 +4213,10 @@ export function ModelSelector({
     pi,
     providers: remoteProviders,
   });
-  const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
-  const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
-  const localModelLoading = !deviceId && !(!providersOverride && localProviders.loadFailed) && (
-    (!providersOverride && localProviders.loading) ||
+  const remoteModelLoading = providersOverrideState?.status === 'loading' || (!!deviceId && remoteModelListStatus === 'loading');
+  const remoteModelLoadFailed = providersOverrideState?.status === 'error' || (!!deviceId && remoteModelListStatus === 'error');
+  const localModelLoading = !deviceId && !providersOverride && !localProviders.loadFailed && (
+    localProviders.loading ||
     (agentKind === 'codex' ? codex.loading : agentKind === 'pi' ? pi.loading : cc.loading)
   );
   const visibleModels = useMemo(
@@ -3459,12 +4288,8 @@ export function ModelSelector({
           ? t('newChat.modelSelector.trigger.agent.pi')
           : t('newChat.modelSelector.trigger.agent.codex')
       : null;
-  const agentIdentityLabel =
-    agentName && agentIdentity?.state === 'pending'
-      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
-      : agentName;
-  const baseDisplayIdentityLabel = agentIdentityLabel
-    ? `${agentIdentityLabel} · ${displayLabel}`
+  const baseDisplayIdentityLabel = agentName
+    ? `${agentName} · ${displayLabel}`
     : displayLabel;
   const remoteStatusLabel = currentModel
     ? remoteModelLoading
@@ -3524,6 +4349,7 @@ export function ModelSelector({
   // 草稿没有已连接来源时显示连接 CTA；已建任务保留保存的模型和恢复入口。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
   const noSource =
+    !providersOverride &&
     !actualRoute &&
     !!onProviderChange &&
     !!onNavigateToProviders &&
@@ -3579,7 +4405,7 @@ export function ModelSelector({
     triggerActiveProvider && currentAgentKind
       ? modelSupportsFastMode(triggerActiveProvider, modelId, currentAgentKind)
       : !!currentModel?.supportsFastMode;
-  const triggerFastOn = fastMode === true && triggerFastSupported;
+  const triggerFastOn = triggerFastSupported ? fastMode ?? false : false;
   // 已建任务的断开态保留模型身份；菜单同时提供重新连接与改选其他来源。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
   // A connected provider lacking this model is unavailable, not signed out.
@@ -3619,7 +4445,7 @@ export function ModelSelector({
     const vendor = selection.agentKind === 'claude-code' ? 'Claude Code' : selection.agentKind === 'pi' ? 'Pi' : 'Codex';
     return [vendor, name ?? t('newChat.modelSelector.trigger.placeholder'), provider ? providerDisplayName(provider, t) : selection.providerId,
       selection.effort ? modelEffortLabel(t, model, selection.effort) : null,
-      selection.fastMode ? t('newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
+      selection.fastMode ? t(selection.fastMode === 'ultrafast' ? 'newChat.modelSelector.speed.ultrafast' : 'newChat.modelSelector.meta.fastBadge') : null].filter(Boolean).join(' · ');
   };
   const pendingSelectionTitle = currentSelection && agentIdentity?.state === 'pending' && currentAgentKind
     ? t('newChat.modelSelector.trigger.currentAndNext', {
@@ -3627,18 +4453,38 @@ export function ModelSelector({
         next: describeSelection({ agentKind: currentAgentKind, model: modelId, providerId: currentProviderId ?? null, effort: showEffort ? effort : null, fastMode: triggerFastOn }),
       })
     : null;
-  const triggerTitle = pendingSelectionTitle
+  // Agent 在另一台电脑运行:图标上的信号波纹之外,悬停 / 读屏也要说出是哪台。
+  const agentDeviceLabel = agentDevice
+    ? agentDevice.name
+      ? t('newChat.modelSelector.trigger.agentDevice', { device: agentDevice.name })
+      : t('newChat.modelSelector.trigger.agentDeviceUnnamed')
+    : null;
+  const withAgentDeviceLabel = (label: string): string =>
+    agentDeviceLabel ? `${label} · ${agentDeviceLabel}` : label;
+  const triggerTitle = withAgentDeviceLabel(pendingSelectionTitle
     ? `${pendingSelectionTitle}${showSourceDisconnected ? ` · ${sourceIssueLabel}` : ''}`
-    : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
+    : showSourceDisconnected ? baseAriaLabel : displayIdentityLabel);
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
-  const accessibleLabel = pendingSelectionTitle ? triggerTitle : baseAriaLabel;
+  const accessibleLabel = pendingSelectionTitle ? triggerTitle : withAgentDeviceLabel(baseAriaLabel);
   const ariaLabel = ariaContext ? `${ariaContext}:${accessibleLabel}` : accessibleLabel;
-  const isBudget = modelId.startsWith('codex/');
+  const isBudget = isCodexGatewayWireModel(modelId);
   const isFieldTrigger = triggerVariant === 'field';
+  const isSettingsTrigger = triggerVariant === 'settings';
+  const modelDescription = isSettingsTrigger && unknownLabel && !localizedName &&
+    !remoteModelLoading && !remoteModelLoadFailed && !fallbackOption?.active
+    ? unknownModelDescription : undefined;
+  const modelLabelContent = modelDescription ? (
+    <>
+      <span>{modelId}</span>
+      <span className="block text-12 leading-5 text-[var(--model-trigger-meta)]">
+        {modelDescription}
+      </span>
+    </>
+  ) : displayLabel;
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // compact 是 composer 容器宽度状态，不是 create-agent 的视觉私有状态。
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
-  const isCompactToolbar = compactToolbar && !isFieldTrigger;
+  const isCompactToolbar = compactToolbar && !isFieldTrigger && !isSettingsTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
   // ── composer pill 的引擎小标(model-selector-unified §1.1)─────────────────────
   // 传了 engineMarkVendor 就走新形态:harness 名字文本让位给尾部的一枚 mark,和深度档字
@@ -3667,7 +4513,7 @@ export function ModelSelector({
     </span>
   ) : null;
   const agentIdentityPrefix =
-    agentIdentityLabel &&
+    agentName &&
     !isCompactToolbar &&
     (!engineMarkOption || agentIdentity?.state === 'pending') ? (
       <>
@@ -3677,7 +4523,7 @@ export function ModelSelector({
             isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
           )}
         >
-          {agentIdentityLabel}
+          {agentName}
         </span>
         <span
           className={cn(
@@ -3692,7 +4538,7 @@ export function ModelSelector({
     ) : null;
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
-  const morphEnabled = useMorphPopover && !isFieldTrigger;
+  const morphEnabled = useMorphPopover && !isFieldTrigger && !isSettingsTrigger;
   const budgetGradientStyle: CSSProperties | undefined = isBudget
     ? {
         background: 'var(--model-budget-gradient)',
@@ -3726,9 +4572,12 @@ export function ModelSelector({
               'rounded-full',
               // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
               // create-agent(新建对话框)与会话内共用同一套裸态,不再分叉 —— 静息/hover 逐字一致。
-              'h-[30px] max-w-full shrink overflow-hidden px-2.5',
+              'max-w-full shrink px-2.5',
+              isSettingsTrigger ? 'min-h-[30px] items-baseline py-1 text-left leading-5' : 'h-[30px] overflow-hidden',
               // 窄态工具条:钳制唯一可收缩的模型入口，给语音 / 发送固定动作留足空间。
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'min-w-0'
+                : isUltraCompactToolbar
                 ? 'w-[64px] min-w-[64px]'
                 : isCompactToolbar
                   ? 'w-[148px] min-w-[72px]'
@@ -3761,7 +4610,9 @@ export function ModelSelector({
               isCreateAgentVariant
                 ? 'text-[var(--create-agent-control-text)]'
                 : 'text-[var(--text-primary)]',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -3791,7 +4642,9 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -3803,7 +4656,7 @@ export function ModelSelector({
               isCreateAgentVariant ? 'text-12' : dense ? 'text-12' : 'text-13',
             )}
           >
-            {displayLabel}
+            {modelLabelContent}
           </span>
           {/* 来源断开是**来源**的事,引擎身份位照常保留(规格 §1.2:引擎可见性靠一致的
               结构位,不靠出错才显示)。 */}
@@ -3836,7 +4689,27 @@ export function ModelSelector({
           )}
           {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先、缺省回落
               当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
-          {activeSourceId ? (
+          {activeSourceId && agentDevice ? (
+            // Agent 在另一台电脑:Logo 原大小原位置不变，右上角外侧叠信号波纹。
+            <RemoteSourceMark
+              className={cn(
+                'mr-1.5',
+                isCreateAgentVariant
+                  ? 'text-[var(--create-agent-control-icon)]'
+                  : 'text-[var(--model-trigger-text)]',
+              )}
+            >
+              <ModelIconMark
+                icon={triggerModelIcon}
+                providerId={activeSourceId}
+                name={triggerActiveProvider?.name}
+                routing={triggerActiveProvider?.routing}
+                logoKind={triggerActiveProvider?.logoKind}
+                colorClass="text-current"
+                withMargin={false}
+              />
+            </RemoteSourceMark>
+          ) : activeSourceId ? (
             <ModelIconMark
               icon={triggerModelIcon}
               providerId={activeSourceId}
@@ -3852,7 +4725,9 @@ export function ModelSelector({
           <span
             className={cn(
               'min-w-0 font-normal',
-              isUltraCompactToolbar
+              isSettingsTrigger
+                ? 'whitespace-normal [overflow-wrap:anywhere]'
+                : isUltraCompactToolbar
                 ? 'hidden'
                 : isCompactToolbar
                   ? 'max-w-[108px] truncate'
@@ -3869,7 +4744,7 @@ export function ModelSelector({
             )}
             style={budgetGradientStyle}
           >
-            {displayLabel}
+            {modelLabelContent}
           </span>
           {/* 引擎小标 + 深度 = pill 的收尾身份组(新形态,见 engineMarkVendor)。
               旧形态没有 mark,深度前保留「·」分隔;有 mark 时图标本身就是分隔,再加点
@@ -3906,7 +4781,9 @@ export function ModelSelector({
                   isCreateAgentVariant
                     ? 'text-[var(--create-agent-control-text)]'
                     : 'text-[var(--text-primary)]',
-                  engineMarkOption
+                  isSettingsTrigger
+                    ? 'max-w-[40%] shrink-0 whitespace-normal [overflow-wrap:anywhere]'
+                    : engineMarkOption
                     ? isCompactToolbar
                       ? 'min-w-0 shrink truncate'
                       : 'shrink-0 whitespace-nowrap'
@@ -3923,7 +4800,8 @@ export function ModelSelector({
             </>
           )}
           {triggerFastOn && showTriggerTail && (
-            <Zap
+            <SpeedIcon
+              mode={triggerFastOn}
               size={isCreateAgentVariant ? 11 : dense ? 12 : 13}
               className={cn(
                 'ml-0.5 shrink-0',
@@ -3931,7 +4809,6 @@ export function ModelSelector({
                   ? 'text-[var(--create-agent-control-icon)]'
                   : 'text-[var(--composer-pill-icon,#3C3F43)] dark:text-[var(--composer-pill-icon,#D9D9D9)]',
               )}
-              aria-label={t('newChat.modelSelector.meta.fastBadge')}
             />
           )}
           {currentModel && remoteModelLoading && (
@@ -3984,10 +4861,12 @@ export function ModelSelector({
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}
+      {...(remoteAgent ? { remoteAgent } : {})}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}
       actualRoute={actualRoute}
+      taskStarted={taskStarted}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
@@ -3995,10 +4874,13 @@ export function ModelSelector({
       configurationEnabled={configurationEnabled}
       fastModeConfigurable={fastModeConfigurable}
       providersOverride={providersOverride}
+      providersOverrideState={providersOverrideState}
       unifiedPanel={unifiedPanel}
       sessionEngineFilter={contentSessionEngineFilter}
       unifiedAgents={unifiedAgents}
       unifiedSelectionPolicy={unifiedSelectionPolicy}
+      recordRecentUsage={recordRecentUsage}
+      // 浏览其他电脑目录时的禁记门在 Content 内按 remoteAgent 派生(它才知道 remoteBrowse)。
       selectedFavoriteUid={selectedFavoriteUid}
       onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
       onUnifiedSelect={onUnifiedSelect}
@@ -4047,7 +4929,9 @@ export function ModelSelector({
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}
       >
-        {content}
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+          {content}
+        </ProviderShareQuotaViewingContext.Provider>
       </MorphPopover>
     );
   }
@@ -4070,7 +4954,9 @@ export function ModelSelector({
           'border border-[var(--model-dropdown-border)]',
         )}
       >
-        {content}
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+          {content}
+        </ProviderShareQuotaViewingContext.Provider>
       </PopoverContent>
     </Popover>
   );

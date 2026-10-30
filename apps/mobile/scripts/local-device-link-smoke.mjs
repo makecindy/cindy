@@ -75,6 +75,7 @@ const flows = resolveFlows({
   flow: options.flow ?? process.env.XDT_MOBILE_E2E_FLOW,
   appId,
   flowSuite,
+  platform,
 });
 const configuredMockHostScenario = options.mockHostScenario
   ?? process.env.XDT_MOBILE_E2E_MOCK_SCENARIO;
@@ -106,7 +107,7 @@ const waitForReadyMs = options.waitForReadyMs
 const waitForExpoReadyMs = options.startExpo ? Math.max(waitForReadyMs, 60_000) : 0;
 const isolateMockHostFlows = options.mockHost
   && !options.checkOnly
-  && (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file' || flowSuite === 'automations')
+  && (flowSuite === 'visual' || flowSuite === 'full' || flowSuite === 'file')
   && !options.flow
   && flows.length > 1;
 const cleanupTasks = [];
@@ -980,7 +981,7 @@ function parseArgs(args) {
   return parsed;
 }
 
-function resolveFlows({ appId, flow, flowSuite }) {
+function resolveFlows({ appId, flow, flowSuite, platform }) {
   if (flow) return [flow];
   if (!flowSuite) return [defaultFlow];
   if (flowSuite === 'default') return [defaultFlow];
@@ -994,14 +995,12 @@ function resolveFlows({ appId, flow, flowSuite }) {
     ];
   }
   if (flowSuite === 'file') return ['file_preview.yaml', 'file_browser.yaml'];
-  if (flowSuite === 'automations') return ['automations.yaml', 'automations_create_edit.yaml'];
   if (flowSuite === 'visual') {
     return [
       'visual_smoke.yaml',
       'visual_session_list_controls.yaml',
       'visual_new_session.yaml',
       'visual_files.yaml',
-      'visual_automations.yaml',
       'visual_session_idle.yaml',
       'visual_session_controls_session.yaml',
       'visual_session_controls_usage.yaml',
@@ -1026,8 +1025,7 @@ function resolveFlows({ appId, flow, flowSuite }) {
       'file_browser.yaml',
       'fork_rewind.yaml',
       'message_selection.yaml',
-      'automations.yaml',
-      'automations_create_edit.yaml',
+      ...(platform === 'ios' ? ['session_back_gesture.yaml'] : []),
       'settings.yaml',
     ];
   }

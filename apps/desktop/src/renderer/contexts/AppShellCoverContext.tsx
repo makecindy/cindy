@@ -1,7 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 
@@ -33,7 +32,7 @@ const FALLBACK_VALUE: AppShellCoverContextValue = Object.freeze({
 });
 
 function isDerivedWindow(): boolean {
-  return isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow();
+  return isSecondaryWindow() || isSidebarWindow();
 }
 
 export function AppShellCoverProvider({ children }: { children: ReactNode }) {

@@ -1,3 +1,4 @@
+import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
   buildAttachmentPersistFileRefs,
   buildAttachmentPersistImageRefs,
@@ -10,6 +11,8 @@ import {
 import type { InputProjection, QueuedRemoteMessage, RemoteImageRef, RemoteSession } from '@/session/types';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { parseMobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
+import { i18n } from '@/i18n';
+import { resolveSystemLocale } from '@/i18n/locale';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   composerDocumentsEqual,
@@ -99,11 +102,20 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     toolLoop: parseMobileToolLoopErrorDetails(record?.toolLoop),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
+    errorCanContinue: record?.errorCanContinue === true,
     autoResumePending: readRecord(record?.autoResumePending),
     continuationTurnClientId: readString(record?.continuationTurnClientId),
     continuationInFlightProjectionCapability,
     credentialSwitchWait: readCredentialSwitchWait(record?.credentialSwitchWait),
+    usageLimitWait: readUsageLimitWait(record?.usageLimitWait),
   };
+}
+
+function readUsageLimitWait(value: unknown): InputProjection['usageLimitWait'] {
+  const resumeAt = readRecord(value)?.resumeAt;
+  return typeof resumeAt === 'number' && Number.isFinite(resumeAt) && resumeAt > 0
+    ? { resumeAt }
+    : null;
 }
 
 /** 宽松解析凭证切换等待态:非对象/blockedBySessionIds 缺失或为空一律视作无等待。 */
@@ -127,10 +139,13 @@ export function buildQueuedTextMessage(
   clientId = createUuid(),
   options: {
     attachments?: readonly RemoteSerializedAttachment[];
+    planMode?: boolean;
     quotesEncoded?: boolean;
     agentReferences?: AgentInputReference[];
     pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
     slashCommandRanges?: Array<{ start: number; end: number }>;
+    /** 伙伴私聊引用回复：写进信封，宿主据此给伙伴附上原消息。 */
+    replyQuote?: ChatReplyQuote;
   } = {},
 ): QueuedRemoteMessage {
   const trimmed = text.trim();
@@ -151,12 +166,15 @@ export function buildQueuedTextMessage(
     options.pastedTextRanges,
     options.slashCommandRanges,
     options.agentReferences,
+    options.replyQuote,
   );
   const createdAt = now.toISOString();
+  const uiLanguage = resolveSystemLocale(i18n.resolvedLanguage || i18n.language);
 
   return {
     clientId,
     text: trimmed,
+    uiLanguage,
     persistedContent,
     ...(attachments.length > 0 ? { files: [...attachments] } : {}),
     ...(options.agentReferences?.length ? { agentReferences: options.agentReferences } : {}),
@@ -178,6 +196,7 @@ export function buildQueuedTextMessage(
     },
     createOpts: {
       agentKind,
+      ...(options.planMode !== undefined ? { planMode: options.planMode } : {}),
       workingDir,
       model: session.model,
       effort,
@@ -205,6 +224,7 @@ function stringifyUserContent(
   pastedTextRanges: Array<{ start: number; end: number; display: string }> = [],
   slashCommandRanges?: Array<{ start: number; end: number }>,
   agentReferences: AgentInputReference[] = [],
+  replyQuote?: ChatReplyQuote,
 ): string {
   return JSON.stringify({
     text,
@@ -214,7 +234,19 @@ function stringifyUserContent(
     ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
     ...(slashCommandRanges !== undefined ? { slashCommandRanges } : {}),
     ...(agentReferences.length > 0 ? { agentReferences } : {}),
+    ...(replyQuote ? { replyQuote } : {}),
   });
+}
+
+/** 排队编辑整条替换时沿用原消息的引用回复：引用属于这条消息，不属于被编辑的正文。 */
+export function queuedMessageReplyQuote(
+  message: Pick<QueuedRemoteMessage, 'persistedContent'>,
+): ChatReplyQuote | undefined {
+  try {
+    return readChatReplyQuote(readRecord(JSON.parse(message.persistedContent))?.replyQuote) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 排队编辑时从持久化信封恢复引用标志，避免整条替换后 marker 退化为正文。 */

@@ -1,0 +1,12 @@
+{
+  "sharedTaskReadOnly": "Only the session owner can interact with this card.",
+  "retry": "Reload",
+  "loadFailed": "The app could not load. Check the connection and reload.",
+  "updateRequired": "This computer does not support MCP Apps yet. Update Cindy on that computer and try again.",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "Sent by $t(mcpApps.appName) “{{name}}”",
+  "serverId": "MCP Server ID: {{id}}",
+  "exitFullscreen": "Exit Fullscreen",
+  "mobileUpdateRequired": "Update Cindy on this phone to open this card."
+}

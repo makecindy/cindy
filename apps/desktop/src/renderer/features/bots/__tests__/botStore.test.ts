@@ -112,7 +112,7 @@ describe('bot profile store', () => {
       vendorKey: 'pi',
     });
     setProviders([
-      piProvider('xd', true, [piModel('z-ai/glm-5.3-flash')]),
+      piProvider('xd', true, [piModel('auto')]),
     ]);
   });
 
@@ -143,25 +143,25 @@ describe('bot profile store', () => {
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('uses Cindy selected default when it is selectable', () => {
+  it('uses the teammate recommendation independently of the new-task draft', () => {
     const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
     expect(bot.capabilities).toMatchObject({
       harness: 'pi',
-      model: 'z-ai/glm-5.3-flash',
+      model: 'auto',
       providerId: 'xd',
       effort: 'high',
     });
   });
 
-  it('does not replace an unavailable Cindy default with another connected model', async () => {
+  it('does not recommend a subscription on an unsupported default harness', async () => {
     setProviders([
       piProvider(
         'openai',
@@ -543,6 +543,20 @@ describe('保存失败只回滚自己那一行', () => {
     expect(getBotProfiles().find((item) => item.id === bot.id)).not.toHaveProperty('capabilityBaseline');
     await expect(pending).resolves.toMatchObject({ skills: ['external', 'local'] });
     expect(getBotProfiles().find((item) => item.id === bot.id)).toMatchObject({ skills: ['external', 'local'] });
+  });
+
+  it.each(['inherit', 'allowlist'] as const)('preserves the Host’s %s tool and MCP grant modes after a save', async mode => {
+    const bot = addBotProfile({ name: 'Capability modes', description: '' });
+    createdIds.push(bot.id);
+    stubDeferredUpdates();
+    const api = (globalThis as unknown as { window: { electronAPI: { localDb: { bots: { update: unknown } } } } }).window.electronAPI.localDb.bots;
+    api.update = vi.fn(async () => ({ ...bot, capabilities: { ...bot.capabilities,
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    } }));
+    await updateBotProfile(bot.id, { description: 'Updated' });
+    expect(getBotProfiles().find(item => item.id === bot.id)?.capabilities).toMatchObject({
+      toolsetMode: mode, toolsets: [], mcpMode: mode, mcpServers: [],
+    });
   });
 
   it('另一个伙伴在同期保存的修改不被撤销', async () => {

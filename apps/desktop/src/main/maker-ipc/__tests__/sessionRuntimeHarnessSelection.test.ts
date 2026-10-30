@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { nextBotModelRoute } from '../../../shared/botModelChain';
+import { createBotSessionTaskRouteBridge } from '../botSessionTaskRouteBridge';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -11,6 +13,7 @@ import {
   type HarnessRuntimeSelectionDeps,
 } from '../sessionRuntimeHarnessSelection';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
+import type { SessionRuntimeResult } from '../sessionControlService';
 
 function setup(running = false) {
   let generation = 4;
@@ -53,7 +56,7 @@ function setup(running = false) {
     pendingRevision: (id) => pending.revision!(id),
     read: vi.fn(async () => effective),
     resolve: vi.fn(async (profile) => ({ ...profile, providerId: profile.providerId ?? 'openai' })),
-    stage: (id, profile, assertCurrent) =>
+    stage: (id, profile, assertCurrent, beforeMutation) =>
       performSessionAgentSwitch(switchDeps, {
         sessionId: id,
         targetAgentKind: profile.agentKind,
@@ -63,6 +66,7 @@ function setup(running = false) {
         fastMode: profile.fastMode,
         runtimeSource: 'agent',
         assertSelectionCurrent: assertCurrent,
+        beforeMutation,
       }),
     pending: (id) => pending.get(id),
   };
@@ -87,6 +91,76 @@ const request = {
 };
 
 describe('runtime harness selection', () => {
+  it('routes a configured cross-harness task choice through the runtime controller', async () => {
+    const h = setup();
+    const bridge = createBotSessionTaskRouteBridge({
+      getSessionRuntime: async ({ targetSessionId }) => {
+        expect(targetSessionId).toBe('s1');
+        return {
+          ok: true,
+          runtime: {
+            runtimeGeneration: h.deps.generation(targetSessionId),
+            effectiveProfile: h.effective,
+          },
+        } as SessionRuntimeResult;
+      },
+      setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {
+        expect(patch.harness).toBe('codex');
+        return setSessionRuntimeHarness(h.deps, {
+          targetSessionId,
+          expectedGeneration,
+          patch: { ...patch, harness: patch.harness! },
+        });
+      },
+      readConfiguredCandidate: async (callerSessionId, current, childSessionId) => {
+        expect([callerSessionId, childSessionId]).toEqual(['bot-main', 's1']);
+        const route = nextBotModelRoute([
+          { harness: 'claude', model: 'claude-fable-5', providerId: 'old-provider', effort: 'high', fastMode: false },
+          { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: '', fastMode: false },
+        ], { harness: current.agentKind === 'claude-code' ? 'claude' : current.agentKind,
+          model: current.model, providerId: current.providerId });
+        return { candidate: route ? {
+          agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+          model: route.model,
+          providerId: route.providerId,
+          effort: null,
+          fastMode: route.fastMode,
+        } satisfies SessionRuntimeProfile : null };
+      },
+    });
+    const preview = await bridge.inspect('bot-main', 's1');
+    expect(preview).toMatchObject({
+      ok: true, generation: 4,
+      next: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+    });
+    if (!preview.ok || !preview.next) throw new Error('Expected configured cross-harness route');
+    expect(await bridge.advance('s1', preview.generation, preview.next)).toMatchObject({
+      ok: true, status: 'deferred', generation: 5,
+    });
+    expect(h.pending.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+    });
+    expect(pendingHarnessRuntimeMutation(h.pending.get('s1'), 5))
+      .toMatchObject({ profile: { effort: null } });
+    expect(h.close).not.toHaveBeenCalled();
+    await expect(bridge.advance('s1', preview.generation, preview.next))
+      .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT' });
+  });
+
+  it('keeps a configured default effort instead of inheriting the previous harness effort', async () => {
+    const h = setup();
+    const result = await setSessionRuntimeHarness(h.deps, {
+      ...request, patch: { ...request.patch, effort: null },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      pendingMutation: { profile: { effort: null } },
+    });
+    expect(h.deps.resolve).toHaveBeenCalledWith(expect.objectContaining({ effort: null }), {
+      effort: true, fast: false,
+    });
+  });
+
   it('blocks sending on the old harness when the accepted target becomes unavailable', async () => {
     const h = setup();
     await setSessionRuntimeHarness(h.deps, request);
@@ -164,8 +238,38 @@ describe('runtime harness selection', () => {
   );
 
   it.each([
+    { orcaRole: 'lead', running: false },
+    { orcaRole: 'lead', running: true },
+    { orcaRole: 'worker', running: false },
+    { orcaRole: 'worker', running: true },
+  ])('stages an Orca harness choice until the next send: %j', async ({ orcaRole, running }) => {
+    const h = setup(running);
+    h.pending.set('s1', { targetAgentKind: 'pi', model: 'old-choice', providerId: null });
+    const read = h.switchDeps.getSessionRow;
+    h.switchDeps.getSessionRow = async (id) => ({ ...(await read(id))!, orcaRole });
+
+    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({
+      ok: true,
+      status: 'deferred',
+      effectiveBoundary: 'next_send',
+      generation: 5,
+      effectiveProfile: h.effective,
+      pendingMutation: {
+        source: 'agent',
+        profile: { agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' },
+      },
+    });
+    expect(h.pending.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai',
+    });
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { remoteHostId: 'ssh-host' },
-    { orcaRole: 'lead' },
+    { remoteHostId: 'ssh-host', orcaRole: 'lead' },
+    { remoteHostId: 'ssh-host', orcaRole: 'worker' },
     { source: 'review' },
     { status: 'deleted' },
     { status: 'archived' },
@@ -175,7 +279,10 @@ describe('runtime harness selection', () => {
     h.pending.set('s1', previous);
     const read = h.switchDeps.getSessionRow;
     h.switchDeps.getSessionRow = async (id) => ({ ...(await read(id))!, ...overrides });
-    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({ ok: false });
+    expect(await setSessionRuntimeHarness(h.deps, request)).toMatchObject({
+      ok: false,
+      errorCode: overrides.status === 'deleted' ? 'NOT_FOUND' : 'ROUTE_UNAVAILABLE',
+    });
     expect(h.pending.get('s1')).toBe(previous);
     expect(h.close).not.toHaveBeenCalled();
   });

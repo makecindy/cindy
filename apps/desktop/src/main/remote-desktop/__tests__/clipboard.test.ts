@@ -79,13 +79,38 @@ it('retains pixel bounds on file-backed images', async () => {
 
 const syncCopy = () =>
   transferDesktopClipboardContent('copy', undefined, () => true, vi.fn(), { sync: true });
+it.each([
+  [3840, 2160],
+  [5120, 2880],
+  [6016, 3384],
+])('copies and pastes a %s x %s screenshot without resizing', async (width, height) => {
+  const bytes = Buffer.alloc(33);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]).copy(bytes);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  const native = { ...image, getSize: () => ({ width, height }), toPNG: () => bytes };
+  mocks.clipboard.readImage.mockReturnValue(native);
+  mocks.decode.mockReturnValue(native);
+  const content = await syncCopy();
+  expect(content).toMatchObject({ png: bytes.toString('base64') });
+  await expect(
+    transferDesktopClipboardContent(
+      'paste',
+      { png: bytes.toString('base64') },
+      () => true,
+      vi.fn(),
+      { sync: true },
+    ),
+  ).resolves.toEqual({ version: '1' });
+  expect(mocks.clipboard.write).toHaveBeenCalledWith({ image: native });
+});
 it.each([copy, syncCopy])(
   'rejects oversized native images before encoding in either copy mode',
   async (read) => {
     const encode = vi.fn();
     mocks.clipboard.readImage.mockReturnValue({
       ...image,
-      getSize: () => ({ width: 2001, height: 2000 }),
+      getSize: () => ({ width: 6001, height: 4000 }),
       toPNG: encode,
     });
     await expect(read()).rejects.toThrow('CLIPBOARD_TOO_LONG');
@@ -93,7 +118,7 @@ it.each([copy, syncCopy])(
   },
 );
 it('rejects an oversized encoded buffer before making a Base64 copy', async () => {
-  const bytes = Buffer.alloc(8 * 1024 * 1024 + 1);
+  const bytes = Buffer.alloc(16 * 1024 * 1024 + 1);
   const stringify = vi.spyOn(bytes, 'toString');
   mocks.clipboard.readImage.mockReturnValue({ ...image, toPNG: () => bytes });
   await expect(syncCopy()).rejects.toThrow('CLIPBOARD_TOO_LONG');
@@ -101,7 +126,7 @@ it('rejects an oversized encoded buffer before making a Base64 copy', async () =
 });
 it('accepts the exact pixel boundary and explicitly encodes at scale one', async () => {
   const encode = vi.fn(() => png);
-  const size = vi.fn(() => ({ width: 2000, height: 2000 }));
+  const size = vi.fn(() => ({ width: 6000, height: 4000 }));
   mocks.clipboard.readImage.mockReturnValue({
     ...image,
     getSize: size,
@@ -111,13 +136,13 @@ it('accepts the exact pixel boundary and explicitly encodes at scale one', async
   expect(size).toHaveBeenCalledWith(1);
   expect(encode).toHaveBeenCalledWith({ scaleFactor: 1 });
 });
-it.each([0, 2001, 0xffffffff])(
+it.each([0, 6001, 0xffffffff])(
   'refuses incoming invalid/oversized dimensions before native decode: %s',
   async (width) => {
     const bytes = Buffer.alloc(33);
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]).copy(bytes);
     bytes.writeUInt32BE(width, 16);
-    bytes.writeUInt32BE(2000, 20);
+    bytes.writeUInt32BE(4000, 20);
     await expect(
       transferDesktopClipboardContent(
         'paste',

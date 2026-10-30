@@ -612,7 +612,7 @@ describe('custom provider runtime fill', () => {
     expect(result.models[0]?.route).not.toBe(source.models[0]?.route);
   });
 
-  it('ignores Pi-only capabilities when comparing or filling a non-Pi target', () => {
+  it('preserves shared capabilities when filling a non-Pi target', () => {
     const source = draft({
       models: [
         {
@@ -631,13 +631,13 @@ describe('custom provider runtime fill', () => {
       targetAgent: 'codex',
     }).find((diff) => diff.field === 'models');
 
-    expect(modelDiff?.targetState).toBe('same');
+    expect(modelDiff?.targetState).toBe('conflict');
     expect(
       applyRuntimeFillFields(target, source, ['models'], {
         sourceAgent: 'pi',
         targetAgent: 'codex',
       }).models,
-    ).toEqual([{ id: 'model-a', name: 'Model A' }]);
+    ).toEqual(source.models);
   });
 
   it('uses the same model and header counting semantics as save', () => {
@@ -758,4 +758,18 @@ describe('custom provider runtime fill', () => {
     expect(runtimeFillSelectedTargetChanged(previous, fresh, ['models'], 'codex')).toBe(true);
     expect(runtimeFillSelectedTargetChanged(previous, fresh, ['apiKey'], 'codex')).toBe(false);
   });
+});
+
+
+it('copies complete metadata without silently opting another engine into compatibility', () => {
+  const model = { id: 'gpt-7-sol', name: 'Seven', api: 'openai-responses' as const,
+    nativeApi: 'openai-responses' as const, defaultEnabled: true, supportsImageInput: false,
+    supportsFastMode: false, reasoning: false, maxOutputTokens: 32000,
+    discoveredMetadata: { supportsToolCalls: true }, discoveredCost: { input: 1, output: 2 } };
+  const source = draft({ models: [model] });
+  const result = applyRuntimeFillFields(draft(), source, ['models'], { sourceAgent: 'pi', targetAgent: 'claude-code' });
+  const { defaultEnabled: _enabled, ...metadata } = model;
+  expect(result.models).toEqual([metadata]);
+  const existing = draft({ models: [{ id: model.id, name: 'Old', defaultEnabled: true }] });
+  expect(applyRuntimeFillFields(existing, source, ['models'], { sourceAgent: 'pi', targetAgent: 'claude-code' }).models[0]?.defaultEnabled).toBe(true);
 });

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ContactsManagerDialog — 智能通讯录管理浮层(radix Dialog, 与 ScheduleFormDialog
  * 同外壳): 左列表(搜索/过滤/分组/新建) + 右详情。
@@ -231,10 +232,7 @@ export function ContactsManagerDialog({
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            'fixed inset-0 z-[10000]',
-            'bg-[var(--overlay-modal)]',
-            'data-[state=open]:animate-confirm-overlay-in',
-            'data-[state=closed]:animate-confirm-overlay-out',
+            'modal-scrim fixed inset-0 z-[10000]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
@@ -243,9 +241,8 @@ export function ContactsManagerDialog({
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
           className={cn(
-            'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-            'flex h-[82vh] w-[920px] max-w-[94vw] flex-col overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'flex h-[82vh] w-[920px] max-w-[94vw] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
@@ -278,42 +275,36 @@ export function ContactsManagerDialog({
               )}
             </div>
             {syncStatus?.enabled && onSyncNow && (
-              <button
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                loading={syncPending}
                 type="button"
                 onClick={onSyncNow}
                 disabled={syncPending || syncStatus.onlineDeviceCount === 0}
-                className={cn(
-                  'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-13 transition-colors',
-                  'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)]',
-                  'hover:bg-[var(--settings-menu-bg-hover)]',
-                  'disabled:cursor-not-allowed disabled:opacity-50',
-                )}
               >
                 <span
-                  className={cn(
-                    'inline-flex',
-                    syncPending && 'animate-spinner motion-reduce:animate-none',
-                  )}
+                  className={cn('inline-flex', syncPending && 'animate-spinner motion-reduce:animate-none')}
                   aria-hidden="true"
                 >
                   <RefreshCw size={14} />
                 </span>
                 {t('settings.contacts.sync.syncNow')}
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
               type="button"
               onClick={() => setImportOpen(true)}
               aria-label={t('settings.contacts.import.title')}
               title={t('settings.contacts.import.title')}
-              className={cn(
-                'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-13 transition-colors',
-                'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)] hover:bg-[var(--settings-menu-bg-hover)]',
-              )}
             >
               <Import size={14} />
               {t('settings.contacts.import.button')}
-            </button>
+            </Button>
             <Dialog.Close asChild>
               <button
                 type="button"

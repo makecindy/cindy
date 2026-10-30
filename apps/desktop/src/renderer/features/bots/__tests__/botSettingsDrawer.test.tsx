@@ -31,9 +31,12 @@ vi.mock('../botPronounContext', () => ({
   useBotTranslation: () => ({ t: (key: string) => key }),
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
+vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [{ id: 'remote-bot', deviceId: 'other-mac', name: 'Remote' }] }));
+vi.mock('../RemoteTeammateSettings', () => ({ RemoteTeammateSettings: ({ bot, initialPage }: { bot: { deviceId: string }; initialPage?: string }) => <div data-testid="remote-settings" data-initial-page={initialPage}>{bot.deviceId}</div> }));
 vi.mock('../botStore', () => ({
   useBotProfiles: () => [
     { id: 'bot-1', name: 'Filo', status: 'active', sessions: [], capabilities: {}, skills: [] },
+    { id: 'bot-paused', name: 'Paused', status: 'paused', sessions: [], capabilities: {}, skills: [] },
   ],
 }));
 vi.mock('../BotsHomeView', async () => {
@@ -43,8 +46,10 @@ vi.mock('../BotsHomeView', async () => {
   return {
     BotSettings: ({
       beforeCloseRef,
+      initialPage,
     }: {
       beforeCloseRef: { current: (() => Promise<boolean>) | null };
+      initialPage?: string;
     }) => {
       useEffect(() => {
         beforeCloseRef.current = guard;
@@ -53,7 +58,7 @@ vi.mock('../BotsHomeView', async () => {
         };
       }, [beforeCloseRef]);
       return (
-        <div data-testid="simple-bot-settings">
+        <div data-testid="simple-bot-settings" data-initial-page={initialPage}>
           <Popover>
             <PopoverTrigger>Choose model</PopoverTrigger>
             <PopoverContent>
@@ -67,6 +72,12 @@ vi.mock('../BotsHomeView', async () => {
     },
   };
 });
+
+const cloud = vi.hoisted(() => ({ demotedBotIds: [] as string[] }));
+vi.mock('../companionCloudStore', () => ({
+  useCompanionCloud: () => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', actors: [], demotedBotIds: cloud.demotedBotIds }),
+}));
+beforeEach(() => { cloud.demotedBotIds = []; });
 
 import { BotSettingsDrawer } from '../BotSettingsDrawer';
 
@@ -84,6 +95,61 @@ afterEach(() => {
 });
 
 describe('BotSettingsDrawer', () => {
+  // Unit regression for the reported inert scrim (DESIGN.md §4: side drawers dismiss outside).
+  // Existing cases cover navigation, Escape and ×, but not pointer dismissal through the real
+  // BotSettingsDrawer. A pointer on the scrim must close only when the save/draft guard permits;
+  // pointers inside the drawer or its portal must leave it open.
+  it('closes from the scrim only after the draft guard allows leaving', async () => {
+    guard.mockResolvedValue(false);
+    const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+      initialEntries: ['/bots/bot-1?settings=1&settingsPage=memory&keep=1'],
+    });
+    render(<RouterProvider router={router} />);
+    // Radix installs its document pointer listener on the next task.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const scrim = screen.getByRole('dialog').parentElement!;
+    fireEvent.pointerDown(scrim, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(scrim);
+    await waitFor(() => expect(guard).toHaveBeenCalledOnce());
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(router.state.location.search).toContain('settings=1');
+
+    guard.mockResolvedValue(true);
+    fireEvent.pointerDown(scrim, { pointerType: 'mouse', button: 0 });
+    fireEvent.click(scrim);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(guard).toHaveBeenCalledTimes(2);
+    expect(router.state.location.pathname).toBe('/bots/bot-1');
+    expect(router.state.location.search).toBe('?keep=1');
+  });
+
+  it('keeps settings open when clicking inside the drawer or its portaled controls', async () => {
+    render(<RouterProvider router={createMemoryRouter(
+      [{ path: '*', element: <BotSettingsDrawer /> }],
+      { initialEntries: ['/bots/bot-1?settings=1'] },
+    )} />);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    fireEvent.pointerDown(screen.getByTestId('simple-bot-settings'), { pointerType: 'mouse', button: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    const option = await screen.findByRole('button', { name: 'Model row' });
+    await act(async () => {
+      fireEvent.pointerDown(option, { pointerType: 'mouse', button: 0 });
+      fireEvent.click(option);
+    });
+    expect(screen.getByTestId('simple-bot-settings')).toBeTruthy();
+    expect(guard).not.toHaveBeenCalled();
+  });
+
+  it('does not open editable settings for a copy demoted to another computer', async () => {
+    cloud.demotedBotIds = ['bot-1'];
+    const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }],
+      { initialEntries: ['/bots/bot-1?settings=1'] });
+    render(<RouterProvider router={router} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it.each(['query', 'sidebar', 'back'])(
     'protects drafts when %s navigation removes settings',
     async (kind) => {
@@ -123,6 +189,29 @@ describe('BotSettingsDrawer', () => {
       expect(router.state.location.pathname).toBe(kind === 'sidebar' ? '/cc-agent' : '/bots/bot-1');
     },
   );
+
+  it('deep-links local and remote teammates to the messaging platforms page', () => {
+    const local = render(
+      <RouterProvider
+        router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+          initialEntries: ['/bots/bot-1?settings=1&settingsPage=channels'],
+        })}
+      />,
+    );
+    expect(screen.getByTestId('simple-bot-settings').getAttribute('data-initial-page')).toBe(
+      'channels',
+    );
+    local.unmount();
+    render(
+      <RouterProvider
+        router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+          initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1&settingsPage=channels'],
+        })}
+      />,
+    );
+    // The remote host serves the same pages; one that cannot serve a page falls back to the home itself.
+    expect(screen.getByTestId('remote-settings').getAttribute('data-initial-page')).toBe('channels');
+  });
 
   it('allows wheel events in portaled model lists while blocking background scrolling', async () => {
     render(
@@ -186,6 +275,8 @@ describe('BotSettingsDrawer', () => {
     expect(dialog.className).toContain('right-0');
     expect(dialog.className).toContain('w-full');
     expect(dialog.className).toContain('max-w-md');
+    // Portaled after the page's title-bar drag strip, so this no-drag wins under the close button.
+    expect((dialog.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
     expect(screen.getByTestId('simple-bot-settings')).toBeTruthy();
 
@@ -194,4 +285,49 @@ describe('BotSettingsDrawer', () => {
     expect(screen.getByTestId('location').textContent).toBe('/bots/bot-1/session/chat-1');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
   });
+});
+
+it('keeps the drawer open while Escape only cancels an IME candidate', async () => {
+  render(
+    <RouterProvider
+      router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+        initialEntries: ['/bots/bot-1?settings=1'],
+      })}
+    />,
+  );
+  const dialog = screen.getByRole('dialog');
+  fireEvent.keyDown(dialog, { key: 'Escape', isComposing: true });
+  fireEvent.keyDown(dialog, { key: 'Escape', keyCode: 229 });
+  await act(async () => {});
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(guard).not.toHaveBeenCalled();
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(guard).toHaveBeenCalledOnce();
+});
+
+it.each(['close button', 'Escape'])('closes a paused teammate\'s settings to the list via %s instead of bouncing back', async (kind) => {
+  const router = createMemoryRouter([{ path: '*', element: <><LocationProbe /><BotSettingsDrawer /></> }], {
+    initialEntries: ['/bots/bot-paused?settings=1'],
+  });
+  render(<RouterProvider router={router} />);
+  if (kind === 'Escape') fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/bots/list'));
+  // The save / routine-draft guard still runs before leaving.
+  expect(guard).toHaveBeenCalledOnce();
+});
+
+it('opens remote settings for the route device instead of searching the local bot store', () => {
+  render(<RouterProvider router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], { initialEntries: ['/bots/remote/other-mac/remote-bot?settings=1'] })} />);
+  expect(screen.getByTestId('remote-settings').textContent).toBe('other-mac');
+  expect(screen.queryByTestId('simple-bot-settings')).toBeNull();
+});
+
+it('routes a local voice deep link to the voice settings page', async () => {
+  const router = createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+    initialEntries: ['/bots/bot-1?settings=1&settingsPage=voice'],
+  });
+  render(<RouterProvider router={router} />);
+  expect(screen.getByTestId('simple-bot-settings').getAttribute('data-initial-page')).toBe('voice');
 });

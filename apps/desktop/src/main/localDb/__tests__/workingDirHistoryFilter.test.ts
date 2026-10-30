@@ -30,10 +30,12 @@ function createLocalDb(): Database.Database {
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
       orca_role TEXT,
+      orca_remote_lead TEXT,
       user_send_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       parent_session_id TEXT,
@@ -58,6 +60,7 @@ function createLocalDb(): Database.Database {
       feishu_bot_app_id TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       codex_history_has_product_prompt INTEGER,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
@@ -71,6 +74,7 @@ function createLocalDb(): Database.Database {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE bot_session_links (session_id TEXT PRIMARY KEY, bot_id TEXT, role TEXT, route_key TEXT);
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,

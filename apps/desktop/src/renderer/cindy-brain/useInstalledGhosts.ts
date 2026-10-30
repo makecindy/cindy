@@ -81,8 +81,15 @@ export function __resetInstalledGhostsStoreForTest(): void {
  * 已装意识清单:设置页导航子项 / 意识总览 / 单意识页 / 聊天动作行共用,
  * 所有消费者永远看到同一份清单(同一引用)。
  */
-export function useInstalledGhosts(): InstalledGhost[] {
-  return useSyncExternalStore(subscribeInstalledGhosts, getInstalledGhostsSnapshot);
+const EMPTY_GHOSTS: InstalledGhost[] = [];
+const emptySnapshot = () => EMPTY_GHOSTS;
+const noSubscription = () => () => {};
+
+export function useInstalledGhosts(enabled = true): InstalledGhost[] {
+  return useSyncExternalStore(
+    enabled ? subscribeInstalledGhosts : noSubscription,
+    enabled ? getInstalledGhostsSnapshot : emptySnapshot,
+  );
 }
 
 /**

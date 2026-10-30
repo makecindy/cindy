@@ -8,6 +8,12 @@ const runtime = vi.hoisted(() => ({
   post: null as ((message: Record<string, unknown>) => void) | null,
   receive: vi.fn(),
 }));
+const diagnosticLog = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/logger', () => ({ createLogger: () => ({ debug: diagnosticLog }) }));
+vi.mock('../../../../shared/remoteDesktopDiagnostics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../shared/remoteDesktopDiagnostics')>()),
+  desktopDiagnosticId: async () => 'hashed-session',
+}));
 vi.mock('@cindy/maker-shared/remote-desktop-viewer', () => ({
   mountRemoteDesktopViewer: (_root: HTMLElement, post: typeof runtime.post) => {
     runtime.post = post;
@@ -35,11 +41,13 @@ afterEach(() => {
 
 async function fixture(
   options: {
+    idleLock?: boolean;
     legacyTimeout?: boolean;
     delayStart?: boolean;
     busy?: boolean;
     alwaysTimeout?: boolean;
     portal?: boolean;
+    heartbeat?: () => Promise<{ controlling: boolean }>;
   } = {},
 ) {
   const start = deferred();
@@ -60,6 +68,7 @@ async function fixture(
         if (options.legacyTimeout && ++capabilityAttempts === 1) throw new Error('INVOKE_TIMEOUT');
         return {
           version: 1,
+          idleLock: options.idleLock,
           enabled: true,
           canControl: true,
           connectionTakeover: true,
@@ -76,7 +85,7 @@ async function fixture(
         startAttempts++;
         if (options.busy && !request.takeover) throw new Error('DESKTOP_BUSY');
         if (options.delayStart && startAttempts === 1) await start.promise;
-        if (hostLease) throw new Error('DESKTOP_BUSY');
+        if (hostLease && !(request.resume && options.idleLock)) throw new Error('DESKTOP_BUSY');
         hostLease = 'lease-' + request.displayId;
         return {
           lease: hostLease,
@@ -89,6 +98,7 @@ async function fixture(
         if (hostLease === request.lease) hostLease = null;
         return {};
       }
+      if (request.op === 'heartbeat' && options.heartbeat) return options.heartbeat();
       if (request.op === 'control' || request.op === 'heartbeat') return { controlling: true };
       return { jpeg: null };
     },
@@ -130,13 +140,80 @@ async function fixture(
   return { start, stop, requests, restart, hostLease: () => hostLease };
 }
 
+it('dumps recent heartbeat results only on failure and preserves the timeout/retry policy', async () => {
+  let calls = 0;
+  const current = await fixture({
+    heartbeat: async () => {
+      if (++calls === 2) throw new Error('INVOKE_TIMEOUT');
+      if (calls === 3) throw new Error('DESKTOP_LEASE_EXPIRED');
+      return { controlling: true };
+    },
+  });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(snapshot.status).toBe('live');
+  expect(diagnosticLog).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(snapshot.status).toBe('reconnecting');
+  expect(diagnosticLog).toHaveBeenCalledOnce();
+  const data = diagnosticLog.mock.calls[0][1];
+  expect(data).toMatchObject({
+    source: 'heartbeat',
+    code: 'DESKTOP_LEASE_EXPIRED',
+    session: 'hashed-session',
+    streaming: true,
+    lastRequestFailure: { operation: 'heartbeat', code: 'DESKTOP_LEASE_EXPIRED' },
+  });
+  expect(data.heartbeats.map((sample: { result: string }) => sample.result)).toEqual([
+    'controlling',
+    'INVOKE_TIMEOUT',
+    'DESKTOP_LEASE_EXPIRED',
+  ]);
+  expect(
+    data.heartbeats.every(
+      (sample: { requestedAt: number; settledAt: number }) =>
+        sample.settledAt >= sample.requestedAt,
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(data)).not.toContain('lease-one');
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(current.requests.filter((r) => r.op === 'start')).toHaveLength(2);
+});
+
+it('does not attach a late old heartbeat result to a replacement display lease', async () => {
+  let reject!: (error: Error) => void;
+  let count = 0;
+  await fixture({
+    heartbeat: async () => {
+      if (++count === 1)
+        return new Promise((_resolve, fail) => {
+          reject = fail;
+        });
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    },
+  });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(3000);
+  controller.selectDisplay('two');
+  await vi.advanceTimersByTimeAsync(0);
+  runtime.post?.({ type: 'streaming', epoch: 'lease-two' });
+  reject(new Error('private old failure'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diagnosticLog).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(3000);
+  const data = diagnosticLog.mock.calls[0][1];
+  expect(data.heartbeats).toHaveLength(1);
+  expect(data.heartbeats[0].result).toBe('DESKTOP_LEASE_EXPIRED');
+  expect(JSON.stringify(data)).not.toContain('private');
+});
+
 it('retries an initial capabilities timeout on a legacy host without inventing a resume', async () => {
   const current = await fixture({ legacyTimeout: true });
   await vi.advanceTimersByTimeAsync(3001);
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
   expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-    { op: 'start', displayId: 'one' },
+    { op: 'start', displayId: 'one', lockOnExit: true },
   ]);
 });
 
@@ -252,7 +329,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           return {
             version: 1,
             enabled: true,
-            canControl: false,
+            canControl: true,
             automaticReconnect: true,
             displays: [{ id: 'one', width: 1280, height: 720 }],
           };
@@ -265,6 +342,7 @@ it('keeps a healthy viewer on the same host connected when another viewer times 
           };
         }
         if (request.op === 'stop') leases.delete(request.lease);
+        if (request.op === 'control' || request.op === 'heartbeat') return { controlling: true };
         return { controlling: false, jpeg: null };
       },
     } satisfies RemoteDesktopViewerApi;
@@ -312,8 +390,8 @@ it.each([['two'], ['two', 'three']])(
     });
     expect(current.hostLease()).toBe('lease-' + latest);
     expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-      { op: 'start', displayId: 'one' },
-      { op: 'start', displayId: latest },
+      { op: 'start', displayId: 'one', lockOnExit: true },
+      { op: 'start', displayId: latest, lockOnExit: true },
     ]);
   },
 );
@@ -329,6 +407,7 @@ it('still requires explicit confirmation to take over another viewer', async () 
     op: 'start',
     displayId: 'one',
     takeover: true,
+    lockOnExit: true,
   });
 });
 
@@ -368,4 +447,29 @@ it('waits for an established lease to stop before a replacement Renderer starts'
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, error: null, controlling: true });
   expect(current.hostLease()).toBe('lease-one');
+});
+
+// Unit: a timeout is terminal even while the link is healthy; reconnect must be explicit.
+it('never automatically reconnects after the host idle deadline', async () => {
+  const current = await fixture({ heartbeat: async () => { throw new Error('DESKTOP_IDLE_TIMEOUT'); } });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(snapshot.error).toBe('idleDisconnected');
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(current.requests.filter((r) => r.op === 'start')).toHaveLength(1);
+});
+
+// Unit: automatic media recovery must not stop the host's running idle clock.
+it('retains the protected host lease while retrying a transient connection failure', async () => {
+  let first = true;
+  const current = await fixture({ idleLock: true, heartbeat: async () => {
+    if (first) { first = false; throw new Error('DESKTOP_LEASE_EXPIRED'); }
+    return { controlling: true };
+  } });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(snapshot.error).toBeNull();
+  expect(current.requests.filter((r) => r.op === 'stop')).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(current.requests.filter((r) => r.op === 'start').at(-1)).toMatchObject({ resume: true, idleTimeoutMinutes: 5 });
 });

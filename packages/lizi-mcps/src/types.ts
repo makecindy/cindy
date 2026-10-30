@@ -1,9 +1,8 @@
-import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
-import type { AgentKind } from '@cindy/maker-core';
 import type {
-  IOSSimulatorInstanceErrorCode,
-  IOSSimulatorRuntimeErrorCode,
-} from '@cindy/ios-simulator-runtime';
+  BrowserControlResult,
+  BrowserControlRuntime,
+} from '@cindy/browser-control-runtime';
+import type { AgentKind } from '@cindy/maker-core';
 
 import type { Recipe, SiteGuide } from './browser/recipe-loader.js';
 
@@ -99,11 +98,90 @@ export interface FeishuBotSendMessageResult {
   reason?: string;
 }
 
+/**
+ * 当前 tool-call 的归属 session(host 从 LiziMcpSessionContext 取)。宿主据此选出
+ * 这一轮真正要出站的 bot:个人设置页那份 FeishuIM,或触发本轮的伙伴自有连接。
+ * 没有它(hook 会话 / 桌面任务)就回落到个人 bot。
+ */
+export interface FeishuBotHostSession {
+  sessionId?: string;
+  sessionInstanceId?: string;
+  /** Trusted host session metadata; preserves an explicit Feishu reply target. */
+  vendorOptions?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * 飞书轮次内工具用到的 transport 子集(结构类型:桌面侧传的是触发本轮的那条连接自己的
+ * `FeishuIM`,单测可用假对象)。所有方法都以这条连接的 bot 身份出站。
+ */
+export interface FeishuBotLaneTransport {
+  getService(): 'feishu' | 'lark';
+  getBotAppId(): string | null;
+  sendText(userId: string, text: string): Promise<{ messageId: string }>;
+  sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }>;
+  replyText(replyToMessageId: string, text: string): Promise<{ messageId: string }>;
+  replyMarkdownText(replyToMessageId: string, markdown: string): Promise<{ messageId: string }>;
+  sendFile(userId: string, absPath: string, displayName?: string): Promise<FeishuBotSendFileResult & { messageId?: string }>;
+  reactToMessage(messageId: string, emojiType: string): Promise<string | null>;
+  removeMessageReaction(messageId: string, reactionId: string): Promise<void>;
+  getChatInfo(chatId: string): Promise<Record<string, unknown>>;
+  listChatMembers(
+    chatId: string,
+    opts?: { pageToken?: string; pageSize?: number },
+  ): Promise<{
+    items: Array<{ memberId: string; name: string }>;
+    memberTotal: number | null;
+    nextPageToken: string | null;
+  }>;
+  getMessage(messageId: string): Promise<Record<string, unknown> | null>;
+  pinMessage(messageId: string): Promise<void>;
+  unpinMessage(messageId: string): Promise<void>;
+  recallMessage(messageId: string): Promise<void>;
+  callApi(args: {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    path: string;
+    params?: Record<string, unknown>;
+    data?: unknown;
+  }): Promise<Record<string, unknown>>;
+}
+
+/**
+ * 飞书轮次的逐轮作用域(桌面 `im/shared/channelToolScope.ts` 的租约投影)。由渠道在
+ * provider 开始本轮前登记、终态释放;**不来自模型参数**。没有作用域的调用一律 fail closed。
+ */
+export interface FeishuBotLaneScope {
+  im: FeishuBotLaneTransport;
+  /** lane userId(私聊 open_id 或 `g/{chatId}[/{threadId}]`),transport 解码后出站。 */
+  laneUserId: string;
+  /** 飞书原生 chat_id(私聊是 p2p chat)。 */
+  chatId: string;
+  /** 话题 id;非话题为空串。 */
+  threadId: string;
+  chatKind: 'direct' | 'group';
+  /** 触发本轮的是不是主人(Main 校验过的身份)。 */
+  requesterIsOwner: boolean;
+  /** 触发消息的 message_id(回复 / 表情的默认目标)。 */
+  triggerMessageId: string;
+  /** 伙伴自有连接(true)还是设置页个人 bot(false)。 */
+  companion: boolean;
+  /**
+   * 当前任务工作目录(来自本次 tool-call 的 session ctx,不来自模型参数);非主人触发的
+   * 轮次 send_file 只能发这里面的文件,缺省时一律拒绝。
+   */
+  workingDir?: string;
+}
+
 export interface FeishuBotMcpHostDeps {
+  /**
+   * 读取当前 session 的飞书逐轮作用域;非飞书轮次 / 轮次已结束返回 null。宿主实现
+   * 用 `session.sessionId` + `sessionInstanceId` 查租约(旧实例借不到新实例权限)。
+   */
+  readLaneScope?(session: FeishuBotHostSession): FeishuBotLaneScope | null;
   sendFile(
     chatId: string,
     absPath: string,
     displayName?: string,
+    session?: FeishuBotHostSession,
   ): Promise<FeishuBotSendFileResult>;
   /**
    * Push a markdown text message to the given chat (private DM). Backed by
@@ -118,6 +196,7 @@ export interface FeishuBotMcpHostDeps {
     markdown: string,
     /** Trusted calling session, only for notifications to the bot owner. */
     notificationSessionId?: string,
+    session?: FeishuBotHostSession,
   ): Promise<FeishuBotSendMessageResult>;
   /**
    * Return the bot's TOFU-recorded owner openId — i.e. the person who first
@@ -129,7 +208,7 @@ export interface FeishuBotMcpHostDeps {
    * Returns null when no owner has been bound yet — user must DM the bot once
    * first (same precondition as scheduler feishu-completion notifications).
    */
-  getOwnerOpenId(): string | null;
+  getOwnerOpenId(session?: FeishuBotHostSession): string | null | Promise<string | null>;
   logger?: LiziMcpLogger;
 }
 
@@ -201,6 +280,9 @@ export interface SlackToolBridgeLike {
  * (大结果落盘的钳制根)。
  */
 export interface SlackHookMcpDeps {
+  compressInlineImage?: CompressInlineImageFn;
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getBridge(): SlackToolBridgeLike | null;
   /** 当前会话工作目录(out_file 泄洪根; 空 = 不落盘只截断)。 */
   workingDir?: string;
@@ -229,7 +311,17 @@ export interface RoutineToolService {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
+  authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
+  /** Host approval snapshot for the current schedule mutation, if one exists. */
+  getApprovedScheduleGuard?: () => import('@cindy/maker-scheduler').ScheduleMutationGuard | undefined;
+  /**
+   * 同账号其它电脑上的定时任务(host 注入,desktop 经既有 `maker:schedule:*` 远程控制通道)。
+   * 缺省 = host 未接 → 工具的 `device` 只接受 local,其它值返 REMOTE_UNSUPPORTED。
+   */
+  remote?: import('./scheduler/_devices.js').SchedulerRemoteDeps;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为
    * scheduler-host/hook-script-generator.installHookScript):落盘路径规范、
@@ -238,6 +330,11 @@ export interface SchedulerMcpDeps {
    * (同 MemoryMcpDeps.searchSessions 模式)。
    */
   hookScript?: SchedulerHookScriptService;
+  /**
+   * 本机定时任务可选的 Agent 运行位置与各处的模型(与协同 Worker 的 list_available_models
+   * 同一份 host 实现)。agentDeviceId:null = 本机。缺省 = schedule_list_models 不注册。
+   */
+  listModels?: import('./xdt-helper/list_available_models.js').ListAvailableModelsDeps['listAvailableModels'];
   logger?: LiziMcpLogger;
 }
 
@@ -249,6 +346,8 @@ export interface SchedulerHookScriptService {
    * meta.workDir 为准。未注入时回落 schedule.workingDir 旧行为。
    */
   resolveSessionWorkDir?(sessionId: string): Promise<string | undefined>;
+  /** Bound task's current Agent location; remote-only routes cannot generate local hook scripts. */
+  isSessionAgentOnOtherDevice?(sessionId: string): Promise<boolean>;
   /**
    * 把受支持的单脚本相对命令固化为绝对路径。任意 shell 命令保持原样；相对脚本
    * 缺少原 cwd 或文件不存在时必须报错，避免改绑后以 fail-open 静默绕过 hook。
@@ -298,6 +397,10 @@ export interface SchedulerHookScriptService {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface MemoryMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  /** Host captures the source turn before storage; invoked only for a successful write. */
+  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
+
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;
   getSessionContext?: () => LiziMcpSessionContext;
@@ -391,9 +494,24 @@ export interface SshPoolLike {
  *  - 插件启用策略由 host 在 Agent runtime / Codex thread 创建时冻结；这里不得
  *    注入调用时读取设置的门控，否则工具暴露状态与执行权限会在运行中分叉。
  */
+/** 与「设置 → 远程连接」添加表单同一份字段。 */
+export interface SshAddHostInput {
+  id: string;
+  hostname: string;
+  port?: number;
+  user: string;
+  authMethod?: 'agent' | 'key';
+  identityFile?: string;
+  displayName?: string;
+}
+
 export interface SshMcpDeps {
   getPool(): Promise<SshPoolLike>;
   ensureReady(id: string): Promise<void>;
+  /** 设置页同一添加流程：写入本机 SSH 配置并刷新连接池；失败以 `[CODE] message` 抛出。 */
+  addHost(input: SshAddHostInput): Promise<void>;
+  /** 设置页「重新读取 ~/.ssh/config」。读取失败时返回诊断类别，连接池保持上次成功的结果。 */
+  reloadConfig(): Promise<{ diagnostic: string | null; warningCount: number }>;
   /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
   redactSensitiveText(snapshot: SshHostSnapshotLike, text: string): string;
   logger?: LiziMcpLogger;
@@ -402,8 +520,8 @@ export interface SshMcpDeps {
 /**
  * cindy_contacts(智能通讯录)MCP server 工厂参数。
  *
- * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir), 不需要 workdir /
- * getSessionContext。开关由 host 设置层注入 isEnabled — provider 注册门控 +
+ * 与 memory 的差异: 通讯录是全局单库(人不属于 workdir)，调用上下文仅供 Host
+ * 核验账号数据访问边界。开关由 host 设置层注入 isEnabled — provider 注册门控 +
  * withContacts 工具级双重拦截(Codex host 长生命周期下 server 可能已 spawn,
  * 运行期关闭靠工具级拦截兜底, 跟 memory 的 MAKER_MEMORY_NOT_READY 同模式)。
  *
@@ -411,6 +529,8 @@ export interface SshMcpDeps {
  * vCard 序列化, workspace dep 已声明), 依赖方向仍单向 @cindy/mcps → maker-core。
  */
 export interface ContactsMcpDeps {
+  withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
+  getSessionContext?: () => LiziMcpSessionContext;
   getManager(): import('@cindy/maker-core').MakerContactsManager;
   /** host 设置层的功能开关. 缺省视为常开(测试/独立复用场景) */
   isEnabled?: () => boolean;
@@ -462,6 +582,8 @@ export interface SessionSearchOptions {
 
 export interface SessionSearchHit {
   sessionId: string;
+  /** 宿主生成的任务深链，包含所属设备，供按需引用原对话。 */
+  sessionUrl: string;
   messageId: string;
   role: string;
   /** FTS5 snippet() 高亮片段 */
@@ -488,7 +610,6 @@ export type SessionSearchFn = (
 // 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
 export type LiziMcpId =
   | 'android'
-  | 'ios_simulator'
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
@@ -538,15 +659,76 @@ export type ControlResult<T extends object = object, E extends string = never> =
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 
+export interface ResolvedBrowserScreenshot {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/jpeg';
+}
+
+/** Host-wide automation targets: managed Chrome, sidebar webview, or the user's own browser via extension. */
+export type BrowserBackendKind = 'external' | 'rsb-webview' | 'user-browser';
+
+/** Per-backend capability flags consulted before dispatch; keys mirror the host's status payload. */
+export interface BrowserBackendCapabilities {
+  evaluate?: boolean;
+  screenshot?: boolean;
+  network?: boolean;
+  upload?: boolean;
+  dialog?: boolean;
+  console?: boolean;
+  pdf?: boolean;
+  focus?: boolean;
+  close?: boolean;
+  trustedInput?: boolean;
+  /** Coordinate clicks, drags and viewport resize (synthetic events are enough). */
+  pointer?: boolean;
+  /** Raw protocol commands that recipe adapters drive (needs a debugger attachment). */
+  rawProtocol?: boolean;
+}
+
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
+  /** Local structural observations only; no URLs, scripts, selectors or input values. */
+  experienceStore?: import('./browser/experience.js').BrowserExperienceStore;
   getRuntime(): BrowserControlRuntime;
+  /**
+   * Resolve the actual host profile before validation, discovery and execution.
+   * undefined keeps the agent's own choice (the user-browser backend picks the
+   * only connected browser, or asks for one when several are connected).
+   */
+  resolveProfile?(profile?: string): string | undefined;
+  /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
+  getBackendScope?(): { lifecycle: object; backend: object };
+  /**
+   * Resolve a successful screenshot runtime result into verified image bytes.
+   * The host owns file-system access so this package never receives a generic
+   * arbitrary-path reader; inline-only hosts may validate and decode in memory.
+   */
+  resolveScreenshot?(
+    result: BrowserControlResult,
+  ): Promise<ResolvedBrowserScreenshot>;
+  /** Shrink the LLM-facing copy to the shared stream-safe byte budget. */
+  compressInlineImage?: CompressInlineImageFn;
   /** Switch the host-wide, persisted automation target; returns the actual mode. */
-  setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
+  setBackend?(backend: BrowserBackendKind): Promise<BrowserBackendKind>;
+  /**
+   * Capability flags of the active backend (false = the action/kind must be
+   * refused before dispatch with a clear hint). Absent → everything allowed.
+   */
+  backendCapabilities?(): BrowserBackendCapabilities;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */
   supportsSemanticQueries?(): boolean;
+  /** Trusted host-only credential IO; never exposed as a tool or page input. */
+  recipeSecrets?: { read(key: string): string | null; write(key: string, value: string): boolean };
+  /** Creates invocation-local file access using the host's existing upload policy. */
+  recipeFiles?: (sessionId?: string) => Promise<{ read(file: string): Buffer; open(file: string): number }>;
+  /**
+   * 代输入: true while the target tab still shows a page where the owner just
+   * typed a secret. Page-state reads (evaluate, requests, response bodies,
+   * console) are then refused.
+   */
+  pageReadsRestricted?(target: { profile?: string; targetId?: string }): Promise<boolean>;
   logger?: LiziMcpLogger;
   /**
    * Optional L2 (user-local) recipe layer. The host scans userData, parses with
@@ -647,6 +829,11 @@ export interface ComputerMcpDeps {
     args: Record<string, unknown>,
     context?: ComputerMcpCallContext,
   ): Promise<unknown>;
+  /**
+   * 代输入: whether typing would land in a password field — the element at a
+   * screen point of this app, or its focused element. Roles only, never values.
+   */
+  isSecureTarget?(target: { pid: number; point?: { x: number; y: number } }): Promise<boolean>;
   logger?: LiziMcpLogger;
 }
 
@@ -778,126 +965,6 @@ export interface AndroidMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-export type IOSSimulatorMcpErrorCode =
-  | IOSSimulatorRuntimeErrorCode
-  | IOSSimulatorInstanceErrorCode
-  | 'SESSION_CONTEXT_REQUIRED'
-  | 'SESSION_NOT_FOUND'
-  | 'UNSUPPORTED_SESSION_KIND'
-  | 'IOS_SIMULATOR_PLUGIN_REQUIRED'
-  | 'IOS_SIMULATOR_PLUGIN_DISABLED'
-  | 'IOS_SIMULATOR_DISABLED'
-  | 'WDA_UNAVAILABLE'
-  | 'XCODE_BUILD_FAILED'
-  | 'DRIVER_DISCONNECTED'
-  | 'ORIENTATION_UNSUPPORTED'
-  | 'IOS_SIMULATOR_HOST_ERROR';
-
-export type IOSSimulatorToolAvailabilityState =
-  | 'available'
-  | 'requires-instance'
-  | 'instance-dependent'
-  | 'unavailable';
-
-export interface IOSSimulatorToolAvailability {
-  state: IOSSimulatorToolAvailabilityState;
-  reasonCode?: string;
-  backend?: 'wda' | 'native-hid' | 'simctl' | 'host';
-}
-
-export interface IOSSimulatorToolAvailabilityReport {
-  ready: boolean;
-  instanceCount: number;
-  runningInstanceCount: number;
-  tools: Record<string, IOSSimulatorToolAvailability>;
-  notice?: {
-    errorCode: IOSSimulatorMcpErrorCode;
-    message: string;
-    data?: Record<string, unknown>;
-  };
-}
-
-export type IOSSimulatorMcpAccessDecision =
-  | { allowed: true }
-  | {
-      allowed: false;
-      errorCode: IOSSimulatorMcpErrorCode;
-      message: string;
-      data?: Record<string, unknown>;
-    };
-
-export type IOSSimulatorMcpToolName =
-  | 'check_environment'
-  | 'doctor'
-  | 'list_devices'
-  | 'list_instances'
-  | 'create_instance'
-  | 'attach_device'
-  | 'detach_device'
-  | 'start_instance'
-  | 'stop_instance'
-  | 'get_screen_map'
-  | 'audit_accessibility'
-  | 'compare_screen_maps'
-  | 'wait_for_ui'
-  | 'tap'
-  | 'swipe'
-  | 'drag'
-  | 'long_press'
-  | 'key_press'
-  | 'batch'
-  | 'touch_path'
-  | 'touch2_path'
-  | 'type_text'
-  | 'press_home'
-  | 'set_orientation'
-  | 'set_appearance'
-  | 'set_increase_contrast'
-  | 'set_content_size'
-  | 'set_location'
-  | 'start_location_route'
-  | 'clear_location'
-  | 'set_privacy'
-  | 'push_notification'
-  | 'set_status_bar'
-  | 'clear_status_bar'
-  | 'lock_screen'
-  | 'unlock_screen'
-  | 'build_app'
-  | 'read_build_diagnostics'
-  | 'install_app'
-  | 'launch_app'
-  | 'terminate_app'
-  | 'open_url'
-  | 'take_screenshot'
-  | 'capture_visual_baseline'
-  | 'visual_diff'
-  | 'capture_state'
-  | 'get_diagnostics'
-  | 'start_recording'
-  | 'stop_recording';
-
-export interface IOSSimulatorMcpCallContext {
-  sessionId?: string;
-  /** Workdir bound by the Host for project-scoped capability policy. */
-  workingDir?: string;
-  /** Host-internal origin. MCP transport always uses agent; renderer IPC uses user. */
-  origin?: 'agent' | 'user';
-}
-
-/** Host adapter used by the reusable iOS Simulator MCP server. */
-export interface IOSSimulatorMcpDeps {
-  callTool(
-    name: IOSSimulatorMcpToolName,
-    args: Record<string, unknown>,
-    context?: IOSSimulatorMcpCallContext,
-  ): Promise<unknown>;
-  describeTools?(
-    context?: IOSSimulatorMcpCallContext,
-  ): Promise<IOSSimulatorToolAvailabilityReport>;
-  logger?: LiziMcpLogger;
-}
-
 export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 
 export interface LiziMcpSessionContext {
@@ -955,6 +1022,12 @@ export interface CodexHttpMcpConfig {
 
 export interface LiziMcpProvider {
   name: string;
+  capability?: {
+    title: string;
+    description: string;
+    source: 'builtin' | 'plugin' | 'custom';
+    discovery?: { tool: string; args?: Record<string, unknown> };
+  };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */

@@ -520,6 +520,17 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('pi');
   });
 
+  it.each(['xai', 'xd', 'custom-gateway'])('Grok Responses on %s recommends Pi without changing other candidates', (id) => {
+    const grok = view({ id, models: {
+      codex: [m('x-ai/grok-future', { group: 'grok', nativeApi: 'openai-responses', api: 'openai-responses' })],
+      pi: [m('x-ai/grok-future', { group: 'grok', nativeApi: 'openai-responses', piApi: 'openai-responses' })],
+    } });
+    expect(pickRecommendedAgent(grok, 'x-ai/grok-future', ['codex', 'pi'])).toBe('pi');
+    expect(pickRecommendedAgent(grok, 'x-ai/grok-future', ['codex'])).toBe('codex');
+    expect(nativeAgentForProviderModel(grok, 'x-ai/grok-future')).toBeNull();
+    expect(candidateAgentsForModel([grok], id, 'x-ai/grok-future')).toEqual(['codex', 'pi']);
+  });
+
   it('xd 网关:按家族推荐 —— gpt 系(含 codex/ 折扣)→ codex,claude 系 → claude-code', () => {
     expect(recommendedAgentForModel(providers, 'xd', 'codex/gpt-5.5')).toBe('codex');
     // 2026-08-14 改判:GPT 非折扣行主场也是 codex,推荐随主场(此前落 null 走 cc 优先
@@ -631,6 +642,7 @@ describe('resolveAgentCapability', () => {
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
       supportsFastMode: true,
+      supportsUltrafastMode: false,
       contextWindow: 200_000,
       contextWindowVerified: false,
     });
@@ -1222,6 +1234,16 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].group).toBe('anthropic');
     expect(entries[0].sortOrder).toBe(3);
   });
+
+  it('模型组 Auto 按服务端给的名称显示，行身份不剥 auto/', () => {
+    const named = { name: 'Auto (研发组)', mode: 'chat' as const };
+    const gateway = view({ id: 'xd', authStrategy: 'gateway-key', models: { pi: [m('auto/grp_123', named)] } });
+    const pool = view({ id: 'org-pool', source: 'organization', models: { pi: [m('auto/grp_456', { ...named, name: 'Auto (销售组)' })] } });
+    const entries = unifiedModelEntries({ providers: [gateway, pool], isVisible: alwaysVisible });
+    expect(find(entries, 'xd', 'auto/grp_123')?.displayName).toBe('Auto (研发组)');
+    expect(find(entries, 'org-pool', 'auto/grp_456')?.displayName).toBe('Auto (销售组)');
+    expect(unifiedModelKeyId('auto/grp_123')).toBe('auto/grp_123');
+  });
 });
 
 // ── 原生底座排序 ──────────────────────────────────────────────────────────────
@@ -1288,4 +1310,17 @@ describe('sortEntriesForAgent(原生底座优先,无主场不降级)', () => {
     });
     expect(codexOnly.every((e) => e.candidates.includes('codex'))).toBe(true);
   });
+});
+
+
+it('keeps display pricing attached to the selected provider and engine', () => {
+  const quote = { items: [{ label: 'Usage', price: 0.5, unit: 'second', quantity: 1 }] };
+  const providers = [
+    view({ id: 'xd', models: { codex: [m('same-model', { displayPricing: quote, currency: 'CNY', costDiscount: 0.2 })] } }),
+    view({ id: 'openai', models: { codex: [m('same-model')] } }),
+  ];
+  expect(resolveAgentCapability(providers, 'xd', 'same-model', 'codex')).toMatchObject({
+    displayPricing: quote, currency: 'CNY', costDiscount: 0.2,
+  });
+  expect(resolveAgentCapability(providers, 'openai', 'same-model', 'codex')).not.toHaveProperty('displayPricing');
 });

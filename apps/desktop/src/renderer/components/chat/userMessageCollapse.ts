@@ -86,6 +86,46 @@ export function mayExceedVisualLineThreshold(
 }
 
 /**
+ * 同一正文在同一阈值下最近一次的实测结论。切回长任务时整屏气泡重新挂载,逐个在
+ * layout effect 里同步测量会在挂载中途强制排版;有上次结论时直接沿用,只交给
+ * ResizeObserver 在排版完成后复核(宽度变了照样纠正)。只存布尔,不落盘。
+ * 正文本身是键,会话窗口被淘汰后仍被它持有:条数与总字符数都封顶(按插入序淘汰),
+ * 超长单条直接不缓存,照旧同步测量。
+ */
+const MEASURED_COLLAPSE_LIMIT = 500;
+const MEASURED_COLLAPSE_MAX_CHARACTERS = 1_000_000;
+const MEASURED_COLLAPSE_MAX_ENTRY_CHARACTERS = 64 * 1024;
+/** 正文 → (阈值 → 是否收起)。 */
+const measuredCollapse = new Map<string, Map<number, boolean>>();
+let measuredCollapseCharacters = 0;
+
+function readMeasuredCollapse(content: string, threshold: number): boolean | undefined {
+  return measuredCollapse.get(content)?.get(threshold);
+}
+
+function rememberMeasuredCollapse(content: string, threshold: number, collapse: boolean): void {
+  if (content.length > MEASURED_COLLAPSE_MAX_ENTRY_CHARACTERS) return;
+  let byThreshold = measuredCollapse.get(content);
+  if (byThreshold) measuredCollapse.delete(content);
+  else {
+    byThreshold = new Map();
+    measuredCollapseCharacters += content.length;
+  }
+  byThreshold.set(threshold, collapse);
+  measuredCollapse.set(content, byThreshold);
+  // The new entry is last and below the total cap, so this never evicts it.
+  while (
+    measuredCollapse.size > MEASURED_COLLAPSE_LIMIT ||
+    measuredCollapseCharacters > MEASURED_COLLAPSE_MAX_CHARACTERS
+  ) {
+    const oldest = measuredCollapse.keys().next().value;
+    if (oldest === undefined) break;
+    measuredCollapse.delete(oldest);
+    measuredCollapseCharacters -= oldest.length;
+  }
+}
+
+/**
  * 以真实排版为准的长消息收起判定 hook。
  *
  * 调用方把 mirrorRef 挂到气泡内的隐藏镜像节点(与正文同宽、同字号、同换行
@@ -100,9 +140,13 @@ export function useUserMessageAutoCollapse(
   threshold: number = LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD,
 ) {
   const mirrorRef = useRef<HTMLDivElement>(null);
-  // 首帧用纯文本估算兜底,useLayoutEffect 的真实测量会在首次绘制前修正。
+  // 首帧优先用同一正文上次的实测结论,没有时用纯文本估算兜底;后者由
+  // useLayoutEffect 的真实测量在首次绘制前修正。
   const [shouldCollapse, setShouldCollapse] = useState(
-    () => enabled && shouldAutoCollapseUserMessageContent(content, threshold),
+    () =>
+      enabled &&
+      (readMeasuredCollapse(content, threshold) ??
+        shouldAutoCollapseUserMessageContent(content, threshold)),
   );
 
   useLayoutEffect(() => {
@@ -120,10 +164,13 @@ export function useUserMessageAutoCollapse(
       // 量化,真实多出一行会让比值整整 +1,而亚像素 / 高字形(emoji)只带来
       // <0.5 行的偏差。改成 ceil 会让恰好压线的消息被 +1px 伪差错误收起。
       const lines = Math.round(el.scrollHeight / lineHeight);
+      rememberMeasuredCollapse(content, threshold, lines > threshold);
       setShouldCollapse(lines > threshold);
     };
 
-    measure();
+    const remembered = readMeasuredCollapse(content, threshold);
+    if (remembered === undefined) measure();
+    else setShouldCollapse(remembered);
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();

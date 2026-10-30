@@ -1,4 +1,6 @@
-import { Bot, CornerDownRight, FolderOpen, Globe2, Monitor, Plug } from 'lucide-react';
+import { Bot, CornerDownRight, FolderOpen, Globe2, ListTodo, Monitor, Plug } from 'lucide-react';
+
+import { i18n } from '@/i18n';
 
 import type { AgentInputReference } from '../../../shared/agentInputQueue';
 import { InlineReferenceChip } from './InlineReferenceChip';
@@ -15,18 +17,22 @@ function oneLine(value: string): string {
 /** The compact label shared by the rich chip and collapsed-message projection. */
 export function sentAgentReferenceDisplayLabel(reference: AgentInputReference): string {
   if (reference.kind === 'message') {
-    const text = oneLine(reference.text ?? '') || reference.messageClientId;
+    const text =
+      oneLine(reference.text ?? '') || i18n.t('chat.userMessage.messageLinkFallback');
     return text.length <= MESSAGE_REFERENCE_LABEL_MAX
       ? text
       : `${text.slice(0, MESSAGE_REFERENCE_LABEL_MAX - 1)}…`;
   }
-  if (reference.kind === 'session') return oneLine(reference.title ?? '') || reference.sessionId;
+  if (reference.kind === 'session') {
+    return oneLine(reference.title ?? '') || i18n.t('chat.userMessage.sessionLinkFallback');
+  }
   if (reference.kind === 'project') return oneLine(reference.name) || reference.workingDir;
   if (reference.kind === 'browser-tab') return oneLine(reference.title ?? '') || reference.url;
   if (reference.kind === 'desktop-window') {
     return oneLine(reference.title ?? '') || oneLine(reference.appName);
   }
   if (reference.kind === 'bot') return oneLine(reference.name) || reference.botId;
+  if (reference.kind === 'todo') return oneLine(reference.title) || reference.todoId;
   return oneLine(reference.label) || reference.resourceId;
 }
 
@@ -58,6 +64,8 @@ export function SentAgentReferenceChip({
         <Monitor aria-hidden />
       ) : reference.kind === 'bot' ? (
         <Bot aria-hidden />
+      ) : reference.kind === 'todo' ? (
+        <ListTodo aria-hidden />
       ) : (
         <Plug aria-hidden />
       );
@@ -101,6 +109,8 @@ export function SentAgentReferenceChip({
       <Monitor aria-hidden />
     ) : reference.kind === 'bot' ? (
       <Bot aria-hidden />
+    ) : reference.kind === 'todo' ? (
+      <ListTodo aria-hidden />
     ) : (
       <Plug aria-hidden />
     );

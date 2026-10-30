@@ -64,7 +64,14 @@ export interface CindyMakeTaskPreparation {
   sessionId: string;
   originSessionId?: string;
   phase:
-    'waiting' | 'environment' | 'source' | 'workspace' | 'dependencies' | 'starting' | 'completed';
+    | 'waiting'
+    | 'environment'
+    | 'source'
+    | 'updatingSource'
+    | 'workspace'
+    | 'dependencies'
+    | 'starting'
+    | 'completed';
   dependencies?: MakeDependencyProgress;
   /** Settings projection; preparation completion is not production completion. */
   sessionStatus?: 'active' | 'archived' | 'deleted';
@@ -92,7 +99,7 @@ export interface CindyMakeTaskOptions {
   effort?: string;
   providerId?: string | null;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   planModeEnabled?: boolean;
 }
 
@@ -129,6 +136,10 @@ export interface CindyMakeTaskActionState {
 
 export interface CindyMakeGlobalState {
   upstreamMerge?: import('./cindyMakeMerge').CindyMakeMergeState;
+  /** Device-level GitHub binding of the personal version; absent until first read. */
+  personalRemote?: import('./cindyMakePersonalRemote').CindyMakePersonalRemoteState;
+  /** The single Sync of the personal version (GitHub steps only when shared there). */
+  personalSync?: import('./cindyMakeSync').CindyMakeSyncState;
   ownerStamp?: import('./dataOwnerPush').DataOwnerPushStamp;
   environmentCheck?: CindyMakeOperationSnapshot;
   environmentPrepare?: CindyMakeOperationSnapshot;
@@ -137,6 +148,8 @@ export interface CindyMakeGlobalState {
   source?: MakeSourceStatus;
   reports?: Record<string, MakeDoctorReport>;
   tasks?: Record<string, MakeDoctorReport>;
+  /** Live build owners only; absent after the job (including stop cleanup) settles. */
+  personalBuildSessionIds?: string[];
   /** Current-owner cleanup jobs, keyed by session ID; independent of Settings lifetime. */
   taskActions?: Record<string, CindyMakeTaskActionState>;
 }

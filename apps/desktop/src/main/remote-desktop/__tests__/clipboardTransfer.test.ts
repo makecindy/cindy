@@ -6,6 +6,20 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('clipboard transfer idle expiry', () => {
+  it('replays an acknowledged-lost chunk without duplicating the eventual paste', async () => {
+    const buffer = new ClipboardTransfer();
+    const common = { op: 'clipboardContent' as const, lease: 'lease' };
+    const transfer = vi.fn(async () => undefined);
+    const json = JSON.stringify({ text: 'hello' });
+    const { id } = await buffer.handle({ ...common, action: 'begin', length: json.length }, () => true, transfer) as { id: string };
+    const chunk = { ...common, action: 'write' as const, id, offset: 0, data: json };
+    await buffer.handle(chunk, () => true, transfer);
+    await buffer.handle(chunk, () => true, transfer);
+    await expect(buffer.handle({ ...chunk, data: 'changed' }, () => true, transfer)).rejects.toThrow();
+    await buffer.handle({ ...common, action: 'commit', id }, () => true, transfer);
+    expect(transfer).toHaveBeenCalledTimes(1);
+    await expect(buffer.handle({ ...common, action: 'commit', id }, () => true, transfer)).rejects.toThrow();
+  });
   it('returns small copies inline only when requested, and keeps large copies chunked', async () => {
     const buffer = new ClipboardTransfer();
     const current = () => true;

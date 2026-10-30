@@ -31,6 +31,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
+import { useSkillhubTarget } from './SkillhubTargetContext';
 
 // Must match the global native scrollbar width in styles/globals.css.
 const MARKET_SCROLLBAR_GUTTER_PX = 12;
@@ -42,12 +43,13 @@ const SORT_OPTIONS: Array<{ value: SortBy; labelKey: string }> = [
   { value: 'created_at', labelKey: 'skillhub.market.sortCreated' },
 ];
 
-export function SkillhubMarketListView() {
-  return <SkillhubMarketListViewInner />;
+export function SkillhubMarketListView({ active = true }: { active?: boolean } = {}) {
+  return <SkillhubMarketListViewInner active={active} />;
 }
 
-function SkillhubMarketListViewInner() {
+function SkillhubMarketListViewInner({ active }: { active: boolean }) {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
   const { user, isInitializing } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
   const { update, updatingNames, isUpdating } = useMarketSkillUpdate();
@@ -76,6 +78,7 @@ function SkillhubMarketListViewInner() {
     loadMore,
     reload,
   } = useMarketList(initialVisibility, {
+    enabled: active,
     initialScope: 'market',
     initialSort: SORT_OPTIONS.find((option) => option.value === initialSearch.get('sort'))?.value,
     initialSearchQuery: initialSearch.get('q') ?? '',
@@ -145,6 +148,7 @@ function SkillhubMarketListViewInner() {
 
   // 订阅 install progress 事件：done 时 refresh 本地 scan + toast
   useEffect(() => {
+    if (target) return;
     const unsubscribe = window.electronAPI.skillhub.onInstallProgress((event) => {
       if (event.phase === 'done') {
         void refreshSkillhub();
@@ -159,21 +163,21 @@ function SkillhubMarketListViewInner() {
       }
     });
     return unsubscribe;
-  }, [isUpdating, t]);
+  }, [isUpdating, t, target === null]);
 
   const sortLabel = useMemo(() => {
     return t(SORT_OPTIONS.find((option) => option.value === sortBy)?.labelKey ?? 'skillhub.market.sortLatest');
   }, [sortBy, t]);
 
   const returnTo = `/skillhub/market?${new URLSearchParams({ q: searchQuery, sort: sortBy, category: categoryFilter, visibility })}`;
-  const handleCardClick = (skill: MarketSkill) => navigate(buildMarketSkillRoute(skill, returnTo));
+  const handleCardClick = (skill: MarketSkill) => target ? target.openMarket(skill) : navigate(buildMarketSkillRoute(skill, returnTo));
 
   const handleClone = (skill: MarketSkill) => {
     setPickerSkill(skill);
     setPickerOpen(true);
   };
   const management = useMarketManagement({
-    active: isMineView,
+    active: isMineView && !target,
     reload,
     onClone: handleClone,
   });
@@ -189,7 +193,7 @@ function SkillhubMarketListViewInner() {
               listVisibility: visibility,
               cardState: skill.cardState,
             });
-            return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+            return action === 'manage' && (target || !identityPolicy.canWrite) ? 'clone' : action;
           })()
         : 'none'}
       allowPrivateVisibilityLabel={visibility === 'mine'}
@@ -202,12 +206,12 @@ function SkillhubMarketListViewInner() {
   );
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[hsl(var(--content-area))]">
+    <div className="app-wallpaper-surface relative flex h-full w-full flex-col overflow-hidden bg-[hsl(var(--content-area))]">
       {/* market-toolbar — h56, padding 0 24
           mac 上本页不渲染通用 ContentHeader,工具栏行承担窗口拖拽,行内交互
           元素各自 no-drag(windowDrag.tsx 约定) */}
       <div
-        className="flex items-center justify-between bg-[hsl(var(--content-area))]"
+        className="app-wallpaper-surface flex items-center justify-between bg-[hsl(var(--content-area))]"
         style={{
           height: '56px',
           padding: '0 24px',
@@ -219,7 +223,7 @@ function SkillhubMarketListViewInner() {
             这里在工具栏补一个返回入口。 */}
         <button
           type="button"
-          onClick={() => navigate('/skillhub/local')}
+          onClick={() => target ? target.back() : navigate('/skillhub/local')}
           aria-label={t('skillhub.sidebar.backToLocal')}
           title={t('skillhub.sidebar.backToLocal')}
           className="flex size-9 shrink-0 items-center justify-center rounded-full text-[var(--msg-assistant-text)] transition-colors hover:bg-sidebar-item-hover"
@@ -263,13 +267,12 @@ function SkillhubMarketListViewInner() {
             <DropdownMenuContent
               align="start"
               sideOffset={4}
-              className="w-32 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+              className="w-32"
             >
               {SORT_OPTIONS.map((option) => (
                 <DropdownMenuItem
                   key={option.value}
                   onSelect={() => setSortBy(option.value)}
-                  className="h-8 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   {t(option.labelKey)}
                 </DropdownMenuItem>
@@ -294,12 +297,12 @@ function SkillhubMarketListViewInner() {
               <DropdownMenuContent
                 align="start"
                 sideOffset={4}
-                className="w-44 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]"
+                className="w-44"
                 style={{ maxWidth: '200px' }}
               >
                 <DropdownMenuItem
                   onSelect={() => setCategoryFilter(CATEGORY_ALL)}
-                  className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="justify-between gap-2"
                 >
                   <span className="truncate">{t('skillhub.market.categoryAll')}</span>
                 </DropdownMenuItem>
@@ -307,7 +310,7 @@ function SkillhubMarketListViewInner() {
                   <DropdownMenuItem
                     key={category.slug}
                     onSelect={() => setCategoryFilter(category.slug as CategoryFilter)}
-                    className="flex h-8 items-center justify-between gap-2 rounded-md px-3 text-sm text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                    className="justify-between gap-2"
                   >
                     <span className="truncate">{category.name}</span>
                   </DropdownMenuItem>
@@ -421,7 +424,7 @@ function SkillhubMarketListViewInner() {
         skill={pickerSkill}
         onClose={() => setPickerOpen(false)}
         onInstallComplete={() => {
-          void refreshSkillhub();
+          void (target?.refresh ?? refreshSkillhub)();
           setPickerOpen(false);
         }}
       />

@@ -4,18 +4,22 @@ export const FILE_PEER_VERSION = 1;
 export const FILE_PEER_CHUNK_BYTES = 16 * 1024;
 export const FILE_PEER_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 export const FILE_PEER_MAX_CONNECTIONS = 4;
-export const FILE_PEER_IDLE_MS = 60_000;
+export const FILE_PEER_IDLE_MS = 5 * 60_000;
+/** Local bridge batch only; wire frames remain 16 KiB for older peers. */
+export const FILE_PEER_WRITE_BATCH_BYTES = 256 * 1024;
 
 export type FilePeerRequest =
   | { action: "caps" }
-  | { action: "offer"; sdp: string }
+  | { action: "offer"; sdp: string; sessionBound?: boolean }
   | { action: "open"; connection: string; url: string }
+  | { action: "attachment"; connection: string; request: Record<string, unknown> }
   | { action: "close"; connection: string };
 
 export interface FilePeerFile {
   ticket: string;
   size: number;
   mimeType: string;
+  version?: string;
 }
 
 export function parseFilePeerRequest(value: unknown): FilePeerRequest {
@@ -29,11 +33,13 @@ export function parseFilePeerRequest(value: unknown): FilePeerRequest {
     v.sdp.length > 0 &&
     v.sdp.length <= 128 * 1024
   )
-    return { action: "offer", sdp: v.sdp };
+    return { action: "offer", sdp: v.sdp, ...(v.sessionBound === true ? { sessionBound: true } : {}) };
   if (typeof v.connection !== "string" || !/^[a-f0-9-]{36}$/.test(v.connection))
     throw new Error("INVALID_FILE_PEER_REQUEST");
   if (v.action === "close")
     return { action: "close", connection: v.connection };
+  if (v.action === "attachment" && v.request && typeof v.request === "object" && !Array.isArray(v.request))
+    return { action: "attachment", connection: v.connection, request: v.request as Record<string, unknown> };
   if (
     v.action === "open" &&
     typeof v.url === "string" &&
@@ -58,5 +64,6 @@ export function parseFilePeerFile(value: unknown): FilePeerFile {
     !/^[\w.+-]+\/[\w.+-]+$/.test(v.mimeType)
   )
     throw new Error("INVALID_FILE_PEER_FILE");
-  return { ticket: v.ticket, size: v.size, mimeType: v.mimeType };
+  return { ticket: v.ticket, size: v.size, mimeType: v.mimeType,
+    ...(typeof v.version === 'string' && /^[a-f0-9]{64}$/.test(v.version) ? { version: v.version } : {}) };
 }

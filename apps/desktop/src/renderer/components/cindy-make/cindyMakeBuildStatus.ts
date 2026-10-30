@@ -6,6 +6,8 @@ export function cindyMakeBuildStatusKey(
   stopping = build.stopping,
 ): string {
   if (stopping) return 'cindyMake.history.stopping';
+  if (build.status === 'merging' && build.mergeStep)
+    return 'cindyMake.personal.mergeStep.' + build.mergeStep;
   if (build.status === 'waiting' && build.preparationStep)
     return 'cindyMake.personal.preparationStep.' + build.preparationStep;
   if (build.status === 'checking' && build.checkStep)

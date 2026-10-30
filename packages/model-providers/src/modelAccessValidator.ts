@@ -1,6 +1,9 @@
+import { modelInterfacesError } from './modelInterfaceContract.js';
+import { parseModelDisplayPricing } from './modelDisplayPricing.js';
 import {
   validModelMetadata,
   expandedRegistryEntries,
+  type ModelMetadata,
 } from "./modelMetadataLayers.js";
 import { parseLocalModelCatalog } from "./localModelCatalog.js";
 import {
@@ -20,6 +23,7 @@ import {
   MODEL_REGISTRY_V3_SCHEMA_VERSION,
   MODEL_REGISTRY_V4_SCHEMA_VERSION,
   MODEL_REGISTRY_V5_SCHEMA_VERSION,
+  MODEL_REGISTRY_V6_SCHEMA_VERSION,
   MODEL_NATIVE_APIS,
   MODEL_REGISTRY_STATUSES,
   type ListModelsResponse,
@@ -837,7 +841,10 @@ export function parseListModelsResponse(
           `response.models[${index}].availability must be available or requires_payment`,
         );
       }
-      const { availability, ...legacyShape } = raw;
+      const { availability, displayPricing: rawDisplayPricing, ...legacyShape } = raw;
+      // Optional presentation data evolves independently of model availability.
+      // An unsupported quote must not reject the catalog or retain an older quote.
+      const displayPricing = parseModelDisplayPricing(rawDisplayPricing);
       const sanitized = sanitizeModelEntryAgents(
         legacyShape,
         MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
@@ -854,7 +861,7 @@ export function parseListModelsResponse(
         MODEL_ACCESS_CATALOG_SCHEMA_VERSION,
       );
       if (error) return fail(error);
-      models.push({ ...(sanitized as PlainObject), availability });
+      models.push({ ...(sanitized as PlainObject), availability, ...(displayPricing ? { displayPricing } : {}) });
     }
     return ok({
       schemaVersion: MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION,
@@ -999,6 +1006,11 @@ function referencePriceGroupsError(value: unknown): string | null {
   return null;
 }
 
+// Capacity is connection-local metadata, never a public Registry default.
+function validRegistryMetadata(value: unknown): value is ModelMetadata {
+  return validModelMetadata(value) && !("contextWindowMax" in value);
+}
+
 function registryRouteError(
   value: unknown,
   path: string,
@@ -1012,6 +1024,7 @@ function registryRouteError(
       ? [
           ...MODEL_REGISTRY_ROUTE_FIELDS,
           ...(schemaVersion >= 5 ? ["referencePriceGroup"] : []),
+          ...(schemaVersion >= 6 ? ["interfaces", "preferredInterfaces"] : []),
           "defaults",
           "forceOverrides",
           "overrideReason",
@@ -1022,7 +1035,7 @@ function registryRouteError(
   );
   if (error) return error;
   for (const field of ["defaults", "forceOverrides"] as const) {
-    if (value[field] !== undefined && !validModelMetadata(value[field]))
+    if (value[field] !== undefined && !validRegistryMetadata(value[field]))
       return `${path}.${field} is invalid`;
   }
   if (
@@ -1098,6 +1111,7 @@ function registryEntryError(
         ? [
             ...MODEL_REGISTRY_ENTRY_V2_FIELDS,
             "nativeApi",
+            ...(schemaVersion >= 6 ? ["nativeApis"] : []),
             ...(schemaVersion >= 4
               ? [
                   "modelRef",
@@ -1269,12 +1283,13 @@ export function parseModelRegistry(
   const unknownField = unknownFieldError(
     value,
     value.schemaVersion === MODEL_REGISTRY_V4_SCHEMA_VERSION ||
-      value.schemaVersion === MODEL_REGISTRY_V5_SCHEMA_VERSION
+      (value.schemaVersion === MODEL_REGISTRY_V5_SCHEMA_VERSION || value.schemaVersion === MODEL_REGISTRY_V6_SCHEMA_VERSION)
       ? [
           ...MODEL_REGISTRY_FIELDS,
           "nativeApiRules",
           "localModels",
           "baseModels",
+          ...(value.schemaVersion === 6 ? ["interfaceProfiles"] : []),
         ]
       : value.schemaVersion === MODEL_REGISTRY_V3_SCHEMA_VERSION
         ? [...MODEL_REGISTRY_FIELDS, "nativeApiRules"]
@@ -1287,10 +1302,13 @@ export function parseModelRegistry(
     value.schemaVersion !== MODEL_REGISTRY_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_V3_SCHEMA_VERSION &&
     value.schemaVersion !== MODEL_REGISTRY_V4_SCHEMA_VERSION &&
-    value.schemaVersion !== MODEL_REGISTRY_V5_SCHEMA_VERSION
+    value.schemaVersion !== MODEL_REGISTRY_V5_SCHEMA_VERSION &&
+    value.schemaVersion !== MODEL_REGISTRY_V6_SCHEMA_VERSION
   ) {
-    return fail("modelRegistry.schemaVersion must be 1, 2, 3, 4 or 5");
+    return fail("modelRegistry.schemaVersion must be 1, 2, 3, 4, 5 or 6");
   }
+  const interfacesError = modelInterfacesError(value);
+  if (interfacesError) return fail(interfacesError);
   if (!isIsoTimestamp(value.updatedAt)) {
     return fail("modelRegistry.updatedAt must be an ISO timestamp");
   }
@@ -1361,7 +1379,7 @@ export function parseModelRegistry(
         !base.aliases.every(
           (a) => typeof a === "string" && a.length > 0 && a.length <= 256,
         ) ||
-        !validModelMetadata(base.defaults)
+        !validRegistryMetadata(base.defaults)
       )
         return fail("modelRegistry.baseModels contains invalid data");
       if (base.referencePriceGroups !== undefined) {

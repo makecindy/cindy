@@ -124,6 +124,8 @@ export interface TipProps {
   forceOpen?: boolean;
   /** 受控开关。提供时优先于 forceOpen,用于需要明确关闭 tooltip 的拖拽态。 */
   controlledOpen?: boolean;
+  /** Discard hover requests while temporarily controlled (e.g. recording). */
+  resetHoverOnControlChange?: boolean;
   /** 自定义 Content 样式(覆盖默认宽度等) */
   contentClassName?: string;
 }
@@ -141,6 +143,7 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
     disabled,
     forceOpen,
     controlledOpen,
+    resetHoverOnControlChange = false,
     contentClassName,
     ...rest
   } = props;
@@ -162,6 +165,9 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
   );
   if (requestedOpen !== undefined) controlledRef.current = true;
   const open = requestedOpen ?? (controlledRef.current ? hoverOpen : undefined);
+  React.useLayoutEffect(() => {
+    if (resetHoverOnControlChange && requestedOpen !== undefined) setHoverOpen(false);
+  }, [resetHoverOnControlChange, requestedOpen]);
 
   // 没有 tooltip 内容时,Tip 仍要保持"透明传递":把外层 props/ref 直接合并到 children,
   // 避免在复合 trigger 里成为 ref/事件断点。React 18 的 cloneElement 类型签名不接受 ref
@@ -175,7 +181,11 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
 
   return (
     <TooltipProvider delayDuration={delay}>
-      <TooltipRoot open={open} onOpenChange={setHoverOpen}>
+      <TooltipRoot open={open} onOpenChange={(next) => {
+        // A hover callback during forced display must not reopen a different
+        // label when control returns to the pointer after recording stops.
+        setHoverOpen(resetHoverOnControlChange && requestedOpen !== undefined ? false : next);
+      }}>
         <TooltipTrigger
           asChild
           ref={forwardedRef as React.Ref<HTMLButtonElement>}

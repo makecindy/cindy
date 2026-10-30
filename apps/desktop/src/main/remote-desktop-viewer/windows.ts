@@ -2,15 +2,28 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  powerMonitor,
   screen,
   type IpcMainInvokeEvent,
   type WebContents,
 } from 'electron';
-import { REMOTE_DESKTOP_CHANNEL, DeviceLinkError, parseClipboardContent } from '@cindy/device-link';
+import {
+  REMOTE_DESKTOP_CHANNEL,
+  DeviceLinkError,
+  parseClipboardContent,
+  parseRemoteDesktopRequest,
+} from '@cindy/device-link';
+import { createHash } from 'node:crypto';
+import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
 import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
+import {
+  getSelfDeviceId,
+  remoteInvoke,
+  getDeviceLinkStatus,
+  getUnresponsiveDeviceIds,
+} from '../device-link/index.js';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig.js';
 import {
   assertTrustedAppRendererEvent,
@@ -18,6 +31,7 @@ import {
   isTrustedCindyRendererWindow,
 } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { createLogger } from '../logger.js';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller.js';
 import { createResourceUsageWindow } from '../resource-usage-window/window.js';
 import type { SupportedLocale } from '../../shared/locale.js';
@@ -27,14 +41,19 @@ import { extractIpcError } from '../../shared/ipcError.js';
 import { RemoteViewerConnection } from './connection.js';
 import { ViewerCredentials } from './credentials.js';
 import { readViewerPreferences, writeViewerPreferences } from './preferences.js';
+import { readViewerResolution, writeViewerResolution } from './resolutionMemory.js';
 import { resolveDesktopInputBinary } from '../remote-desktop/inputHost.js';
 import { ClipboardCounter } from '../remote-desktop/clipboardCounter.js';
 import { transferDesktopClipboardContent } from '../remote-desktop/clipboard.js';
+
+const log = createLogger('remote-viewer');
 
 async function requestRemote<T>(device: string, request: unknown, check: () => void): Promise<T> {
   check();
   if (!getAppCapabilities().canUseDeviceLink || isAppSessionBoundaryPending())
     throw new Error('DESKTOP_STOPPED');
+  const startedAt = Date.now();
+  const startedMonotonic = performance.now();
   try {
     const result = await remoteInvoke(device, REMOTE_DESKTOP_CHANNEL, [request], {
       preSend: () => {
@@ -47,6 +66,27 @@ async function requestRemote<T>(device: string, request: unknown, check: () => v
       throw new Error(result.error.code === 'IPC_ERROR' ? result.error.message : result.error.code);
     return result.result as T;
   } catch (error) {
+    try {
+      const parsed = parseRemoteDesktopRequest(request);
+      const lease = 'lease' in parsed ? parsed.lease : null;
+      log.debug('desktop request failed', {
+        at: Date.now(),
+        startedAt,
+        elapsedMs: performance.now() - startedMonotonic,
+        operation: parsed.op,
+        session: lease ? createHash('sha256').update(lease).digest('hex').slice(0, 16) : null,
+        code: desktopDiagnosticCode(
+          error instanceof DeviceLinkError
+            ? error.code
+            : (extractIpcError(error)?.message ?? error),
+        ),
+        signaling: getDeviceLinkStatus(),
+        peerUnresponsive: getUnresponsiveDeviceIds().includes(device),
+        inFlight: error instanceof DeviceLinkError ? (error.inFlight ?? null) : null,
+      });
+    } catch {
+      /* Diagnostics must preserve the original request failure. */
+    }
     if (error instanceof DeviceLinkError) throw new Error(error.code);
     const parsed = extractIpcError(error);
     if (parsed?.code === 'DEVICE_LINK_CONTROL_DISABLED') throw new Error('REMOTE_DISABLED');
@@ -64,6 +104,8 @@ type Entry = {
   window: BrowserWindow | null;
   controller: ResourceUsageWindowController;
   connection: RemoteViewerConnection;
+  /** The remote keyboard surface owns shortcuts, including Cmd/Ctrl+W. */
+  inputCaptured: boolean;
 };
 
 /** Reuses the existing auxiliary-window lifecycle. One window per target plus
@@ -91,13 +133,24 @@ export class RemoteDesktopViewerWindows {
       target.deviceId.length > 256 ||
       target.deviceId === getSelfDeviceId() ||
       typeof target.name !== 'string' ||
-      target.name.length > 256
+      target.name.length > 256 ||
+      (target.handoff !== undefined &&
+        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff)))
     )
       throwIpcError('INVALID_PARAMS', 'Invalid remote desktop target');
-    let entry = [...this.entries].find((e) => e.connection.target?.deviceId === target.deviceId);
+    // A 代输入 window view is its own window, separate from a whole-desktop viewer.
+    let entry = [...this.entries].find(
+      (e) =>
+        e.connection.target?.deviceId === target.deviceId &&
+        e.connection.target.handoff === target.handoff,
+    );
     if (!entry) entry = [...this.entries].find((e) => !e.connection.target) ?? this.create();
     if (!entry.connection.active)
-      entry.connection.bind({ deviceId: target.deviceId, name: target.name });
+      entry.connection.bind({
+        deviceId: target.deviceId,
+        name: target.name,
+        ...(target.handoff ? { handoff: target.handoff } : {}),
+      });
     entry.controller.open(sender);
     // The spare shell is created off the next click path, never connects to a peer.
     this.prewarm();
@@ -112,6 +165,11 @@ export class RemoteDesktopViewerWindows {
       e.controller.dispose();
     }
     this.entries.clear();
+  }
+  private setInputCaptured(entry: Entry, captured: boolean): void {
+    entry.inputCaptured = captured;
+    const win = entry.window;
+    if (win && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(captured);
   }
   private requestClose(entry: Entry): void {
     const win = entry.window;
@@ -133,11 +191,21 @@ export class RemoteDesktopViewerWindows {
       writeClipboard: (value) => clipboard.writeText(value),
       preferences: readViewerPreferences,
       savePreferences: writeViewerPreferences,
+      resolution: readViewerResolution,
+      saveResolution: writeViewerResolution,
+      channel: (generation, id, request) => {
+        const win = entry.window;
+        if (!win || win.isDestroyed()) return false;
+        win.webContents.send(REMOTE_VIEWER.CHANNEL_REQUEST, { generation, id, request });
+        return true;
+      },
       focused: () => entry.window?.isFocused() === true,
       clipboard: {
+        // The plain counter: a multi-item local clipboard (several files) is
+        // reported by the content read and skipped, without failing the pass.
         version: (current) => {
           if (!current()) return Promise.reject(new Error('DESKTOP_STOPPED'));
-          return counter.read(true);
+          return counter.read();
         },
         stop: () => counter.stop(),
         read: async (current) =>
@@ -161,11 +229,14 @@ export class RemoteDesktopViewerWindows {
       request: requestRemote,
       credentials,
     });
-    const entry: Entry = { window: null, connection, controller: null! };
+    const entry: Entry = { window: null, connection, controller: null!, inputCaptured: false };
     entry.controller = new ResourceUsageWindowController({
       isOpenSender: this.isOpenSender,
       // Independent top-level windows do not follow main-window minimize/hide.
       prewarmWork: false,
+      // A live session survives minimize, Space switches and fullscreen transitions;
+      // only closing the viewer disconnects.
+      pauseWhenHidden: false,
       activityChannel: REMOTE_VIEWER.ACTIVE,
       activityPayload: () => connection.snapshot(),
       localeChannel: REMOTE_VIEWER.LOCALE,
@@ -174,7 +245,7 @@ export class RemoteDesktopViewerWindows {
         [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
       onActivityChanged: (win, active) => {
         connection.setActive(active);
-        if (!active && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(false);
+        if (!active) this.setInputCaptured(entry, false);
       },
       createWindow: () => {
         const win = createResourceUsageWindow(undefined, {
@@ -190,16 +261,37 @@ export class RemoteDesktopViewerWindows {
         });
         entry.window = win;
         win.on('blur', () => {
+          this.setInputCaptured(entry, false);
           void connection.focusChanged();
         });
+        win.on('focus', () => void connection.focusChanged());
+        // The session survives hiding; the page pauses the host's video instead.
+        const hidden = (value: boolean) => () => {
+          if (!win.isDestroyed() && !win.webContents.isDestroyed())
+            win.webContents.send(REMOTE_VIEWER.HIDDEN, value);
+        };
+        win.on('hide', hidden(true));
+        win.on('minimize', hidden(true));
+        win.on('show', hidden(false));
+        win.on('restore', hidden(false));
         // Local navigation/reloads/crashes immediately retire authority, including in-flight starts.
+        // A retired renderer can no longer report focus loss, so its shortcut capture ends too.
+        const retire = () => {
+          this.setInputCaptured(entry, false);
+          connection.deactivate();
+        };
         win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-          if (isMainFrame && !isInPlace) connection.deactivate();
+          if (isMainFrame && !isInPlace) retire();
         });
-        win.webContents.on('render-process-gone', () => connection.deactivate());
-        win.on('closed', () => connection.deactivate());
+        win.webContents.on('render-process-gone', retire);
+        win.on('closed', retire);
         win.webContents.on('before-input-event', (event, input) => {
-          if (input.type === 'keyDown' && input.code === 'KeyW' && (input.meta || input.control)) {
+          if (
+            !entry.inputCaptured &&
+            input.type === 'keyDown' &&
+            input.code === 'KeyW' &&
+            (input.meta || input.control)
+          ) {
             event.preventDefault();
             this.requestClose(entry);
           }
@@ -221,7 +313,23 @@ export class RemoteDesktopViewerWindows {
       throwIpcError('PERMISSION_DENIED', 'Invalid viewer');
     return entry;
   }
+  private readonly endForLocalLock = () => {
+    for (const entry of this.entries) {
+      if (!entry.connection.active) continue;
+      try {
+        entry.connection.close(entry.connection.generation, true);
+      } catch {
+        // An account change can retire the owner between the power event and
+        // its handler. Revoke locally without acting as the previous owner.
+        entry.connection.deactivate();
+      }
+      const win = entry.window;
+      if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
+    }
+  };
   register(): void {
+    powerMonitor.on('lock-screen', this.endForLocalLock);
+    powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);
@@ -233,15 +341,14 @@ export class RemoteDesktopViewerWindows {
     ipcMain.handle(REMOTE_VIEWER.PRESENTED, (event) => {
       this.entry(event).controller.markPresentationReady(event.sender);
     });
-    ipcMain.handle(REMOTE_VIEWER.CLOSE, async (event, generation) => {
+    ipcMain.handle(REMOTE_VIEWER.CLOSE, (event, generation) => {
       const entry = this.entry(event);
       if (generation !== entry.connection.generation) return;
       try {
-        await entry.connection.close(generation);
+        entry.connection.close(generation);
       } catch {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOP_FAILED');
       }
-      if (generation !== entry.connection.generation) return;
       entry.controller.close(event.sender);
     });
     ipcMain.handle(REMOTE_VIEWER.PREFERENCES, async (event, generation, patch) => {
@@ -249,6 +356,23 @@ export class RemoteDesktopViewerWindows {
         return await this.entry(event).connection.preferences(generation, patch);
       } catch {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_SETTINGS_FAILED');
+      }
+    });
+    ipcMain.handle(REMOTE_VIEWER.RESOLUTION, async (event, generation, displayId, value) => {
+      const entry = this.entry(event);
+      try {
+        // An omitted value reads; an explicit null forgets.
+        return await entry.connection.resolution(generation, displayId, value);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_SETTINGS_FAILED');
+      }
+    });
+    ipcMain.handle(REMOTE_VIEWER.CHANNEL_REPLY, (event, generation, id, outcome) => {
+      const entry = this.entry(event);
+      try {
+        entry.connection.channelReply(generation, id, outcome);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
       }
     });
     ipcMain.handle(REMOTE_VIEWER.SAFETY, async (event, generation, retry) => {
@@ -260,6 +384,13 @@ export class RemoteDesktopViewerWindows {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
       }
     });
+    ipcMain.handle(REMOTE_VIEWER.CLIPBOARD_SYNC, async (event, generation) => {
+      try {
+        return await this.entry(event).connection.syncClipboard(generation);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
+      }
+    });
     ipcMain.handle(REMOTE_VIEWER.REQUEST, async (event, generation, request, attempt) => {
       const result = await this.entry(event).connection.request(generation, request, attempt);
       if (!result.ok) throwIpcError('PRECONDITION_FAILED', result.code);
@@ -267,7 +398,14 @@ export class RemoteDesktopViewerWindows {
     });
     ipcMain.handle(REMOTE_VIEWER.CLIPBOARD, async (event, generation, action) => {
       const result = await this.entry(event).connection.clipboard(generation, action);
-      if (!result.ok) throwIpcError('PRECONDITION_FAILED', result.code);
+      if (!result.ok) {
+        // Code only: clipboard contents never reach logs.
+        log.warn('clipboard transfer failed', {
+          action: action === 'copy' || action === 'paste' ? action : 'invalid',
+          code: result.code,
+        });
+        throwIpcError('PRECONDITION_FAILED', result.code);
+      }
     });
     ipcMain.handle(REMOTE_VIEWER.CREDENTIAL, async (event, generation, action, enabled) => {
       try {
@@ -364,7 +502,7 @@ export class RemoteDesktopViewerWindows {
           throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
         }
       } else if (generation !== entry.connection.generation) return;
-      event.sender.setIgnoreMenuShortcuts(focused && entry.window!.isFocused());
+      this.setInputCaptured(entry, focused && entry.window!.isFocused());
     });
   }
 }

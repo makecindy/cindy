@@ -123,6 +123,23 @@ describe('对账', () => {
     expect(h.deriveVersion).not.toHaveBeenCalled();
   });
 
+  it('只缺 SOUL.md 时补种后立刻收进留着的手改 USER.md,不等下一次对账', async () => {
+    const h = harness();
+    const reads = [
+      folder({ identitySource: '', userContextSource: '手改的用户画像' }),
+      folder({ userContextSource: '手改的用户画像' }),
+    ];
+    h.deps.readFolder = async () => reads.shift()!;
+    expect(await syncBotProfileFromFolder('bot-a', h.deps)).toBe('derived');
+    expect(h.seedFolder).toHaveBeenCalledOnce();
+    expect(h.deriveVersion).toHaveBeenCalledWith({
+      botId: 'bot-a',
+      identitySource: '你是纸老虎，一个爱做菜的厨子。',
+      config: { model: 'claude-sonnet-4-6', harness: 'claude', userContextSource: '手改的用户画像' },
+      expectedCurrentVersion: 3,
+    });
+  });
+
   it('数据库里没有这个伙伴时不碰磁盘', async () => {
     const h = harness({ snapshot: null });
     expect(await syncBotProfileFromFolder('bot-a', h.deps)).toBe('missing');

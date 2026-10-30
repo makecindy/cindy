@@ -14,6 +14,7 @@ import type { IMCardActionEvent, IMHost, IMMessageEvent } from '../../types.js';
 import { TelegramApiError, type TelegramApiClient, type TgUpdate } from '../api.js';
 import { encodeCallbackData, encodeMessageId } from '../codec.js';
 import { TelegramIM, type TelegramGroupWindowEntry } from '../index.js';
+import { PROCESSING_REACTION_POOL } from '../reactionPool.js';
 
 const BOT = { id: 999, is_bot: true, first_name: 'Cindy', username: 'my_cindy_bot' };
 const OWNER_ID = '111';
@@ -93,7 +94,11 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
           signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
         });
       }
-      if (method === 'sendMessage' || method === 'sendRichMessage') {
+      if (
+        method === 'sendMessage' ||
+        method === 'sendRichMessage' ||
+        /^send(Photo|Document|Video|Audio|Voice|Animation|Sticker|VideoNote|Poll|Location|Contact|Dice)$/.test(method)
+      ) {
         sentSeq += 1;
         return {
           message_id: sentSeq,
@@ -134,6 +139,23 @@ function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secr
     httpPostForm: async () => ({ status: 200, body: {} }),
   };
   return { host, broadcasts, secrets, handlers };
+}
+
+/**
+ * 图片总仓桩: 图片只在 host 提供媒体总仓时才下载(不再落 legacy 目录)。
+ * 需要「附件下载在途」窗口的用例挂上它, 让照片真正走到 getFile。
+ */
+function stubImageStore(host: IMHost) {
+  const cacheImage = vi.fn(async ({ token }: { token: string }) => ({
+    absPath: `/blobs/${token}.jpg`,
+    url: `cindy-media://blobs/${token}.jpg`,
+  }));
+  host.media = {
+    cacheImage,
+    getCachedImage: async () => null,
+    resolveMediaUrl: () => null,
+  };
+  return { cacheImage };
 }
 
 /**
@@ -213,6 +235,70 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it('reads a persisted image locator without needing the recent in-memory media pool', async () => {
+    await im.init();
+    await connect();
+    const original = api.call.bind(api);
+    api.call = async (method, params, signal) =>
+      method === 'getFile'
+        ? ({ file_path: 'photos/saved.jpg', file_size: 3 } as never)
+        : original(method, params, signal);
+    const fetcher = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      expect(await im.readGroupHistoryImage('saved-file')).toEqual(Buffer.from([1, 2, 3]));
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://files.local/photos/saved.jpg',
+        expect.anything(),
+      );
+      fetcher.mockImplementationOnce(async () => {
+        await im.dispose();
+        return new Response(new Uint8Array([1]));
+      });
+      expect(await im.readGroupHistoryImage('saved-file')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    const method = phase === 'startup' ? 'getMe' : 'getUpdates';
+    const rateLimit = new TelegramApiError(method, 429, 'Too Many Requests', 90);
+    if (phase === 'startup') api.failNextCall(method, rateLimit);
+    try {
+      await im.init();
+      if (phase === 'poll') api.failNextGetUpdates(rateLimit);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(89_999);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.calls.filter((call) => call.method === method)).toHaveLength(2);
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recover', 'offline', 'dispose', 'invalid-token'])('handles startup failure: %s', async (outcome) => {
+    vi.useFakeTimers();
+    ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
+    api.failNextCall('getMe', outcome === 'invalid-token'
+      ? new TelegramApiError('getMe', 401, 'invalid token') : new Error('network down'));
+    try {
+      await im.init();
+      if (outcome === 'offline') await im.goOffline();
+      if (outcome === 'dispose') await im.dispose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.calls.filter((call) => call.method === 'getMe')).toHaveLength(outcome === 'recover' ? 2 : 1);
+      if (outcome === 'recover') expect(im.getStatus().kind).toBe('connected');
+    } finally {
+      await im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('无 token 时 init 保持 idle, 不发任何请求', async () => {
     await im.init();
     expect(im.getStatus()).toEqual({ kind: 'idle' });
@@ -320,7 +406,7 @@ describe('TelegramIM', () => {
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '/nonsense extra args' });
   });
 
-  it('名字召唤: 手打 "@显示名" 与句首裸名字都触发(非 username), 句中提到不触发', async () => {
+  it('手打 @显示名触发，只有名字无论句首还是句中都不触发', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
     await connect();
@@ -329,10 +415,25 @@ describe('TelegramIM', () => {
       groupMessage({ text: '@Cindy 你在?', fromId: 111, messageId: 30 }),
       groupMessage({ text: 'cindy 帮我看看这个', fromId: 222, messageId: 31 }),
       groupMessage({ text: '我问过 Cindy 了不用管', fromId: 111, messageId: 32 }),
+      groupMessage({ text: '明确召唤', fromId: 111, messageId: 34, mentionBot: true }),
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(2));
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
-    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '明确召唤' });
+  });
+
+  it('纯 @bot 无正文仍召唤一轮，单独传递 invoked', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '', fromId: 222, messageId: 33, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({
+      senderId: 'g/-100200',
+      text: '',
+      invoked: true,
+      speaker: { id: '222', isOwner: false },
+    });
   });
 
   it('受保护群的消息一个字都不落本地窗口, 但仍可照常触发一轮', async () => {
@@ -465,6 +566,7 @@ describe('TelegramIM', () => {
     });
     const before = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
     api.pushUpdates([privateMessage('still there?', 222, 91)]);
+    // real-wait: cross the production cooldown window before checking that no reply is sent.
     await new Promise((r) => setTimeout(r, 200));
     const after = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
     expect(after).toBe(before); // 冷却期内不再回
@@ -756,6 +858,7 @@ describe('TelegramIM', () => {
 
     // 轮询确已停: 之后不再产生新的 getUpdates 调用。
     const pollsAtOffline = api.calls.filter((c) => c.method === 'getUpdates').length;
+    // real-wait: allow the production polling interval to elapse after disconnect.
     await new Promise((r) => setTimeout(r, 50));
     expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
   });
@@ -763,6 +866,7 @@ describe('TelegramIM', () => {
   it('下线后立即上线重放同一 update: 旧世代收尾不得移除新任务的游标低水位', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((event) => events.push(event));
+    stubImageStore(ctx.host);
     await connect();
 
     let releaseOldDownload!: () => void;
@@ -813,6 +917,8 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => {
       expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:52`);
     });
+    // 旧/新世代都不往 legacy telegramMediaDir 写任何东西。
+    expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
 
   it('set-online 畸形 payload 一律报错且不产生上下线副作用', async () => {
@@ -1145,6 +1251,7 @@ describe('TelegramIM', () => {
   it('相册处理(附件下载)未收口前, 持久化游标不越过相册首条 update', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
+    stubImageStore(ctx.host);
     await connect();
     // 让 getFile 悬住 — 模拟 settle 已触发、附件仍在下载的处理窗口
     let releaseGetFile!: () => void;
@@ -1170,6 +1277,7 @@ describe('TelegramIM', () => {
     });
     api.pushUpdates([member(45), member(46)]);
     // 等 settle 触发进入下载(getFile 悬住), 此时游标不得越过 45
+    // real-wait: exercise the production settle delay before inspecting the persisted cursor.
     await new Promise((r) => setTimeout(r, 1400));
     expect(events).toHaveLength(0);
     const persistedDuring = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
@@ -1181,6 +1289,7 @@ describe('TelegramIM', () => {
       const persisted = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
       expect(persisted).toBeGreaterThanOrEqual(47);
     });
+    expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
 
   it('相册(media_group)聚合为单个事件, 不各起一轮 turn', async () => {
@@ -1206,6 +1315,7 @@ describe('TelegramIM', () => {
     // 关键断言是"三个成员合进同一个事件", 不是下载成功与否。
     expect(events[0].attachments.length + events[0].unsupported.length).toBe(3);
     // 静默窗后不再有第二个事件
+    // real-wait: cross the production media aggregation quiet window.
     await new Promise((r) => setTimeout(r, 1300));
     expect(events).toHaveLength(1);
   });
@@ -1235,6 +1345,7 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].replyContext).toEqual({
+      messageId: '40',
       author: 'Cindy',
       text: '方案 A: 先改 transport',
       isBot: true,
@@ -1582,6 +1693,46 @@ describe('TelegramIM', () => {
     expect(api.calls.some((c) => c.method === 'deleteMyCommands')).toBe(true);
   });
 
+  it('randomizes processing reactions quietly, keeps waiting fixed, and clears the actual variant', async () => {
+    await connect();
+    const random = vi.spyOn(Math, 'random');
+    try {
+      for (const [index, emoji] of PROCESSING_REACTION_POOL.entries()) {
+        random.mockReturnValue((index + 0.5) / PROCESSING_REACTION_POOL.length);
+        expect(await im.reactToMessage('111|5', '🤔')).toBe(emoji);
+        const sent = api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!;
+        expect(sent.params.reaction).toEqual([{ type: 'emoji', emoji }]);
+        expect(sent.params.is_big).toBeUndefined();
+      }
+      expect(await im.reactToMessage('111|5', '👀')).toBe('👀');
+      await im.removeMessageReaction('111|5');
+      expect(
+        api.calls.filter((call) => call.method === 'setMessageReaction').at(-1)!.params.reaction,
+      ).toEqual([]);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('falls back to the base processing reaction when the group rejects a random variant', async () => {
+    await connect();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.999);
+    try {
+      api.failNextCall(
+        'setMessageReaction',
+        new TelegramApiError('setMessageReaction', 400, 'REACTION_INVALID'),
+      );
+      expect(await im.reactToMessage('111|5', '🤔')).toBe('🤔');
+      expect(
+        api.calls
+          .filter((call) => call.method === 'setMessageReaction')
+          .map((call) => call.params.reaction),
+      ).toEqual([[{ type: 'emoji', emoji: '✍' }], [{ type: 'emoji', emoji: '🤔' }]]);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
   it('行为配置: emoji off 不放任何表情; DM replyQuote=first 首条回复挂回', async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
@@ -1594,6 +1745,8 @@ describe('TelegramIM', () => {
     await connect();
     // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
     expect(await im.reactToMessage('111|5', '👍')).toBeNull();
+    expect(await im.reactToMessage('111|5', '🤔')).toBeNull();
+    expect(await im.reactToMessage('111|5', '👀')).toBeNull();
     expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
     // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂
     api.pushUpdates([privateMessage('问个事', 111, 95)]);
@@ -2312,6 +2465,7 @@ describe('TelegramIM', () => {
     expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
     // ambient 路径不消费成员命令(owner 裸命令走显式召唤通道, 另有用例)
     api.pushUpdates([groupMessage({ text: '/new', fromId: 222, messageId: 51 })]);
+    // real-wait: let the production command dispatch debounce settle before asserting no event.
     await new Promise((r) => setTimeout(r, 100));
     expect(events).toHaveLength(1);
     // NO_REPLY 哨兵: 惰性占位下从头到尾零消息(不发送、无需删除 — 真零痕迹)
@@ -2343,6 +2497,7 @@ describe('TelegramIM', () => {
     // 发出首条真实消息 → typing 循环停(不再有新的 sendChatAction)
     await im.sendText(OWNER_ID, '答复');
     const countAfterSend = api.calls.filter((c) => c.method === 'sendChatAction').length;
+    // real-wait: allow the production typing loop interval to elapse after the reply.
     await new Promise((r) => setTimeout(r, 120));
     expect(api.calls.filter((c) => c.method === 'sendChatAction').length).toBe(countAfterSend);
     // 群触发同样 typing
@@ -2604,6 +2759,7 @@ describe('TelegramIM', () => {
       await vi.waitFor(() => expect(events).toHaveLength(1));
       // 只有新鲜那条进了 turn; 陈旧那条静默消费。
       expect(events[0]).toMatchObject({ text: '刚发的' });
+      // real-wait: cross the production stale-message quiet period before checking for duplicates.
       await new Promise((r) => setTimeout(r, 200));
       expect(events).toHaveLength(1);
     });
@@ -2612,6 +2768,7 @@ describe('TelegramIM', () => {
       await connect();
       const before = api.calls.filter((c) => c.method === 'sendMessage').length;
       api.pushUpdates([privateMessage('在吗', 999, 82, 8 * 3_600)]);
+      // real-wait: cross the production stale-message rejection window before checking for output.
       await new Promise((r) => setTimeout(r, 300));
       // 隔夜再回一句拒绝语同样是诈尸 —— 一条出站都不该有。
       expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before);
@@ -2660,5 +2817,630 @@ describe('TelegramIM', () => {
     expect(im.getStatus()).toEqual({ kind: 'idle' });
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
     expect(ctx.secrets.has('telegram-owner-user-id')).toBe(false);
+  });
+});
+
+describe('TelegramIM 音视频与群历史媒体', () => {
+  /** getFile 给出 file_path、文件下载 fetch 返回固定字节 —— 让下载真正落盘。 */
+  function enableDownloads(): string[] {
+    const fetched: string[] = [];
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        api.calls.push({ method, params: params ?? {} });
+        return { file_id: params?.file_id, file_path: `media/${String(params?.file_id)}` } as never;
+      }
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async (url: string) => {
+      fetched.push(url);
+      return new Response(Buffer.from('media-bytes'));
+    });
+    return fetched;
+  }
+
+  /** 媒体总仓桩: 只收白名单 MIME, 落到临时目录。 */
+  const MEDIA_STORE_MIMES = new Set(['video/mp4', 'video/quicktime', 'audio/ogg', 'audio/mpeg']);
+  let cachedMedia: Array<{ token: string; mimeType: string }>;
+  beforeEach(() => {
+    cachedMedia = [];
+    ctx.host.media = {
+      cacheImage: async () => {
+        throw new Error('not used');
+      },
+      getCachedImage: async () => null,
+      resolveMediaUrl: () => null,
+      cacheMedia: async ({ token, buffer, mimeType }) => {
+        if (!MEDIA_STORE_MIMES.has(mimeType)) throw new Error(`unsupported mime type: ${mimeType}`);
+        const absPath = path.join(tmpDir, `blob-${cachedMedia.length}`);
+        fs.writeFileSync(absPath, buffer);
+        cachedMedia.push({ token, mimeType });
+        return { absPath, url: `cindy-media://blobs/${token}`, mimeType, discard: async () => undefined };
+      },
+    };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function groupVideo(messageId: number, extra: Record<string, unknown> = {}): TgUpdate {
+    return {
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 222, is_bot: false, first_name: 'Tom' },
+        chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+        date: nowSec(10),
+        video: { file_id: `v${messageId}`, file_name: `IMG_${messageId}.MP4`, mime_type: 'video/mp4', file_size: 1024 },
+        ...extra,
+      },
+    };
+  }
+
+  it('私聊视频入媒体总仓后按文件交给模型, 不写 legacy 媒体目录', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    api.pushUpdates([
+      {
+        update_id: 70,
+        message: {
+          message_id: 70,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: 111, type: 'private' },
+          date: nowSec(5),
+          caption: '看看这个视频',
+          video: { file_id: 'vid-70', mime_type: 'video/mp4', file_size: 2048 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].unsupported).toEqual([]);
+    expect(events[0].attachments).toHaveLength(1);
+    expect(events[0].attachments[0]).toMatchObject({
+      kind: 'file',
+      originalName: 'video-70.mp4',
+      mimeType: 'video/mp4',
+      url: 'cindy-media://blobs/vid-70',
+    });
+    expect(fs.readFileSync(events[0].attachments[0].absPath, 'utf8')).toBe('media-bytes');
+    expect(cachedMedia).toEqual([{ token: 'vid-70', mimeType: 'video/mp4' }]);
+    expect(fs.readdirSync(tmpDir).filter((name) => name.endsWith('.mp4'))).toEqual([]);
+  });
+
+  it('host 不提供媒体总仓或总仓拒收格式时标不支持, 不降级写 legacy 目录', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    const dm = (messageId: number, extra: Record<string, unknown>): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: nowSec(5),
+        ...extra,
+      },
+    });
+    api.pushUpdates([
+      dm(72, { document: { file_id: 'mkv', file_unique_id: 'mkv-u', file_name: 'clip.mkv', mime_type: 'video/x-matroska' } }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].attachments).toEqual([]);
+    expect(events[0].unsupported).toEqual([{ type: 'video', label: 'clip.mkv' }]);
+
+    delete ctx.host.media;
+    api.pushUpdates([dm(73, { voice: { file_id: 'voice-73', mime_type: 'audio/ogg' } })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1].unsupported).toEqual([{ type: 'audio', label: 'voice-73.ogg' }]);
+    expect(fs.readdirSync(tmpDir).filter((name) => /\.(mkv|ogg)$/.test(name))).toEqual([]);
+  });
+
+  it('普通文档交 host.files 暂存; host 不提供文件暂存时标不支持且不下载', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const fetched = enableDownloads();
+    const discard = vi.fn(async () => undefined);
+    const stage = vi.fn(async ({ fileName }: { fileName: string }) => ({
+      absPath: `/staged/${fileName}`,
+      discard,
+    }));
+    ctx.host.files = { stage };
+    const doc = (messageId: number, fileId: string): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: nowSec(5),
+        document: { file_id: fileId, file_unique_id: `${fileId}-u`, file_name: 'report.pdf', mime_type: 'application/pdf', file_size: 1024 },
+      },
+    });
+
+    api.pushUpdates([doc(74, 'pdf-74')]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(stage).toHaveBeenCalledWith({
+      integration: 'telegram',
+      buffer: Buffer.from('media-bytes'),
+      fileName: 'report.pdf',
+    });
+    expect(events[0].attachments).toEqual([
+      { kind: 'file', absPath: '/staged/report.pdf', originalName: 'report.pdf', mimeType: 'application/pdf' },
+    ]);
+    expect(events[0].unsupported).toEqual([]);
+    expect(discard).not.toHaveBeenCalled();
+
+    delete ctx.host.files;
+    const getFileBefore = api.calls.filter((c) => c.method === 'getFile').length;
+    api.pushUpdates([doc(75, 'pdf-75')]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1].attachments).toEqual([]);
+    expect(events[1].unsupported).toEqual([{ type: 'file', label: 'report.pdf' }]);
+    expect(api.calls.filter((c) => c.method === 'getFile').length).toBe(getFileBefore);
+    expect(fetched).toHaveLength(1);
+    expect(fs.readdirSync(tmpDir).filter((name) => name.endsWith('.pdf'))).toEqual([]);
+  });
+
+  it('图片进 cacheImage; host 不提供媒体总仓时图片不下载', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const fetched = enableDownloads();
+    const { cacheImage } = stubImageStore(ctx.host);
+    const photo = (messageId: number): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: nowSec(5),
+        caption: '看图',
+        photo: [{ file_id: `photo-${messageId}`, file_unique_id: `photo-u-${messageId}`, width: 10, height: 10 }],
+      },
+    });
+
+    api.pushUpdates([photo(76)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(cacheImage).toHaveBeenCalledWith(
+      expect.objectContaining({ integration: 'telegram', token: 'photo-76', buffer: Buffer.from('media-bytes') }),
+    );
+    expect(events[0].attachments).toEqual([
+      expect.objectContaining({ kind: 'image', absPath: '/blobs/photo-76.jpg', url: 'cindy-media://blobs/photo-76.jpg' }),
+    ]);
+
+    delete ctx.host.media;
+    const getFileBefore = api.calls.filter((c) => c.method === 'getFile').length;
+    api.pushUpdates([photo(77)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1].text).toBe('看图');
+    expect(events[1].attachments).toEqual([]);
+    expect(api.calls.filter((c) => c.method === 'getFile').length).toBe(getFileBefore);
+    expect(fetched).toHaveLength(1);
+    expect(fs.readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it('超过 Bot API 20MB 下载上限的视频标 oversize, 不调用 getFile', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    api.pushUpdates([
+      {
+        update_id: 71,
+        message: {
+          message_id: 71,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: 111, type: 'private' },
+          date: nowSec(5),
+          video: { file_id: 'big', file_name: 'big.mp4', file_size: 21 * 1024 * 1024 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].attachments).toEqual([]);
+    expect(events[0].unsupported).toEqual([{ type: 'oversize', label: 'big.mp4' }]);
+    expect(api.calls.some((c) => c.method === 'getFile')).toBe(false);
+  });
+
+  it('先发视频、再单独 @bot: 群历史媒体可按上下文消息 id 补齐下载', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    api.pushUpdates([groupVideo(80), groupMessage({ text: '能鉴定吗', fromId: 222, messageId: 81, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    // 触发消息本身不带附件 —— 视频在前一条消息里。
+    expect(events[0].attachments).toEqual([]);
+
+    const history = await im.collectGroupHistoryMedia('-100200', ['80', '81']);
+    expect(history.unavailable).toEqual([]);
+    expect(history.attachments).toHaveLength(1);
+    expect(history.attachments[0]).toMatchObject({
+      kind: 'file',
+      originalName: 'IMG_80.MP4',
+      mimeType: 'video/mp4',
+      author: 'Tom',
+    });
+    // 不在上下文 id 里的消息不下载; 其它群同 id 不串。
+    expect((await im.collectGroupHistoryMedia('-100200', ['81'])).attachments).toEqual([]);
+    expect((await im.collectGroupHistoryMedia('-100300', ['80'])).attachments).toEqual([]);
+  });
+
+  it('本轮已随附件送达的被引消息/相册成员不重复补; 媒体不随轮次出池; 受保护群不入池', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    const video = groupVideo(90);
+    const reply = groupMessage({ text: '这个', fromId: 111, messageId: 91, mentionBot: true });
+    reply.message!.reply_to_message = video.message;
+    api.pushUpdates([video, reply, groupVideo(92, { has_protected_content: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].attachments.map((a) => a.originalName)).toEqual(['IMG_90.MP4']);
+    expect(events[0].replyContext?.attachmentCount).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 20));
+    // 同一轮: 被引消息已送达, 排除。
+    expect((await im.collectGroupHistoryMedia('-100200', ['90', '92'], reply.message)).attachments).toEqual([]);
+    // 轮次若被拒(游标未推进), 下次触发仍能补齐 —— 不随轮次出池。
+    expect((await im.collectGroupHistoryMedia('-100200', ['90'])).attachments.map((a) => a.originalName)).toEqual([
+      'IMG_90.MP4',
+    ]);
+    // 受保护群从不入池。
+    expect((await im.collectGroupHistoryMedia('-100200', ['92'])).attachments).toEqual([]);
+  });
+
+  it('原生视频的平台 MIME 不可靠时按扩展名纠正后交给媒体总仓', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    enableDownloads();
+    api.pushUpdates([
+      {
+        update_id: 130,
+        message: {
+          message_id: 130,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: 111, type: 'private' },
+          date: nowSec(5),
+          video: { file_id: 'v130', file_name: 'clip.mp4', mime_type: 'application/octet-stream', file_size: 10 },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(cachedMedia).toEqual([{ token: 'v130', mimeType: 'video/mp4' }]);
+    expect(events[0].unsupported).toEqual([]);
+  });
+
+  it('群历史媒体按最新优先分配名额, 超出的写明原因', async () => {
+    await connect();
+    enableDownloads();
+    const updates = [1, 2, 3, 4, 5].map((i) => groupVideo(100 + i));
+    api.pushUpdates(updates);
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(1),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const history = await im.collectGroupHistoryMedia('-100200', ['101', '102', '103', '104', '105']);
+    expect(history.attachments.map((a) => a.originalName)).toEqual([
+      'IMG_102.MP4',
+      'IMG_103.MP4',
+      'IMG_104.MP4',
+      'IMG_105.MP4',
+    ]);
+    expect(history.unavailable).toEqual(['另有 1 个更早的群历史附件超过数量上限，未提供']);
+    // 超出名额的不下载(只下载 4 个)。
+    expect(api.calls.filter((c) => c.method === 'getFile' && c.params.file_id === 'v101')).toEqual([]);
+  });
+});
+
+describe('TelegramIM 群历史图片', () => {
+  it('群历史图片按可回收缓存写入, 不复用也不固定已有缓存', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({
+      absPath: path.join(tmpDir, `img-${token}`),
+      url: `cindy-media://blobs/${token}.jpg`,
+      discard: async () => undefined,
+    }));
+    const getCachedImage = vi.fn(async () => null);
+    ctx.host.media = { cacheImage, getCachedImage, resolveMediaUrl: () => null };
+    await connect();
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') return { file_id: params?.file_id, file_path: `p/${String(params?.file_id)}` } as never;
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('jpg')));
+    try {
+      api.pushUpdates([
+        {
+          update_id: 120,
+          message: {
+            message_id: 120,
+            from: { id: 222, is_bot: false, first_name: 'Tom' },
+            chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+            date: nowSec(5),
+            photo: [{ file_id: 'ph-120', file_unique_id: 'u', width: 10, height: 10 }],
+          },
+        },
+      ]);
+      await vi.waitFor(() =>
+        expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(1),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      const history = await im.collectGroupHistoryMedia('-100200', ['120']);
+      expect(history.attachments).toHaveLength(1);
+      expect(getCachedImage).not.toHaveBeenCalled();
+      expect(cacheImage).toHaveBeenCalledWith(expect.objectContaining({ token: 'ph-120', staging: true }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('TelegramIM 入站分类', () => {
+  it('document 平台 MIME 不可靠时按扩展名识别图片, 进媒体总仓而不是文件暂存', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({
+      absPath: path.join(tmpDir, `img-${token}`),
+      url: `cindy-media://blobs/${token}.jpg`,
+      discard: async () => undefined,
+    }));
+    const stage = vi.fn();
+    ctx.host.media = { cacheImage, getCachedImage: vi.fn(async () => null), resolveMediaUrl: () => null };
+    ctx.host.files = { stage };
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') return { file_id: params?.file_id, file_path: `p/${String(params?.file_id)}` } as never;
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('jpg')));
+    try {
+      api.pushUpdates([
+        {
+          update_id: 140,
+          message: {
+            message_id: 140,
+            from: { id: 111, is_bot: false, first_name: 'U' },
+            chat: { id: 111, type: 'private' },
+            date: nowSec(5),
+            document: { file_id: 'doc-140', file_unique_id: 'u', file_name: 'scan.JPG', mime_type: 'application/octet-stream' },
+          },
+        },
+      ]);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
+      expect(stage).not.toHaveBeenCalled();
+      expect(cacheImage).toHaveBeenCalledWith(expect.objectContaining({ token: 'doc-140', mimeType: 'image/jpeg', staging: true }));
+      expect(events[0].attachments).toEqual([expect.objectContaining({ kind: 'image', originalName: 'scan.JPG' })]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('TelegramIM 群历史名额与分类一致', () => {
+  it('octet-stream 的 .png 文档按图片额度计, 不挤掉真实文件', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({
+      absPath: path.join(tmpDir, `img-${token}`),
+      url: `cindy-media://blobs/${token}.png`,
+      discard: async () => undefined,
+    }));
+    const stage = vi.fn(async ({ fileName }: { fileName: string }) => ({
+      absPath: path.join(tmpDir, `staged-${fileName}`),
+      discard: async () => undefined,
+    }));
+    ctx.host.media = { cacheImage, getCachedImage: vi.fn(async () => null), resolveMediaUrl: () => null };
+    ctx.host.files = { stage };
+    await connect();
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') return { file_id: params?.file_id, file_path: `p/${String(params?.file_id)}` } as never;
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('x')));
+    try {
+      const doc = (id: number, name: string, mime: string): TgUpdate => ({
+        update_id: id,
+        message: {
+          message_id: id,
+          from: { id: 222, is_bot: false, first_name: 'Tom' },
+          chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+          date: nowSec(5),
+          document: { file_id: `d${id}`, file_unique_id: `u${id}`, file_name: name, mime_type: mime },
+        },
+      });
+      api.pushUpdates([
+        doc(150, 'report.pdf', 'application/pdf'),
+        ...[151, 152, 153, 154, 155].map((id) => doc(id, `p${id}.png`, 'application/octet-stream')),
+      ]);
+      await vi.waitFor(() =>
+        expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(1),
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      const history = await im.collectGroupHistoryMedia('-100200', ['150', '151', '152', '153', '154', '155']);
+      expect(history.unavailable).toEqual([]);
+      expect(history.attachments.filter((a) => a.kind === 'image')).toHaveLength(5);
+      expect(history.attachments.map((a) => a.originalName)).toContain('report.pdf');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('TelegramIM 宿主工具的 Bot API 直通', () => {
+  function membershipUpdate(args: {
+    updateId: number;
+    from: 'left' | 'member' | 'kicked' | 'administrator';
+    to: 'left' | 'member' | 'kicked' | 'administrator';
+    chatType?: 'supergroup' | 'private';
+  }): TgUpdate {
+    return {
+      update_id: args.updateId,
+      my_chat_member: {
+        chat:
+          args.chatType === 'private'
+            ? { id: 111, type: 'private' }
+            : { id: -100200, type: 'supergroup', title: 'Ops' },
+        from: { id: 222, is_bot: false, first_name: 'Tom' },
+        date: nowSec(),
+        old_chat_member: { status: args.from, user: BOT },
+        new_chat_member: { status: args.to, user: BOT },
+      },
+    };
+  }
+
+  it('长轮询订阅 my_chat_member', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const poll = api.calls.find((c) => c.method === 'getUpdates')!;
+    expect(poll.params.allowed_updates).toEqual(['message', 'callback_query', 'my_chat_member']);
+  });
+
+  it('被拉进群 / 移出群: 群窗口记一条系统行, 并私聊告知主人', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+    api.pushUpdates([membershipUpdate({ updateId: 300, from: 'left', to: 'member' })]);
+    await vi.waitFor(() => expect(window).toHaveLength(1));
+    expect(window[0]).toMatchObject({
+      chatId: '-100200',
+      threadId: '',
+      messageId: 'membership-300',
+      chatName: 'Ops',
+      author: { name: 'Telegram', isBot: true },
+    });
+    expect(window[0].text).toContain('加入本群');
+    expect(window[0].text).toContain('Tom');
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before + 1),
+    );
+    const notice = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(notice.params.chat_id).toBe(OWNER_ID);
+    expect(String(notice.params.text)).toContain('Ops');
+    expect(String(notice.params.text)).toContain('-100200');
+
+    api.pushUpdates([membershipUpdate({ updateId: 301, from: 'member', to: 'kicked' })]);
+    await vi.waitFor(() => expect(window).toHaveLength(2));
+    expect(window[1].text).toContain('移出本群');
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before + 2),
+    );
+  });
+
+  it('群内升为管理员、私聊拉黑这类没有进出的变化不产生任何动作', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const before = api.calls.filter((c) => c.method === 'sendMessage').length;
+    api.pushUpdates([
+      membershipUpdate({ updateId: 310, from: 'member', to: 'administrator' }),
+      membershipUpdate({ updateId: 311, from: 'member', to: 'kicked', chatType: 'private' }),
+    ]);
+    await vi.waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(1),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(window).toHaveLength(0);
+    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(before);
+  });
+
+  it('sendMedia: URL 走 JSON 方法并按 lane 解码目标, 群里回流进窗口', async () => {
+    const window: TelegramGroupWindowEntry[] = [];
+    im.onGroupWindowMessage((e) => window.push(e));
+    await connect();
+    const originalCall = api.call;
+    api.call = (async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') {
+        api.calls.push({ method, params });
+        return { message_id: 77, chat: { id: -100200, type: 'supergroup', title: 'Ops' }, date: 1 };
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    const result = await im.sendMedia('g/-100200/9', {
+      kind: 'photo',
+      url: 'https://example.com/a.png',
+      caption: 'look <b>',
+      replyToMessageId: encodeMessageId('-100200', '55'),
+    });
+    expect(result.messageId).toBe(encodeMessageId('-100200', '77'));
+    const sent = api.calls.find((c) => c.method === 'sendPhoto')!;
+    expect(sent.params).toMatchObject({
+      chat_id: '-100200',
+      message_thread_id: 9,
+      photo: 'https://example.com/a.png',
+      caption: 'look <b>',
+      reply_parameters: { message_id: 55, allow_sending_without_reply: true },
+    });
+    expect(sent.params.parse_mode).toBeUndefined();
+    expect(window.at(-1)).toMatchObject({
+      chatId: '-100200',
+      threadId: '9',
+      messageId: '77',
+      author: { isBot: true },
+      text: 'look <b>',
+      fileNames: ['photo'],
+    });
+  });
+
+  it('sendMedia: 本地文件走 multipart, 贴纸不带说明, 缺来源直接报错', async () => {
+    await connect();
+    const file = path.join(tmpDir, 'clip.mp4');
+    fs.writeFileSync(file, 'video-bytes');
+    await im.sendMedia('111', { kind: 'video', absPath: file, caption: 'c' });
+    expect(api.calls.at(-1)?.method).toBe('sendVideo');
+    await im.sendMedia('111', { kind: 'sticker', fileId: 'CAAC123', caption: 'ignored' });
+    const sticker = api.calls.find((c) => c.method === 'sendSticker')!;
+    expect(sticker.params).toMatchObject({ chat_id: '111', sticker: 'CAAC123' });
+    expect(sticker.params.caption).toBeUndefined();
+    await expect(im.sendMedia('111', { kind: 'photo' })).rejects.toThrow('NO_SOURCE');
+    await expect(
+      im.sendMedia('111', { kind: 'document', absPath: path.join(tmpDir, 'missing.bin') }),
+    ).rejects.toThrow('NOT_FOUND');
+  });
+
+  it('downloadFile: getFile + 直链下载落盘, 同名自动加序号, 超限拒绝', async () => {
+    await connect();
+    const originalCall = api.call;
+    api.call = (async (method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        api.calls.push({ method, params });
+        return params.file_id === 'big'
+          ? { file_id: 'big', file_size: 21 * 1024 * 1024, file_path: 'documents/big.bin' }
+          : { file_id: params.file_id, file_size: 5, file_path: 'documents/../../etc/report.pdf' };
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('hello')));
+    try {
+      const dest = path.join(tmpDir, 'downloads');
+      const first = await im.downloadFile('f1', dest);
+      expect(first).toMatchObject({ size: 5, fileName: 'report.pdf' });
+      expect(first.absPath).toBe(path.join(dest, 'report.pdf'));
+      expect(fs.readFileSync(first.absPath, 'utf8')).toBe('hello');
+      const second = await im.downloadFile('f1', dest);
+      expect(second.fileName).toBe('report-1.pdf');
+      const named = await im.downloadFile('f1', dest, '../evil/../x.txt');
+      expect(path.dirname(named.absPath)).toBe(dest);
+      expect(named.fileName).toBe('x.txt');
+      await expect(im.downloadFile('big', dest)).rejects.toThrow('TOO_LARGE');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('resolveSendTarget / getBotId / getBotUsername 暴露连接事实', async () => {
+    expect(im.getBotId()).toBe('');
+    await connect();
+    expect(im.getBotId()).toBe(String(BOT.id));
+    expect(im.getBotUsername()).toBe(BOT.username);
+    expect(im.resolveSendTarget('111')).toEqual({ chat_id: '111' });
+    expect(im.resolveSendTarget('g/-100200/9')).toEqual({ chat_id: '-100200', message_thread_id: 9 });
+    expect(im.getBotApi()).not.toBeNull();
   });
 });

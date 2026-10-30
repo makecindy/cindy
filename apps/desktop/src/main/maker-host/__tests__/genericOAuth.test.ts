@@ -13,7 +13,7 @@ import { providerPresetOAuth } from '@cindy/model-providers';
  *   - setDiscoveredProviderModels 的 additions-only merge。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import type { OAuthProviderDescriptor, ProviderView } from '@cindy/model-providers';
 import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.js';
@@ -122,6 +122,52 @@ function seedBlob(providerId: string, blob: Record<string, unknown>): void {
   resetGenericOAuthMemoryCache(); // 让下次读走注入 storage
 }
 
+describe('Copilot account-specific model discovery (#6663)', () => {
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host for automatic model discovery', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    const automatic = await discoverGenericOAuthModels('copilot-account', oauth, `${original}/models`, 'pi');
+    expect(automatic).toMatchObject([{ id: 'test-model' }]);
+    expect(fetchCalls.map(call => call.url)).toEqual([expected]);
+  });
+
+  it.each(['individual', 'business', 'enterprise'] as const)('uses the %s account host when refreshing saved model lists', async account => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const token = `test-token;proxy-ep=proxy.${account}.githubcopilot.com;exp=9999999999`;
+    seedBlob('copilot-account', { access_token: token });
+    const original = 'https://api.individual.githubcopilot.com';
+    const expected = `https://api.${account}.githubcopilot.com/models`;
+    const requests: string[] = [];
+    const provider: ProviderView = {
+      id: 'copilot-account', name: 'Copilot', source: 'user', connected: true,
+      auth: { method: 'oauth', oauth }, agents: ['pi'], models: {},
+      routing: { pi: { upstream: original, modelsUrl: `${original}/models`, authStrategy: 'oauth-token', wireProtocol: 'openai-chat' } },
+    };
+    const saved = await fetchSavedOAuthProviderModels(provider, 'pi', 'copilot-account', () => true,
+      async (url, init) => {
+        requests.push(String(url));
+        expect(init?.headers).toEqual({ authorization: `Bearer ${token}` });
+        return new Response('{"data":[{"id":"test-model"}]}');
+      });
+    expect(saved).toMatchObject({ ok: true, models: [{ id: 'test-model' }] });
+    expect(requests).toEqual([expected]);
+  });
+
+  it.each([
+    ['proxy-ep=proxy.business.githubcopilot.com.evil.test;', 'https://api.individual.githubcopilot.com/models'],
+    ['proxy-ep=proxy.business.githubcopilot.com;', 'https://custom.example/models'],
+  ])('preserves custom URLs and rejects untrusted token destinations', async (token, url) => {
+    seedBlob('copilot-account', { access_token: token });
+    fetchResponder = () => new Response('{"data":[{"id":"test-model"}]}');
+    await discoverGenericOAuthModels('copilot-account', providerPresetOAuth('github-copilot')!, url, 'pi');
+    expect(fetchCalls.map(call => call.url)).toEqual([url]);
+  });
+});
+
 describe('manual model refresh for saved OAuth providers', () => {
   function savedProvider(presetId = 'openrouter'): ProviderView {
     const baseUrl = presetId === 'nous'
@@ -136,22 +182,35 @@ describe('manual model refresh for saved OAuth providers', () => {
     };
   }
 
+  // Unit: refresh must reuse the saved login for both OpenRouter catalogs. The
+  // former single-response fixture rejected the speech URL and hid its models.
   for (const presetId of ['openrouter', 'nous']) {
     it.each(['claude-code', 'codex', 'pi'] as const)(`${presetId} refresh uses the saved login and upstream protocol for %s`, async agent => {
       const provider = savedProvider(presetId);
       // Display IDs and owner-scoped storage IDs deliberately differ.
       seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
-      let requests = 0;
+      const requests: string[] = [];
       const result = await fetchSavedOAuthProviderModels(provider, agent, 'scoped-account', () => true,
         async (url, init) => {
-          requests++;
-          expect(url).toBe(provider.auth.oauth!.modelsDiscoveryUrl);
+          requests.push(String(url));
           expect(init?.headers).toEqual({ authorization: 'Bearer fake-oauth-access' });
           expect(init?.redirect).toBe('error');
+          if (new URL(String(url)).searchParams.get('output_modalities') === 'speech') {
+            return new Response(JSON.stringify({ data: [{
+              id: 'minimax/speech-2.8-turbo', architecture: { output_modalities: ['speech'] },
+            }] }));
+          }
           return new Response(JSON.stringify({ data: [{ id: 'new-model', context_length: 123456 }] }));
         });
-      expect(requests).toBe(1);
-      expect(result).toMatchObject({ ok: true, models: [{ id: 'new-model', contextWindow: 123456 }] });
+      const modelsUrl = provider.auth.oauth!.modelsDiscoveryUrl!;
+      expect(requests).toEqual(presetId === 'openrouter'
+        ? [modelsUrl, `${modelsUrl}?output_modalities=speech`] : [modelsUrl]);
+      expect(result).toMatchObject({ ok: true, models: [
+        { id: 'new-model', contextWindow: 123456 },
+        ...(presetId === 'openrouter' ? [{
+          id: 'minimax/speech-2.8-turbo', discoveredMetadata: { mode: 'audio_speech' },
+        }] : []),
+      ] });
       expect(JSON.stringify(result)).not.toContain('fake-oauth-access');
     });
   }
@@ -195,14 +254,20 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(requests).toBe(0);
   });
 
-  it.each(['before-request', 'during-request'])('discards a refresh after account/config changes %s', async phase => {
+  // A new catalog must not reuse a revoked owner snapshot or publish a late result.
+  // Keep the original one-request maximum when ownership changes on the first reply.
+  it.each(['before-request', 'during-request', 'during-speech-request'])('discards a refresh after account/config changes %s', async phase => {
     seedBlob('scoped-account', { access_token: 'fake-access' });
     let current = phase !== 'before-request';
     let requests = 0;
     const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'scoped-account', () => current,
-      async () => { requests++; current = false; return new Response('{"data":["model"]}'); });
+      async () => {
+        requests++;
+        if (phase === 'during-request' || requests === 2) current = false;
+        return new Response('{"data":["model"]}');
+      });
     expect(result).toEqual({ ok: false, code: 'AUTH_INVALID' });
-    expect(requests).toBe(phase === 'before-request' ? 0 : 1);
+    expect(requests).toBe(phase === 'before-request' ? 0 : phase === 'during-request' ? 1 : 2);
   });
 });
 
@@ -613,6 +678,48 @@ describe('登录流与凭证落盘失败', () => {
 });
 
 describe('discoverGenericOAuthModels', () => {
+  // PR #6900 unit regression: the login follow-up (unlike saved refresh) could
+  // send more Bearer requests after cancellation. Hold a real catalog response
+  // at each async boundary; no subsequent page or late result may escape.
+  it.each(['before-request', 'first-page', 'next-page', 'speech-page', 'active'] as const)(
+    'checks login ownership before every catalog request: %s', async (phase) => {
+      seedBlob('router', { access_token: 'fake-login-key' });
+      const oauth = providerPresetOAuth('openrouter')!;
+      const endpoint = oauth.modelsDiscoveryUrl!;
+      let current = phase !== 'before-request';
+      let release!: (value: unknown) => void;
+      const waiting = new Promise<unknown>(resolve => { release = resolve; });
+      const pausedUrl = phase === 'next-page' ? `${endpoint}?cursor=next`
+        : phase === 'speech-page' ? `${endpoint}?output_modalities=speech` : endpoint;
+      fetchResponder = (url) => {
+        const payload = url.includes('output_modalities=speech')
+          ? { data: [{ id: 'tts', architecture: { output_modalities: ['speech'] } }] }
+          : { data: ['chat'], ...(url === endpoint ? { next_cursor: 'next' } : {}) };
+        const response = new Response(JSON.stringify(payload));
+        if (url === pausedUrl && current && phase !== 'active') {
+          response.json = () => waiting.then(() => payload);
+        }
+        return response;
+      };
+      const pending = discoverGenericOAuthModels('router', oauth, undefined, 'claude-code', () => current);
+      if (phase !== 'before-request' && phase !== 'active') {
+        await vi.waitFor(() => expect(fetchCalls.at(-1)?.url).toBe(pausedUrl));
+        current = false;
+        release(undefined);
+      }
+      const result = await pending;
+      expect(fetchCalls.map(({ url }) => url)).toEqual(
+        phase === 'before-request' ? [] : [endpoint,
+          ...(['next-page', 'speech-page', 'active'].includes(phase) ? [`${endpoint}?cursor=next`] : []),
+          ...(['speech-page', 'active'].includes(phase) ? [`${endpoint}?output_modalities=speech`] : []),
+        ],
+      );
+      for (const request of fetchCalls) expect(request.headers).toEqual({ authorization: 'Bearer fake-login-key' });
+      if (phase === 'active') expect(result?.map(model => model.id)).toEqual(['chat', 'tts']);
+      else expect(result).toBeNull();
+    },
+  );
+
   it('解析 {data:[{id}]} 形状并去重', async () => {
     seedBlob('acme', { access_token: 'at' });
     fetchResponder = () =>
@@ -661,6 +768,18 @@ describe('discoverGenericOAuthModels', () => {
 });
 
 describe('deriveModelsDiscoveryUrl', () => {
+  it('keeps the Codex backend path without inserting an extra API version', () => {
+    expect(deriveModelsDiscoveryUrl('https://relay.example/backend-api/codex')).toBe(
+      'https://relay.example/backend-api/codex/models',
+    );
+    expect(deriveModelsDiscoveryUrl('https://relay.example/team/backend-api/codex/?tenant=a#ignored')).toBe(
+      'https://relay.example/team/backend-api/codex/models?tenant=a',
+    );
+    expect(deriveModelsDiscoveryUrl('https://relay.example/codex')).toBe(
+      'https://relay.example/codex/v1/models',
+    );
+  });
+
   it('/vN 结尾只追加 /models，其余追加 /v1/models（尾斜杠归一）', () => {
     expect(deriveModelsDiscoveryUrl('https://openrouter.ai/api/v1')).toBe(
       'https://openrouter.ai/api/v1/models',

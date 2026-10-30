@@ -2,6 +2,7 @@ import {
   classifyMarkdownHref,
   looksLikeDirectoryPath,
   looksLikeFilePath,
+  normalizeXdtFileUrlForRenderer,
   resolveKnownLocalFileHref,
   type KnownLocalFileRef,
   type LocalHrefKind,
@@ -295,7 +296,10 @@ export function classifyMarkdownLinkTarget(
   if (raw.startsWith('#')) return { kind: 'anchor', id: decodeAnchorId(raw.slice(1)), href: raw };
   if (raw.startsWith('xdt-audio://')) return { kind: 'audio', href: raw };
   if (raw.startsWith('xdt-image://') || raw.startsWith('xdt-file://')) {
-    return { kind: 'local-image-url', href: raw };
+    return {
+      kind: 'local-image-url',
+      href: raw.startsWith('xdt-file://') ? normalizeXdtFileUrlForRenderer(raw) : raw,
+    };
   }
   if (HTTP_URL_RE.test(raw)) return { kind: 'external', href: raw };
 

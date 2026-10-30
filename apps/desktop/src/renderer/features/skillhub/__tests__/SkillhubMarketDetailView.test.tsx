@@ -150,7 +150,8 @@ describe('published Skill rejection feedback', () => {
     render(<SkillhubMarketDetailView skill={{ ...skill, catalogScope, pendingVersion: { version: '1.0.1', status } }} open onClose={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'skillhub.publishedStatus.rejected' }));
     expect(await screen.findByRole('heading', { name: 'skillhub.scanResult.processingFailedTitle' })).toBeTruthy();
-    expect(screen.getByText('Unable to process archive')).toBeTruthy();
+    expect(screen.queryByText('Unable to process archive')).toBeNull();
+    expect(screen.getByText('skillhub.publishError.INTERNAL.message')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'skillhub.scanResult.rejectedTitle' })).toBeNull();
     expect(getScanStatus).toHaveBeenCalledWith({ slug: skill.name, version: '1.0.1', catalogScope: undefined });
   });

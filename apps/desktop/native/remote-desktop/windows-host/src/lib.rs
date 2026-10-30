@@ -1,10 +1,11 @@
 //! Main-only Node-API transport: the OS sees the actual Cindy PID opening the
 //! pipe. A child process or a self-reported parent PID is never authorization.
 mod capture_protocol;
+mod naming;
 mod pipe;
 mod win;
+use naming::Installation;
 use napi_derive::napi;
-use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{
@@ -27,24 +28,20 @@ impl DesktopConnection {
     #[napi(factory)]
     pub async fn open(binary: String, init: String) -> napi::Result<Self> {
         tokio::task::spawn_blocking(move || {
-            let path = PathBuf::from(binary).canonicalize().map_err(failure)?;
-            let name = format!(
-                "CindyRemoteDesktop-{:x}",
-                Sha256::digest(path.to_string_lossy().to_lowercase().as_bytes())
-            )[..35]
-                .to_string();
-            let mut pipe = pipe::Pipe::client(&format!(r"\\.\pipe\{}", name)).map_err(failure)?;
-            let pid = pipe.server_pid().map_err(failure)?;
-            let server = win::process(pid).map_err(failure)?;
-            if !win::system(win::token(server.0).map_err(failure)?.0).map_err(failure)?
-                || win::image(server.0)
-                    .map_err(failure)?
-                    .canonicalize()
-                    .map_err(failure)?
-                    != path
-            {
-                return Err(failure("identity"));
-            }
+            // `binary` is the helper shipped inside this installation. The
+            // service runs the protected copy of it, so the pipe name is
+            // derived from the installation rather than taken from a caller
+            // supplied service name. The service itself checks the client PID
+            // and the elevated setup flow checks the protected image.
+            let bundled = PathBuf::from(binary)
+                .canonicalize()
+                .map_err(|e| failure(("bundled", e)))?;
+            let installation =
+                Installation::of_bundled(&bundled).map_err(|e| failure(e.detail()))?;
+            let name = installation.service();
+            let mut pipe = pipe::Pipe::client(&installation.pipe())
+                .map_err(|e| failure(("pipe-client", e)))?;
+            let pid = pipe.server_pid().map_err(|e| failure(("server-pid", e)))?;
             unsafe {
                 let manager =
                     OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
@@ -78,8 +75,8 @@ impl DesktopConnection {
             let parsed: serde_json::Value = serde_json::from_str(&init).map_err(failure)?;
             let response_limit = capture_protocol::response_limit(&parsed);
             pipe.write(format!("{init}\n").as_bytes())
-                .map_err(failure)?;
-            if pipe.line(1024).map_err(failure)? != b"ready\n" {
+                .map_err(|e| failure(("write-init", e)))?;
+            if pipe.line(1024).map_err(|e| failure(("read-ready", e)))? != b"ready\n" {
                 return Err(failure("ready"));
             }
             let cancel = pipe.cancel.clone();

@@ -98,5 +98,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.md,
   },
   detailTitle: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
-  detailBody: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.body },
+  detailBody: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
 });

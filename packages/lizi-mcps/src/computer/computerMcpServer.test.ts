@@ -75,6 +75,20 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // Audit regression: discovery returned every schema even when only one was
+  // needed. Exercise the real MCP list entry with no driver/process side effects.
+  it('returns only requested schemas for focused discovery', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({ name: 'list_tools', arguments: { names: ['click'] } })) as {
+        tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      };
+      expect(payload.tools.map((tool) => tool.name)).toEqual(['click']);
+      expect(payload.tools[0]?.inputSchema.properties).toHaveProperty('observe');
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
   it('advertises a first-call goal and keeps host session routing independent of it', async () => {
     const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ windows: [] })) };
     const h = await makeHarness(deps, { sessionId: 'stable-task' });
@@ -1251,7 +1265,7 @@ describe('createComputerMcpServer', () => {
     const authorizer = vi.fn(async (request: { path: string; toolName?: string }) => {
       expect(request.path).toBe(screenshot);
       expect(request.toolName).toBe('cindy-computer:get_window_state');
-      return { allowed: true, isCurrent: () => true };
+      return { allowed: true as const, isCurrent: () => true };
     });
     setSessionPathAuthorizer(authorizer);
     const h = await makeHarness(deps, {

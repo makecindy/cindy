@@ -83,15 +83,22 @@ describe('remote-file-service RPC end-to-end', () => {
     expect(names).toContain('README.md');
     // 文件树不吃 VCS ignore(honorVcsIgnore: false):真实存在的目录要可见。
     expect(names).toContain('ignored-dir');
-    // 内置大目录屏蔽不受开关影响。
+    // 内置大目录默认隐藏(hideMetaFiles 与 showIgnoredDirs 是两个独立开关,
+    // 后者默认关 = 保持历史行为)。
     expect(names).not.toContain('node_modules');
     expect(entries[0]?.type).toBe('directory');
+  });
+
+  it('listDir 带 showIgnoredDirs 时列出内置隐藏目录', async () => {
+    await client.connect();
+    const { entries } = await client.request('listDir', { workdir, showIgnoredDirs: true });
+    expect(entries.map((e) => e.name)).toContain('node_modules');
   });
 
   it('listDir can return complete entries over the same RPC', async () => {
     await client.connect();
     const { entries } = await client.request('listDir', { workdir, includeIgnored: true, docMode: true });
-    expect(entries.map(e => e.name)).toEqual(expect.arrayContaining(['node_modules', '.gitignore', 'blob.bin']));
+    expect(entries.map((e) => e.name)).toEqual(expect.arrayContaining(['node_modules', '.gitignore', 'blob.bin']));
     await expect(client.request('listDir', { workdir, includeIgnored: true, maxEntries: 1 })).rejects.toThrow('DIRECTORY_TOO_LARGE');
   });
 
@@ -225,6 +232,7 @@ describe('remote-file-service RPC end-to-end', () => {
     expect(events.filter((e) => e.relPath.startsWith('node_modules/'))).toEqual([]);
     await client.request('watchStop', { workdir });
   });
+
 
   it('channel close rejects pending requests and marks client dead', async () => {
     await client.connect();

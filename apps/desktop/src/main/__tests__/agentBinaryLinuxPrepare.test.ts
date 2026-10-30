@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import type { StartupBinaryUpdateScope } from '../agent-binaries/startup-update';
 
 // getBase() 按 kind 缓存 provisioner 实例:全部测试共享同一个 cdndProvisioner,
 // 每测试重配它的行为(而不是 mockReturnValueOnce 换实例——缓存会让新实例永远不被使用)。
@@ -29,7 +30,7 @@ const {
     findUsableLinuxRuntimeFallbackBinary: vi.fn(async (): Promise<string | null> => null),
     prepareLinuxRuntimeFallback: vi.fn(),
     probeBinaryVersion: vi.fn(),
-    consumeStartupBinaryUpdateMarker: vi.fn(() => true),
+    consumeStartupBinaryUpdateMarker: vi.fn((): StartupBinaryUpdateScope => true),
   };
 });
 
@@ -91,7 +92,9 @@ beforeEach(async () => {
   findDevBinary.mockReset().mockReturnValue(null);
   findCachedLinuxRuntimeFallbackBinary.mockReturnValue(null);
   findUsableLinuxRuntimeFallbackBinary.mockReset().mockResolvedValue(null);
-  consumeStartupBinaryUpdateMarker.mockReturnValue(true);
+  // These CDN/fallback cases exercise the retained explicit harness-update path.
+  // Unscoped app-update markers are covered through real preparation in startup-policy.
+  consumeStartupBinaryUpdateMarker.mockReturnValue(['claude-code', 'codex', 'pi']);
   probeBinaryVersion.mockReset().mockResolvedValue('1.0.0');
   prepareLinuxRuntimeFallback.mockResolvedValue({
     ready: true,

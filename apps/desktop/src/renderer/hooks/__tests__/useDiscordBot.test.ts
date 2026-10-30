@@ -62,6 +62,7 @@ function installDiscordApi(
       payload,
     })),
     disconnect: vi.fn(async () => ({ status: { kind: 'idle' } as DiscordBotTransportStatus })),
+    reconnect: vi.fn(async () => ({ status: { kind: 'connected', appId: 'bot' } as DiscordBotTransportStatus, ownerUserId: '12345678901234567' })),
     setLifecycleAnnouncement: vi.fn(async (enabled: boolean) => ({
       ok: true,
       lifecycleAnnouncement: enabled,
@@ -78,6 +79,32 @@ function installDiscordApi(
 }
 
 describe('useDiscordBot', () => {
+  it.each(['connecting', 'connected'] as const)('handles reconnect IPC rejection after a %s push', async (kind) => {
+    const api = installDiscordApi({ kind: 'error', reason: 'offline' });
+    api.reconnect.mockImplementationOnce(async () => {
+      const update: DiscordBotTransportStatus = kind === 'connected'
+        ? { kind, appId: 'bot' } : { kind };
+      api.onStatusChange.mock.calls[0][0]({ status: update });
+      throw new Error('IPC interrupted');
+    });
+    const { result } = renderHook(() => useDiscordBot());
+    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    await act(() => result.current.reconnect());
+    expect(result.current.status.kind).toBe(kind === 'connected' ? 'connected' : 'error');
+    expect(result.current.isSaving).toBe(false);
+  });
+
+  it('reconnects with stored credentials without requiring a token draft', async () => {
+    const api = installDiscordApi({ kind: 'error', reason: 'network down' });
+    const { result } = renderHook(() => useDiscordBot());
+    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    await act(() => result.current.reconnect());
+    expect(api.reconnect).toHaveBeenCalledOnce();
+    expect(api.setConfig).not.toHaveBeenCalled();
+    expect(result.current.status.kind).toBe('connected');
+    expect(result.current.token).toBe('');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;

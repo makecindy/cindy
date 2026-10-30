@@ -63,6 +63,13 @@ describe('Astra subscription reference estimates', () => {
     ], astra)).toBeCloseTo(2.94);
   });
 
+  it('does not price Ultrafast usage using the Standard or Fast tariff', () => {
+    const segments = normalizeTurnUsageSegments([{ ...tokens, priceVariant: 'ultrafast' }]);
+    expect(segments?.[0]?.priceVariant).toBe('ultrafast');
+    expect(computeGatewayTurnCost(tokens, astra, 'ultrafast')).toBeNull();
+    expect(computeGatewaySegmentedTurnCost(segments, astra)).toBeNull();
+  });
+
   it('keeps the subscription reference window bound for both tariffs', () => {
     const expanded = { ...tokens, inputTokens: tokens.inputTokens + 1 };
     expect(computeGatewayTurnCost(expanded, astra)).toBeNull();
@@ -1090,5 +1097,23 @@ describe('subscription value and usage details', () => {
       8_500,
     );
     expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
+  });
+});
+describe('enterprise BYOK reported SDK costs', () => {
+  it('keeps a captured managed turn out of actual spend after logout clears the catalog', () => {
+    expect(
+      resolveTurnCost({
+        rawModel: 'deepseek-flash',
+        tokens: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreateTokens: 0 },
+        sdkCostDelta: 0.23,
+        pricing: {},
+        context: {
+          providerId: 'byok-removed-provider',
+          billingRoute: 'provider-api',
+          region: 'global',
+          accessKind: 'managed',
+        },
+      }),
+    ).toEqual({ model: 'deepseek-flash', money: null, source: 'reference' });
   });
 });

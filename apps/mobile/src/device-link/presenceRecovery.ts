@@ -109,6 +109,8 @@ export interface PresenceWipeTimerDeps {
   setTimer(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   clearTimer(timer: ReturnType<typeof setTimeout>): void;
   wipe(deviceId: string): void;
+  /** Deferred consumers must claim immediately before wiping, keeping recovery protection alive. */
+  deferWipe?(deviceId: string, claim: () => boolean): void;
   isConfirmationInFlight?(deviceId: string): boolean;
 }
 
@@ -204,10 +206,22 @@ function schedulePresenceWipeAt(
         );
         return;
       }
-      timers.delete(deviceId);
-      if (shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId)) {
-        deps.wipe(deviceId);
-      }
+      const claim = (): boolean => {
+        if (timers.get(deviceId) !== entry) return false;
+        if (deps.isConfirmationInFlight?.(deviceId)) {
+          schedulePresenceWipeAt(
+            timers, availabilityByDevice, deviceId, firstScheduledAt,
+            deps.now() + PRESENCE_WIPE_CONFIRMATION_POLL_MS, deps,
+          );
+          return false;
+        }
+        timers.delete(deviceId);
+        return shouldWipeUnavailableDeviceMirror(availabilityByDevice, deviceId);
+      };
+      // Retain the entry until execution, so reconnect can still extend its
+      // deadline and clear/replacement can invalidate the queued claim.
+      if (deps.deferWipe) deps.deferWipe(deviceId, claim);
+      else if (claim()) deps.wipe(deviceId);
     }, delayMs),
   };
   timers.set(deviceId, entry);

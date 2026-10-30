@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
 /**
@@ -6,7 +7,7 @@ import { modelManagementState } from './modelManagementState';
  * 设计(2026-07 模型供应商重构定稿 + 2026-07-28 启用/显示双轴交互定稿):
  *   - 列表 = 该供应商**所有 agent 的模型并集**(按 model id 合并),不再按 CLI 分 Tab。
  *   - 三个概念钉死到三种互不借用的表达上(用户裁决):
- *       · **开关 = 显示轴**(仅对话模型行):是否出现在模型选择面板 —— 纯陈列,全页
+ *       · **开关 = 显示轴**:是否出现在对应模型选择面板 —— 纯陈列,全页
  *         唯一一种开关语义。隐藏的模型被显式点名 / 自动兜底时仍可用。存储 =
  *         renderer modelVisibilityPrefs(不变)。
  *       · **高级设置 = 停用动作**(所有行):停用 = 准入关,不可被任何
@@ -18,7 +19,7 @@ import { modelManagementState } from './modelManagementState';
  *         "下沉"是停用在整个设置页的统一隐喻(左栏停用的供应商同样沉底)。
  *   - **能力模型组**(图像/音频/视频/向量/其它端点):不能当 agent 用,永远不进对话模型
  *     选择面板(modelList.ts 硬排除)。图像/视频走同一套显示开关,控制作图/视频功能
- *     是否列出该型号;音频/向量仍只有「⋯」停用。
+ *     是否列出该型号;语音合成复用显示开关控制伙伴朗读候选，其余音频/向量只有停用。
  *   - 普通列表只有一个显示开关;开启时只选一个推荐引擎，逐引擎控制进入高级详情。
  *   - 用途筛选与厂商分组独立;同一家族按型号数字倒序,不冒充上线时间。
  *
@@ -72,10 +73,10 @@ import {
 import { LocalPackagingTag } from './LocalPackagingTag';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
 import {
-  compareModelNames,
   groupModelsForManagement,
   MANAGEMENT_KIND_ORDER,
   modelBrand,
+  sortModelsForManagement,
   type ManagementKind,
   type ManagementView,
 } from './modelManagementPresentation';
@@ -87,6 +88,7 @@ import {
   resolveModelIconKind,
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { modelCompactionTarget } from '../../../shared/modelContextLimit';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -116,6 +118,7 @@ const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'stt',
   'realtime',
   'embedding',
+  'decision',
   'compression',
   'other',
 ]);
@@ -173,10 +176,7 @@ export interface UnionModelRow {
  * 否则并集出现两行、各自被误标单端。
  */
 function canonicalModelKey(provider: ProviderView, agent: AgentKind, id: string): string {
-  for (const prefix of provider.routing[agent]?.modelPrefixes ?? []) {
-    if (id.startsWith(prefix)) return id.slice(prefix.length);
-  }
-  return id;
+  return modelCompactionTarget(provider, agent, id).modelId;
 }
 
 /** 构建并集(导出供单测):行序 = 第一个 agent 的目录序,后续 agent 独占模型追加其后;
@@ -226,6 +226,9 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
     disabled?: boolean;
     availability?: CatalogModel['availability'];
     group: 'image' | 'video' | 'embedding' | 'audio' | 'tts' | 'stt' | 'realtime';
+    displayPricing?: CatalogModel['displayPricing'];
+    currency?: CatalogModel['currency'];
+    costDiscount?: number;
     mode?: string;
     modalities?: CatalogModel['modalities'];
     defaultEnabled?: boolean;
@@ -247,6 +250,7 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
   for (const m of media) {
     if (realIds.has(m.id) || byKey.has(m.id)) continue;
     const entry: CatalogModel = {
+      ...(m.displayPricing && m.currency ? { displayPricing: m.displayPricing, currency: m.currency, costDiscount: m.costDiscount } : {}),
       id: m.id,
       name: m.name,
       contextWindow: 0,
@@ -280,11 +284,11 @@ export function buildUnionRows(provider: ProviderView): UnionModelRow[] {
 function rowHasVisibilitySwitch(row: UnionModelRow, userProvider: boolean): boolean {
   if (!isCapabilityRow(row, userProvider)) return true;
   return managementKindsOfRow(row, userProvider).some(
-    (kind) => kind === 'image' || kind === 'video',
+    (kind) => kind === 'image' || kind === 'video' || kind === 'tts',
   );
 }
 
-/** Image/video switches follow media readiness, not the chat OAuth connection. */
+/** Media switches follow their own channel readiness, not the chat OAuth connection. */
 export function canWriteModelVisibility(options: {
   connected: boolean;
   suspended?: boolean;
@@ -402,6 +406,18 @@ function rowCategory(row: UnionModelRow): ModelCategory {
   return rep ? classifyModel(rep) : 'ungrouped';
 }
 
+/** 沉底分区与分组同口径排序:sortOrder 取自每行代表条目。 */
+function sortRowsForManagement(rows: readonly UnionModelRow[]): UnionModelRow[] {
+  return sortModelsForManagement(
+    rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sortOrder: row.byAgent[row.avail[0]]?.sortOrder,
+      row,
+    })),
+  ).map(({ row }) => row);
+}
+
 export function managementKindsOfRow(row: UnionModelRow, userProvider: boolean): ManagementKind[] {
   const kinds = new Set<ManagementKind>();
   for (const agent of row.avail) {
@@ -426,6 +442,7 @@ export function managementKindOfRow(row: UnionModelRow, userProvider: boolean): 
 export function UnifiedModelList({
   provider,
   onRefresh,
+  onAddSpeechModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -438,6 +455,7 @@ export function UnifiedModelList({
   provider: ProviderView;
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
+  onAddSpeechModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -776,8 +794,8 @@ export function UnifiedModelList({
         brand: g.brand,
         rows: g.models.map((m) => repByRow.get(m.id)).filter((r): r is UnionModelRow => !!r),
       })),
-      hiddenRows: [...hidden].sort(compareModelNames),
-      disabledRows: [...disabled].sort(compareModelNames),
+      hiddenRows: sortRowsForManagement(hidden),
+      disabledRows: sortRowsForManagement(disabled),
     };
     // visibilityVersion:沉底判定读 modelVisibilityPrefs,开关一拨行要立刻迁移。
   }, [
@@ -918,7 +936,7 @@ export function UnifiedModelList({
         : explicitIcon === 'codex'
           ? 'openai'
           : explicitIcon === 'cindy'
-            ? 'xd'
+            ? 'cindy'
             : brand?.logoKind;
     const paymentRequired = isRowPaymentRequired(row);
     // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
@@ -950,7 +968,7 @@ export function UnifiedModelList({
             <ProviderLogoMark
               providerId={provider.id}
               routing={provider.routing}
-              {...(logoKind ? { logoKind } : {})}
+              logoKind={logoKind ?? provider.logoKind}
               size={19}
             />
           ) : (
@@ -972,6 +990,8 @@ export function UnifiedModelList({
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
         {(() => {
+          // Mixed-unit quotes are shown in the existing model details only.
+          if (rep.displayPricing && rep.currency) return null;
           const display = rowPriceDisplay(row);
           if (!display) return null;
           if (display.kind === 'free') {
@@ -1026,7 +1046,7 @@ export function UnifiedModelList({
             位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
             1,048,576 / 1,050,000 都印成 1M)。 */}
         {rowAdvancedButton(row)}
-        {/* 音频/向量能力行没有显示开关,占同宽空位保证列对齐。图像/视频与对话同行。 */}
+        {/* 其余音频/向量能力行没有显示开关。语音合成、图像/视频复用显示轴。 */}
         {capability && !rowHasVisibilitySwitch(row, provider.source === 'user') && (
           <span className="w-9 shrink-0" />
         )}
@@ -1091,56 +1111,63 @@ export function UnifiedModelList({
                 <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
               </button>
             )}
-            {unionRows.length > 0 && (
+            {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-                  >
+                  <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
                     {t('settings.providers.models.manage.menu')}
                     <ChevronDown size={12} aria-hidden />
-                  </button>
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.arrange')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={managementView}
-                    onValueChange={(value) => {
-                      if (value === 'brand' || value === 'model') setManagementView(value);
-                    }}
-                  >
-                    <DropdownMenuRadioItem value="brand">
-                      {t('settings.providers.models.manage.byBrand')}
-                    </DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="model">
-                      {t('settings.providers.models.manage.byName')}
-                    </DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>
-                    {t('settings.providers.models.manage.selection')}
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
-                    onSelect={() => handleBulk('show')}
-                  >
-                    {t('settings.providers.models.manage.showAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable || selectedCount === 0}
-                    onSelect={() => handleBulk('hide')}
-                  >
-                    {t('settings.providers.models.manage.hideAll')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!visibilityWriteAvailable}
-                    onSelect={() => handleBulk('reset')}
-                  >
-                    {t('settings.providers.models.manage.reset')}
-                  </DropdownMenuItem>
+                  {onAddSpeechModels && (
+                    <DropdownMenuItem onSelect={onAddSpeechModels}>
+                      {t('settings.providers.speechSetup.add')}
+                    </DropdownMenuItem>
+                  )}
+                  {unionRows.length > 0 && (
+                    <>
+                      {onAddSpeechModels && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.arrange')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuRadioGroup
+                        value={managementView}
+                        onValueChange={(value) => {
+                          if (value === 'brand' || value === 'model') setManagementView(value);
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="brand">
+                          {t('settings.providers.models.manage.byBrand')}
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="model">
+                          {t('settings.providers.models.manage.byName')}
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel>
+                        {t('settings.providers.models.manage.selection')}
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === writableRows.length}
+                        onSelect={() => handleBulk('show')}
+                      >
+                        {t('settings.providers.models.manage.showAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable || selectedCount === 0}
+                        onSelect={() => handleBulk('hide')}
+                      >
+                        {t('settings.providers.models.manage.hideAll')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!visibilityWriteAvailable}
+                        onSelect={() => handleBulk('reset')}
+                      >
+                        {t('settings.providers.models.manage.reset')}
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1345,15 +1372,17 @@ export function UnifiedModelList({
                       </span>
                     </button>
                     {!hasLockedDisabledRow && (
-                      <button
+                      <Button
+                        variant="secondary"
+                        size="xxs"
+                        compact
+                        tone="quiet"
                         type="button"
                         disabled={!selectionAvailable}
                         onClick={resetDisableOverrides}
-                        className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{ color: 'var(--text-tertiary)' }}
                       >
                         {t('settings.providers.models.enableAllModels')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                   {!collapsed &&
@@ -1400,28 +1429,30 @@ export function UnifiedModelList({
                             </span>
                           )}
                           {!paymentRequired && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              compact
                               type="button"
                               disabled={!selectionAvailable}
                               onClick={() => setRowDisabled(row, false)}
-                              className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{
-                                borderColor: 'var(--settings-btn-secondary-border)',
-                                color: 'var(--settings-btn-secondary-text)',
-                              }}
+                              className="ml-auto shrink-0"
                             >
                               {t('settings.providers.models.enableModel')}
-                            </button>
+                            </Button>
                           )}
                           {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
-                            <button
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              tone="danger"
+                              compact
                               type="button"
                               onClick={() => void deleteInstalledModel(row)}
-                              className="flex h-6 shrink-0 items-center rounded-full px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                              style={{ color: 'var(--error-fg)' }}
+                              className="shrink-0"
                             >
                               {t('settings.providers.local.deleteModel')}
-                            </button>
+                            </Button>
                           )}
                         </div>
                       );

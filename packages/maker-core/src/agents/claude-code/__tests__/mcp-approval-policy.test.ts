@@ -27,6 +27,7 @@ import type {
   TurnPermissionPolicy,
 } from '../../base-agent.js';
 import type { PermissionMode } from '../../../types/common.js';
+import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
@@ -205,7 +206,7 @@ async function startSession(
       scope?: string;
     }>;
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
-    getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+    reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
     resolveVerifiedContextWindow?: AgentDeps['resolveVerifiedContextWindow'];
     availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
@@ -226,7 +227,7 @@ async function startSession(
   const deps = createDeps(policy, options?.mcpServerNames);
   deps.capabilityRouting = options?.capabilityRouting;
   deps.turnChangeCapture = options?.turnChangeCapture;
-  deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
+  deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
   deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
   deps.resolveVerifiedContextWindow = options?.resolveVerifiedContextWindow;
   deps.capabilityAdditions = options?.availableModels
@@ -292,7 +293,37 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+const OUTPUT_DELIVERY_ROUTING = {
+  overrides: [
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'tool', id: 'Artifact' },
+      invocation: 'disabled',
+    },
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'mcp', id: 'claude.ai Claude Docs' },
+      invocation: 'disabled',
+    },
+  ],
+} as const satisfies CapabilityRoutingPolicy;
+
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('removes host-disabled built-in tools and MCP servers from a local session', async () => {
+    const { handle } = await startSession(undefined, {
+      capabilityRouting: OUTPUT_DELIVERY_ROUTING,
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      disallowedTools?: string[];
+      settings?: { deniedMcpServers?: unknown };
+    };
+
+    expect(options.disallowedTools).toEqual(['Artifact']);
+    expect(options.settings?.deniedMcpServers).toEqual([
+      { serverName: 'claude.ai Claude Docs' },
+    ]);
+    await handle.close();
+  });
   it('captures known writes before execution and marks Bash opaque only after execution', async () => {
     const beforeKnownFileWrite = vi.fn(async () => undefined);
     const noteOpaqueWrite = vi.fn();
@@ -744,6 +775,17 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
     expect(result.behavior).toBe('allow');
     expect(result.updatedPermissions).toBeUndefined();
+    // A live owner permission change supersedes the IM policy on this same turn.
+    await handle.setPermissionMode!('bypassPermissions');
+    expect((await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-full-access',
+    })).behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.setPermissionMode!('ask');
+    await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-restored',
+    });
+    expect(permissionRequests(seen)).toHaveLength(2);
     await handle.close();
   });
 
@@ -828,38 +870,6 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     expect(requests).toHaveLength(1);
     // 逐次确认的语义就是不许一次点选永久放行。
     expect(requests[0]?.suggestions).toBeUndefined();
-    await handle.close();
-  });
-
-  it('uses the host security disclosure for a progressive MCP action', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description:
-        'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const { handle, canUseTool, seen } = await startSession(() => 'prompt-each-time', {
-      mcpServerNames: ['cindy_ios_simulator'],
-      getMcpToolApprovalPresentation: () => disclosure,
-    });
-
-    await canUseTool(
-      'mcp__cindy_ios_simulator__call_tool',
-      { name: 'build_app', args: {} },
-      {
-        toolUseID: 't-build',
-        title: 'Generic MCP approval',
-        description: 'Generic MCP description',
-        suggestions: SESSION_SUGGESTION,
-      },
-    );
-
-    expect(permissionRequests(seen)).toEqual([
-      expect.objectContaining({
-        title: disclosure.title,
-        description: disclosure.description,
-        suggestions: undefined,
-      }),
-    ]);
     await handle.close();
   });
 
@@ -999,10 +1009,13 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.close();
   });
 
-  it('Full access overrides a pending prompt-each-time MCP approval', async () => {
+  it.each([false, true])('Full access overrides a pending MCP approval (IM policy=%s)', async (imPolicy) => {
     const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
       // 决策永不返回：请求挂起，等模式切换来结算。
       decide: () => undefined,
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Merge the contacts.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
 
     const pending = canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_merge' }, {
@@ -1292,6 +1305,7 @@ describe('fail-closed still precedes the MCP policy', () => {
     const { handle, canUseTool, seen } = await startSession(() => 'auto-approve', {
       permissionMode: 'auto',
     });
+    expect(handle.getAutoReviewOwner?.()).toBe('cindy');
 
     const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-auto-trusted' });
 
@@ -1326,6 +1340,25 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
+  it('retains remote plan rejection restrictions through approval', async () => {
+    const review = vi.fn<NonNullable<AgentDeps['reviewAutoPermissionAction']>>(async () => ({ verdict: 'allow' }));
+    let response = 0;
+    const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt', {
+      permissionMode: 'auto', reviewAutoPermissionAction: review,
+      attachResolver: () => response++ === 0
+        ? { kind: 'plan_review', behavior: 'deny', reason: 'Do not publish.' }
+        : { kind: 'plan_review', behavior: 'allow' },
+    });
+    await handle.send({ type: 'user', content: 'Fix parser.' });
+    await onApprovalRequest({ requestId: 'reject', kind: 'plan_review', plan: 'draft' });
+    await onApprovalRequest({ requestId: 'approve', kind: 'plan_review', plan: 'Run tests.' });
+    await onApprovalRequest({ requestId: 'tool', kind: 'permission', toolName: 'Bash', input: { command: 'npm test' } });
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: {
+      earlierUserMessages: ['Fix parser.', 'Do not publish.'], currentUserMessage: 'Approved plan:\nRun tests.',
+    } }));
+    await handle.close();
+  });
+
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
@@ -1337,7 +1370,6 @@ describe('remote sessions share the same permission semantics', () => {
       initMcpServerNames?: readonly string[];
       failedInitMcpServerNames?: readonly string[];
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
-      getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
       resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
       reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     },
@@ -1350,7 +1382,6 @@ describe('remote sessions share the same permission semantics', () => {
     let onSubagentModelAccessRequest: ((raw: unknown) => Promise<{ status?: string }>) | undefined;
     const deps = createDeps(policy);
     deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
-    deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
     deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
     deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
@@ -1413,6 +1444,58 @@ describe('remote sessions share the same permission semantics', () => {
       workingDir,
     };
   }
+
+  describe.each(['local', 'remote'] as const)('delegated trusted MCP %s', (transport) => {
+    it.each((['auto', 'acceptEdits', 'ask'] as const).flatMap(permissionMode =>
+      (['ordinary', 'allow', 'block', 'ask', 'revoked', 'unavailable', 'late-revoke', 'late-scope', 'confirmed'] as const)
+        .map(scenario => ({ permissionMode, scenario }))))(
+      'keeps live authorization before the Host shortcut: $permissionMode/$scenario', async ({ permissionMode, scenario }) => {
+        let active = scenario !== 'revoked' && scenario !== 'confirmed';
+        let revision = 'scope-1';
+        let preparations = 0;
+        const review = Object.assign(vi.fn(async (_request: AutoReviewRequest) => {
+          if (scenario === 'late-revoke') active = false;
+          if (scenario === 'late-scope') revision = 'scope-2';
+          return { verdict: scenario === 'block' ? 'block' as const : scenario === 'ask' ? 'ask' as const : 'allow' as const };
+        }), {
+          prepareRequest: vi.fn(async (request: AutoReviewRequest): Promise<AutoReviewRequest> => {
+            if (++preparations === 2 && permissionMode !== 'auto') {
+              if (scenario === 'late-revoke') active = false;
+              if (scenario === 'late-scope') revision = 'scope-2';
+            }
+            if (scenario === 'unavailable') throw new Error('storage unavailable');
+            if (scenario === 'ordinary') return request;
+            // Prove a previously ordinary shortcut cannot cross a late Host change.
+            if (permissionMode !== 'auto' && preparations === 1 && scenario.startsWith('late-')) return request;
+            return active ? { ...request, delegatedTask: { source: 'approved-plugin', pluginId: 'eval', role: 'worker',
+              task: 'Run the approved evaluation only', workingDir: request.workspaceRoots[0], authorizationRevision: revision } }
+              : { ...request, authorizationError: 'Plugin authorization revoked' };
+          }),
+        });
+        const deny = (): InteractionDecision => ({ kind: 'permission', behavior: scenario === 'confirmed' ? 'allow' : 'deny' });
+        const session = transport === 'local'
+        ? await startSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, decide: deny })
+        : await startRemoteSession(() => 'auto-approve', { permissionMode, mcpServerNames: ['cindy_scheduler'], reviewAutoPermissionAction: review, attachResolver: deny });
+        try {
+          await session.handle.send({ type: 'user', content: 'Run this evaluation; do not create schedules.' });
+          const toolName = 'mcp__cindy_scheduler__call_tool';
+          const input = { name: 'schedule_create', args: { prompt: 'outside task scope' } };
+          const result = 'canUseTool' in session
+            ? await session.canUseTool(toolName, input, { toolUseID: 'delegated-mcp' })
+            : await session.onApprovalRequest({ requestId: 'delegated-mcp', kind: 'permission', toolName, input });
+          expect(result.behavior).toBe(scenario === 'ordinary' || (permissionMode === 'auto' ? scenario === 'allow' : scenario === 'confirmed') ? 'allow' : 'deny');
+          expect(review.prepareRequest).toHaveBeenCalled();
+          expect(review).toHaveBeenCalledTimes(permissionMode !== 'auto' || ['ordinary', 'revoked', 'unavailable', 'confirmed'].includes(scenario) ? 0 : 1);
+          expect(session.seen).toHaveLength((permissionMode === 'auto' ? ['ask', 'unavailable'].includes(scenario) : scenario !== 'ordinary') ? 1 : 0);
+          if (review.mock.calls.length) {
+            const request = review.mock.calls[0][0];
+            expect(request.delegatedTask?.pluginId).toBe('eval');
+            expect(JSON.parse((request.action as { description: string }).description)).toMatchObject({ toolName, input });
+          }
+        } finally { await session.handle.close(); }
+      },
+    );
+  });
 
   it.each(['http', 'sse'] as const)('forwards a selected custom %s MCP to a remote Bot without the host bridge', async (transport) => {
     process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
@@ -1612,42 +1695,6 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
-  it('uses the host security disclosure for remote progressive MCP actions', async () => {
-    const disclosure = {
-      title: 'Allow Xcode to build this project?',
-      description:
-        'Build scripts may access files outside the project, and output is returned to the Agent.',
-    };
-    const { handle, onApprovalRequest, seen } = await startRemoteSession(
-      () => 'prompt-each-time',
-      {
-        mcpServerNames: ['cindy_ios_simulator'],
-        getMcpToolApprovalPresentation: () => disclosure,
-        attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
-      },
-    );
-
-    const result = await onApprovalRequest({
-      requestId: 'r-build',
-      kind: 'permission',
-      toolName: 'mcp__cindy_ios_simulator__call_tool',
-      input: { name: 'build_app', args: {} },
-      title: 'Generic MCP approval',
-      description: 'Generic MCP description',
-      suggestions: SESSION_SUGGESTION,
-    });
-
-    expect(result.behavior).toBe('deny');
-    expect(permissionRequests(seen)).toEqual([
-      expect.objectContaining({
-        title: disclosure.title,
-        description: disclosure.description,
-        suggestions: undefined,
-      }),
-    ]);
-    await handle.close();
-  });
-
   it('fails closed instead of allowing when no resolver is attached', async () => {
     const { handle, onApprovalRequest } = await startRemoteSession(() => 'prompt');
 
@@ -1671,7 +1718,7 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
-  it.each([false, true])('remote Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+  it.each([false, true])('remote Auto to Full access applies the owner choice during review (IM policy=%s)', async (restricted) => {
     let release!: (decision: { verdict: 'allow' }) => void;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt-each-time', {
@@ -1689,7 +1736,7 @@ describe('remote sessions share the same permission semantics', () => {
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
     await handle.setPermissionMode!('bypassPermissions');
     release({ verdict: 'allow' });
-    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(await pending).toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
@@ -1775,6 +1822,13 @@ describe('remote sessions share the same permission semantics', () => {
       {
         toolNamePrefix: 'AskUserQuestion',
         sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
+        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
@@ -1888,7 +1942,10 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
+      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+    }));
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1970,7 +2027,10 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
+      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+    }));
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',
@@ -1981,5 +2041,34 @@ describe('remote sessions share the same permission semantics', () => {
     ).resolves.toMatchObject({ behavior: 'deny' });
     expect(permissionRequests(failed.seen)).toHaveLength(0);
     await failed.handle.close();
+  });
+});
+
+describe('remote sessions apply host-disabled built-in surfaces', () => {
+  it('passes disallowed tools and denied MCP servers to the remote daemon', async () => {
+    const config = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = config;
+    const workingDir = await makeTempDir();
+    let startParams: Record<string, unknown> | undefined;
+    const deps = createDeps(() => 'auto-approve');
+    deps.capabilityRouting = OUTPUT_DELIVERY_ROUTING;
+    deps.remoteCcQueryFactory = (async (args: { startParams: Record<string, unknown> }) => {
+      startParams = args.startParams;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-remote-output-routing',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+
+    expect(startParams?.disallowedTools).toEqual(['Artifact']);
+    expect(
+      (startParams?.extraOptions as { settings?: { deniedMcpServers?: unknown } })
+        ?.settings?.deniedMcpServers,
+    ).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    await handle.close();
   });
 });

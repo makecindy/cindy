@@ -3,27 +3,38 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
+  SHARED_TASK_CAPABILITY,
   type DeviceLinkClient,
   type DeviceLinkStatus,
+  type DeviceView,
   type LinkAcceptPayload,
   type PresenceSnapshot,
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
+// Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
+vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
+import { useMobileMakerTransport } from '../device-link/useMobileMakerTransport';
+import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
+import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
+import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
+import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
   accountGeneration: 1,
   user: { id: 'test-account' },
   getAccessToken: vi.fn(async () => 'test-token'),
-  apiFetch: vi.fn(async () => ({ devices: [] })),
+  apiFetch: vi.fn(async (..._args: unknown[]): Promise<{ devices: DeviceView[] }> => ({ devices: [] })),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 const networkEvents = vi.hoisted(() => ({
   state: 'active',
   app: (_next: string) => {},
-  network: (_next: { type: string; isConnected: boolean; isInternetReachable: boolean }) => {},
+  network: (_next: { type?: string; isConnected?: boolean; isInternetReachable?: boolean }) => {},
+  read: vi.fn<() => Promise<{ type?: string; isConnected?: boolean; isInternetReachable?: boolean }>>(),
 }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' },
@@ -34,19 +45,26 @@ vi.mock('react-native', () => ({
     },
   },
 }));
-vi.mock('expo-network', () => ({ addNetworkStateListener: (listener: typeof networkEvents.network) => {
+vi.mock('expo-network', () => ({ getNetworkStateAsync: networkEvents.read, addNetworkStateListener: (listener: typeof networkEvents.network) => {
   networkEvents.network = listener; return { remove() {} };
 } }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}),
 }));
+vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
+vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}),
   getAllKeys: vi.fn(async () => []), multiRemove: vi.fn(async () => {}),
 } }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
-vi.mock('@/debug/visualMock', () => ({ createVisualMockDeviceLinkContext: vi.fn(), seedVisualMockStore: vi.fn() }));
+vi.mock('@/debug/visualMock', () => ({ prepareVisualMockDeviceLinkContext: vi.fn() }));
+vi.mock('@cindy/maker-shared/device-responsiveness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/maker-shared/device-responsiveness')>();
+  return { ...actual, createDeviceResponsivenessBreaker: (options: Parameters<typeof actual.createDeviceResponsivenessBreaker>[0]) =>
+    actual.createDeviceResponsivenessBreaker({ ...options, now: () => Date.now() }) };
+});
 
 // Only the transport boundary is fake. Mount the real Provider, including its
 // handshake single-flight cache, invalidation callbacks and invoke send path.
@@ -56,21 +74,28 @@ const transport = vi.hoisted(() => {
     statusChanged: (status: DeviceLinkStatus) => void = () => {};
     presenceChanged: (snapshot: PresenceSnapshot) => void = () => {};
     peerReset: Parameters<DeviceLinkClient['onPeerTransportReset']>[0] = () => {};
+    frame: Parameters<DeviceLinkClient['onFrame']>[0] = () => {};
     openLink = vi.fn<(deviceId: string) => Promise<LinkAcceptPayload>>();
-    invoke = vi.fn(async () => ({ ok: true, result: 'history page' }));
+    invoke = vi.fn<DeviceLinkClient['invoke']>(async (_deviceId, _payload, _timeout, options) => {
+      options?.preSend?.();
+      return { ok: true, result: 'history page' };
+    });
     start = vi.fn();
     stop = vi.fn();
     connectNow = vi.fn();
+    restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
-    isOutboundExplicitlyClosed = () => false;
+    serverCapabilities: string[] = [];
+    hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
+    isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
     // No background recovery owner; each test explicitly starts the fresh read.
-    hasPendingRequestsTo = () => false;
+    hasPendingRequestsTo = vi.fn((_deviceId: string) => false);
     onStatusChange(listener: Client['statusChanged']) { this.statusChanged = listener; return () => {}; }
     onPresenceChanged(listener: Client['presenceChanged']) { this.presenceChanged = listener; return () => {}; }
     onPeerTransportReset(listener: Client['peerReset']) { this.peerReset = listener; return () => {}; }
     onConnectionIssue = () => () => {};
-    onFrame = () => () => {};
+    onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }
     onReliableFrameBeforeLink = () => () => {};
   }
   return { Client, clients: [] as Client[] };
@@ -88,11 +113,17 @@ const accepted = (capabilities?: string[]): LinkAcceptPayload => ({ appVersion: 
 const historyChannel = 'local-db:messages:view';
 let root: Root;
 let context: DeviceLinkContextValue;
-function Probe() { context = useDeviceLink(); return null; }
+let maker: MobileMakerTransport;
+function Probe() { context = useDeviceLink(); maker = useMobileMakerTransport('host'); return null; }
 function render() { root.render(createElement(DeviceLinkProvider, null, createElement(Probe))); }
 function deferredAccept() {
   let resolve!: (value: LinkAcceptPayload) => void;
   const promise = new Promise<LinkAcceptPayload>(done => { resolve = done; });
+  return { promise, resolve };
+}
+function deferredRoster() {
+  let resolve!: (value: { devices: DeviceView[] }) => void;
+  const promise = new Promise<{ devices: DeviceView[] }>(done => { resolve = done; });
   return { promise, resolve };
 }
 async function readHistory() {
@@ -103,17 +134,428 @@ async function readHistory() {
 }
 
 beforeEach(async () => {
+  networkEvents.read.mockReset().mockRejectedValue(new Error('native lookup unavailable'));
   networkEvents.state = 'active';
   auth.accountGeneration = 1;
+  auth.apiFetch.mockReset();
+  auth.apiFetch.mockResolvedValue({ devices: [] });
   transport.clients.length = 0;
   root = createRoot(document.createElement('div'));
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
+describe('Provider device roster reads', () => {
+  it('starts a fresh snapshot when Home joins a recovery read that predates its presence fence', async () => {
+    const stale = deferredRoster();
+    const current = deferredRoster();
+    auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+    const client = transport.clients[0];
+
+    await act(async () => {
+      client.status = 'online';
+      client.statusChanged('online');
+    });
+    expect(auth.apiFetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => client.presenceChanged({
+      deviceId: 'desktop', deviceName: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1,
+    }));
+    const joined = context.readDeviceList();
+    expect(auth.apiFetch).toHaveBeenCalledTimes(1);
+    const fresh = context.readDeviceList({ fresh: true });
+    expect(auth.apiFetch).toHaveBeenCalledTimes(2);
+
+    const desktop: DeviceView = {
+      deviceId: 'desktop', name: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: true, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(),
+      isSelf: false,
+    };
+    await act(async () => {
+      stale.resolve({ devices: [] });
+      current.resolve({ devices: [desktop] });
+    });
+
+    expect(await joined).toEqual({ devices: [] });
+    expect(await fresh).toEqual({ devices: [desktop] });
+  });
+
+  it('fences stale rosters without disturbing another device or a second controller sharing the host', async () => {
+    const secondRoot = createRoot(document.createElement('div'));
+    let secondContext!: DeviceLinkContextValue;
+    function SecondProbe() { secondContext = useDeviceLink(); return null; }
+    await act(async () => secondRoot.render(createElement(DeviceLinkProvider, null, createElement(SecondProbe))));
+    try {
+      const client = transport.clients[0];
+      const secondClient = transport.clients[1];
+      const stale = deferredRoster();
+      const current = deferredRoster();
+      auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+      client.openLink.mockResolvedValue(accepted(supported));
+      secondClient.openLink.mockResolvedValue(accepted(supported));
+      let settleOtherDevice!: (value: { ok: true; result: string }) => void;
+      let settleOtherController!: (value: { ok: true; result: string }) => void;
+      client.invoke.mockImplementationOnce(() => new Promise(resolve => { settleOtherDevice = resolve; }));
+      secondClient.invoke.mockImplementationOnce(() => new Promise(resolve => { settleOtherController = resolve; }));
+      const presence = (deviceId: string): PresenceSnapshot => ({
+        deviceId, deviceName: deviceId, platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1,
+      });
+      // Seed authoritative presence before opening links: a real presence event
+      // intentionally invalidates that device's cached handshake. Roster fencing
+      // itself must leave these accepted links and outstanding calls untouched.
+      await act(async () => {
+        client.presenceChanged(presence('other-host'));
+        secondClient.presenceChanged(presence('desktop'));
+      });
+      let otherDeviceRead!: Promise<unknown>;
+      let otherControllerRead!: Promise<unknown>;
+      await act(async () => {
+        otherDeviceRead = context.invoke('other-host', historyChannel);
+        otherControllerRead = secondContext.invoke('desktop', historyChannel);
+      });
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      expect(secondClient.invoke).toHaveBeenCalledTimes(1);
+      const oldRead = context.readDeviceList();
+      const freshRead = context.readDeviceList({ fresh: true });
+      const row = (deviceId: string, online: boolean): DeviceView => ({
+        deviceId, name: deviceId, platform: 'darwin', appVersion: 'test',
+        online, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(), isSelf: false,
+      });
+      const staleRows = [row('desktop', false), row('other-host', false)];
+      await act(async () => stale.resolve({ devices: staleRows }));
+      expect(await oldRead).toEqual({ devices: staleRows });
+      expect(context.getPresenceAvailability('desktop')).toBeNull();
+      expect(context.getPresenceAvailability('other-host')).toBe(true);
+      expect(secondContext.getPresenceAvailability('desktop')).toBe(true);
+      const currentRows = [row('desktop', true), row('other-host', true)];
+      await act(async () => current.resolve({ devices: currentRows }));
+      expect(await freshRead).toEqual({ devices: currentRows });
+      expect(context.getPresenceAvailability('desktop')).toBe(true);
+      expect(context.getPresenceAvailability('other-host')).toBe(true);
+      expect(secondContext.getPresenceAvailability('desktop')).toBe(true);
+      await act(async () => {
+        settleOtherDevice({ ok: true, result: 'other device result' });
+        settleOtherController({ ok: true, result: 'other controller result' });
+      });
+      expect(await otherDeviceRead).toBe('other device result');
+      expect(await otherControllerRead).toBe('other controller result');
+      // Reading again reuses each accepted handshake rather than reopening links.
+      await act(async () => {
+        await context.invoke('other-host', historyChannel);
+        await secondContext.invoke('desktop', historyChannel);
+      });
+      for (const peer of [client, secondClient]) {
+        expect(peer.openLink).toHaveBeenCalledTimes(1);
+        expect(peer.invoke).toHaveBeenCalledTimes(2);
+        expect(peer.stop).not.toHaveBeenCalled();
+        expect(peer.restartConnection).not.toHaveBeenCalled();
+        expect(peer.connectNow).not.toHaveBeenCalled();
+      }
+    } finally { await act(async () => secondRoot.unmount()); }
+  });
+
+  it('prevents an older roster response from superseding a newer fresh read', async () => {
+    const stale = deferredRoster();
+    const current = deferredRoster();
+    auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+    const client = transport.clients[0];
+
+    await act(async () => {
+      client.status = 'online';
+      client.statusChanged('online');
+    });
+    const joined = context.readDeviceList();
+    const fresh = context.readDeviceList({ fresh: true });
+
+    const offlineDesktop: DeviceView = {
+      deviceId: 'desktop', name: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: false, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(),
+      isSelf: false,
+    };
+    const onlineDesktop: DeviceView = { ...offlineDesktop, online: true };
+    await act(async () => {
+      stale.resolve({ devices: [offlineDesktop] });
+    });
+    expect(context.getPresenceAvailability('desktop')).toBeNull();
+    await act(async () => {
+      current.resolve({ devices: [onlineDesktop] });
+    });
+
+    expect(await joined).toEqual({ devices: [offlineDesktop] });
+    expect(await fresh).toEqual({ devices: [onlineDesktop] });
+    expect(context.getPresenceAvailability('desktop')).toBe(true);
+  });
+});
+
+describe('Provider queued send guards', () => {
+  it('opts the production text reader into file transfer and honors pre-cancelled reads', async () => {
+    const client = transport.clients[0];
+    client.invoke.mockResolvedValue({ ok: true, result: { success: true, data: 'text', size: 4 } });
+    await act(async () => {
+      expect(await maker.fs.readTextFilePreview('/text.txt')).toMatchObject({ data: 'text' });
+    });
+    expect(client.invoke).toHaveBeenCalledWith('host', {
+      channel: 'text-file:read-preview', args: [{ filePath: '/text.txt', allowFileTransfer: true }],
+    }, undefined, expect.any(Object));
+    client.invoke.mockClear();
+    const abort = new AbortController(); abort.abort();
+    await expect(maker.fs.readTextFilePreview('/text.txt', { signal: abort.signal })).rejects.toThrow('PREVIEW_CANCELLED');
+    expect(client.invoke).not.toHaveBeenCalled();
+  });
+  // Unit: resource auto-refresh must reach the shared scheduler as background;
+  // the previous adapter dropped that local hint and consumed foreground slots.
+  it('preserves background intent without changing ordinary resource reads', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      await context.invoke('host', 'maker:remote-resources:manifest', [], { background: true });
+      await context.invoke('host', 'maker:remote-resources:manifest', []);
+    });
+    const calls = client.invoke.mock.calls.filter(([, payload]) => payload.channel === 'maker:remote-resources:manifest');
+    expect(calls.map(call => call[3]?.background)).toEqual([true, undefined]);
+    expect(calls.map(call => call[1])).toEqual([
+      { channel: 'maker:remote-resources:manifest', args: [] },
+      { channel: 'maker:remote-resources:manifest', args: [] },
+    ]);
+  });
+  it('rejects a write cancelled after admission without sending or counting a remote timeout', async () => {
+    resetDeviceResponsivenessTracking();
+    const client = transport.clients[0];
+    const send = vi.fn();
+    const cancelled = new DeviceLinkError('INVOKE_TIMEOUT', 'local operation expired');
+    // Two actual remote timeouts: a third would open the breaker if the local
+    // guard rejection were incorrectly classified as a failed remote request.
+    for (let i = 0; i < 2; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+    let current = true;
+    let dispatch!: () => void;
+    client.invoke.mockImplementation((_deviceId, _payload, _timeout, options) => new Promise((resolve, reject) => {
+      dispatch = () => {
+        try { options?.preSend?.(); send(); resolve({ ok: true, result: null }); }
+        catch (error) { reject(error); }
+      };
+    }));
+    let result!: Promise<unknown>;
+    await act(async () => {
+      result = context.invoke('host', 'maker:send', [], {
+        preSend: () => { if (!current) throw cancelled; },
+      }).catch(error => error);
+    });
+    expect(client.invoke).toHaveBeenCalledTimes(1);
+    current = false;
+    await act(async () => dispatch());
+    expect(await result).toBe(cancelled);
+    expect(send).not.toHaveBeenCalled();
+    expect(unresponsiveDevicesStore.getSnapshot().has('host')).toBe(false);
+    resetDeviceResponsivenessTracking();
+  });
+});
+
+describe('pending catalog recovery', () => {
+  it.each(['foreground', 'peer response'] as const)('wakes a blocked invalidation on %s before its long retry timer expires', async (recovery) => {
+    vi.useFakeTimers();
+    try {
+      const client = transport.clients[0];
+      client.openLink.mockResolvedValue(accepted(supported));
+      await act(async () => {
+        if (recovery === 'foreground') {
+          networkEvents.state = 'background'; networkEvents.app('background');
+        } else unresponsiveDevicesStore.markUnresponsive('host');
+        client.frame({ v: 1, kind: 'push', src: 'host', dst: 'mobile',
+          payload: { channel: 'maker:provider:changed', payload: {} } } as Parameters<typeof client.frame>[0]);
+        await vi.advanceTimersByTimeAsync(60000);
+      });
+      expect(client.invoke).not.toHaveBeenCalled();
+      await act(async () => {
+        if (recovery === 'foreground') {
+          networkEvents.state = 'active'; networkEvents.app('active');
+        } else unresponsiveDevicesStore.clearUnresponsive('host');
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+      expect(client.invoke).toHaveBeenCalledWith('host', expect.objectContaining({ channel: 'maker:get-capabilities' }), undefined, expect.objectContaining({ preSend: expect.any(Function) }));
+    } finally { unresponsiveDevicesStore.clearAll(); vi.useRealTimers(); }
+  });
+});
+
+describe('pending probe reply recovery', () => {
+  afterEach(() => {
+    resetDeviceResponsivenessTracking();
+    revokedDevicesStore.clearAll();
+  });
+  it.each(['relay reconnect', 'short background'] as const)('reopens the reply link after %s while the old business probe still owns its slot', async recovery => {
+    vi.useFakeTimers();
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    let resolveProbe!: (value: { ok: true; result: string }) => void;
+    const probe = new Promise<{ ok: true; result: string }>(resolve => { resolveProbe = resolve; });
+    client.invoke.mockImplementation(() => probe);
+    try {
+      await act(async () => { await context.openLink('host'); });
+      await act(async () => {
+        for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+        await vi.advanceTimersByTimeAsync(14_000);
+      });
+      expect(client.invoke).toHaveBeenCalledExactlyOnceWith('host', expect.objectContaining({ channel: 'local-db:sessions:list' }), expect.any(Number), expect.objectContaining({ preSend: expect.any(Function) }));
+      expect(unresponsiveDevicesStore.has('host')).toBe(true);
+      client.hasPendingRequestsTo.mockImplementation(device => device === 'host');
+      const freshAccept = deferredAccept();
+      client.openLink.mockReturnValue(freshAccept.promise);
+      if (recovery === 'relay reconnect') {
+        await act(async () => { client.status = 'connecting'; client.statusChanged('connecting'); });
+        await act(async () => { client.status = 'online'; client.statusChanged('online'); });
+      } else {
+        // The relay stays online, so the successful pre-background handshake is still cached.
+        await act(async () => { networkEvents.state = 'background'; networkEvents.app('background'); });
+        await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.restartConnection).not.toHaveBeenCalled();
+      }
+      // The serial recovery scheduler is still awaiting probe; only its reply link may reopen.
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      expect(unresponsiveDevicesStore.has('host')).toBe(true);
+      // Repeated foreground hints share both pending and accepted handshakes.
+      await act(async () => networkEvents.app('active'));
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      await act(async () => freshAccept.resolve(accepted(supported)));
+      await act(async () => networkEvents.app('active'));
+      expect(client.openLink).toHaveBeenCalledTimes(2);
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        client.hasPendingRequestsTo.mockReturnValue(false);
+        resolveProbe({ ok: true, result: 'probe response' });
+      });
+      expect(unresponsiveDevicesStore.has('host')).toBe(false);
+    } finally {
+      await act(async () => { resolveProbe({ ok: true, result: 'cleanup' }); });
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['no pending request', 'revoked', 'explicitly closed', 'background', 'settled before send', 'offline before send'] as const)(
+    'does not bypass lifecycle guards: %s', async reason => {
+      vi.useFakeTimers();
+      const client = transport.clients[0];
+      client.openLink.mockResolvedValue(accepted(supported));
+      let resolveProbe!: (value: { ok: true; result: string }) => void;
+      client.invoke.mockImplementation(() => new Promise(resolve => { resolveProbe = resolve; }));
+      try {
+        await act(async () => { await context.openLink('host'); });
+        await act(async () => {
+          for (let i = 0; i < 3; i++) settleDeviceSend('host', acquireDeviceSendSlot('host'), 'timeout');
+          await vi.advanceTimersByTimeAsync(14_000);
+        });
+        expect(client.invoke).toHaveBeenCalledTimes(1);
+        client.hasPendingRequestsTo.mockReturnValue(reason !== 'no pending request');
+        await act(async () => {
+          client.status = 'connecting'; client.statusChanged('connecting');
+          if (reason === 'revoked') revokedDevicesStore.markRevoked('host');
+          if (reason === 'explicitly closed') client.isOutboundExplicitlyClosed.mockReturnValue(true);
+          if (reason === 'background') { networkEvents.state = 'background'; networkEvents.app('background'); }
+          client.status = 'online'; client.statusChanged('online');
+          // Mutate after the initial guard but before the async send continuation.
+          if (reason === 'settled before send') client.hasPendingRequestsTo.mockReturnValue(false);
+          if (reason === 'offline before send') { client.status = 'connecting'; client.statusChanged('connecting'); }
+        });
+        expect(client.openLink).toHaveBeenCalledTimes(1);
+        expect(client.invoke).toHaveBeenCalledTimes(1);
+        if (reason === 'background') {
+          await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+          expect(client.openLink).toHaveBeenCalledTimes(2);
+          expect(client.invoke).toHaveBeenCalledTimes(1);
+          expect(unresponsiveDevicesStore.has('host')).toBe(true);
+        }
+      } finally {
+        client.hasPendingRequestsTo.mockReturnValue(false);
+        await act(async () => resolveProbe?.({ ok: true, result: 'cleanup' }));
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
+describe('Provider shared-task relay compatibility', () => {
+  it('distinguishes an old online relay from disconnection and re-negotiates after upgrade', async () => {
+    const client = transport.clients[0];
+    expect(context.sharedTaskAvailable).toBeUndefined();
+    await act(async () => client.statusChanged('online'));
+    expect(context.sharedTaskAvailable).toBe(false);
+    await act(async () => client.statusChanged('connecting'));
+    expect(context.sharedTaskAvailable).toBeUndefined();
+    client.serverCapabilities = [SHARED_TASK_CAPABILITY];
+    await act(async () => client.statusChanged('online'));
+    expect(context.sharedTaskAvailable).toBe(true);
+    await act(async () => client.statusChanged('stopped'));
+    expect(context.sharedTaskAvailable).toBeUndefined();
+  });
+});
+
 describe('Provider network recovery priority', () => {
   const wifi = { type: 'WIFI', isConnected: true, isInternetReachable: true };
-  it('coalesces equal hints but expedites transport changes and offline recovery', async () => {
+  it('refreshes native state on foreground and ignores snapshots older than a network event', async () => {
+    networkEvents.read.mockResolvedValueOnce({ type: 'NONE', isConnected: false });
+    await act(async () => networkEvents.app('active'));
+    expect(localNetworkStore.getSnapshot().status).toBe('unavailable');
+    let complete!: (network: NetworkState) => void;
+    networkEvents.read.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    await act(async () => networkEvents.app('active'));
+    await act(async () => {
+      networkEvents.network(wifi);
+      complete({ type: 'NONE', isConnected: false });
+    });
+    expect(localNetworkStore.getSnapshot().status).toBe('available');
+  });
+
+  it.each([
+    [{ type: 'WIFI', isConnected: true, isInternetReachable: false }, 'unavailable'],
+    [{ type: 'UNKNOWN', isConnected: false, isInternetReachable: false }, 'unknown'],
+  ] as const)('uses native evidence without turning lookup failures into phone outages (%j)', async (network, expected) => {
+    await act(async () => networkEvents.network(network));
+    expect(localNetworkStore.getSnapshot().status).toBe(expected);
+  });
+
+  // Regression: phone route loss used to count as three host failures. Existing
+  // recovery tests only checked reconnect calls, not the visible host verdict.
+  // Unit tier: real provider/native event boundary, no network or real timers.
+  it.each(['outage', 'route switch'] as const)('does not blame either computer for timeouts spanning a phone %s', async (change) => {
+    resetDeviceResponsivenessTracking();
+    await act(async () => networkEvents.network(wifi));
+    const devices = ['host-a', 'host-b'];
+    const pending = devices.map(device => Array.from({ length: 3 }, () => acquireDeviceSendSlot(device)));
+    await act(async () => {
+      networkEvents.network(change === 'outage'
+        ? { type: 'NONE', isConnected: false, isInternetReachable: false }
+        : { ...wifi, type: 'CELLULAR' });
+      networkEvents.network(wifi);
+      devices.forEach((device, index) => {
+        pending[index].forEach(slot => settleDeviceSend(device, slot, 'timeout'));
+      });
+    });
+    expect([...unresponsiveDevicesStore.getSnapshot()]).toEqual([]);
+    const fresh = Array.from({ length: 3 }, () => acquireDeviceSendSlot('host-a'));
+    await act(async () => {
+      networkEvents.network(wifi);
+      fresh.forEach(slot => settleDeviceSend('host-a', slot, 'timeout'));
+    });
+    expect(unresponsiveDevicesStore.has('host-a')).toBe(true);
+  });
+
+  it('ignores requests issued offline, then counts new failures after recovery', async () => {
+    resetDeviceResponsivenessTracking();
+    await act(async () => networkEvents.network({ type: 'NONE', isConnected: false }));
+    const pending = Array.from({ length: 3 }, () => acquireDeviceSendSlot('host'));
+    await act(async () => networkEvents.network(wifi));
+    pending.forEach(slot => settleDeviceSend('host', slot, 'timeout'));
+    expect(unresponsiveDevicesStore.has('host')).toBe(false);
+    const fresh = Array.from({ length: 3 }, () => acquireDeviceSendSlot('host'));
+    await act(async () => fresh.forEach(slot => settleDeviceSend('host', slot, 'timeout')));
+    expect(unresponsiveDevicesStore.has('host')).toBe(true);
+    await act(async () => networkEvents.network({ type: 'NONE', isConnected: false }));
+    expect(unresponsiveDevicesStore.has('host')).toBe(false);
+  });
+
+  it('replaces an online socket on physical route changes and retains probes for equal hints', async () => {
     const client = transport.clients[0];
     await act(async () => {
       networkEvents.network(wifi);
@@ -123,8 +565,104 @@ describe('Provider network recovery priority', () => {
       networkEvents.network(wifi);
     });
     expect(client.notifyNetworkChanged.mock.calls).toEqual([
-      [{ urgent: false }], [{ urgent: false }], [{ urgent: true }], [{ urgent: true }],
+      [{ urgent: false }], [{ urgent: false }],
     ]);
+    expect(client.restartConnection.mock.calls).toEqual([
+      ['network-path-changed'], ['network-path-changed'],
+    ]);
+  });
+
+  it('does not replace a slow socket for reachability changes or repeated network capabilities', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ ...wifi, isInternetReachable: false });
+      networkEvents.network(wifi);
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged.mock.calls).toEqual([
+      [{ urgent: false }], [{ urgent: true }], [{ urgent: true }], [{ urgent: false }],
+    ]);
+  });
+
+  it.each(['UNKNOWN', undefined])('probes an unknown network (%s) without treating it as route loss', async type => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type, isConnected: false, isInternetReachable: false });
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged.mock.calls).toEqual([
+      [{ urgent: false }], [{ urgent: true }], [{ urgent: true }],
+    ]);
+  });
+
+  it.each([false, true])('keeps confirmed route loss pending across UNKNOWN (connected=%s)', async isConnected => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+      networkEvents.network({ type: 'UNKNOWN', isConnected, isInternetReachable: false });
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    await act(async () => networkEvents.network(wifi));
+    expect(client.restartConnection).toHaveBeenCalledExactlyOnceWith('network-path-changed');
+  });
+
+  it('does not retain unknown background notifications as a lost route', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      client.notifyNetworkChanged.mockClear();
+      networkEvents.state = 'background'; networkEvents.app('background');
+      networkEvents.network({ type: 'UNKNOWN', isConnected: false, isInternetReachable: false });
+    });
+    expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
+    await act(async () => {
+      networkEvents.state = 'active'; networkEvents.app('active');
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged).toHaveBeenCalledWith({ urgent: true });
+  });
+
+  it('remembers a lost route even when the replacement has the same network type', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+      networkEvents.network(wifi);
+      networkEvents.network(wifi);
+    });
+    expect(client.restartConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['connecting', 'stopped'] as const)('does not bypass handshakes or congestion backoff while %s', async status => {
+    const client = transport.clients[0];
+    client.status = status;
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network({ ...wifi, type: 'CELLULAR' });
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    expect(client.notifyNetworkChanged).toHaveBeenLastCalledWith({ urgent: true });
+  });
+
+  it.each([false, true])('defers a background route change unless a new connection supersedes it (connected=%s)', async connected => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.state = 'background'; networkEvents.app('background');
+      networkEvents.network({ ...wifi, type: 'CELLULAR' });
+      if (connected) client.statusChanged('online');
+    });
+    expect(client.restartConnection).not.toHaveBeenCalled();
+    await act(async () => {
+      networkEvents.state = 'active'; networkEvents.app('active');
+    });
+    expect(client.restartConnection).toHaveBeenCalledTimes(connected ? 0 : 1);
   });
 
   it.each(['online', 'stopped', 'connecting'] as const)('recovers immediately from background with a %s connection', async (status) => {
@@ -138,7 +676,10 @@ describe('Provider network recovery priority', () => {
     await act(async () => {
       networkEvents.state = 'active'; networkEvents.app('active');
     });
-    expect(client.connectNow).toHaveBeenCalledWith('appstate-active', { overrideCongestionCooldown: true });
+    expect(client.connectNow).toHaveBeenCalledWith('appstate-active', {
+      overrideCongestionCooldown: true,
+      keepInFlightAttempt: true,
+    });
     if (status === 'online') expect(client.notifyNetworkChanged).toHaveBeenCalledWith({ urgent: true });
     else expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
     expect(client.stop).not.toHaveBeenCalled();
@@ -185,7 +726,7 @@ describe('Provider history handshake lifetime', () => {
       await act(async () => current.resolve(accepted(supported)));
       expect(await fresh.result).toBe('history page');
       expect(currentClient.invoke).toHaveBeenCalledTimes(1);
-      expect(currentClient.invoke).toHaveBeenCalledWith('host', { channel: historyChannel, args: [] }, undefined);
+      expect(currentClient.invoke).toHaveBeenCalledWith('host', { channel: historyChannel, args: [] }, undefined, expect.objectContaining({ preSend: expect.any(Function) }));
       // A late old completion must not evict the new successful single-flight.
       await act(async () => { expect(await context.invoke('host', historyChannel)).toBe('history page'); });
       expect(currentClient.openLink).toHaveBeenCalledTimes(currentClient === client ? 2 : 1);

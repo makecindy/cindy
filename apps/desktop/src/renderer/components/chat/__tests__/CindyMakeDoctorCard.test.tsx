@@ -63,6 +63,13 @@ vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => n
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
 const render = (ui: ReactElement) => renderUI(ui, { wrapper: MemoryRouter });
+it.each(['cindy-make', 'cindy-make-doctor'] as const)('hides %s cards in the message stream while Make is disabled', (cardType) => {
+  const view = render(<SystemCard cardType={cardType} sessionId="origin-task" data={{}} />);
+  expect(view.container.childElementCount).toBe(0);
+  expect(startMakeDoctorInStream).not.toHaveBeenCalled();
+  expect(chooseMakeUpstream).not.toHaveBeenCalled();
+});
+
 function Location() {
   return <span data-testid="location">{useLocation().pathname}</span>;
 }
@@ -137,7 +144,7 @@ describe('Make upstream step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }));
     expect(choose).toHaveBeenCalledWith('personal');
     expect(screen.getByRole('button', { name: 'cindyMake.upstream.personal' }).className).toContain(
-      'border-[var(--border-default)]',
+      '[--button-face-border:var(--border-default)]',
     );
     fireEvent.click(screen.getByText('cindyMakeDoctor.details'));
     expect(screen.getByText('cindyMakeDoctor.checks.git')).toBeTruthy();
@@ -244,7 +251,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.source.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'cindyMake.prepare.retry' }));
@@ -272,7 +279,7 @@ describe('Make upstream step', () => {
       expect(document.querySelector('.animate-spinner')).toBeNull();
       expect(screen.getByRole('status').textContent).toBe(`cindyMake.upstream.${status}`);
       expect(screen.getByRole('status').className).toContain(
-        status === 'failed' ? 'text-[var(--status-danger)]' : 'text-[var(--text-secondary)]',
+        status === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-secondary)]',
       );
       expect(screen.queryByRole('button', { name: 'cindyMake.upstream.personal' })).toBeNull();
     },
@@ -937,10 +944,9 @@ describe('doctor card interactions', () => {
     expect(screen.getByText('cindyMakeDoctor.recheck')).toBeTruthy();
   });
 
-  it('renders through the message-stream SystemCard and routes actions to the originating run', async () => {
+  it('keeps the standalone doctor card routing actions to the originating run', async () => {
     const view = render(
-      <SystemCard
-        cardType="cindy-make-doctor"
+      <CindyMakeDoctorCard
         sessionId="origin-task"
         data={{ report: { ...report, status: 'running' } }}
       />,
@@ -951,8 +957,7 @@ describe('doctor card interactions', () => {
     expect(cancelMakeDoctor).toHaveBeenCalledWith('run', undefined);
 
     view.rerender(
-      <SystemCard
-        cardType="cindy-make-doctor"
+      <CindyMakeDoctorCard
         sessionId="origin-task"
         data={{ report: { ...report, status: 'cancelled' } }}
       />,
@@ -966,7 +971,7 @@ describe('doctor card interactions', () => {
   it('renders Make requests as plain text and preserves them when collapsed and expanded', () => {
     const request = '修复滚动\n<b>literal HTML</b>';
     const view = render(
-      <SystemCard cardType="cindy-make" sessionId="origin-task" data={{ report, request }} />,
+      <CindyMakeDoctorCard sessionId="origin-task" data={{ report, request }} />,
     );
     const content = screen.getByText(/literal HTML/);
     expect(content.textContent).toBe(request);
@@ -979,7 +984,7 @@ describe('doctor card interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'cindyMakeDoctor.title' }));
     expect(screen.getByText(/literal HTML/).textContent).toBe(request);
     view.rerender(
-      <SystemCard cardType="cindy-make" sessionId="origin-task" data={{ report, request: '' }} />,
+      <CindyMakeDoctorCard sessionId="origin-task" data={{ report, request: '' }} />,
     );
     expect(screen.queryByText('cindyMake.request')).toBeNull();
   });
@@ -989,8 +994,7 @@ describe('doctor card interactions', () => {
     render(
       <>
         <Location />
-        <SystemCard
-          cardType="cindy-make"
+        <CindyMakeDoctorCard
           sessionId="origin-task"
           data={{
             report: { ...report, upstream: { status: 'notFound', items: [] } },
@@ -1011,8 +1015,7 @@ describe('doctor card interactions', () => {
     render(
       <>
         <Location />
-        <SystemCard
-          cardType="cindy-make"
+        <CindyMakeDoctorCard
           sessionId="origin-task"
           data={{
             report: { ...report, source: { status: 'ready', path: 'C:\\source' } },

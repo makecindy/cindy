@@ -2,7 +2,7 @@
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
  * 交互契约(2026-07-07 与产品确认):
- *  - 右滑露出「置顶/取消置顶」(按 pinnedAt 切换),全滑(超过屏宽 55%)松手直接触发;
+ *  - 右滑露出「置顶/取消置顶」和「已读」,全滑(超过屏宽 55%)松手标为已读;
  *  - 左滑露出「选项」+「归档」,全滑=归档(归档按钮越过阈值时扩展盖满,预告松手即触发);
  *  - 删除不做滑动直达,只在「选项」菜单里(带系统 Alert 确认),由页面层承接;
  *  - 同一时间只允许一行滑开:互斥由页面级 SwipeRowRegistry 驱动(开新关旧、滚动关行)。
@@ -20,7 +20,7 @@
  *  - 全滑判定在 onSwipeableWillOpen(松手后的 JS 回调)同步读 translation,不在
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
-import { memo, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
@@ -36,6 +36,7 @@ import Animated, {
   type SharedValue,
 } from "react-native-reanimated";
 import {
+  Check,
   Archive,
   ArchiveRestore,
   Ellipsis,
@@ -49,6 +50,7 @@ import {
   type SwipeRowRegistry,
 } from "@/session/swipeRowRegistry";
 import type { RemoteSession } from "@/session/types";
+import { useDisclosurePrepare } from "@/session/listDisclosureTransition";
 import {
   iconSize,
   iconStroke,
@@ -62,8 +64,8 @@ import { radius, spacing } from "@/theme/tokens";
 const BUTTON_SIZE = 56;
 /** 按钮与行边缘 / 屏幕边缘 / 相邻按钮的间距(iOS 26 的悬浮圆钮留白比色块时代更宽)。 */
 const BUTTON_GAP = spacing.md;
-/** 左面板(置顶):gap + 圆 + gap;右面板(选项 + 归档):gap + 圆 + gap + 圆 + gap。 */
-const LEFT_PANEL_WIDTH = BUTTON_GAP * 2 + BUTTON_SIZE;
+/** 两侧面板都放两个按钮:gap + 圆 + gap + 圆 + gap。 */
+const LEFT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 const RIGHT_PANEL_WIDTH = BUTTON_GAP * 3 + BUTTON_SIZE * 2;
 /** 全滑触发阈值:位移超过屏宽的这个比例,松手即执行(iOS Mail 惯例的 50-60% 区间)。 */
 const FULL_SWIPE_RATIO = 0.55;
@@ -72,13 +74,14 @@ const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
 
 /**
- * 页面级滑动控制 bundle:registry + 三个动作回调打包成一个稳定引用(useMemo),
+ * 页面级滑动控制 bundle:registry + 四个动作回调打包成一个稳定引用(useMemo),
  * 供 ProjectRow / AutomationGroupChildren 等嵌套渲染路径向下透传——不提供时对应
  * 行退化为不可滑动(选择态或不需要手势的调用点保持原行为)。
  */
 export interface SessionSwipeControls {
   registry: SwipeRowRegistry;
   onTogglePin(session: RemoteSession): void;
+  onMarkRead(session: RemoteSession): void;
   onArchive(session: RemoteSession): void;
   onShowOptions(session: RemoteSession): void;
 }
@@ -91,8 +94,9 @@ export interface SwipeableSessionRowProps {
    * 回调统一带 session 入参:页面层可以传稳定引用(useCallback / setState),
    * renderItem 里不必为每行现造闭包(否则 memo 的浅比较永远失败,review P2)。
    */
-  /** 右滑按钮 / 右滑全滑:置顶或取消置顶(实现方负责先关行再发 RPC 的时序)。 */
+  /** 右滑置顶按钮:置顶或取消置顶(实现方负责先关行再发 RPC 的时序)。 */
   onTogglePin(session: RemoteSession): void;
+  onMarkRead(session: RemoteSession): void;
   /** 左滑「归档」按钮 / 左滑全滑(不关行:乐观更新立即把行移出列表,失败由页面层回滚收口)。 */
   onArchive(session: RemoteSession): void;
   /** 左滑「选项」按钮:先关行,再由页面层弹出操作菜单。 */
@@ -105,11 +109,13 @@ function SwipeableSessionRowInner({
   session,
   registry,
   onTogglePin,
+  onMarkRead,
   onArchive,
   onShowOptions,
   testID,
   children,
 }: SwipeableSessionRowProps) {
+  const { t } = useTranslation();
   const rowKey = session.id;
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
@@ -149,25 +155,34 @@ function SwipeableSessionRowInner({
     methodsRef.current?.close();
   }, []);
 
+  // RNGH rebuilds its serialized worklet graph when these JS callbacks change.
+  // Row refreshes and rotation only update the action's committed inputs.
+  const gestureInputs = useRef({ registry, rowKey, fullSwipeThreshold, onMarkRead, onArchive, session });
+  useLayoutEffect(() => {
+    gestureInputs.current = { registry, rowKey, fullSwipeThreshold, onMarkRead, onArchive, session };
+  });
   const handleOpenStartDrag = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
     registry.onRowOpen(rowKey, close);
-  }, [registry, rowKey, close]);
+  }, [close]);
 
   const handleClose = useCallback(() => {
+    const { registry, rowKey } = gestureInputs.current;
     registry.onRowClose(rowKey);
-  }, [registry, rowKey]);
+  }, []);
 
   // 全滑判定:松手瞬间(库在 release 时派发 WillOpen)读当前位移,超阈值即触发。
   // direction 语义:RIGHT = 右滑(露出左面板/置顶),LEFT = 左滑(露出右面板/归档)。
   const handleWillOpen = useCallback(
     (direction: (typeof SwipeDirection)[keyof typeof SwipeDirection]) => {
+      const { fullSwipeThreshold, onMarkRead, onArchive, session } = gestureInputs.current;
       const translation = translationRef.current;
       if (!translation) return;
       if (direction === SwipeDirection.RIGHT) {
         if (translation.value >= fullSwipeThreshold) {
-          // 置顶后行只重排不消失:先关再发,避免重排后行停在打开态。
+          // 已读后收起滑动操作。
           close();
-          onTogglePin(session);
+          onMarkRead(session);
         }
         return;
       }
@@ -176,8 +191,13 @@ function SwipeableSessionRowInner({
         onArchive(session);
       }
     },
-    [fullSwipeThreshold, close, onTogglePin, onArchive, session],
+    [close],
   );
+
+  const handleReadPress = useCallback(() => {
+    close();
+    onMarkRead(session);
+  }, [close, onMarkRead, session]);
 
   const handlePinPress = useCallback(() => {
     close();
@@ -200,17 +220,29 @@ function SwipeableSessionRowInner({
     (_progress: SharedValue<number>, translation: SharedValue<number>) => {
       translationRef.current = translation;
       return (
-        <PinActionPanel
-          label={pinLabel}
-          onPress={handlePinPress}
+        <LeftActionsPanel
+          pinLabel={pinLabel}
+          readLabel={t("session.row.markRead")}
+          onPin={handlePinPress}
+          onRead={handleReadPress}
           pinned={pinned}
+          fullSwipeThreshold={fullSwipeThreshold}
           styles={styles}
-          testID={testID ? `${testID}.pinAction` : undefined}
+          testID={testID}
           translation={translation}
         />
       );
     },
-    [pinLabel, pinned, handlePinPress, styles, testID],
+    [
+      pinLabel,
+      pinned,
+      handlePinPress,
+      handleReadPress,
+      fullSwipeThreshold,
+      styles,
+      testID,
+      t,
+    ],
   );
 
   const statusToggle = statusToggleAction(session.status);
@@ -258,52 +290,115 @@ function SwipeableSessionRowInner({
   );
 }
 
-/**
- * 右滑露出的「置顶」浮块:定宽壳决定 snap 位;按钮绝对定位、随露出进度淡入 + 微缩放
- * 弹入;overshoot / 全滑时按钮保持圆角横向拉伸(宽度 = 位移 - 两侧 gap),图标钉在
- * 行边缘一侧跟手(iOS Mail 同款)。
- */
-function PinActionPanel({
-  label,
-  onPress,
+/** 右滑双按钮:置顶可点按,已读在全滑阈值后展开。 */
+function LeftActionsPanel({
+  readLabel,
+  pinLabel,
   pinned,
+  fullSwipeThreshold,
+  onRead,
+  onPin,
   styles,
   testID,
   translation,
 }: {
-  label: string;
-  onPress(): void;
+  readLabel: string;
+  pinLabel: string;
   pinned: boolean;
+  fullSwipeThreshold: number;
+  onRead(): void;
+  onPin(): void;
   styles: SwipeStyles;
   testID?: string;
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
-  const buttonStyle = useAnimatedStyle(() => {
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
+  const PinIcon = pinned ? PinOff : Pin;
+  // 挂载时同步落初值,只在真正跨越阈值时启动 timing。若每个面板挂载都执行
+  // withTiming(0),大项目从完整首帧切到窗口行时会留下仍在更新已卸载 Fabric tag
+  // 的空动画,最终用 Reanimated 警告栈堵住 Android 主线程。
+  const armedProgress = useSharedValue(0);
+  useAnimatedReaction(
+    () => translation.value >= fullSwipeThreshold,
+    (next, previous) => {
+      if (previous === null) {
+        armedProgress.value = next ? 1 : 0;
+        return;
+      }
+      if (next !== previous) {
+        armedProgress.value = withTiming(next ? 1 : 0, {
+          duration: ARM_ANIMATION_MS,
+        });
+      }
+    },
+  );
+
+  const pinStyle = useAnimatedStyle(() => {
     const revealed = Math.max(0, translation.value);
     const progress = Math.min(1, revealed / LEFT_PANEL_WIDTH);
     return {
-      opacity: interpolate(progress, [0.15, 0.7], [0, 1], "clamp"),
+      // 错峰弹入(靠内的「置顶」后现身);armed 时淡出让位给拉伸的「已读」。
+      opacity:
+        interpolate(progress, [0.3, 0.8], [0, 1], "clamp") *
+        (1 - armedProgress.value),
+      // overshoot(revealed > 面板宽)时跟着行边缘外扩,保持「贴着行」的间距不脱节。
+      left: Math.max(
+        BUTTON_GAP * 2 + BUTTON_SIZE,
+        revealed - BUTTON_SIZE - BUTTON_GAP,
+      ),
       transform: [
-        { scale: interpolate(progress, [0.15, 1], [0.5, 1], "clamp") },
+        { scale: interpolate(progress, [0.3, 1], [0.5, 1], "clamp") },
       ],
-      // 静置是正圆;继续拖动从圆拉长成胶囊(radius.pill 让圆角恒为半高)。
-      width: Math.max(BUTTON_SIZE, revealed - BUTTON_GAP * 2),
     };
   });
-  const IconComponent = pinned ? PinOff : Pin;
+  const readStyle = useAnimatedStyle(() => {
+    const revealed = Math.max(0, translation.value);
+    const progress = Math.min(1, revealed / LEFT_PANEL_WIDTH);
+    return {
+      opacity: interpolate(progress, [0.08, 0.45], [0, 1], "clamp"),
+      transform: [
+        { scale: interpolate(progress, [0.08, 0.6], [0.5, 1], "clamp") },
+      ],
+      // armed 时从正圆拉长成胶囊铺满整个露出区(保留两侧 gap),盖过「置顶」。
+      width:
+        BUTTON_SIZE +
+        Math.max(0, revealed - BUTTON_GAP * 2 - BUTTON_SIZE) *
+          armedProgress.value,
+    };
+  });
+
   return (
     <View style={styles.pinShell}>
-      <Animated.View style={[styles.pinButton, buttonStyle]}>
+      <Animated.View style={[styles.leadingPinButton, pinStyle]}>
         <Pressable
-          accessibilityLabel={label}
+          accessibilityLabel={pinLabel}
           accessibilityRole="button"
-          onPress={onPress}
+          onPress={onPin}
+          onPressIn={() => prepareDisclosure(true)}
           style={styles.actionPressable}
-          testID={testID}
+          testID={testID ? `${testID}.pinAction` : undefined}
         >
           <View style={styles.pinIconWrap}>
-            <IconComponent
+            <PinIcon
+              color={colors.swipeActionText}
+              size={ICON_SIZE}
+              strokeWidth={iconStroke.regular}
+            />
+          </View>
+        </Pressable>
+      </Animated.View>
+      <Animated.View style={[styles.readButton, readStyle]}>
+        <Pressable
+          accessibilityLabel={readLabel}
+          accessibilityRole="button"
+          onPress={onRead}
+          style={styles.actionPressable}
+          testID={testID ? `${testID}.readAction` : undefined}
+        >
+          <View style={styles.pinIconWrap}>
+            <Check
               color={colors.swipeActionText}
               size={ICON_SIZE}
               strokeWidth={iconStroke.regular}
@@ -340,6 +435,8 @@ function RightActionsPanel({
   translation: SharedValue<number>;
 }) {
   const { colors } = useTheme();
+  // 置顶 / 归档会让行移位:按下即提前挂上列表过渡,松手时直接执行。
+  const prepareDisclosure = useDisclosurePrepare();
   const { t } = useTranslation();
   const StatusIcon = archived ? ArchiveRestore : Archive;
   // 挂载时同步落初值,只在真正跨越阈值时启动 timing。若每个面板挂载都执行
@@ -419,6 +516,7 @@ function RightActionsPanel({
           accessibilityLabel={archiveLabel}
           accessibilityRole="button"
           onPress={onArchive}
+          onPressIn={() => prepareDisclosure(true)}
           style={styles.actionPressable}
           testID={testID ? `${testID}.archiveAction` : undefined}
         >
@@ -445,16 +543,24 @@ const makeStyles = (colors: ThemeColors) =>
       overflow: "visible",
       width: LEFT_PANEL_WIDTH,
     },
-    pinButton: {
+    leadingPinButton: {
       backgroundColor: colors.swipeActionPin,
-      // radius.pill:正圆起步,拉长后自动变胶囊(圆角恒为半高),iOS 26 同款。
       borderRadius: radius.pill,
       height: BUTTON_SIZE,
-      left: BUTTON_GAP,
-      // 行高内垂直居中(面板 wrapper 与行等高):50% 锚点 + 负半径回拉,不写死行高。
       marginTop: -BUTTON_SIZE / 2,
       overflow: "hidden",
       position: "absolute",
+      top: "50%",
+      width: BUTTON_SIZE,
+    },
+    readButton: {
+      backgroundColor: colors.swipeActionRead,
+      borderRadius: radius.pill,
+      height: BUTTON_SIZE,
+      marginTop: -BUTTON_SIZE / 2,
+      overflow: "hidden",
+      position: "absolute",
+      left: BUTTON_GAP,
       top: "50%",
     },
     pinIconWrap: {

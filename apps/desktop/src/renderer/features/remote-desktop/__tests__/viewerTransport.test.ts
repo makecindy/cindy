@@ -38,7 +38,7 @@ beforeEach(async () => {
         return {
           version: 1,
           enabled: true,
-          canControl: false,
+          canControl: true,
           displays: [{ id: 'one', width: 1280, height: 720 }],
         };
       if (request.op === 'start')
@@ -47,6 +47,7 @@ beforeEach(async () => {
           controlling: false,
           display: { id: 'one', width: 1280, height: 720 },
         };
+      if (request.op === 'control' || request.op === 'heartbeat') return { controlling: true };
       return {};
     },
   } satisfies RemoteDesktopViewerApi;

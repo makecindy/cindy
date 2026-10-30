@@ -153,6 +153,43 @@ function makeService(options: {
 }
 
 describe('SkillhubAutoSyncService', () => {
+  it('refreshes department policies after signing out and back into the same identity', async () => {
+    const setup = makeService({ configSkills: [] });
+    await setup.service.runOnceAfterLogin();
+    await setup.service.runOnceAfterLogin();
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(1);
+    setup.service.cancelInFlight();
+    await setup.service.runOnceAfterLogin();
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not restore completion when cancellation precedes auth cleanup', async () => {
+    let release!: (value: []) => void;
+    const setup = makeService({ fetchConfigImpl: () => new Promise<[]>((resolve) => { release = resolve; }) });
+    const first = setup.service.runOnceAfterLogin();
+    await vi.waitFor(() => expect(setup.fetchConfig).toHaveBeenCalledTimes(1));
+    setup.service.cancelInFlight();
+    release([]);
+    await first;
+    expect(setup.recordCandidateSkills).not.toHaveBeenCalled();
+    setup.fetchConfig.mockResolvedValue([]);
+    await setup.service.runOnceAfterLogin();
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues same-account login behind a cancelled pending run', async () => {
+    let release!: (value: []) => void;
+    const setup = makeService({ fetchConfigImpl: () => new Promise<[]>((resolve) => { release = resolve; }) });
+    const first = setup.service.runOnceAfterLogin();
+    await vi.waitFor(() => expect(setup.fetchConfig).toHaveBeenCalledTimes(1));
+    setup.service.cancelInFlight();
+    setup.fetchConfig.mockResolvedValue([]);
+    const relogin = setup.service.runOnceAfterLogin();
+    release([]);
+    await Promise.all([first, relogin]);
+    expect(setup.fetchConfig).toHaveBeenCalledTimes(2);
+  });
+
   afterAll(() => fs.rmSync(TEST_ROOT, { recursive: true, force: true }));
 
   it('defers automatic cancellation cleanup behind a pending uninstall and retries after release', async () => {

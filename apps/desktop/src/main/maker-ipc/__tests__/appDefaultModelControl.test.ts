@@ -1,11 +1,12 @@
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel } from '../appDefaultModelControl';
+import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
 import { setNewMakerDraftCache, syncNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache';
 
 const host = vi.hoisted(() => ({ owner: 'owner:1', enabled: true, connected: true, agents: ['codex'],
-  enableSecond: false, providers: vi.fn() }));
+  enableSecond: false, providers: vi.fn(), remote: vi.fn() }));
+vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readRemoteProviderRoute: host.remote }));
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: () => ({ listAvailableAgents: () => host.agents }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders: host.providers }),
@@ -45,6 +46,47 @@ describe('Bot control of the real Cindy default', () => {
     const dispatch = vi.fn(); configureAppDefaultModelSelection(dispatch);
     await expect(changeAppDefaultModel(id)).rejects.toThrow();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+  it('validates the complete task route including harness, account and tuning without changing defaults', async () => {
+    expect(await validateTaskModel(route)).toBe(true);
+    for (const patch of [{ harness: 'pi' as const }, { providerId: 'another-account' }, { effort: 'ultra' }]) {
+      expect(await validateTaskModel({ ...route, ...patch })).toBe(false);
+    }
+    host.connected = false;
+    expect(await validateTaskModel(route)).toBe(false);
+    expect((await inspectAppDefaultModel()).current).toEqual(route);
+  });
+  it('resolves an implicit legacy source without changing the saved route or accepting a stale explicit source', async () => {
+    const legacy = { ...route, providerId: null };
+    mirror(legacy);
+    expect(await resolveAvailableTaskModels([legacy])).toEqual([route]);
+    expect(await validateTaskModel(legacy)).toBe(true);
+    expect((await inspectAppDefaultModel()).current).toEqual(legacy);
+    expect(await validateTaskModel({ ...legacy, providerId: 'deleted' })).toBe(false);
+    host.enabled = false;
+    expect(await validateTaskModel(legacy)).toBe(false);
+    host.enabled = true; host.connected = false;
+    expect(await validateTaskModel(legacy)).toBe(false);
+  });
+  it('resolves a one-task selection without changing application preferences', async () => {
+    const dispatch = vi.fn(); configureAppDefaultModelSelection(dispatch);
+    expect(await resolveTaskModelSelection({ id, effort: 'low', fastMode: true })).toEqual({ ...route, effort: 'low', fastMode: true });
+    expect(await resolveTaskModelSelection({ id })).toEqual(route);
+    expect((await inspectAppDefaultModel()).current).toEqual(route);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it.each(['disabled', 'disconnected', 'harness', 'account', 'effort', 'fast'] as const)('rejects an unavailable one-task selection: %s', async failure => {
+    const selection = { id, effort: 'medium', fastMode: false };
+    if (failure === 'disabled') host.enabled = false;
+    if (failure === 'disconnected') host.connected = false;
+    if (failure === 'harness') host.agents = [];
+    if (failure === 'account') selection.id = JSON.stringify(['codex', 'other-account', 'luna']);
+    if (failure === 'effort') selection.effort = 'ultra';
+    if (failure === 'fast') {
+      const providers = await host.providers(); providers[0].models.codex[0].supportsFastMode = false;
+      host.providers.mockResolvedValue(providers); selection.fastMode = true;
+    }
+    await expect(resolveTaskModelSelection(selection)).rejects.toThrow();
   });
   it('waits for the real owner-fenced mirror instead of mutating the cache itself', async () => {
     const dispatch = vi.fn(selection => mirror(selection.route, selection.requestId));
@@ -154,4 +196,31 @@ describe('Bot control of the real Cindy default', () => {
     await expect(changeAppDefaultModel(id, 'ultra')).rejects.toThrow('不可用');
     expect(dispatch).not.toHaveBeenCalled();
   });
+});
+
+// A shared account is independent of the recipient's installed harnesses and local credentials.
+it('validates remote task routes without reading or falling back to local providers', async () => {
+  host.agents = [];
+  host.providers.mockClear();
+  const shared = { ...route, agentDeviceId: 'share:one' };
+  host.remote.mockResolvedValue({ provider: { id: 'openai' }, model: { efforts: ['medium'], supportsFastMode: false } });
+  expect(await validateTaskModel(shared)).toBe(true);
+  expect(await validateTaskModel({ ...shared, effort: 'ultra' })).toBe(false);
+  host.remote.mockRejectedValue(new Error('revoked'));
+  expect(await resolveAvailableTaskModels([shared])).toEqual([null]);
+  expect(await validateTaskModel(shared)).toBe(false);
+  expect(host.providers).not.toHaveBeenCalled();
+});
+
+it('rejects an owner change even when the remote default lookup fails', async () => {
+  host.remote.mockImplementation(async () => {
+    host.owner = 'owner:2';
+    throw new Error('disconnected');
+  });
+  await expect(resolveAvailableTaskModels([{ ...route, agentDeviceId: 'share:one' }])).rejects.toThrow('账号已变化');
+});
+
+it('keeps available alternatives when a remote default is offline', async () => {
+  host.remote.mockRejectedValue(new Error('offline'));
+  expect(await resolveAvailableTaskModels([{ ...route, agentDeviceId: 'share:one' }, route])).toEqual([null, route]);
 });

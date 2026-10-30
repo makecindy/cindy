@@ -38,7 +38,9 @@ export type GhostCardEntry =
 
 export interface GhostLiveCard {
   callId: string;
+  sessionId?: string | null;
   ghostId: string;
+  logicalGhostId?: string;
   /** agent 侧 tool_use id(claude 路径推送里带;codex 为 null → 启发式锚定)。 */
   toolUseId: string | null;
   receivedAt: number;
@@ -78,7 +80,9 @@ function sweepLive(now: number): void {
 /** 推送入口(preload onCardUpdated 消费;导出供单测直喂)。 */
 export function ingestCardPush(payload: {
   callId: string;
+  sessionId?: string | null;
   ghostId: string;
+  logicalGhostId?: string;
   toolUseId: string | null;
   html: string;
   animatedHtml?: string | null;
@@ -114,12 +118,19 @@ export function ingestCardPush(payload: {
   if (existing >= 0) {
     // 换海报:锚定信息不变,只刷新鲜度。
     liveCards = liveCards.map((c, i) =>
-      i === existing ? { ...c, receivedAt: now } : c,
+      i === existing ? { ...c, ...(payload.sessionId !== undefined ? { sessionId: payload.sessionId } : {}), receivedAt: now } : c,
     );
   } else {
     liveCards = [
       ...liveCards,
-      { callId: payload.callId, ghostId: payload.ghostId, toolUseId: payload.toolUseId, receivedAt: now },
+      {
+        callId: payload.callId,
+        sessionId: payload.sessionId,
+        ghostId: payload.ghostId,
+        ...(payload.logicalGhostId !== undefined ? { logicalGhostId: payload.logicalGhostId } : {}),
+        toolUseId: payload.toolUseId,
+        receivedAt: now,
+      },
     ];
   }
   bump();

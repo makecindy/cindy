@@ -1,3 +1,5 @@
+import type { AgentRequestReceipt } from './forwardedRequest.js';
+import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
  *
@@ -9,8 +11,15 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import type { SharedTaskAuthor } from '@cindy/maker-shared';
+import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
 import { UI_ACTION_TRIGGER_PREFIX } from '@cindy/maker-shared/synthetic-trigger';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
+import {
+  formatAnnotationRegion,
+  sanitizeAnnotationRegions,
+  type AnnotationRegion,
+} from '@cindy/maker-shared/image-annotation';
 import {
   describeAgentInputReference,
   projectAgentFacingText,
@@ -69,6 +78,13 @@ export interface AgentInputSerializedFile {
    * 在附件 block 后注入一句固定说明,告诉模型红色笔迹是用户标注、非原图内容。
    */
   annotated?: boolean;
+  /**
+   * 可选(向后兼容):标注区域,归一化坐标外接框(0..1,原点左上)。新控制端烧录时
+   * 由笔迹归纳;buildMakerUserMessage 经 sanitizeAnnotationRegions 校验后在标注
+   * 说明末尾补一句"每张图圈在哪"。旧主机忽略该字段;缺省 / 非法时新主机退回
+   * 原固定说明(字节不变)。
+   */
+  annotationRegions?: AnnotationRegion[];
 }
 
 export interface AgentInputMention {
@@ -151,7 +167,7 @@ export interface AgentInputCreateOpts {
   providerId?: string | null;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   /** 计划模式一级开关(与 permissionMode 正交), lazy-create / rehydrate 时透传给 maker。 */
   planMode?: boolean;
@@ -189,6 +205,63 @@ export interface AutoResumeInfo {
   maxAttempts: number;
   /** 本会话累计自动重连次数（不设上限，纯展示）。 */
   sessionTotal: number;
+  /**
+   * 供应商组自动换电脑后的续跑(reason 仍为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON，记账与额度重置
+   * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
+   */
+  agentSwitch?: AutoResumeAgentSwitch;
+  /**
+   * 供应商组里任务所在的那台连不上，等它恢复后留在原电脑继续(reason 同样为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON)：
+   * 活动行显示「{computer} 已重新连上，继续运行」，读不到名称时不写电脑名。旧端忽略该字段，显示成「用量已恢复，
+   * 已自动继续」(与 agentSwitch 相同)。
+   */
+  agentReconnect?: AutoResumeAgentReconnect;
+  /**
+   * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
+   * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
+   */
+  groupSwitch?: AutoResumeGroupSwitch;
+  /**
+   * 只出现在投影的进行中行：供应商组正在为这次失败换电脑，错误先不呈现，行内显示「正在换一台电脑继续」
+   * (provider-groups.md §6.1)。此时 attempt / maxAttempts / sessionTotal 都是 0(不是重连，不显示次数)；
+   * 旧端忽略该字段，显示成「重新连接中」。
+   */
+  groupSwitchPending?: AutoResumeGroupSwitch;
+}
+
+export interface AutoResumeGroupSwitch {
+  cause: AutoResumeAgentSwitchCause;
+}
+
+/**
+ * 换电脑的原因(docs/product-rules/provider-groups.md §6.1)。`failed` = 那台出了别的问题(Agent 意外退出、服务报错
+ * 用尽重试等)。旧端不认识的原因整条忽略，活动行退回「用量已恢复，已自动继续」。
+ */
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload' | 'failed';
+
+export interface AutoResumeAgentSwitch {
+  /** 原电脑的显示名。 */
+  from: string;
+  /** 换到的电脑的显示名。 */
+  to: string;
+  cause: AutoResumeAgentSwitchCause;
+}
+
+export interface AutoResumeAgentReconnect {
+  /** 重新连上的那台电脑的显示名；读不到时为空。 */
+  computer: string;
+}
+
+/** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
+export const USAGE_LIMIT_RESET_AUTO_RESUME_REASON = 'usage-limit-reset';
+
+/**
+ * 普通任务撞上账号 5 小时 / 周限额后的等待计划：错误照常呈现，用户可随时自己处理；
+ * 到 `resumeAt` 仍无人处理时被控端自动继续该任务。仅在本次运行内有效（不落盘）。
+ */
+export interface AgentInputUsageLimitWait {
+  /** 预计自动继续的时刻（unix ms，已含重置后的缓冲）。 */
+  resumeAt: number;
 }
 
 /**
@@ -218,12 +291,24 @@ export interface RecoveryCheckpoint {
   }>;
 }
 
+/** Same-process model source prefix; cannot be supplied by JSON or survive queue persistence. */
+export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
+
 export interface AgentInputQueuedMessage {
+  /** Rejection marker only. The positive authorization is a Main-only, non-persisted guard. */
+  taskActionRequiresAuthorization?: true;
+  /** Main-owned delegation receipt; stripped from renderer/device-link input. */
+  botTaskCoordination?: BotTaskCoordination;
+  [HOST_ONLY_AGENT_PREFIX]?: string;
+  /** Host-stamped attribution, retained in durable queue snapshots and messages. */
+  sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
-  autoReviewUserText?: string;
+  autoReviewUserText?: string | AgentRequestReceipt;
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
+  /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
+  durableDelivery?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
@@ -260,6 +345,8 @@ export interface AgentInputQueuedMessage {
         kind: 'orca';
         senderLabel: string;
         displayText?: string;
+        /** 发出本条的 Lead / Worker 会话；接收方据此渲染可点击的来源标签。老快照没有。 */
+        senderSessionId?: string;
       }
     | {
         /**
@@ -275,11 +362,22 @@ export interface AgentInputQueuedMessage {
         runId?: string;
       }
     | {
-        /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
+        /**
+         * 另一个会话经工具（send_to_session / steer_session / 伙伴委派等）发来的消息。
+         * 既用于本人排队消息控制授权，也落库到 agentMeta.origin 供接收方渲染来源标签。
+         */
         kind: 'session';
         senderSessionId: string;
         /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
         displayText: string;
+        /**
+         * 发送时来源会话的标题快照；接收方渲染「由任务「X」发送」标签。来源会话
+         * 之后改名 / 删除时 renderer 优先用实时标题，拿不到再回退这里。老快照没有。
+         */
+        senderSessionTitle?: string;
+        /** 来源会话属于某个伙伴时的伙伴身份快照；接收方标签改显示伙伴名与头像。 */
+        senderBotId?: string;
+        senderBotName?: string;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。
@@ -294,8 +392,32 @@ export interface AgentInputQueuedMessage {
    * 见 device-link/invoke-context 的可信度说明。
    */
   fromMobileClient?: boolean;
+  /** Main-stamped interface language for this turn. Wire text is not trusted as prompt text. */
+  uiLanguage?: string;
   /** Main-owned provenance: this queue item entered through device-link input IPC. */
   fromDeviceLinkClient?: boolean;
+  /**
+   * 远程操作本机的同账号控制端(手机 / 另一台电脑)。被控端在 input:enqueue /
+   * input:steer 的 IPC 边界按 device-link invoke context 盖章:设备 id 来自 relay
+   * 填写的 `env.src`,平台来自 presence(未知平台不盖章),名字是被控端当时可见的
+   * 展示名快照。共享任务访客、本机输入都不盖章。
+   *
+   * **只由被控端写入,wire 传来的值在 IPC 边界一律剥掉**。落库到
+   * `agentMeta.sourceDevice` 驱动界面设备标签,并在派发时生成发给模型的
+   * `[客户端说明]`。只用于归属展示,**不是**任何信任 / 权限判据。
+   */
+  sourceDevice?: MessageSourceDevice;
+  /**
+   * 插件任务派发的消息(`plugin-task:` 入口由主机盖章)。落库到
+   * `agentMeta.sourcePlugin` 驱动「由插件「X」发送」标签,派发时生成
+   * `[消息来源]` 说明。只用于归属展示,不是权限判据;wire 值在 IPC 边界剥掉。
+   */
+  sourcePlugin?: MessageSourcePlugin;
+  /**
+   * Host-owned:`text` 上的 `[UI_ACTION_TRIGGER]` 前缀只为让排队行与落库行保持隐藏
+   * (主机构造的任务回执等内部消息),发给模型时去掉前缀。wire 值在 IPC 边界剥掉。
+   */
+  agentOmitsTriggerPrefix?: true;
   /**
    * 一次性跳过意识拦截钩(订阅槽①)。**预留字段,v1 无调用点置位**:当前
    * 没有"强制发送"UI,被拦消息只能编辑后重发且重发仍会再审;未来落地
@@ -320,6 +442,7 @@ export interface AgentInputQueuedMessage {
   /**
    * 本次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。随 `autoResume`
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
+   * 首次派发前的组限额恢复只带 info、不设 autoResume：保留原用户气泡与用户轮记账，另显示恢复活动。
    */
   autoResumeInfo?: AutoResumeInfo;
   /** Bounded, durable handoff state shared by manual and automatic recovery. */
@@ -350,6 +473,15 @@ export type AgentInputRecovery =
   | null;
 
 /**
+ * 非真人输入的来源：自动化调度、目标守护、Orca 协同、其他任务经工具投递。
+ * 它们推进同一会话，但不代表用户本人介入——不能给中断续跑的 episode 额度充值。
+ * 队列条目（`origin.kind`）与落库行（`agentMeta.origin.kind`）共用这一个判据。
+ */
+export function isAutomaticInputOriginKind(kind: unknown): boolean {
+  return kind === 'scheduler' || kind === 'goal' || kind === 'orca' || kind === 'session';
+}
+
+/**
  * Normalize the persisted/device-link clear token used by optimistic input
  * preconditions. `null` is a known "never cleared" boundary; `undefined`
  * means the payload did not contain a usable token.
@@ -366,6 +498,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
+  turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
@@ -403,6 +537,9 @@ export interface AgentInputProjection {
    * resending this string through the normal composer path.
    */
   errorRetryText: string | null;
+  /** Host confirms this error belongs to a persisted scheduled input whose recovery ended.
+   * Missing on older hosts means unavailable; never infer it from conversation history. */
+  errorCanContinue?: boolean;
   /**
    * 凭证切换等待态:发送需要重启共享 codex 进程,但被列出的会话(其它本地 Codex
    * 任务)挡住。等待中的那条消息保留在队首,挡路任务结束后 main 自动重发;renderer
@@ -421,6 +558,11 @@ export interface AgentInputProjection {
    * 老被控端可能缺省该字段,消费方按 falsy 处理即可(退化成"没有自愈提示")。
    */
   autoResumePending?: AutoResumeInfo;
+  /**
+   * 账号限额等待中(与 `error` 同时存在:错误照常显示,横幅附「将于 X 自动继续 · 取消」)。
+   * 老被控端缺省该字段,消费方按 null 处理(退化成只有错误、没有自动继续)。
+   */
+  usageLimitWait?: AgentInputUsageLimitWait | null;
 }
 
 export type AgentInputMakerMessage =
@@ -438,14 +580,16 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
- * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
- * 不能把崩溃前的 working/idle 当成当前事实。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文、瞬时 Bot 状态或尚未落库的
+ * 原用户消息自动继续标记。它们只在当前进程内存中存活；恢复后正文保留
+ * fail-closed 标记，Bot 状态必须重新查询，手动恢复不能冒充自动继续。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
 ): AgentInputQueuedMessage {
-  let changed = false;
+  const transientUsageResume = !item.autoResume
+    && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON;
+  let changed = transientUsageResume;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
   let chatMessage = item.chatMessage;
@@ -512,7 +656,7 @@ export function sanitizeQueuedMessageForPersistence(
     // Historical plain-text queue payloads have no embedded reference bodies.
   }
 
-  if (!changed && !item.trustedSessionReferenceContexts) return item;
+  if (!changed && !item.trustedSessionReferenceContexts && item[HOST_ONLY_AGENT_PREFIX] === undefined) return item;
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
@@ -522,6 +666,8 @@ export function sanitizeQueuedMessageForPersistence(
       ? { sessionReferencesRequireTrustedSnapshot: true }
       : {}),
   };
+  delete sanitized[HOST_ONLY_AGENT_PREFIX];
+  if (transientUsageResume) delete sanitized.autoResumeInfo;
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -548,8 +694,9 @@ export function updateQueuedMessageText(
   newText: string,
   sessionRefs: AgentInputSessionRef[] = reconcileSessionRefsForText(newText, entry.sessionRefs),
 ): AgentInputQueuedMessage {
-  // A plugin rewrite must not turn a hidden host welcome into an editable user draft.
-  if (entry.toolsDisabled === true && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+  // A plugin rewrite must not turn a hidden host message into an editable user draft.
+  if ((entry.toolsDisabled === true || entry.agentOmitsTriggerPrefix === true)
+    && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
     && !newText.startsWith(UI_ACTION_TRIGGER_PREFIX)) {
     newText = `${UI_ACTION_TRIGGER_PREFIX}${newText}`;
   }
@@ -732,6 +879,23 @@ export function reconcileSessionRefsForText(
 export const ANNOTATED_IMAGE_NOTE =
   'Note: the red freehand marks on the attached image(s) are annotations drawn by the user ' +
   'to highlight the region(s) they are referring to; they are not part of the original image.';
+
+/**
+ * 标注区域说明的前缀(接在 ANNOTATED_IMAGE_NOTE 之后另起一行)。只有至少一张
+ * 标注图带合法 `annotationRegions` 时才出现;图片按本条消息内 image block 的
+ * 顺序从 1 编号,帮助模型在多张图 / 多处标注时对上用户所指。
+ */
+export const ANNOTATED_IMAGE_REGIONS_PREFIX =
+  'Marked regions (normalized image coordinates, origin top-left; ' +
+  'images numbered in their order within this message): ';
+
+/** 一张标注图的区域描述,如 `image 2: x 0.31–0.46, y 0.12–0.20; x 0.70–0.90, y 0.55–0.61`。 */
+function describeAnnotatedImageRegions(
+  imageNumber: number,
+  regions: readonly AnnotationRegion[],
+): string {
+  return `image ${imageNumber}: ${regions.map(formatAnnotationRegion).join('; ')}`;
+}
 
 /** Stable serialization shared by the resolver's final budget check and agent injection. */
 export function serializeSessionReferencePayload(
@@ -1000,7 +1164,14 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const agentFacingText = getAgentFacingText(queued);
+  const facingText = getAgentFacingText(queued);
+  // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
+  const authoredText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
+    ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
+    : facingText;
+  // Combine the host source with the latest body, including any Ghost rewrite.
+  const agentFacingText = (queued.botTaskCoordination ? coordinationModelPrefix(queued.botTaskCoordination) : '')
+    + (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }
@@ -1008,6 +1179,9 @@ export function buildMakerUserMessage(
     blocks.push({ type: 'mention', name: m.name, path: m.path, kind: m.type });
   }
   let hasAnnotatedImage = false;
+  // 本条消息内 image block 的序号(从 1 起),与模型看到的图片顺序一致。
+  let imageBlockCount = 0;
+  const regionDescriptions: string[] = [];
   for (const f of queued.files ?? []) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
@@ -1022,12 +1196,25 @@ export function buildMakerUserMessage(
     } else {
       continue;
     }
-    if (type === 'image' && f.annotated) hasAnnotatedImage = true;
+    if (type !== 'image') continue;
+    imageBlockCount += 1;
+    if (!f.annotated) continue;
+    hasAnnotatedImage = true;
+    // wire 数据不可信(device-link / 持久化队列):只用校验后的区域。
+    const regions = sanitizeAnnotationRegions(f.annotationRegions);
+    if (regions) regionDescriptions.push(describeAnnotatedImageRegions(imageBlockCount, regions));
   }
   // 标注说明放在全部附件 block 之后、每条消息至多一条:codex 侧 inputs 保序,
   // 文本紧随图片;claude 侧所有 text 会合并进文本前缀,红色笔迹自身即区分符。
+  // 没有任何区域数据(旧控制端 / mobile)时说明与旧版逐字节相同。
   if (hasAnnotatedImage) {
-    blocks.push({ type: 'text', text: ANNOTATED_IMAGE_NOTE });
+    blocks.push({
+      type: 'text',
+      text:
+        regionDescriptions.length > 0
+          ? `${ANNOTATED_IMAGE_NOTE}\n${ANNOTATED_IMAGE_REGIONS_PREFIX}${regionDescriptions.join('; ')}.`
+          : ANNOTATED_IMAGE_NOTE,
+    });
   }
   if (sessionReferenceContexts.length > 0) {
     const payload = serializeSessionReferencePayload(sessionReferenceContexts);

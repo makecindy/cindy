@@ -33,6 +33,7 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     // fork:载入完整消息前缀 + SDK fork + 事务批量拷贝,大会话 15-30s;非幂等,
     // 误超时后桌面仍会建出新会话,重试会分叉重复副本。
     expect(resolveMobileInvokeTimeoutMs('maker:fork')).toBe(30_000);
+    expect(resolveMobileInvokeTimeoutMs('maker:fork-strip-encrypted')).toBe(30_000);
     // rewind:commit:DB 读 + 线程回滚 + Git 回退 + SQLite 事务,非幂等——误超时
     // 后对话与文件已被回退,重试会作用在已变更的历史上。
     expect(resolveMobileInvokeTimeoutMs('maker:rewind:commit')).toBe(30_000);
@@ -57,6 +58,17 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     // 破坏性操作,误超时后删除已生效、mobile 却报失败。
     expect(resolveMobileInvokeTimeoutMs('maker:message:delete')).toBe(30_000);
     expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['device-link:media:fetch']).toBe(30_000);
+    // Orca 生命周期:主机会逐个启动 / 关闭 Worker(SSH / Agent 启停可能很慢),与开启协同同一预算。
+    for (const channel of [
+      'maker:session:enable-orca',
+      'maker:session:disable-orca',
+      'maker:worker:create',
+      'maker:worker:archive',
+      'maker:worker:acknowledge-done',
+      'maker:worker:switch-focus',
+    ]) {
+      expect(resolveMobileInvokeTimeoutMs(channel)).toBe(65_000);
+    }
   });
 
   it('maker:schedule:* 前缀整类放宽:桌面 handler 会等 scheduler 就绪(30s 上限)', () => {

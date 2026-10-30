@@ -4,16 +4,20 @@ interface ShareableMessageLike {
   kind: string;
   systemCardType?: unknown;
   orcaCard?: unknown;
-  hookSource?: unknown;
+  hookSource?: { userTextContent?: boolean };
   isSyntheticTrigger?: boolean;
 }
 
+/**
+ * 旧 Hook 行落库的是拼好的 Agent prompt，不进分享；本机 IM 行落库的是用户原文，
+ * 与普通用户消息一样可分享（分享图不带任何来源标签）。
+ */
 export function isShareableMessage(message: ShareableMessageLike): boolean {
   return (
     (message.kind === "user" || message.kind === "assistant") &&
     !message.systemCardType &&
     !message.orcaCard &&
-    !message.hookSource &&
+    (!message.hookSource || message.hookSource.userTextContent === true) &&
     message.isSyntheticTrigger !== true
   );
 }
@@ -63,6 +67,21 @@ export const shareSelectionStore = {
     activeSessionId = null;
     selectedIds.clear();
     notify();
+  },
+  /** Hand off to the system sheet now; restore only if opening it fails. */
+  exitForShare(): () => boolean {
+    const sessionId = activeSessionId;
+    const selection = Array.from(selectedIds);
+    shareSelectionStore.exit();
+    const exitedRevision = revision;
+    return () => {
+      // A newer selection (even one subsequently cancelled) owns the UI now.
+      if (!sessionId || revision !== exitedRevision) return false;
+      activeSessionId = sessionId;
+      for (const id of selection) selectedIds.add(id);
+      notify();
+      return true;
+    };
   },
   toggle(clientId: string): void {
     if (!clientId) return;

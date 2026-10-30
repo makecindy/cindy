@@ -6,6 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
+import { stopWheelPropagation } from '@/lib/stopWheelPropagation';
 
 import { ProviderMark } from './ModelSelector';
 import { computeFlyoutPlacement, UNIFIED_FLYOUT_GAP } from './unifiedModelSelection';
@@ -187,10 +188,14 @@ export function UnifiedFlyoutHost({
             ref={flyoutRef}
             role="dialog"
             data-testid="unified-model-config-flyout"
+            // 浮层 portal 在 body,模态对话框里滚轮会被 react-remove-scroll 拦掉,
+            // 里面的账号列表(max-h-72 overflow-y-auto)就滚不动;放行原生滚动。
+            onWheel={stopWheelPropagation}
             className={cn(
               // 设计稿 .flyout:padding 14px 14px 12px。
-              'w-full rounded-[16px] border p-3.5 pb-3 shadow-[var(--shadow-menu)]',
-              'border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
+              // 12px 容器档 + 登记浮层阴影 + 共享菜单面板材质(DESIGN §4 / §5 / §15.12)。
+              'w-full rounded-xl border p-3.5 pb-3 shadow-[shadow:var(--shadow-menu)]',
+              'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
               'transition-[top] duration-150 ease-out motion-reduce:transition-none',
               className,
             )}

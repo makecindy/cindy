@@ -12,6 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { app, BrowserWindow, webContents } from 'electron';
+import { parseGoalCommand } from '@cindy/maker-shared/goal-command';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createLogger } from '../logger.js';
@@ -48,6 +49,7 @@ export interface DesktopCommandTriggeredPayload {
     | 'cmd'
     | 'issue'
     | 'review'
+    | 'side'
     | 'jump-session'
     | 'goal'
     | 'workflows'
@@ -334,8 +336,6 @@ export async function runShellCommand(opts: RunCmdOptions): Promise<CmdExecution
  * 在 bootstrap 阶段调一次, 把所有内置 desktop command 灌进 registry。
  * 重复调会因为 registry.register 的去重保护抛错(开发期暴露问题)。
  */
-/** /goal clear 的别名(对齐 Claude Code /goal clear|stop|off|...)。 */
-const GOAL_CLEAR_ALIASES = new Set(['clear', 'stop', 'off', 'cancel', 'reset', 'none']);
 
 export interface BuiltinDesktopCommandDeps {
   /** null-safe 取 GoalController 单例(注册早于 startGoalController,invoke 时已就绪)。 */
@@ -344,6 +344,7 @@ export interface BuiltinDesktopCommandDeps {
   getLearnController: () => LearnController | null;
   /** Learn Skill 的设备/profile 开关；SSH 兼容入口与 Skill 使用同一开关。 */
   isLearnEnabled: () => boolean;
+  isLearnEnabledForListing?: () => boolean;
   /**
    * device-link 隧道 invoke(控制端 → 被控端)。ctx.deviceId 存在(远程会话)时,
    * /goal /learn /cmd 的业务体经它路由到被控端执行 —— 与 renderer 的
@@ -385,6 +386,7 @@ export function registerBuiltinDesktopCommands(
     registry.register(
       createMakeDoctorCommand({
         name,
+        isVisible: () => false,
         description: () =>
           t(name === 'cindy-make' ? 'cindyMake.description' : 'cindyMakeDoctor.description'),
         environment: (ctx) =>
@@ -516,6 +518,12 @@ export function registerBuiltinDesktopCommands(
     description:
       'Clears the current session context in place — wipes its messages and state without creating or switching to a new session. The session stays in the sidebar.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
+  });
+
+  registry.register({
+    name: 'side',
+    get description() { return t('chat.sideChat.commandDescription'); },
+    execute: (ctx) => sendDesktopCommandToSender(ctx, buildPayload('side', ctx)),
   });
 
   registry.register({
@@ -657,9 +665,9 @@ export function registerBuiltinDesktopCommands(
         broadcastDesktopCommand({ ...buildPayload('goal', ctx), error: 'goal-failed' });
         return;
       }
-      const lower = arg.toLowerCase();
+      const command = parseGoalCommand(arg);
       // /goal clear|stop|off|... → 清除目标。
-      if (arg && GOAL_CLEAR_ALIASES.has(lower)) {
+      if (command.action === 'clear') {
         try {
           if (remoteGoal) await remoteGoal.clearGoal(sessionId);
           else await controller!.clearGoal(sessionId);
@@ -674,7 +682,7 @@ export function registerBuiltinDesktopCommands(
         return;
       }
       // /goal(无参)→ 等同点击「新建目标」:让 renderer 打开新建目标弹窗(此处已确保有 session)。
-      if (!arg) {
+      if (command.action === 'open-dialog') {
         broadcastDesktopCommand({ ...buildPayload('goal', ctx), goalAction: 'open-dialog' });
         return;
       }
@@ -703,6 +711,8 @@ export function registerBuiltinDesktopCommands(
     // preference. Keep the compatibility route and let remote learn:start
     // enforce the controlled host's effective setting.
     isVisible: (ctx) => Boolean(ctx?.deviceId) || deps.isLearnEnabled(),
+    isVisibleForListing: (ctx) => Boolean(ctx?.deviceId)
+      || (deps.isLearnEnabledForListing ?? deps.isLearnEnabled)(),
     execute: async (ctx) => {
       const arg = (ctx.args ?? '').trim();
       if (!arg && !ctx.sessionId) {

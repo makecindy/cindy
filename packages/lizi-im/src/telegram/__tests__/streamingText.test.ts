@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { TELEGRAM_PROGRESS_FRAME_MAX_CHARS } from '../progressFrame.js';
 import {
+  startTelegramProgressCarrier,
   startTelegramStreaming,
+  TELEGRAM_UPDATE_THROTTLE_MS,
   TelegramFinalUnconfirmedError,
   type TelegramStreamingDeps,
 } from '../streamingText.js';
@@ -83,6 +86,35 @@ function makeHarness(
 }
 
 describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
+  it.each(['', ' \n\t '])('空终稿 %j 不发送消息，并撤掉已有过程消息', async (text) => {
+    const h = makeHarness();
+    const handle = await startTelegramStreaming(h.deps, '工作中');
+    await handle.finalize(text);
+    await handle.finalize(text);
+    expect(h.calls).toEqual(['send:工作中', 'delete:msg-1']);
+  });
+
+  it('未建过程消息的空终稿没有任何出站动作', async () => {
+    const h = makeHarness();
+    const handle = await startTelegramStreaming(h.deps);
+    await handle.finalize('');
+    expect(h.calls).toEqual([]);
+  });
+
+  it('没有文字但有图片的终稿仍发送附件', async () => {
+    const uploadImages = vi.fn(async () => undefined);
+    const h = makeHarness();
+    const handle = await startTelegramStreaming({ ...h.deps, uploadImages });
+    handle.addExtraImageAbsPath!('/tmp/telegram-test-image.png');
+    await handle.finalize('');
+    expect(uploadImages).toHaveBeenCalledWith(
+      expect.any(String),
+      ['abs:/tmp/telegram-test-image.png'],
+      expect.objectContaining({ startIndex: 0 }),
+    );
+    expect(h.reposted.join('')).not.toContain('空回复');
+  });
+
   it('过程消息存在时终稿始终新发，随后才删除旧消息', async () => {
     const h = makeHarness();
     const handle = await startTelegramStreaming(h.deps, '⚙️ 工作中 · 3s');
@@ -578,5 +610,64 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
     expect(h.deleted).toEqual([]);
     expect(h.calls).toEqual([]);
     expect(handle.messageId).toBe('');
+  });
+});
+
+describe('startTelegramProgressCarrier(官方 bot 只驱动过程载体)', () => {
+  it('与个人 handle 同一生命周期: 惰性首帧 send、尾沿节流后 edit, flush 跳过节流, close 后静默', async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const carrier = startTelegramProgressCarrier({
+        send: async (markdown) => {
+          calls.push(`send:${markdown}`);
+          return 'p-1';
+        },
+        edit: async (messageId, markdown) => {
+          calls.push(`edit:${messageId}:${markdown}`);
+        },
+      });
+      carrier.replace('   ');
+      carrier.replace('NO_');
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS);
+      expect(calls).toEqual([]);
+
+      carrier.replace('第一帧');
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS);
+      expect(calls).toEqual(['send:第一帧']);
+      expect(carrier.messageId).toBe('p-1');
+
+      carrier.replace('第二帧');
+      await carrier.flush();
+      expect(calls).toEqual(['send:第一帧', 'edit:p-1:第二帧']);
+
+      carrier.close();
+      carrier.replace('迟到');
+      await carrier.flush();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_UPDATE_THROTTLE_MS * 2);
+      expect(calls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超过单帧上限后停止编辑(与个人 driver 同一常量)', async () => {
+    vi.useFakeTimers();
+    try {
+      const edits: string[] = [];
+      const carrier = startTelegramProgressCarrier({
+        send: async () => 'p-1',
+        edit: async (_id, markdown) => {
+          edits.push(markdown);
+        },
+      });
+      carrier.replace('a');
+      await carrier.flush();
+      carrier.replace('x'.repeat(TELEGRAM_PROGRESS_FRAME_MAX_CHARS + 1));
+      await carrier.flush();
+      expect(edits).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

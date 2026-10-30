@@ -106,6 +106,38 @@ function runtimeCatalog(): Catalog {
 }
 
 describe("resolveCatalogUrl", () => {
+  it("opts explicit catalog endpoints into media without changing unrelated query parameters", () => {
+    const resolved = new URL(
+      resolveCatalogUrl({
+        url: "https://example.com/api/model-catalog/catalog?region=cn&registryMedia=0&registrySchemaVersion=4",
+      })!,
+    );
+    expect(Object.fromEntries(resolved.searchParams)).toEqual({
+      region: "cn",
+      registryMedia: "1",
+      registryLocalRuntimes: "1",
+      registrySchemaVersion: "6",
+    });
+  });
+
+  it("scopes LKG reads and writes to the media-capable URL", async () => {
+    const cfg = { baseUrl: "https://model-access.example.com" };
+    const readCache = vi.fn().mockResolvedValue(null);
+    const writeCache = vi.fn();
+    await loadCatalog(cfg, {
+      fetchText: vi.fn().mockResolvedValue(JSON.stringify({ ...MINIMAL, modelRegistry: BUNDLED_CATALOG.modelRegistry })),
+      readCache,
+      writeCache,
+    });
+    expect(readCache).toHaveBeenCalledWith(resolveCatalogUrl(cfg));
+    expect(writeCache).toHaveBeenCalledWith(
+      resolveCatalogUrl(cfg),
+      expect.any(String),
+    );
+    expect(readCache).not.toHaveBeenCalledWith(
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6",
+    );
+  });
   it("prefers explicit url", () => {
     expect(
       resolveCatalogUrl({ url: "https://x/y.json", baseUrl: "https://b" }),
@@ -115,7 +147,7 @@ describe("resolveCatalogUrl", () => {
     expect(
       resolveCatalogUrl({ baseUrl: "https://model-access.example.com/" }),
     ).toBe(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
     );
   });
   it("builds the migration OSS fallback URL", () => {
@@ -1042,7 +1074,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1102,7 +1134,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1160,7 +1192,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1189,7 +1221,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenCalledTimes(1);
     expect(fetchText).toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
       15_000,
     );
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
@@ -1313,7 +1345,7 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
       providersForAgent(views, "codex")
         .map((p) => p.id)
         .sort(),
-    ).toEqual(["anthropic", "openai", "xai", "xd"]);
+    ).toEqual(["openai", "xai", "xd"]);
   });
 
   it("connectedProvidersForAgent honors connection", () => {
@@ -1577,17 +1609,12 @@ describe("resolveRoute(运行时注入 fixture)", () => {
     expect(r?.routing.authStrategy).toBe("oauth-passthrough");
   });
 
-  it("anthropic claude (codex) → Anthropic Messages bridge + host-owned OAuth", () => {
-    const r = resolveRoute(views, "anthropic", "claude-opus-4-8", "codex");
-    expect(r?.routing).toMatchObject({
-      upstream: "https://api.anthropic.com",
-      wireProtocol: "anthropic-messages",
-      authStrategy: "provider-oauth-header",
-      headerOverride: {
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-      },
-    });
+  it("anthropic claude has no Codex / Pi route (subscription stays inside the Claude Code CLI)", () => {
+    expect(resolveRoute(views, "anthropic", "claude-opus-4-8", "codex")).toBeNull();
+    expect(resolveRoute(views, "anthropic", "claude-opus-4-8", "pi")).toBeNull();
+    expect(resolveRoute(views, "anthropic", "claude-opus-4-8", "claude-code")?.routing.upstream).toBe(
+      "https://api.anthropic.com",
+    );
   });
 
   it("xd claude (claude-code) → gateway, gateway-key, 不删 anthropic-beta(fast 经网关透传)", () => {
@@ -1713,4 +1740,36 @@ describe("server-delivered local models", () => {
       snapshot.modelRegistry.localModels,
     );
   });
+});
+
+// Tier: integration. Same loader instance/unchanged code accepts data-only updates;
+// schema negotiation uses one deadline and never blends two profile revisions.
+describe('V6 negotiation', () => {
+  it('retries a frozen unknown-version response as V5 once and caches the actual variant', async () => {
+    const old = { ...MINIMAL, modelRegistry: { schemaVersion: 5, updatedAt: '2099-01-01T00:00:00.000Z', models: [] } };
+    let clock = 0;
+    const fetchText = vi.fn(async (url: string) => { clock += 7; return JSON.stringify(url.includes('Version=6') ? MINIMAL : old); });
+    const writeCache = vi.fn(async () => {});
+    const result = await loadCatalogWithSource({ baseUrl: 'https://models.example', now: () => clock, remoteBudgetMs: 100 }, { fetchText, writeCache });
+    expect(fetchText).toHaveBeenCalledTimes(2);
+    expect(fetchText).toHaveBeenNthCalledWith(2, expect.stringContaining('registrySchemaVersion=5'), 93);
+    expect(result.catalog.modelRegistry?.schemaVersion).toBe(5);
+    expect(writeCache).toHaveBeenCalledWith(expect.stringContaining('registrySchemaVersion=5'), expect.any(String));
+  });
+});
+
+it('keeps the accepted complete V6 snapshot when an old server answers with its V5 projection', async () => {
+  const { projectRegistryV5 } = await import('../modelInterfaceContract.js');
+  const current = { ...MINIMAL, modelRegistry: structuredClone(BUNDLED_CATALOG.modelRegistry!) };
+  current.modelRegistry.updatedAt = '2099-01-01T00:00:00.000Z';
+  const legacy = { ...current, modelRegistry: projectRegistryV5(current.modelRegistry) };
+  const writeCache = vi.fn(async () => {});
+  const result = await loadCatalogWithSource({ baseUrl: 'https://models.example' }, {
+    fetchText: async () => JSON.stringify(legacy),
+    readCache: async url => url.includes('Version=6') ? JSON.stringify(current) : null,
+    writeCache,
+  });
+  expect(result.catalog.modelRegistry).toEqual(current.modelRegistry);
+  expect(result.capabilityEvidence).toBe('fallback');
+  expect(writeCache).toHaveBeenCalledWith(expect.stringContaining('Version=6'), expect.any(String));
 });

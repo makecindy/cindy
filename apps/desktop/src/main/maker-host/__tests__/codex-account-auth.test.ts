@@ -4,6 +4,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { shell } from 'electron';
+import { prepareCodexGlobalSkillsLinks } from '../codex-global-skills.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -36,6 +37,10 @@ vi.mock('../codex-global-rules.js', () => ({ prepareCodexGlobalRulesCopy: vi.fn(
 vi.mock('../codex-global-plugins.js', () => ({
   prepareCodexGlobalPluginsBridge: async () => ({ routingFailures: [] }),
 }));
+vi.mock('../../usageBroadcaster.js', () => ({
+  broadcastCodexAccountAuthStarted: vi.fn(),
+  broadcastCodexAccountAuthReady: vi.fn(),
+}));
 vi.mock('../codex-auth-state.js', () => ({
   terminateCodexLoginProcess: (child: EventEmitter) => child.emit('exit', 1),
 }));
@@ -66,8 +71,10 @@ import {
   loginCodexAccount,
   logoutCodexAccount,
   parseCodexAccountIdentity,
+  prepareCodexAccountHome,
   setCodexAccountRetirement,
 } from '../codex-account-auth';
+import { broadcastCodexAccountAuthReady, broadcastCodexAccountAuthStarted } from '../../usageBroadcaster.js';
 
 function credential(subject: string, account = 'workspace') {
   const claims = Buffer.from(
@@ -83,6 +90,8 @@ function credential(subject: string, account = 'workspace') {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(broadcastCodexAccountAuthStarted).mockReset();
+  vi.mocked(broadcastCodexAccountAuthReady).mockReset();
   state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-account-auth-'));
   state.owner = { dataOwnerId: 'owner-a', generation: 1 };
   state.raw = credential('person-a');
@@ -91,10 +100,67 @@ beforeEach(() => {
   setCodexAccountRetirement(async () => {});
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(state.root, { recursive: true, force: true });
 });
 
 describe('native Codex account credentials', () => {
+  it('keeps the original identity when its model cache cannot be removed', async () => {
+    await loginCodexAccount('account-a', () => true);
+    const home = codexAccountHome('account-a');
+    const files = ['auth.json', 'account.json', 'config.toml'];
+    const before = files.map(file => fs.readFileSync(path.join(home, file), 'utf8'));
+    const cache = path.join(home, 'models_cache.json');
+    fs.writeFileSync(cache, '{"models":[]}');
+    state.raw = credential('person-b');
+    const rm = fs.rmSync.bind(fs);
+    vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (target === cache) throw Object.assign(new Error('cache busy'), { code: 'EPERM' });
+      rm(target, options);
+    });
+    await expect(loginCodexAccount('account-a', () => true)).rejects.toThrow('cache busy');
+    expect(files.map(file => fs.readFileSync(path.join(home, file), 'utf8'))).toEqual(before);
+    expect(codexAccountState('account-a').identity).toBe('person-a@example.test');
+    expect(fs.readFileSync(cache, 'utf8')).toBe('{"models":[]}');
+  });
+  it('signals explicit auth replacement before retirement and readiness immediately after commit', async () => {
+    const result = await loginCodexAccount('account-a', () => true);
+    expect(result.ok).toBe(true);
+    expect(broadcastCodexAccountAuthStarted).toHaveBeenCalledExactlyOnceWith('account-a');
+    expect(broadcastCodexAccountAuthReady).toHaveBeenCalledExactlyOnceWith('account-a');
+    expect(codexAccountState('account-a').authenticated).toBe(true);
+  });
+
+  it('mounts private built-in and plugin skills in every independent account home', async () => {
+    const real = await vi.importActual<typeof import('../codex-global-skills.js')>('../codex-global-skills.js');
+    vi.mocked(prepareCodexGlobalSkillsLinks).mockImplementationOnce((home, options) =>
+      real.prepareCodexGlobalSkillsLinks(home, { ...options, homeDir: path.join(state.root, 'user-home') }),
+    ).mockImplementationOnce((home, options) =>
+      real.prepareCodexGlobalSkillsLinks(home, { ...options, homeDir: path.join(state.root, 'user-home') }),
+    );
+    const roots = [path.join(state.root, 'shared-system-skills', 'version'), path.join(state.root, 'owner-a', 'ghost-install-state', 'skill-snapshots', 'example', 'rev')];
+    for (const [index, root] of roots.entries()) {
+      const skill = path.join(root, 'skills', index === 0 ? 'learn' : 'example--demo');
+      fs.mkdirSync(skill, { recursive: true });
+      fs.writeFileSync(path.join(skill, 'SKILL.md'), `skill-${index}`);
+    }
+    const homes: string[] = [];
+    const managedSkills = roots.map((root, index) => ({
+      kind: 'agent-skill' as const, source: 'skill' as const, name: index === 0 ? 'learn' : 'demo',
+      path: path.join(root, 'skills', index === 0 ? 'learn' : 'example--demo', 'SKILL.md'),
+      claudeCommandName: index === 0 ? 'cindy:learn' : 'cindy-plugin-example:demo',
+    }));
+    for (const provider of ['account-a', 'account-b']) {
+      expect((await loginCodexAccount(provider, () => true)).ok).toBe(true);
+      const home = await prepareCodexAccountHome(provider, [state.root], managedSkills);
+      homes.push(home);
+      expect(fs.readFileSync(path.join(home, 'skills', real.codexManagedSkillLinkName('cindy:learn'), 'SKILL.md'), 'utf8')).toBe('skill-0');
+      expect(fs.readFileSync(path.join(home, 'skills', real.codexManagedSkillLinkName('cindy-plugin-example:demo'), 'SKILL.md'), 'utf8')).toBe('skill-1');
+    }
+    expect(homes[0]).not.toBe(homes[1]);
+    expect(fs.existsSync(path.join(state.root, 'user-home'))).toBe(false);
+  });
+
   it('leaves opening the authorization page to Codex even when both streams print its URL', async () => {
     const progress = vi.fn();
     expect((await loginCodexAccount('account-a', () => true, progress)).ok).toBe(true);
@@ -175,6 +241,8 @@ describe('native Codex account credentials', () => {
     await loginCodexAccount('account-a', () => true);
     await loginCodexAccount('account-b', () => true);
     await logoutCodexAccount('account-a');
+    const cache = path.join(codexAccountHome('account-a'), 'models_cache.json');
+    fs.writeFileSync(cache, '{"models":[{"slug":"gpt-6.1-sol","additional_speed_tiers":["ultrafast"]}]}');
     const retire = vi.fn(async () => {
       expect(codexAccountState('account-a').authenticated).toBe(false);
     });
@@ -184,7 +252,9 @@ describe('native Codex account credentials', () => {
       ok: true,
       firstLogin: false,
       previousIdentity: 'person-a@example.test',
+      identityChanged: subject !== 'person-a' || workspace !== 'workspace',
     });
+    expect(fs.existsSync(cache)).toBe(subject === 'person-a' && workspace === 'workspace');
     expect(retire).toHaveBeenCalledExactlyOnceWith('account-a');
     expect(codexAccountState('account-a').identity).toBe(`${subject}@example.test`);
     expect(codexAccountState('account-b').identity).toBe('person-a@example.test');
@@ -202,12 +272,18 @@ describe('native Codex account credentials', () => {
     await logoutCodexAccount('account-a');
     const home = codexAccountHome('account-a');
     const identity = fs.readFileSync(path.join(home, 'account.json'), 'utf8');
+    const cache = path.join(home, 'models_cache.json');
+    const cachedModels = '{"models":[{"slug":"gpt-6.1-sol","additional_speed_tiers":["ultrafast"]}]}';
+    fs.writeFileSync(cache, cachedModels);
     state.raw = credential('person-b');
     const result = await loginCodexAccount('account-a', () => true);
     expect(result.ok).toBe(true);
+    expect(result.identityChanged).toBe(true);
+    expect(fs.existsSync(cache)).toBe(false);
     expect(result.rollbackCredentials?.()).toBe(true);
     expect(codexAccountState('account-a').authenticated).toBe(false);
     expect(fs.readFileSync(path.join(home, 'account.json'), 'utf8')).toBe(identity);
+    expect(fs.readFileSync(cache, 'utf8')).toBe(cachedModels);
     expect(fs.existsSync(path.join(home, 'auth.json'))).toBe(false);
   });
   it('does not commit a replacement cancelled while retiring the old runtime', async () => {
@@ -222,11 +298,32 @@ describe('native Codex account credentials', () => {
     });
     expect(codexAccountState('account-a').authenticated).toBe(false);
     expect(fs.existsSync(path.join(codexAccountHome('account-a'), 'auth.json'))).toBe(false);
+    expect(broadcastCodexAccountAuthStarted).toHaveBeenLastCalledWith('account-a');
+    expect(broadcastCodexAccountAuthReady).toHaveBeenLastCalledWith('account-a');
   });
   it('rolls back a committed login when its IPC owner cancels', async () => {
     const result = await loginCodexAccount('account-a', () => true);
     expect(result.rollbackCredentials?.()).toBe(true);
     expect(codexAccountState('account-a').authenticated).toBe(false);
+  });
+  it.each([false, true])('resynchronizes rollback quota reads only for the original owner (owner changed: %s)', async (ownerChanged) => {
+    await loginCodexAccount('account-a', () => true);
+    state.raw = credential('person-b');
+    const result = await loginCodexAccount('account-a', () => true);
+    const events: string[] = [];
+    vi.mocked(broadcastCodexAccountAuthStarted).mockImplementationOnce(() => {
+      events.push(`start:${codexAccountState('account-a').identity}`);
+    });
+    vi.mocked(broadcastCodexAccountAuthReady).mockImplementationOnce(() => {
+      events.push(`ready:${codexAccountState('account-a').identity}`);
+    });
+    if (ownerChanged) state.owner = { dataOwnerId: 'owner-b', generation: 2 };
+    expect(result.rollbackCredentials?.()).toBe(true);
+    expect(events).toEqual(ownerChanged ? [] : [
+      'start:person-a@example.test', 'ready:person-a@example.test',
+    ]);
+    state.owner = { dataOwnerId: 'owner-a', generation: 1 };
+    expect(codexAccountState('account-a').identity).toBe('person-a@example.test');
   });
   it('cancels a pending login without installing its credentials', async () => {
     state.hold = true;

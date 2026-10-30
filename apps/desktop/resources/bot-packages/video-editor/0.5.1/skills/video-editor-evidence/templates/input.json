@@ -1,0 +1,25 @@
+{
+  "fps": 30,
+  "sources": [
+    {
+      "id": "clip-a",
+      "duration": 20,
+      "rights": "CLEARED"
+    }
+  ],
+  "clips": [
+    {
+      "source": "clip-a",
+      "in": 1,
+      "out": 4,
+      "transcript": "这是合成转录，不是真实用户口播。"
+    },
+    {
+      "source": "clip-a",
+      "in": 8,
+      "out": 10,
+      "transcript": "第二段合成转录。"
+    }
+  ],
+  "maxDuration": 10
+}

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ConnectProviderCard — 零可用模型时新会话首屏的「连接供应商」引导卡。
  *
@@ -154,22 +155,28 @@ export function ConnectProviderCard({ className, dismissible = true }: {
 
       <div className={cn('mt-4 flex items-center', dismissible ? 'justify-between' : 'justify-end')}>
         {dismissible ? (
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            tone="quiet"
+            compact
             type="button"
             onClick={onboarding.dismiss}
-            className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
           >
             {t('onboarding.connectProvider.dismiss')}
-          </button>
+          </Button>
         ) : null}
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={() => navigate('/settings?tab=providers&wizard=1')}
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-13 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <KeyRound size={13} />
           {t('onboarding.connectProvider.haveApiKey')}
-        </button>
+        </Button>
       </div>
     </section>
   );

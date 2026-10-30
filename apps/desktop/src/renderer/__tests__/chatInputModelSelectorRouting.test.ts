@@ -19,6 +19,20 @@ describe('ChatInput model source switching wiring', () => {
     expect(normalizeSourceText(windowsCheckoutSource)).toBe(chatInputSource);
   });
 
+  it('only the serialized unified panel skips the remote effort selector lock', () => {
+    const modelSelectorSource = normalizeSourceText(
+      readFileSync(resolve(__dirname, '..', 'components', 'new-chat', 'ModelSelector.tsx'), 'utf8'),
+    );
+    expect(modelSelectorSource).toContain('onEffortChange(effort, { serializedByPanel: true })');
+    const start = chatInputSource.indexOf('const handleEffortChange = useCallback(');
+    const body = chatInputSource.slice(start, chatInputSource.indexOf('\n  );\n', start));
+    expect(body).toContain('const lockSelector = options?.serializedByPanel !== true;');
+    expect(body).toContain('if (lockSelector) setRemoteSwitchInFlight(true);');
+    expect(body).toContain(
+      'if (lockSelector && isSessionScopeCurrent(sessionId, currentSessionIdRef.current))',
+    );
+  });
+
   it('uses the unified 90% switch-rebuild line instead of a harness compaction setting', () => {
     const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
     const end = chatInputSource.indexOf('// session-agent-switch', start);
@@ -65,6 +79,55 @@ describe('ChatInput model source switching wiring', () => {
       /setModelWithFinalWindowConfirmation\(\s*newModelId,\s*effectiveSourceId,/,
     );
     expect(modelChange).toMatch(/maker\.setModel\(\s*sessionId,\s*newModelId,\s*undefined,/);
+  });
+
+  it('snapshots the target model thinking intent into the atomic selection', () => {
+    const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
+    const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
+    const handleStart = chatInputSource.indexOf(
+      'const handleProviderChange = useCallback(',
+      providerStart,
+    );
+    const modelChange = chatInputSource.slice(modelStart, providerStart);
+    const providerChange = chatInputSource.slice(providerStart, handleStart);
+
+    // 意图计算统一走 resolveModelThinkingIntent：缺记忆按 UI 默认开，来源/引擎未知时不猜。
+    expect(chatInputSource).toMatch(
+      /function resolveModelThinkingIntent\([\s\S]*?getThinking[\s\S]*?\?\?\s*true[\s\S]*?\n\}/,
+    );
+    // 换模型：本地 + 远程两条原子选择都带上；缺意图时不传（Pi 侧保持现状）。
+    expect(modelChange).toMatch(/const nextThinking = resolveModelThinkingIntent\(\{/);
+    expect(modelChange.match(/thinking: nextThinking/g)).toHaveLength(2);
+    // 失败回滚同样要带（与换来源分支对称）：否则回滚那次不下发档位，Pi 会停在
+    // 失败那次收敛后的档位上。
+    expect(modelChange).toMatch(/const rollbackThinking = resolveModelThinkingIntent\(\{/);
+    expect(modelChange.match(/thinking: rollbackThinking/g)).toHaveLength(1);
+    // 换来源（含失败回滚）同样要带，否则切到 Pi 新路由时旧档位会残留。
+    expect(
+      providerChange.match(/const targetThinking = resolveModelThinkingIntent\(\{/g),
+    ).toHaveLength(2);
+    expect(providerChange).toMatch(/const rollbackThinking = resolveModelThinkingIntent\(\{/);
+    expect(providerChange.match(/thinking: targetThinking/g)).toHaveLength(2);
+    expect(providerChange.match(/thinking: rollbackThinking/g)).toHaveLength(1);
+  });
+
+  it('replays the thinking intent through agent-switch staging and thinking toggles', () => {
+    const agentSwitchStart = chatInputSource.indexOf('const performAgentSwitch = useCallback(');
+    const agentSwitchEnd = chatInputSource.indexOf(
+      'const handleUnifiedDraftSelect = useCallback(',
+      agentSwitchStart,
+    );
+    const agentSwitch = chatInputSource.slice(agentSwitchStart, agentSwitchEnd);
+    // switchSessionAgent 的第 7 参必须带上目标 (引擎,来源,模型) 的思考意图。
+    expect(agentSwitch).toMatch(/const targetThinking =[\s\S]*?getThinking/);
+    expect(agentSwitch).toMatch(/switchSessionAgent\([\s\S]*?targetThinking,\s*\);/);
+
+    const toggleStart = chatInputSource.indexOf('onThinkingChange={async (enabled) => {');
+    const toggleEnd = chatInputSource.indexOf('modelMemory={modelMemory}', toggleStart);
+    const toggle = chatInputSource.slice(toggleStart, toggleEnd);
+    // 意图期内切开关必须写回 staged 意图（否则发送结算按旧快照把思考又打开）。
+    expect(toggle).toContain('getAgentSwitchIntent(sessionId)');
+    expect(toggle).toContain('thinking: enabled');
   });
 
   it('keeps exact-window confirmation local and removes it from device-link calls', () => {
@@ -187,9 +250,7 @@ describe('ChatInput model source switching wiring', () => {
     const catalogTargetResolution = guard.indexOf('const targetRouteProviderId =');
     const remoteGuard = guard.indexOf('const hasVerifiedWindows =');
     const legacyPiGuard = guard.indexOf('shouldBlockLegacyRemotePiModelWindowSwitch({');
-    const remoteUnknownBlock = guard.indexOf(
-      'if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;',
-    );
+    const sshHostGuard = guard.indexOf("if (remoteHostId && runtimeAgentKind === 'codex' && !requireDestructiveConfirmation) return true;");
     const zeroUsagePass = guard.indexOf(
       'if (!requireDestructiveConfirmation && (!trustedContextTokens || trustedContextTokens <= 0))',
     );
@@ -209,10 +270,13 @@ describe('ChatInput model source switching wiring', () => {
     expect(remoteGuard).toBeGreaterThan(catalogTargetResolution);
     expect(legacyPiGuard).toBeGreaterThan(remoteGuard);
     expect(legacyPiGuard).toBeLessThan(zeroUsagePass);
-    expect(guard.slice(legacyPiGuard, remoteUnknownBlock)).toContain('return false;');
+    expect(guard.slice(legacyPiGuard, zeroUsagePass)).toContain('return false;');
+    expect(sshHostGuard).toBeGreaterThan(-1);
+    expect(sshHostGuard).toBeLessThan(catalogTargetResolution);
+    // The Codex delegation runs first; other SSH harnesses keep their old guard.
+    expect(guard).toContain('if (remoteHostId && (!hasVerifiedWindows || !hasVerifiedUsage)) return false;');
     expect(remoteGuard).toBeLessThan(remoteBlock);
     const shrinkGate = guard.slice(remoteGuard, remoteBlock);
-    expect(shrinkGate).toContain('agentStatus.isRunning');
     expect(shrinkGate).toContain('targetContextWindow >= currentContextWindow');
     expect(shrinkGate).toMatch(/!requireDestructiveConfirmation\s*&&\s*hasVerifiedWindows/);
     expect(shrinkGate).toContain(
@@ -220,12 +284,11 @@ describe('ChatInput model source switching wiring', () => {
     );
     expect(shrinkGate).toContain("typeof contextTokens === 'number'");
     expect(shrinkGate).toContain('const hasVerifiedUsage = trustedContextTokens !== undefined;');
-    expect(shrinkGate).toContain('!hasVerifiedWindows || !hasVerifiedUsage');
-    expect(remoteUnknownBlock).toBeGreaterThan(legacyPiGuard);
-    expect(zeroUsagePass).toBeGreaterThan(remoteUnknownBlock);
-    expect(shrinkGate).toContain('return true;');
+    expect(zeroUsagePass).toBeGreaterThan(legacyPiGuard);
+    expect(shrinkGate).toContain('return acceptedWindow;');
+    expect(shrinkGate).toContain('stagingSameAgentSelection && hasVerifiedTargetWindow && hasVerifiedUsage');
     expect(guard).toContain(
-      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return true;",
+      "if (!requireDestructiveConfirmation && verdict.level === 'ok') return acceptedWindow;",
     );
     expect(remoteBlock).toBeLessThan(warningPath);
     expect(remoteBlock).toBeLessThan(confirmPath);
@@ -364,9 +427,12 @@ describe('ChatInput model source switching wiring', () => {
     // device-link 老被控端 capabilities-only:联合列表的数据源是供应商目录,没有目录
     // 就是一张空列表。判据必须是结构化的 unsupported,不是 providers.length===0
     // (后者在加载中恒成立,会让面板每次打开先闪一下旧布局)。
+    // 目录所在电脑 = Agent 在另一台电脑运行时的那台,否则远程任务的被控端。
     expect(chatInputSource).toContain(
-      'const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;',
+      'const unifiedModelPanelEnabled = !catalogDeviceId || !remoteProviders.unsupported;',
     );
+    // 已建任务换电脑的意图期内,目录跟随意图里的电脑(effectiveAgentDeviceId)。
+    expect(chatInputSource).toContain('const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;');
   });
 
   /**
@@ -474,7 +540,7 @@ describe('ChatInput model source switching wiring', () => {
     const draftBlock = chatInputSource.slice(
       draftStart,
       chatInputSource.indexOf(
-        '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+        '[sessionId, settingsLocked, modelMemory, taskComputerModelMemory, onUnifiedDraftSelect, agentDeviceId]',
         draftStart,
       ),
     );
@@ -482,11 +548,16 @@ describe('ChatInput model source switching wiring', () => {
     // rowModelId 只在类型声明与注释里出现,**不得**出现在任何写入实参上。
     expect(draftBlock).not.toContain('selection.rowModelId');
     for (const write of [
-      'modelMemory?.setEffort(',
-      'modelMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
+      'targetMemory?.setEffort(',
+      'targetMemory?.setFast(targetKind, selection.providerId, selection.modelId, selection.fast)',
     ]) {
       expect(draftBlock).toContain(write);
     }
+    // 远程 Agent 换落点:记忆按目标目录写(回任务所在电脑写那份 —— 本机预设 / 被控电脑的镜像,
+    // 去另一台电脑写本机为那台记的一份),落点原样交给草稿层。
+    expect(draftBlock).toContain('? agentDeviceModelMemoryAccessors(selection.agentDevice.deviceId)');
+    expect(draftBlock).toContain(': taskComputerModelMemory;');
+    expect(draftBlock).toContain('agentDevice: selection.agentDevice');
     // 「恢复推荐」已先删除记忆键；直通草稿时不得把推荐档位重新写成 override。
     expect(draftBlock).toContain('!selection.resetToRecommended');
     expect(draftBlock).toContain(
@@ -497,7 +568,7 @@ describe('ChatInput model source switching wiring', () => {
   it('keeps a new conversation model pick on the draft path', () => {
     const draftStart = chatInputSource.indexOf('const handleUnifiedDraftSelect = useCallback(');
     const draftEnd = chatInputSource.indexOf(
-      '[sessionId, settingsLocked, modelMemory, onUnifiedDraftSelect]',
+      '[sessionId, settingsLocked, modelMemory, taskComputerModelMemory, onUnifiedDraftSelect, agentDeviceId]',
       draftStart,
     );
     const draftHandler = chatInputSource.slice(draftStart, draftEnd);

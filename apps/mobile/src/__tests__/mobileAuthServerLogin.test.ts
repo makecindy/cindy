@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md and protocol-compatibility.md: PKCE, rotating credentials, account replacement and native login bridges must preserve their cross-file trust boundaries.
 import { readFileSync as readFileSyncRaw } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -55,6 +56,8 @@ describe('mobile auth-server login', () => {
     );
     expect(nativeSource).toContain('GoogleSignin.configure({');
     expect(nativeSource).toContain("import('xdt-wechat-login')");
+    expect(loginSource).toContain('useMobileSocialProviderModes({');
+    expect(loginSource).toContain('socialProviderModes.has(provider)');
     expect(nativeSource).toContain('requestWechatAuthCode({');
     expect(nativeSource).toContain('createNativeWechatLoginTimeout()');
     expect(nativeSource).toContain('cancelWechatAuthRequest().catch');
@@ -509,7 +512,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = switchBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      latestRead,
     );
     const rollbackWrite = switchBody.indexOf(
       'await restorePersistedAuthSessionRaw(previousSessionRaw);',
@@ -520,7 +523,8 @@ describe('mobile auth-server login', () => {
     expect(latestRead).toBeGreaterThan(serialized);
     expect(activeVaultCommit).toBeGreaterThan(latestRead);
     expect(targetWrite).toBeGreaterThan(activeVaultCommit);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(latestRead);
+    expect(runtimeClear).toBeLessThan(activeVaultCommit);
     expect(rollbackWrite).toBeGreaterThan(runtimeClear);
     expect(switchBody.slice(runtimeClear, rollbackWrite)).toContain(
       'activateMobileSessionRealm(realm!);',
@@ -619,7 +623,7 @@ describe('mobile auth-server login', () => {
     ).toBeGreaterThanOrEqual(4);
   });
 
-  it('keeps the added-account vault transaction through runtime cleanup and owner commit', () => {
+  it('clears unscoped caches before persisting a new login identity', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
@@ -646,7 +650,7 @@ describe('mobile auth-server login', () => {
     );
     const runtimeClear = acceptBody.indexOf(
       'await clearAccountScopedRuntimeForSwitch();',
-      targetWrite,
+      previousSessionSnapshot,
     );
     const ownerCommit = acceptBody.indexOf(
       'activateMobileSessionRealm(committedRealm);',
@@ -661,7 +665,9 @@ describe('mobile auth-server login', () => {
     expect(previousSessionSnapshot).toBeGreaterThan(serialized);
     expect(vaultTransaction).toBeGreaterThan(previousSessionSnapshot);
     expect(targetWrite).toBeGreaterThan(vaultTransaction);
-    expect(runtimeClear).toBeGreaterThan(targetWrite);
+    expect(runtimeClear).toBeGreaterThan(previousSessionSnapshot);
+    expect(runtimeClear).toBeLessThan(vaultTransaction);
+    expect(acceptBody).toContain('replacesActiveSession || userRef.current === null');
     expect(ownerCommit).toBeGreaterThan(runtimeClear);
     expect(rollback).toBeGreaterThan(ownerCommit);
     expect(acceptBody.slice(rollback)).toContain(
@@ -732,7 +738,8 @@ describe('mobile auth-server login', () => {
       'utf8',
     );
     expect(screenSource).toContain('() => () => {');
-    expect(screenSource).toContain('void auth.cancelAddAccount();');
+    expect(screenSource).toContain('void auth.cancelAddAccount().catch(() => undefined);');
+    expect(screenSource).not.toContain('cancelAddAccount().finally');
     expect(screenSource).toContain('flowFinishedRef.current');
 
     const beginStart = authSource.indexOf('const beginAddAccount = useCallback');
@@ -763,10 +770,13 @@ describe('mobile auth-server login', () => {
       resolve(process.cwd(), 'src/session/AccountSwitcherSheet.tsx'),
       'utf8',
     );
-    expect(sheetSource).toContain('disabled={switchingKey !== null}');
-    expect(sheetSource).not.toContain(
-      'disabled={auth.accountsLoading || switchingKey !== null}',
+    // 「添加账号」改用共享 MainWindowActionButton(action 对象传 disabled):只在切换账号时禁用,
+    // 不因后台同步 savedAccounts(accountsLoading)而阻塞。
+    expect(sheetSource).toMatch(
+      /testID: 'accountSwitcher\.addAccount'/,
     );
+    expect(sheetSource).toContain('disabled: switchingKey !== null,');
+    expect(sheetSource).not.toMatch(/disabled[=:]\s*\{?auth\.accountsLoading/);
     expect(sheetSource).toContain("t('devices.list.alert.actionFailed')");
     expect(sheetSource).toContain('formatRemoteError(error)');
     expect(sheetSource).not.toContain('.catch(() => undefined)\n        .finally');

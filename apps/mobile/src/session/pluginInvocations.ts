@@ -1,8 +1,9 @@
-import { parseMessageToolUse, type MessageToolResultPairing } from '@cindy/maker-shared/message-normalize';
+import { buildMessageToolResultPairing, parseMessageToolUse, type MessageToolResultPairing } from '@cindy/maker-shared/message-normalize';
 import type { RemoteMessage } from './types';
 
 export interface PluginInvocation {
   id: string;
+  namespace?: string | null;
   name: string;
   tools: string[];
   hasPendingCalls: boolean;
@@ -11,6 +12,10 @@ export interface PluginInvocation {
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const text = (value: unknown) => typeof value === 'string' && value.length <= 256 ? value : undefined;
+const pluginNamespace = (value: unknown): string | null | undefined =>
+  value === null ? null : typeof value === 'string' && value.length <= 128 ? value : undefined;
+const identityKey = (id: string, namespace: string | null | undefined) =>
+  JSON.stringify([id, namespace === undefined ? false : namespace]);
 
 /** Read only the documented MCP text envelope, never arbitrary nested plugin data. */
 function infoName(raw: string | undefined, id: string): string | undefined {
@@ -45,11 +50,12 @@ export function collectPluginInvocations(
   for (const message of messages) {
     if (message.role !== 'tool_use') continue;
     const tool = parseMessageToolUse(message);
-    const id = text(record(tool.input)?.ghost_id);
+    const input = record(tool.input);
+    const id = text(input?.ghost_id);
     if (!id || !/(?:^|:|__)ghost_info$/.test(tool.toolName)) continue;
     const raw = pairing.resultContentFor(message, tool);
     const name = infoName(raw, id);
-    if (name) names.set(id, name);
+    if (name) names.set(identityKey(id, pluginNamespace(input?.namespace)), name);
   }
   const turns = new Map<string, PluginInvocation[]>();
   let owner: string | undefined;
@@ -64,9 +70,13 @@ export function collectPluginInvocations(
     const input = record(tool.input);
     const id = text(input?.ghost_id);
     if (!id || input?.grant_only === true) continue;
+    const namespace = pluginNamespace(input?.namespace);
     const calls = turns.get(owner) ?? [];
-    let plugin = calls.find((call) => call.id === id);
-    if (!plugin) { plugin = { id, name: names.get(id) ?? id, tools: [], hasPendingCalls: false }; calls.push(plugin); }
+    let plugin = calls.find((call) => call.id === id && call.namespace === namespace);
+    if (!plugin) {
+      plugin = { id, ...(namespace !== undefined ? { namespace } : {}), name: names.get(identityKey(id, namespace)) ?? id, tools: [], hasPendingCalls: false };
+      calls.push(plugin);
+    }
     // Known IDs must pair exactly: an adjacent result may belong to another
     // concurrent plugin. Legacy ID-less calls retain the existing pairing fallback.
     const settled = tool.toolUseId
@@ -78,4 +88,34 @@ export function collectPluginInvocations(
     turns.set(owner, calls);
   }
   return turns;
+}
+
+/** Attach plugin activity to its assistant work, never the user's bubble. One entry per turn. */
+export function companionPluginWorkEntries(items: readonly import('./messageRenderModel').MobileMessageRenderItem[], invocations?: ReadonlyMap<string, PluginInvocation[]>) {
+  const entries = new Map<string, { plugins: PluginInvocation[]; sessionId: string; running: boolean }>();
+  let owner: { plugins: PluginInvocation[]; sessionId: string; running: boolean } | undefined;
+  let attached = false;
+  for (const item of items) {
+    if (item.type === 'message' && item.message.kind === 'user' && item.message.source.agentMeta?.delivery !== 'steer') {
+      const plugins = invocations?.get(item.message.source.clientId || item.message.source.id) ?? item.message.pluginInvocations;
+      owner = plugins?.length
+        ? { plugins, sessionId: item.message.source.sessionId, running: false }
+        : undefined;
+      attached = false;
+    } else if (item.type === 'work_group' && owner) {
+      // A turn may contain several work groups around intermediate output.
+      // Keep one stable entry, but derive activity from the entire owning turn.
+      owner.running ||= item.isStreaming === true;
+      if (!attached) entries.set(item.key, owner);
+      attached = true;
+    }
+  }
+  return entries;
+}
+
+/** History work rows may be deferred placeholders; derive identity from available source messages. */
+export function collectCompanionPluginInvocations(messages: readonly RemoteMessage[]) {
+  return collectPluginInvocations(messages, buildMessageToolResultPairing(messages, {
+    contentToPreview: (content) => typeof content === 'string' ? content : JSON.stringify(content) ?? '',
+  }));
 }

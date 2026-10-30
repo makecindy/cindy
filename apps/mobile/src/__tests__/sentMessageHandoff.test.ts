@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HistoryViewController, HistoryViewHandoff, projectHistoryView } from '@cindy/maker-shared/message-window';
-import { appendOptimisticUserMessage, confirmedHistoryUserClientIds, projectOptimisticUserMessages, reconcileOptimisticUserMessages } from '../session/optimisticUserMessages';
+import { appendOptimisticUserMessage, confirmedHistoryUserClientIds, projectOptimisticUserMessages, reconcileOptimisticUserMessages, repliedHistoryUserClientIds } from '../session/optimisticUserMessages';
 import { buildMobileHistoryRenderItems } from '../session/mobileHistoryRender';
 import { buildMobileMessageRenderItems } from '../session/messageRenderModel';
 import { buildPendingSendItems, mergePendingSendItems } from '../session/pendingSendItems';
@@ -23,6 +23,74 @@ const queueInput = (current: readonly QueuedRemoteMessage[] = [], overrides: Par
 });
 
 describe('sent message handoff', () => {
+  it.each([false, true])('places a late harness boundary before the reserved send (history ready=%s)', async (ready) => {
+    const previous: RemoteMessage = { ...echo, id: 'previous', clientId: 'previous', role: 'assistant',
+      createdAt: '2026-09-16T23:59:00Z' };
+    const boundary: RemoteMessage = { ...echo, id: 'switch', clientId: 'switch', role: 'agent_switch',
+      content: { fromAgentKind: 'cc', toAgentKind: 'codex' }, createdAt: '2026-09-16T23:59:59Z' };
+    let history = [previous];
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(history, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    if (ready) await view.refresh();
+    let slots = appendOptimisticUserMessage([], [previous], queued, 's');
+    const raw = [previous, boundary];
+    const handoff = new HistoryViewHandoff<RemoteMessage>(() => false);
+    const render = () => {
+      const snapshot = view.getSnapshot();
+      const state = handoff.reconcile(snapshot, raw);
+      slots = reconcileOptimisticUserMessages(slots, raw, new Set(['sent']), confirmedHistoryUserClientIds(snapshot, raw));
+      const messages = projectOptimisticUserMessages(state.messages, slots);
+      return (snapshot.ready ? buildMobileHistoryRenderItems({ view, snapshot, messages,
+        pendingHandoff: state.pending, staleTail: state.tail,
+        localUserClientIds: new Set(slots.map((entry) => entry.message.clientId)), streaming: false, sessionId: 's' })
+        : buildMobileMessageRenderItems(messages, { preserveSourceOrder: true })).map((item) => item.key);
+    };
+    const expected = ['message-previous', 'message-switch', 'message-sent'];
+    expect(projectOptimisticUserMessages(raw, slots).map((message) => message.clientId))
+      .toEqual(['previous', 'switch', 'sent']);
+    if (!ready) expect(render()).toEqual(expected);
+    history = [previous, boundary];
+    await view.refresh();
+    expect(render()).toEqual(expected);
+    raw.push(echo);
+    expect(render()).toEqual(expected);
+    history = [...raw];
+    await view.refresh();
+    expect(render()).toEqual(expected);
+    expect(slots).toEqual([]);
+    view.setActive(false);
+  });
+
+  it('does not pull a later harness switch across a reply into an earlier send', () => {
+    const reply: RemoteMessage = { ...echo, id: 'reply', clientId: 'reply', role: 'assistant' };
+    const boundary: RemoteMessage = { ...echo, id: 'switch', clientId: 'switch', role: 'agent_switch' };
+    const first = appendOptimisticUserMessage([], [], queued, 's');
+    const slots = appendOptimisticUserMessage(first, [echo, reply], { ...queued, clientId: 'next' }, 's');
+    expect(projectOptimisticUserMessages([echo, reply, boundary], slots).map((message) => message.clientId))
+      .toEqual(['sent', 'reply', 'switch', 'next']);
+  });
+
+  it.each([false, true])('keeps consecutive switches with their sends without a reply (next echoed=%s)', (echoed) => {
+    const firstSwitch: RemoteMessage = { ...echo, id: 'switch-first', clientId: 'switch-first', role: 'agent_switch' };
+    const secondSwitch: RemoteMessage = { ...firstSwitch, id: 'switch-next', clientId: 'switch-next' };
+    const nextEcho: RemoteMessage = { ...echo, id: 'db-next', clientId: 'next' };
+    const first = reconcileOptimisticUserMessages(appendOptimisticUserMessage([], [], queued, 's'), [echo], none, none);
+    let slots = appendOptimisticUserMessage(first, [firstSwitch, echo], { ...queued, clientId: 'next' }, 's');
+    const raw = [firstSwitch, echo, secondSwitch, ...(echoed ? [nextEcho] : [])];
+    const expected = ['switch-first', 'sent', 'switch-next', 'next'];
+    expect(projectOptimisticUserMessages(raw, slots).map((message) => message.clientId)).toEqual(expected);
+    // A stale history page can still omit the first echo held by its reservation.
+    expect(projectOptimisticUserMessages(raw.filter((message) => message.clientId !== 'sent'), slots)
+      .map((message) => message.clientId)).toEqual(expected);
+    const history = [firstSwitch, echo, secondSwitch, nextEcho];
+    slots = reconcileOptimisticUserMessages(slots, history, none, new Set(expected));
+    expect(slots).toEqual([]);
+    expect(projectOptimisticUserMessages(history, slots).map((message) => message.clientId)).toEqual(expected);
+  });
+
   it.each([false, true])('keeps a new send after history-only replies (echo=%s)', async (hasEcho) => {
     const previousUser = { ...echo, id: 'previous-user', clientId: 'previous-user', createdAt: '2026-09-16T23:59:00Z' };
     const previousReply: RemoteMessage = { ...echo, id: 'previous-reply', clientId: 'previous-reply', role: 'assistant', createdAt: '2026-09-16T23:59:10Z' };
@@ -204,5 +272,24 @@ describe('sent message handoff', () => {
 
   it.each(['hiddenClientIds', 'locallyRemovedClientIds'] as const)('does not settle an already retired item (%s)', (field) => {
     expect(settleEnqueueResult([], queued, true, queueInput([], { [field]: new Set(['sent']) }))).toEqual([]);
+  });
+
+  it('只有后面已出现消息的已确认用户行才算 turn 跑过', async () => {
+    const previousReply: RemoteMessage = { ...echo, id: 'previous-reply', clientId: 'previous-reply', role: 'assistant', createdAt: '2026-09-16T23:59:10Z' };
+    const reply: RemoteMessage = { ...previousReply, id: 'reply', clientId: 'reply', createdAt: '2026-09-17T00:00:10Z' };
+    let history: RemoteMessage[] = [previousReply, echo];
+    const view = new HistoryViewController<RemoteMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(history, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // 权威历史已落库用户行、实时推送还停在上一条回复:派发前钩子期间,不算跑过。
+    expect(repliedHistoryUserClientIds(view.getSnapshot(), [previousReply])).toEqual(new Set());
+    // 实时推送先到回复(快速 turn),权威历史还没刷新:算跑过。
+    expect(repliedHistoryUserClientIds(view.getSnapshot(), [echo, reply])).toEqual(new Set(['sent']));
+    history = [previousReply, echo, reply];
+    await view.refresh();
+    expect(repliedHistoryUserClientIds(view.getSnapshot(), [previousReply])).toEqual(new Set(['sent']));
   });
 });

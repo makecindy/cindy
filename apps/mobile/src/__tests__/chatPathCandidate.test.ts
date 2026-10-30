@@ -1,6 +1,74 @@
+// @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import ts from 'typescript';
+
+const rendererTree = ts.createSourceFile('renderer.tsx', readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const pathFunctions = new Set(['ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
+const spanTree = ts.createSourceFile('span.tsx', readFileSync(join(process.cwd(), 'src/session/ChatPathChipSpan.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const pathCode = [rendererTree, spanTree].flatMap((tree) => tree.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name && pathFunctions.has(node.name.text)).map((node) => node.getText(tree).replace(/^export /, ''))).join('\n');
+const compiledPath = ts.transpileModule(pathCode, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+const flattenStyle = (value: any): any => Array.isArray(value) ? Object.assign({}, ...value.map(flattenStyle)) : value ?? {};
+const pathContext = React.createContext<any>(null);
+const verdictListeners = new Set<(key: string) => void>();
+const verifyPath = vi.fn(async () => undefined);
+const pathBindings = {
+  React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
+  useRecyclingState: React.useState, ChatFilePathContext: pathContext,
+  resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference,
+  StyleSheet: { flatten: flattenStyle },
+  peekRemotePathVerdictForRender: () => 'unknown', peekRemotePathVerdict: () => undefined,
+  remotePathVerdictKey: (device: string, workdir: string, path: string) => [device, workdir, path].join('|'),
+  subscribeRemotePathVerdictChange: (listener: (key: string) => void) => { verdictListeners.add(listener); return () => verdictListeners.delete(listener); },
+  verifyRemotePathCached: verifyPath,
+};
+const productionPath = new Function(...Object.keys(pathBindings), compiledPath + '\nreturn {ChatPathChipSpan, LinkPathChipSpan, clickableInlineStyle};')(...Object.values(pathBindings));
+const pathStyles = { markdownLink: { textDecorationLine: 'underline' }, markdownPathChip: { textDecorationLine: 'underline' }, markdownInlineCode: { fontFamily: 'monospace' }, markdownUnderlineStrike: { textDecorationLine: 'underline line-through' } };
+
+describe('production path spans', () => {
+  it('adds the clickable signal only when a handler exists and preserves strike-through', () => {
+    expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, undefined, {}))).toEqual({});
+    expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, () => {}, {}))).toEqual({ textDecorationLine: 'underline' });
+    expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, () => {}, { textDecorationLine: 'line-through' }))).toEqual({ textDecorationLine: 'underline line-through' });
+  });
+
+  // Bug #1144: cached verdict expiry must retry while the same span stays mounted.
+  it('revalidates only its own cache key, preserves label shapes, and stops after unmount', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    verifyPath.mockClear();
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const open = vi.fn();
+    const context = { deviceId: 'd1', workdir: '/repo', statPath: vi.fn(), onOpenPath: open };
+    const SpanText = ({ children, style, onPress }: any) => React.createElement('span', { onClick: onPress, 'data-style': JSON.stringify(flattenStyle(style)) }, children);
+    const render = (bare: boolean, display: string, streaming = false) => React.createElement(pathContext.Provider, { value: context },
+      React.createElement(productionPath.LinkPathChipSpan, { url: 'src/a.ts', display, bare, styles: pathStyles, SpanText, baseStyle: {}, streaming }));
+    try {
+      await act(async () => root.render(render(true, 'src/a.ts')));
+      expect(verifyPath).toHaveBeenCalledTimes(1);
+      expect(container.firstElementChild?.getAttribute('data-style')).not.toContain('monospace');
+      await act(async () => container.querySelector('span')!.click());
+      expect(open).toHaveBeenCalledWith({ kind: 'file', absPath: '/repo/src/a.ts', relPath: 'src/a.ts' });
+      await act(async () => { for (const listener of verdictListeners) listener('other-key'); });
+      expect(verifyPath).toHaveBeenCalledTimes(1);
+      await act(async () => { for (const listener of verdictListeners) listener('d1|/repo|/repo/src/a.ts'); });
+      expect(verifyPath).toHaveBeenCalledTimes(2);
+      await act(async () => root.render(render(false, 'a.ts')));
+      expect(container.firstElementChild?.getAttribute('data-style')).toContain('monospace');
+      await act(async () => root.render(render(false, 'Read the rules')));
+      expect(container.firstElementChild?.getAttribute('data-style')).not.toContain('monospace');
+      await act(async () => root.render(render(true, 'src/a.ts', true)));
+      const calls = verifyPath.mock.calls.length;
+      await act(async () => { for (const listener of verdictListeners) listener('d1|/repo|/repo/src/a.ts'); });
+      expect(verifyPath).toHaveBeenCalledTimes(calls);
+    } finally { await act(async () => root.unmount()); }
+    expect(verdictListeners.size).toBe(0);
+  });
+});
 
 import {
   canOpenChatPathChip,
@@ -365,19 +433,6 @@ describe('歧义候选的点亮门槛(DESIGN.md §14.5 规则 5)', () => {
   });
 });
 
-describe('ambiguousShape 只能由单一判据产出(源码级守卫)', () => {
-  // 三个入口(行内 code / 显式链接 / 裸路径)历史上各自硬写过字面量,于是同一语义
-  // 在代码里有三份判据、改一处漏两处。收敛后只允许调 isAmbiguousChatPathShape。
-  it('chatPathCandidate.ts 里不出现 `ambiguousShape: true/false` 字面量', () => {
-    const src = readFileSync(
-      join(process.cwd(), 'src/session/chatPathCandidate.ts'),
-      'utf8',
-    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-    expect(src, 'ambiguousShape 被硬写成字面量 —— 应统一走 isAmbiguousChatPathShape')
-      .not.toMatch(/ambiguousShape:\s*(true|false)\b/);
-  });
-});
-
 describe('chatPathLabelReadsAsFileReference(决定手写链接是否保留等宽 chip)', () => {
   // 桌面 shouldRenderCodeReferenceLabel 的移植,两端口径需同步。
   const c = (url: string) => {
@@ -650,131 +705,5 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     // 形状上满足「带分隔符 + 扩展名」,词法层无法排除;stat 判 nonfile → 纯文本。
     expect(allValues('比例 16/9.0 居中')).toEqual(['16/9.0']);
     expect(allValues('记作 a/b.c 即可')).toEqual(['a/b.c']);
-  });
-});
-
-describe('路径 chip 的可点信号(源码级守卫)', () => {
-  // DESIGN.md §14.5:可点与不可点的差异**只应是那条下划线**(对齐 GitHub ——
-  // `.markdown-body code` 不定义 color、纯靠继承,`.markdown-body a` 只加
-  // text-decoration、不加 font-weight)。RN 的样式合成没有类型保护,只能源码层钉。
-  const readRenderer = () =>
-    readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-
-  it('markdownPathChip 只有下划线:不改文字颜色、不改字重', () => {
-    const block = /markdownPathChip:\s*\{([^}]*)\}/.exec(readRenderer());
-    expect(block, '未找到 markdownPathChip 样式定义').not.toBeNull();
-    const body = block![1];
-    expect(body, '缺少下划线').toMatch(/textDecorationLine:\s*'underline'/);
-    // 可点的行内 code 必须与不可点的同色同字重 —— 多一个信号,「有横线 = 能点」
-    // 这条规则就少一分可信。
-    expect(body, '路径 chip 不得改文字颜色(应继承行内 code 的压暗档)').not.toMatch(/\bcolor:/);
-    expect(body, '路径 chip 不得改字重').not.toMatch(/fontWeight:/);
-  });
-
-  it('markdownLink 只有正文色 + 下划线,不加粗', () => {
-    const block = /markdownLink:\s*\{([^}]*)\}/.exec(readRenderer());
-    expect(block, '未找到 markdownLink 样式定义').not.toBeNull();
-    const body = block![1];
-    expect(body).toMatch(/textDecorationLine:\s*'underline'/);
-    expect(body, '外链不得加粗(GitHub 的 a 也只有 text-decoration)').not.toMatch(/fontWeight:/);
-  });
-
-  it('LinkPathChipSpan 的等宽 chip 是按来源 + label 条件套的,不是无条件开或关', () => {
-    const src = readRenderer();
-    const start = src.indexOf('function LinkPathChipSpan');
-    expect(start, '未找到 LinkPathChipSpan').toBeGreaterThan(-1);
-    const body = src.slice(start, start + 2400);
-    // 必须先按来源分流(bare = 正文裸写),再过 label 形态判定 —— 无条件去掉
-    // markdownInlineCode 会把作者手写的 `[README.md](path)` 一起降级成正文
-    // (PR #1144 review 实捉);无条件套上又会让裸路径点亮时形态跳变。
-    expect(body, '未按 bare 来源分流').toMatch(/!bare/);
-    expect(body, '未复用 label 形态判定').toContain('chatPathLabelReadsAsFileReference');
-    // 两个分支都在:套 chip 的与不套的。
-    expect(body, '缺少套等宽 chip 的分支').toMatch(/markdownInlineCode[\s\S]*markdownPathChip/);
-    expect(body, '缺少不套等宽的分支').toMatch(/\[baseStyle, styles\.markdownPathChip\]/);
-  });
-
-  // ── 收敛检查点(PR #1144 两轮 review 各捉到一个「有下划线却点不动」) ──
-  // 不变量:**下划线 ⇔ 可点**,双向成立。根因是「加不加下划线」与「有没有 onPress」
-  // 在各分支独立决定 → 必然漂移。判据已收成 clickableInlineStyle 一处,这里钉住它
-  // 不被重新拆散。能区分错误修法:只修某一处 case 分支的写法过不了第一条。
-  it('markdownLink 只能经 clickableInlineStyle 取用,不得在 case 分支里直接写', () => {
-    const src = readRenderer();
-    const helperStart = src.indexOf('function clickableInlineStyle');
-    expect(helperStart, '未找到 clickableInlineStyle —— 判据被拆散了?').toBeGreaterThan(-1);
-    const helperEnd = src.indexOf('\n}', helperStart);
-    const helperBody = src.slice(helperStart, helperEnd);
-    // helper 自己必须按 onPress 决定下划线。
-    expect(helperBody, 'helper 未按 onPress 分流').toMatch(/onPress \? styles\.markdownLink : undefined/);
-    // 除 helper 自身外,全文件不应再出现 styles.markdownLink 的**用法**。
-    // 注释行(含 helper 的 JSDoc,它会引用这个名字来说明规则)不算用法。
-    const lines = src.split('\n');
-    const others = lines
-      .map((line, i) => ({ line, no: i + 1 }))
-      .filter(({ line }) => line.includes('styles.markdownLink'))
-      .filter(({ line }) => {
-        const t = line.trim();
-        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
-      })
-      .filter(({ no }) => {
-        const at = lines.slice(0, no - 1).join('\n').length;
-        return at < helperStart || at > helperEnd;
-      });
-    expect(
-      others.map((o) => `${o.no}: ${o.line.trim()}`),
-      '有 case 分支绕过 clickableInlineStyle 直接用 markdownLink —— 会造出「有下划线却点不动」',
-    ).toEqual([]);
-  });
-
-  it('可点 inline 的 onPress 与样式取同一个值(不出现一边条件、一边无条件)', () => {
-    const src = readRenderer();
-    // 每个 clickableInlineStyle(styles, X, ...) 的 X 都必须同时是某处的 onPress={X}。
-    const handlers = [...src.matchAll(/clickableInlineStyle\(styles,\s*([A-Za-z_$][\w$]*)\s*[,)]/g)]
-      .map((m) => m[1]);
-    expect(handlers.length, '未找到 clickableInlineStyle 的调用').toBeGreaterThan(0);
-    for (const h of handlers) {
-      expect(src, `${h} 用作下划线判据却没有作为 onPress 传下去`).toContain(`onPress={${h}}`);
-    }
-  });
-
-  it('行内 code 形态仍叠在 markdownInlineCode 之后(顺序错了下划线会被覆盖)', () => {
-    const src = readRenderer();
-    const sites = src.match(/chipStyle=\{\[[^\]]*\]\}/g) ?? [];
-    expect(sites.length).toBeGreaterThan(0);
-    for (const site of sites) {
-      const inline = site.indexOf('markdownInlineCode');
-      const chip = site.indexOf('markdownPathChip');
-      if (inline === -1 || chip === -1) continue;
-      expect(chip, `叠加顺序反了:${site}`).toBeGreaterThan(inline);
-    }
-  });
-});
-
-describe('远端 verdict 通知必须驱动重验,不能只驱动重绘(源码级守卫)', () => {
-  // 第 10 轮把点亮态改成缓存的纯派生时,桌面把 cacheGen 放进了验证副作用的依赖、
-  // 手机只在订阅回调里 setVerdict —— 而 readVerdict 是稳定的 useCallback,通知不改变
-  // 验证副作用的任何依赖,于是 TTL 到期后 chip 只完成「降级成纯文本」、没完成「重验」,
-  // 挂载期间永不自愈,比重构前(一直乐观点亮)更糟(PR #1144 review 实捉)。
-  //
-  // 这类 bug 的形状是「依赖数组漏了触发源」,没有类型保护、行为测试又要 RN 渲染,
-  // 所以在源码层钉住:通知必须递增计数,且计数必须出现在验证副作用的依赖里。
-  const src = readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
-
-  it('订阅回调递增计数(而不是只重绘)', () => {
-    const cb = /subscribeRemotePathVerdictChange\(\(key\) => \{([\s\S]*?)\}\);/.exec(src);
-    expect(cb, '未找到订阅回调').not.toBeNull();
-    expect(cb![1], '订阅回调只重绘、没驱动重验 —— TTL 到期后 chip 会降级且永不自愈')
-      .toMatch(/setCacheGen/);
-  });
-
-  it('计数出现在验证副作用的依赖数组里', () => {
-    // 验证副作用的标志是它调用 verifyRemotePathCached;取其后最近的依赖数组。
-    const idx = src.indexOf('verifyRemotePathCached(');
-    expect(idx, '未找到验证副作用').toBeGreaterThan(-1);
-    const deps = /\}, \[([^\]]*)\]\);/.exec(src.slice(idx));
-    expect(deps, '未找到验证副作用的依赖数组').not.toBeNull();
-    expect(deps![1], 'cacheGen 不在依赖里 —— 缓存变化不会触发重验').toMatch(/cacheGen/);
   });
 });

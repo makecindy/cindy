@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useRemoteSessionSync } from '../features/cc-agent/hooks/useRemoteSessionSync';
 
@@ -17,14 +17,99 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('@/lib/makerTransport', () => ({ isSessionTurnRunningFor: async () => true }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  remoteProjectsStore: { getDeviceIds: () => ['host', 'neighbor'], subscribe: () => () => {} },
+  remoteProjectsStore: { getDeviceIds: () => ['host', 'neighbor'], getDeviceName: () => 'host', subscribe: () => () => {} },
 }));
 vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
   refreshRemoteDeviceSessions: vi.fn(),
 }));
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+function recoveryEvents() {
+  function event<T>() {
+    const listeners = new Set<(payload: T) => void>();
+    return {
+      on: (cb: (payload: T) => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+      emit: (payload: T) => listeners.forEach((cb) => cb(payload)),
+    };
+  }
+  const status = event<{ status: string }>();
+  const presence = event<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }>();
+  const responsiveness = event<{ deviceId: string; unresponsive: boolean; recovered: boolean }>();
+  const subscribe = vi.fn(async () => {});
+  vi.stubGlobal('electronAPI', { deviceLink: {
+    subscribe, unsubscribe: async () => {},
+    onStatusChanged: status.on,
+    onPresenceChanged: presence.on,
+    onResponsivenessChanged: responsiveness.on,
+  } });
+  mocks.running = false;
+  mocks.reconcile.mockResolvedValue(true);
+  return { status, presence, responsiveness, subscribe };
+}
+
+it.each(['focus', 'manual', 'presence', 'relay', 'response'])('allows %s recovery after a terminal reply clears the breaker', async (trigger) => {
+  vi.useFakeTimers();
+  const events = recoveryEvents();
+  const hook = renderHook(() => useRemoteSessionSync('session', 'host'));
+  const neighbor = renderHook(() => useRemoteSessionSync('neighbor-session', 'neighbor'));
+  await act(async () => {
+    events.status.emit({ status: 'online' });
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(hook.result.current.contentState).toBe('ready');
+  const callsBeforeClear = events.subscribe.mock.calls.length;
+  await act(async () => {
+    events.responsiveness.emit({ deviceId: 'host', unresponsive: true, recovered: false });
+    events.responsiveness.emit({ deviceId: 'host', unresponsive: false, recovered: false });
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(hook.result.current.contentState).toBe('syncing');
+  expect(neighbor.result.current.contentState).toBe('ready');
+  expect(events.subscribe).toHaveBeenCalledTimes(callsBeforeClear);
+  await act(async () => {
+    if (trigger === 'focus') window.dispatchEvent(new Event('focus'));
+    else if (trigger === 'manual') hook.result.current.resync();
+    else if (trigger === 'presence') events.presence.emit({ deviceId: 'host', online: true, remoteControlEnabled: true });
+    else if (trigger === 'relay') events.status.emit({ status: 'online' });
+    else events.responsiveness.emit({ deviceId: 'host', unresponsive: false, recovered: true });
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(hook.result.current.contentState).toBe('ready');
+  expect(neighbor.result.current.contentState).toBe('ready');
+  hook.unmount();
+  neighbor.unmount();
+});
+
+it.each(['relay', 'peer', 'disabled', 'unresponsive'])('does not resume cleared history while %s is unavailable', async (reason) => {
+  vi.useFakeTimers();
+  const events = recoveryEvents();
+  const hook = renderHook(() => useRemoteSessionSync('session', 'host'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+  const callsBeforeClear = events.subscribe.mock.calls.length;
+  await act(async () => {
+    events.responsiveness.emit({ deviceId: 'host', unresponsive: true, recovered: false });
+    events.responsiveness.emit({ deviceId: 'host', unresponsive: false, recovered: false });
+    if (reason === 'relay') events.status.emit({ status: 'offline' });
+    else if (reason === 'unresponsive') events.responsiveness.emit({ deviceId: 'host', unresponsive: true, recovered: false });
+    else events.presence.emit({ deviceId: 'host', online: reason !== 'peer', remoteControlEnabled: reason !== 'disabled' });
+    hook.result.current.resync();
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(60_000);
+  });
+  expect(events.subscribe).toHaveBeenCalledTimes(callsBeforeClear);
+  expect(hook.result.current.contentState).toBe('syncing');
+  await act(async () => {
+    if (reason === 'relay') events.status.emit({ status: 'online' });
+    else if (reason === 'unresponsive') events.responsiveness.emit({ deviceId: 'host', unresponsive: false, recovered: true });
+    else events.presence.emit({ deviceId: 'host', online: true, remoteControlEnabled: true });
+    await vi.advanceTimersByTimeAsync(250);
+  });
+  expect(hook.result.current.contentState).toBe('ready');
+  hook.unmount();
 });
 
 it('requires a fresh ACK and snapshot after peer-only resets without invalidating neighbors', async () => {

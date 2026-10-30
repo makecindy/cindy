@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   manage: vi.fn(),
   windowStateKeeper: vi.fn(),
+  installWindowHiddenBroadcast: vi.fn(),
 }));
 
 vi.mock('electron-window-state', () => ({ default: mocks.windowStateKeeper }));
@@ -17,6 +18,9 @@ vi.mock('../../secondary-windows.js', () => ({ installExternalLinkGuards: vi.fn(
 vi.mock('../../selection-context-menu.js', () => ({ installSelectionContextMenu: vi.fn() }));
 vi.mock('../../appearance-settings-ipc.js', () => ({ applyAppearanceToWindow: vi.fn() }));
 vi.mock('../registry.js', () => ({ markRsbWindowWebContentsId: vi.fn() }));
+vi.mock('../../windowHiddenBroadcast.js', () => ({
+  installWindowHiddenBroadcast: mocks.installWindowHiddenBroadcast,
+}));
 
 import { createRightSidebarWindow } from '../window';
 
@@ -49,5 +53,6 @@ describe('createRightSidebarWindow window state', () => {
       fullScreen: false,
     });
     expect(mocks.manage).toHaveBeenCalledWith(win);
+    expect(mocks.installWindowHiddenBroadcast).toHaveBeenCalledWith(win);
   });
 });

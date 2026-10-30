@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Share, StyleSheet, View } from 'react-native';
 import { WebView, type WebViewNavigation } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { useTheme } from '@/theme';
+import { fontWeight, lineHeight, typeScale } from '@/theme/tokens';
 import { HtmlBrowserChrome } from './HtmlBrowserChrome';
 import type { HtmlBrowserChromeProps } from './HtmlBrowserChrome.types';
 import { normalizeBrowserAddress, allowWebsiteNavigation } from './browserAddress';
@@ -13,11 +14,14 @@ import { browserViewportScrollScript, type BrowserInsets } from './htmlBrowserVi
 
 export interface WebsiteVisit { url: string; snapshotClosed: Promise<void> }
 
+/** 「已复制网址」提示停留时长,与文件预览 / 文件浏览的复制提示一致。 */
+const COPY_NOTICE_DISMISS_MS = 2500;
+
 /** Separate native lifetime and ephemeral cookie store from the file preview. */
 export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
   visit: WebsiteVisit;
   insets: BrowserInsets;
-  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'onClose'>;
+  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'standalone' | 'onClose'>;
   onReturn(): void;
 }) {
   const { t } = useTranslation();
@@ -28,11 +32,23 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
   const [navigation, setNavigation] = useState<WebViewNavigation | null>(null);
   const [source, setSource] = useState({ uri: visit.url });
   const [rendererEpoch, setRendererEpoch] = useState(0);
+  // WKWebView paints white until its first load ends; each renderer starts hidden over the themed page.
+  const [paintedEpoch, setPaintedEpoch] = useState<number | null>(null);
   const rendererGone = useRef(false);
   const pendingAddress = useRef<{ url: string; previous: string[] } | null>(null);
   const address = navigation?.url ?? source.uri;
   const live = useRef(true);
   const { viewRef, measure, script, viewportStyle, obscuredContentInsets } = useHtmlBrowserViewport(insets);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
+  const copyAddress = useCallback(async () => {
+    await Clipboard.setStringAsync(address);
+    if (!live.current) return;
+    setNotice(t('files.preview.browserCopiedAddress'));
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), COPY_NOTICE_DISMISS_MS);
+  }, [address, t]);
   useEffect(() => {
     live.current = true;
     void visit.snapshotClosed.then(() => { if (live.current) setReady(true); }, () => { if (live.current) setFailed(true); });
@@ -75,7 +91,11 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
             if (event.nativeEvent.url === pendingAddress.current?.url) pendingAddress.current = null;
             setFailed(false);
           }}
-          onLoadEnd={() => { if (live.current && script) webView.current?.injectJavaScript(script); }}
+          onLoadEnd={() => {
+            if (!live.current) return;
+            setPaintedEpoch(rendererEpoch);
+            if (script) webView.current?.injectJavaScript(script);
+          }}
           onScroll={({ nativeEvent: { contentOffset } }) => {
             if (live.current) webView.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
           }}
@@ -91,17 +111,17 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
           onError={() => { if (live.current) setFailed(true); }}
           onContentProcessDidTerminate={() => { if (live.current) { rendererGone.current = true; setFailed(true); } }}
           onRenderProcessGone={() => { if (live.current) { rendererGone.current = true; setFailed(true); } }}
-          style={styles.fill}
+          style={[styles.fill, { backgroundColor: colors.surface }, paintedEpoch !== rendererEpoch && styles.unpainted]}
         />}
         {!ready && !failed && <View style={styles.center}><ActivityIndicator color={colors.textSecondary} /></View>}
         {failed && <View pointerEvents="none" style={[styles.center, { backgroundColor: colors.surface }]}>
-          <Text style={{ color: colors.textPrimary }}>{t('files.preview.browserWebsiteFailed')}</Text>
+          <Text style={[styles.failedText, { color: colors.errorText }]}>{t('files.preview.browserWebsiteFailed')}</Text>
         </View>}
       </View>
     </View>
     <HtmlBrowserChrome {...chrome}
       title={address} path={address} address={address} website
-      source={false} busy={false} loading={!failed && (!ready || !navigation || navigation.loading)}
+      source={false} busy={false} notice={notice} loading={!failed && (!ready || !navigation || navigation.loading)}
       canGoBack canGoForward={navigation?.canGoForward === true}
       onNavigate={navigate}
       onBack={() => navigation?.canGoBack ? webView.current?.goBack() : onReturn()}
@@ -111,7 +131,7 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
         else webView.current?.reload();
       }}
       onToggleSource={onReturn}
-      onCopyPath={() => { void Clipboard.setStringAsync(address); }}
+      onCopyPath={() => { void copyAddress().catch(() => {}); }}
       onShare={() => { void Share.share(Platform.OS === 'ios' ? { url: address } : { message: address }).catch(() => {}); }}
       onAddToTask={() => {}}
     />
@@ -121,5 +141,8 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   viewport: { flex: 1, overflow: 'hidden' },
+  unpainted: { opacity: 0 },
   center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  // 报错说明(成句的话):footnote 13/18 400;字色 errorText 在调用处按主题注入。
+  failedText: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
 });

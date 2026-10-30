@@ -16,13 +16,16 @@
  */
 
 import { projectScheduleSidebarIndex } from '../scheduler/lib/projectScheduleSidebarIndex';
+import { parseScheduleBindings } from '../scheduler/lib/scheduleBindingIndex';
 import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSidebarIndexRuns';
+import { isTeammateTaskSession } from '../../../shared/sessionSource';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { readSessionBatch, isSessionListRow as isRemoteSessionListSession } from '@/lib/sessionBatchRead';
 import { remoteProjectsStore, type RemoteSessionStatus } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
+import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
@@ -112,6 +115,41 @@ function parseRemoteSessionList(value: unknown, expectedStatus: RemoteSessionSta
   return value as unknown as Session[];
 }
 
+/** Old hosts omit teammate lanes from sessions:list; their owner-authorized history API already exposes exact links. */
+async function readRemoteTeammateTasks(
+  deviceId: string, status: RemoteSessionStatus, limit: number, current: () => boolean,
+): Promise<Session[]> {
+  const links = new Map<string, NonNullable<Session['companion']>>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  try {
+    do {
+      if (!current()) return [];
+      const response = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:history:query', [{
+        tool: 'list_sessions', args: { source: 'bot', time_field: 'activity', limit: 200, ...(cursor ? { cursor } : {}) },
+      }]) as { ok?: boolean; sessions?: Array<{ id?: unknown; status?: unknown; source?: unknown; companion?: Session['companion'] }>; hasMore?: boolean; nextCursor?: string };
+      if (!current() || response?.ok !== true || !Array.isArray(response.sessions)) return [];
+      for (const row of response.sessions) {
+        if (typeof row.id === 'string' && row.status === status && isTeammateTaskSession(row)
+          && typeof row.companion?.id === 'string') links.set(row.id, row.companion);
+      }
+      if (!response.hasMore || links.size >= limit) break;
+      if (!response.nextCursor || cursors.has(response.nextCursor)) return [];
+      cursor = response.nextCursor;
+      cursors.add(cursor);
+    } while (current());
+    if (!current() || links.size === 0) return [];
+    const rows = await readSessionBatch([...links.keys()].slice(0, limit), deviceId);
+    if (!current()) return [];
+    return rows.flatMap(({ sessionId, value }) => value && value.source === 'bot' && value.status === status
+      ? [{ ...value, companion: links.get(sessionId)! }] : []);
+  } catch (error) {
+    if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+    // Unsupported/offline history must not replace ordinary tasks or cached companion rows.
+    return [];
+  }
+}
+
 /** 退避:250ms 起指数增长,封顶 3000ms。 */
 function backoffMs(attempt: number): number {
   return Math.min(250 * 2 ** attempt, 3000);
@@ -144,7 +182,9 @@ export type RefreshResult = 'ok' | 'revoked' | 'superseded' | 'gave-up';
 
 interface RefreshTask {
   promise: Promise<RefreshResult>;
+  lifecycleEpoch: number;
   rerun: boolean;
+  rerunEpoch?: number;
   name?: string;
   opts: RefreshOptions;
 }
@@ -193,10 +233,22 @@ export async function refreshRemoteDeviceSessions(
   name?: string,
   opts: RefreshOptions = {},
 ): Promise<RefreshResult> {
+  // The main-process probe owns recovery while the circuit is open. Preserve
+  // the mirror and avoid starting another listing/retry chain in every window.
+  if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
   const status = opts.status ?? 'active';
   const taskKey = refreshTaskKey(deviceId, status);
+  const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
   const existing = refreshTasks.get(taskKey);
   if (existing) {
+    if (existing.lifecycleEpoch !== lifecycleEpoch) {
+      // Keep the physical request single-flight across disable/re-enable. A new
+      // caller may retry after it settles; the cancelled caller cannot do so.
+      await existing.promise;
+      if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== lifecycleEpoch)
+        return 'superseded';
+      return refreshRemoteDeviceSessions(deviceId, name, opts);
+    }
     const requestedSnapshotMode = opts.snapshotMode ?? 'merge';
     // periodic tick 是弱语义：已有任意 refresh 在途时直接复用，不能每个 interval tick
     // 都 bump epoch 让慢请求自取消。bootstrap/reseed 等事件型 refresh 仍走强语义补跑。
@@ -219,12 +271,13 @@ export async function refreshRemoteDeviceSessions(
       coalescingMode: undefined,
     };
     // 先让当前 in-flight snapshot 失效,否则它可能在排队的补跑开始前覆盖 push 带来的新状态。
-    remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
+    existing.rerunEpoch = remoteProjectsStore.nextSnapshotEpoch(deviceId, status);
     return existing.promise;
   }
 
   const task: RefreshTask = {
     promise: Promise.resolve('gave-up'),
+    lifecycleEpoch,
     rerun: false,
     name,
     opts,
@@ -239,10 +292,21 @@ export async function refreshRemoteDeviceSessions(
 async function drainRefreshTask(deviceId: string, task: RefreshTask): Promise<RefreshResult> {
   let result: RefreshResult = 'gave-up';
   do {
+    if (remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) !== task.lifecycleEpoch)
+      return 'superseded';
     task.rerun = false;
     result = await runRefreshRemoteDeviceSessions(deviceId, task.name, task.opts);
     // revoked 是被控端明确拒绝,不再补跑排队请求。
     if (result === 'revoked') return result;
+    // Disconnect/remove/clear must cancel queued work as well as the in-flight
+    // snapshot. A new reconnect refresh can explicitly queue a newer epoch.
+    if (
+      task.rerun &&
+      task.rerunEpoch !== undefined &&
+      !remoteProjectsStore.isLatestSnapshotEpoch(deviceId, task.rerunEpoch, task.opts.status ?? 'active')
+    ) {
+      return 'superseded';
+    }
   } while (task.rerun);
   return result;
 }
@@ -320,6 +384,7 @@ async function runRefreshRemoteDeviceSessions(
   let timeoutAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
     try {
@@ -336,11 +401,19 @@ async function runRefreshRemoteDeviceSessions(
               ...(opts.coalescingMode === 'weak' ? {} : { fresh: true }),
             },
           ],
+          { background: status === 'archived' || opts.coalescingMode === 'weak' },
         );
         // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
         if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
           return 'superseded';
-        const sessions = parseRemoteSessionList(value, status);
+        const ordinary = parseRemoteSessionList(value, status);
+        // Optional old-host history may span many pages. Publish the successful
+        // ordinary read now; reconcile removals only after discovery completes.
+        remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, ordinary, status);
+        const teammateTasks = await readRemoteTeammateTasks(deviceId, status, listLimit,
+          () => remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status));
+        if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+        const sessions = [...new Map([...teammateTasks, ...ordinary].map(session => [session.id, session])).values()];
         // Companions are fetched by resource:get + sessions:get, not by the
         // ordinary task list. Keep their live state and reconcile them by id,
         // even when the ordinary list is empty or is a full replacement.
@@ -375,7 +448,10 @@ async function runRefreshRemoteDeviceSessions(
           await probeMissingSessionStatuses(deviceId, epoch, missingCompanionIds, status);
         }
       }
+      if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
       if (opts.scope === 'schedule' || opts.scope === 'both') {
+        if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
+        let scheduleIndexError: unknown;
         try {
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,
@@ -398,10 +474,27 @@ async function runRefreshRemoteDeviceSessions(
         } catch (error) {
           // Older peers may not expose this existing channel. Keep the last mirror;
           // failure of optional schedule metadata must not hide a valid session list.
-          if (opts.scope === 'schedule' || String(error).includes(ACCESS_REVOKED_MARKER))
-            throw error;
+          if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+          scheduleIndexError = error;
           log.debug('remote schedule index unavailable');
         }
+        // 与现有首拉、重连及 schedule push 共用刷新与代次保护，每设备一份列表。
+        // 不能从 run 索引猜绑定：尚未首次运行、绑定多个调度、解除绑定都需要当前列表。
+        try {
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+          if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
+          const raw = await window.electronAPI.deviceLink.invoke(
+            deviceId, 'maker:schedule:list', [null, { sessionBindings: true }],
+          );
+          if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+          remoteProjectsStore.setDeviceScheduleBindings(deviceId, parseScheduleBindings(raw));
+        } catch (error) {
+          if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+          // 辅助信息读取失败保留上次镜像；后续既有 push/重连重查，不影响任务列表。
+          log.debug('remote schedule bindings unavailable');
+        }
+        // 老端的 run 索引不可用也不阻止读取绑定；索引自身仍沿用原有失败处理。
+        if (scheduleIndexError && opts.scope === 'schedule') throw scheduleIndexError;
       }
       return remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)
         ? 'ok'

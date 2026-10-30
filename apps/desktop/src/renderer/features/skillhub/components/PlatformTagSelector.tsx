@@ -1,6 +1,11 @@
-import * as Popover from '@radix-ui/react-popover';
 import { ChevronDown } from 'lucide-react';
 
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
 
@@ -32,8 +37,8 @@ export function PlatformTagSelector({
   };
 
   return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           aria-label={ariaLabel}
@@ -56,43 +61,30 @@ export function PlatformTagSelector({
           </span>
           <ChevronDown size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
         </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          data-testid="platform-tag-options"
-          side="bottom"
-          align="start"
-          sideOffset={4}
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onWheel={(event) => {
-            // The parent Dialog's scroll lock otherwise cancels wheel input from this portal.
-            event.stopPropagation();
-          }}
-          className={cn(
-            'z-[10010] max-h-52 w-[var(--radix-popover-trigger-width)] overflow-y-auto overscroll-contain rounded-xl border p-1',
-            'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            '[box-shadow:var(--cmd-palette-shadow)]',
-          )}
-        >
-          {categories.map((category) => (
-            <label
-              key={category.slug}
-              className={cn(
-                'flex cursor-pointer select-none items-center gap-2 rounded-lg px-2.5 py-2 text-sm',
-                'text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--surface-hover)]',
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(category.slug)}
-                onChange={() => toggle(category.slug)}
-                className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
-              />
-              <span className="min-w-0 truncate">{category.name}</span>
-            </label>
-          ))}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        data-testid="platform-tag-options"
+        side="bottom"
+        align="start"
+        onWheel={(event) => {
+          // The parent Dialog's scroll lock otherwise cancels wheel input from this portal.
+          event.stopPropagation();
+        }}
+        // Above the publish Dialog; as wide as the trigger; long tag lists scroll.
+        className="z-[10010] max-h-52 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto overscroll-contain"
+      >
+        {categories.map((category) => (
+          <DropdownMenuCheckboxItem
+            key={category.slug}
+            checked={selected.has(category.slug)}
+            onCheckedChange={() => toggle(category.slug)}
+            // Multi-select: keep the menu open while ticking several tags.
+            onSelect={(event) => event.preventDefault()}
+          >
+            <span className="min-w-0 truncate">{category.name}</span>
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

@@ -1,31 +1,18 @@
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, appendAutoReviewUserIntent, extractAutoReviewUserIntent } from '@cindy/maker-core';
+import { createAutoReviewIntentProjection, type AutoReviewHistoryMessage } from '@cindy/maker-shared/auto-review-intent';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import type { AutoReviewUserIntent, SendOptions, UserMessage } from '@cindy/maker-core';
 import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
-import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
+import { projectPersistedAgentFacingUserText, readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
 
-/** Existing transcript projection, already filtered by the database's clear/rewind boundary. */
-export interface AutoReviewHistoryMessage {
-  clientId: string;
-  role: string;
-  content: unknown;
-  createdAt?: number;
-  agentMeta: Record<string, unknown> | null;
-}
+/** Main-only projection of a protected delegated receipt; never accepted from wire input. */
+export { AUTO_REVIEW_DELEGATED_CONTINUATION };
 
-function interactionAnswer(message: AutoReviewHistoryMessage): { text: string; acceptedAt: number } | null {
-  if (message.role !== 'ask_user' && message.role !== 'plan_review') return null;
-  const value = message.agentMeta?.autoReviewUserText;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const answer = value as Record<string, unknown>;
-  return typeof answer.text === 'string' && typeof answer.acceptedAt === 'number'
-    && Number.isFinite(answer.acceptedAt)
-    ? { text: answer.text, acceptedAt: answer.acceptedAt } : null;
-}
-
+export type { AutoReviewHistoryMessage } from '@cindy/maker-shared/auto-review-intent';
+const intentProjection = createAutoReviewIntentProjection();
 /** Both queued and direct steers may reach a freshly reattached harness. */
 export async function restoreAutoReviewSteerIntent(
   content: string | ReadonlyArray<{ type: string; [key: string]: unknown }>,
-  options: SendOptions,
+  options: SendOptions & { readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true },
   readHistory: () => Promise<AutoReviewHistoryMessage[]>,
 ): Promise<AutoReviewUserIntent | undefined> {
   options.signal?.throwIfAborted();
@@ -33,6 +20,11 @@ export async function restoreAutoReviewSteerIntent(
   if (options[AUTO_REVIEW_USER_INTENT] !== undefined) return options[AUTO_REVIEW_USER_INTENT];
   const context = options[MAIN_OWNED_SEND_CONTEXT];
   if (context && context.origin.kind !== 'desktop') return undefined;
+  if (options[AUTO_REVIEW_DELEGATED_CONTINUATION]) {
+    const history = await readHistory();
+    options.signal?.throwIfAborted();
+    return restoreAutoReviewUserIntent(history);
+  }
   const text = options[AUTO_REVIEW_SOURCE_CONTENT] ?? context?.rawChannelText;
   if (typeof text !== 'string') return undefined;
   const history = await readHistory().catch(() => []);
@@ -45,32 +37,7 @@ export async function restoreAutoReviewSteerIntent(
 }
 
 /** Read only the user's authored text, never the decorated agent-facing projection. */
-export function readAutoReviewUserText(content: unknown): string | null {
-  if (typeof content === 'string') {
-    try {
-      content = JSON.parse(content);
-    } catch {
-      return content as string;
-    }
-  }
-  if (!content || typeof content !== 'object' || Array.isArray(content)) return null;
-  const value = content as Record<string, unknown>;
-  if (typeof value.text !== 'string') return null;
-  if (
-    value.quotesEncoded === true ||
-    [
-      'images',
-      'files',
-      'mentions',
-      'sessionReferences',
-      'agentReferences',
-      'references',
-      'pastedTextRanges',
-    ].some((key) => Array.isArray(value[key]) && value[key].length > 0)
-  )
-    return null;
-  return value.text;
-}
+export const readAutoReviewUserText = intentProjection.readText;
 
 /** Resource changes discard old deictic grants, while preserving verified current authored text. */
 export function currentAutoReviewResourceIntent(
@@ -94,72 +61,30 @@ export function currentAutoReviewResourceIntent(
           .filter((block) => block.type === 'text')
           .map((block) => block.text)
           .join('\n');
-  if (projectPersistedAgentFacingUserText(content) !== wireText) return '';
-  // Pasted ranges and attached transcript projections are evidence, not a signed instruction.
-  if (
-    ['pastedTextRanges', 'sessionReferences', 'agentReferences'].some(
-      (key) => Array.isArray(value[key]) && value[key].length > 0,
-    )
-  )
-    return '';
-  return value.quotesEncoded === true
-      ? joinChatQuoteTextSegments(parseChatQuoteSegments(value.text))
-      : value.text;
+  // Queue admission carries Composer text; direct consumers may already carry
+  // its agent-facing projection. Both must match this same persisted envelope.
+  if (value.text !== wireText && projectPersistedAgentFacingUserText(content) !== wireText) return '';
+  // Structured references have validated spans: discard those spans, not the
+  // owner's adjacent request. Attached session transcripts are separate from value.text entirely.
+  const references = readAgentInputReferences(value.agentReferences, value.text);
+  if (Array.isArray(value.agentReferences) && references.length !== value.agentReferences.length) return '';
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const reference of references) {
+    parts.push(value.text.slice(cursor, reference.start));
+    cursor = reference.end;
+  }
+  parts.push(value.text.slice(cursor));
+  const textOutsideReferences = parts.join('');
+  const segments = value.quotesEncoded === true ? parseChatQuoteSegments(textOutsideReferences) : undefined;
+  const authoredText = segments ? joinChatQuoteTextSegments(segments) : textOutsideReferences;
+  // Composer serializes list structure outside reference/quote spans. A list
+  // containing only those resources leaves markers, not a new owner request.
+  // Keep all text verbatim if any line still contains actual authored content.
+  if ((references.length > 0 || segments?.some(segment => segment.kind === 'quote')) &&
+      authoredText.split(/\r?\n/).every(line => /^[ \t]*(?:[-+*•]|[1-9]\d*[.)、])?[ \t]*$/.test(line))) return '';
+  return authoredText;
 }
 
 /** Restore a bounded suffix of actual owner messages, without promoting assistant handoffs to consent. */
-export function restoreAutoReviewUserIntent(
-  history: readonly AutoReviewHistoryMessage[],
-  current?: { clientId: string; content: unknown; authoredText?: string },
-): AutoReviewUserIntent {
-  let intent: AutoReviewUserIntent = '';
-  let replayed = false;
-  const latest = current ? current.authoredText ?? readAutoReviewUserText(current.content) : null;
-  // Cards are created before the user answers; their acceptance time orders authority.
-  const ordered = history.map((message, index) => ({ message, index,
-    at: interactionAnswer(message)?.acceptedAt ?? message.createdAt ?? index,
-  })).sort((a, b) => a.at - b.at || a.index - b.index);
-  for (let index = 0; index < ordered.length; index++) {
-    const { message, at } = ordered[index]!;
-    if (message.role === 'ask_user' || message.role === 'plan_review') {
-      const answer = interactionAnswer(message);
-      if (!answer) { intent = ''; continue; }
-      // Millisecond ties cannot establish whether a card overrode a newer restriction.
-      if (ordered.some((entry, other) => other !== index && entry.at === at)) return '';
-      if (answer.text) intent = appendAutoReviewUserIntent(intent, answer.text);
-      continue;
-    }
-    if (message.role !== 'user') continue;
-    // Host-originated scheduled turns are execution context, never new owner consent.
-    // Keep intervening human restrictions; do not let repeated heartbeats erase them.
-    // Use the protected receipt, not origin (which the renderer can edit).
-    const receipt = message.agentMeta?.autoReviewUserText as Record<string, unknown> | undefined;
-    if (receipt?.kind === 'scheduled-continuation') continue;
-    // An already-persisted retry is the same input, not a second authorization.
-    if (current && message.clientId === current.clientId) {
-      if (message.agentMeta?.autoReviewUserText !== latest) return '';
-      replayed = true;
-    }
-    const meta = message.agentMeta;
-    const text = meta?.autoReviewUserText;
-    // delivery/wire alone are not authorship proof: plugin rewrites have the same shape.
-    // Old rows without Host-captured text cannot safely restore authorization.
-    if (
-      typeof text !== 'string' ||
-      !['turn', 'steer'].includes(String(meta?.delivery)) ||
-      meta?.autoResume ||
-      meta?.contextRebuild ||
-      text.startsWith('[UI_ACTION_TRIGGER]')
-    ) {
-      intent = '';
-      continue;
-    }
-    if (readAutoReviewUserText(message.content) === null) intent = '';
-    intent = appendAutoReviewUserIntent(intent, text);
-  }
-  if (replayed || !current) return intent;
-  if (readAutoReviewUserText(current.content) === null) intent = '';
-  return latest !== null
-    ? appendAutoReviewUserIntent(intent, latest)
-    : extractAutoReviewUserIntent('');
-}
+export const restoreAutoReviewUserIntent = intentProjection.restore;

@@ -1,29 +1,58 @@
+import { setSessionOpeningModelAdmission } from '../localDb/sessionOpening';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const run = vi.fn(async () => undefined);
-  const values = vi.fn(() => ({ run }));
+  const values = vi.fn((_row: Record<string, unknown>) => ({ run }));
   return {
     run, values, insert: vi.fn(() => ({ values })),
     bootstrap: vi.fn(async (): Promise<void> => undefined), recent: vi.fn(async () => undefined),
+    workspace: vi.fn(),
   };
 });
-vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: { insert: mocks.insert } }) }));
+vi.mock('../localDb/client/current', () => ({ getCurrentDbClientSnapshot: () => mocks, getDbClient: () => ({ drizzle: { insert: mocks.insert } }) }));
 vi.mock('../localDb/schema', () => ({ sessions: {} }));
-vi.mock('../localDb/mapper', () => ({ sessionCreateToRow: (id: string, row: object) => ({ id, ...row }) }));
-vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
+vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: mocks.workspace }));
 vi.mock('../git-snapshot/projectGitBootstrap', () => ({ ensureProjectGitInitialized: mocks.bootstrap }));
-vi.mock('../maker-host/git-safety-settings-store', () => ({ readGitSafetySettings: () => ({ autoSnapshotEnabled: true }) }));
+vi.mock('../maker-host/git-safety-settings-store', () => ({ readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }) }));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: mocks.recent }));
 vi.mock('../localDb/pluginWorkspaceDedupe', () => ({ pickSessionForWorkdir: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 
-import { createPluginDraftSession } from '../localDb/ipc/pluginWorkspaceSessions';
+import { createPluginTaskSession, createPluginDraftSession } from '../localDb/ipc/pluginWorkspaceSessions';
 
 beforeEach(() => {
+  setSessionOpeningModelAdmission(async body => ({ ...body, model: body.model ?? 'test-model', effort: body.effort ?? '' }));
   vi.clearAllMocks();
   mocks.bootstrap.mockResolvedValue(undefined);
   mocks.run.mockResolvedValue(undefined);
+});
+
+describe('plugin errand creation persistence boundary', () => {
+  const params = { ghostId: 'test-plugin', sessionId: 'task', title: 'Task', permissionMode: 'plan' as const };
+  it.each(['initial', 'workspace allocation', 'bootstrap', 'after bootstrap'] as const)('does not begin persistence on %s failure', async phase => {
+    const onPersistenceStarted = vi.fn();
+    if (phase === 'workspace allocation') mocks.workspace.mockImplementationOnce(() => { throw new Error('Workspace unavailable'); });
+    if (phase === 'bootstrap') mocks.bootstrap.mockRejectedValueOnce(new Error('Workspace unavailable'));
+    const shouldContinue = () => phase !== 'initial' && (phase !== 'after bootstrap' || !mocks.bootstrap.mock.calls.length);
+    await expect(createPluginTaskSession({ ...params, shouldContinue, onPersistenceStarted })).rejects.toThrow();
+    expect(onPersistenceStarted).not.toHaveBeenCalled();
+    expect(mocks.insert).not.toHaveBeenCalled();
+  });
+  it.each(['success', 'insert error', 'after insert'] as const)('marks the boundary before any %s outcome', async phase => {
+    const onPersistenceStarted = vi.fn();
+    mocks.values.mockImplementationOnce(() => {
+      expect(onPersistenceStarted).toHaveBeenCalledOnce();
+      if (phase === 'insert error') throw new Error('Storage unavailable');
+      return { run: mocks.run };
+    });
+    const shouldContinue = () => phase !== 'after insert' || !mocks.values.mock.calls.length;
+    const result = createPluginTaskSession({ ...params, shouldContinue, onPersistenceStarted });
+    if (phase === 'success') await expect(result).resolves.toBe('task');
+    else await expect(result).rejects.toThrow();
+    expect(onPersistenceStarted).toHaveBeenCalledOnce();
+    expect(mocks.insert).toHaveBeenCalledOnce();
+  });
 });
 
 describe('plugin draft creation commit boundary', () => {
@@ -41,7 +70,7 @@ describe('plugin draft creation commit boundary', () => {
     mocks.bootstrap.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
     const notify = vi.fn();
     const result = createPluginDraftSession({ ...params, shouldContinue: () => active, notifySessionCreated: notify });
-    expect(mocks.bootstrap).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.bootstrap).toHaveBeenCalledOnce());
     active = false;
     finish();
     expect(await result).toBeNull();
@@ -72,4 +101,9 @@ describe('plugin draft creation commit boundary', () => {
     expect(await createPluginDraftSession(params)).toEqual(expect.any(String));
     expect(mocks.run).toHaveBeenCalledOnce();
   });
+});
+
+it('persists empty reasoning for models without effort controls instead of defaulting high', async () => {
+  await createPluginTaskSession({ ghostId: 'plugin', title: 'Task', model: 'plain-model', effort: '', permissionMode: 'plan' });
+  expect(mocks.values.mock.calls[0][0]).toMatchObject({ model: 'plain-model', effort: '' });
 });

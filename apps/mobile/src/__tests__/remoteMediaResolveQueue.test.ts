@@ -83,7 +83,7 @@ describe('remoteMediaResolveQueue', () => {
     const queue = createRemoteMediaResolveQueue({ resolve });
 
     // 未命中:立即拒绝,不触发取件,也不写负缓存。
-    await expect(queue.request(imageRequest('a.png'), { cachedOnly: true })).rejects.toThrow('cachedOnly');
+    await expect(queue.request(imageRequest('a.png'), { cachedOnly: true })).rejects.toThrow('这个媒体还没有缓存到手机上');
     expect(resolve).not.toHaveBeenCalled();
 
     // 负缓存未被污染:随后的正常请求照常起飞。
@@ -182,21 +182,26 @@ describe('remoteMediaResolveQueue', () => {
     await viewer;
   });
 
-  it('promotes an already queued url to the front on a front request', async () => {
+  // #6517 review P1, unit: a viewer's cache-only front request must promote an
+  // existing queued original without creating another download or waiter.
+  it.each([false, true])('promotes an already queued url on a front request (cachedOnly: %s)', async (cachedOnly) => {
     const { pending, resolve } = manualResolver();
     const queue = createRemoteMediaResolveQueue({ resolve }, { maxConcurrent: 1 });
 
     void queue.request(imageRequest('a.png')).catch(() => undefined);
     void queue.request(imageRequest('b.png')).catch(() => undefined);
     const promoted = queue.request(imageRequest('c.png'));
-    const viewer = queue.request(imageRequest('c.png'), { front: true });
+    const viewer = queue.request(imageRequest('c.png'), { front: true, cachedOnly });
+    if (cachedOnly) await expect(viewer).rejects.toThrow('这个媒体还没有缓存到手机上');
+    expect(queue.stats()).toEqual({ inFlight: 1, queued: 2 });
     await flush();
 
     pending[0]?.resolve(resolvedMedia('a.png'));
     await flush();
     expect(resolve.mock.calls[1]?.[0]?.url).toBe('xdt-image://cache/c.png');
     pending[1]?.resolve(resolvedMedia('c.png'));
-    await Promise.all([promoted, viewer]);
+    await promoted;
+    if (!cachedOnly) await viewer;
   });
 
   it('serves fresh cache hits without re-resolving, and re-resolves stale entries', async () => {
@@ -393,7 +398,7 @@ describe('remoteMediaResolveQueue', () => {
 
     queue.releaseAll();
     // 排队项直接拒绝,resolve 不会为它被调用
-    await expect(p2).rejects.toThrow('远程媒体取件已取消');
+    await expect(p2).rejects.toThrow('已取消取回远程媒体');
     pending[0]?.resolve(resolvedMedia('a.png'));
     await expect(p1).resolves.toMatchObject({ ossKey: 'key/a.png' });
     await flush();

@@ -165,6 +165,27 @@ describe('dedicated upstream merge session', () => {
       }
     },
   );
+  it('asks the resolver to keep both computers’ changes when combining with GitHub', async () => {
+    setMainLocale('zh-CN');
+    await ensureUpstreamMergeSession(
+      userData,
+      { ...state, strategy: 'combine', ref: 'github', remote: { base: 'e'.repeat(40) } },
+      { agentKind: 'codex' },
+      vi.fn(),
+      () => true,
+    );
+    expect(h.insert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: '09-20 14:07 合并两台电脑的修改' }),
+    );
+    const prompt = String(h.dispatch.mock.calls.at(-1)?.[1]);
+    expect(prompt).toContain('两边的功能都不能丢');
+    expect(prompt).toContain(state.upstreamCommit);
+    expect(prompt).toContain(state.baselineCommit!);
+    expect(prompt).toContain('e'.repeat(40));
+    for (const forbidden of ['rebase --skip', 'reset --hard', 'ours/theirs', '禁止 push'])
+      expect(prompt).toContain(forbidden);
+    expect(prompt).not.toContain('最新官方版本');
+  });
   it('reopens an existing task without changing its timestamp or dispatching the first message twice', async () => {
     h.reads.push([row], [{ id: 'first-message' }]);
     expect(
@@ -197,6 +218,48 @@ describe('dedicated upstream merge session', () => {
         source: 'cindy-make-merge',
       }),
     );
+  });
+  it('does not resend an interrupted task even when its first message was not persisted', async () => {
+    h.reads.push([row], []);
+    expect(
+      await ensureUpstreamMergeSession(
+        userData,
+        { ...state, sessionId: row.id, status: 'failed', error: 'interrupted' },
+        undefined,
+        vi.fn(),
+        () => true,
+      ),
+    ).toBe(row.id);
+    expect(h.insert).not.toHaveBeenCalled();
+    expect(h.dispatch).not.toHaveBeenCalled();
+  });
+  it('dispatches later conflict steps once each in the retained task, preserving the legacy first key', async () => {
+    const plan = {
+      action: 'revert' as const,
+      runId: 'feature-run',
+      taskSessionId: 'feature-task',
+      taskTree: 'c'.repeat(40),
+      steps: [],
+      nextStep: 0,
+      awaitingResolution: true,
+    };
+    for (const nextStep of [0, 1]) {
+      const next = { ...state, sessionId: row.id, feature: { ...plan, nextStep } };
+      h.reads.push([row], []);
+      await ensureUpstreamMergeSession(userData, next, { agentKind: 'codex' }, vi.fn(), () => true);
+      expect(h.dispatch).toHaveBeenLastCalledWith(
+        row.id,
+        expect.any(String),
+        expect.objectContaining({ id: row.id }),
+        expect.any(Function),
+        `cindy-make-merge-first-${state.id}${nextStep === 0 ? '' : '-step-1'}`,
+      );
+      h.reads.push([row], [{ id: 'persisted-step-message' }]);
+      await ensureUpstreamMergeSession(userData, next, { agentKind: 'codex' }, vi.fn(), () => true);
+      expect(h.dispatch).toHaveBeenCalledTimes(nextStep + 1);
+    }
+    expect(h.insert).not.toHaveBeenCalled();
+    expect(h.emit).not.toHaveBeenCalled();
   });
   it('never sends into an account switched during creation', async () => {
     h.insert.mockImplementation(async () => {

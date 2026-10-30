@@ -52,7 +52,7 @@ describe('HomeZeroModelAction', () => {
     expect(screen.getByText('onboarding.homeZeroModel.title')).toBeTruthy();
     expect(screen.queryByText('onboarding.connectProvider.title')).toBeNull();
     expect(screen.getByTestId('home-zero-model-cta').className).toContain(
-      'bg-[var(--accent-cta-bg)]',
+      '[--button-face-bg:var(--accent-cta-bg-pure)]',
     );
     expect(screen.getByTestId('home-zero-model-cta').className).toContain(
       'text-[var(--accent-pure-cta-fg)]',

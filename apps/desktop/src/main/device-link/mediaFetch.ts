@@ -36,6 +36,10 @@ import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { mimeOf, uploadLocalFile } from './mediaTransfer.js';
 import { createLogger } from '../logger.js';
+import { getDeviceLinkInvokeContext } from './invoke-context.js';
+import { sharedTaskMediaId, withSharedTaskMedia } from './sharedTaskMediaContext.js';
+import { assertSharedTaskMedia } from './sharedTaskMediaAccess.js';
+import { fileVersion } from './fileVersion.js';
 
 const log = createLogger('device-link:mediaFetch');
 
@@ -70,6 +74,7 @@ export interface MediaFetchResult {
    */
   inlineBase64?: string;
   transferRequired?: boolean;
+  version?: string;
 }
 
 /** 缩略图最长边:手机聊天气泡最宽 ~360pt@3x≈1080px,1024 足够清晰;点开查看器仍取原图。 */
@@ -314,6 +319,11 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       : {};
   const url = record.url;
   if (typeof url !== 'string' || !url) throw new Error('media:fetch 缺少 url');
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  let sharedRoot: string | { file: string } | undefined;
+  if (sharedTask) {
+    sharedRoot = await assertSharedTaskMedia(url, sharedTask);
+  }
   const isPathMedia = url.startsWith('xdt-file://') || url.startsWith('xdt-audio://');
   const sshOrigin = isPathMedia ? await parseSshMediaOrigin(url) : null;
   const constraints: PathMediaConstraints = isPathMedia
@@ -322,6 +332,7 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   if (maximumBytes !== undefined)
     constraints.maxBytes = Math.min(constraints.maxBytes ?? maximumBytes, maximumBytes);
   let absPath: string;
+  let sourceVersion: string | undefined;
   let mimeType: string | undefined;
   if (sshOrigin) {
     // SSH 分支的两道约束必须在 materialize **内部**生效:它 stat 完就会把整份文件分片拉进
@@ -338,9 +349,21 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
       throw new Error(`SSH 媒体取回失败（${materialized.status}）：${materialized.message}`);
     }
     absPath = materialized.cachePath;
+    sourceVersion = materialized.sourceVersion;
     mimeType = materialized.mime;
   } else {
     ({ absPath, mimeType } = resolveLocalMedia(url));
+    if (!isPathMedia && mimeType?.startsWith('image/')) {
+      try {
+        const source = await stat(absPath);
+        if (!source.isFile()) throw new Error('[MEDIA_SOURCE_MISSING] Media source is not a file');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new Error('[MEDIA_SOURCE_MISSING] Media source is missing on this Host');
+        }
+        throw error;
+      }
+    }
   }
   // For file/audio schemes the requested URL path carries the semantic
   // extension; if it resolves through a symlink whose target has a different
@@ -363,10 +386,16 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
     let real: string;
     try {
       real = await realpath(absPath);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('[MEDIA_SOURCE_MISSING] Media source is missing on this Host');
       throw new Error('媒体文件不存在或不可读');
     }
     // realpath 再查:挡字面形式看似无害的 symlink 逃逸。
+    if (sharedRoot && (typeof sharedRoot === 'string'
+      ? !isInsideRealDir(real, sharedRoot)
+      : path.relative(sharedRoot.file, real) !== '')) {
+      throw new Error('[PERMISSION_DENIED] Media left the shared task file scope');
+    }
     if (!isPathAllowedAgainst(real, getSensitiveMediaBlocklist())) {
       log.warn(`media:fetch blocked sensitive realpath ${url.slice(0, 60)}`);
       throw new Error('该路径位于敏感目录,已阻止远程取件');
@@ -403,16 +432,23 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
     }
   }
 
-  return { absPath, mimeType, uploadExtHint, maxBytes: constraints.maxBytes };
+  return {
+    absPath, mimeType, uploadExtHint, maxBytes: constraints.maxBytes,
+    // Only the authorized SSH materializer supplies immutable versioned copies.
+    sourceVersion,
+  };
 }
 
 export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
   const record =
     arg && typeof arg === 'object'
-      ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown; prepareOnly?: unknown })
+      ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown; prepareOnly?: unknown; metadataOnly?: unknown })
       : {};
-  const { absPath, mimeType, uploadExtHint, maxBytes } = await resolveAuthorizedMedia(arg);
+  const { absPath, mimeType, uploadExtHint, maxBytes, sourceVersion } = await resolveAuthorizedMedia(arg);
   const url = record.url as string;
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  const mediaScope = sharedTask?.author.sharedTaskId ?? sharedTaskMediaId();
+  const cacheKey = mediaScope ? `${mediaScope}:${url}` : url;
   const skipCache = record.skipCache === true;
   if (record.prepareOnly === true && record.thumbnail !== true) {
     const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -423,11 +459,15 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
       const result = {
         ossKey: '',
         size: before.size,
+        version: fileVersion(absPath, before, sourceVersion),
         mimeType:
           mimeType ??
           mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
       };
-      if (before.size > FILE_INLINE_MAX_BYTES) return { ...result, transferRequired: true };
+      if (record.metadataOnly === true || before.size > FILE_INLINE_MAX_BYTES) {
+        log.debug(`media:fetch prepare → transfer size=${before.size} mime=${result.mimeType}`);
+        return { ...result, transferRequired: true };
+      }
       // Bounded read: a growing file cannot allocate an unbounded relay response.
       const bytes = Buffer.alloc(before.size);
       let offset = 0;
@@ -437,8 +477,9 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
         offset += read.bytesRead;
       }
       const after = await file.stat();
-      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs)
+      if (fileVersion(absPath, after, sourceVersion) !== result.version)
         throw new Error('REMOTE_FILE_CHANGED');
+      log.debug(`media:fetch prepare → inline size=${before.size} mime=${result.mimeType}`);
       return { ...result, inlineBase64: bytes.toString('base64') };
     } finally {
       await file.close();
@@ -473,11 +514,13 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
 
   // cindy-media 地址=内容指纹,永不变更,是最理想的上传去重键。
   const cacheable = url.startsWith('xdt-image://') || url.startsWith('cindy-media://');
-  let st: { size: number; mtimeMs: number } | null = null;
-  if (cacheable) {
-    st = await stat(absPath);
+  const versioned = !cacheable && !/^(audio|video)\//.test(
+    mimeType ?? mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
+  );
+  const st = cacheable || versioned ? await stat(absPath) : null;
+  if (cacheable && st) {
     if (!skipCache) {
-      const hit = lookupUploadCache(url, st.size, st.mtimeMs, Date.now());
+      const hit = lookupUploadCache(cacheKey, st.size, st.mtimeMs, Date.now());
       if (hit) {
         log.debug(`media:fetch cache hit ${url.slice(0, 40)} → ossKey=${hit.ossKey}`);
         return { ossKey: hit.ossKey, mimeType: hit.mimeType, size: hit.size };
@@ -485,13 +528,14 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
     }
   }
 
-  const uploaded = await uploadLocalFile(absPath, {
+  if (sharedTask && !sharedTask.isCurrent()) throw new Error('[PERMISSION_DENIED] Shared task access revoked');
+  const uploaded = await withSharedTaskMedia(sharedTask?.author.sharedTaskId, () => uploadLocalFile(absPath, {
     ...(maxBytes !== null ? { maxBytes } : {}),
     ...(mimeType ? { contentType: mimeType } : {}),
     ...(uploadExtHint ? { extHint: uploadExtHint } : {}),
-  });
+  }));
   if (cacheable && st) {
-    rememberUpload(url, {
+    rememberUpload(cacheKey, {
       ossKey: uploaded.key,
       mimeType: uploaded.contentType,
       size: uploaded.size,
@@ -501,7 +545,13 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
     });
   }
   log.debug(`media:fetch ${url.slice(0, 40)} → ossKey=${uploaded.key} size=${uploaded.size}`);
-  return { ossKey: uploaded.key, mimeType: uploaded.contentType, size: uploaded.size };
+  // Fallback downloads can join the same durable version cache as direct transfers.
+  // A changing source remains viewable but must never be indexed under an old version.
+  const afterUpload = versioned ? await stat(absPath).catch(() => null) : null;
+  const version = st && afterUpload && uploaded.size === st.size
+    && fileVersion(absPath, st, sourceVersion) === fileVersion(absPath, afterUpload, sourceVersion)
+    ? fileVersion(absPath, st, sourceVersion) : undefined;
+  return { ossKey: uploaded.key, mimeType: uploaded.contentType, size: uploaded.size, ...(version ? { version } : {}) };
 }
 
 export const __testing = {

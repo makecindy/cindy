@@ -13,6 +13,7 @@ import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 
 const {
@@ -57,6 +58,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalAuthUser: () => null,
   useAuth: () => ({ mode: 'local', exitLocalMode: vi.fn(async () => undefined) }),
 }));
 
@@ -132,10 +134,14 @@ import { updateCustomProvider } from '@/lib/customProviders';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import { useProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
+import { __testing as localProviderGroupsTesting } from '@/features/provider-group/useLocalProviderGroups';
+import { resetProviderShareStoreForTests } from '@/features/provider-share/providerShareStore';
 
 vi.mock('@/components/settings/useProviderSubscriptionCard', () => ({
   useProviderSubscriptionCard: vi.fn(() => null),
 }));
+
+vi.mock('@/components/settings/LlamaCppProviderDetail', () => ({ LlamaCppProviderDetail: () => null }));
 
 vi.mock('@/components/settings/OllamaProviderDetail', () => ({ OllamaProviderDetail: () => null }));
 
@@ -200,6 +206,7 @@ beforeEach(() => {
       onProviderOAuthProgress: vi.fn(() => () => undefined),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
+      llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
       onLocalModelStatus: vi.fn(() => () => undefined),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
@@ -254,10 +261,19 @@ describe('ProvidersSection — 深链定位', () => {
     },
   );
 
-  it.each(['anthropic', 'xai', 'cindy-local-ollama'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
+  it('uses the same local header and empty model treatment for llama.cpp', async () => {
+    providersState.providers = [makeProvider('cindy-local-llamacpp', { name: 'llama.cpp', source: 'user', auth: { method: 'none' }, connected: true })];
+    renderAt('?tab=providers&connect=cindy-local-llamacpp');
+    expect(await screen.findByText(/^settings\.providers\.local\.subtitle/)).toBeTruthy();
+    expect(screen.queryByText('settings.providers.detail.emptyModelsConnected')).toBeNull();
+    expect(screen.queryByText('settings.providers.pill.configured')).toBeNull();
+    expect(await screen.findByText('settings.providers.llamacpp.startOnUse')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+  });
+  it.each(['anthropic', 'xai', 'cindy-local-ollama', 'cindy-local-llamacpp'])('shows the saved name in both sidebar and detail header for %s', async (id) => {
     providersState.providers = [makeProvider(id, {
       name: 'My renamed provider', connected: true,
-      source: id === 'cindy-local-ollama' ? 'user' : 'builtin',
+      source: id.startsWith('cindy-local-') ? 'user' : 'builtin',
     })];
     renderAt(`?tab=providers&connect=${id}`);
     await waitFor(() => expect(screen.getAllByText('My renamed provider').length).toBeGreaterThanOrEqual(2));
@@ -299,7 +315,7 @@ describe('ProvidersSection — 深链定位', () => {
   );
 
   it.each(['subscriptionAccount', 'openAiAccount'] as const)(
-    'collapses usage on %s changes but retains expansion on quota refresh',
+    'shows usage windows without a details disclosure across %s changes',
     async (identityField) => {
       const account = { title: 'ChatGPT', windows: [{ key: 'weekly', title: 'Weekly', window: { utilization: 20 }, detail: 'Weekly usage details' }] };
       vi.mocked(useProviderSubscriptionCard).mockReturnValue(account);
@@ -309,16 +325,13 @@ describe('ProvidersSection — 深链定位', () => {
       });
       providersState.providers = [provider];
       const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
-      fireEvent.click(await screen.findByRole('button', { name: 'quotaCard.usageTitle' }));
-      const refresh = () => view.rerender(
-        <MemoryRouter><ProvidersSection /></MemoryRouter>,
-      );
-      vi.mocked(useProviderSubscriptionCard).mockReturnValue({ ...account, updatedAt: Date.now() });
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('true');
+      const usage = await screen.findByTestId('provider-usage-module');
+      expect(within(usage).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
+      expect(within(usage).queryByText('Weekly usage details')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'quotaCard.usageTitle' })).toBeNull();
       providersState.providers = [{ ...provider, [identityField]: { source: 'oauth', identity: 'second@example.test' } }];
-      refresh();
-      expect(screen.getByRole('button', { name: 'quotaCard.usageTitle' }).getAttribute('aria-expanded')).toBe('false');
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(within(screen.getByTestId('provider-usage-module')).getByRole('progressbar', { name: 'Weekly' })).toBeTruthy();
     },
   );
 
@@ -835,6 +848,32 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 
+  it('keeps enterprise models visible inside the unified detail layout without connection editing', async () => {
+    const status = { state: 'ready', providers: [{ providerId: 'byok-team', state: 'ready' }] } as const;
+    const retryByok = vi.fn(async () => status);
+    Object.assign(window.electronAPI, {
+      modelAccess: { getByokStatus: vi.fn(async () => status), retryByok },
+    });
+    providersState.providers = [makeProvider('byok-team', {
+      name: 'Enterprise Provider', source: 'organization',
+      connected: true, agents: ['codex'], auth: { method: 'managed' },
+      models: { codex: [{
+        id: 'byok-team/company-chat', name: 'Company Chat', contextWindow: 128000,
+        efforts: [], defaultEffort: null,
+      }] },
+    })];
+    renderAt('?tab=providers&connect=byok-team&model=byok-team%2Fcompany-chat&agent=codex');
+
+    await screen.findByRole('switch', { name: 'Company Chat' });
+    await waitFor(() => expect(document.querySelector('[data-deep-link-target="true"]')).not.toBeNull());
+    expect(customDialogSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.refreshAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.custom.editAria' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.byok.refresh' }));
+    await waitFor(() => expect(retryByok).toHaveBeenCalledOnce());
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
   it('connect=<目录外 id> → 视为 preset id,向导 preset entry 打开', async () => {
     renderAt('?tab=providers&connect=deepseek');
 
@@ -973,5 +1012,192 @@ describe('ProvidersSection — 深链定位', () => {
       releaseOwner: true,
       ownerId,
     });
+  });
+});
+
+describe('ProvidersSection — 允许被远程调用与供应商组', () => {
+  afterEach(() => localProviderGroupsTesting.reset());
+
+  // Test value: the real settings rail must separate established outgoing shares and keep local
+  // reordering within that section. Existing deep-link tests never render an owned share.
+  // Minimal input: two shared providers interleaved with one ordinary provider; tier: unit.
+  it('separates outgoing shares, preserves selection and reorders within the shared section', async () => {
+    resetProviderShareStoreForTests();
+    let changed!: () => void;
+    let sharedIds = ['shared-a', 'shared-b'];
+    Object.assign(window.electronAPI, {
+      providerShare: {
+        command: vi.fn(async (cmd: { action: string }) => {
+          if (cmd.action === 'received') return [];
+          if (cmd.action === 'shared-provider-ids') return { ready: true, providerIds: sharedIds };
+          throw new Error(`unexpected ${cmd.action}`);
+        }),
+        onReceivedChanged: () => () => undefined,
+        onOwnedChanged: (listener: () => void) => { changed = listener; return () => undefined; },
+      },
+    });
+    providersState.providers = [
+      makeProvider('shared-a', { name: 'Shared A', connected: true }),
+      makeProvider('ordinary', { name: 'Ordinary', connected: true }),
+      makeProvider('shared-b', { name: 'Shared B', connected: true }),
+    ];
+    providersState.order = ['shared-a', 'ordinary', 'shared-b'];
+    renderAt('?tab=providers&connect=shared-a');
+    const group = await screen.findByRole('group', { name: 'providerShare.owned.title' });
+    const rowIds = () => [...group.querySelectorAll('[data-sortable-id]')].map(row => row.getAttribute('data-sortable-id'));
+    expect(rowIds()).toEqual(['shared-a', 'shared-b']);
+    expect(within(group).queryByRole('button', { name: /Ordinary/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Shared A/ })).toHaveLength(1);
+    expect(within(group).getByRole('button', { name: /Shared A/ }).getAttribute('aria-current')).toBe('true');
+
+    fireEvent.keyDown(within(group).getAllByRole('button', { name: 'settings.providers.order.handle' })[0], { key: 'ArrowDown' });
+    await waitFor(() => expect(rowIds()).toEqual(['shared-b', 'shared-a']));
+    expect(window.electronAPI.maker.setProviderOrder).toHaveBeenLastCalledWith(undefined, 1, ['shared-b', 'ordinary', 'shared-a']);
+    fireEvent.click(within(group).getByRole('button', { name: /Shared B/ }));
+    expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Shared B');
+
+    sharedIds = [];
+    await act(async () => changed());
+    expect(screen.queryByTestId('provider-share-owned')).toBeNull();
+    expect(screen.getByRole('button', { name: /Shared B/ }).getAttribute('aria-current')).toBe('true');
+    resetProviderShareStoreForTests();
+  });
+
+  it('folds the provider group into the remote-use row and waits for the group settings before showing it', async () => {
+    localProviderGroupsTesting.reset();
+    let answer!: (groups: Record<string, unknown>) => void;
+    const list = new Promise<Record<string, unknown>>((resolve) => {
+      answer = resolve;
+    });
+    const command = vi.fn((cmd: { action: string }) =>
+      cmd.action === 'list' ? list : Promise.reject(new Error(`unexpected ${cmd.action}`)),
+    );
+    Object.assign(window.electronAPI, {
+      deviceLink: {
+        getState: vi.fn(async () => ({ remoteControlEnabled: true })),
+        listDevices: vi.fn(async () => ({ devices: [] })),
+        onPresenceChanged: () => () => undefined,
+        onControlTargetChanged: () => () => undefined,
+      },
+      providerGroup: { command, onChanged: () => () => undefined },
+    });
+    providersState.providers = [
+      makeProvider('anthropic', { name: 'Anthropic', connected: true, remoteInvocationEnabled: true }),
+    ];
+    renderAt('?tab=providers&connect=anthropic');
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'list' }));
+    await waitFor(() => expect(window.electronAPI.deviceLink.getState).toHaveBeenCalled());
+    // 等「允许远程控制」读完，只剩组设置没读到。
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // 组设置还没读到：整行先不出现，不先显示「远程与分享」再跳成组。
+    expect(screen.queryByTestId('provider-remote-access')).toBeNull();
+
+    await act(async () => {
+      answer({
+        anthropic: {
+          strategy: 'least',
+          autoSwitch: true,
+          members: [
+            { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+            { key: 'device:mini:anthropic', kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic', limit: 4, weight: 1, paused: false },
+          ],
+        },
+      });
+      await list;
+    });
+    const row = await screen.findByTestId('provider-remote-access');
+    // 组的状态写在入口按钮上，不再单独占一行；有组时说明 Agent 由组选电脑运行。
+    expect(within(row).getByTestId('provider-share-entry').textContent).toBe('settings.providers.remote.groupBadge');
+    expect(within(row).getByText('settings.providers.detail.remoteAccess.descriptionGroup')).toBeTruthy();
+    expect(within(row).getByRole('switch', { name: 'settings.providers.detail.remoteAccess.ariaLabel' })).toBeTruthy();
+    expect(screen.queryByTestId('provider-group-row')).toBeNull();
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'get' }));
+  });
+});
+
+// 模型面板底部「配置模型」在分享来的供应商上带 receivedShare，设置页直接选中那一条。
+describe('ProvidersSection — 分享来的供应商深链', () => {
+  const share: ProviderShareReceived = {
+    shareId: 'share-1',
+    memberId: 'mem-1',
+    providerId: 'anthropic',
+    providerLabel: 'Anthropic',
+    hostDeviceId: 'host-1',
+    deviceName: "Magi's Mac Mini",
+    owner: { displayName: 'Magi', avatarUrl: null, region: 'global' },
+    // 暂停中的分享不读对方目录，详情页不依赖 device-link。
+    status: 'paused',
+    hostOnline: true,
+    hostCapable: true,
+  };
+
+  /** 返回推送新名单的函数(模拟 main 的 RECEIVED_CHANGED)。 */
+  function stubReceived(received: ProviderShareReceived[]) {
+    resetProviderShareStoreForTests();
+    let push: ((list: ProviderShareReceived[]) => void) | null = null;
+    const command = vi.fn(async (cmd: { action: string }) => {
+      if (cmd.action === 'received') return received;
+      throw new Error(`unexpected ${cmd.action}`);
+    });
+    Object.assign(window.electronAPI, {
+      providerShare: {
+        command,
+        onReceivedChanged: (listener: (list: ProviderShareReceived[]) => void) => {
+          push = listener;
+          return () => undefined;
+        },
+      },
+    });
+    return (list: ProviderShareReceived[]) => act(() => push?.(list));
+  }
+
+  afterEach(() => resetProviderShareStoreForTests());
+
+  it('receivedShare=<shareId> → 选中那条分享来的供应商；参数消费后清除', async () => {
+    stubReceived([share]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await screen.findByTestId('provider-share-received-detail');
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('这条分享已不在列表里 → 只停在供应商页，参数同样清除', async () => {
+    stubReceived([{ ...share, shareId: 'share-other' }]);
+    renderAt('?tab=providers&receivedShare=share-gone');
+
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+  });
+
+  it('名单暂时为空(断线、换账号) → 保留参数，名单回来后再选中', async () => {
+    const push = stubReceived([]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await waitFor(() => expect(window.electronAPI.providerShare.command).toHaveBeenCalledWith({ action: 'received' }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByTestId('search').textContent).toBe('?tab=providers&receivedShare=share-1');
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+
+    push([share]);
+    await screen.findByTestId('provider-share-received-detail');
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('名单暂时为空期间用户改选了别的供应商 → 放弃跳转，名单回来后不切走右栏', async () => {
+    providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+    const push = stubReceived([]);
+    renderAt('?tab=providers&receivedShare=share-1');
+
+    await waitFor(() => expect(window.electronAPI.providerShare.command).toHaveBeenCalledWith({ action: 'received' }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    fireEvent.click(await screen.findByRole('button', { name: /^Anthropic/ }));
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+
+    push([share]);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
+    expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
   });
 });

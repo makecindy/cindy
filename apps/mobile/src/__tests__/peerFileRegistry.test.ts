@@ -69,6 +69,16 @@ describe("peer file staging ownership", () => {
     remove();
     expect(await tryMobilePeerFile("device", "url")).toBeNull();
   });
+  it("forwards the read-level trace to the download provider", async () => {
+    const peer = vi.fn(async () => null);
+    const remove = installPeerFileDownload(peer);
+    await tryMobilePeerFile("device", "url", undefined, 42);
+    expect(peer).toHaveBeenCalledWith("device", "url", undefined, 42, undefined, undefined);
+    const metadata = { version: 'a'.repeat(64), size: 12, mimeType: 'text/html' };
+    await tryMobilePeerFile('device', 'url', undefined, 43, metadata);
+    expect(peer).toHaveBeenLastCalledWith('device', 'url', undefined, 43, metadata, undefined);
+    remove();
+  });
 });
 
 it("reserves space for a 2 GiB consumer copy before transfer, and rejects invalid sizes", () => {

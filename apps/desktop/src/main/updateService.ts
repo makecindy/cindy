@@ -21,7 +21,6 @@
  */
 
 import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -45,6 +44,8 @@ import { compareAppUpdateVersions } from './updateVersionPolicy';
 import { CURRENT_APP_ID } from '../shared/brandRegion';
 import { syncWindowsVersionAfterUpdate, windowsInstallKey } from './windowsInstallationVersion';
 import { writeStartupBinaryUpdateMarker } from './agent-binaries/startup-update';
+import { prefetch as prefetchAgentBinary } from './agent-binaries/index.js';
+import { getVendorAsset } from './agent-binaries/manifest.js';
 
 import { createLogger, maskPath } from './logger';
 import {
@@ -70,11 +71,15 @@ import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
-import { findLinuxUserInstallation, isDebianManagedInstallation, missingLinuxUserInstallTools, type LinuxUserInstallation } from './linuxInstallation';
+import {
+  checkDebianManagedInstallation,
+  findLinuxUserInstallation,
+  missingLinuxUserInstallTools,
+  type LinuxUserInstallation,
+} from './linuxInstallation';
 import { linuxPasswordStoreRelaunchArgs } from './linuxPasswordStore';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion';
 import { disposeAndroidAdb } from './mcp-integrations/android';
-import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
 import {
@@ -171,9 +176,9 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
+/** Version of the patch currently being downloaded (downloading / superseding only). */
+let downloadingVersion: string | undefined;
 let readyFilePath: string | undefined;
-/** SHA-256 from the verified manifest for the staged Windows archive. */
-let readyZipSha256: string | undefined;
 /** 当前 staged 补丁对应的渠道代际。延迟清理用它区分「同路径上的新旧包」。 */
 let readyChannelEpoch: number | undefined;
 /**
@@ -243,11 +248,41 @@ function broadcastChannelSettings(): void {
 
 function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): void {
   currentStatus = status;
+  if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
   broadcastStatus({ status, ...extra });
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     void evaluateAutoRelaunch('status-ready');
   }
+}
+
+function formatLinuxProbeError(error: unknown, exePath: string): string {
+  const details = error && typeof error === 'object'
+    ? error as { code?: unknown; status?: unknown; signal?: unknown }
+    : {};
+  const code = typeof details.code === 'string' && /^[A-Za-z0-9_]+$/.test(details.code)
+    ? details.code
+    : null;
+  const status = typeof details.status === 'number' && Number.isInteger(details.status)
+    ? details.status
+    : null;
+  const signal = typeof details.signal === 'string' && /^[A-Za-z0-9]+$/.test(details.signal)
+    ? details.signal
+    : null;
+  const reason = code === 'ETIMEDOUT' || (signal !== null && status === null)
+    ? 'timeout'
+    : code === 'ENOENT' || code === 'EACCES' || code === 'EPERM'
+      ? 'not-executable'
+      : 'query-failed';
+  // execFileSync's message embeds the queried path. Log only controlled
+  // fields; the path goes through maskPath on its own.
+  return JSON.stringify({
+    reason,
+    status,
+    code,
+    signal,
+    path: maskPath(exePath),
+  });
 }
 
 function blockWindowsUpdaterForMissingRuntime(missingFiles: readonly string[]): false {
@@ -703,11 +738,9 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
     return { action: 'check' };
   }
 
-  // Patch present, awaiting relaunch. User-writable patch-info metadata cannot
-  // re-establish the Windows archive trust anchor after a cold start.
+  // Patch present, awaiting relaunch.
   readyVersion = patchInfo.version;
   readyFilePath = patchFilePath;
-  readyZipSha256 = undefined;
   readyChannelEpoch = updateChannelEpoch;
   return { action: 'relaunch', version: patchInfo.version };
 }
@@ -859,7 +892,6 @@ function discardStagedPatchFiles(): void {
   }
   readyVersion = undefined;
   readyFilePath = undefined;
-  readyZipSha256 = undefined;
   readyChannelEpoch = undefined;
   linuxStagedDebSha256 = null;
   linuxStagedDebSize = null;
@@ -888,7 +920,6 @@ function flushDeferredStagedPatchClear(): void {
     if (readyChannelEpoch === stale.epoch) {
       readyVersion = undefined;
       readyFilePath = undefined;
-      readyZipSha256 = undefined;
       readyChannelEpoch = undefined;
     }
     return;
@@ -1113,7 +1144,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const wasReady = currentStatus === 'ready';
   const previousReadyVersion = wasReady ? readyVersion : undefined;
   const previousReadyFilePath = wasReady ? readyFilePath : undefined;
-  const previousReadyZipSha256 = wasReady ? readyZipSha256 : undefined;
   const previousReadyChannelEpoch = wasReady ? readyChannelEpoch : undefined;
 
   // 只有非 ready 路径才广播 'checking' — wasReady 路径下广播 checking 会让 banner
@@ -1183,58 +1213,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   }
 
   // wasReady 且 manifest 仍是已下好的同一个版本 → 无事发生,保持 ready。
-  // Windows 同文件名但 SHA-256 变了时不能把新摘要绑到旧字节上，必须重下。
-  let replacingReadyWindowsDigest = false;
   if (wasReady && latestVersion === previousReadyVersion) {
-    if (process.platform === 'win32') {
-      const sameFile = path.basename(asset.file) === path.basename(previousReadyFilePath ?? '');
-      const trustedSha256 = normalizeWindowsZipSha256(asset.sha256);
-      if (!trustedSha256) {
-        log.info('Windows: current manifest cannot re-anchor the ready patch — discarding it');
-        discardStagedPatchFiles();
-        return 'idle';
-      }
-      if (!sameFile) {
-        log.info('Windows: ready patch filename changed — downloading newly advertised artifact');
-        replacingReadyWindowsDigest = true;
-      } else if (!windowsZipDigestsEqual(previousReadyZipSha256, trustedSha256)) {
-        log.info('Windows: ready patch digest changed — re-downloading current artifact');
-        replacingReadyWindowsDigest = true;
-      } else {
-        readyZipSha256 = trustedSha256;
-        log.info('Ready patch v%s still matches latest — no superseding needed', previousReadyVersion);
-        return 'ready';
-      }
-    } else {
-      log.info('Ready patch v%s still matches latest — no superseding needed', previousReadyVersion);
-      return 'ready';
-    }
-  }
-
-  // Cold-started Windows patches stay off the relaunch path until a current
-  // manifest restores the trust anchor. Reuse that staged file only when its
-  // bytes still match the current digest.
-  if (!wasReady && process.platform === 'win32') {
-    const patchResult = checkExistingPatch();
-    if (patchResult.action === 'relaunch' && patchResult.version === latestVersion) {
-      const sameFile = path.basename(asset.file) === path.basename(readyFilePath ?? '');
-      const trustedSha256 = normalizeWindowsZipSha256(asset.sha256);
-      if (!trustedSha256) {
-        log.info('Windows: current manifest cannot re-anchor the staged patch — discarding it');
-        discardStagedPatchFiles();
-        return 'idle';
-      }
-      if (!sameFile) {
-        log.info('Windows: staged patch filename changed — downloading newly advertised artifact');
-      } else if (await windowsZipFileMatchesDigest(readyFilePath, trustedSha256)) {
-        readyZipSha256 = trustedSha256;
-        log.info('Staged patch v%s matches latest — skipping re-download', latestVersion);
-        setStatus('ready', { version: latestVersion });
-        return 'ready';
-      } else {
-        log.info('Windows: staged patch digest does not match current manifest — re-downloading');
-      }
-    }
+    log.info('Ready patch v%s still matches latest — no superseding needed', previousReadyVersion);
+    return 'ready';
   }
 
   log.info('Update available: %s → %s (wasReady=%s)', currentVersion, latestVersion, wasReady);
@@ -1242,12 +1223,11 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const downloadUrl = `${getBaseUrl()}/${asset.file}`;
   const fileName = path.basename(asset.file);
   const destPath = path.join(getUpdatesDir(), fileName);
-  const keepPreviousReady = wasReady && !replacingReadyWindowsDigest;
 
   // wasReady 路径下,旧的 a.zip 必须保留到 b 通过 SHA 校验之后才能删,否则 b 下载失败
   // 时用户连旧的 a 都装不上了。非 wasReady 路径保持原行为(下载前清理腾空间)。
-  // 同文件 digest 变更会覆盖 destPath，不能再按 superseding 回滚到旧摘要。
-  if (!keepPreviousReady) {
+  downloadingVersion = latestVersion;
+  if (!wasReady) {
     cleanOldFiles(fileName);
     setStatus('downloading', { version: latestVersion, progress: 0 });
   } else {
@@ -1273,7 +1253,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   // 启动态热更包几乎总是队首(入队即开下),这条 0% 就是"真实开始"的信号;
   // 极少数排在二进制下载之后的场景,renderer 侧会在二进制段活跃期间丢弃它,
   // 不会产生假进度条。后台轮询场景 renderer 以 status==='passed' 挡掉,不受影响。
-  if (!keepPreviousReady) {
+  if (!wasReady) {
     broadcastUpdateProgress({ progress: 0, received: 0, total: lastTotal });
   }
 
@@ -1284,9 +1264,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       // AND the legacy `app-update-progress` channel (used by EnvCheckContext
       // splash flow). Keeping the old channel preserves the current renderer
       // contract — see app-update-system-frontend.md ADR-2.
-      // keepPreviousReady 路径不广播 update-status:banner 期间维持 superseding,version 不变,
+      // wasReady 路径不广播 update-status:banner 期间维持 superseding,version 不变,
       // 否则每次 progress 都会把 status 重新设回 downloading,banner 隐藏闪烁。
-      if (!keepPreviousReady) {
+      if (!wasReady) {
         broadcastStatus({
           status: 'downloading',
           version: latestVersion,
@@ -1343,8 +1323,8 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       total: result.size,
     });
 
-    // keepPreviousReady 路径下,SHA 已经过了,这时候才真正安全地把旧 a.zip 清掉。
-    if (keepPreviousReady) {
+    // wasReady 路径下,SHA 已经过了,这时候才真正安全地把旧 a.zip 清掉。
+    if (wasReady) {
       cleanOldFiles(fileName);
     }
 
@@ -1378,9 +1358,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     }
     readyVersion = latestVersion;
     readyFilePath = result.path;
-    readyZipSha256 = process.platform === 'win32'
-      ? normalizeWindowsZipSha256(asset.sha256)
-      : undefined;
     readyChannelEpoch = updateChannelEpoch;
     // 信任锚:manifest 里的 installer 摘要与大小,进本进程内存,不落用户可写盘。
     linuxStagedDebSha256 = normalizeLinuxDebSha256(asset.sha256 ?? '');
@@ -1397,10 +1374,10 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       log.error('unexpected download error:', err);
     }
 
-    // keepPreviousReady 路径:静默回退到旧的 ready 状态。a.zip / patch-info.json / readyVersion /
+    // wasReady 路径:静默回退到旧的 ready 状态。a.zip / patch-info.json / readyVersion /
     // readyFilePath 全都没动过,直接重新广播 ready 让 banner 按钮从 loading 恢复成可点。
-    // 下一次 30min 轮询会再次尝试 b。同文件 digest 变更会覆盖 destPath，不能回滚。
-    if (keepPreviousReady) {
+    // 下一次 30min 轮询会再次尝试 b。
+    if (wasReady) {
       // 下载期间用户切渠道:旧 patch 已被作废,不能从局部快照恢复。
       // 代际在下载开始前就可能已经推进过,所以还要看旧补丁自己的代际。
       const staleChannelPatch =
@@ -1413,7 +1390,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
         }
         readyVersion = undefined;
         readyFilePath = undefined;
-        readyZipSha256 = undefined;
         readyChannelEpoch = undefined;
         removePatchInfo();
         setStatus('idle');
@@ -1422,7 +1398,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       log.info('Superseding download failed — rolling back to ready v%s', previousReadyVersion);
       readyVersion = previousReadyVersion;
       readyFilePath = previousReadyFilePath;
-      readyZipSha256 = previousReadyZipSha256;
       readyChannelEpoch = previousReadyChannelEpoch;
       setStatus('ready', { version: previousReadyVersion });
       return 'ready';
@@ -1453,7 +1428,6 @@ function handleApplyFailure(reason: string): void {
   removePatchInfo();
   readyVersion = undefined;
   readyFilePath = undefined;
-  readyZipSha256 = undefined;
   readyChannelEpoch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
@@ -1480,70 +1454,7 @@ function handleApplyFailure(reason: string): void {
 
 // ── F3: Platform Executors ────────────────────────────────────────────────
 
-function normalizeWindowsZipSha256(value: string | undefined): string | undefined {
-  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
-    ? value.toLowerCase()
-    : undefined;
-}
-
-function windowsZipDigestsEqual(left: string | undefined, right: string | undefined): boolean {
-  const a = normalizeWindowsZipSha256(left);
-  const b = normalizeWindowsZipSha256(right);
-  return Boolean(a && b && a === b);
-}
-
-async function windowsZipFileMatchesDigest(
-  filePath: string | undefined,
-  expected: string,
-): Promise<boolean> {
-  if (!filePath) return false;
-  try {
-    const actual = await hashFileSha256(filePath);
-    return windowsZipDigestsEqual(actual, expected);
-  } catch {
-    return false;
-  }
-}
-
-function hashFileSha256(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256');
-    const stream = fs.createReadStream(filePath);
-    stream.on('error', reject);
-    stream.on('data', (chunk: Buffer | string) => {
-      hash.update(chunk);
-    });
-    stream.on('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-function handleMissingWindowsArchiveDigest(): void {
-  cancelStartupBinaryUpdateCheck?.();
-  cancelStartupBinaryUpdateCheck = undefined;
-  log.error('Windows update archive is missing its trusted manifest SHA-256');
-  // Cold-started patches have only user-writable patch-info metadata until a
-  // current manifest re-establishes the trust anchor. Refuse this apply, but
-  // keep the staged patch so a later online startup/check can reconcile it.
-  readyZipSha256 = undefined;
-  isRelaunching = false;
-  autoRelaunchInProgress = false;
-  void clearSubagentLaunchFence().catch((err: unknown) => {
-    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
-  });
-  setStatus('error', { errorCode: 'updater_spawn_failed' });
-}
-
-function executeUpdateWindows(
-  zipPath: string,
-  theme: 'light' | 'dark',
-  expectedSha256: string | undefined,
-): void {
-  const trustedSha256 = normalizeWindowsZipSha256(expectedSha256);
-  if (!trustedSha256) {
-    handleMissingWindowsArchiveDigest();
-    return;
-  }
-
+function executeUpdateWindows(zipPath: string, theme: 'light' | 'dark'): void {
   const appExePath = app.getPath('exe');
   const appDir = path.dirname(appExePath);
   const exeName = path.basename(appExePath);
@@ -1627,7 +1538,6 @@ function executeUpdateWindows(
   // an in-app override disagrees with the OS preference.
   const args = [
     '--zip', zipPath,
-    '--zip-sha256', trustedSha256,
     '--app-dir', appDir,
     '--exe-name', exeName,
     '--pid', String(pid),
@@ -1679,9 +1589,6 @@ function forceQuit(): void {
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();
-  // build_app uses detached process groups, so parent exit does not reliably
-  // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
-  abortIOSSimulatorOperationsForExit();
   // Residual window only, and now a millisecond-scale one: `executeRelaunch`
   // reclaimed this runtime's runners and then confirmed the agent home was
   // still quiet, refusing to get here otherwise. What is left is the gap
@@ -1905,12 +1812,28 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
     // Do not change installation strategy after the preflight (there is an
     // await while reclaiming runners). A changed layout must fail closed.
     const now = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership recheck failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // A transient ownership probe failure is not evidence that the install
+      // changed. Keep the verified .deb staged so the user can retry, and do
+      // not consume an apply attempt. checkExistingPatch deletes the .deb
+      // after three recorded attempts.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
     if (installation
       ? !now || now.prefix !== installation.prefix || now.current !== installation.current
         || now.region !== installation.region || !readyVersion
-      : now !== null || !isDebianManagedInstallation(exePath)) {
+      : now !== null || debianCheck?.status !== 'managed') {
       throw new Error('Linux installation changed after preflight');
     }
+    // Count the attempt only after the recheck confirms we will launch.
+    // Incrementing earlier let three transient recheck failures burn the
+    // staged .deb on the next startup.
+    incrementApplyAttempts();
     script = buildLinuxUpdateScript({
       pid, debPath, sha256, sizeBytes, exePath, lockFilePath, logPath,
       userInstallation: installation ? { ...installation, version: readyVersion! } : undefined,
@@ -1979,10 +1902,18 @@ function executeUpdateLinux(debPath: string, installation: LinuxUserInstallation
   });
 }
 
-async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = false): Promise<void> {
+interface RelaunchOptions {
+  /**
+   * Last check after Subagent reclaim, immediately before the platform updater
+   * spawns. Returning false keeps the patch staged and does not restart.
+   */
+  shouldProceed?: () => boolean;
+}
+
+async function executeRelaunch(theme: 'light' | 'dark', options?: RelaunchOptions): Promise<void> {
   if (isCindyPersonalRuntime()) return;
   try {
-    await executeRelaunchUnguarded(theme, checkForBinaryUpdates);
+    await executeRelaunchUnguarded(theme, options);
   } catch (err) {
     log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
     try {
@@ -2002,7 +1933,10 @@ async function executeRelaunch(theme: 'light' | 'dark', checkForBinaryUpdates = 
   }
 }
 
-async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryUpdates: boolean): Promise<void> {
+async function executeRelaunchUnguarded(
+  theme: 'light' | 'dark',
+  options?: RelaunchOptions,
+): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -2077,9 +2011,19 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
     const exePath = app.getPath('exe');
     const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
     linuxInstallation = installation;
+    const debianCheck = installation ? null : checkDebianManagedInstallation(exePath);
+    if (debianCheck?.status === 'error') {
+      log.error('Linux Debian ownership check failed: %s', formatLinuxProbeError(debianCheck.error, exePath));
+      isRelaunching = false;
+      autoRelaunchInProgress = false;
+      // Keep the verified installer staged. A transient dpkg-query failure is
+      // not evidence that this executable belongs to an unsupported layout.
+      setStatus('ready', { version: readyVersion ?? undefined });
+      return;
+    }
     const supported = installation
       ? installation.region === CURRENT_CINDY_REGION && missingLinuxUserInstallTools().length === 0
-      : isDebianManagedInstallation(exePath);
+      : debianCheck?.status === 'managed';
     if (!supported) {
       log.error('Linux installation cannot self-update; use the installation guide or its package manager');
       isRelaunching = false;
@@ -2106,28 +2050,41 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
     return;
   }
 
+  // The reclaim above can wait several seconds; a caller-bound condition (an
+  // Agent install's confirming account) is re-checked after it, at the last
+  // point where not restarting is still possible.
+  if (options?.shouldProceed && !options.shouldProceed()) {
+    log.info('executeRelaunch() cancelled by caller condition; patch remains staged');
+    isRelaunching = false;
+    autoRelaunchInProgress = false;
+    return;
+  }
+
   log.info(
     'Executing relaunch with file: %s (%s bytes)',
     maskPath(readyFilePath), fs.statSync(readyFilePath).size,
   );
 
-  if (checkForBinaryUpdates && readyVersion) {
+  // Keep the legacy marker for rollback compatibility. New startups adopt only
+  // completed binary downloads and reuse usable local runtimes otherwise;
+  // application-update readiness never waits for optional binary preparation.
+  if (readyVersion) {
     cancelStartupBinaryUpdateCheck = writeStartupBinaryUpdateMarker(app.getPath('userData'), readyVersion);
   }
 
   switch (process.platform) {
     case 'win32':
-      executeUpdateWindows(readyFilePath, theme, readyZipSha256);
+      executeUpdateWindows(readyFilePath, theme);
       break;
     case 'darwin':
       // Increment immediately before starting the platform executor so a
-      // failed updater can be bounded across restarts. Windows does this only
-      // after its final app-local/System32 Runtime check inside the executor.
+      // failed updater can be bounded across restarts. Windows and Linux do
+      // this only after the last in-executor check that can still keep the
+      // staged patch for retry (Windows Runtime, Linux ownership recheck).
       incrementApplyAttempts();
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      incrementApplyAttempts();
       executeUpdateLinux(readyFilePath, linuxInstallation);
       break;
     default:
@@ -2137,6 +2094,208 @@ async function executeRelaunchUnguarded(theme: 'light' | 'dark', checkForBinaryU
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
+
+/** Report known platform apply blockers before suggesting the built-in update action. */
+function agentUpdateApplyBlockReason(): string | null {
+  if (process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux') {
+    return '当前平台不支持应用内更新。';
+  }
+  if (isMacAppTranslocated()) return '请先将 Cindy 移入「应用程序」文件夹，再安装更新。';
+  if (process.platform === 'win32' && !checkWindowsUpdaterPrerequisites(undefined, process.resourcesPath).satisfied) {
+    return 'Windows 更新器运行环境不可用；已下载的更新将保留。';
+  }
+  if (process.platform === 'linux') {
+    const exePath = app.getPath('exe');
+    const installation = findLinuxUserInstallation(exePath, os.homedir(), process.getuid?.() ?? -1);
+    if (installation) {
+      if (installation.region !== CURRENT_CINDY_REGION || missingLinuxUserInstallTools().length > 0) {
+        return '当前 Linux 用户安装环境不支持应用内更新。';
+      }
+    } else {
+      const debianCheck = checkDebianManagedInstallation(exePath);
+      if (debianCheck.status !== 'managed') {
+        return debianCheck.status === 'error'
+          ? '暂时无法验证 Linux 安装来源，请稍后重试。'
+          : '当前 Linux 安装方式不支持应用内更新；请使用安装说明或系统包管理器。';
+      }
+    }
+  }
+  return null;
+}
+
+/** Build and installation blockers shared by every Agent-facing update entry. */
+function agentUpdateUnsupportedReason(): string | null {
+  if (!app.isPackaged || isDev() || isCindyPersonalRuntime() || isVersionlessAppVersion(app.getVersion())) {
+    return '此构建不支持应用内更新。';
+  }
+  return agentUpdateApplyBlockReason();
+}
+
+export async function checkAppUpdateForAgent(): Promise<{
+  status: string;
+  currentVersion: string;
+  targetVersion?: string;
+  reason?: string;
+}> {
+  const currentVersion = app.getVersion();
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
+  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+    // `readyVersion` is unset during a first download and still names the old
+    // patch while superseding; report the version actually being downloaded.
+    return { status: 'downloading', currentVersion, targetVersion: downloadingVersion };
+  }
+  if (currentStatus === 'ready' && readyVersion) {
+    return { status: 'ready', currentVersion, targetVersion: readyVersion };
+  }
+  // An Agent check must not stage a patch: checkForUpdate() downloads it and
+  // enables the existing auto-relaunch-on-idle path. Read only the manifest;
+  // the user can download and install through the built-in update action.
+  const manifest = await fetchManifest();
+  if (!manifest) return { status: 'manifest_failed', currentVersion, reason: '无法读取当前渠道的更新信息。' };
+  const relation = compareAppUpdateVersions(manifest.app?.version, currentVersion);
+  if (relation === 'invalid') return {
+    status: 'manifest_failed', currentVersion, reason: '当前渠道的更新版本信息无效。',
+  };
+  if (relation === 'newer' && resolveUpdateAsset(manifest)) {
+    return { status: 'available', currentVersion, targetVersion: manifest.app.version };
+  }
+  return {
+    status: 'no_installable_update', currentVersion,
+    reason: '当前渠道没有适用于这台设备的可安装更新；也可能已是最新版本。',
+  };
+}
+
+/** Longer than the Windows / Linux updater spawn timeout (5 s). */
+const AGENT_RELAUNCH_SETTLE_MS = 10_000;
+
+const AGENT_UPDATE_FAILURE_REASONS: Record<Exclude<CheckForUpdateResult, 'ready'>, string> = {
+  manifest_failed: '无法读取当前渠道的更新信息。',
+  download_failed: '下载更新失败，请稍后重试。',
+  manual_download: '当前安装需要手动下载新版本。',
+  idle: '当前渠道没有适用于这台设备的可安装更新。',
+};
+
+export type AgentConfirmedAppUpdateResult =
+  | { status: 'relaunching'; targetVersion?: string }
+  | { status: 'failed'; reason: string; errorCode?: string; stagedVersion?: string };
+
+/**
+ * Apply an update the user approved on the Host confirmation card. This is the
+ * built-in Check for Updates → Restart path, not a parallel one:
+ * `checkForUpdate()` stages the patch (its in-flight guard keeps a repeated or
+ * concurrent request on the same download) and `executeRelaunch()` applies it
+ * with every existing platform, Subagent and channel guard.
+ *
+ * `expectedVersion` is the version shown on the card the owner approved; a
+ * different staged version (the channel moved on meanwhile) is not installed
+ * without a new confirmation. `beforeRelaunch` runs after the patch is staged;
+ * returning false keeps the patch staged and skips the restart.
+ */
+export async function applyConfirmedAppUpdateForAgent(options: {
+  expectedVersion?: string;
+  beforeRelaunch: () => Promise<boolean>;
+  /** Re-checked inside the relaunch, after Subagent reclaim and right before the updater spawns. */
+  beforeSpawn?: () => boolean;
+}): Promise<AgentConfirmedAppUpdateResult> {
+  // The single version rule for every checkpoint: the staged patch is the
+  // confirmed version and no newer one is being downloaded over it. Like the
+  // built-in banner, never restart while superseding.
+  const versionChanged = (): AgentConfirmedAppUpdateResult | null => {
+    if (!options.expectedVersion) return null;
+    const current = currentStatus === 'superseding' ? downloadingVersion : readyVersion;
+    if (current === options.expectedVersion && currentStatus !== 'superseding') return null;
+    return {
+      status: 'failed',
+      reason: `当前渠道的新版本是 ${current ?? '未知版本'}，与确认的 ${options.expectedVersion} 不同，本次没有安装；请重新发起更新。`,
+      errorCode: 'version_changed',
+      ...(current ? { stagedVersion: current } : {}),
+    };
+  };
+  const relaunchCancelled: AgentConfirmedAppUpdateResult = {
+    status: 'failed', reason: '更新已下载，但本次没有重启。', errorCode: 'relaunch_cancelled',
+  };
+  /**
+   * Wait until a relaunch settles: success exits the process (Windows / Linux
+   * from their spawn callbacks), failure clears the flags in
+   * handleApplyFailure() or an early refusal. Whatever is still relaunching at
+   * the deadline is reported as relaunching.
+   */
+  const awaitRelaunchOutcome = async (
+    targetVersion: string | undefined,
+    timeoutMs: number,
+  ): Promise<AgentConfirmedAppUpdateResult> => {
+    const deadline = Date.now() + timeoutMs;
+    while ((isRelaunching || autoRelaunchInProgress) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (isRelaunching || autoRelaunchInProgress) return { status: 'relaunching', targetVersion };
+    return {
+      status: 'failed',
+      reason: '更新器没有启动，Cindy 未重启。',
+      errorCode: lastErrorCode ?? 'relaunch_not_started',
+    };
+  };
+  // A relaunch already started elsewhere (Settings banner or idle auto-install)
+  // is not this request's: report it instead of claiming its outcome.
+  const relaunchInProgress: AgentConfirmedAppUpdateResult = {
+    status: 'failed',
+    reason: 'Cindy 已经在通过设置页或空闲自动安装重启更新，本次请求没有另外安装。',
+    errorCode: 'relaunch_in_progress',
+  };
+  const unsupported = agentUpdateUnsupportedReason();
+  if (unsupported) return { status: 'failed', reason: unsupported, errorCode: 'unsupported' };
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
+  if (currentStatus !== 'ready') {
+    const result = await checkForUpdate();
+    if (result !== 'ready') {
+      return { status: 'failed', reason: AGENT_UPDATE_FAILURE_REASONS[result], errorCode: result };
+    }
+  }
+  const changedAfterDownload = versionChanged();
+  if (changedAfterDownload) return changedAfterDownload;
+  if (!await options.beforeRelaunch()) return relaunchCancelled;
+  if (isRelaunching || autoRelaunchInProgress) return relaunchInProgress;
+  // A background check may have superseded the staged patch during the wait.
+  const changedBeforeRelaunch = versionChanged();
+  if (changedBeforeRelaunch) return changedBeforeRelaunch;
+  if (currentStatus !== 'ready' || !readyVersion) {
+    return { status: 'failed', reason: '已下载的更新不再可用，请重新检查更新。', errorCode: 'not_ready' };
+  }
+  const targetVersion = readyVersion;
+  // Both bindings are re-checked once more inside the relaunch, after its
+  // Subagent reclaim wait: the confirmed version and the caller's condition.
+  let cancelledBeforeSpawn: AgentConfirmedAppUpdateResult | null = null;
+  await executeRelaunch(resolvedRelaunchTheme, {
+    shouldProceed: () => {
+      cancelledBeforeSpawn = versionChanged()
+        ?? (options.beforeSpawn?.() === false ? relaunchCancelled : null);
+      return cancelledBeforeSpawn === null;
+    },
+  });
+  if (cancelledBeforeSpawn) return cancelledBeforeSpawn;
+  // macOS exits inside the call. Windows and Linux return with `isRelaunching`
+  // still set and settle within their 5 s spawn timeout; wait for that outcome
+  // so a failed spawn is reported now rather than after a later restart.
+  if (process.platform === 'darwin') {
+    return isRelaunching
+      ? { status: 'relaunching', targetVersion }
+      : { status: 'failed', reason: '更新器没有启动，Cindy 未重启。', errorCode: lastErrorCode ?? 'relaunch_not_started' };
+  }
+  return awaitRelaunchOutcome(targetVersion, AGENT_RELAUNCH_SETTLE_MS);
+}
+
+/** Effective idle auto-install switch (Settings → About), shared with the Agent tools. */
+export function readAutoRelaunchOnIdleForAgent(): boolean {
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
+}
+
+/** Same write as the Settings toggle IPC; only called after the user confirmed the Host card. */
+export function setAutoRelaunchOnIdleForAgent(enabled: boolean): boolean {
+  writeAutoRelaunchOnIdle(enabled);
+  void evaluateAutoRelaunch('agent-settings-set');
+  return readAutoUpdateSettings().autoRelaunchOnIdle;
+}
 
 export function initUpdateService(): void {
   // Observe the successful old-updater receipt before existing cleanup removes
@@ -2168,7 +2327,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    void executeRelaunch(resolved, true);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(
@@ -2310,6 +2469,54 @@ export function initUpdateService(): void {
     app.quit();
   });
 
+  // About downloads before showing the restart confirmation. A failed preparation
+  // leaves both the application update state and the running harness untouched.
+  const preparedHarnessVersions = new Map<'claude-code' | 'codex', string>();
+  ipcMain.handle('update-harness-prepare', async (event, kind: unknown, expectedVersion: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if ((kind !== 'claude-code' && kind !== 'codex') || typeof expectedVersion !== 'string'
+      || expectedVersion.length === 0 || expectedVersion.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'kind and expectedVersion required');
+    }
+    preparedHarnessVersions.delete(kind);
+    const signal = AbortSignal.timeout(180_000);
+    const manifest = await fetchManifest(undefined, signal);
+    const asset = manifest && getVendorAsset(manifest, kind === 'claude-code' ? 'claudeCode' : 'codexPackage');
+    if (!manifest || !asset || asset.version !== expectedVersion) {
+      throwIpcError('INTERNAL', 'harness update changed or is unavailable; check again');
+    }
+    if (!await prefetchAgentBinary(kind, { manifest, signal })) {
+      throwIpcError('INTERNAL', 'could not prepare harness update; retry later');
+    }
+    preparedHarnessVersions.set(kind, expectedVersion);
+    return { ready: true };
+  });
+
+  // About → Agent version update: keep the same graceful app relaunch lifecycle,
+  // with cache-only adoption for prepared targets. Only legacy kind-only callers
+  // retain a scoped repair marker: a newer manifest must not cause a prepared
+  // update to download again in Splash. Pi has its own kernel manager.
+  ipcMain.handle('update-harness-relaunch', (event, kind: unknown, preparedVersion?: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (kind !== 'claude-code' && kind !== 'codex') {
+      throwIpcError('INVALID_PARAMS', 'kind required (claude-code | codex)');
+    }
+    if (preparedVersion !== undefined) {
+      if (typeof preparedVersion !== 'string' || preparedHarnessVersions.get(kind) !== preparedVersion) {
+        throwIpcError('INVALID_PARAMS', 'prepare the requested harness version before restarting');
+      }
+    } else {
+      const cancelMarker = writeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion(), [kind]);
+      if (!cancelMarker) {
+        throwIpcError('INTERNAL', 'failed to schedule harness update');
+      }
+    }
+    log.info(`harness update relaunch requested: ${kind}`);
+    app.relaunch({ args: process.argv.slice(1) });
+    app.quit();
+    return { accepted: true };
+  });
+
   ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {
     if (theme === 'light' || theme === 'dark') {
       resolvedRelaunchTheme = theme;
@@ -2337,11 +2544,7 @@ export function initUpdateService(): void {
     // 这里复用 'downloading' 结果让前端 toast 文案保持一致。
     if (currentStatus === 'downloading') return { result: 'downloading' };
     if (currentStatus === 'superseding') return { result: 'downloading' };
-    // A cold-started Windows patch has no process-local trust anchor yet. Let a
-    // current manifest re-establish it instead of short-circuiting forever.
-    if (currentStatus === 'ready' && (process.platform !== 'win32' || readyZipSha256)) {
-      return { result: 'ready' };
-    }
+    if (currentStatus === 'ready')       return { result: 'ready' };
     const result = await checkForUpdate();
     return { result };
   });
@@ -2373,21 +2576,9 @@ export function initUpdateService(): void {
         // Network unavailable — fall back to local patch.
         log.info('Manifest fetch failed, falling back to local patch');
         const patchResult = checkExistingPatch();
-        if (patchResult.action === 'relaunch' && process.platform === 'darwin') {
+        if (patchResult.action === 'relaunch' && process.platform !== 'linux') {
           currentStatus = 'ready';
           return await buildStartupReadyReply(patchResult.version);
-        }
-        if (patchResult.action === 'relaunch' && process.platform === 'win32') {
-          // Windows 安装的信任锚是当前进程里的 manifest SHA-256。冷启动
-          // checkExistingPatch 不会信任用户可写的 patch-info.sha256，断网时
-          // 没有可信摘要就不能 relaunch；保留暂存包等下次在线对账。
-          log.info(
-            'Windows: manifest unavailable — keeping local patch without relaunch until a trusted digest is restored',
-          );
-          readyVersion = undefined;
-          readyFilePath = undefined;
-          readyZipSha256 = undefined;
-          readyChannelEpoch = undefined;
         }
         if (patchResult.action === 'relaunch' && process.platform === 'linux') {
           // Linux 安装的信任锚是 manifest 里的 installer 摘要;断网拿不到
@@ -2435,37 +2626,7 @@ export function initUpdateService(): void {
       const patchResult = checkExistingPatch();
       if (patchResult.action === 'relaunch' && patchResult.version === latestVersion) {
         log.info('Local patch v%s matches latest, requesting relaunch', patchResult.version);
-        let reuseStagedPatch = true;
-        if (process.platform === 'win32') {
-          const hotfix = manifest.app.hotfix;
-          const sameFile = Boolean(
-            hotfix && path.basename(hotfix.file) === path.basename(readyFilePath ?? ''),
-          );
-          const trustedSha256 = hotfix ? normalizeWindowsZipSha256(hotfix.sha256) : undefined;
-          if (!trustedSha256) {
-            log.info('Windows: manifest has no trusted hotfix digest — discarding local patch');
-            discardStagedPatchFiles();
-            return { hasUpdate: false, action: 'none' as const };
-          }
-          if (!sameFile) {
-            log.info('Windows: local patch filename changed — will download newly advertised artifact');
-            readyVersion = undefined;
-            readyFilePath = undefined;
-            readyZipSha256 = undefined;
-            readyChannelEpoch = undefined;
-            reuseStagedPatch = false;
-          } else if (!(await windowsZipFileMatchesDigest(readyFilePath, trustedSha256))) {
-            log.info('Windows: local patch bytes do not match current digest — will re-download');
-            readyVersion = undefined;
-            readyFilePath = undefined;
-            readyZipSha256 = undefined;
-            readyChannelEpoch = undefined;
-            reuseStagedPatch = false;
-          } else {
-            readyZipSha256 = trustedSha256;
-          }
-        }
-        if (reuseStagedPatch && process.platform === 'linux') {
+        if (process.platform === 'linux') {
           // 冷启动匹配旧补丁:把这份 CDN manifest 的 installer 摘要与大小
           // 重新锚进进程内存,让后续 apply 有可信锚可用。
           const installer = manifest.app.installer;
@@ -2481,10 +2642,8 @@ export function initUpdateService(): void {
             return { hasUpdate: false, action: 'none' as const };
           }
         }
-        if (reuseStagedPatch) {
-          currentStatus = 'ready';
-          return await buildStartupReadyReply(patchResult.version);
-        }
+        currentStatus = 'ready';
+        return await buildStartupReadyReply(patchResult.version);
       }
 
       // Stale local patch — drop refs, fresh download will overwrite.
@@ -2495,7 +2654,6 @@ export function initUpdateService(): void {
         );
         readyVersion = undefined;
         readyFilePath = undefined;
-        readyZipSha256 = undefined;
         readyChannelEpoch = undefined;
         linuxStagedDebSha256 = null;
         linuxStagedDebSize = null;

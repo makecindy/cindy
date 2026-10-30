@@ -1,6 +1,6 @@
 ---
 name: cindy-skill-creator
-description: Create or update a Cindy Skill with appropriately scoped instructions and any needed supporting resources.
+description: Create or edit a Cindy Skill, search the SkillHub public marketplace or your organization's Skills, upload your own Skill, or publish a new version of a Skill you authored.
 metadata:
   short-description: Create or update a skill
 ---
@@ -8,6 +8,8 @@ metadata:
 # Skill Creator
 
 Create Skills that give the current Agent useful, non-obvious guidance without constraining unrelated work.
+
+For searching SkillHub, uploading a local Skill, or updating an already-published Skill, read [references/skillhub-publishing.md](references/skillhub-publishing.md) and follow the relevant workflow. Searching, local editing and cloud publication are separate actions; publish when the user requests it. An explicit upload/update request is authorization for that publication; ask only for missing choices such as the target Skill or first-publication visibility.
 
 ## Core Principles
 
@@ -151,7 +153,7 @@ These examples illustrate options, not a required structure. Choose the organiza
 
 Adapt the work to the request. Creating a complex new skill may involve understanding realistic use cases, choosing supporting resources, initializing files, writing instructions, and validating the result. A narrow update to an existing skill may require only a focused edit and validation.
 
-If this Skill is invoked without a concrete creation or update request, ask what Skill the user wants and do not create files yet.
+If this Skill is invoked without a concrete creation, edit, search, or upload request, ask what the user wants to do with a Skill and do not create files yet.
 
 Ask clarifying questions only when the missing information matters and cannot be reasonably inferred. Respect a user-specified location. When the user explicitly asks for a project-specific Skill, create it under `<current-workdir>/.agents/skills`; otherwise create it under `~/.agents/skills`. These shared roots make the Skill available to Cindy's local Claude Code, Codex, and Pi Agents. A newly created or updated Skill is picked up by new or restarted Agent sessions.
 

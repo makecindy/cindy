@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { app } from 'electron';
 
 import { physicalWorktreeKey, worktreeResourceId } from './resourceLock';
@@ -27,11 +28,19 @@ export interface WorktreeRecycleRecord {
   retryPolicy?: WorktreeRecyclePolicy;
   /** null is a durable marker that recovery has reserved a previously absent directory. */
   directoryIdentity?: string | null;
-  snapshot?: { head: string; headRef?: string | null; tree: string; indexTree: string; commit: string; ref: string; indexHash: string };
+  /** `untracked` marks a tree that also holds new non-ignored files; older snapshots relied on `archive`. */
+  snapshot?: { head: string; headRef?: string | null; tree: string; indexTree: string; commit: string; ref: string; indexHash: string; untracked?: true };
   restoredGeneration?: string;
   /** Temporary checkout used to repair a partially removed worktree. */
   restoreCheckoutPath?: string;
+  /** Written only by older clients; still honoured when restoring their records. */
   archive?: WorktreeRecoveryArchive;
+  /** The one fresh retry budget for a request an older client paused over its archive. */
+  legacyArchiveRetry?: true;
+  /** When deletion was first allowed to start; files written since stop a resumed removal. */
+  removingSince?: number;
+  /** Ignored and nested paths a snapshot left out, captured when removal began. */
+  removalDiscardable?: string[];
 }
 
 export function recycleJournalRoot(): string {
@@ -42,7 +51,7 @@ function sharedJournalLocationsRoot(): string {
   return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-recycle-journals');
 }
 
-/** Publish a locator, not a second copy of mutable recovery state. */
+/** Keep publishing locators for older clients that may still borrow across profiles. */
 async function publishJournalLocation(root: string): Promise<void> {
   const directory = sharedJournalLocationsRoot();
   const id = createHash('sha256').update(root).digest('hex');
@@ -99,36 +108,6 @@ export async function readRecycleRecord(value: string, sessionId?: string): Prom
   }
 }
 
-/** Borrowing reads each profile's authoritative current record; it never owns their recovery. */
-export async function readRecycleRecordsAcrossProfiles(value: string): Promise<WorktreeRecycleRecord[]> {
-  const id = worktreeResourceId(await physicalWorktreeKey(value));
-  const roots = new Set([recycleJournalRoot()]);
-  const directory = sharedJournalLocationsRoot();
-  let names: string[];
-  try { names = await fs.readdir(directory); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    names = [];
-  }
-  for (const name of names.filter((name) => /^[a-f0-9]{64}\.json$/.test(name))) {
-    const location = JSON.parse(await fs.readFile(path.join(directory, name), 'utf8')) as { version?: number; root?: string };
-    if (location.version !== 1 || typeof location.root !== 'string' || !path.isAbsolute(location.root)
-      || path.basename(location.root) !== 'worktree-recycle'
-      || createHash('sha256').update(location.root).digest('hex') !== name.slice(0, -5)) {
-      throw new Error('invalid worktree recycle journal location');
-    }
-    roots.add(location.root);
-  }
-  const records: WorktreeRecycleRecord[] = [];
-  for (const root of roots) {
-    try {
-      records.push(parseRecord(await fs.readFile(path.join(root, `${id}.json`), 'utf8'), id));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  }
-  return records;
-}
-
 /** Caller holds the physical resource lock. Atomic per-resource files cannot lose another resource's update. */
 export async function writeRecycleRecord(record: WorktreeRecycleRecord): Promise<void> {
   if (!/^[a-f0-9]{64}$/.test(record.id)) throw new Error('invalid worktree resource id');
@@ -136,7 +115,7 @@ export async function writeRecycleRecord(record: WorktreeRecycleRecord): Promise
   await fs.mkdir(root, { recursive: true });
   // Must be discoverable before committing an intent that permits destructive I/O.
   await publishJournalLocation(root);
-  if (record.archive && record.snapshot && record.phase === 'removed') {
+  if (record.snapshot && record.phase === 'removed') {
     const history = path.join(root, 'history');
     await fs.mkdir(history, { recursive: true });
     const key = createHash('sha256').update(`${record.generation}:${record.requestedAt}:${record.snapshot.commit}`).digest('hex');
@@ -181,6 +160,75 @@ export async function newRecycleRecord(meta: WorktreeMeta): Promise<WorktreeRecy
     generation: worktreeGeneration(meta), meta, requestedAt: new Date().toISOString(),
     phase: 'pending', attempts: 0, nextAttemptAt: 0,
   };
+}
+
+const archiveNamePattern = /^[a-f0-9-]+\.tar\.gz\.enc$/;
+/** Older clients may still be writing an archive in a shared profile; their writes finish well within this. */
+const ORPHAN_ARCHIVE_MIN_AGE_MS = 2 * 60 * 60_000;
+
+/**
+ * Delete recovery archives no record points to. Older clients left one per interrupted attempt;
+ * its key lived only in the unsaved record, so nothing can ever decrypt it. Any unreadable
+ * record skips the sweep, since it might reference an archive.
+ */
+export async function pruneUnreferencedRecoveryArchives(now = Date.now()): Promise<number> {
+  const root = recycleJournalRoot();
+  let names: string[];
+  try {
+    names = await fs.readdir(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  const archives = names.filter((name) => archiveNamePattern.test(name));
+  if (archives.length === 0) return 0;
+  const records = await listRecycleRecordsWithHistory();
+  if (!records) return 0;
+  const referenced = new Set<string>();
+  for (const record of records) if (record.archive?.file) referenced.add(record.archive.file);
+  let removed = 0;
+  for (const name of archives) {
+    if (referenced.has(name)) continue;
+    const file = path.join(root, name);
+    try {
+      if (now - (await fs.stat(file)).mtimeMs < ORPHAN_ARCHIVE_MIN_AGE_MS) continue;
+      await fs.rm(file, { force: true });
+      removed++;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Current and history records, or null when any of them cannot be read: an unreadable record
+ * might still need the evidence a sweep would otherwise discard.
+ */
+export async function listRecycleRecordsWithHistory(): Promise<WorktreeRecycleRecord[] | null> {
+  const root = recycleJournalRoot();
+  const files: Array<{ file: string; id: string }> = [];
+  let scanned = 0;
+  for (const [directory, pattern] of [[root, /^[a-f0-9]{64}\.json$/], [path.join(root, 'history'), /^[a-f0-9]{64}-[a-f0-9]{64}\.json$/]] as const) {
+    let names: string[];
+    try { names = await fs.readdir(directory); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const name of names) {
+      if (++scanned % 128 === 0) await setImmediate();
+      if (pattern.test(name)) files.push({ file: path.join(directory, name), id: name.slice(0, 64) });
+    }
+  }
+  const records: WorktreeRecycleRecord[] = [];
+  for (const { file, id } of files) {
+    try { records.push(parseRecord(await fs.readFile(file, 'utf8'), id)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      log.warn('worktree recycle sweep skipped: unreadable record', { resourceId: id });
+      return null;
+    }
+  }
+  return records;
 }
 
 /** Fail closed for a malformed file; callers report the failure without discarding evidence. */

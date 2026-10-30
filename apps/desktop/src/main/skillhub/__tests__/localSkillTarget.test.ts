@@ -23,6 +23,16 @@ describe('local Skill removal targets', () => {
     expect(inspectLocalSkillTarget(path.dirname(dir), [path.dirname(dir)])).toBeNull();
   });
 
+  it('accepts a nested namespace Skill without treating the namespace as the entity', () => {
+    const skill = directory('.agents', 'skills', '@scope', 'nested');
+    const namespace = path.dirname(skill);
+    expect(inspectLocalSkillTarget(skill, [skill])).toMatchObject({
+      operationPath: fs.realpathSync.native(skill),
+      linkOnly: false,
+    });
+    expect(inspectLocalSkillTarget(namespace, [namespace])).toBeNull();
+  });
+
   it.each([
     ['.Agents', 'Skills'], ['.Claude', 'Skills'], ['.Codex', 'Skills'],
     ['.Pi', 'Skills'], ['.Pi', 'Agent', 'Skills'], ['Codex-Home', 'Skills'], ['Pi-Agent-Home', 'Skills'],

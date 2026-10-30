@@ -2,7 +2,11 @@ import type { OutgoingHttpHeaders, OutgoingHttpHeader, ServerResponse } from 'no
 import type { Transform } from 'node:stream';
 
 /** Validate every response path, including local protocol adapters, before client delivery. */
-export function installResponseGuard(res: ServerResponse, create: () => Transform): void {
+export function installResponseGuard(
+  res: ServerResponse,
+  create: () => Transform,
+  onRejected?: (error: unknown) => void,
+): void {
   const write = res.write.bind(res);
   const end = res.end.bind(res);
   const writeHead = res.writeHead.bind(res);
@@ -17,13 +21,17 @@ export function installResponseGuard(res: ServerResponse, create: () => Transfor
     return Reflect.apply(writeHead, res, args);
   }) as typeof res.writeHead;
   let guard: Transform | undefined;
+  const reject = (error: unknown) => {
+    onRejected?.(error);
+    res.destroy();
+  };
   const get = (): Transform => {
     if (guard) return guard;
     guard = create();
     guard.on('data', (chunk: Buffer) => { if (!write(chunk)) guard!.pause(); });
     res.on('drain', () => guard?.resume());
     guard.once('end', () => end());
-    guard.once('error', () => res.destroy());
+    guard.once('error', reject);
     res.once('close', () => guard?.destroy());
     return guard;
   };
@@ -34,14 +42,14 @@ export function installResponseGuard(res: ServerResponse, create: () => Transfor
       const ready = stream.write(chunk, typeof encoding === 'string' ? encoding : 'utf8', cb);
       if (!ready) stream.once('drain', () => res.emit('drain'));
       return ready;
-    } catch { res.destroy(); return false; }
+    } catch (error) { reject(error); return false; }
   }) as typeof res.write;
   res.end = ((chunk?: unknown, encoding?: BufferEncoding | (() => void), callback?: () => void) => {
     const cb = typeof chunk === 'function' ? chunk as () => void
       : typeof encoding === 'function' ? encoding : callback;
     if (cb) res.once('finish', cb);
     try { get().end(typeof chunk === 'function' ? undefined : chunk, typeof encoding === 'string' ? encoding : 'utf8'); }
-    catch { res.destroy(); }
+    catch (error) { reject(error); }
     return res;
   }) as typeof res.end;
 }

@@ -1,11 +1,14 @@
 import {
   buildUserProvider,
+  BUNDLED_CATALOG,
+  findBaseModel,
   type ProviderPreset,
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   resolvePiModelRoute,
   providerWireProtocolForApi,
   type AgentKind,
+  type CatalogModel,
   type PiModelApi,
   type ProviderModelRouteConfig,
   type ProviderWireProtocol,
@@ -14,6 +17,7 @@ import {
 export type CustomProviderAuthMode = 'apiKey' | 'oauth' | 'none';
 
 export interface ProviderModelFetchSignatureFields {
+  wireProtocol?: ProviderWireProtocol;
   baseUrl: string;
   requestPath: string;
   modelsUrl: string;
@@ -25,11 +29,19 @@ export interface ProviderConnectionTestSignatureFields extends ProviderModelFetc
   catalogPresetId?: string;
   wireProtocol: ProviderWireProtocol;
   models: ReadonlyArray<{ id: string; mode?: string; discoveredMetadata?: { mode?: string }; api?: PiModelApi; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
+  /** Current provider projection, used only for probing; never persisted as user overrides. */
+  catalogModels?: ReadonlyArray<Pick<CatalogModel, 'id' | 'mode' | 'userModelConfig'>>;
 }
 
-export function firstProviderChatModel<T extends { id: string; mode?: string; discoveredMetadata?: { mode?: string } }>(models: readonly T[]): T | undefined {
+export function firstProviderChatModel<T extends { id: string; mode?: string; discoveredMetadata?: { mode?: string } }>(
+  models: readonly T[],
+  catalogModels: ProviderConnectionTestSignatureFields['catalogModels'] = [],
+): T | undefined {
   return models.find((model) => model.id.trim().length > 0 && isAgentSelectableModel(
-    { id: model.id, group: 'custom', mode: model.mode ?? model.discoveredMetadata?.mode },
+    { id: model.id, group: 'custom', mode: model.mode ?? model.discoveredMetadata?.mode ??
+      // Restoring automatic detection must not reuse a saved explicit mode.
+      catalogModels.find(current => current.id === model.id.trim() && current.userModelConfig?.mode === undefined)?.mode ??
+      findBaseModel(BUNDLED_CATALOG.modelRegistry, model.id.trim())?.defaults.mode },
     { userProvider: true },
   ));
 }
@@ -48,7 +60,7 @@ export function resolveProviderConnectionProbeRoute(
   agent: ProviderProbeAgent,
   fields: Pick<
     ProviderConnectionTestSignatureFields,
-    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models' | 'catalogPresetId'
+    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models' | 'catalogPresetId' | 'catalogModels'
   >,
   presets: readonly ProviderPreset[] = [],
 ): ProviderConnectionProbeRoute | null {
@@ -59,7 +71,7 @@ export function resolveProviderConnectionProbeRoute(
       models: fields.models.map(model => ({ ...model, name: model.id })),
     } },
   }, { presets }).models[agent] : undefined;
-  const firstModel = firstProviderChatModel(projectedModels ?? fields.models);
+  const firstModel = firstProviderChatModel(projectedModels ?? fields.models, fields.catalogModels);
   const api = firstModel?.api ?? firstModel?.piApi;
   if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
     return { api, baseUrl: firstModel?.route?.baseUrl ?? fields.baseUrl,
@@ -125,6 +137,7 @@ export function providerModelFetchRequestSignature(
     authMode,
     baseUrl: fields.baseUrl.trim(),
     requestPath: fields.requestPath.trim(),
+    wireProtocol: fields.wireProtocol,
     modelsUrl: fields.modelsUrl.trim(),
     apiKey: authMode === 'apiKey' ? fields.apiKey.trim() : null,
     headers: Object.entries(effectiveHeaders).sort(([a], [b]) => a.localeCompare(b)),
@@ -264,7 +277,7 @@ export function connectionTestCanUseSaved(
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
   if ((form.catalogPresetId ?? null) !== (baseline.catalogPresetId ?? null)) return false;
-  const firstModel = firstProviderChatModel(form.models);
+  const firstModel = firstProviderChatModel(form.models, form.catalogModels);
   if ((firstModel?.piApi ?? null) !== (baseline.modelPiApi ?? null)) return false;
   if ((firstModel?.api ?? null) !== (baseline.modelApi ?? null)) return false;
   if (
@@ -281,15 +294,14 @@ export function providerConnectionTestRequestSignature(
   fields: ProviderConnectionTestSignatureFields,
   authMode: CustomProviderAuthMode,
 ): string {
+  const firstModel = firstProviderChatModel(fields.models, fields.catalogModels);
   return JSON.stringify({
     request: providerModelFetchRequestSignature(fields, authMode),
     wireProtocol: fields.wireProtocol,
-    modelId: firstProviderChatModel(fields.models)?.id.trim() ?? null,
-    modelPiApi: firstProviderChatModel(fields.models)?.piApi ?? null,
-    modelApi: firstProviderChatModel(fields.models)?.api ?? null,
+    modelId: firstModel?.id.trim() ?? null,
+    modelPiApi: firstModel?.piApi ?? null,
+    modelApi: firstModel?.api ?? null,
     catalogPresetId: fields.catalogPresetId ?? null,
-    modelRoute: normalizedModelRoute(
-      firstProviderChatModel(fields.models)?.route,
-    ),
+    modelRoute: normalizedModelRoute(firstModel?.route),
   });
 }

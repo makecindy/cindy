@@ -1,4 +1,8 @@
+import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
+import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
+import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -18,11 +22,14 @@ import { setProviderPresentation, retainProviderPresentationAfterAuthChange } fr
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
   PI_MODEL_APIS,
+  mergeDiscoveredRuntimeModels,
+  isByokProviderId,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   runtimeCustomProviderId,
   storedCustomProviderId,
   type AgentKind,
+  type Catalog,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
   type ProviderPreset,
@@ -30,13 +37,15 @@ import {
 } from '@cindy/model-providers';
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../shared/localModelRuntime.js';
+import { MANAGED_OLLAMA_PROVIDER_ID, isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import type {
   CodexImageGenerationRestartPolicy,
   CustomProviderUpdateOptions,
   CustomProviderUpdateResult,
 } from '../../shared/customProviderUpdate.js';
 import { notifyManagedOllamaRemoved } from '../local-model-runtime/ipc.js';
+import { stopManagedLlamaCppService } from '../local-model-runtime/llamaCppService.js';
+import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type {
   ModelPriceOverrideDesiredQuote,
@@ -87,7 +96,9 @@ import {
   cancelProviderImport,
   finishProviderImportConfirm,
   previewProviderImport,
+  createProviderImportDraftsFromFile,
 } from '../provider-import/providerImport.js';
+import { readProviderImportFile } from '../provider-import/providerImportFile.js';
 import {
   builtinApiKeyStore,
   builtinApiKeyPresentationId,
@@ -97,6 +108,10 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import type {
+  ProviderAccountUsageRequest,
+  ProviderAccountUsageResult,
+} from '../../shared/providerAccountUsage.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -132,10 +147,18 @@ function requireProviderOAuthOwnerId(value: unknown, required = false): string |
   return value;
 }
 
-function requireProviderOAuthLoginOptions(value: unknown): { ownerId?: string } {
+function requireProviderOAuthLoginOptions(value: unknown): {
+  ownerId?: string;
+  method?: 'browser' | 'device';
+} {
   if (value === undefined) return {};
   const options = providerOAuthOptions(value);
-  return { ownerId: requireProviderOAuthOwnerId(options.ownerId) };
+  if (options.method !== undefined && options.method !== 'browser' && options.method !== 'device')
+    throwIpcError('INVALID_PARAMS', 'method must be browser or device');
+  return {
+    ownerId: requireProviderOAuthOwnerId(options.ownerId),
+    method: options.method as 'browser' | 'device' | undefined,
+  };
 }
 
 function requireProviderOAuthCancelOptions(value: unknown): {
@@ -181,16 +204,25 @@ function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateO
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy'))
+  if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
     return null;
   const source = (input as Record<string, unknown>).source;
   if (source !== undefined && source !== 'manual-settings') return null;
   const policy = (input as Record<string, unknown>).codexImageGenerationRestartPolicy;
-  if (policy === undefined) return source === 'manual-settings' ? { source } : {};
-  if (policy !== 'interrupt') return null;
+  const append = (input as Record<string, unknown>).appendSpeechModelsOnly;
+  const refreshAgents = (input as Record<string, unknown>).speechReferenceRefreshAgents;
+  if (refreshAgents !== undefined && (!Array.isArray(refreshAgents) ||
+    refreshAgents.length === 0 || refreshAgents.length > VALID_AGENTS.length ||
+    refreshAgents.some(agent => !VALID_AGENTS.includes(agent)) ||
+    new Set(refreshAgents).size !== refreshAgents.length)) return null;
+  if (append !== undefined && append !== true) return null;
+  if (policy !== undefined && policy !== 'interrupt') return null;
+  if (append && (source || policy || refreshAgents)) return null;
   return {
     ...(source === 'manual-settings' ? { source } : {}),
-    codexImageGenerationRestartPolicy: policy,
+    ...(policy ? { codexImageGenerationRestartPolicy: policy } : {}),
+    ...(append ? { appendSpeechModelsOnly: true as const } : {}),
+    ...(refreshAgents ? { speechReferenceRefreshAgents: refreshAgents as AgentKind[] } : {}),
   };
 }
 
@@ -257,7 +289,9 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: { allowSideEffects?: boolean; snapshotOnly?: boolean }): Promise<ProviderView[]>;
+  /** Synchronous catalog ownership check; injected to keep this IPC module free of Host cycles. */
+  isOrganizationManagedProviderId(providerId: string): boolean;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -273,6 +307,11 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): (() => void) & { commit?: () => void };
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /**
+   * 自定义供应商删除后立即让供应商组转分享同步；删除组配置本身是异步落盘，不能等下一轮轮询。
+   * 生产接线为 providerGroupReshare.kick，单测可注入内存桩。
+   */
+  kickProviderGroupReshare?(reason: string): void;
   /** Non-sensitive spawn-config signature for one custom Provider config. */
   codexCustomProviderConfigSignature?(config: CustomProviderConfig): string;
   /** Force-retire the shared local Codex Host and hold its change guard before mutation. */
@@ -294,10 +333,17 @@ export interface ProviderHandlerDeps {
   getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
+  /** Current Registry and presets for classifying freshly discovered custom models. */
+  getModelCatalog(): Pick<Catalog, 'modelRegistry' | 'presets'>;
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
-  testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
+  testConnection(input: ProviderTestInput, signal?: AbortSignal): Promise<ProviderTestResult>;
+  /** 账户余额查询（生产 = readProviderAccountUsage；单测注入 stub 不联网）。 */
+  accountUsage(input: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
   fetchModels(spec: ProviderModelsFetchSpec): Promise<ProviderModelsFetchResult>;
+  /** Main's native file picker; no renderer-supplied paths or file contents. */
+  selectProviderImportFile?(event: unknown): Promise<string | null>;
+  detectProvider?(spec: ProviderModelsFetchSpec, signal: AbortSignal): Promise<DeploymentDetectionResult>;
   /** 内置四家的模型真源刷新；生产按 providerId 分派到既有 discovery 机制。 */
   refreshBuiltinModels(providerId: BuiltinRefreshableProviderId): Promise<void>;
   /** Renderer 自动刷新提示；Main 侧负责静默失败、冷却和跨窗口去重。 */
@@ -330,10 +376,14 @@ export interface ProviderHandlerDeps {
     providerId: string,
     isCurrent: () => boolean,
     onBrowserUrl?: (url: string | null) => void,
+    method?: 'browser' | 'device',
+    onDeviceCode?: (code: { userCode: string; verificationUrl: string; expiresAt: number }) => void,
   ): Promise<{
     ok: boolean;
     reason?: string;
     rollbackCredentials?: () => boolean;
+    /** Required account-state commit. False or failure must roll credentials back. */
+    commitAccountCapabilities?: () => Promise<boolean>;
     /** Publish identity/model changes only after the login is accepted, outside rollback. */
     afterCommit?: () => Promise<void>;
   }>;
@@ -394,6 +444,9 @@ export interface ProviderHandlerDeps {
    */
   setModelsDisabled(providerId: string, modelIds: readonly string[], disabled: boolean): void;
   setProviderDisabled(providerId: string, disabled: boolean): void;
+  /** Per-provider opt-in for remote Agent use; absent means disabled. */
+  getRemoteProviderInvocationEnabled?(providerId: string): boolean;
+  setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void;
   /**
    * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
    * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
@@ -432,25 +485,54 @@ export interface ProviderHandlerDeps {
    */
   readCodexContextWindowInfo?(target: ModelPriceOverrideTarget, sessionId?: string): Promise<CodexContextWindowInfo | null>;
   readModelContextLimit?(target: ModelPriceOverrideTarget): ModelContextLimitView;
+  readModelImageInputOverride?(target: ModelPriceOverrideTarget): boolean | null;
+  writeModelImageInputOverride?(targets: readonly ModelPriceOverrideTarget[], value: boolean | null): Promise<void>;
   validateModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number): Promise<void>;
   writeModelContextLimit?(targets: readonly ModelPriceOverrideTarget[], limit: number | null): void | Promise<void>;
+  readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
+  writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
+  stageClearProviderModelCompaction?(providerId: string): () => boolean;
 }
 
 /** 上下文上限的读回视图(与写入返回同形，UI 一次拿齐当前值与是否自定义)。 */
 export interface ModelContextLimitView {
+  compaction?: import('../../shared/modelContextLimit').ModelContextLimitView['compaction'];
   mixed?: boolean;
   limit: number | null;
   isCustomized: boolean;
+}
+
+/** 校验 PROVIDER_ACCOUNT_USAGE 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
+function parseAccountUsageInput(input: unknown): ProviderAccountUsageRequest | null {
+  if (!input || typeof input !== 'object') return null;
+  const i = input as Record<string, unknown>;
+  if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
+  if (i.forceRefresh !== undefined && typeof i.forceRefresh !== 'boolean') return null;
+  if (
+    i.agent !== undefined
+    && (typeof i.agent !== 'string' || !(VALID_AGENTS as readonly string[]).includes(i.agent))
+  ) {
+    return null;
+  }
+  return {
+    providerId: i.providerId,
+    forceRefresh: i.forceRefresh ?? undefined,
+    agent: i.agent as AgentKind | undefined,
+  };
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
 function parseTestInput(input: unknown): ProviderTestInput | null {
   if (!input || typeof input !== 'object') return null;
   const i = input as Record<string, unknown>;
+  if (i.requestId !== undefined && (typeof i.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(i.requestId))) return null;
+  if (i.strategy !== undefined && i.strategy !== 'auto') return null;
+  const options = { ...(i.requestId ? { requestId: i.requestId as string } : {}), ...(i.strategy === 'auto' ? { strategy: 'auto' as const } : {}) };
+  if (i.strategy === 'auto' && (!i.requestId || i.kind !== 'adhoc')) return null;
   if (i.kind === 'saved') {
     if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
     if (typeof i.agent !== 'string' || !VALID_AGENTS.includes(i.agent)) return null;
-    return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind };
+    return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind, ...options };
   }
   if (i.kind === 'adhoc') {
     const s = i.spec;
@@ -459,10 +541,10 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
     if (typeof spec.authMethod !== 'string' || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod))
       return null;
-    if (typeof spec.baseUrl !== 'string' || spec.baseUrl.length === 0) return null;
+    if (typeof spec.baseUrl !== 'string' || spec.baseUrl.length === 0 || spec.baseUrl.length > 4096) return null;
     try {
       const u = new URL(spec.baseUrl);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+      if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username || u.password) return null;
     } catch {
       return null;
     }
@@ -485,8 +567,12 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (spec.api !== undefined && (typeof spec.api !== 'string' || !(PI_MODEL_APIS as readonly string[]).includes(spec.api))) return null;
     if (spec.catalogPresetId !== undefined && typeof spec.catalogPresetId !== 'string') return null;
     if (spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
+    if ((typeof spec.apiKey === 'string' && spec.apiKey.length > 16384) || (spec.modelId as string).length > 1024
+      || Object.keys(spec.headers ?? {}).length > 64
+      || Object.entries(spec.headers ?? {}).some(([k, v]) => k.length > 256 || (v as string).length > 16384)) return null;
+    if (i.strategy === 'auto' && (spec.agent !== 'pi' || spec.catalogPresetId || spec.api || spec.requestPath || spec.authMethod === 'oauth')) return null;
     return {
-      kind: 'adhoc',
+      kind: 'adhoc', ...options,
       spec: {
         agent: spec.agent as AgentKind,
         baseUrl: spec.baseUrl,
@@ -508,6 +594,8 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
 function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (!input || typeof input !== 'object') return null;
   const spec = input as Record<string, unknown>;
+  if (spec.allowEmpty !== undefined && typeof spec.allowEmpty !== 'boolean') return null;
+  if (spec.redirect !== undefined && spec.redirect !== 'error') return null;
   if (typeof spec.agent !== 'string' || !VALID_AGENTS.includes(spec.agent)) return null;
   if (typeof spec.authMethod !== 'string' || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod))
     return null;
@@ -554,6 +642,8 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     baseUrl: spec.baseUrl,
     authMethod: spec.authMethod as ProviderModelsFetchSpec['authMethod'],
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
+    ...(spec.allowEmpty === true ? { allowEmpty: true } : {}),
+    ...(spec.redirect === 'error' ? { redirect: 'error' as const } : {}),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
@@ -568,6 +658,7 @@ export function registerProviderHandlers(
   deps: ProviderHandlerDeps,
 ): void {
   const oauthMutationGeneration = new Map<string, symbol>();
+  const acceptingOAuthGenerations = new Set<symbol>();
   const beginOAuthMutation = (providerId: string): symbol => {
     // Unique token avoids ABA when a completed entry is deleted and the same provider starts again.
     const generation = Symbol(providerId);
@@ -615,6 +706,7 @@ export function registerProviderHandlers(
   };
   const cancelOwnedProviderOAuth = (owner: ProviderOAuthOwner): void => {
     if (!isOAuthMutationCurrent(owner.providerId, owner.generation)) return;
+    if (acceptingOAuthGenerations.has(owner.generation)) return;
     const cancellationGeneration = beginOAuthMutation(owner.providerId);
     try {
       deps.oauthCancel(owner.providerId);
@@ -1070,6 +1162,9 @@ export function registerProviderHandlers(
       }
       assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
+      const remoteAccess = deps.getRemoteProviderInvocationEnabled
+        ? (providerId: string) => deps.getRemoteProviderInvocationEnabled!(providerId)
+        : null;
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
       // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
@@ -1077,7 +1172,23 @@ export function registerProviderHandlers(
       return {
         dataOwnerId,
         ownerGeneration: ownerAtIngress?.generation ?? 0,
-        providers: providers.map(withoutProviderHeaderCredentials),
+        providers: providers.map((provider) => {
+          const safe = withoutProviderHeaderCredentials(provider);
+          const view = {
+            ...safe,
+            ...(safe.models ? {
+              models: Object.fromEntries(
+                Object.entries(safe.models).map(([agent, models]) => [
+                  agent,
+                  models?.map((model) => ({ ...model, effortsUnknown: model.effortsUnknown === true })),
+                ]),
+              ),
+            } : {}),
+          };
+          return remoteAccess
+            ? { ...view, remoteInvocationEnabled: remoteAccess(provider.id) }
+            : view;
+        }),
         providerOrder,
         modelVisibilityOverrides,
       };
@@ -1162,6 +1273,32 @@ export function registerProviderHandlers(
 
   const providerImportScope = (): { dataOwnerId: string | null; generation: number } =>
     captureProviderOwnerSession() ?? { dataOwnerId: null, generation: 0 };
+
+  registry.handle(MAKER_INVOKE.PROVIDER_IMPORT_FILE, async (event, ...args: unknown[]) => {
+    assertTrustedProviderMutationSender(event);
+    if (args.length) throwIpcError('INVALID_PARAMS', 'file import takes no arguments');
+    if (!deps.selectProviderImportFile) throwIpcError('INTERNAL', 'file picker unavailable');
+    const owner = providerImportScope();
+    let filePath: string | null;
+    try {
+      filePath = await deps.selectProviderImportFile(event);
+    } catch {
+      throwIpcError('PROVIDER_IMPORT_FILE_READ_FAILED', 'could not select provider import file');
+    }
+    if (!filePath) return null;
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    const bytes = await readProviderImportFile(filePath);
+    assertTrustedProviderMutationSender(event);
+    assertProviderMutationOwner(owner);
+    try {
+      const ids = createProviderImportDraftsFromFile(bytes, owner);
+      return ids.length === 1 ? ids[0] : ids;
+    } catch {
+      // JSON/schema errors may quote arbitrary secret-bearing input, including field names.
+      throwIpcError('PROVIDER_IMPORT_FILE_INVALID', 'invalid provider import configuration');
+    }
+  });
 
   registry.handle(
     MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW,
@@ -1285,7 +1422,7 @@ export function registerProviderHandlers(
               });
               if (fetched.ok && fetched.models?.length) {
                 assertProviderImportModels(fetched.models);
-                config.runtimes[agent] = { ...runtime, models: fetched.models };
+                config.runtimes[agent] = { ...runtime, models: mergeDiscoveredRuntimeModels([], fetched.models) };
               } else modelsPending = true;
             } catch {
               modelsPending = true;
@@ -1363,6 +1500,9 @@ export function registerProviderHandlers(
     assertRequestedProviderOwner(value.dataOwnerId as string | null, value.ownerGeneration);
     if (!provider || provider.id === 'xd') {
       throwIpcError('INVALID_PARAMS', 'Provider does not support presentation overrides');
+    }
+    if (provider.source === 'organization') {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
     if (value.action === 'rename' && typeof value.name === 'string' && value.name.trim() && value.name.length <= 128) {
       if (provider.source === 'builtin') {
@@ -1574,6 +1714,38 @@ export function registerProviderHandlers(
     return enqueueDisableWrite(run);
   });
 
+  registry.handle(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const ownerAtIngress = captureProviderOwnerSession();
+    if (!deps.getRemoteProviderInvocationEnabled || !deps.setRemoteProviderInvocationEnabled) {
+      throwIpcError('INTERNAL', 'remote provider access is not wired');
+    }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'invalid input');
+    }
+    const value = input as Record<string, unknown>;
+    if (typeof value.providerId !== 'string' || value.providerId.length === 0 || value.providerId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (typeof value.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required');
+    const providers = await deps.listProviders({ allowSideEffects: false });
+    assertProviderMutationOwner(ownerAtIngress);
+    const provider = providers.find((item) => item.id === value.providerId);
+    if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${value.providerId}"`);
+    assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting remote provider access');
+    try {
+      deps.setRemoteProviderInvocationEnabled(value.providerId, value.enabled);
+    } catch (err) {
+      log.warn('remote provider access persist failed', {
+        providerId: value.providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to persist remote provider access');
+    }
+    deps.broadcastChanged();
+    return { ok: true, enabled: value.enabled };
+  });
+
   const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throwIpcError('INVALID_PARAMS', 'price override target must be an object');
@@ -1664,6 +1836,9 @@ export function registerProviderHandlers(
       if (target.providerId === 'xd') {
         throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway pricing is server-controlled');
       }
+      if (deps.isOrganizationManagedProviderId(target.providerId)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise pricing is managed by your organization');
+      }
       if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
         throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
       }
@@ -1696,6 +1871,9 @@ export function registerProviderHandlers(
   registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const target = parsePriceTarget(input);
+    if (deps.isOrganizationManagedProviderId(target.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise pricing is managed by your organization');
+    }
     const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
@@ -1748,7 +1926,9 @@ export function registerProviderHandlers(
   const readContextTargets = (targets: ModelPriceOverrideTarget[]): ModelContextLimitView => {
     const { read } = requireContextLimitDeps();
     const views = targets.map(read);
+    const policy = deps.readModelCompaction?.(targets[0]!);
     return {
+      ...(policy ? { compaction: policy } : {}),
       limit: views.find((v) => v.limit !== null)?.limit ?? null,
       isCustomized: views.some((v) => v.isCustomized),
       mixed: views.some((v) => v.limit !== views[0]!.limit),
@@ -1764,6 +1944,37 @@ export function registerProviderHandlers(
     return { read: deps.readModelContextLimit, write: deps.writeModelContextLimit };
   };
 
+  const readImageInputTargets = (targets: ModelPriceOverrideTarget[]) => {
+    if (!deps.readModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    const values = targets.map((target) => deps.readModelImageInputOverride!(target));
+    return { value: values[0]!, mixed: values.some((value) => value !== values[0]) };
+  };
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    return readImageInputTargets(parseContextTargets(input));
+  });
+  registry.handle(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, async (event, input: unknown, value: unknown, ownerInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    assertContextOwner(ownerInput);
+    const targets = parseContextTargets(input);
+    if (value !== null && typeof value !== 'boolean') throwIpcError('INVALID_PARAMS', 'image input must be boolean or null');
+    if (!deps.writeModelImageInputOverride) throwIpcError('INTERNAL', 'model image input override unavailable');
+    if (deps.isOrganizationManagedProviderId(targets[0]!.providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Model capabilities are managed by your organization');
+    }
+    const owner = captureProviderOwnerSession();
+    // Metadata does not mutate credentials or transport. Holding the provider
+    // route gate here would make Pi's refresh preview reject its own provider.
+    return enqueuePriceMutation(async () => {
+      if (value !== null) for (const target of targets) await requirePriceTargetModel(target);
+      assertProviderMutationOwner(owner, 'active account changed before setting image input');
+      await deps.writeModelImageInputOverride!(targets, value as boolean | null);
+      assertProviderMutationOwner(owner, 'active account changed after setting image input');
+      deps.broadcastChanged();
+      return readImageInputTargets(targets);
+    });
+  });
+
   registry.handle(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_GET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const targets = parseContextTargets(input);
@@ -1778,6 +1989,28 @@ export function registerProviderHandlers(
     }
     return view;
   });
+
+  registry.handle(
+    MAKER_INVOKE.MODEL_COMPACTION_SET,
+    async (event, input: unknown, pctInput: unknown, ownerInput: unknown) => {
+      assertTrustedProviderMutationSender(event);
+      assertContextOwner(ownerInput);
+      const targets = parseContextTargets(input);
+      if (pctInput !== null && (typeof pctInput !== 'number' || !Number.isInteger(pctInput) || pctInput < 50 || pctInput > 90)) {
+        throwIpcError('INVALID_PARAMS', 'compaction percentage must be 50–90 or null');
+      }
+      if (!deps.writeModelCompaction) throwIpcError('INTERNAL', 'model compaction settings unavailable');
+      const ownerAtIngress = captureProviderOwnerSession();
+      return withProviderConfigMutation(targets[0]!.providerId, () => enqueuePriceMutation(async () => {
+        if (pctInput !== null) for (const target of targets) await requirePriceTargetModel(target);
+        assertProviderMutationOwner(ownerAtIngress, 'active account changed before setting compaction');
+        await deps.writeModelCompaction!(targets, pctInput as number | null);
+        assertProviderMutationOwner(ownerAtIngress, 'active account changed after setting compaction');
+        deps.broadcastChanged();
+        return readContextTargets(targets);
+      }));
+    },
+  );
 
   registry.handle(
     MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET,
@@ -1871,7 +2104,10 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider create options');
     const config = input as CustomProviderConfig;
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be created from the custom form',
@@ -1944,7 +2180,10 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider update options');
     let config = input as CustomProviderConfig;
-    if (config.id === MANAGED_OLLAMA_PROVIDER_ID) {
+    if (deps.isOrganizationManagedProviderId(config.id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
+    if (isManagedSidecarProviderId(config.id)) {
       throwIpcError(
         'PERMISSION_DENIED',
         'managed local providers cannot be edited from the custom form',
@@ -1955,18 +2194,42 @@ export function registerProviderHandlers(
     return withProviderConfigMutation(config.id, async (commitRouteMutation) => {
       let generation: symbol | null = null;
       let codexHostPrepared = false;
+      let speechReferenceAdded = false;
       try {
         // per-provider 队列等待结束后才读取该 owner 的 DB / secrets。
         assertProviderMutationOwner(ownerAtIngress);
         const previous = await getCustomProvider(config.id);
         assertProviderMutationOwner(ownerAtIngress);
         if (!previous) throwIpcError('NOT_FOUND', `custom provider '${config.id}' not found`);
-        if (resolveLatest) {
+        if (options.appendSpeechModelsOnly) {
+          if (Object.keys(keys).length) throwIpcError('INVALID_PARAMS', 'speech additions cannot change credentials');
+          try { config = appendSpeechModels(previous, config, deps.listPresets()); }
+          catch { throwIpcError('INVALID_PARAMS', 'connection changed or invalid speech additions'); }
+          const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
+          if (!validation.ok) throwIpcError(validation.code, validation.message);
+          separated = splitCustomProviderHeaders(config);
+        } else if (resolveLatest) {
           // Main-only key import merges under the same queue, never from a stale UI snapshot.
           config = resolveLatest(previous);
           const latestValidation = validateCustomProviderConfig(config, { allowLegacyXai: true });
           if (!latestValidation.ok) throwIpcError(latestValidation.code, latestValidation.message);
           separated = splitCustomProviderHeaders(config);
+        }
+        if (options.speechReferenceRefreshAgents) {
+          const providers = await deps.listProviders({ allowSideEffects: false, snapshotOnly: true });
+          assertProviderMutationOwner(ownerAtIngress);
+          const provider = providers.find(p => p.id === runtimeCustomProviderId(config.id));
+          const reference = provider && missingSpeechReference(
+            provider, config, new Set(options.speechReferenceRefreshAgents), deps.getModelCatalog(),
+          );
+          if (reference) {
+            config = structuredClone(config);
+            config.runtimes[reference.agent]!.models.push(reference.model);
+            const validation = validateCustomProviderConfig(config, { allowLegacyXai: true });
+            if (!validation.ok) throwIpcError(validation.code, validation.message);
+            separated = splitCustomProviderHeaders(config);
+            speechReferenceAdded = true;
+          }
         }
         // 即便 OAuth 描述符没变，runtime / model 编辑也必须让旧登录尾部的自动发现失效，
         // 否则旧 endpoint 的迟到结果可能合并进刚保存的新配置。
@@ -2067,7 +2330,7 @@ export function registerProviderHandlers(
           codexHostChangeRequired ? commitRouteMutation : undefined,
         );
         assertProviderMutationOwner(ownerAtIngress);
-        return { ok: true };
+        return { ok: true, ...(speechReferenceAdded ? { speechReferenceAdded: true as const } : {}) };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
         if (generation !== null) finishOAuthMutation(config.id, generation);
@@ -2085,6 +2348,9 @@ export function registerProviderHandlers(
     if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
+    }
+    if (deps.isOrganizationManagedProviderId(providerId)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
     const runtimeProviderId = runtimeCustomProviderId(providerId);
     const ownerAtIngress = captureProviderOwnerSession();
@@ -2110,72 +2376,99 @@ export function registerProviderHandlers(
           await deps.retireCodexAccount?.(providerId);
           assertProviderMutationOwner(ownerAtIngress);
         }
-        deps.oauthCancel(providerId);
-        const credentialSnapshots = stageProviderCredentials(
-          providerId,
-          (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
-            agent,
-            replacement: null,
-          })),
-          planProviderHeaderMutations(
-            { id: providerId, name: providerId, runtimes: {} },
-            {},
-            'delete',
-          ),
-          commitRouteMutation,
-        );
-        // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
-        let restoreOAuthCredentials: (() => boolean) | null = null;
-        let restoreDisableOverrides: (() => boolean) | null = null;
-        let restorePriceOverrides: (() => boolean) | null = null;
-        // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
-        // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
-        // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
-        // listProviders() 里找到该 provider、预埋新 override,同 id 重建照旧复活停用
-        // 状态。整体持锁后,并发写会排到目录刷新之后,成员校验自然拒绝
-        // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
-        // 清理与恢复都直接调用。
-        await enqueueDisableWrite(async () => {
-          // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+        const deleteConnection = async () => {
+          // Stop first: no owner-scoped settings or credentials may be staged while waiting.
           assertProviderMutationOwner(ownerAtIngress);
+          deps.oauthCancel(providerId);
+          // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
+          let restoreOAuthCredentials: (() => boolean) | null = null;
+          let restoreDisableOverrides: (() => boolean) | null = null;
+          let restorePriceOverrides: (() => boolean) | null = null;
+          let restoreCompactionOverrides: (() => boolean) | null = null;
+          // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
+          // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
+          // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
+          // listProviders() 里找到该 provider、预埋新 override,同 id 重建照旧复活停用
+          // 状态。整体持锁后,并发写会排到目录刷新之后,成员校验自然拒绝
+          // (PR #744 review 第二十二轮)。队列内不得再调 enqueueDisableWrite(自等死锁),
+          // 清理与恢复都直接调用。
+          await enqueueDisableWrite(async () => {
+            // 进入 disable 全局队列后可能再次换号；以下会写 owner-scoped override/OAuth blob。
+            assertProviderMutationOwner(ownerAtIngress);
+            const credentialSnapshots = stageProviderCredentials(
+              providerId,
+              (VALID_AGENTS as readonly AgentKind[]).map((agent) => ({
+                agent,
+                replacement: null,
+              })),
+              planProviderHeaderMutations(
+                { id: providerId, name: providerId, runtimes: {} },
+                {},
+                'delete',
+              ),
+              commitRouteMutation,
+            );
+            try {
+              // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
+              // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
+              // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
+              restoreDisableOverrides =
+                deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
+              restorePriceOverrides =
+                deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
+              restoreCompactionOverrides =
+                deps.stageClearProviderModelCompaction?.(runtimeProviderId) ?? null;
+              assertProviderMutationOwner(ownerAtIngress);
+              restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
+              if (!restoreOAuthCredentials) {
+                throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
+              }
+              await deleteCustomProvider(providerId);
+              if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
+              assertProviderMutationOwner(ownerAtIngress);
+            } catch (err) {
+              assertProviderMutationOwner(ownerAtIngress);
+              const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
+              const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
+              const compactionRestored = !restoreCompactionOverrides || restoreCompactionOverrides();
+              const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
+              const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
+              if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored || !compactionRestored) {
+                commitRouteMutation();
+                throwIpcError(
+                  'INTERNAL',
+                  'provider deletion failed and existing credentials could not be restored',
+                );
+              }
+              throw err;
+            }
+            // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
+            // 凭证/override 的恢复只覆盖删除本身失败的场景。
+            assertProviderMutationOwner(ownerAtIngress);
+            await afterChange(codexHostPrepared, commitRouteMutation);
+            assertProviderMutationOwner(ownerAtIngress);
+            deps.broadcastPricingChanged();
+            // 删除连接即删除它的供应商组(provider-groups.md §3)：同名重建会得到同一个 id，不能让旧组复活。
+            await writeProviderGroup(providerId, null)
+              .then(() => {
+                deps.kickProviderGroupReshare?.('provider-delete');
+                return pruneProviderGroupBindings(providerId, null);
+              })
+              .catch((error) => {
+                log.warn('provider group cleanup after provider deletion failed', {
+                  providerId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              });
+          });
+        };
+        if (providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
           try {
-            // 停用 override 清理进事务(第二十轮):放在配置删除之前,后续任一步失败
-            // 由恢复函数把停用状态原样写回;清理自身抛错时事务未产生破坏,删除中止,
-            // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
-            restoreDisableOverrides =
-              deps.stageClearProviderDisableOverrides?.(runtimeProviderId) ?? null;
-            restorePriceOverrides =
-              deps.stageClearProviderModelPriceOverrides?.(runtimeProviderId) ?? null;
-            assertProviderMutationOwner(ownerAtIngress);
-            restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
-            if (!restoreOAuthCredentials) {
-              throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
-            }
-            await deleteCustomProvider(providerId);
-            if (providerId === MANAGED_OLLAMA_PROVIDER_ID) notifyManagedOllamaRemoved();
-            assertProviderMutationOwner(ownerAtIngress);
-          } catch (err) {
-            assertProviderMutationOwner(ownerAtIngress);
-            const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
-            const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
-            const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
-            const credentialsRestored = restoreProviderCredentials(providerId, credentialSnapshots);
-            if (!oauthRestored || !credentialsRestored || !overridesRestored || !pricesRestored) {
-              commitRouteMutation();
-              throwIpcError(
-                'INTERNAL',
-                'provider deletion failed and existing credentials could not be restored',
-              );
-            }
-            throw err;
+            await stopManagedLlamaCppService(deleteConnection);
+          } catch {
+            throwIpcError('PRECONDITION_FAILED', 'LLAMACPP_STOP_FAILED');
           }
-          // 在队列内尝试刷新目录；刷新失败不撤销已经提交的删除。
-          // 凭证/override 的恢复只覆盖删除本身失败的场景。
-          assertProviderMutationOwner(ownerAtIngress);
-          await afterChange(codexHostPrepared, commitRouteMutation);
-          assertProviderMutationOwner(ownerAtIngress);
-          deps.broadcastPricingChanged();
-        });
+        } else await deleteConnection();
         return { ok: true };
       } finally {
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
@@ -2190,20 +2483,88 @@ export function registerProviderHandlers(
     async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
   );
 
+  // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const parsed = parseAccountUsageInput(input);
+    if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
+    return deps.accountUsage(parsed);
+  });
+
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。
   // 入参非法 / saved 解析失败（供应商不存在等）仍走 throwIpcError。
-  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (_event, input: unknown) => {
+  const connectionTests = new Map<ProviderOAuthRendererSender, { id: string; controller: AbortController }>();
+  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const sender = providerOAuthRendererSender(event);
+    const value = input as Record<string, unknown> | null;
+    if (value?.kind === 'cancel') {
+      if (!sender || typeof value.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value.requestId)) throwIpcError('INVALID_PARAMS', 'invalid test cancellation');
+      const previous = connectionTests.get(sender);
+      if (previous?.id === value.requestId) previous.controller.abort();
+      return { ok: false, latencyMs: 0, decision: 'cancelled' };
+    }
     const parsed = parseTestInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid test-connection input');
+    // Old callers retain their single-test contract; new operations are owned by the sender.
+    if (!parsed.requestId) {
+      try { return await deps.testConnection(parsed); }
+      catch { throwIpcError('INVALID_PARAMS', 'invalid saved provider connection'); }
+    }
+    if (!sender) throwIpcError('INVALID_PARAMS', 'missing test owner');
+    if (connectionTests.has(sender)) throwIpcError('PRECONDITION_FAILED', 'connection test already running');
+    const controller = new AbortController();
+    const operation = { id: parsed.requestId, controller };
+    connectionTests.set(sender, operation);
+    const owner = captureProviderOwnerSession();
+    const abort = () => controller.abort();
+    sender.once?.('destroyed', abort);
     try {
-      return await deps.testConnection(parsed);
-    } catch (err) {
-      // resolveSavedProbeSpec 的解析错误（provider 不存在 / 无该 runtime）→ INVALID_PARAMS。
-      throwIpcError('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
+      const result = await deps.testConnection(parsed, controller.signal);
+      if (controller.signal.aborted || !providerMutationOwnerMatches(owner)) return { ok: false, latencyMs: 0, decision: 'cancelled' };
+      return result;
+    } catch { throwIpcError('INVALID_PARAMS', 'invalid provider connection test'); }
+    finally {
+      sender.removeListener?.('destroyed', abort);
+      if (connectionTests.get(sender) === operation) connectionTests.delete(sender);
     }
   });
 
   // 获取模型列表：查询型结构化返回（同上例外条款）；仅网络/上游失败在结果 code 里，不抛。
+  // Like provider creation, detection is local trusted settings only. Never expose keys via relay.
+  const detections = new Map<ProviderOAuthRendererSender, { id: string; controller: AbortController }>();
+  registry.handle(MAKER_INVOKE.PROVIDER_DETECT, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const sender = providerOAuthRendererSender(event);
+    if (!sender || !input || typeof input !== 'object') throwIpcError('INVALID_PARAMS', 'invalid detection input');
+    const value = input as Record<string, unknown>;
+    if (typeof value.requestId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value.requestId)) throwIpcError('INVALID_PARAMS', 'invalid detection id');
+    const previous = detections.get(sender);
+    if (value.cancel === true) {
+      if (previous?.id === value.requestId) previous.controller.abort();
+      return { candidates: [], reason: 'insufficient_evidence' };
+    }
+    const parsed = parseModelsFetchInput(value);
+    if (!parsed || parsed.savedProviderId || parsed.authMethod === 'oauth' || parsed.baseUrl.length > 4096
+      || (parsed.apiKey?.length ?? 0) > 16384 || Object.entries(parsed.headers ?? {}).some(([k,v]) => k.length > 256 || v.length > 16384)
+      || Object.keys(parsed.headers ?? {}).length > 64) throwIpcError('INVALID_PARAMS', 'invalid detection input');
+    previous?.controller.abort();
+    const controller = new AbortController();
+    const operation = { id: value.requestId, controller };
+    detections.set(sender, operation);
+    const owner = captureProviderOwnerSession();
+    const abort = () => controller.abort();
+    sender.once?.('destroyed', abort);
+    try {
+      const result = await deps.detectProvider?.(parsed, controller.signal);
+      if (controller.signal.aborted || !providerMutationOwnerMatches(owner)) return { candidates: [], reason: 'insufficient_evidence' };
+      return result ?? { candidates: [], reason: 'insufficient_evidence' };
+    } finally {
+      sender.removeListener?.('destroyed', abort);
+      if (detections.get(sender) === operation) detections.delete(sender);
+    }
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_MODELS_FETCH, async (event, input: unknown) => {
     // 这条查询会把 renderer 提供的 API key / 自定义 headers 带到目标 endpoint；
     // 与重新发现一样，必须先确认调用方是 Cindy 自有顶层页面，避免 WebView / 子 frame
@@ -2311,8 +2672,13 @@ export function registerProviderHandlers(
     async (event, providerId: unknown, rawOptions?: unknown) => {
       assertTrustedProviderMutationSender(event);
       const id = requireProviderId(providerId);
-      const { ownerId } = requireProviderOAuthLoginOptions(rawOptions);
+      if (deps.isOrganizationManagedProviderId(id)) {
+        throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+      }
+      const { ownerId, method } = requireProviderOAuthLoginOptions(rawOptions);
       const sender = providerOAuthRendererSender(event);
+      if (method === 'device' && !ownerId)
+        throwIpcError('INVALID_PARAMS', 'device login requires an initiating window');
       if (ownerId && !sender) {
         throwIpcError('INVALID_PARAMS', 'ownerId requires an Electron sender');
       }
@@ -2327,6 +2693,7 @@ export function registerProviderHandlers(
       const ownerAtIngress = captureProviderOwnerSession();
       const finishRouteMutation = deps.beginRouteMutation(id);
       const generation = beginOAuthMutation(id);
+      const isCurrent = () => isOAuthMutationCurrent(id, generation) && providerMutationOwnerMatches(ownerAtIngress);
       let owner: ProviderOAuthOwner | null = null;
       let codexHostPrepared = false;
       try {
@@ -2339,18 +2706,38 @@ export function registerProviderHandlers(
           ownerAtIngress,
         );
         codexHostPrepared = preparation.prepared;
-        const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation), (url) => {
+        const result = await deps.oauthLogin(id, isCurrent, (url) => {
           // Only the initiating local renderer gets this ephemeral authorization URL.
-          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
-              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          if (!ownerId || !sender || !isCurrent()) return;
           try {
             sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
               providerId: id, ownerId, phase: 'browser-url', url,
             });
           } catch { /* A closed renderer must not interrupt credential cleanup. */ }
+        }, method, (code) => {
+          if (!ownerId || !sender || !isCurrent()) return;
+          try {
+            sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+              providerId: id, phase: 'device-code', ...code,
+            });
+          } catch { /* The login still runs if its initiating window closes. */ }
         });
-        if (isOAuthMutationCurrent(id, generation)) {
+        if (isCurrent()) {
           if (result.ok) {
+            if (result.commitAccountCapabilities) {
+              // Credentials are installed: close cancellation before committing their
+              // capabilities so cancellation cannot split the accepted account state.
+              acceptingOAuthGenerations.add(generation);
+              let committed = false;
+              try { committed = await result.commitAccountCapabilities(); } catch { /* Roll back below. */ }
+              if (!committed) {
+                if (!result.rollbackCredentials?.()) {
+                  finishRouteMutation.commit?.();
+                  throwIpcError('INTERNAL', 'failed to restore credentials after account capability update');
+                }
+                return { ok: false, reason: 'login_cancelled' };
+              }
+            }
             finishRouteMutation.commit?.();
             try {
               await result.afterCommit?.();
@@ -2375,6 +2762,7 @@ export function registerProviderHandlers(
         if (isIpcError(err)) throw err;
         throwIpcError('INVALID_PARAMS', err instanceof Error ? err.message : String(err));
       } finally {
+        acceptingOAuthGenerations.delete(generation);
         if (codexHostPrepared) deps.cancelCodexCustomProviderHostChange?.();
         if (ownerId && owner) removeProviderOAuthOwner(ownerId, sender ?? undefined, owner);
         finishOAuthMutation(id, generation);
@@ -2388,6 +2776,9 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = storedCustomProviderId(requireProviderId(providerId));
+    if (deps.isOrganizationManagedProviderId(id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
     const owner = captureProviderOwnerSession();
     return withProviderConfigMutation(id, async (commitRouteMutation) => {
       assertProviderMutationOwner(owner);
@@ -2420,6 +2811,9 @@ export function registerProviderHandlers(
     const options = parseCustomProviderUpdateOptions(optionsInput);
     if (!options) throwIpcError('INVALID_PARAMS', 'Invalid provider change options');
     const id = requireProviderId(providerId);
+    if (deps.isOrganizationManagedProviderId(id)) {
+      throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
+    }
     const ownerAtIngress = captureProviderOwnerSession();
     let generation: symbol | null = null;
     try {
@@ -2483,6 +2877,8 @@ export function registerProviderHandlers(
         if (owner) cancelOwnedProviderOAuth(owner);
         return { ok: true };
       }
+      const currentGeneration = oauthMutationGeneration.get(id);
+      if (currentGeneration && acceptingOAuthGenerations.has(currentGeneration)) return { ok: true };
       clearProviderOAuthOwners(id);
       const generation = beginOAuthMutation(id);
       try {

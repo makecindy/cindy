@@ -138,6 +138,34 @@ Submission still requires the same signed process, console account, window and
 secure field, plus an enabled same-parent submit button; the button is revalidated
 immediately before one AXPress. Recovery dialogs, user-selection and unknown password fields fail closed.
 
+Multiple displays may expose empty `login` windows alongside the interactive
+surface. The Mac helper inspects all windows within the existing shared time/node
+budget and selects exactly one recognized password-field or own-account
+presentation surface. Empty login windows are allowed; unknown siblings and
+multiple actionable surfaces fail closed. Revalidation follows the original
+window and secure field even if the window list is reordered. See
+`MacScreenUnlock.swift` and `MacUnlockProfileTests.swift` for selection and regressions.
+Abort cleanup revalidates only the original window's subtree, retaining the
+console account, signed process and exact secure-field identity checks. A sibling
+becoming actionable or unreadable still prevents submission, but cannot by itself
+prevent clearing the password already written to the original field. Cleanup never
+falls back to a replacement window. `MacUnlockWindowCollectorTests.swift` covers
+these sibling transitions alongside traversal budgets and object mapping.
+On a two-display Mac, the old preparation probe failed with
+`CREDENTIAL_UNLOCK_UNAVAILABLE` while the updated probe returned `fieldReady: true`
+on the same locked session. This checks field preparation only, not password
+submission or successful system unlock.
+
+Mobile fingerprints exclude the explicit macOS-only source files and desktop
+entry-point directories listed in `apps/mobile/fingerprint.config.cjs`. Shared
+Swift, mobile forms, resources and the podspec remain fingerprint inputs, including
+new files unless explicitly excluded. Regression tests verify both directions.
+Adopting this narrower boundary changes existing fingerprints once and must be
+coordinated with a planned native mobile release; it does not make legacy runtime
+hashes interchangeable. Subsequent changes confined to the excluded Mac sources
+do not require another mobile runtime. Existing phones can use the updated Mac
+helper over the unchanged protocol without installing a new phone build.
+
 The `cindy-remote-unlock-inspect --prepare` diagnostic exercises wake and field
 preparation without accepting any password or submitting login. On the test Mac,
 this probe reaches `fieldReady: true`; a separately cleared, never-submitted test
@@ -200,22 +228,36 @@ reject that field; actual modal recovery and user-selection still fail. The only
 submit action remains LUIBUTTON_GO and recovery buttons are never invoked. The
 current Mac preparation probe succeeds with this passive help visible.
 
-### Lock on explicit remote exit
+### Lock on remote exit and connection loss
 
 The Security panel includes a separate, default-off lock-on-exit preference. It is
 a non-secret phone-local boolean override per computer, independent of saved
-passwords and Face ID. Explicit Back/disconnect and route unmount send
-`stop.lockScreen: true` only when the host advertises `lockOnExit`. Ordinary stop,
-media recovery, display changes, background pauses and Face ID inactivity retain
-their original behavior. Network loss or force-quitting the phone cannot promise
-delivery of an exit command. Old hosts retain normal stop behavior.
+passwords and Face ID. Desktop has the same per-computer preference. New viewers
+send optional `lockOnExit` on start and heartbeats, so the host owns the policy
+before a connection fails. Explicit Back/disconnect and route unmount still send
+`stop.lockScreen: true` when supported, including to older hosts. New hosts also
+lock on signaling loss or heartbeat expiry (12-second lease, checked every second),
+without needing an exit command. Live-lease resume/takeover, display changes and
+background viewing with live heartbeats do not trigger locking. Old hosts ignore
+the optional policy fields and still need the explicit exit command.
 
 The existing authenticated Device Link request is bound to its exact peer and
 lease. The host blocks replacement starts during the bounded lock operation,
 releases held input, then the validated native helper sends the fixed macOS lock
 shortcut and confirms the current console session is locked. No password, Face ID,
 server endpoint or account-wide setting is involved. Lock failure is visible on
-the phone; only macOS currently advertises this optional capability.
+the phone; Desktop closes locally without awaiting the remote result. Background
+lock failures are logged on the host. macOS and supported Linux hosts advertise
+this optional capability.
+
+### Idle protection
+
+The separate default-five-minute idle setting is host-enforced when `idleLock` is
+advertised. It does not change saved credentials, biometric checks or privacy defaults.
+Timeout and loss of the protected lease block automatic resume so saved auto-unlock
+cannot immediately undo locking. Local Desktop lock/suspend requests an immediate
+remote lock; Mobile backgrounding without PiP does the same when idle protection is
+on. See [Remote desktop](remote-desktop.md#idle-protection) for options and counting.
 
 ### Stable mobile controls
 

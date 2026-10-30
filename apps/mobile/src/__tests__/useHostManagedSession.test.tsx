@@ -6,12 +6,12 @@ import { useHostManagedSession } from '@/session/hostManagedSession';
 
 let container: HTMLDivElement;
 let root: Root;
-function Controls({ scope, session }: { scope: string; session: { source?: string } | null }) {
-  const managed = useHostManagedSession(scope, session);
+function Controls({ scope, session, pendingValue }: { scope: string; session: { source?: string } | null; pendingValue?: boolean }) {
+  const managed = useHostManagedSession(scope, session, pendingValue);
   return createElement('div', null, managed ? 'companion controls' : 'task controls');
 }
-const render = (scope: string, session: { source?: string } | null) => {
-  act(() => root.render(createElement(StrictMode, null, createElement(Controls, { scope, session }))));
+const render = (scope: string, session: { source?: string } | null, pendingValue?: boolean) => {
+  act(() => root.render(createElement(StrictMode, null, createElement(Controls, { scope, session, pendingValue }))));
   return container.textContent;
 };
 beforeEach(() => {
@@ -37,4 +37,15 @@ describe('mobile companion control lifetime', () => {
       expect(render(scope, { source: 'bot' })).toBe('companion controls');
     }
   });
+});
+
+it('filters a confirmed companion opened without resource params and retains it through refresh', () => {
+  expect(render('owner/host/chat', null, false)).toBe('task controls');
+  expect(render('owner/host/chat', { source: 'bot' }, false)).toBe('companion controls');
+  expect(render('owner/host/chat', null, false)).toBe('companion controls');
+  expect(render('owner/host/chat', {}, false)).toBe('companion controls');
+  for (const scope of ['owner/host/other', 'owner/other/chat', 'other/host/chat']) {
+    expect(render(scope, null, false)).toBe('task controls');
+    expect(render(scope, { source: 'desktop' }, false)).toBe('task controls');
+  }
 });

@@ -76,9 +76,8 @@ export interface GhostOauthClientConfig {
   /**
    * 可选:XDT server token broker 的 provider slug(如 'jira')。声明后
    * code 换 token 与 refresh 不直连 tokenUrl,改经注入的 broker 调用器
-   * (client secret 在服务端,不随包分发)。静态官方前缀照旧放行；其余资格由装入
-   * 来源与当前组织事实共同判定。校验层保持纯函数不感知装入语境，门控在运行时
-   * 接线层。broker 模式兼容
+   * (client secret 在服务端,不随包分发)。资格按可信安装事实判定，名称前缀不放行。
+   * 校验层保持纯函数不感知装入语境，门控在运行时接线层。broker 模式兼容
    * PKCE(pkce 缺省开):verifier 经 broker
    * exchange 透传到服务端,由 provider 决定是否消费(feishu 要、jira/slack
    * 显式声明 pkce:false)。
@@ -235,6 +234,8 @@ export interface GhostOauthLogger {
 }
 
 export interface StartGhostOauthFlowOptions {
+  /** Main-only transaction, never a plugin/Renderer-supplied URL. */
+  remote?: import('../plugin-oauth/context.js').RemoteOauthContext;
   config: GhostOauthClientConfig;
   /** 拉起系统浏览器(生产注入 shell.openExternal)。 */
   openExternal(url: string): void | Promise<void>;
@@ -393,6 +394,9 @@ function isInvalidGrant(text: string | null): boolean {
 
 /** 在途单作废钩子:同一时刻只允许一单,后来者顶掉前一单(CANCELLED 收场)。 */
 let activeAbort: (() => void) | null = null;
+// Remote transactions have their own cancellation boundary. A second controller
+// must never supersede another controller's authorization.
+const remoteAborts = new Set<() => void>();
 
 /**
  * 前一单**完整收尾**(含 loopback 监听真正关闭)的信号。close 是异步的,
@@ -404,6 +408,7 @@ let activeSettled: Promise<void> | null = null;
 /** 外部主动取消当前在途授权(用户关设置页 / 换意识时调用;无在途时是空操作)。 */
 export function cancelActiveGhostOauthFlow(): void {
   activeAbort?.();
+  for (const abort of remoteAborts) abort();
 }
 
 /**
@@ -451,18 +456,22 @@ export async function startGhostOauthFlow(
   const cancelledPromise = new Promise<'cancelled'>((resolve) => {
     signalCancelled = () => {
       cancelledFlag = true;
+      opts.remote?.finish(false);
       resolve('cancelled');
     };
   });
-  activeAbort?.();
-  activeAbort = signalCancelled;
+  if (opts.remote) remoteAborts.add(signalCancelled);
+  else {
+    activeAbort?.();
+    activeAbort = signalCancelled;
+  }
   const cancellation: FlowCancellation = {
     cancelledPromise,
     isCancelled: () => cancelledFlag,
     myAbort: signalCancelled,
   };
 
-  const prior = activeSettled;
+  const prior = opts.remote ? null : activeSettled;
   const run = (async (): Promise<GhostOauthFlowResult> => {
     // 等前一单**完整**收尾(含监听真正关闭)再起本单;排队期间被顶掉/取消
     // 就直接收场,不去抢端口。
@@ -472,6 +481,22 @@ export async function startGhostOauthFlow(
   })();
   // 同步挂链:第三单在本单尚未真正跑起来时进场,也严格排到本单之后——
   // 任意时刻至多一单持有监听,不存在两单并发抢同一钉死端口的窗口。
+  if (opts.remote) {
+    try {
+      const result = await run;
+      if (!result.ok) {
+        opts.remote.finish(false);
+        // Provider errors may echo a code/token. Never publish their detail.
+        return { ok: false, error: result.error };
+      }
+      return result;
+    } catch {
+      opts.remote.finish(false);
+      return { ok: false, error: 'CANCELLED' };
+    } finally {
+      remoteAborts.delete(signalCancelled);
+    }
+  }
   activeSettled = run.then(
     () => undefined,
     () => undefined,
@@ -492,7 +517,12 @@ async function runGhostOauthFlow(
   opts: StartGhostOauthFlowOptions,
   cancellation: FlowCancellation,
 ): Promise<GhostOauthFlowResult> {
-  const { config, openExternal, fetchImpl, logger } = opts;
+  const { config, openExternal, fetchImpl } = opts;
+  // Remote metadata must not echo provider-controlled responses into logs.
+  const logger: GhostOauthLogger | undefined = opts.remote && opts.logger ? {
+    info: message => opts.logger!.info(message),
+    warn: message => opts.logger!.warn(message),
+  } : opts.logger;
   const timeoutMs = opts.timeoutMs ?? FLOW_TIMEOUT_DEFAULT_MS;
   const brandName = opts.brandName ?? 'Cindy';
 
@@ -530,7 +560,7 @@ async function runGhostOauthFlow(
   } catch (err) {
     listenErr = err;
   }
-  if (!listener && config.redirectPort && opts.reclaimPort) {
+  if (!listener && config.redirectPort && opts.reclaimPort && !opts.remote) {
     logger?.warn('ghost oauth 钉死端口被占,尝试自动回收', { port: config.redirectPort });
     const reclaimed = await opts.reclaimPort(config.redirectPort).catch(() => false);
     if (reclaimed) {
@@ -602,6 +632,7 @@ async function runGhostOauthFlow(
     };
     const corsAllowlist = ghostCallbackCorsAllowlist(config);
     server.on('request', (req, res) => {
+      if (opts.remote) { res.writeHead(404); res.end(); return; }
       // 页面语言按浏览器 Accept-Language 就近命中(zh/ja/ko, 缺省英文)
       const lang = pickOAuthResultPageLang(
         typeof req.headers['accept-language'] === 'string'
@@ -678,18 +709,37 @@ async function runGhostOauthFlow(
     timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
   });
 
+  const remoteAbort = new AbortController();
+  let callbackReceived = false;
   try {
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
-    await openExternal(authorizeUrl.toString());
-    logger?.info('ghost oauth 授权页已拉起', { host: authorizeUrl.hostname, port });
+    opts.remote?.assertCurrent();
+    if (opts.remote) await new Promise<void>(resolve => server.close(() => resolve()));
+    // Reserve the same redirect port on both hosts. The controller never kills a port owner.
+    const remoteCallback = opts.remote?.authorize({
+      authorizeUrl: authorizeUrl.toString(), callbackUrl: `http://127.0.0.1:${port}${callbackPath}`,
+      state, corsOrigins: [...ghostCallbackCorsAllowlist(config).origins],
+      corsHosts: [...(config.corsDeliveryHosts ?? [])],
+    }, remoteAbort.signal).then(value => {
+      opts.remote?.assertCurrent();
+      if (value.state !== state) return { kind: 'invalid' as const, detail: 'remote callback rejected' };
+      return 'code' in value ? { kind: 'code' as const, code: value.code } :
+        { kind: 'invalid' as const, detail: 'remote authorization denied' };
+    });
+    if (!opts.remote) await openExternal(authorizeUrl.toString());
+    logger?.info(opts.remote ? 'ghost oauth 等待控制端授权' : 'ghost oauth 授权页已拉起', {
+      host: authorizeUrl.hostname, port,
+    });
 
-    const outcome = await Promise.race([callback, timeout, cancellation.cancelledPromise]);
+    const outcome = await Promise.race([remoteCallback ?? callback, timeout, cancellation.cancelledPromise]);
 
     if (outcome === 'timeout') return { ok: false, error: 'TIMEOUT' };
     if (outcome === 'cancelled') return { ok: false, error: 'CANCELLED' };
     if (outcome.kind === 'invalid')
       return { ok: false, error: 'CALLBACK_INVALID', detail: outcome.detail };
+    callbackReceived = true;
+    opts.remote?.assertCurrent();
 
     // broker 模式:code 交换交给 XDT server(secret 在服务端),不直连 tokenUrl。
     if (config.tokenBroker && opts.broker) {
@@ -698,6 +748,7 @@ async function runGhostOauthFlow(
         redirectUri,
         ...(verifier !== null ? { codeVerifier: verifier } : {}),
       });
+      opts.remote?.assertCurrent();
       if (!brokered.ok) {
         logger?.warn('ghost oauth broker 交换失败', {
           slug: config.tokenBroker,
@@ -745,6 +796,7 @@ async function runGhostOauthFlow(
     }
 
     const text = await readBoundedText(res);
+    opts.remote?.assertCurrent();
     if (!res.ok) {
       const detail = summarizeTokenError(res.status, text);
       logger?.warn('ghost oauth token 交换被拒', {
@@ -768,6 +820,7 @@ async function runGhostOauthFlow(
     });
     return { ok: true, bundle };
   } finally {
+    if (!callbackReceived) remoteAbort.abort();
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     // 只清自己那单的取消钩子:单 A 被单 B 顶掉后,A 的 finally 晚到,不能把
     // B 刚注册的 activeAbort 抹成 null(否则 B 变成"取消不掉的孤儿单")。

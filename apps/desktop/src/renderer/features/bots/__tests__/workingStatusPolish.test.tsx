@@ -3,12 +3,12 @@ import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
-import { BotWorkingStatus } from '../BotWorkingStatus';
-import type { ChatMessage } from '@/lib/makerChatStore';
+import { BotGenerationLabel } from '../BotGenerationLabel';
 
+// The composer-top bot status line was retired (bot chats now show the normal
+// work group and RunningStatusBar). Sidebar/group rows keep the polished copy.
 const request = vi.fn();
-const props = { sessionId: 'test', visible: true, status: 'Thinking', startedAt: 1000, messages: [] as ChatMessage[], foregroundRunning: true, backgroundWorkActive: false, avatar: null };
-const tool = (name: string, input: unknown): ChatMessage => ({ clientId: 'tool', role: 'tool_use', content: '', toolName: name, toolInput: input });
+const props = { sessionId: 'test', startedAt: 1000 };
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
@@ -22,10 +22,10 @@ const tick = () => act(() => { vi.advanceTimersByTime(1150); });
 it('displays specific default immediately, then model copy with the existing cadence and opacity', async () => {
   let resolve!: (value: { text: string }) => void;
   request.mockReturnValue(new Promise((r) => { resolve = r; }));
-  render(<BotWorkingStatus {...props} messages={[tool('bot_memory', { action: 'read' })]} />);
-  expect(screen.getByRole('status').textContent).toBe('正在读取记忆…');
+  render(<BotGenerationLabel {...props} phase="reading-memory" />);
+  expect(screen.getByText('正在读取记忆…')).toBeTruthy();
   await act(async () => resolve({ text: '翻翻之前记下的事…' }));
-  expect(screen.getByRole('status').textContent).toBe('正在读取记忆…');
+  expect(screen.getByText('正在读取记忆…')).toBeTruthy();
   act(() => { vi.advanceTimersByTime(1000); });
   expect(screen.getByText('正在读取记忆…').style.opacity).toBe('0');
   act(() => { vi.advanceTimersByTime(150); });
@@ -33,82 +33,50 @@ it('displays specific default immediately, then model copy with the existing cad
   expect(request).toHaveBeenCalledWith({ sessionId: 'test', phase: 'reading-memory', locale: 'zh-CN' });
 });
 
-it('changes matters, keeps defaults between them, and discards obsolete or terminal model results', async () => {
+it('discards obsolete model results after the phase changes', async () => {
   const resolves: Array<(v: { text: string | null }) => void> = [];
   request.mockImplementation(() => new Promise((r) => resolves.push(r)));
-  const memory = tool('bot_memory', { action: 'write', body: 'PRIVATE' });
-  const file = tool('read', { path: 'PRIVATE' });
-  const view = render(<BotWorkingStatus {...props} messages={[memory]} />);
-  view.rerender(<BotWorkingStatus {...props} messages={[file]} />);
+  const view = render(<BotGenerationLabel {...props} phase="saving-memory" />);
+  view.rerender(<BotGenerationLabel {...props} phase="reading-file" />);
   await act(async () => resolves[0]({ text: '把这件事记下来…' }));
   tick();
-  expect(screen.getByRole('status').textContent).toBe('正在读取文件…');
+  expect(screen.getByText('正在读取文件…')).toBeTruthy();
+  expect(screen.queryByText('把这件事记下来…')).toBeNull();
   await act(async () => resolves[1]({ text: '翻翻文件里的内容…' }));
   tick();
-  expect(screen.getByRole('status').textContent).toBe('翻翻文件里的内容…');
-  view.rerender(<BotWorkingStatus {...props} />);
-  tick();
-  expect(screen.getByRole('status').textContent).toBe('正在思考…');
-  view.rerender(<BotWorkingStatus {...props} messages={[memory]} />);
-  view.rerender(<BotWorkingStatus {...props} visible={false} />);
-  await act(async () => resolves[2]({ text: '迟到的记忆文案' }));
-  tick();
-  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByText('翻翻文件里的内容…')).toBeTruthy();
 });
 
-it('keeps specific default on model failure and avoids requests without a public subject or local active turn', async () => {
+it('keeps the specific default on model failure and avoids requests without a session', async () => {
   request.mockRejectedValue(new Error('unavailable'));
-  const messages = [tool('read', { path: 'PRIVATE' })];
-  const view = render(<BotWorkingStatus {...props} messages={messages} />);
+  const view = render(<BotGenerationLabel {...props} phase="reading-file" />);
   await act(async () => {});
   tick();
-  expect(screen.getByRole('status').textContent).toBe('正在读取文件…');
-  view.rerender(<BotWorkingStatus {...props} sessionId={undefined} messages={messages} />);
-  view.rerender(<BotWorkingStatus {...props} foregroundRunning={false} backgroundWorkActive messages={messages} />);
-  view.rerender(<BotWorkingStatus {...props} status="Waiting on input" />);
-  view.rerender(<BotWorkingStatus {...props} />);
+  expect(screen.getByText('正在读取文件…')).toBeTruthy();
+  view.rerender(<BotGenerationLabel {...props} sessionId={undefined} phase="reading-file" />);
   expect(request).toHaveBeenCalledTimes(1);
 });
 
-it('keeps the memory subject while consuming the returned feedback', async () => {
-  request.mockResolvedValue({ text: null });
-  render(<BotWorkingStatus {...props} messages={[
-    { ...tool('bot_memory', { action: 'read', filename: 'PRIVATE' }), toolUseId: 't' },
-    { clientId: 'r', role: 'tool_result', content: 'PRIVATE', toolUseId: 't' },
-    { clientId: 'th', role: 'thinking', content: 'PRIVATE', isStreaming: true },
-  ]} />);
-  expect(screen.getByRole('status').textContent).toBe('正在核对记忆…');
-  expect(request).toHaveBeenCalledWith({ sessionId: 'test', phase: 'reviewing-memory', locale: 'zh-CN' });
-  await act(async () => {});
-});
-
-it('keeps foreground workflow copy specific, then falls back only when background work remains', async () => {
-  request.mockResolvedValue({ text: '翻翻之前记下的事…' });
-  const messages = [tool('bot_memory', { action: 'read' })];
-  const view = render(<BotWorkingStatus {...props} backgroundWorkActive messages={messages} />);
-  expect(screen.getByRole('status').textContent).toBe('正在读取记忆…');
+it('remote rows get polished copy from the host resource, never a local model request', async () => {
+  const invoke = vi.fn().mockResolvedValue({ blocks: [{ id: 'working', fallbackMarkdown: '翻翻文件里的内容…' }] });
+  Object.assign(window.electronAPI, { deviceLink: { invoke } });
+  render(<BotGenerationLabel {...props} phase="reading-file" remote={{ deviceId: 'host', botId: 'writer' }} />);
   await act(async () => {});
   tick();
-  expect(screen.getByRole('status').textContent).toBe('翻翻之前记下的事…');
-  expect(request).toHaveBeenCalledTimes(1);
-  view.rerender(<BotWorkingStatus {...props} backgroundWorkActive foregroundRunning={false} messages={messages} />);
-  tick();
-  expect(screen.getByRole('status').textContent).toBe('正在处理…');
-  expect(request).toHaveBeenCalledTimes(1);
-  view.rerender(<BotWorkingStatus {...props} visible={false} foregroundRunning={false} />);
-  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByText('翻翻文件里的内容…')).toBeTruthy();
+  expect(request).not.toHaveBeenCalled();
+  expect(invoke).toHaveBeenCalledWith('host', expect.any(String), [{
+    client: { protocolVersion: 1, primitives: ['status'], locale: 'zh-CN' },
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'working:writer/reading-file' },
+  }]);
 });
 
 it.each([
-  ['delete', 'deleting-memory', '正在删除记忆…'],
-  ['review', 'reviewing-memory', '正在核对记忆…'],
-  ['consolidate', 'organizing-memory', '正在整理记忆…'],
-] as const)('keeps an accurate memory %s fallback and requests polishing', async (action, phase, text) => {
-  request.mockRejectedValue(new Error('unavailable'));
-  render(<BotWorkingStatus {...props} messages={[tool('bot_memory', { action })]} />);
-  expect(screen.getByRole('status').textContent).toBe(text);
-  expect(request).toHaveBeenCalledWith({ sessionId: 'test', phase, locale: 'zh-CN' });
-  await act(async () => {});
-  tick();
-  expect(screen.getByRole('status').textContent).toBe(text);
+  ['en', 'Organizing the conversation…'], ['zh-CN', '正在整理对话…'],
+  ['zh-TW', '正在整理對話…'], ['ja', '会話を整理しています…'], ['ko', '대화를 정리하는 중…'],
+])('localizes the compaction caption in %s without a model request', async (locale, caption) => {
+  await i18n.changeLanguage(locale);
+  render(<BotGenerationLabel sessionId="test" phase="compacting" startedAt={1000} />);
+  expect(screen.getByText(caption)).toBeTruthy();
+  expect(request).not.toHaveBeenCalled();
 });

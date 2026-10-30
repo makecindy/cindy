@@ -214,6 +214,7 @@ export async function replace(
   sessionId: string,
   meta: WorktreeMeta,
   expected?: WorktreeMeta,
+  beforeMutation?: () => Promise<void>,
 ): Promise<void> {
   if (!sessionId) throw new Error('worktreeStore.replace: sessionId is required');
   await mutateRegistry((map) => {
@@ -223,7 +224,7 @@ export async function replace(
     }
     if (previousSessionId && previousSessionId !== sessionId) delete map[previousSessionId];
     map[sessionId] = meta;
-  });
+  }, beforeMutation);
   try {
     await setWorktreePathInDb(sessionId, meta.path);
   } catch (err) {
@@ -234,11 +235,12 @@ export async function replace(
   }
 }
 
-async function mutateRegistry(mutate: (map: Record<string, WorktreeMeta>) => void): Promise<void> {
+async function mutateRegistry(mutate: (map: Record<string, WorktreeMeta>) => void, beforeMutation?: () => Promise<void>): Promise<void> {
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   await withCrossProcessLock(path.join(os.tmpdir(), `cindy-worktree-registry-${uid}.lock`),
     { label: 'worktree-registry' }, async (status) => {
       if (!status.held) throw new Error('worktree registry is busy');
+      if (beforeMutation) await beforeMutation();
       const map = readMap();
       mutate(map);
       writeMap(map);

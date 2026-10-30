@@ -9,6 +9,7 @@ import {
 import { deriveModelList } from '../modelList.js';
 import { buildRegistry, chatEligibleSourcesForModel } from '../registry.js';
 import { buildUserProvider } from '../user-provider.js';
+import { remoteInvocationModels } from '../remoteModels.js';
 import {
   isChatEligible,
   isAgentSelectableModel,
@@ -16,6 +17,7 @@ import {
 } from '../classification.js';
 import type { ModelRegistry } from '../modelAccessBean.js';
 import type { Provider } from '../types.js';
+import type { ProviderView } from '../registry.js';
 
 const modes = [
   'image_generation',
@@ -35,6 +37,44 @@ const shell: Provider = {
   routing: {},
   models: {},
 };
+
+// Unit regression for PR #6592 / provider-sharing.md §12: the remote catalog must
+// omit denied media, which existing metadata projection tests do not exercise.
+// Minimal input: one allowed and one denied media model in a restricted ProviderView.
+describe('remote media authorization projection', () => {
+  const fields = ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const;
+  const defaultsFields = ['imageDefaults', 'videoDefaults', 'embeddingDefaults'] as const;
+  const media = [{ id: 'allowed', name: 'Allowed' }, { id: 'denied', name: 'Denied' }];
+  const provider: ProviderView = {
+    ...shell,
+    connected: true,
+    imageModels: media, videoModels: media, audioModels: media, embeddingModels: media,
+  };
+
+  it.each(['allowed', 'denied'])('filters media and defaults when standard is %s', (standard) => {
+    const defaults = { standard, draft: 'allowed', best: 'denied' };
+    const original = {
+      ...provider, remoteModelIds: ['allowed'],
+      imageDefaults: defaults, videoDefaults: defaults, embeddingDefaults: defaults,
+    };
+    const result = remoteInvocationModels(original);
+    for (const field of fields) {
+      expect(result[field]).toEqual([media[0]]);
+      expect(original[field]).toEqual(media);
+    }
+    for (const field of defaultsFields) {
+      expect(result[field]).toEqual(standard === 'allowed' ? { standard, draft: 'allowed' } : undefined);
+      expect(original[field]).toEqual(defaults);
+    }
+    expect(remoteInvocationModels(provider)).toBe(provider);
+  });
+
+  it.each([{ scope: [] }, { scope: ['allowed', null] }])('hides all media for scope $scope', ({ scope }) => {
+    const result = remoteInvocationModels({ ...provider, remoteModelIds: scope as string[] });
+    for (const field of fields) expect(result[field]).toEqual([]);
+  });
+});
+
 function registry(mode: string): ModelRegistry {
   return {
     schemaVersion: 4,

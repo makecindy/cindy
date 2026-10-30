@@ -145,6 +145,8 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const appVersionLabelDetail = appRegionLabel
     ? `${appRegionLabel} · ${appDisplayVersionDetail}`
     : appDisplayVersionDetail;
+  const visibleVersionLabel = appVersionLabel;
+  const visibleVersionLabelDetail = appVersionLabelDetail;
   const remoteAvailable = mode === 'cloud';
 
   const openSettings = () => {
@@ -264,9 +266,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             >
               <AccountMenuAvatar account={account} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-13 font-medium">{primaryLabel}</span>
+                <span className="block truncate">{primaryLabel}</span>
                 {secondaryLabel ? (
-                  <span className="mt-0.5 block truncate text-11 text-[var(--text-secondary)]">
+                  <span className="mt-0.5 block truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                     {secondaryLabel}
                   </span>
                 ) : null}
@@ -274,7 +276,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               {switching ? (
                 <Spinner size={14} className="shrink-0 text-[var(--text-secondary)]" />
               ) : account.isCurrent ? (
-                <span className="flex shrink-0 items-center gap-1 text-11 text-[var(--text-secondary)]">
+                <span className="flex shrink-0 items-center gap-1 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                   <Check className="h-4 w-4" aria-hidden="true" />
                   {t('sidebar.accountSwitcher.current')}
                 </span>
@@ -495,9 +497,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
               {/* 2px gap 与同栏 userNameContainer 保持一致。 */}
               <p
                 className="flex min-w-0 items-center gap-1 text-10 leading-[1.3] text-[var(--sidebar-user-card-text)]"
-                title={appVersionLabelDetail}
+                title={visibleVersionLabelDetail}
               >
-                <span className="truncate opacity-80">{appVersionLabel}</span>
+                <span className="truncate opacity-80">{visibleVersionLabel}</span>
                 {showBetaLabel ? (
                   <span
                     className="shrink-0 select-none opacity-80"

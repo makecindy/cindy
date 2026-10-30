@@ -9,11 +9,14 @@ import {
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import { Check, ChevronDown, Maximize, RotateCcw } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
-import type {
-  RemoteDesktopDisplayMode,
-  RemoteDesktopVideoSettings,
+import {
+  REMOTE_DESKTOP_VIDEO_QUALITIES,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopVideoQuality,
+  type RemoteDesktopVideoSettings,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
 import {
   NativePullDownMenu,
@@ -29,6 +32,12 @@ import {
   useTheme,
 } from "@/theme";
 
+const QUALITY_LABELS = {
+  auto: "remoteDesktop.automatic",
+  saver: "remoteDesktop.saver",
+  hd: "remoteDesktop.hd",
+} as const satisfies Record<RemoteDesktopVideoQuality, string>;
+
 type Props = {
   video: {
     supported: boolean;
@@ -41,7 +50,7 @@ type Props = {
     onFitDisplay?(): void;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
-    onResolution(id: string): Promise<void>;
+    onResolution(mode: RemoteDesktopDisplayMode): Promise<void>;
   };
   connected: boolean;
   controlling: boolean;
@@ -81,10 +90,11 @@ export function RemoteDesktopDisplaySettings({
     };
   }, [connected, video.modesSupported, video.displayGeometry, reload]);
   const disabled = !connected || !video.supported;
-  const title = { color: colors.textPrimary, fontSize: typeScale.body };
+  const title = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
+  // 说明档(13/18,二级字色):成句的提示与当前分辨率取值。
   const hint = {
-    color: colors.textPrimary,
-    fontSize: typeScale.caption,
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
   };
   const segment = (label: string, selected: boolean, onPress: () => void) => (
@@ -98,19 +108,20 @@ export function RemoteDesktopDisplaySettings({
         {
           flex: 1,
           minHeight: 44,
-          borderRadius: radius.control,
+          borderRadius: radius.pill,
           alignItems: "center",
           justifyContent: "center",
           backgroundColor: selected ? colors.cta : "transparent",
-          opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
         },
+        disabled && { opacity: 0.6 },
+        pressed && !disabled && mobileInteractionStyles.pressed,
       ]}
     >
       <Text
         style={{
           ...title,
           color: selected ? colors.ctaText : colors.textPrimary,
-          fontWeight: selected ? fontWeight.semibold : fontWeight.medium,
+          fontWeight: fontWeight.medium,
         }}
       >
         {label}
@@ -120,7 +131,7 @@ export function RemoteDesktopDisplaySettings({
   const segments = {
     flexDirection: "row" as const,
     padding: spacing.xs,
-    borderRadius: radius.control,
+    borderRadius: radius.pill,
     backgroundColor: colors.surfaceChip,
   };
   const segmented = (
@@ -158,7 +169,6 @@ export function RemoteDesktopDisplaySettings({
       </View>
     );
   const fpsValues = [30, 60] as const;
-  const qualityValues = [0, 2000000, 8000000, 20000000] as const;
   const current = modes.find((mode) => mode.current);
   const modeLabel = (mode: RemoteDesktopDisplayMode) =>
     `${mode.width} × ${mode.height}${mode.native === true ? ` · ${t("remoteDesktop.nativeResolution")}` : ""}`;
@@ -167,7 +177,7 @@ export function RemoteDesktopDisplaySettings({
     if (!mode || mode.current || !controlling || video.busy || !connected)
       return;
     void video
-      .onResolution(id)
+      .onResolution(mode)
       .then(() => setExpanded(false))
       .catch(() => {});
   };
@@ -243,11 +253,12 @@ export function RemoteDesktopDisplaySettings({
         </Text>
         {segmented(
           "quality",
-          ["automatic", "clear", "highDefinition", "original"].map((key) =>
-            t(`remoteDesktop.${key}`),
+          REMOTE_DESKTOP_VIDEO_QUALITIES.map((quality) =>
+            t(QUALITY_LABELS[quality]),
           ),
-          qualityValues.indexOf(video.settings.bitrate),
-          (index) => video.onChange({ bitrate: qualityValues[index] }),
+          REMOTE_DESKTOP_VIDEO_QUALITIES.indexOf(video.settings.quality),
+          (index) =>
+            video.onChange({ quality: REMOTE_DESKTOP_VIDEO_QUALITIES[index] }),
         )}
         <Text style={hint}>{t("remoteDesktop.qualityHint")}</Text>
       </View>
@@ -354,7 +365,8 @@ export function RemoteDesktopDisplaySettings({
                 onPress={() => chooseMode(mode.id)}
                 style={({ pressed }) => [
                   styles.row,
-                  { opacity: pressed ? 0.6 : !controlling ? 0.4 : 1 },
+                  !controlling && { opacity: 0.4 },
+                  pressed && mobileInteractionStyles.pressed,
                 ]}
               >
                 <Text style={[title, { flex: 1 }]}>{modeLabel(mode)}</Text>

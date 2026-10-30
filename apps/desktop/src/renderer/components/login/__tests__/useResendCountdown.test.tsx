@@ -7,7 +7,7 @@ import { resendRemainingSeconds, useResendCountdown } from '../useResendCountdow
 
 /**
  * Step 3a 倒计时契约 fake timers 用例(implementation-plan v6.19 逐条):
- * 42→0 全程、41999/1000/1/0ms 边界、重发成功重置、重发失败保持、离开清理、
+ * 60→0 全程、59999/1000/1/0ms 边界、重发成功重置、重发失败保持、离开清理、
  * 挂起恢复校正。绝对 deadline 模型:tick 只重算,不递减计数。
  */
 
@@ -23,9 +23,9 @@ afterEach(() => {
 });
 
 describe('resendRemainingSeconds 显示数学(v5 冻结:max(0, ceil((deadline-now)/1000)))', () => {
-  it('41999/1000/1/0ms 边界', () => {
-    const deadline = T0 + 42_000;
-    expect(resendRemainingSeconds(deadline, deadline - 41_999)).toBe(42);
+  it('59999/1000/1/0ms 边界', () => {
+    const deadline = T0 + 60_000;
+    expect(resendRemainingSeconds(deadline, deadline - 59_999)).toBe(60);
     expect(resendRemainingSeconds(deadline, deadline - 1_000)).toBe(1);
     expect(resendRemainingSeconds(deadline, deadline - 1)).toBe(1);
     expect(resendRemainingSeconds(deadline, deadline)).toBe(0);
@@ -35,14 +35,14 @@ describe('resendRemainingSeconds 显示数学(v5 冻结:max(0, ceil((deadline-no
 });
 
 describe('useResendCountdown(Step 3a 绝对 deadline 契约)', () => {
-  it('arm 后首帧显示 42,42→0 全程逐秒重算,到 0 切链接态', () => {
+  it('arm 后首帧显示 60,60→0 全程逐秒重算,到 0 切链接态', () => {
     const { result } = renderHook(() => useResendCountdown(true));
     act(() => result.current.arm());
-    expect(result.current.remaining).toBe(42); // 首帧 42
+    expect(result.current.remaining).toBe(60); // 首帧 60
 
     act(() => vi.advanceTimersByTime(1_000));
-    expect(result.current.remaining).toBe(41);
-    act(() => vi.advanceTimersByTime(40_000));
+    expect(result.current.remaining).toBe(59);
+    act(() => vi.advanceTimersByTime(58_000));
     expect(result.current.remaining).toBe(1);
     act(() => vi.advanceTimersByTime(1_000));
     expect(result.current.remaining).toBe(0); // deadline<=now → 同步切「重新发送」
@@ -51,23 +51,23 @@ describe('useResendCountdown(Step 3a 绝对 deadline 契约)', () => {
     expect(result.current.remaining).toBe(0);
   });
 
-  it('重发成功重置:计数中途再次 arm → deadline 重置回 42', () => {
+  it('重发成功重置:计数中途再次 arm → deadline 重置回 60', () => {
     const { result } = renderHook(() => useResendCountdown(true));
     act(() => result.current.arm());
     act(() => vi.advanceTimersByTime(10_000));
-    expect(result.current.remaining).toBe(32);
+    expect(result.current.remaining).toBe(50);
     act(() => result.current.arm()); // 重发成功 → 重置
-    expect(result.current.remaining).toBe(42);
+    expect(result.current.remaining).toBe(60);
   });
 
   it('重发失败保持:不 arm 则沿当前 deadline 继续倒数', () => {
     const { result } = renderHook(() => useResendCountdown(true));
     act(() => result.current.arm());
     act(() => vi.advanceTimersByTime(5_000));
-    expect(result.current.remaining).toBe(37);
+    expect(result.current.remaining).toBe(55);
     // 重发失败 = 调用方不 arm(无任何操作),下一 tick 仍按原 deadline
     act(() => vi.advanceTimersByTime(1_000));
-    expect(result.current.remaining).toBe(36);
+    expect(result.current.remaining).toBe(54);
   });
 
   it('离开 verification-code 清理 state:active 退出后归零,重进不残留旧 deadline', () => {
@@ -76,7 +76,7 @@ describe('useResendCountdown(Step 3a 绝对 deadline 契约)', () => {
     });
     act(() => result.current.arm());
     act(() => vi.advanceTimersByTime(2_000));
-    expect(result.current.remaining).toBe(40);
+    expect(result.current.remaining).toBe(58);
 
     rerender({ active: false }); // 离开(back/reset)
     expect(result.current.remaining).toBe(0);
@@ -88,13 +88,13 @@ describe('useResendCountdown(Step 3a 绝对 deadline 契约)', () => {
     const { result } = renderHook(() => useResendCountdown(true));
     act(() => result.current.arm());
     act(() => vi.advanceTimersByTime(2_000));
-    expect(result.current.remaining).toBe(40);
+    expect(result.current.remaining).toBe(58);
 
     // 模拟休眠 30s:时钟前跳但期间无 tick,恢复后第一个 tick 以 Date.now 重算
     act(() => vi.setSystemTime(T0 + 2_000 + 30_000));
     act(() => vi.advanceTimersByTime(1_000));
-    expect(result.current.remaining).toBe(resendRemainingSeconds(T0 + 42_000, T0 + 33_000));
-    expect(result.current.remaining).toBe(9);
+    expect(result.current.remaining).toBe(resendRemainingSeconds(T0 + 60_000, T0 + 33_000));
+    expect(result.current.remaining).toBe(27);
   });
 
   it('arm 先于 step 切换到 verification-code 的时序:deadline 不被入场沿清掉', () => {
@@ -105,6 +105,6 @@ describe('useResendCountdown(Step 3a 绝对 deadline 契约)', () => {
     });
     act(() => result.current.arm());
     rerender({ active: true });
-    expect(result.current.remaining).toBe(42);
+    expect(result.current.remaining).toBe(60);
   });
 });

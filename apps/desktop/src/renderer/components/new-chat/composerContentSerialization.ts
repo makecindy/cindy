@@ -3,6 +3,7 @@ import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { EditorState } from '@tiptap/pm/state';
 import {
   buildBotReferenceHref,
+  parseTodoReferenceHref,
   parseBrowserTabReferenceHref,
   parseDesktopWindowReferenceHref,
   parsePluginResourceReferenceHref,
@@ -39,12 +40,6 @@ export interface SerializedComposerContent {
   agentReferences: AgentInputReference[];
   pastedTextRanges: PastedTextRange[];
   slashCommandRanges: SlashCommandRange[];
-  /** Host capability atoms are routing metadata, not visible prompt text. */
-  hostCapability?: {
-    capability: string;
-    ghostId: string;
-    name: string;
-  };
 }
 
 type OrderedMarker = '.' | ')' | '、';
@@ -110,7 +105,6 @@ function serializeComposerDocument(
   const mentions: MentionedResource[] = [];
   const seenMentions = new Set<string>();
   let hasQuotes = false;
-  let hostCapability: SerializedComposerContent['hostCapability'];
 
   const addMention = (attrs: MentionChipAttrs) => {
     // Slash commands and deep links are represented in the wire text but are
@@ -122,6 +116,7 @@ function serializeComposerDocument(
       attrs.kind === 'browser-tab' ||
       attrs.kind === 'desktop-window' ||
       attrs.kind === 'bot' ||
+      attrs.kind === 'todo' ||
       attrs.kind === 'plugin-resource' ||
       attrs.kind === 'plugin-capability'
     )
@@ -332,18 +327,8 @@ function serializeComposerDocument(
           }
           return;
         }
-        if (attrs.kind === 'plugin-capability') {
-          // The chip is a structured routing atom. Keeping it out of the
-          // visible body prevents an automatic start sentence from being
-          // duplicated when the user types their own request after the chip.
-          // ChatInput adds a localized default only for chip-only sends.
-          hostCapability ??= {
-            capability: attrs.path,
-            ghostId: attrs.pluginId || attrs.path,
-            name: attrs.sourceLabel || attrs.label,
-          };
-          return;
-        }
+        // Legacy draft atoms no longer describe executable host capabilities.
+        if (attrs.kind === 'plugin-capability') return;
         if (attrs.kind === 'plugin-resource') {
           const label = attrs.label
             .replace(/\s+/g, ' ')
@@ -384,6 +369,25 @@ function serializeComposerDocument(
             botId: attrs.path,
             name: attrs.label || attrs.path,
           });
+          return;
+        }
+        if (attrs.kind === 'todo') {
+          const target = parseTodoReferenceHref(attrs.path);
+          const title = attrs.label.replace(/\s+/g, ' ').trim();
+          const wire = `[${title.replace(/([[\]\\])/g, '\\$1') || 'Todo'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          if (target && title) {
+            bufferAgentReferences.push({
+              kind: 'todo',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              botId: target.botId,
+              todoId: target.todoId,
+              title,
+            });
+          }
           return;
         }
         if (attrs.kind === 'dir') {
@@ -537,7 +541,6 @@ function serializeComposerDocument(
     ...serializeComposerContentBlocksWithRanges(blocks, { preserveTrailingWhitespace }),
     mentions,
     hasQuotes,
-    ...(hostCapability ? { hostCapability } : {}),
   };
 }
 

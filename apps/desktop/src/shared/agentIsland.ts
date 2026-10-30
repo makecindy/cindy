@@ -1,5 +1,7 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
+import type { BotAvatarHue } from './botAvatarHue.js';
+import { isSupportedBotAvatarValue } from './botAvatarValue.js';
 
 export type AgentIslandSessionPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
@@ -7,7 +9,8 @@ export type AgentIslandInteractionKind =
   | 'permission'
   | 'ask_user_question'
   | 'plan_review'
-  | 'plugin_setup';
+  | 'plugin_setup'
+  | 'input_handoff';
 export type AgentIslandActivityLineKind = 'user' | 'assistant' | 'status' | 'tool';
 
 /**
@@ -20,14 +23,39 @@ export interface AgentIslandActivityLine {
 }
 
 /**
+ * The companion a Bot Session speaks for. The island draws this identity instead
+ * of the task's title, working directory and agent mark.
+ */
+export interface AgentIslandCompanionSnapshot {
+  name: string;
+  /** Group the member speaks in; absent for the companion's own chat. */
+  groupName?: string;
+  /** BotAvatar hue family member; the island resolves it to its dark tint. */
+  hue: BotAvatarHue;
+  /** Bounded JPEG thumbnail (base64) when the companion has artwork. */
+  imageJpeg?: string;
+  /** Emoji, or the name's initial, painted when there is no artwork. */
+  glyph: string;
+  glyphIsInitial: boolean;
+}
+
+/**
  * Renderer-facing session snapshot for the macOS Agent Island overlay.
  */
 export interface AgentIslandSessionSnapshot {
+  /** Group-message UI only; never a maker task or a remotely relayed activity. */
+  groupChat?: { avatars: AgentIslandCompanionSnapshot[]; mentionLabel?: string };
+  /** Opaque identity of the completed card, issued by its owning process. */
+  completionToken?: string;
+  /** This completion preserves older unread state without requesting a new alert. */
+  completionNotification?: 'silent';
   sessionId: string;
   title: string;
+  companion?: AgentIslandCompanionSnapshot;
   projectName: string | null;
   detail: string;
   compactDetail: string;
+  workingPhase?: SessionActivitySnapshot['workingPhase'];
   messagePreview: AgentIslandActivityLine | null;
   phase: AgentIslandSessionPhase;
   agentKind: 'claude-code' | 'codex' | string;
@@ -51,10 +79,14 @@ export interface AgentIslandPermissionActionSnapshot {
  */
 export interface AgentIslandSessionActivity
   extends Omit<SessionActivitySnapshot, 'phase' | 'interactionKind'> {
+  completionToken?: string;
+  completionNotification?: 'silent';
   phase: AgentIslandSessionPhase;
   interactionKind?: AgentIslandInteractionKind;
   /** Compatibility/display alias; canonical probe field is currentActionSummary. */
   compactDetail: string;
+  /** Only marked summaries can bypass legacy Markdown recovery on another host. */
+  summaryFormat?: 'plain-text';
 }
 
 export type AgentIslandDisplayMode = 'compact' | 'expanded';
@@ -369,7 +401,9 @@ export interface AgentIslandPillSnapshot {
   priorityMicroTitle: string;
   priorityCompactTitle: string;
   sessionCount: number;
-  activeSessionCount: number;
+  /** Running and not waiting on the user; disjoint from `attentionCount`. */
+  runningSessionCount: number;
+  /** Sessions blocked on the user (question / permission). */
   pendingInteractionCount: number;
   unreadCompletedCount: number;
   deferredRevealCount: number;
@@ -383,7 +417,7 @@ export function createEmptyAgentIslandPillSnapshot(): AgentIslandPillSnapshot {
     priorityMicroTitle: '',
     priorityCompactTitle: '',
     sessionCount: 0,
-    activeSessionCount: 0,
+    runningSessionCount: 0,
     pendingInteractionCount: 0,
     unreadCompletedCount: 0,
     deferredRevealCount: 0,
@@ -399,6 +433,8 @@ export function createEmptyAgentIslandPillSnapshot(): AgentIslandPillSnapshot {
  */
 export interface AgentIslandStrings {
   appName: string;
+  markRead?: string;
+  archive?: string;
   newConversationTitle: string;
   newConversationHint: string;
   muteSound: string;
@@ -453,7 +489,7 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   deny: 'Deny',
 };
 
-export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 640;
+export const AGENT_ISLAND_MAX_EXPANDED_WIDTH = 440;
 export const AGENT_ISLAND_MAX_RESIZABLE_WIDTH = 920;
 export const AGENT_ISLAND_MIN_EXPANDED_WIDTH = 360;
 export const AGENT_ISLAND_IDLE_EXPANDED_WIDTH = 340;
@@ -474,7 +510,7 @@ export const AGENT_ISLAND_COMPACT_HARDWARE_HIDDEN_PULL_DISTANCE = 48;
 // drawn by SwiftUI with the real font. The nominal value is an upper bound of what
 // gets drawn, so reserved space is never short.
 export const AGENT_ISLAND_COMPACT_BADGE_MIN_WIDTH = 22;
-export const AGENT_ISLAND_COMPACT_BADGE_ACTIVE_TOTAL_MIN_WIDTH = 30;
+export const AGENT_ISLAND_COMPACT_BADGE_PAIR_MIN_WIDTH = 30;
 export const AGENT_ISLAND_COMPACT_BADGE_CONTENT_INSET = 2;
 export const AGENT_ISLAND_COMPACT_BADGE_TEXT_SPACING = 1;
 /** Generous upper bound for one monospaced 10pt digit (real advance is ~6pt). */
@@ -517,6 +553,29 @@ export function computeAgentIslandSimulatedNotchWidth(displayWidth: number): num
   );
 }
 
+export type AgentIslandCompactBadgeCounts = Pick<
+  AgentIslandPillSnapshot,
+  'attentionCount' | 'runningSessionCount' | 'sessionCount'
+>;
+
+/**
+ * Text segments of the compact count badge, mirroring `PillBadge.segments` in
+ * `macos-agent-island-helper.swift`:
+ *
+ * - only running tasks → `running`
+ * - something needs attention and tasks are running → `attention · running`
+ * - only attention → `attention`
+ * - neither (e.g. read completions still on the island) → session count
+ */
+export function getAgentIslandCompactBadgeSegments(input: AgentIslandCompactBadgeCounts): string[] {
+  if (input.attentionCount > 0 && input.runningSessionCount > 0) {
+    return [`${input.attentionCount}`, '·', `${input.runningSessionCount}`];
+  }
+  if (input.attentionCount > 0) return [`${input.attentionCount}`];
+  if (input.runningSessionCount > 0) return [`${input.runningSessionCount}`];
+  return [`${Math.max(1, input.sessionCount)}`];
+}
+
 /**
  * Upper-bound width of the compact count badge the native helper draws, mirroring
  * `PillBadge.intrinsicWidth` in `macos-agent-island-helper.swift`.
@@ -527,14 +586,8 @@ export function computeAgentIslandSimulatedNotchWidth(displayWidth: number): num
  * monospaced 10pt advance is ~6pt, and overestimating only leaves invisible slack
  * inside the carrier's transparent inset.
  */
-export function getAgentIslandCompactBadgeWidth(input: {
-  activeSessionCount: number;
-  sessionCount: number;
-}): number {
-  const isActiveTotal = input.activeSessionCount > 0 && input.sessionCount > 1;
-  const segments = isActiveTotal
-    ? [`${input.activeSessionCount}`, '/', `${input.sessionCount}`]
-    : [`${Math.max(1, input.sessionCount)}`];
+export function getAgentIslandCompactBadgeWidth(input: AgentIslandCompactBadgeCounts): number {
+  const segments = getAgentIslandCompactBadgeSegments(input);
   const segmentsWidth = segments.reduce(
     (total, segment) => total
       + segment.length * AGENT_ISLAND_COMPACT_BADGE_CHAR_WIDTH_BOUND
@@ -542,8 +595,8 @@ export function getAgentIslandCompactBadgeWidth(input: {
     0,
   );
   const spacing = AGENT_ISLAND_COMPACT_BADGE_TEXT_SPACING * Math.max(0, segments.length - 1);
-  const minWidth = isActiveTotal
-    ? AGENT_ISLAND_COMPACT_BADGE_ACTIVE_TOTAL_MIN_WIDTH
+  const minWidth = segments.length > 1
+    ? AGENT_ISLAND_COMPACT_BADGE_PAIR_MIN_WIDTH
     : AGENT_ISLAND_COMPACT_BADGE_MIN_WIDTH;
   return Math.max(
     minWidth,
@@ -556,7 +609,7 @@ export function getAgentIslandDefaultContentWidth(input: {
   hasSession: boolean;
   displayWidth?: number;
   screenMetrics?: AgentIslandScreenLayoutMetrics | null;
-  pillSnapshot?: Pick<AgentIslandPillSnapshot, 'activeSessionCount' | 'sessionCount'> | null;
+  pillSnapshot?: AgentIslandCompactBadgeCounts | null;
 }): number {
   if (input.expanded) {
     return input.hasSession ? AGENT_ISLAND_MAX_EXPANDED_WIDTH : AGENT_ISLAND_IDLE_EXPANDED_WIDTH;
@@ -616,7 +669,7 @@ export function snapAgentIslandCompactHardwareContentWidth(input: {
   maxWidth: number;
   hasSession: boolean;
   screenMetrics?: AgentIslandScreenLayoutMetrics | null;
-  pillSnapshot?: Pick<AgentIslandPillSnapshot, 'activeSessionCount' | 'sessionCount'> | null;
+  pillSnapshot?: AgentIslandCompactBadgeCounts | null;
 }): number {
   if (!input.screenMetrics?.hasNotch) {
     return input.clampedWidth;
@@ -737,6 +790,12 @@ export function computeAgentIslandContentHeight(input: {
 /** main → renderer:per-session 活动快照(侧栏卡片用)。 */
 export const AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL = 'agent-island:session-snapshots';
 export const AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL = 'agent-island:set-visible-session';
+/**
+ * renderer(主窗)→ main:灵动岛点击的目标地址已提交,且目标没有处置控件(群专线所在的群、
+ * 只读历史、不可用的委派任务),请求处置被点的那张卡。参数为 sessionId 与这次点击的
+ * islandEntryId;main 只认最近一次点击、且卡片身份未变。
+ */
+export const AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL = 'agent-island:consume-entry-alert';
 export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
 export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
 export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
@@ -744,3 +803,171 @@ export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display
 export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
 export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
 export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = 'agent-island:select-sound-file';
+/** renderer(主窗)→ main:按侧栏「任务范围」筛过的远程设备任务活动。 */
+export const AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL = 'agent-island:set-remote-sessions';
+// Local main-window presentation only; never exposed through device-link.
+export const AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL = 'agent-island:set-companion-chats';
+export const AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL = 'agent-island:read-companion-chat';
+
+export interface AgentIslandCompanionChatInput {
+  sessionId: string;
+  botId: string;
+  deviceId: string | null;
+  companion: AgentIslandRemoteCompanionInput;
+  visible: boolean;
+  unread: boolean;
+  lastMessageAt: number;
+  preview: string;
+}
+
+export interface AgentIslandCompanionChatsInput {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+  chats: AgentIslandCompanionChatInput[];
+}
+
+export interface AgentIslandCompanionChatRead extends AgentIslandCompanionChatInput {
+  readThroughAt: number;
+}
+
+export function parseAgentIslandCompanionChats(raw: unknown): AgentIslandCompanionChatInput[] | null {
+  if (!Array.isArray(raw) || raw.length > AGENT_ISLAND_REMOTE_SESSIONS_MAX) return null;
+  const chats: AgentIslandCompanionChatInput[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null;
+    const row = item as Record<string, unknown>;
+    const sessionId = readBoundedString(row.sessionId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const botId = readBoundedString(row.botId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const deviceId = row.deviceId === null ? null : readBoundedString(row.deviceId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const companion = readRemoteCompanion(row.companion);
+    if (!sessionId || !botId || !companion || (row.deviceId !== null && !deviceId)
+      || typeof row.visible !== 'boolean' || typeof row.unread !== 'boolean'
+      || typeof row.lastMessageAt !== 'number' || !Number.isFinite(row.lastMessageAt) || row.lastMessageAt < 0
+      || seen.has(sessionId)) return null;
+    seen.add(sessionId);
+    chats.push({ sessionId, botId, deviceId, companion, visible: row.visible, unread: row.unread,
+      lastMessageAt: row.lastMessageAt, preview: readBoundedString(row.preview, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '' });
+  }
+  return chats;
+}
+
+/**
+ * 远程设备(device-link「我控制它」)任务的活动镜像,供本机灵动岛与桌面通知使用。
+ * 只含 running / needs-interaction / 未读终态;范围由 renderer 按侧栏「任务范围」裁剪。
+ */
+export interface AgentIslandRemoteSessionInput {
+  summaryFormat?: 'plain-text';
+  completionToken?: string;
+  completionNotification?: 'pending' | 'teammate' | 'silent';
+  sessionId: string;
+  deviceId: string;
+  deviceName: string | null;
+  title: string | null;
+  workingDir: string | null;
+  workspaceKind: string | null;
+  /** DB 形态('cc' | 'codex' | 'pi')。 */
+  agentKind: string | null;
+  phase: AgentIslandSessionPhase;
+  detail: string;
+  workingPhase?: string;
+  interactionKind?: AgentIslandInteractionKind;
+  /** The companion this chat speaks for, when its main computer is the other device. */
+  companion?: AgentIslandRemoteCompanionInput;
+}
+
+export interface AgentIslandRemoteCompanionInput {
+  name: string;
+  /** Stored avatar value as the other computer reports it (grapheme, preset, its blob or a cloud image). */
+  avatar: string;
+  avatarColor: string;
+}
+
+/** Upper bound the IPC parser accepts; builders trim to it so one extra entry never voids the payload. */
+export const AGENT_ISLAND_REMOTE_SESSIONS_MAX = 500;
+const AGENT_ISLAND_REMOTE_ID_MAX_LENGTH = 256;
+const AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH = 1024;
+/** Longest stored companion avatar value (a cloud image address); anything longer is dropped. */
+const AGENT_ISLAND_REMOTE_AVATAR_MAX_LENGTH = 2048;
+const AGENT_ISLAND_SESSION_PHASES: readonly AgentIslandSessionPhase[] = [
+  'running',
+  'needs-interaction',
+  'completed',
+  'error',
+];
+const AGENT_ISLAND_INTERACTION_KINDS: readonly AgentIslandInteractionKind[] = [
+  'permission',
+  'ask_user_question',
+  'plan_review',
+  'plugin_setup',
+  'input_handoff',
+];
+
+/** renderer payload 的运行时校验:整体形状非法返回 null,单条非法条目丢弃。 */
+export function parseAgentIslandRemoteSessions(raw: unknown): AgentIslandRemoteSessionInput[] | null {
+  if (!Array.isArray(raw) || raw.length > AGENT_ISLAND_REMOTE_SESSIONS_MAX) return null;
+  const out: AgentIslandRemoteSessionInput[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const record = item as Record<string, unknown>;
+    const sessionId = readBoundedString(record.sessionId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const deviceId = readBoundedString(record.deviceId, AGENT_ISLAND_REMOTE_ID_MAX_LENGTH);
+    const phase = record.phase;
+    if (!sessionId || !deviceId || seen.has(sessionId)) continue;
+    if (!(AGENT_ISLAND_SESSION_PHASES as readonly unknown[]).includes(phase)) continue;
+    seen.add(sessionId);
+    const interactionKind = (AGENT_ISLAND_INTERACTION_KINDS as readonly unknown[]).includes(record.interactionKind)
+      ? record.interactionKind as AgentIslandInteractionKind
+      : undefined;
+    const workingPhase = readBoundedString(record.workingPhase, 64);
+    const completionToken = readBoundedString(record.completionToken, 128);
+    const companion = readRemoteCompanion(record.companion);
+    out.push({
+      sessionId,
+      deviceId,
+      ...(completionToken ? { completionToken } : {}),
+      deviceName: readBoundedString(record.deviceName, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
+      title: readBoundedString(record.title, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH),
+      workingDir: readBoundedString(record.workingDir, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH * 4),
+      workspaceKind: readBoundedString(record.workspaceKind, 64),
+      agentKind: readBoundedString(record.agentKind, 64),
+      phase: phase as AgentIslandSessionPhase,
+      ...(record.completionNotification === 'pending' || record.completionNotification === 'teammate' || record.completionNotification === 'silent'
+        ? { completionNotification: record.completionNotification } : {}),
+      detail: readBoundedString(record.detail, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH) ?? '',
+      ...(record.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
+      ...(workingPhase ? { workingPhase } : {}),
+      ...(interactionKind ? { interactionKind } : {}),
+      ...(companion ? { companion } : {}),
+    });
+  }
+  return out;
+}
+
+function readRemoteCompanion(value: unknown): AgentIslandRemoteCompanionInput | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const name = readBoundedString(record.name, AGENT_ISLAND_REMOTE_TEXT_MAX_LENGTH);
+  if (!name) return null;
+  // Bound the raw value before trimming or grapheme parsing: an oversized one is never an avatar.
+  const rawAvatar = typeof record.avatar === 'string' && record.avatar.length <= AGENT_ISLAND_REMOTE_AVATAR_MAX_LENGTH
+    ? record.avatar
+    : '';
+  const avatar = rawAvatar.trim();
+  // Only values a companion avatar can hold: never an arbitrary local path or data URI.
+  const supportedAvatar = (avatar.startsWith('https://') && avatar.length <= AGENT_ISLAND_REMOTE_AVATAR_MAX_LENGTH)
+    || isSupportedBotAvatarValue(avatar);
+  return {
+    name,
+    avatar: supportedAvatar ? avatar : '',
+    avatarColor: readBoundedString(record.avatarColor, 64) ?? '',
+  };
+}
+
+function readBoundedString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}

@@ -3,7 +3,7 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { fontWeight, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing, typeScale } from '@/theme/tokens';
+import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 export function StartupBlockedScreen({
   title,
@@ -44,11 +44,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   title: {
     color: colors.textPrimary,
     fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.title,
+    fontWeight: fontWeight.semibold,
   },
   subtitle: {
     color: colors.textSecondary,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     textAlign: 'center',
   },
   retryButton: {
@@ -62,8 +64,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     opacity: 0.7,
   },
   retryLabel: {
-    color: colors.surface,
+    color: colors.ctaText,
     fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
     fontWeight: fontWeight.medium,
   },
 });

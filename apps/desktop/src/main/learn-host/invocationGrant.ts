@@ -6,7 +6,7 @@ import {
   isDbClientNotReadyError,
   tryGetDbClient,
 } from '../localDb/client/current.js';
-import { messages, sessions } from '../localDb/schema.js';
+import { botSessionLinks, messages, sessions } from '../localDb/schema.js';
 
 export type LearnInvocationGrantResult =
   | { ok: true }
@@ -41,6 +41,16 @@ type ConsumeUserInvocation = (
 
 const messageRowid = sql<number>`"messages"."rowid"`;
 
+/** Bot-owned plugins are absent from the global skill catalog, so their /learn
+ * aliases cannot be attested there. Bot calls must use /cindy:learn explicitly. */
+export async function canGrantUnqualifiedClaudeLearnInvocation(sessionId: string): Promise<boolean> {
+  const db = tryGetDbClient();
+  if (!db) return false;
+  const [botLink] = await db.drizzle.select({ sessionId: botSessionLinks.sessionId })
+    .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+  return !botLink;
+}
+
 function normalizeInput(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
@@ -51,7 +61,7 @@ export function parseDirectLearnInvocation(
   // Slash-skill dispatch resolves names case-insensitively. Keep the grant
   // parser on the same rule so an invocation accepted as the Learn Skill is
   // also accepted when that Skill calls the privileged host tool.
-  const command = /^\/(?:skill:)?learn(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  const command = /^\/(?:(?:skill|cindy):)?learn(?:\s+([\s\S]*))?$/i.exec(text.trim());
   if (!command) return null;
 
   const arg = (command[1] ?? '').trim();

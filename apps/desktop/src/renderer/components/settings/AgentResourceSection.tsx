@@ -17,6 +17,13 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { SettingsTextInput } from './SettingsTextInput';
+import {
+  SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_CLASS,
+  SETTINGS_ROW_DIVIDER_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+} from './settingsRowClasses';
 
 type Wire = AgentResourceSettingsWire;
 type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
@@ -30,17 +37,12 @@ const MAX_CONCURRENT_CAP = 64;
 const PRESET_HINT_KEYS = ['full', 'balanced', 'background', 'custom'] as const;
 
 /** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担(房规见 SubagentModelSection 卡 2)。 */
-const CARD_CLASS = cn(
-  'flex flex-col rounded-xl',
-  'bg-[var(--settings-theme-card-bg)]',
-  'border border-[var(--settings-theme-card-border)]',
-);
+const CARD_CLASS = SETTINGS_CARD_CLASS;
 /** 卡片内一行:左侧标签 + 说明,右侧控件相对整块垂直居中(设置页各 section 通用版式)。 */
-const ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
-const ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
-const ROW_HINT_CLASS = 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
-/** 行间分割线:左右缩进与行内边距对齐。 */
-const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
+const ROW_CLASS = SETTINGS_ROW_CLASS;
+const ROW_LABEL_CLASS = SETTINGS_ROW_LABEL_CLASS;
+const ROW_HINT_CLASS = SETTINGS_ROW_HINT_CLASS;
+const DIVIDER_CLASS = SETTINGS_ROW_DIVIDER_CLASS;
 
 /** 数字输入复用标准 Input md 档，设置封装保留旧局部主题覆盖，原生步进器不自绘。 */
 
@@ -230,9 +232,9 @@ export function AgentResourceSection() {
             高度恒等于四者中最高的一段,与窗口宽度和语言都无关(固定 min-height 只是下限,
             长文案照样会溢出撑高)。因为与宽度无关,提示就留在左列、不必独占整行,分段控件
             才能像同卡其它行一样相对「标签 + 说明」整块垂直居中。 */}
-        <div className={ROW_CLASS}>
+        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <p id="settings-search-settings-agentResource-preset" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.preset')}
             </p>
             {/* 四段提示全部常挂载、叠在同一个 grid 格里,只有当前档位那段可见(其余
@@ -270,7 +272,7 @@ export function AgentResourceSection() {
         {/* 并发命令上限 */}
         <label className={ROW_CLASS}>
           <span className="flex min-w-0 flex-col gap-1">
-            <span className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <span id="settings-search-settings-agentResource-maxConcurrent" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.maxConcurrent')}
             </span>
             <span className={ROW_HINT_CLASS}>{t('settings.agentResource.maxConcurrentHint')}</span>
@@ -302,9 +304,9 @@ export function AgentResourceSection() {
         <div className={DIVIDER_CLASS} />
 
         {/* 进程优先级 */}
-        <div className={ROW_CLASS}>
+        <div className={cn(ROW_CLASS, 'cindy-segmented-row')}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <p id="settings-search-settings-agentResource-priority" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.priority')}
             </p>
             <p className={ROW_HINT_CLASS}>{t('settings.agentResource.priorityHint')}</p>
@@ -326,7 +328,7 @@ export function AgentResourceSection() {
         {/* 工具链限核 */}
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 flex-col gap-1">
-            <p className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
+            <p id="settings-search-settings-agentResource-capThreads" className={ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.agentResource.capThreads')}
             </p>
             <p className={ROW_HINT_CLASS}>{t('settings.agentResource.capThreadsHint')}</p>

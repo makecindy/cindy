@@ -1,9 +1,19 @@
 import type { RemoteResource, RemoteActionDescriptor } from '@cindy/device-link';
+import {
+  parseCindyMakeBuildDiagnostic,
+  parseCindyMakeBuildOutput,
+} from '../../shared/cindyMakeBuildDiagnostic.js';
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
+import type { CindyMakeContributionState } from '../../shared/cindyMakeContribution.js';
 import type {
   CindyMakeCompletionMeta,
   CindyMakePersonalBuildState,
 } from '../../shared/cindyMakeSession.js';
+import type {
+  CindyMakeRemoteError,
+  CindyMakeRemoteSync,
+} from '../../shared/cindyMakePersonalRemote.js';
+import type { CindyMakeSyncState } from '../../shared/cindyMakeSync.js';
 
 export const MAKE_REMOTE_COLLECTION = 'cindy-make';
 export const makeRemoteRef = (sessionId: string) => ({
@@ -19,10 +29,24 @@ export interface MakeRemoteSnapshot {
   completion?: { id: string; meta: CindyMakeCompletionMeta };
   sharedBuild?: CindyMakePersonalBuildState;
   recoverable: boolean;
+  sourceMergePending?: boolean;
+  personal?: MakeRemotePersonalSnapshot;
+}
+
+export interface MakeRemotePersonalSnapshot {
+  remote?: { sync?: CindyMakeRemoteSync; error?: CindyMakeRemoteError };
+  /** The single local Sync pipeline, projected separately from GitHub storage status. */
+  personalSync?: CindyMakeSyncState;
+  contributions?: readonly MakeRemoteContributionSnapshot[];
+}
+
+export interface MakeRemoteContributionSnapshot {
+  number: number;
+  state?: CindyMakeContributionState;
 }
 type Translate = (key: string, values?: Record<string, string>) => string;
 
-/** Portable projection of Main-owned facts. Paths, prompts and process output stay on the host. */
+/** Portable projection of Main-owned facts. Only scrubbed, bounded process excerpts may leave the host. */
 export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate): RemoteResource {
   let title = t('cindyMake.history.lifecycle.running');
   let description = '';
@@ -30,6 +54,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
   let busy = source.busy;
   let failed = false;
   const details: string[] = [];
+  const links: RemoteResource['links'] = [
+    { rel: 'conversation', target: { kind: 'session', sessionId: source.sessionId } },
+  ];
   const actions: RemoteActionDescriptor[] = [];
   const action = (id: string, key: string, disabled = false) =>
     actions.push({ id, label: t(key), disabled });
@@ -93,16 +120,25 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       shared?.buildId === meta.personal?.buildId &&
       meta.personal &&
       ['ready', 'failed'].includes(meta.personal.status)
-        ? meta.personal
+        ? {
+            ...meta.personal,
+            mergeSessionId: meta.personal.mergeSessionId ?? shared?.mergeSessionId,
+          }
         : (shared ?? meta.personal);
     const building =
       !!personal &&
-      ['waiting', 'checking', 'merging', 'packaging', 'publishing'].includes(personal.status);
+      ['waiting', 'syncing', 'checking', 'merging', 'packaging', 'publishing'].includes(
+        personal.status,
+      );
     const starting = testStatus === 'starting';
     const buildMode =
       !starting &&
       ((!!shared && (building || meta.lastAction !== 'test')) ||
         (meta.lastAction ?? (meta.personal ? 'build' : 'test')) === 'build');
+    if (buildMode && building && !personal?.stopping) {
+      const outputLine = parseCindyMakeBuildOutput(personal?.outputLine);
+      if (outputLine) details.push(outputLine);
+    }
     busy = buildMode ? building : starting;
     const error =
       starting || building
@@ -114,11 +150,13 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       buildMode && personal
         ? personal.stopping
           ? 'cindyMake.history.stopping'
-          : personal.status === 'waiting' && personal.preparationStep
-            ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
-          : personal.status === 'checking' && personal.checkStep
-            ? 'cindyMake.personal.checkStep.' + personal.checkStep
-            : 'cindyMake.personal.status.' + personal.status
+          : personal.status === 'merging' && personal.mergeStep
+            ? 'cindyMake.personal.mergeStep.' + personal.mergeStep
+            : personal.status === 'waiting' && personal.preparationStep
+              ? 'cindyMake.personal.preparationStep.' + personal.preparationStep
+              : personal.status === 'checking' && personal.checkStep
+                ? 'cindyMake.personal.checkStep.' + personal.checkStep
+                : 'cindyMake.personal.status.' + personal.status
         : 'cindyMake.test.status.' + testStatus,
     );
     description = t(
@@ -142,6 +180,18 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       details.push(
         t((buildMode ? 'cindyMake.personal.errors.' : 'cindyMake.test.errors.') + error),
       );
+    if (buildMode && personal?.status === 'failed') {
+      const diagnostic = parseCindyMakeBuildDiagnostic(personal.diagnostic);
+      if (diagnostic && diagnostic.kind !== 'process')
+        details.push(t('cindyMake.personal.diagnostic.' + diagnostic.kind));
+      if (diagnostic?.exitCode !== undefined)
+        details.push(
+          t('cindyMake.personal.diagnostic.exitCode', { code: String(diagnostic.exitCode) }),
+        );
+      if (diagnostic?.message) details.push(diagnostic.message);
+      if (!diagnostic && ['buildFailed', 'checksFailed'].includes(error ?? ''))
+        details.push(t('cindyMake.personal.diagnostic.unavailable'));
+    }
     if (buildMode && personal?.logs?.length)
       details.push(
         t('cindyMake.personal.buildLog.title') +
@@ -154,23 +204,83 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
     action(`test:${id}:continue`, 'cindyMake.test.continue', starting || building);
     action(
       `test:${id}:start`,
-      testStatus === 'ready'
-        ? 'cindyMake.test.started'
-        : 'cindyMake.test.start',
+      testStatus === 'ready' ? 'cindyMake.test.started' : 'cindyMake.test.start',
       starting || building || testStatus === 'ready' || !meta.commit,
     );
-    action(`test:${id}:build`, 'cindyMake.personal.generate', starting || building || !meta.commit);
+    action(
+      `test:${id}:build`,
+      'cindyMake.personal.generate',
+      starting || building || !meta.commit || source.sourceMergePending,
+    );
     if (building && personal?.buildId)
-      action(
-        `build:${personal.buildId}:stop`,
-        personal.stopping ? 'cindyMake.history.stopping' : 'cindyMake.history.stop',
-        !!personal.stopping,
-      );
+      actions.push({
+        id: `build:${personal.buildId}:stop`,
+        label: t(personal.stopping ? 'cindyMake.history.stopping' : 'cindyMake.history.stop'),
+        disabled: !!personal.stopping,
+        tone: 'destructive',
+        confirmation: {
+          title: t('cindyMake.history.stopConfirm.title'),
+          body: t('cindyMake.history.stopConfirm.description'),
+          confirmLabel: t('cindyMake.history.stop'),
+        },
+      });
   } else if (!source.busy && source.recoverable) {
-    title = t('cindyMake.test.resume.title');
-    description = t('cindyMake.test.resume.description');
-    action(`resume:${source.revision}`, 'cindyMake.test.resume.action');
+    title = t('cindyMake.test.title');
+    action(`resume:${source.revision}:start`, 'cindyMake.test.start');
+    action(
+      `resume:${source.revision}:build`,
+      'cindyMake.personal.generate',
+      source.sourceMergePending,
+    );
   }
+  const personalDetails: string[] = [];
+  if (source.personal?.remote?.sync)
+    personalDetails.push(t('cindyMake.storage.status.' + source.personal.remote.sync));
+  if (source.personal?.remote?.error)
+    personalDetails.push(t('cindyMake.storage.errors.' + source.personal.remote.error));
+  const personalSync = source.personal?.personalSync;
+  if (personalSync?.running && personalSync.step)
+    personalDetails.push(t('cindyMake.sync.step.' + personalSync.step));
+  const waiting = personalSync?.waiting;
+  if (waiting) {
+    const waitingKey = waiting.abandoning
+      ? 'cindyMake.sync.waiting.abandoning'
+      : waiting.reason === 'working'
+        ? 'cindyMake.sync.waiting.working.' + waiting.kind
+        : waiting.reason === 'interrupted'
+          ? 'cindyMake.sync.waiting.interrupted.' + (waiting.sessionId ? 'task' : 'start')
+          : 'cindyMake.sync.waiting.' + waiting.reason;
+    personalDetails.push(t(waitingKey, { count: String(waiting.missing ?? 0) }));
+  }
+  const done = personalSync?.done;
+  if (done && !done.generateFirst) {
+    personalDetails.push(
+      !done.ref
+        ? t('cindyMake.sync.doneCurrent')
+        : done.ref === 'main'
+          ? t('cindyMake.sync.doneDevelopment')
+          : t('cindyMake.sync.done', { ref: done.ref }),
+    );
+  }
+  if (done?.generateFirst)
+    personalDetails.push(t('cindyMake.sync.generateFirst', { ref: done.generateFirst }));
+  if (done?.ahead) personalDetails.push(t('cindyMake.sync.ahead'));
+  if (done?.buildFirst) personalDetails.push(t('cindyMake.sync.buildFirst'));
+  if (done?.uploadAfterBuild && !done.buildFirst)
+    personalDetails.push(t('cindyMake.sync.uploadAfterBuild'));
+  if (done?.held && !done.ahead) personalDetails.push(t('cindyMake.sync.held', { ref: done.held }));
+  if (personalSync?.error) personalDetails.push(t('cindyMake.sync.errors.' + personalSync.error));
+  for (const contribution of source.personal?.contributions ?? []) {
+    personalDetails.push(
+      t('cindyMake.contribution.state.' + (contribution.state ?? 'submitted'), {
+        number: String(contribution.number),
+      }),
+    );
+  }
+  if (personalDetails.length)
+    description = [description, ...personalDetails].filter(Boolean).join('\n\n');
+  const hasWorkflow = blocked || (!source.busy && source.recoverable);
+  if (!hasWorkflow && personalDetails.length && !source.busy) title = t('cindyMake.title');
   const fallbackMarkdown = [title, description, ...details].filter(Boolean).join('\n\n');
   return {
     ref: makeRemoteRef(source.sessionId),
@@ -180,9 +290,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       subtitle: description,
       status: { label: title, tone: failed ? 'critical' : busy ? 'warning' : 'neutral' },
     },
-    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: source.sessionId } }],
+    links,
     blocks:
-      blocked || (!source.busy && source.recoverable)
+      hasWorkflow
         ? [
             {
               id: 'workflow',
@@ -191,7 +301,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
               data: { input: blocked ? 'blocked' : 'available', busy },
             },
           ]
-        : [],
+        : personalDetails.length
+          ? [{ id: 'personal-status', primitive: 'markdown', fallbackMarkdown }]
+          : [],
     actions,
   };
 }

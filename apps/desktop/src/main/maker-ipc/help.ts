@@ -33,6 +33,7 @@ const log = createLogger('maker-ipc/help');
 // trusted to invent tab ids (CLAUDE.md rule 16: deterministic check in code).
 const ALLOWED_TABS = new Set<HelpTabId>([
   'general',
+  'appearance',
   'personalization',
   'api-keys',
   'providers',

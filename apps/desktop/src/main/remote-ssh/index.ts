@@ -17,7 +17,8 @@
  * The pool itself is in-memory; on app restart, hydrate() rebuilds it from disk.
  */
 
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, dialog } from 'electron';
+import { t } from '../i18n.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -31,7 +32,7 @@ import {
   readSshConfigDetailed,
   removeManagedHost,
   updateManagedHostFields,
-  installRemoteAgent,
+  installRemoteAgent as installRemoteAgentPackage,
   PINNED_PI_VERSION,
   probeRemoteAgent,
   uninstallRemoteAgent,
@@ -75,6 +76,7 @@ import { ensurePiManagerDaemon } from '@cindy/maker-remote-ssh';
 import { PROTOCOL_VERSION as PI_MANAGER_PROTOCOL_VERSION } from '@cindy/maker-pi-manager';
 import { invalidateRemotePiPathCaches, redactCredentialText } from '../maker-host/pi-remote-transport.js';
 import { serializeEnvBlock } from './env-block.js';
+import { confirmHostKeyChange } from './host-key-recovery.js';
 import { classifyConnectFailure } from './connect-failure.js';
 import {
   addKeyToAgent,
@@ -123,13 +125,28 @@ import {
   removeRemoteMcpForwardPref,
 } from './codex-remote-mcp.js';
 import { ensureDaemonRunning } from '../maker-host/cc-manager-client.js';
-import { getMakerIfReady, softCloseCcSessionsForHost } from '../maker-host/index.js';
+import { getMakerIfReady, softCloseCcSessionsForHost, listSshCodexProviders } from '../maker-host/index.js';
+import { readSshCodexModelList } from './codex-model-list.js';
+import { prepareRemoteAgentInstall } from './codex-install-lifecycle.js';
+import { getRemoteCodexLiveTurnChecker } from '../maker-host/remote-session-start-ensure.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { RemoteHostHydrationQueue } from './hydration-queue.js';
 
 export { redactSshSensitiveText };
 
 const log = createLogger('remote-ssh/ipc');
+
+// Shared by manual and silent installation inside their existing per-host install lock.
+async function installRemoteAgent(
+  host: RemoteHost, agentKind: RemoteAgentKind, onProgress: (event: InstallProgressEvent) => void,
+): Promise<InstallResult> {
+  await prepareRemoteAgentInstall(agentKind, {
+    isInstalled: async () => (await probeRemoteAgent(host, 'codex')).installed,
+    hasLiveTurn: () => getRemoteCodexLiveTurnChecker()?.(host.id) ?? true,
+    stopDaemon: () => killRemoteCodexDaemon(host),
+  });
+  return installRemoteAgentPackage(host, agentKind, onProgress);
+}
 /**
  * pi-manager daemon 的空闲回收阈值(与 packages/maker-pi-manager 的
  * PiSessionRegistry 默认 idleTimeoutMs 对齐, 1_800_000 = 30min)。
@@ -153,6 +170,7 @@ export const REMOTE_SSH_INVOKE = {
   RUN_AGENT_ONE_SHOT: 'maker:remote-ssh:run-agent-one-shot',
   // Phase B+ — Codex credential sync
   CHECK_CODEX_AUTH: 'maker:remote-ssh:check-codex-auth',
+  LIST_CODEX_MODELS: 'maker:remote-ssh:list-codex-models',
   SYNC_CODEX_AUTH: 'maker:remote-ssh:sync-codex-auth',
   // Phase B++ — SSH key setup wizard
   LIST_LOCAL_KEYS: 'maker:remote-ssh:list-local-keys',
@@ -394,8 +412,8 @@ function isAgentCacheHit(
  * 能正确 toast 的 SSH_AGENT_NOT_INSTALLED IPC error, 引导用户去 Settings 安装。
  *
  * Claude Code 首次检查走完整 probeRemoteAgent,确保 Cindy 管理的远端 runtime
- * 与当前 pin 一致；否则客户端升级后旧 binary 会永久命中 `test -x`。Codex 仍
- * 只做存在性检查。两者命中内存 cache 后续都是 ~0ms。
+ * 与当前 pin 一致；Codex 同样探测版本及完整包布局，旧 standalone 触发升级。
+ * 各引擎命中内存 cache 后续都是 ~0ms。
  */
 export async function ensureRemoteAgentInstalled(
   hostId: string,
@@ -410,20 +428,9 @@ export async function ensureRemoteAgentInstalled(
     throwIpcError('SSH_NOT_CONNECTED', `ssh host ${hostId} not connected`);
   }
 
-  let ok: boolean;
-  let installedVersion: string | null = null;
-  if (agentKind === 'claude-code' || agentKind === 'pi') {
-    const probe = await probeRemoteAgent(host, agentKind);
-    ok = probe.installed;
-    installedVersion = probe.installedVersion;
-  } else {
-    const binPath = '$HOME/.xdt-server/v1/codex-home/packages/standalone/current/codex';
-    const result = await host.exec(`test -x ${binPath} && echo OK || echo MISSING`, {
-      timeoutMs: 5_000,
-      label: 'check-agent-installed',
-    });
-    ok = result.stdout.trim() === 'OK';
-  }
+  const probe = await probeRemoteAgent(host, agentKind);
+  const ok = probe.installed;
+  const installedVersion = probe.installedVersion;
   if (!ok) {
     const friendlyKind = agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
     throwIpcError(
@@ -545,6 +552,7 @@ export async function ensureRemoteAgentInstalledOrInstall(
     // 只保留最后 6 条避免 message 太长 (toast 现已支持 whitespace-pre-wrap 多行)。
     const TAIL_LIMIT = 6;
     const logTail: string[] = [];
+    let failureNotified = false;
     try {
       const result = await installRemoteAgent(host, agentKind, (progress) => {
         // 维护尾部 log 串 — 只收 install-log 行做诊断补充。error event 不收:
@@ -584,6 +592,7 @@ export async function ensureRemoteAgentInstalledOrInstall(
           : baseMsg;
         log.warn('silent-install: failed (not ready)', { hostId, agentKind, error: composedMsg });
         broadcastSilentInstallStatus({ hostId, agentKind, phase: 'failed', message: composedMsg });
+        failureNotified = true;
         throwIpcError('SSH_INSTALL_FAILED', composedMsg);
       }
       // 装好后标 cache, 后续 ensureRemoteAgentInstalled 短路返回。
@@ -605,12 +614,15 @@ export async function ensureRemoteAgentInstalledOrInstall(
       // 不是安装失败;改写成 SSH_INSTALL_FAILED 会误导调用方走安装重试分支。
       const msg = err instanceof Error ? err.message : String(err);
       const code = (err as { code?: string }).code;
+      // Every started attempt needs a terminal event, including preflight IPC errors.
+      if (!failureNotified) {
+        broadcastSilentInstallStatus({ hostId, agentKind, phase: 'failed', message: msg });
+      }
       if (!code || !isIpcErrorCode(code)) {
         log.error('silent-install: unexpected error', { hostId, agentKind, error: msg });
-        broadcastSilentInstallStatus({ hostId, agentKind, phase: 'failed', message: msg });
         throwIpcError('INTERNAL', msg);
       }
-      // 已有白名单 code (比如上面手动 throwIpcError 走到这) — broadcast 已发, 直接 rethrow
+      // Preserve recognized IPC codes after closing the installation status.
       throw err;
     }
   })();
@@ -1107,6 +1119,117 @@ function patchSshHostPrefOrThrow(
   }
 }
 
+/**
+ * Add a Cindy-managed SSH host. Shared by Settings → 远程连接 and the Agent's
+ * `cindy_ssh` `ssh_add_host` tool so both write the same managed config and
+ * refresh the same pool.
+ */
+export async function addRemoteSshHost(rawHost: unknown): Promise<{ host: HostSnapshotWithPrefs }> {
+  const input = normalizeAddInput(rawHost);
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    if (getPool().get(input.id)) {
+      throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
+    }
+    const latest = await readLatestSshConfigOrThrow();
+    if (latest.hosts.some((host) => host.id === input.id)) {
+      throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
+    }
+    const cfg: HostConfig = {
+      id: input.id,
+      hostname: input.hostname,
+      port: input.port ?? 22,
+      user: input.user,
+      authMethod: input.authMethod ?? 'agent',
+      identityFile: input.identityFile,
+      source: 'ssh-config',
+      managedByCindy: true,
+    };
+    let addReceipt: ManagedHostAddReceipt;
+    try {
+      addReceipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
+    } catch (err) {
+      log.warn('failed to write SSH config while adding host', { error: String(err) });
+      if ((err as { code?: string }).code === MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE) {
+        throwIpcError(
+          'SSH_CONFIG_OWNERSHIP_REQUIRED',
+          'The existing Cindy SSH config is not owned by Cindy; add the ownership marker or choose another file.',
+        );
+      }
+      throwIpcError('SSH_CONFIG_IO_FAILED', SSH_CONFIG_WRITE_FAILED_MESSAGE);
+    }
+    let refreshError: unknown;
+    try {
+      // ADD must not disconnect or repoint any existing alias. If an external
+      // editor changed one concurrently, keep the old pool and ask for an
+      // explicit reload. A collision on the newly-added alias is handled
+      // separately and conditionally rolls back Cindy's staged block.
+      await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));
+    } catch (err) {
+      if (err instanceof SshHostOwnershipConflictError) {
+        let rolledBack = false;
+        let rollbackError: unknown;
+        try {
+          rolledBack = await addReceipt.rollback();
+        } catch (error) {
+          rollbackError = error;
+        }
+        log.warn('SSH host ownership changed while adding', {
+          hostId: cfg.id,
+          rolledBack,
+          ...(rollbackError !== undefined
+            ? {
+                rollbackError: rollbackError instanceof Error
+                  ? rollbackError.message
+                  : String(rollbackError),
+              }
+            : {}),
+        });
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'SSH configuration changed while adding the host; reload it and try again.',
+        );
+      }
+      refreshError = err;
+    }
+    // The managed host is already committed. Persist alias-local fields even
+    // when the in-memory refresh failed so the subsequent reload does not
+    // silently lose the form's display name or Agent Proxy choice.
+    patchSshHostPrefOrThrow(cfg.id, {
+      displayName: input.displayName,
+      ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
+    });
+    if (refreshError !== undefined) {
+      // ADD never disconnects existing aliases. The new host remains on disk
+      // and becomes visible after a successful explicit reload.
+      throwReloadRequired('新主机', refreshError);
+    }
+    const host = getPool().get(cfg.id);
+    if (!host) throwReloadRequired('新主机', new Error('host missing after refresh'));
+    log.info('audit: remote ssh host added', {
+      operation: 'remote_ssh_host_add',
+      hostId: cfg.id,
+      hostname: cfg.hostname,
+      user: cfg.user,
+      port: cfg.port,
+      authMethod: cfg.authMethod,
+    });
+    // Settings 与 Agent 添加共用这条推送：已打开的主机列表会就地插入新主机。
+    broadcastStatus(host.snapshot());
+    return { host: withPrefs(host.snapshot()) };
+  });
+}
+
+/** Re-read ~/.ssh/config into the pool, as Settings' reload button does. */
+export async function reloadRemoteSshConfig(): Promise<ReturnType<typeof currentRemoteSshListResult>> {
+  try {
+    await hydrateRemoteHosts();
+  } catch (err) {
+    log.warn('failed to reload SSH config', { error: String(err) });
+  }
+  return currentRemoteSshListResult();
+}
+
 export function registerRemoteSshIpc(): void {
   if (registered) return;
   registered = true;
@@ -1150,107 +1273,12 @@ export function registerRemoteSshIpc(): void {
 
   ipcMain.handle(REMOTE_SSH_INVOKE.RELOAD_CONFIG, async (event) => {
     assertTrustedAppRendererEvent(event);
-    try {
-      await hydrateRemoteHosts();
-    } catch (err) {
-      log.warn('failed to reload SSH config', { error: String(err) });
-    }
-    return currentRemoteSshListResult();
+    return reloadRemoteSshConfig();
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.ADD, async (event, rawHost: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const input = normalizeAddInput(rawHost);
-    await ensureHydrated();
-    return remoteHostHydrationQueue.run(async () => {
-      if (getPool().get(input.id)) {
-        throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
-      }
-      const latest = await readLatestSshConfigOrThrow();
-      if (latest.hosts.some((host) => host.id === input.id)) {
-        throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
-      }
-      const cfg: HostConfig = {
-        id: input.id,
-        hostname: input.hostname,
-        port: input.port ?? 22,
-        user: input.user,
-        authMethod: input.authMethod ?? 'agent',
-        identityFile: input.identityFile,
-        source: 'ssh-config',
-        managedByCindy: true,
-      };
-      let addReceipt: ManagedHostAddReceipt;
-      try {
-        addReceipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
-      } catch (err) {
-        log.warn('failed to write SSH config while adding host', { error: String(err) });
-        if ((err as { code?: string }).code === MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE) {
-          throwIpcError(
-            'SSH_CONFIG_OWNERSHIP_REQUIRED',
-            'The existing Cindy SSH config is not owned by Cindy; add the ownership marker or choose another file.',
-          );
-        }
-        throwIpcError('SSH_CONFIG_IO_FAILED', SSH_CONFIG_WRITE_FAILED_MESSAGE);
-      }
-      let refreshError: unknown;
-      try {
-        // ADD must not disconnect or repoint any existing alias. If an external
-        // editor changed one concurrently, keep the old pool and ask for an
-        // explicit reload. A collision on the newly-added alias is handled
-        // separately and conditionally rolls back Cindy's staged block.
-        await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));
-      } catch (err) {
-        if (err instanceof SshHostOwnershipConflictError) {
-          let rolledBack = false;
-          let rollbackError: unknown;
-          try {
-            rolledBack = await addReceipt.rollback();
-          } catch (error) {
-            rollbackError = error;
-          }
-          log.warn('SSH host ownership changed while adding', {
-            hostId: cfg.id,
-            rolledBack,
-            ...(rollbackError !== undefined
-              ? {
-                  rollbackError: rollbackError instanceof Error
-                    ? rollbackError.message
-                    : String(rollbackError),
-                }
-              : {}),
-          });
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'SSH configuration changed while adding the host; reload it and try again.',
-          );
-        }
-        refreshError = err;
-      }
-      // The managed host is already committed. Persist alias-local fields even
-      // when the in-memory refresh failed so the subsequent reload does not
-      // silently lose the form's display name or Agent Proxy choice.
-      patchSshHostPrefOrThrow(cfg.id, {
-        displayName: input.displayName,
-        ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
-      });
-      if (refreshError !== undefined) {
-        // ADD never disconnects existing aliases. The new host remains on disk
-        // and becomes visible after a successful explicit reload.
-        throwReloadRequired('新主机', refreshError);
-      }
-      const host = getPool().get(cfg.id);
-      if (!host) throwReloadRequired('新主机', new Error('host missing after refresh'));
-      log.info('audit: remote ssh host added', {
-        operation: 'remote_ssh_host_add',
-        hostId: cfg.id,
-        hostname: cfg.hostname,
-        user: cfg.user,
-        port: cfg.port,
-        authMethod: cfg.authMethod,
-      });
-      return { host: withPrefs(host.snapshot()) };
-    });
+    return addRemoteSshHost(rawHost);
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.UPDATE, async (event, rawHost: unknown) => {
@@ -1402,6 +1430,43 @@ export function registerRemoteSshIpc(): void {
       });
       return { ok: true as const };
     });
+  });
+
+  // Local UI only: trust changes require a native confirmation with main-owned details.
+  ipcMain.handle('maker:remote-ssh:review-host-key', async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = requireString(requireObject(args).id, 'id');
+    const host = getPool().get(id);
+    if (!host) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    const store = getSharedHostKeyStore();
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('SSH_CONNECT_FAILED', 'The requesting window is no longer available.');
+    try {
+      const updated = await confirmHostKeyChange({
+        getHost: () => getPool().get(id),
+        store,
+        isWindowAlive: () => !parent.isDestroyed(),
+        confirm: async (mismatch) => {
+          const result = await dialog.showMessageBox(parent, {
+            type: 'warning',
+            title: t('settings.remote.hostKey.title'),
+            message: t('settings.remote.hostKey.explanation').replace('{{host}}', () => mismatch.host),
+            detail: t('settings.remote.hostKey.details')
+              .replace('{{trusted}}', () => mismatch.trusted)
+              .replace('{{presented}}', () => mismatch.presented)
+              .replace('{{file}}', () => store.filePath),
+            buttons: [t('settings.remote.hostKey.cancel'), t('settings.remote.hostKey.trust')],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          return result.response === 1;
+        },
+      });
+      return { updated };
+    } catch {
+      throwIpcError('SSH_CONNECT_FAILED', t('settings.remote.hostKey.updateFailed'));
+    }
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.CONNECT, async (_event, args: unknown) => {
@@ -1703,6 +1768,10 @@ export function registerRemoteSshIpc(): void {
   });
 
   // ── Codex auth sync (Phase B+) ───────────────────────────────────────────
+  ipcMain.handle(REMOTE_SSH_INVOKE.LIST_CODEX_MODELS, async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return readSshCodexModelList(args, listSshCodexProviders);
+  });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.CHECK_CODEX_AUTH, async (_event, args: unknown) => {
     const obj = requireObject(args);

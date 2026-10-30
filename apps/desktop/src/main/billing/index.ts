@@ -59,6 +59,9 @@ function assertMainWindowSender(
 
 function throwBillingFetchError(error: unknown): never {
   if (error instanceof ServerApiError) {
+    if (error.code === 'PLAN_CHANGE_RENEWAL_PREPAID') {
+      throwIpcError('PLAN_CHANGE_RENEWAL_PREPAID', 'next renewal is already paid');
+    }
     if (error.code === 'PLAN_CHANGE_NOT_AVAILABLE') {
       throwIpcError('PLAN_CHANGE_NOT_AVAILABLE', 'target plan is not available');
     }
@@ -400,7 +403,7 @@ export function createBillingHandlers(
           method: 'POST',
           body: { targetOfferCode },
           headers: { 'Idempotency-Key': idempotencyKey },
-          allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE'],
+          allowedRedactedErrorCodes: ['PLAN_CHANGE_NOT_AVAILABLE', 'PLAN_CHANGE_RENEWAL_PREPAID'],
         }),
         projectBillingPlanChange,
       );
@@ -410,7 +413,7 @@ export function createBillingHandlers(
       return projectResponse(
         await invoke<unknown>(
           `/api/billing/subscription/plan-changes/${encodeURIComponent(planChangeId)}/confirm`,
-          { method: 'POST' },
+          { method: 'POST', allowedRedactedErrorCodes: ['PLAN_CHANGE_RENEWAL_PREPAID'] },
         ),
         projectBillingPlanChange,
       );

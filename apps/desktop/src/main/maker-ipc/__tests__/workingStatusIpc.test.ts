@@ -132,3 +132,53 @@ it.each(['done', 'error', 'status'] as const)('still cancels at product %s after
   resolve({ ok: true, text: '翻翻之前记下的事…' });
   expect(await pending).toEqual({ text: null });
 });
+
+it('shares same-language captions across surfaces and retains independent locale caches', async () => {
+  const read = (locale: string) => h.handler!({}, { sessionId: 'test', phase: 'reading-memory', locale });
+  const [a, b] = await Promise.all([read('zh-CN'), read('zh-CN')]);
+  expect(a).toEqual(b);
+  await read('en');
+  await read('zh-CN');
+  await read('en');
+  expect(h.request).toHaveBeenCalledTimes(2);
+  expect(listeners.size).toBe(2);
+  emit('done');
+  expect(listeners.size).toBe(0);
+});
+
+
+it('cancels pre-compaction copy without generating a second caption, then resumes after the boundary', async () => {
+  let resolve!: (value: unknown) => void;
+  h.request.mockReturnValue(new Promise(r => { resolve = r; }));
+  const pending = invoke();
+  await Promise.resolve();
+  emit('status', { isRunning: true, status: 'Compacting...' });
+  expect(h.request.mock.calls[0][2].signal.aborted).toBe(true);
+  expect(await invoke('compacting')).toEqual({ text: null });
+  expect(h.request).toHaveBeenCalledTimes(1);
+  resolve({ ok: true, text: '翻翻之前记下的事…' });
+  expect(await pending).toEqual({ text: null });
+  emit('compact_boundary', { trigger: 'auto' });
+  emit('text', { text: 'Public reply' });
+  expect(await invoke('replying')).toEqual({ text: null });
+  emit('done');
+  expect(listeners.size).toBe(0);
+});
+
+
+it('keeps pending copy for a running parallel tool when another result arrives', async () => {
+  await invoke();
+  emit('tool_use', { toolUseId: 'memory', toolName: 'bot_memory', input: { action: 'read' } });
+  emit('tool_use', { toolUseId: 'file', toolName: 'Read', input: { file_path: 'sample.txt' } });
+  let finish!: (value: unknown) => void;
+  h.request.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  const pending = invoke('reading-file');
+  await Promise.resolve();
+  const options = h.request.mock.calls.at(-1)![2];
+  emit('tool_result', { toolUseId: 'memory' });
+  expect(options.signal.aborted).toBe(false);
+  emit('tool_result', { toolUseId: 'file' });
+  expect(options.signal.aborted).toBe(true);
+  finish({ ok: true, text: '读读这份文件…' });
+  expect(await pending).toEqual({ text: null });
+});

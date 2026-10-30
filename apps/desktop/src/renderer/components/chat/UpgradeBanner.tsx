@@ -112,7 +112,7 @@ function fallbackFilesFromMessage(message: ChatMessage): AttachedFile[] | undefi
  *  (ChatMessage 只有 role/content/clientId/persistedContent, 不带 agent prefs).
  *  Returns null if no user message present or DB session row missing critical
  *  fields. */
-async function snapshotRetryCandidate(sessionId: string): Promise<RetryCandidate | null> {
+export async function snapshotRetryCandidate(sessionId: string): Promise<RetryCandidate | null> {
   const snap = makerChatStore.getSnapshot(sessionId);
   // Critical gate: 只有该 session **正在 streaming / agent 正在 running** 时, 才
   // 把 last user message 当成"被升级中断的 in-flight turn"来 retry。空闲会话点
@@ -154,7 +154,10 @@ async function snapshotRetryCandidate(sessionId: string): Promise<RetryCandidate
   // banner click 路径不在乎几毫秒。失败返 null, handleUpgrade 捕获后不重发。
   try {
     const row = await sessionService.get(sessionId);
-    if (!row.workingDir || !row.model || !row.effort || !row.permissionMode) {
+    // An empty effort is the persisted sentinel for a model that has no
+    // reasoning tiers. It is a valid retry preference; only a missing value
+    // means the session row is incomplete.
+    if (!row.workingDir || !row.model || row.effort == null || !row.permissionMode) {
       return null;
     }
     return {

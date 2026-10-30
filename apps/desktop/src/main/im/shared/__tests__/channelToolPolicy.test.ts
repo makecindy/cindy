@@ -30,3 +30,32 @@ describe('production channel policy for Pi management', () => {
     expect(channelForceConfirmToolCall('read', { path: 'notes.md' })).toBe(false);
   });
 });
+
+describe('channel policy for scheduler command execution', () => {
+  it.each(['schedule_create', 'schedule_update', 'schedule_set_pre_run_hook', 'schedule_resume', 'schedule_run_now'])(
+    'requires per-turn confirmation for %s, even inside a trusted scheduler MCP', (name) => {
+      expect(channelForceConfirmToolCall('mcp__cindy_scheduler__call_tool', { name, args: {} })).toBe(true);
+      expect(channelForceConfirmToolCall('mcp:cindy_scheduler', {
+        toolParams: { name: 'call_tool', args: { name, args: {} } },
+      })).toBe(true);
+      expect(channelForceConfirmToolCall(name, {})).toBe(true);
+    },
+  );
+
+  it('keeps scheduler discovery and reads outside forced confirmation', () => {
+    for (const name of ['schedule_list', 'schedule_get', 'schedule_list_runs']) {
+      expect(channelForceConfirmToolCall('mcp:cindy_scheduler', {
+        toolParams: { name: 'call_tool', args: { name, args: {} } },
+      })).toBe(false);
+    }
+  });
+});
+
+describe('channel policy for Host app update cards', () => {
+  it.each([
+    ['cindy.app.update', { from: '0.1.86', to: '0.1.90' }],
+    ['cindy.app.auto_update', { enabled: true }],
+  ])('lets the owner answer the %s card instead of hard-denying it', (toolName, input) => {
+    expect(checkChannelDestructiveToolCall(toolName, input)).toEqual({ destructive: false });
+  });
+});

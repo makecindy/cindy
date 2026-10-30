@@ -276,6 +276,62 @@ describe('resolveSendToSessionExecutionConfig', () => {
     })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
   });
 
+  it('keeps an explicit effort for a custom model whose capabilities were never declared (#5535)', () => {
+    // 自定义来源只填了 id/name:目录与路由快照都没有档位声明,[] 只是占位,不是 valid: none。
+    const undeclared = { id: 'custom/step-5-preview', efforts: [], defaultEffort: null, effortsUnknown: true };
+    const routing: OrcaWorkerProviderRoutingContext = {
+      availability: {
+        codex: [], pi: [],
+        'claude-code': [{
+          id: 'custom-anthropic',
+          name: 'Custom Anthropic Messages',
+          models: [undeclared.id],
+          effortMetaByModel: { [undeclared.id]: { efforts: [], defaultEffort: null, effortsUnknown: true } },
+          requiresExplicitRoute: true,
+        }],
+      },
+      resolveDefaultProviderIdForModel: (agent, model) =>
+        agent === 'claude-code' && model === undeclared.id ? 'custom-anthropic' : null,
+    };
+    expect(resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'claude-code', model: undeclared.id, fastMode: false, providerId: 'custom-anthropic' },
+      overrides: { effort: 'medium' },
+      availableModels: [undeclared],
+      providerRouting: routing,
+      hasCindyAiApiKey: false,
+    })).toEqual({
+      ok: true,
+      config: {
+        agentKind: 'claude-code',
+        model: undeclared.id,
+        effort: 'medium',
+        fastMode: false,
+        providerId: 'custom-anthropic',
+      },
+    });
+
+    // 明确无档位(已声明空表,无 effortsUnknown)仍按原规则拒绝显式档位。
+    const declaredNone = { id: 'custom/no-reasoning', efforts: [], defaultEffort: null };
+    expect(resolveSendToSessionExecutionConfig({
+      source: { agentKind: 'claude-code', model: declaredNone.id, fastMode: false, providerId: 'custom-anthropic' },
+      overrides: { effort: 'medium' },
+      availableModels: [declaredNone],
+      providerRouting: {
+        ...routing,
+        availability: {
+          ...routing.availability,
+          'claude-code': [{
+            ...routing.availability['claude-code'][0]!,
+            models: [declaredNone.id],
+            effortMetaByModel: { [declaredNone.id]: { efforts: [], defaultEffort: null } },
+          }],
+        },
+        resolveDefaultProviderIdForModel: () => 'custom-anthropic',
+      },
+      hasCindyAiApiKey: false,
+    })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS', message: expect.stringContaining('valid: none') });
+  });
+
   it('keeps the legacy inherited route when no Agent/model change is requested', () => {
     expect(resolveSendToSessionExecutionConfig({
       source: fableSource(),
@@ -343,6 +399,37 @@ describe('resolveSendToSessionExecutionConfig', () => {
       ok: true,
       config: { effort: 'xhigh', fastMode: true },
     });
+  });
+
+  // Unit regression: flattened model metadata may belong to a different account.
+  // Existing Fast/effort coverage did not exercise Ultrafast or inherited speed.
+  it.each([true, false])('uses the selected account Ultrafast entitlement (%s)', (entitled) => {
+    const model = 'gpt-5.6-sol';
+    const routing = providerRouting();
+    const primary = routing.availability.codex[0];
+    routing.availability.codex = [
+      { ...primary, ultrafastModels: entitled ? [] : [model] },
+      { ...primary, id: 'selected-account', ultrafastModels: entitled ? [model] : [] },
+    ];
+    routing.resolveDefaultProviderIdForModel = () => 'selected-account';
+    for (const routeChanged of [false, true]) {
+      const source = routeChanged
+        ? { ...fableSource(), fastMode: 'ultrafast' as const }
+        : { ...sourceFor('codex'), providerId: 'selected-account', fastMode: 'ultrafast' as const };
+      const base = {
+        source, availableModels: [{ ...available('codex')[0], supportsUltrafastMode: !entitled }],
+        providerRouting: routing, hasCindyAiApiKey: true,
+      };
+      const routeOverrides = routeChanged ? { agentKind: 'codex' as const, model } : {};
+      expect(resolveSendToSessionExecutionConfig({
+        ...base, overrides: { ...routeOverrides, fastMode: 'ultrafast' },
+      })).toMatchObject(entitled
+        ? { ok: true, config: { fastMode: 'ultrafast' } }
+        : { ok: false, errorCode: 'INVALID_ARGS' });
+      expect(resolveSendToSessionExecutionConfig({
+        ...base, overrides: routeOverrides,
+      })).toMatchObject({ ok: true, config: { fastMode: entitled ? 'ultrafast' : false } });
+    }
   });
 
   it('fails before creation when no connected provider can route the selected model', () => {

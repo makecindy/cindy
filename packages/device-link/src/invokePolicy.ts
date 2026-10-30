@@ -1,5 +1,76 @@
 import { INVOKE_TIMEOUT_OVERRIDES_MS } from './allowlist.js';
+import {
+  TASK_MIGRATION_CHANNEL,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+} from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
+import { isRemoteAgentReadInvoke } from './remoteAgent.js';
+
+/** These reads may wait behind current-task work. Not a retry or authorization policy.
+ * sessions:list also serves initial loading and recovery probes, so it stays foreground.
+ */
+const BACKGROUND_INVOKE_CHANNELS = new Set([
+  'git-context:pr-refs:list',
+  'git-context:pr-status',
+  'maker:schedule:list-sidebar-index-runs',
+  'maker:usage:device-rows',
+  // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
+  'maker:session-background-activity',
+  'maker:session-background-tasks:list',
+  // Next-prompt suggestion after a turn completes: a model request the host answers in
+  // ~2 s. Nobody waits on it, so it must not hold a foreground slot while the user sends.
+  'maker:predict-prompt',
+  // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
+  'maker:session:prewarm',
+]);
+
+export function isBackgroundInvoke(channel: string): boolean {
+  return BACKGROUND_INVOKE_CHANNELS.has(channel);
+}
+
+/**
+ * Writes the person is actively waiting on: sending, steering or stopping a turn and
+ * answering an interaction. Every relay round trip costs ~0.5 s, so one of these queued
+ * behind a dozen history/list reads is exactly the slowness users feel. Both ends grant
+ * them a small admission allowance beyond the ordinary limits (InvokeScheduler on the
+ * controller, dispatch admission on the host); nothing here changes authorization,
+ * retries or timeouts, and a listed channel still needs its allowlist entry.
+ * Queue-management edits (reorder, expand, rename) stay foreground: the UI applies them
+ * optimistically and nobody waits on their round trip.
+ */
+const INTERACTIVE_INVOKE_CHANNELS = new Set([
+  'maker:send',
+  'maker:abort-session',
+  'maker:input:enqueue',
+  'maker:input:steer',
+  'maker:input:stop',
+  'maker:input:resume',
+  'maker:input:retry-last-error',
+  'maker:input:remove',
+  'maker:resolve-interaction',
+  'maker:agent-task:stop',
+]);
+
+export function isInteractiveInvoke(channel: string): boolean {
+  return INTERACTIVE_INVOKE_CHANNELS.has(channel);
+}
+
+export type InvokePriority = 'interactive' | 'foreground' | 'background';
+
+/** A caller's background hint never demotes an interactive write. */
+export function resolveInvokePriority(channel: string, backgroundHint?: boolean): InvokePriority {
+  if (isInteractiveInvoke(channel)) return 'interactive';
+  return (backgroundHint ?? isBackgroundInvoke(channel)) ? 'background' : 'foreground';
+}
+
+/** Control traffic must not wait behind business operations to maintain a link/lease. */
+export function bypassInvokeScheduling(payload: InvokePayload): boolean {
+  if (payload.channel === 'device-link:subscribe' || payload.channel === 'device-link:unsubscribe') return true;
+  const request = payload.args?.[0];
+  return payload.channel === 'device-link:remote-desktop:v1' && !!request &&
+    typeof request === 'object' && 'op' in request && request.op === 'heartbeat';
+}
 
 /**
  * mobile 侧 invoke 超时解析(优先级:mobile 精确表 → schedule 前缀规则 →
@@ -33,7 +104,7 @@ import type { InvokePayload } from './protocol.js';
  *  - maker:send:makerSendTransaction 接收消息前会等
  *    ensureRemoteReadyForSessionStart(SSH 就绪窗口 20s)再落库/派发;误超时后
  *    桌面仍会接收并发出该消息,用户重试会把同一条消息发两遍;
- *  - maker:regenerate-title:桌面路径先 getValidClaudeAiOAuth(刷新最长 ~10s)
+ *  - maker:regenerate-title:桌面路径先读取来源凭证(可能要刷新 token,最长 ~10s)
  *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s;
  *  - maker:create-session:桌面 await maker.createSession → agent.startSession /
  *    Codex host.ensureStarted,冷启动 app-server 无更短 deadline;goal 路径无
@@ -45,6 +116,10 @@ import type { InvokePayload } from './protocol.js';
  *    restoreSessionForGoal 同样 await createSession 重启持久化 agent,冷启动
  *    可超 15s;两者都有真实副作用(set 落库目标并发首轮,resume 先标 active),
  *    误超时后重试会改动/重启已在跑的 goal。
+ *  - maker:session:enable-orca / maker:worker:create:建 Worker 前被控端要等 SSH 远端
+ *    就绪(ensureRemoteReadyForSessionStart)再启动 agent,冷启动可超 30s;误超时后
+ *    被控端仍会建成 Worker,手机重试会建出第二个。预算与桌面 dispatch-ui-assignment
+ *    同为 65s,超时后手机按 Worker 列表回查,不当作失败。
  * 新增合法慢通道优先登记协议契约表(桌面控制端共用),仅 mobile 特有差异放这里。
  */
 export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
@@ -57,12 +132,21 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'file-browser:remote-op': 30_000,
   'maker:create-session': 30_000,
   'maker:fork': 30_000,
+  // Readable-history recovery also loads history, may start Codex, and copies messages.
+  // Keep the normal fork window; a timeout does not cancel the host-side operation.
+  'maker:fork-strip-encrypted': 30_000,
   'maker:get-context-usage': 30_000,
   'maker:goal:resume': 30_000,
   'maker:goal:set': 30_000,
   'maker:message:delete': 30_000,
   'maker:regenerate-title': 30_000,
   'maker:rewind:commit': 30_000,
+  'maker:session:disable-orca': 65_000,
+  'maker:session:enable-orca': 65_000,
+  'maker:worker:acknowledge-done': 65_000,
+  'maker:worker:archive': 65_000,
+  'maker:worker:create': 65_000,
+  'maker:worker:switch-focus': 65_000,
   'maker:send': 30_000,
   'maker:usage:codex-rate-limit-reset': 30_000,
   'maker:usage:codex-rate-limits': 30_000,
@@ -70,11 +154,43 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;
 
+export const BOT_GROUP_SEND_TIMEOUT_MS = 180_000;
+// MCP Apps Host bounds loading at 90s (connection + discovery + HTML). Leave
+// room for response delivery without changing other MCP App operation budgets.
+export const MCP_APP_OPEN_TIMEOUT_MS = 120_000;
+
+/**
+ * Every action-specific desktop budget `resolveRemoteInvokeTimeoutMs` can return beyond
+ * INVOKE_TIMEOUT_OVERRIDES_MS. Hosts size their global orphan/outbox ceilings from both,
+ * so a host never gives up before the controller stops waiting.
+ */
+export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  BOT_GROUP_SEND_TIMEOUT_MS,
+  MCP_APP_OPEN_TIMEOUT_MS,
+  TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
+  TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
+];
+
 export function resolveRemoteInvokeTimeoutMs(
   channel: string,
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  const appRequest = args?.[1] as { op?: unknown } | undefined;
+  if (channel === 'maker:mcp-apps:v1' && appRequest?.op === 'open') return MCP_APP_OPEN_TIMEOUT_MS;
+  // Group sends can materialize phone attachments, upload media and then submit the message.
+  // Only this action gets the larger window; a timeout still means an unconfirmed result.
+  const groupRequest = args?.[0] as { collectionId?: unknown; actionId?: unknown } | undefined;
+  if (channel === 'maker:remote-resources:invoke' && groupRequest?.collectionId === 'bot-groups' && groupRequest.actionId === 'send')
+    return BOT_GROUP_SEND_TIMEOUT_MS;
+  if (channel === TASK_MIGRATION_CHANNEL) {
+    const request = args?.[0];
+    const action = request && typeof request === 'object' && 'action' in request ? request.action : undefined;
+    if (action === 'receive') return TASK_MIGRATION_RECEIVE_TIMEOUT_MS;
+    // Read-only inventory of a large project (dependencies included) can legitimately exceed 30s.
+    if (action === 'estimate') return TASK_MIGRATION_ESTIMATE_TIMEOUT_MS;
+    return 30_000;
+  }
   if (platform === 'desktop') return INVOKE_TIMEOUT_OVERRIDES_MS[channel];
   // Renewals must settle before the 12s lease, independently of slow media offers.
   const request = args?.[0];
@@ -110,6 +226,14 @@ const PEER_RESET_RETRYABLE_READ_CHANNELS = new Set([
 ]);
 
 /** Safe to retry after a peer reset; this does not grant permission or allow coalescing. */
+/**
+ * peer reset 后可重试的边界(按 op 判断)。远程 Agent 的 poll 按游标幂等，重拉不会重复执行；
+ * 它的其它 op(open / call / reply / push / close)仍不可重试。
+ */
+export function isPeerResetRetryableInvoke(channel: string, args?: unknown[]): boolean {
+  return isPeerResetRetryableReadChannel(channel) || isRemoteAgentReadInvoke(channel, args);
+}
+
 export function isPeerResetRetryableReadChannel(channel: string): boolean {
   return PEER_RESET_RETRYABLE_READ_CHANNELS.has(channel);
 }

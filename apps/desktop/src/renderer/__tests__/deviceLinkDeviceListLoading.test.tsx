@@ -998,3 +998,26 @@ describe('useDeviceLinkDeviceList initial request', () => {
     expect(result.current.hasRemote).toBe(false);
   });
 });
+
+
+it('removes an offline device immediately and ignores a directory reply started before deletion', async () => {
+  const target = { deviceId: 'old-device', name: 'Old Mac', platform: 'darwin', appVersion: '0.1.0-dev',
+    online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,
+  } satisfies DeviceLinkDeviceView;
+  let resolveStale!: (value: { devices: DeviceLinkDeviceView[] }) => void;
+  const stale = new Promise<{ devices: DeviceLinkDeviceView[] }>(resolve => { resolveStale = resolve; });
+  const listDevices = vi.fn().mockResolvedValueOnce({ devices: [target] }).mockReturnValueOnce(stale).mockResolvedValue({ devices: [] });
+  vi.stubGlobal('electronAPI', { deviceLink: { listDevices, getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(), onStatusChanged: vi.fn(), onControlTargetChanged: vi.fn(),
+  } });
+  const { useDeviceLinkDeviceList, retryDeviceLinkDeviceList, removeDeviceLinkDevice } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  const { result, unmount } = renderHook(() => useDeviceLinkDeviceList());
+  await waitFor(() => expect(result.current?.[0]?.deviceId).toBe(target.deviceId));
+  act(() => retryDeviceLinkDeviceList());
+  await waitFor(() => expect(listDevices).toHaveBeenCalledTimes(2));
+  await act(async () => { removeDeviceLinkDevice(target.deviceId); });
+  expect(result.current).toEqual([]);
+  await act(async () => { resolveStale({ devices: [target] }); });
+  expect(result.current).toEqual([]);
+  unmount();
+});

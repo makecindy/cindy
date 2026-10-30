@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { MountedMenuContent } from '../MountedMenuContent';
 /**
  * ProjectNode — 单个 Project 节点（Header + 受控折叠的子 sessions）
@@ -8,7 +9,7 @@ import { MountedMenuContent } from '../MountedMenuContent';
  *     · displayName Inter 14 / 500 #262626 (Light) / #f5f5f5 (Dark)
  *     · 整行 hover 高亮 sidebar-item-hover
  *   - Project Sessions：padding [2, 0, 0, 0] / gap 2 vertical
- *     缩进 18px 由 SessionItem 自身（indented=true → pl-[18px]）承担，本容器不重复加 pl
+ *     子层级缩进 8px：文字行由 SessionItem 的 indented padding 承担，卡片由本容器承担。
  *     折叠时不渲染该容器
  *
  * 交互：
@@ -54,7 +55,7 @@ import type { SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS, MENU_SEPARATOR_CLASS } from '../menuStyles';
+import { MENU_ITEM_CLASS } from '../menuStyles';
 import { RemoteProjectIcon } from '../RemoteProjectIcon';
 import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { isDeviceLinkWriteBlocked } from '../../lib/remoteSessionWriteGuard';
@@ -212,14 +213,15 @@ export const ProjectNode = memo(function ProjectNode({
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
           SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
-      <SectionCollapse collapsed={isCollapsed}>
-        {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
-            大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
+
+      <SectionCollapse collapsed={isCollapsed} data-no-drag>
+        {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
+>>>>>>> origin/main
         <div
           data-no-drag={onSessionReorder ? undefined : 'true'}
           className={cn(
-            'flex flex-col gap-0.5 pt-0.5 pb-1.5 pr-0',
-            sessionVariant === 'list' ? 'pl-3' : 'pl-0',
+            'flex flex-col gap-0.5 pt-0.5 pr-0',
+            sessionVariant === 'list' ? 'pl-2' : 'pl-0',
           )}
         >
           <SessionEntryList
@@ -491,7 +493,7 @@ const ProjectHeader = memo(function ProjectHeader({
             <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
           {!isEditingName && isDeviceLink ? (
-            <Tip text={remoteIdentity?.displayLabel ?? project.deviceLinkDeviceId ?? ''}>
+            <Tip text={remoteIdentity?.displayLabel ?? deviceDisplayName(project.deviceLinkDeviceId ?? '', project.deviceLinkDeviceName)}>
               <RemoteProjectIcon
                 kind="device-link"
                 connectionStatus={project.deviceLinkConnectionStatus}
@@ -618,7 +620,7 @@ const ProjectHeader = memo(function ProjectHeader({
           align="start"
           sideOffset={2}
           // 统一菜单 surface(menuStyles):与 SessionItem / Dialogue / 自动化 等同款
-          className={cn(MENU_CONTENT_CLASS, 'min-w-[160px] overflow-hidden')}
+          className="min-w-[160px] overflow-hidden"
         >
           <MountedMenuContent>
             {() => (
@@ -683,7 +685,7 @@ const ProjectHeader = memo(function ProjectHeader({
                     >
                       {t('ccAgent.sidebar.projectAction.openInExplorer')}
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onClick={() => {
                         setMenuPos(null);
@@ -705,7 +707,7 @@ const ProjectHeader = memo(function ProjectHeader({
                     </DropdownMenuItem>
                   </>
                 )}
-                <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+                <DropdownMenuSeparator />
                 {project.scope === 'local' && (
                   <DropdownMenuItem onClick={handleRemoveFromSidebar} className={MENU_ITEM_CLASS}>
                     {t('ccAgent.sidebar.projectAction.removeFromSidebar')}

@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RemoteDesktopViewerApi } from '../../../../shared/remoteDesktopViewer';
-import { DesktopViewerController, type ViewerSnapshot } from '../viewerController';
+import type {
+  RememberedViewerResolution,
+  RemoteDesktopViewerApi,
+  RemoteViewerChannelRequest,
+  RemoteViewerSafety,
+} from '../../../../shared/remoteDesktopViewer';
+import {
+  clipboardFailureKey,
+  DesktopViewerController,
+  type ViewerSnapshot,
+} from '../viewerController';
 
 const runtime = vi.hoisted(() => ({
   post: null as ((message: Record<string, unknown>) => void) | null,
@@ -32,16 +41,32 @@ afterEach(() => {
 async function fixture(
   firstControl?: Promise<{ controlling: boolean }>,
   resolutionRestore = false,
+  options: {
+    caps?: Record<string, unknown>;
+    remembered?: RememberedViewerResolution | null;
+    root?: { clientWidth: number; clientHeight: number };
+    api?: Partial<RemoteDesktopViewerApi>;
+  } = {},
 ) {
   const control = vi.fn(async (enabled: boolean) => ({ controlling: enabled }));
   if (firstControl) control.mockImplementationOnce(() => firstControl);
   const heartbeat = vi.fn(async () => ({ controlling: true }));
   const clipboard = vi.fn(async () => {});
-  const resolution = vi.fn(async (_modeId: string) => ({
+  const resolution = vi.fn(async (modeId: string) => ({
     lease: 'lease',
     controlling: false,
-    display: { id: 'one', width: 3840, height: 2160 },
+    display:
+      modeId === 'hd'
+        ? { id: 'one', width: 1920, height: 1080 }
+        : { id: 'one', width: 3840, height: 2160 },
   }));
+  let remembered = options.remembered ?? null;
+  const memory = vi.fn(
+    async (_generation: number, _displayId: string, value?: RememberedViewerResolution | null) => {
+      if (value !== undefined) remembered = value;
+      return remembered;
+    },
+  );
   const api = {
     state: async () => ({
       generation: 1,
@@ -72,11 +97,12 @@ async function fixture(
             clipboardText: true,
             automaticReconnect: true,
             displays: [{ id: 'one', name: 'Display', width: 1280, height: 720 }],
+            ...options.caps,
           };
         case 'start':
           return {
             lease: 'lease',
-            controlling: false,
+            controlling: request.control === true,
             display: { id: 'one', width: 1280, height: 720 },
           };
         case 'control':
@@ -93,8 +119,15 @@ async function fixture(
         case 'viewerDisplay':
           return {
             lease: 'lease',
-            controlling: false,
+            controlling: request.control === true,
             display: { id: 'viewer', width: request.width, height: request.height },
+            ...(request.keepVideo ? { videoKept: true } : {}),
+          };
+        case 'restoreViewerDisplay':
+          return {
+            lease: 'lease',
+            controlling: false,
+            display: { id: 'one', width: 1280, height: 720 },
           };
         case 'frame':
           return { jpeg: null };
@@ -102,14 +135,18 @@ async function fixture(
           return {};
       }
     },
+    resolution: memory,
+    ...options.api,
   } satisfies RemoteDesktopViewerApi;
-  controller = new DesktopViewerController(api, {} as HTMLElement, (state) => {
+  controller = new DesktopViewerController(api, (options.root ?? {}) as HTMLElement, (state) => {
     snapshot = state;
   });
   await vi.advanceTimersByTimeAsync(0);
-  return { control, heartbeat, clipboard, resolution, api };
+  return { control, heartbeat, clipboard, resolution, memory, api };
 }
 const present = () => runtime.post?.({ type: 'streaming', epoch: 'lease' });
+const mode4k = { id: '4k', width: 3840, height: 2160, current: false };
+const portrait = { id: '640', width: 640, height: 1242, current: false };
 const inputEnabled = () =>
   runtime.receive.mock.calls.filter(([message]) => message.type === 'control').at(-1)?.[0]
     .enabled ?? false;
@@ -117,7 +154,7 @@ const inputEnabled = () =>
 it('keeps high-resolution system modes on a restorable lease', async () => {
   const f = await fixture(undefined, true);
   present();
-  await controller.resolution('4k');
+  await controller.resolution(mode4k);
   expect(f.resolution).toHaveBeenCalledWith('4k');
   expect(
     runtime.receive.mock.calls.some(([m]) => m.type === 'videoSettings' && m.width === 3840),
@@ -127,7 +164,7 @@ it('keeps high-resolution system modes on a restorable lease', async () => {
 it('does not silently make a persistent resolution change on an older host', async () => {
   const f = await fixture();
   present();
-  await expect(controller.resolution('4k')).rejects.toThrow('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+  await expect(controller.resolution(mode4k)).rejects.toThrow('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
   expect(f.resolution).not.toHaveBeenCalled();
 });
 
@@ -142,6 +179,7 @@ it('matches the viewer ratio without replacing the lease or resetting input sequ
     type: 'videoSettings',
     width: 960,
     height: 1920,
+    restore: false,
     audio: false,
   });
   expect(runtime.receive.mock.calls.filter(([m]) => m.type === 'init')).toHaveLength(1);
@@ -151,63 +189,282 @@ it('changes portrait resolution using the same temporary screen lease', async ()
   await fixture();
   present();
   await controller.fitDisplay(500, 1000);
-  await controller.resolution('640');
+  await controller.resolution(portrait);
   expect(snapshot.controlling).toBe(true);
   expect(snapshot.displayId).toBe('one');
   expect(runtime.receive).toHaveBeenCalledWith({
     type: 'videoSettings',
     width: 640,
     height: 1242,
+    restore: false,
     audio: false,
   });
   expect(runtime.receive.mock.calls.filter(([m]) => m.type === 'init')).toHaveLength(1);
 });
 
-it('orders quick copy/paste shortcuts and reports transfer failure without reconnecting', async () => {
+it('orders manual copy/paste transfers and reports failure without reconnecting', async () => {
   const current = await fixture();
   present();
   const gate = deferred<void>();
   current.clipboard.mockImplementationOnce(() => gate.promise);
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  const copy = controller.clipboard('copy');
+  const paste = controller.clipboard('paste');
   await vi.advanceTimersByTimeAsync(0);
   expect(current.clipboard).toHaveBeenCalledExactlyOnceWith(1, 'copy');
   gate.resolve();
-  await vi.advanceTimersByTimeAsync(0);
+  await Promise.all([copy, paste]);
   expect(current.clipboard).toHaveBeenLastCalledWith(1, 'paste');
-  current.clipboard.mockRejectedValueOnce(new Error('CLIPBOARD_UNAVAILABLE'));
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(current.clipboard).toHaveBeenCalledTimes(3);
-  expect(snapshot).toMatchObject({
-    clipboardError: true,
-    controlling: true,
-    ready: true,
-    error: null,
-  });
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(snapshot.clipboardError).toBe(false);
+  // Electron rebuilds the IPC error; the controller decodes it to the stable code.
+  current.clipboard.mockRejectedValueOnce(
+    new Error(
+      "Error invoking remote method 'remote-viewer:clipboard': Error: [PRECONDITION_FAILED] CLIPBOARD_UNSUPPORTED",
+    ),
+  );
+  await expect(controller.clipboard('paste')).rejects.toThrow(/^CLIPBOARD_UNSUPPORTED$/);
+  expect(snapshot).toMatchObject({ controlling: true, ready: true, error: null });
+  await controller.clipboard('copy');
   expect(current.clipboard).toHaveBeenCalledTimes(4);
 });
 
-it('drops queued clipboard work after control is released and ignores stale shortcut epochs', async () => {
+it('ignores clipboard messages from the picture; shortcuts reach the host as keys', async () => {
+  const current = await fixture();
+  present();
+  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
+  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(current.clipboard).not.toHaveBeenCalled();
+  const init = runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0];
+  expect(init).not.toHaveProperty('clipboardShortcuts');
+  expect(init).toMatchObject({ macKeyboard: false });
+});
+
+const syncOn = async (clipboardSync: RemoteDesktopViewerApi['clipboardSync']) => {
+  const current = await fixture(undefined, false, {
+    api: {
+      clipboardSync,
+      preferences: async () => ({
+        audio: true,
+        idleTimeoutMinutes: 5,
+        privacyScreen: false,
+        hostMute: false,
+        clipboardSync: true,
+        lockOnExit: false,
+      }),
+    },
+  });
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  return current;
+};
+const gateReleases = () =>
+  runtime.receive.mock.calls.filter(([message]) => message.type === 'inputGate').length;
+const idle: RemoteViewerSafety = { privacyActive: false, notice: null, clipboardProgress: null };
+
+it('a paste shortcut holds the keys until the local clipboard has been pushed', async () => {
+  const sync = deferred<RemoteViewerSafety>();
+  const clipboardSync = vi.fn(() => sync.promise);
+  await syncOn(clipboardSync);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(clipboardSync).toHaveBeenCalledExactlyOnceWith(1);
+  expect(gateReleases()).toBe(0);
+  sync.resolve({ ...idle, notice: 'clipboardSyncSkipped' });
+  await vi.advanceTimersByTimeAsync(0);
+  // One gate holds both shortcuts; the latest paste's wait opens it once.
+  expect(gateReleases()).toBe(1);
+  expect(snapshot.safety.notice).toBe('clipboardSyncSkipped');
+});
+
+it('an earlier paste reaching its deadline never opens the gate a later paste re-armed', async () => {
+  const sync = deferred<RemoteViewerSafety>();
+  const clipboardSync = vi.fn(() => sync.promise);
+  await syncOn(clipboardSync);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(900);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  // The first paste's second passes while the shared push is still in flight.
+  await vi.advanceTimersByTimeAsync(500);
+  expect(clipboardSync).toHaveBeenCalledOnce();
+  expect(gateReleases()).toBe(0);
+  sync.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(1);
+  // A stalled push: the latest paste's own deadline opens the gate, once.
+  clipboardSync.mockImplementationOnce(() => new Promise<RemoteViewerSafety>(() => {}));
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(600);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(999);
+  expect(gateReleases()).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(gateReleases()).toBe(2);
+});
+
+it('a paste shortcut is released after one second when the sync pass stalls; later pastes keep waiting on that pass', async () => {
+  const sync = deferred<RemoteViewerSafety>();
+  const clipboardSync = vi.fn(() => sync.promise);
+  await syncOn(clipboardSync);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(999);
+  expect(gateReleases()).toBe(0);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(gateReleases()).toBe(1);
+  // The pass is still in flight: a second paste neither starts another one nor
+  // opens early; it is released by the real push within its own second.
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(clipboardSync).toHaveBeenCalledOnce();
+  expect(gateReleases()).toBe(1);
+  sync.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(2);
+  // Once that pass has settled, the next paste starts a fresh one.
+  clipboardSync.mockImplementationOnce(async () => idle);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(clipboardSync).toHaveBeenCalledTimes(2);
+  expect(gateReleases()).toBe(3);
+});
+
+it('tells the picture which modifier is copy/paste on the controlled computer', async () => {
+  await fixture(undefined, false, { caps: { platform: 'darwin' } });
+  expect(runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0]).toMatchObject({
+    clipboardModifier: 'meta',
+  });
+  controller.dispose();
+  await fixture(undefined, false, { caps: { platform: 'win32' } });
+  expect(runtime.receive.mock.calls.findLast(([m]) => m.type === 'init')?.[0]).toMatchObject({
+    clipboardModifier: 'control',
+  });
+});
+
+it('a display switch that drops and regains control without a reconnect drops the old paste sync', async () => {
+  const first = deferred<RemoteViewerSafety>();
+  const clipboardSync = vi.fn(() => first.promise);
+  await fixture(undefined, true, {
+    api: {
+      clipboardSync,
+      preferences: async () => ({
+        audio: true,
+        idleTimeoutMinutes: 5,
+        privacyScreen: false,
+        hostMute: false,
+        clipboardSync: true,
+        lockOnExit: false,
+      }),
+    },
+  });
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(clipboardSync).toHaveBeenCalledOnce();
+  // Changing the resolution suspends control and re-acquires it; no cancel() runs.
+  await controller.resolution(mode4k);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(
+    runtime.receive.mock.calls.filter(([m]) => m.type === 'control').map(([m]) => m.enabled),
+  ).toContain(false);
+  expect(inputEnabled()).toBe(true);
+  const second = deferred<RemoteViewerSafety>();
+  clipboardSync.mockImplementationOnce(() => second.promise);
+  const before = gateReleases();
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  // The retired pass is not reused, and its late settlement opens nothing.
+  expect(clipboardSync).toHaveBeenCalledTimes(2);
+  first.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(before);
+  second.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(before + 1);
+});
+
+it('a paste waiting on the old session never opens the gate of the next one', async () => {
+  const sync = deferred<RemoteViewerSafety>();
+  const clipboardSync = vi.fn(() => sync.promise);
+  await syncOn(clipboardSync);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(clipboardSync).toHaveBeenCalledOnce();
+  // Reconnecting retires the old session; its sync may still settle later.
+  controller.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  sync.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(0);
+  // The next session's paste starts its own pass and is released by it.
+  const again = deferred<RemoteViewerSafety>();
+  clipboardSync.mockImplementationOnce(() => again.promise);
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(clipboardSync).toHaveBeenCalledTimes(2);
+  expect(gateReleases()).toBe(0);
+  again.resolve(idle);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(gateReleases()).toBe(1);
+});
+
+it('a copy shortcut pulls the computer clipboard shortly after; paste never waits with sync off', async () => {
+  const clipboardSync = vi.fn(async () => idle);
+  await syncOn(clipboardSync);
+  runtime.post?.({ type: 'clipboardIntent', action: 'copy', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(199);
+  expect(clipboardSync).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(clipboardSync).toHaveBeenCalledExactlyOnceWith(1);
+  controller.dispose();
+  const off = vi.fn(async () => idle);
+  await fixture(undefined, false, { api: { clipboardSync: off } });
+  present();
+  runtime.post?.({ type: 'clipboardIntent', action: 'paste', epoch: 'lease' });
+  runtime.post?.({ type: 'clipboardIntent', action: 'copy', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(300);
+  expect(off).not.toHaveBeenCalled();
+  expect(gateReleases()).toBe(1);
+});
+
+it('tells the picture when the controller keyboard follows macOS Command rules', async () => {
+  vi.stubGlobal('window', { electronAPI: { platform: 'darwin' } });
+  try {
+    await fixture();
+    expect(runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0]).toMatchObject({
+      macKeyboard: true,
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('drops queued clipboard work after host control is lost', async () => {
   const current = await fixture();
   present();
   const gate = deferred<void>();
   current.clipboard.mockImplementationOnce(() => gate.promise);
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'old-lease' });
-  runtime.post?.({ type: 'clipboard', action: 'invalid', epoch: 'lease' });
-  expect(current.clipboard).not.toHaveBeenCalled();
-  runtime.post?.({ type: 'clipboard', action: 'copy', epoch: 'lease' });
-  runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
+  const copy = controller.clipboard('copy');
+  const paste = controller.clipboard('paste').catch((error: Error) => error.message);
   await vi.advanceTimersByTimeAsync(0);
-  await controller.setControl(false);
-  await controller.setControl(true);
+  current.heartbeat.mockResolvedValue({ controlling: false });
+  await vi.advanceTimersByTimeAsync(3000);
   gate.resolve();
-  await vi.advanceTimersByTimeAsync(0);
+  await copy;
+  expect(await paste).toBe('DESKTOP_STOPPED');
   expect(current.clipboard).toHaveBeenCalledExactlyOnceWith(1, 'copy');
+});
+
+it.each([
+  ['DESKTOP_VIEW_ONLY', 'copy', 'remoteDesktop.viewer.controlRequired'],
+  ['CLIPBOARD_UNSUPPORTED', 'paste', 'remoteDesktop.viewer.clipboardUnsupported'],
+  ['CLIPBOARD_EMPTY', 'paste', 'remoteDesktop.viewer.clipboardEmpty'],
+  ['CLIPBOARD_TOO_LONG', 'copy', 'remoteDesktop.viewer.clipboardTooLong'],
+  ['DESKTOP_CLIPBOARD_COPY_FAILED', 'copy', 'remoteDesktop.viewer.clipboardCopyFailed'],
+  ['DESKTOP_CLIPBOARD_UNAVAILABLE', 'paste', 'remoteDesktop.viewer.clipboardPasteFailed'],
+] as const)('explains %s on %s', (code, action, key) => {
+  expect(clipboardFailureKey(new Error(code), action)).toBe(key);
 });
 
 it.each([true, false])(
@@ -234,79 +491,138 @@ it.each([true, false])(
   },
 );
 
-it('pauses actions and input during release and does not send duplicate control requests', async () => {
+it('does not present a usable desktop when the host refuses initial control', async () => {
+  const f = await fixture(Promise.resolve({ controlling: false }));
+  present();
+  expect(f.control).toHaveBeenCalledExactlyOnceWith(true);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
+});
+
+it('shows a reconnectable error when host input is busy during control acquisition', async () => {
+  const firstControl = Promise.reject(new Error('[PRECONDITION_FAILED] DESKTOP_INPUT_BUSY'));
+  const f = await fixture(firstControl);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
+  controller.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  present();
+  expect(f.control).toHaveBeenCalledTimes(2);
+  expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
+});
+
+it('sends workspace actions on the current lease only while controlling', async () => {
   const f = await fixture();
   present();
-  const gate = deferred<{ controlling: boolean }>();
-  f.control.mockImplementationOnce(() => gate.promise);
-  const pending = controller.setControl(false);
-  await controller.setControl(true);
-  expect(f.control).toHaveBeenCalledTimes(2); // Initial grant + one release.
+  const request = vi.spyOn(f.api, 'request');
+  const sent = () =>
+    request.mock.calls.flatMap(([, value]) => (value.op === 'windowAction' ? [value] : []));
+  await controller.workspaceAction('workspaceLeft');
+  await controller.workspaceAction('omarchyMenu');
+  expect(sent()).toEqual([
+    { op: 'windowAction', action: 'workspaceLeft', lease: 'lease' },
+    { op: 'windowAction', action: 'omarchyMenu', lease: 'lease' },
+  ]);
+  request.mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DESKTOP_INPUT_UNSUPPORTED'));
+  await expect(controller.workspaceAction('workspaceRight')).rejects.toThrow(
+    'DESKTOP_INPUT_UNSUPPORTED',
+  );
+  controller.dispose();
+
+  // The lease is live but control is still pending: nothing may reach the host.
+  const pending = await fixture(deferred<{ controlling: boolean }>().promise);
+  present();
   expect(snapshot).toMatchObject({ controlling: false, controlPending: true });
-  expect(inputEnabled()).toBe(false);
+  const pendingRequest = vi.spyOn(pending.api, 'request');
+  await controller.workspaceAction('workspaceRight');
+  expect(pendingRequest.mock.calls.some(([, value]) => value.op === 'windowAction')).toBe(false);
+});
+
+it('stops input and viewing after input queue overflow', async () => {
+  await fixture();
+  present();
+  runtime.post?.({ type: 'inputOverflow', epoch: 'lease' });
+  expect(snapshot).toMatchObject({ controlling: false, ready: false, error: 'controlUnavailable' });
+  expect(runtime.receive).toHaveBeenCalledWith({ type: 'stop', preserveFrame: true });
   await expect(controller.clipboard('paste')).rejects.toThrow('DESKTOP_VIEW_ONLY');
-  runtime.receive.mockClear();
-  controller.keys(['MetaLeft', 'KeyD']);
-  expect(runtime.receive).not.toHaveBeenCalled();
-  gate.resolve({ controlling: false });
-  await pending;
-  expect(snapshot).toMatchObject({ controlling: false, controlPending: false });
-  expect(f.clipboard).not.toHaveBeenCalled();
 });
 
 it('ignores a pre-transition heartbeat without briefly disabling newly granted control', async () => {
-  const f = await fixture();
-  present();
-  await controller.setControl(false);
   const gate = deferred<{ controlling: boolean }>();
-  f.heartbeat.mockImplementationOnce(() => gate.promise);
+  const f = await fixture(gate.promise);
+  present();
+  f.heartbeat.mockResolvedValueOnce({ controlling: false });
   await vi.advanceTimersByTimeAsync(3000);
-  await controller.setControl(true);
-  gate.resolve({ controlling: false });
+  gate.resolve({ controlling: true });
   await vi.advanceTimersByTimeAsync(0);
   expect(snapshot.controlling).toBe(true);
   expect(inputEnabled()).toBe(true);
 });
 
-it('retains view-only after the host revokes control and the viewer reconnects', async () => {
+it('requires control again after the host revokes it and the viewer reconnects', async () => {
   const f = await fixture();
   present();
   f.heartbeat.mockResolvedValue({ controlling: false });
   await vi.advanceTimersByTimeAsync(3000);
   expect(snapshot.controlling).toBe(false);
-  expect(inputEnabled()).toBe(false);
+  expect(snapshot.ready).toBe(false);
+  expect(snapshot.error).toBe('controlUnavailable');
+  expect(runtime.receive).toHaveBeenCalledWith({ type: 'stop', preserveFrame: true });
   controller.retry();
   await vi.advanceTimersByTimeAsync(0);
   present();
-  expect(f.control).toHaveBeenCalledOnce();
-  expect(snapshot.controlling).toBe(false);
-  expect(inputEnabled()).toBe(false);
+  expect(f.control).toHaveBeenCalledTimes(2);
+  expect(snapshot.controlling).toBe(true);
+  expect(inputEnabled()).toBe(true);
 });
 
-it('does not re-enable input when a failed release is followed by another video frame', async () => {
+it('keeps confirmed control on an input timeout until the heartbeat settles it', async () => {
   const f = await fixture();
   present();
-  f.control.mockRejectedValueOnce(new Error('INVOKE_TIMEOUT'));
-  await controller.setControl(false);
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, request) => {
+    if (request.op === 'input') throw new Error('[PRECONDITION_FAILED] INVOKE_TIMEOUT');
+    return original(generation, request);
+  });
+  runtime.post?.({
+    type: 'input',
+    epoch: 'lease',
+    sequence: 1,
+    events: [{ kind: 'release' }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ controlling: true, ready: true, error: null });
+  expect(inputEnabled()).toBe(true);
+});
+
+it('leaves the desktop when the host rejects an input batch', async () => {
+  const f = await fixture();
   present();
-  expect(snapshot).toMatchObject({ controlling: false, controlPending: false });
-  expect(inputEnabled()).toBe(false);
-  await vi.advanceTimersByTimeAsync(3000);
-  expect(f.control).toHaveBeenLastCalledWith(false);
-  expect(inputEnabled()).toBe(false);
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, request) => {
+    if (request.op === 'input') throw new Error('[PRECONDITION_FAILED] DESKTOP_VIEW_ONLY');
+    return original(generation, request);
+  });
+  runtime.post?.({
+    type: 'input',
+    epoch: 'lease',
+    sequence: 1,
+    events: [{ kind: 'release' }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(snapshot).toMatchObject({ ready: false, controlling: false, error: 'controlUnavailable' });
 });
 
 it('coalesces rapid quality changes and waits for the current negotiation to present', async () => {
   await fixture();
   present();
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
-  controller.settings({ bitrate: 20000000 });
+  controller.settings({ quality: 'saver' });
+  controller.settings({ quality: 'hd' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(1);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
@@ -315,7 +631,7 @@ it('coalesces rapid quality changes and waits for the current negotiation to pre
   expect(
     runtime.receive.mock.calls.filter(([message]) => message.type === 'videoSettings'),
   ).toHaveLength(2);
-  expect(snapshot.settings.bitrate).toBe(8000000);
+  expect(snapshot.settings.quality).toBe('auto');
 });
 
 it('expires stale bitrate and latency samples', async () => {
@@ -338,9 +654,9 @@ it('does not let a fallback screenshot interrupt a pending video-settings negoti
   await fixture();
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   runtime.receive.mockClear();
-  controller.settings({ bitrate: 2000000 });
+  controller.settings({ quality: 'saver' });
   await vi.advanceTimersByTimeAsync(0);
-  controller.settings({ bitrate: 8000000 });
+  controller.settings({ quality: 'auto' });
   await vi.advanceTimersByTimeAsync(0);
   runtime.post?.({ type: 'framePresented', epoch: 'lease' });
   expect(
@@ -403,8 +719,319 @@ it('passes actual logical geometry to rendering and reacquires control after fit
     type: 'videoSettings',
     width: 960,
     height: 710,
+    restore: false,
     audio: false,
   });
   expect(snapshot.controlling).toBe(true);
   expect(f.control).toHaveBeenLastCalledWith(true);
+  // The list keeps the size the user asked for as current, not the host's logical size.
+  const current = (await controller.resolutionModes()).filter((mode) => mode.current);
+  expect(current).toMatchObject([{ width: 1920, height: 1420 }]);
+});
+
+const sent = (type: string) =>
+  runtime.receive.mock.calls.filter(([message]) => message.type === type).map(([m]) => m);
+
+it('keeps the running video when the host confirms a live display switch', async () => {
+  const f = await fixture(undefined, false, { caps: { liveDisplaySwitch: true } });
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  runtime.receive.mockClear();
+  await controller.fitDisplay(500, 1000);
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', keepVideo: true }),
+    undefined,
+  );
+  expect(sent('displayGeometry')).toEqual([
+    { type: 'displayGeometry', width: 960, height: 1920, restore: false },
+  ]);
+  expect(sent('videoSettings')).toEqual([]);
+  expect(snapshot).toMatchObject({ transport: 'video', status: 'live', controlling: true });
+});
+
+it('rebuilds the video when a live-switch host does not confirm keeping it', async () => {
+  const f = await fixture(undefined, true, { caps: { liveDisplaySwitch: true } });
+  present();
+  runtime.receive.mockClear();
+  await controller.resolution(mode4k);
+  expect(f.resolution).toHaveBeenCalledWith('4k');
+  expect(sent('displayGeometry')).toEqual([]);
+  expect(sent('videoSettings')).toEqual([
+    { type: 'videoSettings', width: 3840, height: 2160, restore: true, audio: false },
+  ]);
+});
+
+it('applies a listed mode without reading the mode list again', async () => {
+  const f = await fixture(undefined, true);
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  await controller.resolution(mode4k);
+  expect(request.mock.calls.some(([, r]) => r.op === 'displayModes')).toBe(false);
+});
+
+it('offers same-ratio choices after fitting and restores the original display', async () => {
+  const f = await fixture();
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  // Host modes keep the monitor's ratio: the portrait mode is not offered.
+  expect((await controller.resolutionModes()).map((mode) => mode.id)).toEqual(['4k']);
+  await controller.fitDisplay(500, 1000);
+  expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
+  const fitted = await controller.resolutionModes();
+  expect(fitted.every((mode) => Math.abs(mode.width / mode.height - 0.5) < 0.003)).toBe(true);
+  expect(fitted.find((mode) => mode.current)).toMatchObject({ width: 960, height: 1920 });
+  await controller.resolution(fitted[0]);
+  expect(request).toHaveBeenLastCalledWith(
+    1,
+    expect.objectContaining({ op: 'control', enabled: true }),
+    undefined,
+  );
+  expect(snapshot.fittedDisplay).toEqual({ width: 960, height: 1920 });
+  // Fitting the same ratio again is a fit, not a restore; restoring is explicit.
+  await controller.fitDisplay(500, 1000);
+  expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(false);
+  await controller.restoreDisplay();
+  expect(request.mock.calls.some(([, r]) => r.op === 'restoreViewerDisplay')).toBe(true);
+  expect(snapshot.fittedDisplay).toBeNull();
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', null);
+});
+
+it('remembers system modes per monitor and forgets the computer’s own mode', async () => {
+  const f = await fixture(undefined, true);
+  const original = f.api.request;
+  vi.spyOn(f.api, 'request').mockImplementation(async (generation, r) =>
+    r.op === 'displayModes'
+      ? [
+          { ...mode4k, current: true },
+          { id: 'hd', width: 1920, height: 1080, current: false },
+        ]
+      : original(generation, r),
+  );
+  present();
+  const [own, hd] = await controller.resolutionModes();
+  await controller.resolution(hd);
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', {
+    kind: 'mode',
+    modeId: 'hd',
+    width: 1920,
+    height: 1080,
+  });
+  await controller.resolution(own);
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', null);
+});
+
+it('reapplies a remembered system mode once control and the first frame are ready', async () => {
+  const f = await fixture(undefined, true, {
+    remembered: { kind: 'mode', modeId: 'stale-id', width: 3840, height: 2160 },
+  });
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  // Mode IDs may change; the same size still matches.
+  expect(f.resolution).toHaveBeenCalledExactlyOnceWith('4k');
+  expect(snapshot.controlling).toBe(true);
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.resolution).toHaveBeenCalledOnce();
+});
+
+it('reapplies a remembered fit at its own size and ratio', async () => {
+  const f = await fixture(undefined, false, {
+    remembered: { kind: 'fit', width: 1280, height: 960 },
+    root: { clientWidth: 1000, clientHeight: 500 },
+  });
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', width: 1280, height: 960 }),
+    undefined,
+  );
+  expect(snapshot.fittedDisplay).toEqual({ width: 1280, height: 960 });
+});
+
+it('switches the fitted ratio and keeps it across same-ratio sizes', async () => {
+  const f = await fixture();
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  await controller.fitDisplay(500, 1000);
+  const screenRatio = { width: 1512, height: 982 };
+  await controller.fitDisplay(1512, 982, true, undefined, { ratio: screenRatio });
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', width: 1512, height: 982 }),
+    undefined,
+  );
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  await controller.resolution({ id: 'fitted:1210x786', width: 1210, height: 786, current: false });
+  expect(snapshot.fittedDisplay).toEqual(screenRatio);
+  expect(f.memory).toHaveBeenLastCalledWith(1, 'one', { kind: 'fit', width: 1210, height: 786 });
+});
+
+it('does not retry a remembered choice that failed in this window', async () => {
+  const f = await fixture(undefined, true, {
+    remembered: { kind: 'mode', modeId: '4k', width: 3840, height: 2160 },
+  });
+  f.resolution.mockRejectedValueOnce(new Error('DESKTOP_DISPLAY_FAILED'));
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.resolution).toHaveBeenCalledOnce();
+  f.heartbeat.mockResolvedValueOnce({ controlling: false });
+  await vi.advanceTimersByTimeAsync(3000);
+  controller.retry();
+  await vi.advanceTimersByTimeAsync(0);
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.resolution).toHaveBeenCalledOnce();
+});
+
+const channelFixture = async (caps: Record<string, unknown> = { channelRequests: true }) => {
+  let forward: ((message: RemoteViewerChannelRequest) => void) | null = null;
+  const channelReply = vi.fn(async () => {});
+  const f = await fixture(undefined, false, {
+    caps,
+    api: {
+      onChannelRequest: (listener: (message: RemoteViewerChannelRequest) => void) => {
+        forward = listener;
+        return () => {};
+      },
+      channelReply,
+    },
+  });
+  const ask = (request: Record<string, unknown>, id = 'id-1', generation = 1) =>
+    forward?.({ generation, id, request: request as RemoteViewerChannelRequest['request'] });
+  return { ...f, channelReply, ask };
+};
+const control = { op: 'control', lease: 'lease', enabled: true };
+
+it('carries Main’s small requests over the live media data channel', async () => {
+  const f = await channelFixture();
+  present();
+  f.ask(control);
+  const [channel] = sent('channelRequest') as { id: string; request: unknown }[];
+  expect(channel).toMatchObject({ id: 'id-1', request: control });
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'id-1',
+    ok: true,
+    result: { controlling: true },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'id-1', {
+    kind: 'result',
+    value: { controlling: true },
+  });
+});
+
+it('maps channel refusals to the relay and real failures to errors', async () => {
+  const f = await channelFixture();
+  present();
+  f.ask(control, 'busy');
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'busy',
+    ok: false,
+    error: 'DESKTOP_CHANNEL_BUSY',
+  });
+  f.ask({ op: 'displayModes', lease: 'lease' }, 'large');
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'large',
+    ok: false,
+    error: 'DESKTOP_REPLY_TOO_LARGE',
+  });
+  f.ask(control, 'failed');
+  runtime.post?.({
+    type: 'channelReply',
+    epoch: 'lease',
+    id: 'failed',
+    ok: false,
+    error: 'DESKTOP_VIEW_ONLY',
+  });
+  f.ask(control, 'unsent');
+  runtime.post?.({ type: 'channelRequestState', epoch: 'lease', id: 'unsent', sent: false });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'busy', { kind: 'relay' });
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'large', { kind: 'relay' });
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'failed', {
+    kind: 'error',
+    code: 'DESKTOP_VIEW_ONLY',
+  });
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'unsent', { kind: 'relay' });
+});
+
+it('returns requests to the relay without video, support, the current lease or generation', async () => {
+  const unsupported = await channelFixture({});
+  present();
+  unsupported.ask(control);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(unsupported.channelReply).toHaveBeenLastCalledWith(1, 'id-1', { kind: 'relay' });
+  controller.dispose();
+  const f = await channelFixture();
+  f.ask(control, 'before-video');
+  present();
+  f.ask({ ...control, lease: 'old' }, 'old-lease');
+  f.ask(control, 'old-generation', 0);
+  f.ask({ op: 'heartbeat', lease: 'lease' }, 'not-allowed');
+  await vi.advanceTimersByTimeAsync(0);
+  for (const id of ['before-video', 'old-lease', 'not-allowed'])
+    expect(f.channelReply).toHaveBeenCalledWith(1, id, { kind: 'relay' });
+  expect(f.channelReply).toHaveBeenCalledWith(0, 'old-generation', { kind: 'relay' });
+  expect(sent('channelRequest')).toEqual([]);
+});
+
+it('settles carried requests as unknown when the media peer falls back', async () => {
+  const f = await channelFixture();
+  present();
+  f.ask(control);
+  runtime.post?.({ type: 'fallback', epoch: 'lease' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.channelReply).toHaveBeenCalledWith(1, 'id-1', { kind: 'error', code: 'INVOKE_TIMEOUT' });
+});
+
+it('needs no separate control request when the host grants it with the lease and display changes', async () => {
+  const f = await fixture(undefined, false, { caps: { autoControl: true } });
+  const request = vi.spyOn(f.api, 'request');
+  present();
+  expect(f.control).not.toHaveBeenCalled();
+  expect(snapshot).toMatchObject({ controlling: true, ready: true });
+  await controller.fitDisplay(500, 1000);
+  expect(request).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({ op: 'viewerDisplay', control: true }),
+    undefined,
+  );
+  expect(f.control).not.toHaveBeenCalled();
+  expect(snapshot.controlling).toBe(true);
+});
+
+it('waits for auto-unlock to finish before reapplying a remembered resolution', async () => {
+  const unlock = deferred<{
+    available: boolean;
+    autoUnlock: boolean;
+    biometricAvailable: boolean;
+    biometricVerification: boolean;
+  }>();
+  const credential = vi.fn(() => unlock.promise);
+  const f = await fixture(undefined, true, {
+    caps: { platform: 'darwin', autoControl: true },
+    remembered: { kind: 'mode', modeId: '4k', width: 3840, height: 2160 },
+    api: { credential },
+  });
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(credential).toHaveBeenCalledWith(1, 'unlock', undefined);
+  expect(f.resolution).not.toHaveBeenCalled();
+  unlock.resolve({
+    available: true,
+    autoUnlock: true,
+    biometricAvailable: false,
+    biometricVerification: false,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.resolution).toHaveBeenCalledExactlyOnceWith('4k');
 });

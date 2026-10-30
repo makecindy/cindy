@@ -68,7 +68,7 @@ export interface TextChannelIM {
    */
   reactToMessage?(messageId: string, emoji: string): Promise<string | null>;
 
-  /** 撤销 reactToMessage 加的回应;失败吞掉(清理是尽力而为)。 */
+  /** 撤销回应；失败抛出供状态切换保留 token，终态调用方负责尽力清理。 */
   removeMessageReaction?(messageId: string, reactionToken: string): Promise<void>;
 
   // ── status ─────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import { DEFAULT_FAMILY_ID, getThemeFamilies } from '../families';
 import { builtinThemes } from '../registry';
 import {
   CINDY_EXPECTED_VALUES,
+  CINDY_INK_TEXT_TIERS,
   CINDY_REQUIRED_COLOR_IDS,
   BRAND_RED_ALLOWED_IDS,
   BRAND_RED_EXPECTED_BY_ID,
@@ -67,6 +68,8 @@ function parseRgb(v: string): RGB {
   const m = v.match(/rgba?\(([^)]+)\)/);
   if (!m) throw new Error(`bad rgb: ${v}`);
   const parts = m[1].split(',').map((x) => parseFloat(x));
+  // 半透明色当不透明色算会把对比度虚高成黑/白满值,必须先 compositeOver 叠到底色上。
+  if (parts[3] !== undefined && parts[3] < 1) throw new Error(`translucent color needs compositing: ${v}`);
   return [parts[0], parts[1], parts[2]];
 }
 
@@ -133,6 +136,47 @@ function rgbContrast(c1: RGB, c2: RGB): number {
 
 function contrast(c1: string | undefined, c2: string | undefined): number {
   return rgbContrast(toRgb(c1), toRgb(c2));
+}
+
+/** 自下而上叠出一个面的实际颜色:最底层必须不透明(页面/卡片),其上各层可半透明。 */
+function flattenPlane(colors: Record<string, string>, ...layerIds: string[]): RGB {
+  const [baseId, ...overlays] = layerIds;
+  const base = parseCssColor(colors[baseId]);
+  if (base.alpha !== 1) throw new Error(`${baseId} 作底层必须不透明: ${colors[baseId]}`);
+  return overlays.reduce<RGB>((under, id) => compositeOver(colors[id], under), base.rgb);
+}
+
+/** 文字叠在面上之后的实际对比度(墨水半透明,按 CSS 叠色实算,不按不透明近似)。 */
+function inkContrast(colors: Record<string, string>, textId: string, ...planeIds: string[]): number {
+  const plane = flattenPlane(colors, ...planeIds);
+  return rgbContrast(compositeOver(colors[textId], plane), plane);
+}
+
+/** 沿 var(--x) 别名解析到字面值;主题没覆盖的 id 回落注册表默认值。 */
+function resolveIn(colors: Record<string, string>, id: string, mode: 'light' | 'dark', depth = 0): string {
+  if (depth > 8) throw new Error(`alias 层数过深: ${id}`);
+  const value = colors[id] ?? colorRegistry.resolveDefault(id, mode) ?? '';
+  const alias = /^var\(--([a-z0-9-]+)\)$/.exec(value)?.[1];
+  return alias ? resolveIn(colors, alias, mode, depth + 1) : value;
+}
+
+/**
+ * ⑦ 文字墨水阶梯反向冻结的判定本体(⑧ 注入错值复用同一函数证伪)。
+ * 每档必须是纯黑(浅色)/纯白(深色)墨水、透明度恰等于裁决值,且逐档严格递减。
+ */
+function inkLadderViolations(colors: Record<string, string>, mode: 'light' | 'dark'): string[] {
+  const ink: RGB = mode === 'light' ? [0, 0, 0] : [255, 255, 255];
+  const violations: string[] = [];
+  let previousAlpha = Number.POSITIVE_INFINITY;
+  for (const tier of CINDY_INK_TEXT_TIERS) {
+    const value = colors[tier.id];
+    const { rgb, alpha } = parseCssColor(value);
+    if (!rgbEqual(rgb, ink, 0)) violations.push(`${tier.id}(${tier.role})不是${mode === 'light' ? '黑' : '白'}色墨水: ${value}`);
+    if (Math.abs(alpha - tier[mode]) > 1e-6) violations.push(`${tier.id}(${tier.role})透明度应为 ${tier[mode]}: ${value}`);
+    if (!(alpha < previousAlpha)) violations.push(`${tier.id}(${tier.role})没有比上一档更淡: ${value}`);
+    previousAlpha = alpha;
+  }
+  return violations;
 }
 
 const BRAND_RED_HEX = '#DF0C27';
@@ -381,35 +425,38 @@ describe('CINDY · ⑥ family(cindy 默认且置顶 / Classic 文案 / 9 主题�
   });
 });
 
-// ===== ⑦ WCAG + U2 例外 + text-secondary 反向冻结 =====
-describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向冻结', () => {
+// ===== ⑦ WCAG 复算(墨水叠色实算) + 文字墨水阶梯反向冻结 =====
+describe('CINDY · ⑦ WCAG 复算 + 文字墨水阶梯反向冻结', () => {
   const light = cindyLight.colors as unknown as Record<string, string>;
   const dark = cindyDark.colors as unknown as Record<string, string>;
+  // 文字实际落在的面:页面、卡片,以及叠在两者之上的悬停/标签底(墨水半透明,逐层叠色)。
+  const TEXT_PLANES: ReadonlyArray<readonly string[]> = [
+    ['surface'],
+    ['surface-elevated'],
+    ['surface', 'surface-hover'],
+    ['surface-elevated', 'surface-hover'],
+    ['surface', 'surface-chip'],
+    ['surface-elevated', 'surface-chip'],
+  ];
 
-  it('text-primary × surface/elevated/chip 全部 ≥4.5:1', () => {
-    const cases: Array<[string, string, string]> = [
-      [light['text-primary'], light['surface'], 'light/surface'],
-      [light['text-primary'], light['surface-elevated'], 'light/elevated'],
-      [light['text-primary'], light['surface-chip'], 'light/chip'],
-      [dark['text-primary'], dark['surface'], 'dark/surface'],
-      [dark['text-primary'], dark['surface-elevated'], 'dark/elevated'],
-      [dark['text-primary'], dark['surface-chip'], 'dark/chip'],
-    ];
-    for (const [fg, bg, label] of cases) {
-      expect(contrast(fg, bg), `${label} < 4.5:1`).toBeGreaterThanOrEqual(4.5);
+  function expectInkFloor(ids: readonly string[], floor: number) {
+    for (const [name, theme] of THEMES) {
+      for (const id of ids) {
+        for (const plane of TEXT_PLANES) {
+          const r = inkContrast(theme.colors, id, ...plane);
+          expect(r, `${name} ${id} × ${plane.join('+')} 实测 ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(floor);
+        }
+      }
     }
+  }
+
+  it('text-primary × surface/elevated/chip(及悬停叠层)全部 ≥4.5:1', () => {
+    expectInkFloor(['text-primary'], 4.5);
   });
 
-  it('text-tertiary × surface/elevated/chip 全部 ≥4.5:1(非 U2 token AA 整改)', () => {
-    const cases: Array<[string, string, string]> = [
-      [light['text-tertiary'], light['surface'], 'light/surface'],
-      [light['text-tertiary'], light['surface-elevated'], 'light/elevated'],
-      [dark['text-tertiary'], dark['surface'], 'dark/surface'],
-      [dark['text-tertiary'], dark['surface-elevated'], 'dark/elevated'],
-    ];
-    for (const [fg, bg, label] of cases) {
-      expect(contrast(fg, bg), `${label} < 4.5:1`).toBeGreaterThanOrEqual(4.5);
-    }
+  it('说明与次要文字(text-secondary-mid / text-secondary / meta)× 同上各面 ≥4.5:1', () => {
+    // 2026-10-22 起承担可读辅助信息的是说明档与次要档;原「text-tertiary ≥4.5」守的是同一视觉角色。
+    expectInkFloor(['text-secondary-mid', 'text-secondary', 'cmd-palette-item-meta'], 4.5);
   });
 
   it('E1D 中性 CTA 对比度:#FCFCFC×#3C3F43=10.32(light)、#151515×#EEEEEE=15.74(dark) ≥4.5', () => {
@@ -422,52 +469,38 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     expect(contrast(frDark, dark['surface'])).toBeGreaterThanOrEqual(3);
   });
 
-  it('U2 例外:text-secondary × surface/elevated/chip 忠于 Figma 原值(实测 2.3-2.9:1,不要求达标)', () => {
-    const pairs: Array<[string, string, string]> = [
-      [light['text-secondary'], light['surface'], 'light/surface'],
-      [light['text-secondary'], light['surface-elevated'], 'light/elevated'],
-      [dark['text-secondary'], dark['surface'], 'dark/surface'],
-      [dark['text-secondary'], dark['surface-elevated'], 'dark/elevated'],
-    ];
-    for (const [fg, bg, label] of pairs) {
-      const r = contrast(fg, bg);
-      // 实测应 2.3-2.9:1;记录入档但不阻断
-      expect(r, `${label} U2 例外,实测 ${r.toFixed(2)}:1`).toBeGreaterThan(2);
-    }
+  it('信息类文字地板:三级及以上 × 页面/卡片/悬停面 ≥3.0(用户裁决 2026-10-22,决策表 §9.1;U2 退役后深色同样适用)', () => {
+    expectInkFloor(
+      ['text-secondary', 'cmd-palette-item-meta', 'text-tertiary', 'text-secondary-cross', 'sidebar-list-muted'],
+      3.0,
+    );
   });
 
-  it('2026-08 地板:light 信息类文字 × surface/surface-hover 对比度 ≥3.0(用户裁决,决策表 §9.4;dark 仍属 U2 例外不设此门)', () => {
-    // 覆盖面取 §9.4 声明的地板范围(页底/通用 hover);菜单 hover 上 2.90 为已登记 watch 项,不入门禁。
-    for (const id of ['text-secondary', 'cmd-palette-item-meta', 'sidebar-list-muted'] as const) {
-      for (const bgId of ['surface', 'surface-hover'] as const) {
-        const r = contrast(light[id]!, light[bgId]!);
-        expect(r, `light ${id} × ${bgId} 应 ≥3.0,实测 ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(3.0);
-      }
-    }
-  });
-
-  it('反向冻结:text-secondary 必须恰等于定稿值 #888883(light,用户裁决 2026-08-13 暖化+抬至≥3.0,取代 2026-07-20 调参)/#6F6F6F(dark),RGB 归一', () => {
-    expect(
-      rgbEqual(toRgb(light['text-secondary']), toRgb('#888883'), 1),
-      'light text-secondary 须恰等 #888883(用户裁决 2026-08-13)',
-    ).toBe(true);
-    expect(
-      rgbEqual(toRgb(dark['text-secondary']), toRgb('#6F6F6F'), 1),
-      'dark text-secondary 须恰等 #6F6F6F',
-    ).toBe(true);
+  it('反向冻结:文字阶梯恰等于 2026-10-22 裁决的墨水值(浅色纯黑 / 深色纯白,逐档严格递减),不得退回实色灰', () => {
+    expect(inkLadderViolations(light, 'light')).toEqual([]);
+    expect(inkLadderViolations(dark, 'dark')).toEqual([]);
   });
 
   it('CINDY 侧栏层级:二级暗灰(sidebar-muted)明显弱于正文(text-primary)×surface + 中性选中 pill', () => {
     // 侧栏层级:标题正文 > 图标/时间戳/分组(二级暗灰) > 中性选中 pill 前景。
     for (const [name, theme] of THEMES) {
-      const c = theme.colors as unknown as Record<string, string>;
-      const sec = contrast(c['sidebar-muted'], c['surface']);
-      const pri = contrast(c['text-primary-hsl'], c['surface']);
+      const sec = inkContrast(theme.colors, 'sidebar-muted', 'surface');
+      const pri = inkContrast(theme.colors, 'text-primary-hsl', 'surface');
       expect(sec, `${name} 二级暗灰 ${sec.toFixed(2)} 应明显弱于正文 ${pri.toFixed(2)}`).toBeLessThan(pri);
     }
     // ③ exact 已守,此处补层级:选中 pill 前景×中性底 ≥4.5。
     expect(contrast(cindyLight.colors['sidebar-item-active-foreground']!, cindyLight.colors['sidebar-item-active']!), 'light 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
+  });
+
+  // Unit regression #7838: running task/timer icons retain status-bar-accent even when selected.
+  // The existing text contrast assertion cannot detect orange disappearing into a selected fill.
+  it('CINDY 运行图标×选中行底色对比度 ≥3:1', () => {
+    for (const [name, theme] of THEMES) {
+      const mode = name === 'cindy-dark' ? 'dark' : 'light';
+      const running = resolveIn(theme.colors, 'status-bar-accent', mode);
+      expect(contrast(running, theme.colors['sidebar-item-active']), `${mode} 运行橙×选中底`).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it('CINDY 侧栏草稿铅笔×普通/悬停行底色对比度 ≥3:1', () => {
@@ -535,7 +568,7 @@ describe('CINDY · ⑧ 可证伪自检(注入错值后断言必须变红,还原�
     const badId = 'text-primary'; // 不在 allowed
     expect(allowed.has(badId), 'text-primary 不在 ALLOWED,染红应被 ⑤ 抓').toBe(false);
     const badRgb = toRgb('#DF0C27');
-    const textRgb = toRgb(cindyLight.colors['text-primary']);
+    const textRgb = parseCssColor(cindyLight.colors['text-primary']).rgb;
     expect(rgbEqual(textRgb, badRgb, 2), '注入后 text-primary 染红会被 ⑤ 单向禁止越界抓').toBe(
       false,
     );
@@ -557,15 +590,31 @@ describe('CINDY · ⑧ 可证伪自检(注入错值后断言必须变红,还原�
     ).toBe(true);
   });
 
-  it('反向冻结证伪:注入 #686B72 到 text-secondary → ⑦ 变红', () => {
-    const figma = toRgb('#888883'); // 用户裁决定稿 2026-08-13(沿革: Figma #9A9DA3 → 2026-07-20 #8C8E94 → 本值)
-    const injected = toRgb('#686B72');
-    expect(rgbEqual(injected, figma, 1), '#686B72 ≠ #888883,注入后 ⑦ 反向冻结断言必红').toBe(false);
-    // 正常值仍恰等
+  it('反向冻结证伪:text-secondary 退回实色灰 #888883 / 透明度漂移 / 层级倒挂 → ⑦ 变红', () => {
+    const light = cindyLight.colors as unknown as Record<string, string>;
+    const dark = cindyDark.colors as unknown as Record<string, string>;
+    // 2026-08 实色暖灰(墨水改版前的定稿值)与凭眼加深的 #686B72 都必须被拦下。
+    for (const solid of ['#888883', '#686B72']) {
+      expect(inkLadderViolations({ ...light, 'text-secondary': solid }, 'light'), `注入 ${solid}`).not.toEqual([]);
+    }
+    expect(inkLadderViolations({ ...light, 'text-secondary': 'rgba(0, 0, 0, 0.60)' }, 'light')).not.toEqual([]);
+    expect(inkLadderViolations({ ...dark, 'text-secondary': '#6F6F6F' }, 'dark')).not.toEqual([]);
+    // 旧版倒挂(三级比次要更深)即便都用墨水也必红。
     expect(
-      rgbEqual(toRgb(cindyLight.colors['text-secondary']), figma, 1),
-      '还原后恰等定稿值',
-    ).toBe(true);
+      inkLadderViolations({ ...light, 'text-tertiary': 'rgba(0, 0, 0, 0.60)' }, 'light'),
+    ).not.toEqual([]);
+    // 还原后转绿
+    expect(inkLadderViolations(light, 'light')).toEqual([]);
+    expect(inkLadderViolations(dark, 'dark')).toEqual([]);
+  });
+
+  it('叠色证伪:半透明色不得当不透明色算对比度', () => {
+    expect(() => contrast('rgba(0, 0, 0, 0.44)', '#F2F2ED')).toThrow(/compositing/);
+    expect(() => contrast('0.0 0.0% 0.0% / 0.56', '#F2F2ED')).toThrow();
+    // 叠色实算:黑 44% 压在页底上只有 ~3.2:1,而不是黑字的 ~18:1。
+    const tertiaryOnPage = inkContrast(cindyLight.colors as unknown as Record<string, string>, 'text-tertiary', 'surface');
+    expect(tertiaryOnPage).toBeGreaterThan(3);
+    expect(tertiaryOnPage).toBeLessThan(4);
   });
 
   it('§7 必炸点对比度(橙徽章/红 CTA/Fast toggle,§7 矩阵)', () => {
@@ -576,8 +625,13 @@ describe('CINDY · ⑧ 可证伪自检(注入错值后断言必须变红,还原�
     expect(contrast(D['status-badge-fg']!, orange), 'dark 橙徽章 fg×橙').toBeGreaterThanOrEqual(4.5);
     expect(contrast('#FCFCFC', L['accent-cta-bg']!), 'light 中性 CTA').toBeGreaterThanOrEqual(4.5);
     expect(contrast('#151515' /* 2026-08 色阶改版: 反相深字随暗色平移 */, D['accent-cta-bg']!), 'dark 中性 CTA').toBeGreaterThanOrEqual(4.5);
-    // Fast toggle: thumb(surface-on-card) × track(fast-toggle-track = text-disabled)
-    expect(contrast(L['surface-on-card']!, L['text-disabled']!), 'light Fast toggle thumb×track').toBeGreaterThanOrEqual(3);
-    expect(contrast(D['surface-on-card']!, D['text-disabled']!), 'dark Fast toggle thumb×track').toBeGreaterThanOrEqual(3);
+    // Fast/思考小开关:关闭轨道 fast-toggle-track(2026-10-22 起随 switch-track-off,不再借用禁用文字色)
+    // × 两种滑块(默认白钮;模型选择器传 surface-on-card)。
+    for (const [mode, colors] of [['light', L], ['dark', D]] as const) {
+      const track = resolveIn(colors, 'fast-toggle-track', mode);
+      for (const thumb of ['#FFFFFF', resolveIn(colors, 'surface-on-card', mode)]) {
+        expect(contrast(thumb, track), `${mode} Fast toggle thumb ${thumb} × track ${track}`).toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 });

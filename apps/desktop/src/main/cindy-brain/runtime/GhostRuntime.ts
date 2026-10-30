@@ -1,4 +1,5 @@
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 /**
  * GhostRuntime — 意识运行时状态机(docs/dev-rules/plugin-security-and-authoring.md)。
@@ -45,6 +46,8 @@ interface GhostRuntimeOptions {
   onStateChanged?: (id: string, state: GhostRuntimeState) => void;
   /** 时钟注入(测试用假时钟)。 */
   now?: () => number;
+  /** 宿主要求这个实例暂不启动时返回原因(如换库后缓存没清掉、需要重启应用)。 */
+  startBlockedReason?: (id: string) => string | null;
   log?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;
@@ -54,8 +57,26 @@ interface GhostRuntimeOptions {
 interface RuntimeEntry {
   state: GhostRuntimeState;
   handle: SandboxHandle | null;
+  loading: Promise<void> | null;
+  /** 当前沙箱按哪一份安装拉起(sandboxIdentity);换版后据此识别过期沙箱。 */
+  identity: string | null;
   /** 熔断窗口内的崩溃时间戳(旧的滚动淘汰)。 */
   crashTimestamps: number[];
+}
+
+/**
+ * 沙箱的安装身份:adapter 按安装目录 + 安装回执划分区,面板 webview 也按同一份
+ * 现装记录解析分区。更新换版期间若有人(面板 /wake、常驻拉起)拿旧记录把沙箱
+ * 拉了起来,提交后它就留在旧分区,与重挂载的面板永远不同源——spawn 据此识别
+ * 并换新。
+ */
+function sandboxIdentity(ghost: InstalledGhost): string {
+  return JSON.stringify([
+    ghost.dir,
+    ghostInstallApprovalToken(ghost.approval),
+    ghost.manifest.version,
+    ghost.namespace ?? null,
+  ]);
 }
 
 export class GhostRuntime {
@@ -83,11 +104,19 @@ export class GhostRuntime {
    * 即用户重新唤醒);stopping 拒绝(等熄灯完成)。
    */
   async spawn(ghost: InstalledGhost): Promise<{ ok: true; state: GhostRuntimeState } | { ok: false; reason: string }> {
-    const id = ghost.manifest.id;
+    const id = installedGhostStoragePart(ghost);
     const entry = this.getEntry(id);
-    if (entry.state === 'starting' || entry.state === 'running') return { ok: true, state: entry.state };
+    const identity = sandboxIdentity(ghost);
+    if (entry.state === 'starting' || entry.state === 'running') {
+      if (entry.identity === identity) return { ok: true, state: entry.state };
+      // 旧安装的沙箱(更新换版窗口里被拉起)按新记录重开,否则它困在旧分区。
+      this.options.log?.info('ghost sandbox restarts for the updated install', { id });
+      this.stop(id);
+    }
     if (entry.state === 'fused') return { ok: false, reason: '已熔断(反复崩溃),重新唤醒后可再试' };
     if (entry.state === 'stopping') return { ok: false, reason: '正在熄灯,稍后再试' };
+    const blocked = this.options.startBlockedReason?.(id) ?? null;
+    if (blocked !== null) return { ok: false, reason: blocked };
 
     this.setState(id, entry, 'starting');
     // 沙箱创建本身也可能同步 throw(如 app 未 ready、窗口创建失败):同样按
@@ -101,9 +130,11 @@ export class GhostRuntime {
       return { ok: false, reason: '沙箱创建失败' };
     }
     entry.handle = handle;
+    entry.identity = identity;
     handle.onGone((details) => this.handleGone(id, details.reason));
     try {
-      await handle.load();
+      entry.loading = handle.load();
+      await entry.loading;
     } catch (err) {
       // 入口都加载不出来按一次崩溃记账(坏 entry 反复 spawn 同样会熔断)。
       this.options.log?.warn('ghost sandbox load failed', { id, error: err instanceof Error ? err.message : String(err) });
@@ -118,8 +149,17 @@ export class GhostRuntime {
     }
     // load 期间可能已被 stop/crash 改道;只有仍处 starting 才转 running。
     // (经 stateOf 重读:setState 走方法赋值,TS 的字面量收窄跟不上。)
-    if (this.stateOf(id) === 'starting') this.setState(id, entry, 'running');
+    if (entry.handle === handle && this.stateOf(id) === 'starting') this.setState(id, entry, 'running');
     return { ok: true, state: this.stateOf(id) };
+  }
+
+  /** Await this sandbox's actual entry load, including an already-starting instance. */
+  async waitUntilRunning(id: string): Promise<boolean> {
+    const entry = this.entries.get(id);
+    const handle = entry?.handle;
+    if (!entry || !handle) return false;
+    try { await entry.loading; } catch { return false; }
+    return entry.handle === handle && entry.state === 'running';
   }
 
   /** 熄灯(沉睡 / 抽离 / 闲置超时 / 退出前逐个关)。幂等。 */
@@ -164,7 +204,7 @@ export class GhostRuntime {
   private getEntry(id: string): RuntimeEntry {
     let entry = this.entries.get(id);
     if (!entry) {
-      entry = { state: 'off', handle: null, crashTimestamps: [] };
+      entry = { state: 'off', handle: null, loading: null, identity: null, crashTimestamps: [] };
       this.entries.set(id, entry);
     }
     return entry;

@@ -119,7 +119,7 @@ describe('messagePresentation', () => {
       hasTime: true,
       hasTurnCost: true,
       isStreaming: true,
-    }).items).toEqual(['streaming']);
+    }).items).toEqual([]);
   });
 
   it('summarizes tool groups as desktop-style headers without mobile detail badges', () => {
@@ -451,6 +451,9 @@ describe('messagePresentation', () => {
     expect(isToolErrorLike(message('json', { secondaryBody: '{"status":"failed"}' }))).toBe(true);
     expect(isToolErrorLike(message('text', { secondaryBody: 'process exited with exit code 2' }))).toBe(true);
     expect(isToolErrorLike(message('ok', { secondaryBody: '{"ok":true}' }))).toBe(false);
+    // 成功结果里的空 errors 数组不是失败；非空数组仍是。
+    expect(isToolErrorLike(message('empty-errors', { secondaryBody: '{"ok":true,"errors":[]}' }), false)).toBe(false);
+    expect(isToolErrorLike(message('errors', { secondaryBody: '{"errors":["boom"]}' }), false)).toBe(true);
     // 关闭关键词启发式后只信结构化错误记录。
     expect(isToolErrorLike(message('kw-off', { secondaryBody: 'build failed with error' }), false)).toBe(false);
     expect(isToolErrorLike(message('rec-on', { secondaryBody: '{"status":"failed"}' }), false)).toBe(true);
@@ -600,6 +603,13 @@ describe('messagePresentation', () => {
       title: 'Working…',
       header: { title: 'Working…' },
     });
+
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 77_516_000 })).toMatchObject({
+      title: 'Worked for 21h 31m',
+      header: { title: 'Worked for 21h 31m' },
+    });
+    expect(summarizeWorkGroupPresentation({ ...workGroup, durationMs: 183_845_000 }).title)
+      .toBe('Worked for 2d 3h 4m');
 
     expect(summarizeWorkGroupPresentation({
       ...workGroup,

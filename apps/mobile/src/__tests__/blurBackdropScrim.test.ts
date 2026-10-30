@@ -23,11 +23,15 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     expect(src).toContain("isScrim ? 'dark' : mode === 'dark' ? 'dark' : 'light'");
   });
 
-  it('scrim 消费点用裸 BlurBackdrop(走恒深默认):SheetModal / SessionActionSheet 背板', () => {
+  it('兼容弹层保留恒深 BlurBackdrop，Android 原生弹层消费同一遮罩 token', () => {
     const sheetModal = readTextLf(resolve(process.cwd(), 'src/session/SheetModal.tsx'), 'utf8');
-    const actionSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheet.tsx'), 'utf8');
+    const actionSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheetFrame.tsx'), 'utf8');
+    const nativeSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheetFrame.android.tsx'), 'utf8');
     expect(sheetModal).toContain('<BlurBackdrop />');
     expect(actionSheet).toContain('<BlurBackdrop />');
+    expect(nativeSheet).toContain('scrimColor={colors.overlay}');
+    expect(nativeSheet).toContain('containerColor={colors.surfaceElevated}');
+    expect(nativeSheet).toContain('colorScheme={mode}');
   });
 
   it('surface 消费点保留显式浅色 overlayColor(面板表面不染深)', () => {

@@ -66,6 +66,47 @@ async function fixture(
 }
 
 describe("Routine event admission and execution", () => {
+  it('persists a disabled draft without inventing a trigger and rejects premature activation', async () => {
+    const f = await fixture();
+    const draft = await f.engine.createOnce('bot', { ...input, enabled: false, triggers: [] }, 'imported-draft-fixture');
+    await f.engine.stop();
+    const restored = await fixture(undefined, f.snapshot());
+    try {
+      expect(restored.engine.list('bot')).toEqual([draft]);
+      restored.advance(3600_000);
+      await restored.engine.tick();
+      expect(restored.execute).not.toHaveBeenCalled();
+      await expect(restored.engine.put('bot', { ...draft, enabled: true }, draft.id)).rejects.toThrow('requires');
+      expect(restored.engine.list('bot')).toEqual([draft]);
+    } finally { await restored.engine.stop(); }
+  });
+  it('deduplicates concurrent creation and a retry after restart without overwriting newer edits', async () => {
+    const f = await fixture();
+    const creationId = 'mobile-request-123456';
+    const [a, b] = await Promise.all([f.engine.createOnce('bot', input, creationId), f.engine.createOnce('bot', input, creationId)]);
+    expect(a).toEqual(b);
+    expect(f.engine.list('bot')).toHaveLength(1);
+    await f.engine.stop();
+    const restarted = await fixture(undefined, f.snapshot());
+    try {
+      expect(await restarted.engine.createOnce('bot', input, creationId)).toEqual(a);
+      const updated = await restarted.engine.put('bot', { ...input, name: 'Edited on desktop' }, a.id);
+      await expect(restarted.engine.createOnce('bot', input, creationId)).rejects.toThrow('already created');
+      expect(restarted.engine.list('bot')).toEqual([updated]);
+      await expect(restarted.engine.createOnce('another-bot', input, creationId)).rejects.toThrow('already used');
+    } finally { await restarted.engine.stop(); }
+  });
+  it('rejects stale remote edits, deletes and manual runs without changing the current routine', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.engine.put('bot-1', input);
+      const updated = await f.engine.put('bot-1', { ...input, name: 'Newer desktop edit' }, first.id, first.revision);
+      await expect(f.engine.put('bot-1', { ...input, name: 'Old mobile draft' }, first.id, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.remove('bot-1', first.id, undefined, first.revision)).rejects.toThrow('Routine changed');
+      await expect(f.engine.runNow('bot-1', first.id, first.revision)).rejects.toThrow('Routine changed');
+      expect(f.engine.list('bot-1')).toEqual([updated]);
+    } finally { await f.engine.stop(); }
+  });
   it.each([
     { id: 'timer', kind: 'interval' as const, intervalMs: 60_000 },
     { id: 'timer', kind: 'cron' as const, expression: '* * * * *', timezone: 'UTC' },
@@ -686,4 +727,140 @@ it('keeps committed deduplication across restart and expires it after the bounde
   expect(await restored.engine.publish('github', event('receipt'))).toMatchObject({ duplicate: false });
   expect(Object.keys(restored.snapshot()!.receipts)).toHaveLength(1);
   await restored.engine.stop();
+});
+
+describe('routine check configuration', () => {
+  it('persists an audible default for new rules without migrating legacy omissions', async () => {
+    const f = await fixture();
+    try {
+      const created = await f.engine.put('bot', input);
+      expect(created.silentWhenIdle).toBe(false);
+      const oldState = f.snapshot()!;
+      delete oldState.routines[0]!.silentWhenIdle;
+      const restarted = await fixture(undefined, oldState);
+      try {
+        const edited = await restarted.engine.put('bot', { ...input, name: 'Edited old rule' }, created.id);
+        expect(edited.silentWhenIdle).toBeUndefined();
+      } finally { await restarted.engine.stop(); }
+    } finally { await f.engine.stop(); }
+  });
+  it('round trips preferences, preserves omitted fields from old clients, and allows removal', async () => {
+    const f = await fixture();
+    try {
+      const original = await f.engine.put('bot', { ...input, silentWhenIdle: false, preRunHook: { command: 'node check.mjs', timeoutMs: 5000 } });
+      const edited = await f.engine.put('bot', { ...input, name: 'Edited' }, original.id);
+      expect(edited).toMatchObject({ silentWhenIdle: false, preRunHook: original.preRunHook });
+      const restarted = await fixture(undefined, f.snapshot());
+      expect(restarted.engine.list('bot')[0]).toEqual(edited);
+      await restarted.engine.stop();
+      const removed = await f.engine.put('bot', { ...input, preRunHook: null }, original.id);
+      expect(removed.preRunHook).toBeNull();
+      expect(removed.silentWhenIdle).toBe(false);
+      expect(() => parseRoutineInput({ ...input, preRunHook: { command: 'check', timeoutMs: 0 } })).toThrow();
+    } finally { await f.engine.stop(); }
+  });
+  it('records a completed check separately from a model run', async () => {
+    const f = await fixture(async () => ({ skipped: true, resultText: 'No changes' }));
+    try {
+      const routine = await f.engine.put('bot', input);
+      await f.engine.runNow('bot', routine.id);
+      await vi.waitFor(() => expect(f.engine.history(routine.id)[0]?.status).toBe('skipped'));
+      expect(f.engine.history(routine.id)[0]).toMatchObject({ resultText: 'No changes' });
+    } finally { await f.engine.stop(); }
+  });
+  it('drops a live plugin source on archive instead of retargeting it', async () => {
+    const f = await fixture();
+    f.engine.registerSource({
+      id: 'plugin:helper',
+      name: 'Helper',
+      status: 'listening',
+      events: [{ type: 'mail', name: 'Mail', fields: [] }],
+    });
+    await f.engine.createOnce('bot', {
+      name: 'watch',
+      prompt: 'read mail',
+      enabled: true,
+      triggers: [{ id: 't1', kind: 'event', sourceId: 'plugin:helper', eventType: 'mail', filters: [] }],
+    }, 'a'.repeat(16));
+    const archive = 'arch_' + 'a'.repeat(32);
+    await f.engine.relocatePluginSource('helper', archive);
+    const ids = f.engine.listSources().map((source) => source.id);
+    expect(ids).not.toContain('plugin:helper');
+    expect(ids).not.toContain('plugin:' + archive);
+    expect(f.engine.list('bot')[0]?.triggers).toEqual([
+      expect.objectContaining({ sourceId: 'plugin:' + archive }),
+    ]);
+    await f.engine.stop();
+  });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：RoutineEngine.ensureBuiltin / put / remove / publish；主人能暂停但删不掉、
+   *   改不了宿主内置的「跟进」规则，宿主改模板（正文或模板版本）后已有规则被对齐且保留暂停选择。
+   * - Bug／规则依据：docs/product-rules/bot-routines.md「内置跟进例行任务」（只能暂停 / 恢复）。
+   * - 现有覆盖缺口：既有用例只覆盖普通规则；builtin 分支（拒删、拒改、对齐模板、保留 enabled）无覆盖。
+   * - 最小失败输入：对 builtin 规则 remove，或 put 一份改了 prompt 的定义；宿主再次 ensure 新 prompt；
+   *   正文相同但模板版本递增时不重写（版本形同虚设）。
+   * - tier：unit（内存 load/save fake，无真实等待）。
+   */
+  it('keeps a host built-in rule pausable but not deletable or editable, and realigns it on ensure', async () => {
+    const f = await fixture();
+    const id = 'builtin-follow-up-bot';
+    try {
+      const created = await f.engine.ensureBuiltin('bot', 'follow-up', input, id);
+      expect(created).toMatchObject({ id, builtin: 'follow-up', enabled: true });
+      // 幂等：同一模板不产生新 revision。
+      expect((await f.engine.ensureBuiltin('bot', 'follow-up', input, id))?.revision).toBe(created?.revision);
+      await expect(f.engine.remove('bot', id)).rejects.toThrow('BUILTIN_ROUTINE');
+      await expect(f.engine.put('bot', { ...input, prompt: 'edited' }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+      const modelOverride = { agentKind: 'codex' as const, model: 'budget-model', providerId: 'subscription', effort: 'medium' };
+      const paused = await f.engine.put('bot', { ...input, enabled: false, modelOverride }, id);
+      // Older clients and template refreshes preserve the explicit choice.
+      expect((await f.engine.put('bot', { ...input, enabled: false }, id)).modelOverride).toEqual(modelOverride);
+      expect(paused).toMatchObject({ builtin: 'follow-up', enabled: false });
+      expect(await f.engine.publish('github', event('while-paused'))).toEqual({ accepted: 0, duplicate: false });
+      const realigned = await f.engine.ensureBuiltin('bot', 'follow-up', { ...input, prompt: 'v2' }, id, 1);
+      expect(realigned?.modelOverride).toEqual(modelOverride);
+      expect(realigned).toMatchObject({ prompt: 'v2', enabled: false, builtin: 'follow-up', builtinVersion: 1 });
+      // 模板版本递增：正文相同也重写并记下新版本；同版本再 ensure 不产生新 revision。主人暂停后的选择保留。
+      const bumped = await f.engine.ensureBuiltin('bot', 'follow-up', { ...input, prompt: 'v2' }, id, 2);
+      expect(bumped).toMatchObject({ builtinVersion: 2, enabled: false, revision: realigned!.revision + 1 });
+      expect((await f.engine.ensureBuiltin('bot', 'follow-up', { ...input, prompt: 'v2' }, id, 2))?.revision).toBe(bumped?.revision);
+      expect((await f.engine.put('bot', { ...input, prompt: 'v2', enabled: false, modelOverride: null }, id)).modelOverride).toBeNull();
+      await f.engine.setBotPaused('bot', true);
+      expect(await f.engine.ensureBuiltin('bot', 'follow-up', input, id)).toBeNull();
+    } finally { await f.engine.stop(); }
+  });
+
+  it('persists the explicit routine session mode and defaults legacy rules to persistent at runtime', async () => {
+    const f = await fixture();
+    try {
+      const fresh = await f.engine.put('bot', { ...input, sessionMode: 'fresh' });
+      expect(fresh.sessionMode).toBe('fresh');
+      const legacy = await f.engine.put('bot-legacy', input);
+      expect(legacy.sessionMode).toBeUndefined();
+      expect(() => parseRoutineInput({ ...input, sessionMode: 'invalid' })).toThrow('Invalid routine session mode');
+    } finally { await f.engine.stop(); }
+  });
+
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：RoutineEngine.put / ensureBuiltin 经同一串行写队列后落地的内置规则（enabled、prompt）。
+   * - Bug／规则依据：docs/product-rules/bot-routines.md「内置跟进例行任务」保留主人的暂停选择；ensureBuiltin 曾在
+   *   写队列外读 enabled，排在它前面的暂停写入落地后又被旧值 true 覆盖，规则被悄悄恢复。
+   * - 现有覆盖缺口：上一用例的暂停与对齐都逐个 await，测不到两次写入在队列里重叠的时序。
+   * - 最小失败输入：暂停（不 await）紧接着宿主对齐新模板。
+   * - tier：unit（内存 load/save fake，无真实等待）。
+   */
+  it('keeps an owner pause that is queued ahead of a host realign of the built-in rule', async () => {
+    const f = await fixture();
+    const id = 'builtin-follow-up-bot';
+    try {
+      await f.engine.ensureBuiltin('bot', 'follow-up', input, id);
+      const pausing = f.engine.put('bot', { ...input, enabled: false }, id);
+      await f.engine.ensureBuiltin('bot', 'follow-up', { ...input, prompt: 'v2' }, id, 1);
+      await pausing;
+      expect(f.engine.list('bot').find((routine) => routine.id === id)).toMatchObject({ enabled: false, prompt: 'v2' });
+    } finally { await f.engine.stop(); }
+  });
 });

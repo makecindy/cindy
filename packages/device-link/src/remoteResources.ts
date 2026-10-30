@@ -71,6 +71,10 @@ export interface RemoteResourceDisplay {
   title: RemoteText;
   subtitle?: RemoteText;
   preview?: RemoteText;
+  /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
+  generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;
@@ -129,6 +133,8 @@ export interface RemoteResourceBlock {
   /** session-controls: { input: 'blocked' | 'available', busy: boolean }.
    * Controllers may hide their composer while blocked. Hosts must independently
    * enforce workspace use; this presentation hint never grants permission.
+   * search: { query?: string, placeholder?: RemoteText }. Sent only to controllers
+   * declaring `search`; they re-read the same resource with `RemoteResourceGetRequest.query`.
    */
   data?: unknown;
 }
@@ -136,6 +142,8 @@ export interface RemoteResourceBlock {
 export interface RemoteCollectionItem {
   ref: RemoteResourceRef;
   display: RemoteResourceDisplay;
+  /** Optional Host-owned plugin chronology. Missing dates remain unknown on older Hosts. */
+  pluginOrder?: { addedAt?: number; recentIndex?: number };
   links: RemoteResourceLink[];
   actions?: RemoteActionDescriptor[];
   /** Opaque provider revision. Controllers compare it but never interpret it. */
@@ -186,6 +194,12 @@ export interface RemoteCollectionListResponse {
 export interface RemoteResourceGetRequest {
   client: RemoteResourceClientDescriptor;
   ref: RemoteResourceRef;
+  /**
+   * Optional filter for a resource that advertised a `search` block. Hosts that do
+   * not understand it ignore it and return the unfiltered resource; controllers
+   * only send it after the host declared searchability.
+   */
+  query?: string;
 }
 
 export interface RemoteActionInvokeRequest {
@@ -202,7 +216,9 @@ export type RemoteActionEffect =
   | { kind: 'navigate'; target: RemoteLinkTarget }
   | { kind: 'toast'; message: RemoteText };
 
+/** Optional opaque reply for an explicitly negotiated resource primitive. */
 export interface RemoteActionInvokeResponse {
+  result?: unknown;
   effects: RemoteActionEffect[];
 }
 
@@ -213,6 +229,7 @@ export interface RemoteResourceChangedPayload {
 }
 
 const MAX_ID_CHARS = 160;
+const MAX_RESOURCE_ID_CHARS = 256;
 const MAX_CURSOR_CHARS = 1_024;
 const MAX_QUERY_CHARS = 1_000;
 const MAX_LOCALE_CHARS = 64;
@@ -270,7 +287,7 @@ export function parseRemoteResourceRef(value: unknown): RemoteResourceRef | null
   if (!record) return null;
   const collectionId = boundedText(record.collectionId, MAX_ID_CHARS);
   const kind = boundedText(record.kind, MAX_ID_CHARS);
-  const id = boundedText(record.id, MAX_ID_CHARS);
+  const id = boundedText(record.id, MAX_RESOURCE_ID_CHARS);
   return collectionId && kind && id ? { collectionId, kind, id } : null;
 }
 
@@ -342,7 +359,11 @@ export function parseRemoteResourceGetRequest(value: unknown): RemoteResourceGet
   if (!record) return null;
   const client = parseRemoteResourceClientDescriptor(record.client);
   const ref = parseRemoteResourceRef(record.ref);
-  return client && ref ? { client, ref } : null;
+  if (!client || !ref) return null;
+  // Same bound as collection list queries; an empty query means "no filter".
+  if (record.query === undefined || record.query === '') return { client, ref };
+  const query = boundedText(record.query, MAX_QUERY_CHARS);
+  return query ? { client, ref, query } : null;
 }
 
 export function parseRemoteActionInvokeRequest(value: unknown): RemoteActionInvokeRequest | null {

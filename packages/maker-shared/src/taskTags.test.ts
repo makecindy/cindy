@@ -4,6 +4,7 @@ import {
   reconcileTaskTags,
   taskTagEditRevision,
   taskTagNameKey,
+  taskTagErrorKey,
   TASK_TAG_PRESETS,
   type TaskTag,
 } from './taskTags';
@@ -12,6 +13,16 @@ const tag = (
   color: TaskTag['color'] = 'red',
   favoriteOrder: number | null = null,
 ): TaskTag => ({ id, name: id, color, favoriteOrder, revision: 1 });
+
+it.each([
+  { code: 'BACKPRESSURE', message: 'queue full' },
+  { error: { code: 'BACKPRESSURE', message: 'queue full' } },
+  new Error("Error invoking remote method 'device-link:invoke': Error: [DEVICE_LINK_BUSY] queue full"),
+])('distinguishes busy from offline for reads and edits', (error) => {
+  expect(taskTagErrorKey(error, 'get')).toBe('remoteBusy');
+  expect(taskTagErrorKey(error, 'attach')).toBe('remoteBusy');
+  expect(taskTagErrorKey({ code: 'NOT_CONNECTED' }, 'get')).toBe('offline');
+});
 
 it('keeps default names localized after recoloring without translating custom names', () => {
   for (const color of ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'gray']) {
