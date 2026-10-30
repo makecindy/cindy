@@ -55,7 +55,7 @@ vi.mock('react-i18next', () => ({
 
 import { useTranslation } from 'react-i18next';
 import { QuotaHoverCard as UsageCard, type QuotaHoverCardProps } from '../QuotaHoverCard';
-import { buildClaudeUsageCard } from '../usageCardModel';
+import { buildClaudeUsageCard, buildKimiUsageCard } from '../usageCardModel';
 
 // Exercise the Claude adapter and the shared card together, retaining all existing edge cases.
 function QuotaHoverCard({
@@ -1004,4 +1004,18 @@ describe('QuotaHoverCard', () => {
     );
     expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
+});
+
+// Unit/jsdom: the Kimi adapter and real card must agree on remaining direction
+// and avoid rendering a contradictory empty-state message below a valid quota.
+it('renders returned Kimi windows without a fabricated empty state or token total', () => {
+  function KimiCard() {
+    const { t } = useTranslation();
+    return <UsageCard account={buildKimiUsageCard({ kind: 'kimi-coding-quota', fetchedAt: NOW_MS, windows: [{ id: 'limit_5h', usedPercent: 23, resetsAt: null }, { id: 'limit_month_code', usedPercent: 0, resetsAt: null }] }, t)} nowMs={NOW_MS} />;
+  }
+  render(<KimiCard />);
+  expect(screen.getByText('剩余 77%')).toBeTruthy();
+  expect(screen.getByText('剩余 100%')).toBeTruthy();
+  expect(screen.queryByText('quotaCard.noWindows')).toBeNull();
+  expect(screen.getAllByRole('progressbar')).toHaveLength(2);
 });

@@ -5,7 +5,11 @@ export interface ScheduleStorage {
   listActive(): Promise<Schedule[]>;
   get(id: string): Promise<Schedule | null>;
   insert(schedule: Schedule): Promise<Schedule>;
-  update(id: string, patch: Partial<Schedule>): Promise<Schedule | null>;
+  /** Numeric lastFinishedAt writes atomically retain the greater completion time.
+   * With expected, atomically match the snapshot's timing and scheduling
+   * fields (lastFiredAt, nextFireAt, status, recurring, manual, cronExpr,
+   * timezone, intervalMs); return null on mismatch without applying the patch. */
+  update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null>;
   delete(id: string): Promise<void>;
 
   /**
@@ -22,6 +26,10 @@ export interface ScheduleStorage {
   insertRun(run: ScheduleRun): Promise<ScheduleRun>;
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
   listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]>;
+  /** Atomically claim one interrupted agent run whose last turn still belongs
+   * to it. Hosts must exclude paused/deleted schedules, taken-over sessions and
+   * sessions owned by another running attempt. Optional for stores without session history. */
+  claimInterruptedRun?(sessionId: string, heartbeatAt: number): Promise<ScheduleRun | null>;
   /** Returns the deleted run for callers that want to know its scheduleId, or null if not found. */
   deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null>;
 
@@ -67,4 +75,9 @@ export interface ScheduleStorage {
    * runNow/终态行挤出窗口时会漏判（codex review P2）。
    */
   hasRunningRuns(scheduleId?: string): Promise<boolean>;
+  /** A running owner or an interrupted run with persisted accepted input
+   * consumes a Once trigger. An interrupted pre-accept attempt does not.
+   * Query without a history-display row limit; later user input must not
+   * make an already accepted prompt eligible for automatic replay. */
+  hasUnfinishedRuns(scheduleId: string): Promise<boolean>;
 }

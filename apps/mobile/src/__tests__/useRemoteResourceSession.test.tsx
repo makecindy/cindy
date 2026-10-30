@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   language: "en", focused: true,
   t: (key: string) => key, metadataVerified: true,
-  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '',
+  resourceId: 'bot-1', sessionId: 'task-1', openSearch: '', resourceHistorySessionId: '', resourceThreadRootSessionId: '', resourceThreadRootClientId: '',
   markRead: vi.fn(), forget: vi.fn(),
   store: { getSessionDeviceId: vi.fn(), upsertDeviceSession: vi.fn() },
   router: { replace: vi.fn(), setParams: vi.fn() },
@@ -28,7 +28,7 @@ vi.mock('expo-router', async () => {
   return {
     useIsFocused: () => h.focused,
     useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch, resourceHistorySessionId: h.resourceHistorySessionId }),
+    useLocalSearchParams: () => ({ resourceCollectionId: 'teammates', resourceId: h.resourceId, resourceKind: 'bot', openSearch: h.openSearch, resourceHistorySessionId: h.resourceHistorySessionId, resourceThreadRootSessionId: h.resourceThreadRootSessionId, resourceThreadRootClientId: h.resourceThreadRootClientId }),
     useRouter: () => h.router,
   };
 });
@@ -78,7 +78,7 @@ async function render(canMarkRead = false) {
   // A viewport receipt is separate from loading/entering the chat.
   result.markReadThrough(200);
 }
-beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.resourceHistorySessionId = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
+beforeEach(() => { vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.openSearch = ''; h.resourceHistorySessionId = ''; h.resourceThreadRootSessionId = ''; h.resourceThreadRootClientId = ''; h.auth.accountGeneration = 1; h.metadataVerified = true; h.focused = true; h.language = "en"; h.resourceId = 'bot-1'; h.sessionId = 'task-1'; h.link.status = 'online'; h.link.connectionEpoch = 1; h.store.getSessionDeviceId.mockReturnValue(undefined); });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 
 describe('companion task visibility refresh', () => {
@@ -415,4 +415,26 @@ it.each([true, false])('keeps a searched historical transcript read-only after v
   expect(result.error === null).toBe(owned);
   expect(h.router.setParams).not.toHaveBeenCalled();
   expect(h.markRead).not.toHaveBeenCalled();
+});
+
+// Mobile topics: the canonical redirect must not steal a reply; a forged root must
+// never unlock sending. Existing transcript tests did not cover writable hidden lanes (unit).
+it.each([true, false])('verifies the exact private-topic binding before enabling replies (%s)', async (matches) => {
+  h.sessionId = 'topic-1'; h.resourceThreadRootSessionId = 'task-1'; h.resourceThreadRootClientId = 'root-1';
+  h.get.mockResolvedValue({ links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }], display: { lastReplyAt: 200 } });
+  h.link.invoke.mockResolvedValue({ dmThreadsSupported: true, sessions: [{ id: 'topic-1', role: 'thread', status: 'active',
+    threadRoot: { rootSessionId: 'task-1', rootClientId: matches ? 'root-1' : 'somebody-else' } }] });
+  await render(true);
+  expect(result.ready).toBe(matches);
+  expect(result.canCompose).toBe(matches);
+  expect(h.router.setParams).not.toHaveBeenCalled();
+  expect(h.markRead).not.toHaveBeenCalled();
+  h.link.connectionEpoch += 1;
+  let resolve!: (value: unknown) => void;
+  h.link.invoke.mockReturnValue(new Promise(r => { resolve = r; }));
+  await render(true);
+  expect(result.ready).toBe(false);
+  expect(result.canCompose).toBe(false);
+  await act(async () => resolve({ dmThreadsSupported: false }));
+  expect(result.ready).toBe(false);
 });

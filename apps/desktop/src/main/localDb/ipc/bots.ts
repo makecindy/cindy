@@ -40,6 +40,7 @@ import {
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
+import { collectPresentBotRemoteResourceSources } from './botRemoteResourceAbsence.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
@@ -1451,16 +1452,18 @@ async function readRemoteBotProfile(client: ReturnType<typeof getDbClient>, botI
   const canonicalResolution = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
   // Personal transcript links let search entries open the exact historical task.
-  // No group/channel lanes, prompts, credentials or runtime configuration.
+  // Include only the root binding for private topics, never prompts or runtime configuration.
   const personalSessions = await db.select({
     id: sessions.id,
     role: botSessionLinks.role,
+    routeKey: botSessionLinks.routeKey,
     status: sessions.status,
   }).from(botSessionLinks)
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(
       eq(botSessionLinks.botId, botId),
-      inArray(botSessionLinks.role, ['canonical', 'history']),
+      inArray(botSessionLinks.role, ['canonical', 'history', 'thread']),
+      or(ne(botSessionLinks.role, 'thread'), isNull(botSessionLinks.archivedAt)),
       ne(sessions.status, 'deleted'),
     ));
   owner.assertCurrent();
@@ -1468,7 +1471,10 @@ async function readRemoteBotProfile(client: ReturnType<typeof getDbClient>, botI
   return {
     ...visibleProfile,
     canonicalSessionId: canonicalResolution.canonicalSessionId ?? undefined,
-    sessions: personalSessions,
+    dmThreadsSupported: true,
+    sessions: personalSessions.map(({ routeKey, ...row }) => ({ ...row,
+      ...(row.role === 'thread' ? { threadRoot: parseBotDmThreadRouteKey(routeKey) } : {}),
+    })),
   };
 }
 
@@ -1626,12 +1632,12 @@ export async function listBotRemoteResourceSources(): Promise<BotRemoteResourceS
   owner.assertCurrent();
   // The roster reads only identity + canonical preview, never runtime snapshots
   // or every historical task attached to a long-lived companion.
-  const sources: BotRemoteResourceSource[] = [];
   // A large roster must not occupy one DB RPC slot per companion at once.
-  for (const { id } of profiles) {
-    owner.assertCurrent();
-    sources.push(await readBotRemoteResourceSource(client, id));
-  }
+  const sources = await collectPresentBotRemoteResourceSources(
+    profiles.map((profile) => profile.id),
+    (id) => readBotRemoteResourceSource(client, id),
+    () => owner.assertCurrent(),
+  );
   owner.assertCurrent();
   return sources;
 }
@@ -1800,13 +1806,16 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
     // loses a race, the unreferenced content-addressed blob is recycler-safe.
     ownerBoundary.assertCurrent();
     const written = await storeTeammateAvatarImage(image, db, ownerBoundary.assertCurrent);
+    const capabilities = parseJson(version.capabilitiesJson);
+    const clearsFallback = capabilities.cloudAvatarFallback === true;
+    delete capabilities.cloudAvatarFallback;
     const now = Date.now();
     await client.tx('bots.updateProfile', {
       id: botId,
       avatar: written.url,
       identitySource: version.identitySource,
-      capabilitiesJson: version.capabilitiesJson,
-      profileContentChanged: false,
+      capabilitiesJson: safeJson(capabilities),
+      profileContentChanged: clearsFallback,
       expectedCurrentVersion: current.currentVersion,
       expectedAvatar: expectedAvatar ?? current.avatar,
       botAvatarRef: { id: randomUUID(), hash: written.hash, createdAt: now },
@@ -1821,11 +1830,13 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 
 /**
  * Trusted, main-only inputs of a companion restored from the cloud (cloud-companions.md §3.1):
- * the preset it was made from, whether the cloud profile replaces a copy whose first meeting
- * never finished, and whether its name may equal another companion's here (the display-name check is
- * skipped; the default Cindy stays unique). Never reachable from a renderer or model body.
+ * the preset it was made from, provenance of a local stand-in avatar, whether the cloud
+ * profile replaces a copy whose first meeting never finished, and whether its name may
+ * equal another companion's here (the default Cindy stays unique).
+ * Never reachable from a renderer or model body. The stand-in marker lives in
+ * the profile transaction, not in disposable companion sync bookkeeping.
  */
-export interface RestoredBotOrigin { templateId?: unknown; replacesUnfinishedMeeting?: true; allowSameName?: true }
+export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
 export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
@@ -1900,6 +1911,8 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   // Progress is main-owned; callers can request an invitation, never supply its result.
   delete persistedCapabilities.invitation;
   delete persistedCapabilities.templateId;
+  delete persistedCapabilities.cloudAvatarFallback;
+  if (restored?.avatarFallback === true) persistedCapabilities.cloudAvatarFallback = true;
   if (templateId) persistedCapabilities.templateId = templateId;
   else if (isBotTemplatePresetId(restored?.templateId)) persistedCapabilities.templateId = restored.templateId;
   if (prepareInvitation) persistedCapabilities.invitation = {
@@ -2120,6 +2133,11 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   // stops a running or recovered invitation (it ends as INVITATION_REPLACED) from greeting again.
   if (previous.invitation && !droppingMeeting) nextConfig.invitation = previous.invitation;
   else delete nextConfig.invitation;
+  // Only cloud restoration can set/reset this provenance; ordinary settings
+  // edits (including stale full-form saves) cannot release it. A real image
+  // clears it atomically in setBotProfileAvatar.
+  if (restored?.avatarFallback ?? (previous.cloudAvatarFallback === true)) nextConfig.cloudAvatarFallback = true;
+  else delete nextConfig.cloudAvatarFallback;
   if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
     nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
   }
@@ -2911,9 +2929,11 @@ export function registerBotIpc(): void {
 
   // 私聊话题：打开话题时建（或复用）它的隐藏 Session；时间线读本私聊的话题入口。
   ipcMain.handle('local-db:bots:dm-thread:ensure', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+    const remote = isDeviceLinkInvoke();
+    if (!remote) assertTrustedAppRendererEvent(event);
     const body = requireObject(raw, 'body');
     const botId = readText(body.botId, 'botId', 128, true);
+    if (remote && await readRemoteBotSessionAccess(botId, 'bot') !== 'visible') throwIpcError('NOT_FOUND', 'Bot 不存在');
     const rootSessionId = readText(body.rootSessionId, 'rootSessionId', 128, true);
     const rootClientId = readText(body.rootClientId, 'rootClientId', 256, true);
     if (!parseBotDmThreadRouteKey(`dm-thread:${rootSessionId}:${rootClientId}`)) {
@@ -2923,9 +2943,11 @@ export function registerBotIpc(): void {
     return ensureBotDmThreadSession({ botId, rootSessionId, rootClientId, title: title || '话题' });
   });
   ipcMain.handle('local-db:bots:dm-thread:list', async (event, raw: unknown) => {
-    assertTrustedAppRendererEvent(event);
+    const remote = isDeviceLinkInvoke();
+    if (!remote) assertTrustedAppRendererEvent(event);
     const body = requireObject(raw, 'body');
     const botId = readText(body.botId, 'botId', 128, true);
+    if (remote && await readRemoteBotSessionAccess(botId, 'bot') !== 'visible') throwIpcError('NOT_FOUND', 'Bot 不存在');
     const rootSessionId = readText(body.rootSessionId, 'rootSessionId', 128, true);
     return listBotDmThreads(botId, rootSessionId);
   });

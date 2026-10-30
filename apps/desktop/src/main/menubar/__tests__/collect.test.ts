@@ -2,6 +2,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import { describe, expect, it } from 'vitest';
 
 import {
+  kimiSource,
   claudeSource,
   codexSource,
   collectMenubarInputs,
@@ -339,4 +340,19 @@ describe('topModels', () => {
     expect(top.slice(0, 8).map((row) => row.name)).toEqual(rows.slice(0, 8).map((row) => row.name));
     expect(top.map((row) => row.name)).toContain('free-heavy');
   });
+});
+
+// Unit: Kimi quota must not inherit Codex plan identity or show expired/stale amounts.
+it('maps Kimi periods and removes expired or stale numbers from the menu bar', () => {
+  const account = provider({ id: 'kimi-coding', name: 'Kimi Code' });
+  const result = { status: 'ready', stale: false, snapshot: { kind: 'kimi-coding-quota', fetchedAt: NOW, windows: [
+    { id: 'limit_5h', usedPercent: 20, resetsAt: NOW + 3600_000 },
+    { id: 'limit_7d', usedPercent: 100, resetsAt: NOW - 1 },
+    { id: 'limit_month_total', usedPercent: 30, resetsAt: null },
+  ] } } as const;
+  const source = kimiSource(account, result as never, NOW);
+  expect(source).toMatchObject({ family: 'kimi', brand: 'Kimi Code', account: null, plan: null, credits: null });
+  expect(source.windows).toMatchObject([{ kind: 'session', usedPercent: 20, windowMinutes: 300 }, { kind: 'period', usedPercent: 30, windowMinutes: 0 }]);
+  expect(kimiSource(account, { ...result, stale: true } as never, NOW).windows).toEqual([]);
+  expect(kimiSource(account, { status: 'unavailable', error: 'auth' }, NOW).windows).toEqual([]);
 });

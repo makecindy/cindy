@@ -561,6 +561,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 前拦截、直读 usage reader,不进 ipcMain。列入 allowlist 作契约登记 + 老被控端
   // CHANNEL_NOT_ALLOWED 供控制端探测降级。
   'maker:usage:xai-subscription',
+  // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
+  // Old hosts reject the channel; callers never fall back to their local account.
+  'maker:usage:kimi-coding',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
   // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
   // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无
@@ -589,6 +592,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // memory, prompts, configuration, or native UI/file mutations.
   'local-db:bots:list',
   'local-db:bots:get',
+  // Same-account opted-in controllers: private topic summaries and idempotent creation.
+  // Existing Bot/root ownership and permission inheritance apply; no sender, UI or shell use.
+  // Older hosts omit dmThreadsSupported; clients keep the canonical chat usable.
+  'local-db:bots:dm-thread:list',
+  'local-db:bots:dm-thread:ensure',
   // 伙伴自主跟进的工作台「一眼」：只读宿主内存状态表的投影（任务标题、等你的一句话摘要、
   // 分钟数、设备名），不含工作目录、提示词、工具入参或代输入值；handler 只放远程可见的伙伴。
   // 放行标准：① 只读 ② 同账号已授权控制端本就能经 maker:list-active / sessions:get-many 看到

@@ -10083,11 +10083,18 @@ onQuit(
   },
   'sync',
 );
+let schedulerQuit: Promise<void> | undefined;
 onQuit(
   'session-active-turn-freeze',
   () => {
     suspendUsageLimitWaits();
     freezeSessionActiveTurnMarkers();
+    // Fence scheduler completion before process reapers / Maker close emit
+    // terminal events. Keep the write alive until the async quit phase drains.
+    schedulerQuit = getSchedulerIfInitialized()?.stop({ interrupted: true });
+    void schedulerQuit?.catch((error) => {
+      createSchedulerLogger('scheduler-host').error?.('scheduler quit persistence failed', error);
+    });
   },
   'sync',
 );
@@ -10264,6 +10271,7 @@ onQuit(
 onQuit(
   'shutdown-maker',
   async () => {
+    await schedulerQuit?.catch(() => {});
     // Not try/finally: a rejection here can predate `maker.shutdown` entirely
     // (see `makerShutdownSettled`), so it must not read as "the parent is down".
     const { piSessionFailures } = await shutdownMaker();

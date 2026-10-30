@@ -1128,33 +1128,6 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('sessionsStore.forceRefreshAll()');
   });
 
-  it('backfills scheduler session metadata before broadcasting session-bound refreshes', () => {
-    const source = readTextLf(
-      new URL('../../main/scheduler-host/runner.ts', import.meta.url),
-      'utf8',
-    );
-
-    const fireStart = source.indexOf(
-      'async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {',
-    );
-    const turnListenerStart = source.indexOf('let assistantText =', fireStart);
-    expect(fireStart).toBeGreaterThanOrEqual(0);
-    expect(turnListenerStart).toBeGreaterThan(fireStart);
-
-    const fireSetupSource = source
-      .slice(fireStart, turnListenerStart)
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
-    const backfillMatches = [...fireSetupSource.matchAll(/\bawait\s+backfillSessionMeta\s*\(/g)];
-    const sessionBoundMatches = [
-      ...fireSetupSource.matchAll(/\bawait\s+ctx\.onSessionBound\?\.\(session\.id\)/g),
-    ];
-
-    expect(backfillMatches).toHaveLength(1);
-    expect(sessionBoundMatches).toHaveLength(1);
-    expect(backfillMatches[0].index).toBeLessThan(sessionBoundMatches[0].index);
-  });
-
   it('does not clear automation conversation attention just by browsing schedules', () => {
     const schedulerPageSource = readTextLf(
       new URL('../features/scheduler/SchedulerPage.tsx', import.meta.url),

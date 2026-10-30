@@ -38,8 +38,12 @@ const types = {
 if (!preview) app.dock?.hide();
 app.whenReady().then(() => {
   const ownSession = session.fromPartition('ui-check');
-  ownSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-  ownSession.setPermissionCheckHandler(() => false);
+  // Only the local fixture's DOM fullscreen is needed by video assertions.
+  // Screen capture, media devices and every other permission remain denied.
+  const canFullscreen = (wc, permission) =>
+    permission === 'fullscreen' && wc?.getURL().startsWith(origin + '/');
+  ownSession.setPermissionRequestHandler((wc, permission, callback) => callback(canFullscreen(wc, permission)));
+  ownSession.setPermissionCheckHandler((wc, permission) => canFullscreen(wc, permission));
   ownSession.on('will-download', (event) => event.preventDefault());
   ownSession.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
@@ -84,6 +88,10 @@ app.whenReady().then(() => {
       // stop producing frames. Offscreen rendering keeps checks hidden while
       // allowing exact resizing and screenshots without showing a native window.
       offscreen: !preview && process.platform === 'win32',
+      // Exercise the real DOM Fullscreen API/top layer without entering a native
+      // macOS Space. A hidden check window cannot complete that OS transition,
+      // and its pending resize would otherwise contaminate subsequent variants.
+      disableHtmlFullscreenWindowResize: !preview,
       session: ownSession,
       sandbox: true,
       contextIsolation: true,

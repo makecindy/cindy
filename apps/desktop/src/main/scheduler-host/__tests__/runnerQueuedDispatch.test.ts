@@ -119,6 +119,11 @@ import {
   type SchedulerQueueDeps,
 } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { withScheduleLock } from '../scheduleLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.js';
+import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
+import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
 import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
 
@@ -515,6 +520,137 @@ beforeEach(() => {
 });
 
 describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
+  // Review P1 / unit: the real IPC Continue input starts with planMode=false.
+  // Connect that handler and coordinator to the real runner so the accepted
+  // permission gate, rather than a mocked enqueue, decides vendor dispatch.
+  it.each([false, true])('continues a saved plan-mode task through the input handler and real runner (busy=%s)', async (busy) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const planState = { enabled: true, generation: 0 };
+    Object.defineProperty(h.session, 'stablePlanModeState', { value: planState });
+    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: true });
+    const queue = createQueueHarness({ busy });
+    const { runner } = createRunnerHarness(h.session, queue.deps);
+    const ctx = { ...createFireContext(), resumeSessionId: SESSION_ID };
+    const vendorPlans: boolean[] = [];
+    let input!: ReturnType<typeof createInputEnqueueHarness>;
+    let completion: Promise<{ runId: string }> | undefined;
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_sid, _message, createOpts, sendOpts) => {
+        await input.preparations.get(sendOpts.persistUserMessage!.clientId)?.onPreparing?.();
+        planState.enabled = createOpts.planMode === true;
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        if (vi.mocked(h.session.abort).mock.calls.length > 0) {
+          return { kind: 'session-dispatch', source: 'test', dispatched: false,
+            reason: 'cancelled-before-dispatch', context: 'permission check', message: 'dispatch cancelled' };
+        }
+        vendorPlans.push(createOpts.planMode === true);
+        return { kind: 'session-dispatch', source: 'test', dispatched: true };
+      },
+      onAcceptedQueuedMessage: async (_sid, item) => { await input.acceptedCallbacks.get(item.clientId)?.(); },
+      steerToAgent: async () => {},
+      abortSession: async () => {},
+      isTurnRunning: () => false,
+      hasPendingInteraction: () => false,
+      getAgentKind: () => 'claude-code',
+      getSdkSessionId: async () => 'sdk-1',
+      emitProjection: () => {},
+    });
+    input = createInputEnqueueHarness(coordinator, {
+      remote: false,
+      getSessionFsSnapshot: mocks.getSessionFsSnapshot,
+      resumeInterruptedScheduleRun: async (_sid, enqueue) => {
+        completion = runner.fireManualContinuation(heartbeatSchedule(), ctx, enqueue).then(() => ({ runId: ctx.runId }));
+        return { completion };
+      },
+    });
+    const item: AgentInputQueuedMessage = {
+      clientId: 'continue-plan-task', text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+      persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT, model: 'claude-opus-4-6',
+      effort: '', permissionMode: 'ask', workingDir: '/tmp/bound',
+      createOpts: { agentKind: 'claude-code', model: 'claude-opus-4-6', workingDir: '/tmp/bound',
+        permissionMode: 'ask', planMode: false, userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+      chatMessage: { clientId: 'continue-plan-task', role: 'user', content: CONTINUE_AFTER_APP_EXIT_PROMPT,
+        createdAt: '2026-10-30T00:00:00.000Z' },
+    };
+    try {
+      await input.enqueue({}, SESSION_ID, item);
+      await vi.waitFor(() => expect(vendorPlans).toEqual([true]));
+      expect(ctx.onTurnActive).toHaveBeenCalledWith(SESSION_ID);
+      expect(h.session.abort).not.toHaveBeenCalled();
+      h.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await completion;
+    } finally {
+      ctx.abortController.abort();
+      coordinator.clearSession(SESSION_ID);
+      await completion?.catch(() => {});
+    }
+  });
+
+  // Review P1: a resumed old run must serialize with the same schedule's
+  // ordinary runner; cancellation while queued must never create a turn.
+  it.each(['release', 'cancel'] as const)('shares the schedule lock for manual continuation: %s', async (action) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps);
+    const schedule = heartbeatSchedule();
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const ordinary = withScheduleLock(schedule.id, new AbortController().signal, async () => {
+      entered(); await held;
+    });
+    await ready;
+    const controller = new AbortController();
+    const ctx = { ...createFireContext(), signal: controller.signal, resumeSessionId: SESSION_ID };
+    const resumed = runner.fireManualContinuation(schedule, ctx, queue.deps.enqueuePrompt);
+    void resumed.catch(() => {});
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(queue.enqueueCalls).toHaveLength(0);
+      expect(maker.createSession).not.toHaveBeenCalled();
+      if (action === 'cancel') {
+        controller.abort();
+        await expect(resumed).rejects.toThrow(/aborted/);
+        expect(queue.enqueueCalls).toHaveLength(0);
+      } else {
+        release();
+        await ordinary;
+        await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+        await queue.accept();
+        h.emit({ type: 'done', data: {}, source: 'claude-code' });
+        await expect(resumed).resolves.toMatchObject({ sessionId: SESSION_ID });
+      }
+    } finally {
+      controller.abort();
+      release();
+      await ordinary;
+      await resumed.catch(() => {});
+    }
+  });
+
+  // App-exit regression / unit: a passed precheck may become idle after partial
+  // effects. Recovery must continue the saved conversation and keep its run id.
+  it('resumes the original task without replaying its initial prompt or precheck', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(h.session, queue.deps);
+    const ctx = { ...createFireContext(), resumeSessionId: SESSION_ID };
+    const fire = runner.fireManualContinuation(heartbeatSchedule({ targetSessionId: undefined,
+      preRunHook: { command: 'already-passed-check' } }), ctx, queue.deps.enqueuePrompt);
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    const input = enqueueLast(queue);
+    expect(input.text).toContain('continue from where it left off');
+    expect(input.text).not.toContain('PR #971 heartbeat prompt');
+    expect(input.origin).toMatchObject({ runId: ctx.runId });
+    expect(input.sessionId).toBe(SESSION_ID);
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({ id: SESSION_ID }));
+    await queue.accept();
+    h.emit({ type: 'done', data: { text: 'recovered' }, source: 'claude-code' });
+    await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
   // PR #7104 / unit: retrying an old message must still yield to the human,
   // even though its persisted send-time sorting key no longer advances.
   it('defers a heartbeat after recent human recovery instead of enqueueing it', async () => {
@@ -3034,6 +3170,46 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
 
   beforeEach(() => {
     mocks.getSessionFsSnapshot.mockResolvedValue(persisted);
+  });
+
+  // Replaces the renderer's signature-text scan: a real fresh runner must not
+  // broadcast until production backfill has persisted the sidebar metadata.
+  // Unit: hold one in-memory DB write, observe the public session-bound callback.
+  it('persists fresh schedule metadata before broadcasting session-bound', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const saved: Record<string, unknown> = { source: 'desktop' };
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const db = { update: () => ({ set: (patch: Record<string, unknown>) => ({
+      where: async () => { entered(); await held; Object.assign(saved, patch); },
+    }) }) };
+    mocks.backfillSessionMeta.mockImplementation(async (_db, id, patch, logger) => {
+      await sharedProduction.backfill!(db as never, id, patch, logger);
+    });
+    const queue = createQueueHarness({ busy: false });
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps);
+    vi.mocked(maker.isSessionAlive).mockReturnValue(false);
+    const ctx = createFireContext();
+    const broadcasts: Record<string, unknown>[] = [];
+    ctx.onSessionBound = async () => { broadcasts.push({ ...saved }); };
+    const fire = runner.fire(heartbeatSchedule({ targetSessionId: undefined,
+      workingDir: '/tmp/bound', workspaceKind: 'project', model: 'claude-opus-4-6',
+      providerId: 'test-provider' }), ctx);
+    const settled = fire.then(() => undefined, (error: unknown) => error);
+    try {
+      await Promise.race([ready, settled.then((error) => { throw error; })]);
+      expect(broadcasts).toEqual([]);
+      release();
+      await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
+      expect(broadcasts[0]).toMatchObject({ source: 'scheduler', workspaceKind: 'project' });
+    } finally {
+      release();
+      ctx.abortController.abort();
+      await settled;
+    }
+    expect(String(await settled)).toMatch(/abort/i);
   });
 
   // Local QA 2026-10-21: an explicit model on an ordinary bound schedule caused

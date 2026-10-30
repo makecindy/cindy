@@ -26,28 +26,26 @@ const nativeApis: Record<string, Record<string, string>> = {
 };
 const generated = appendPiProviderPresets([]);
 describe('Pi supplier connection import', () => {
-  it('projects every generated model into all three harnesses with its actual API and metadata', () => {
-    for (const preset of generated.filter(p => p.id !== 'nous')) {
-      const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, { ...runtime, catalogPresetId: preset.id }])) }, { presets: generated });
-      const source = sourceProviderForPreset(preset.id);
-      const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => preset.runtimes.pi!.models.some(model => model.id === row.id));
-      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-        expect(provider.models[agent], `${preset.id}/${agent}`).toHaveLength(rows.length);
-        rows.forEach((row, index) => {
-          // Cindy's Coding route declarations supersede the imported Pi source
-          // limits; other supplier rows retain their original metadata contract.
-          const kimiCode = preset.id === 'moonshot-kimi-code';
-          const codingWindow = kimiCode && ['k3', 'k3-256k'].includes(row.id);
-          const codingResponses = kimiCode && agent === 'codex' && ['k3', 'k3-256k', 'kimi-for-coding'].includes(row.id);
-          expect(provider.models[agent]![index], `${preset.id}/${agent}/${row.id}`).toMatchObject({
-            id: row.id, api: codingResponses ? 'openai-responses' : nativeApis[preset.id]?.[agent] ?? row.execution.pi.api,
-            ...(agent === 'pi' ? { piApi: row.execution.pi.api } : {}),
-            ...(row.contextWindow === undefined ? {} : { contextWindow: codingWindow ? 262144 : row.contextWindow }),
-            ...(row.maxOutput === undefined ? {} : { maxOutput: codingWindow ? 262144 : row.maxOutput }),
-            ...(row.supportsImageInput === undefined ? {} : { supportsImageInput: row.supportsImageInput }),
-          });
+  it.each(generated.filter(p => p.id !== 'nous'))('projects $id models into all three harnesses with their actual API and metadata', preset => {
+    const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, { ...runtime, catalogPresetId: preset.id }])) }, { presets: generated });
+    const source = sourceProviderForPreset(preset.id);
+    const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => preset.runtimes.pi!.models.some(model => model.id === row.id));
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(provider.models[agent], `${preset.id}/${agent}`).toHaveLength(rows.length);
+      rows.forEach((row, index) => {
+        // Cindy's Coding route declarations supersede the imported Pi source
+        // limits; other supplier rows retain their original metadata contract.
+        const kimiCode = preset.id === 'moonshot-kimi-code';
+        const codingWindow = kimiCode && ['k3', 'k3-256k'].includes(row.id);
+        const codingResponses = kimiCode && agent === 'codex' && ['k3', 'k3-256k', 'kimi-for-coding'].includes(row.id);
+        expect(provider.models[agent]![index], `${preset.id}/${agent}/${row.id}`).toMatchObject({
+          id: row.id, api: codingResponses ? 'openai-responses' : nativeApis[preset.id]?.[agent] ?? row.execution.pi.api,
+          ...(agent === 'pi' ? { piApi: row.execution.pi.api } : {}),
+          ...(row.contextWindow === undefined ? {} : { contextWindow: codingWindow ? 262144 : row.contextWindow }),
+          ...(row.maxOutput === undefined ? {} : { maxOutput: codingWindow ? 262144 : row.maxOutput }),
+          ...(row.supportsImageInput === undefined ? {} : { supportsImageInput: row.supportsImageInput }),
         });
-      }
+      });
     }
   });
   it('keeps the model-specific routes of mixed-protocol suppliers', () => {

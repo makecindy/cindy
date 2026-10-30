@@ -164,12 +164,20 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 明确 `context-overflow` 且本轮没有助手输出或
 工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
+模型切换产生的空 assistant 分隔记录不属于助手产出：自动换窗、手动重试与恢复检查点的
+进展统计均排除它。有效标记必须符合 `turnModelChange.ts` 的生产者合同：`fromModel` / `toModel`
+均为字符串且 `modelOnly: true`；有正文的记录、无有效切模标记的空记录和工具操作仍保留原保护。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
 自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
 `invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
 确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
-推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
+推理密文范围）不得当成换窗。此类 compact 失败使用 `remote-compact-encrypted-content`
+原因，桌面与手机展示加密历史无法读取、自动接续未完成，不解释为单条输入超长；
+旧 Host 留下的 `context-overflow` 加无详情的裸包装消息 `Error running remote compact task`
+也按压缩错误显示，兼容密文错误码只在已丢失的 `additionalDetails` 中的记录；含具体窗口超限、
+超时或其他详情的消息不走此兜底。原始错误未带此持久化原因时仍须有密文证据。
+手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了

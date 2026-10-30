@@ -595,6 +595,7 @@ export const MAKER_INVOKE = {
   LLAMACPP_STOP: 'maker:llamacpp:stop',
   LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
+  PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**

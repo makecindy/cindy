@@ -1,5 +1,31 @@
 # 跨端协议兼容
 
+## Chat Server 只读工作发现与定向通知（2026-10-29）
+
+`/me.capabilities` 新增 `workAvailabilityVersion:1`、`workNotificationsVersion:1`。
+`POST /executions/availability {botIds}` 每批 1–128 个本人伙伴，返回 `{items:[{botId,enabled,pending}]}`。
+它只检查普通和成员加入队列，不写执行/回执，不获取租约。pending 只是提示，实际领取仍使用原单伙伴 `/executions/claim`，
+其请求体、鉴权、epoch、幂等、60 秒租约及失联后的显式重试行为不变。
+
+主人 actor 流新增 `work.available {work:[{botId,conversationId}]}`，覆盖未打开群及普通、计划、真实入群、重试和前序结束。
+通知可重放且不构成执行授权。Desktop 只唤醒对应伙伴，批量只用于无副作用的发现；真实响应逐伙伴处理，不等待聚合租约结果。
+同一伙伴最多一项领取或忙碌扫描；探测不占用该位置，新工作可以越过慢探测。旧探测的空结果不能覆盖期间到达的提示。
+完整空队列证明且可靠通知在线时最长 60 秒空闲退避；其余空领取/旧服务端/断线上限 15 秒，含抖动和调度误差。
+普通错误按伙伴退避；401 续期期间暂停新后台请求，成功后沿用原重发，失败进入退避；429 立即更新共享截止时间。
+主力登记子请求和认证后的重发均在发送前检查门禁，成功不清除已有 Retry-After。已在途结果仍接收，已有心跳继续原规则。
+云端伙伴运行时以独立的后台身份 API 接入安装归属 GET/POST `/preferences`、自动主力确认和删除登记重试；
+同路径的资料同步、消息镜像以及用户明确操作继续原通道，不按 URL 一刀切限流。
+
+新端在能力缺失或只读探测 404 时回退原 claim。服务端同时声明 `personalMask:1` 时也不使用探测：
+AI 代答与私人汇总只能由空闲的 `/mask/executions/claim` 发现，探测与 `work.available` 均不覆盖它们。
+旧客户端忽略新能力与事件；Mobile 无执行器协议变化。手机不运行伙伴：本人 actor scope 中只含 `work.available`
+的批次直接 ACK，不重读列表或历史，混合批次照常刷新（[`chatServerSubscription.ts`](../../apps/mobile/src/chat/chatServerSubscription.ts)）。
+推荐先部署全部服务端，再发客户端；旧 dispatcher 混合窗口依靠兜底，不承诺即时唤醒。没有环境变量或 Schema 变化。
+actor 游标只保存在当前账号运行时，重连续读、重启从零；RESET_REQUIRED 与 CURSOR_AHEAD 都有恢复入口。
+RESET_REQUIRED 跳过的通知可能含主力迁移的 `actor.changed`，因此先重读伙伴与主力电脑，再从新游标续订和领取。
+
+设计与验收不变量见 [工作轮询设计](chat-work-polling.md)。新增能力只优化发现，不引入批量领取或自动恢复执行协议。
+
 ## 设置页中我分享的供应商
 
 Desktop 的本机分享命令与既有同账号供应商管理通道增量支持 `shared-provider-ids`，
@@ -4070,6 +4096,26 @@ contacts 在每次 begin 投递前核对原元素仍连接、仍声明 contacts�
 旧接收端仍可能丢弃核实状态或把接收回复标成私密；完整修复需要执行交接的宿主升级。
 账号、群与 IM 发言人校验、权限档、Plan、输入代次和撤销校验保持不变。
 不改变连接恢复或重放策略；单次派发失败只影响该请求，不重启连接或扩大设备访问。
+
+## Kimi Code 配额查询
+
+同账号 invoke 白名单新增 `maker:usage:kimi-coding`，请求只接受 `providerId`、可选 `agent`
+及 `forceRefresh`，不接受端点或凭证。执行端通过现有凭证链查询固定官方 Coding 接口，
+返回规范化的窗口比例、重置时间及查询状态；控制端再次校验字段。远程供应商目录新增可选
+`kimiCodingUsageAgents` 展示能力数组，由宿主根据真实路由计算，执行地址仍被剥离；该字段
+不参与宿主授权，实际查询仍按真实目录严格检查官方端点。不开放供应商分享、
+共享任务或未连接设备权限，不改变推理请求及限额自动继续规则。
+新控制端连接旧执行端时，该 channel 不受支持，界面显示查询不可用且不回退到本机账号。
+旧控制端不发送此请求，新执行端的既有通道保持不变；无需 server、协议版本或数据库迁移。
+查询失败只影响该连接的配额显示，不重启共享链路、不重放任务写操作；回滚即恢复不显示
+Kimi 配额，用户已有登录及配置保留。
+
+自建中转沿用 `packages/device-link-relay/src/hub.ts` 的通用 envelope 转发：
+`invoke` 的 channel、args 与响应 payload 不由中转解析，因此此只读通道无需修改中转、
+升级 `RELAY_VERSION` 或新增能力协商；旧中转也可转发，是否支持查询仍由执行端决定。
+验证包括共享客户端与自建中转单测、`pnpm --filter @cindy/device-link-relay run interop`
+的真实客户端加入／签名通信／重连，以及 Desktop 的 Kimi dispatch 回归；这些验证不替代
+真实 Kimi 账号与两台实机的端到端验收。
 
 ## Telegram 群历史按消息号取图（2026-10-29）
 

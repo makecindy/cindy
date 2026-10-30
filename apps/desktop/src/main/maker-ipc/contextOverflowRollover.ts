@@ -8,6 +8,7 @@
 import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
+  REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
   type PiCacheCompatibility,
   isContextOverflowErrorMessage,
@@ -39,6 +40,7 @@ import { readMessageSourceDevice } from '@cindy/maker-shared/message-source';
 import { buildClientEnvironmentNote } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote } from './messageSourceNote.js';
 import { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
+import { isEmptyModelChangeMarker } from './recoveryCoordinator.js';
 export { isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
@@ -72,7 +74,7 @@ export type OverflowRolloverPlan =
 export function isContextOverflowErrorData(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   const rec = data as { reason?: unknown; message?: unknown; sdkError?: unknown };
-  if (rec.reason === CONTEXT_OVERFLOW_REASON) return true;
+  if (rec.reason === CONTEXT_OVERFLOW_REASON || rec.reason === REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON) return true;
   return [rec.message, rec.sdkError].some(
     (value) =>
       typeof value === 'string' &&
@@ -200,7 +202,7 @@ function isSyntheticUser(message: OverflowSourceMessage): boolean {
 }
 
 function hasTurnSideEffects(messagesAfterUser: OverflowSourceMessage[]): boolean {
-  return messagesAfterUser.some((message) => message.role !== 'error');
+  return messagesAfterUser.some((message) => message.role !== 'error' && !isEmptyModelChangeMarker(message));
 }
 
 export type OverflowReplayWireMessage =

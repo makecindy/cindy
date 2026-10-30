@@ -143,7 +143,7 @@ import { cindyMakeManager } from '../../cindy-make/manager.js';
 import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
-import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
+import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { botSessionInputBlockReason, isShadowedCompanionSession } from '../../maker-ipc/botSessionInputGuard.js';
 import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 
@@ -1788,7 +1788,7 @@ export function registerSessionIpc(
         });
       } catch (error) {
         throwIpcError(
-          'PRECONDITION_FAILED',
+          error instanceof WritableDirectoryPickerGrantError ? error.code : 'PRECONDITION_FAILED',
           error instanceof Error ? error.message : 'Writable directory authorization failed',
         );
       }

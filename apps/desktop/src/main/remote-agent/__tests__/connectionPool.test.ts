@@ -611,7 +611,7 @@ afterEach(async () => {
   scenario.releaseHold?.();
   await Promise.allSettled(opened.splice(0).map((handle) => handle.close({ reason: 'navigation' })));
   await host.abortAll();
-  host.dispose();
+  await host.dispose();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -633,6 +633,7 @@ describe('remote connection pool with a real host', () => {
     };
     let session: Session | undefined;
     let replacement: Session | undefined;
+    let hostStopped: Promise<void> | undefined;
     const logger = { trace() {}, debug() {}, info() {}, warn: vi.fn(), error() {}, fatal() {}, child() { return logger; } };
     try {
       const handle = await startRemoteAgentSession('codex', {
@@ -652,7 +653,7 @@ describe('remote connection pool with a real host', () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(handle.isTurnRunning?.()).toBe(true);
       offline = true;
-      host.dispose();
+      hostStopped = host.dispose();
       await session.abort().catch(() => undefined);
       await vi.advanceTimersByTimeAsync(15_000);
       await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
@@ -669,6 +670,9 @@ describe('remote connection pool with a real host', () => {
       await vi.waitFor(() => expect(fs.readdirSync(path.join(workspaces, controllerDirectory))).toEqual([]));
       // Same production lazy-rebuild boundary: a closed Session is replaced,
       // carrying its native resume ID rather than a fresh conversation.
+      // A restarted provider cannot overlap the old process's filesystem work.
+      // Advancing fake time does not drain the real recursive deletion.
+      await hostStopped;
       host = createHost();
       offline = false;
       const resumed = await startRemoteAgentSession('codex', {
@@ -688,6 +692,7 @@ describe('remote connection pool with a real host', () => {
       scenario.releaseHold?.();
       await session?.close().catch(() => undefined);
       await replacement?.close().catch(() => undefined);
+      await hostStopped;
       vi.useRealTimers();
     }
   });

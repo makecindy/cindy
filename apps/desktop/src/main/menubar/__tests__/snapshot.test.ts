@@ -253,3 +253,13 @@ describe('menubar strings', () => {
     expect(strings.updatedMinutes_one).not.toMatch(/Updated/);
   });
 });
+
+// Unit: new monthly Kimi limits must remain monthly in the actual native-panel VM.
+it('projects Kimi monthly windows as remaining percentages with their real period label', () => {
+  const view = buildMenubarView(input([codex('kimi', 0, {
+    family: 'kimi', brand: 'Kimi Code', account: null, plan: null,
+    windows: [{ kind: 'period', label: 'limit_month_code', usedPercent: 35, resetsAtMs: null, windowMinutes: 0 }],
+  })]));
+  expect(view.sources[0]).toMatchObject({ value: '65', valueUnit: '%', fill: 0.65 });
+  expect(JSON.stringify(view.details.kimi)).toContain('Monthly Coding');
+});
