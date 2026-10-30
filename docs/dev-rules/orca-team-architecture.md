@@ -850,3 +850,14 @@ side_chat 待落地的是：
 4. persistent/ephemeral 默认值：side_chat 默认 persistent 还是 ephemeral。
 5. workflow step 何时自动接手为 worker：失败、超时、高风险文件、用户点名，判据需要收紧。
 6. budget / quality routing 作为 skill+memory 决策，还是主进程 deterministic policy，如何与用户偏好并存。
+
+### 远程派单来源核验（2026-10-30）
+
+普通 `maker:input:enqueue` 继续剥离 wire 的 `origin`。远程 Orca 派单在入队前，由运行设备
+按持久的 active `orcaRemoteLead` 绑定和经过认证的调用设备，向 Lead 的
+`maker:orca:remote-worker:verify-input` 查询这一输入的摘要。Lead 仅在对应 enqueue RPC
+在途期间保留 clientId、完整输入摘要及 Worker/Lead/设备归属；成功、失败、取消跟踪或账号
+切换后均不能复用为新输入授权。通过后只恢复 Orca 消息来源，不改变权限模式或直报 guard。
+普通同账号输入、伪造标签、错误任务/设备、被修改的内容及旧输入重放都不能取得此证明。
+证明不持久化，不记录消息正文或凭据。旧 Lead 没有此只读 channel 时不恢复来源，沿用
+既有自动回报兜底；修复完整直报需要 Lead 与运行设备均升级。手机仅展示既有消息来源。

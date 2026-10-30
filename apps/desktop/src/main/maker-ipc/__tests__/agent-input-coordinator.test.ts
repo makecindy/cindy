@@ -1,4 +1,5 @@
 import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
+import { createRemoteOrcaInputAdmission } from '../orcaRemoteInputProvenance.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -429,6 +430,28 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
+  it.each([true, false])('retains Lead provenance only for attested remote input (verified=%s)', async verified => {
+    const h = createHarness();
+    const sid = 'remote-worker';
+    const admit = createRemoteOrcaInputAdmission({
+      owner: () => 1,
+      caller: () => ({ controllerDeviceId: 'lead-pc' }),
+      readSession: async () => ({ status: 'active', orcaRemoteLead: {
+        leadDeviceId: 'lead-pc', leadDeviceName: 'PC', leadSessionId: 'lead', leadTitle: 'Lead', workerLabel: 'worker',
+      } }),
+      invoke: async () => ({ ok: true, result: verified }),
+    });
+    const input = makeItem('lead-dispatch', 'task', {
+      origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'task' },
+    });
+    const { enqueue } = createInputEnqueueHarness(h.coordinator, { admitRemoteOrcaInput: admit });
+    await enqueue({}, sid, input);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage?.origin?.kind).toBe(verified ? 'orca' : undefined);
+    expect(h.coordinator.getAcceptedInputProvenance(sid)?.originKind).toBe(verified ? 'orca' : undefined);
+  });
+
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,
     resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async () => null,

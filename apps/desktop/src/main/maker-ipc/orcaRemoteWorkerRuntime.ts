@@ -16,6 +16,7 @@ import {
 } from '@cindy/device-link';
 import { formatAgentMessage, formatOrcaCommunicationMessage } from '@cindy/orca-workflow';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
+import { remoteOrcaInputDigest } from './orcaRemoteInputProvenance.js';
 
 import type {
   AgentInputCreateOpts,
@@ -236,6 +237,9 @@ export function buildRemoteWorkerQueuedMessage(params: {
 
 export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps) {
   const workers = new Map<string, WorkerState>();
+  // Exists only while the actual enqueue RPC is in flight. Never persisted or
+  // reconstructed from model text, queue labels, or old pending-report IDs.
+  const inputProofs = new Map<string, { state: WorkerState; awaiting: AwaitingReport; digest: string }>();
   const unreachableDevices = new Set<string>();
   let timer: unknown = null;
   let polling = false;
@@ -629,6 +633,14 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
   }
 
   return {
+    verifyInput(deviceId: string, remoteSessionId: unknown, clientId: unknown, digest: unknown, leadSessionId: unknown, teamId: unknown): boolean {
+      if (typeof remoteSessionId !== 'string' || typeof clientId !== 'string' || typeof digest !== 'string') return false;
+      const proof = inputProofs.get(clientId);
+      return !!proof && current(proof.state) && proof.state.awaiting === proof.awaiting
+        && proof.state.ref.deviceId === deviceId && proof.state.ref.remoteSessionId === remoteSessionId
+        && proof.state.ref.leadSessionId === leadSessionId && proof.state.ref.teamId === teamId
+        && proof.digest === digest;
+    },
     track(ref: RemoteWorkerRef, opts: { workingDir?: string } = {}): void {
       const existing = workers.get(ref.proxySessionId);
       const workingDir = opts.workingDir || existing?.workingDir || null;
@@ -771,7 +783,13 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           return { ok: true, mode: 'queued', agentKind: createOpts.agentKind };
         };
         try {
-          await deps.invoke(ref.deviceId, 'maker:input:enqueue', [ref.remoteSessionId, item]);
+          const proof = { state, awaiting: prepared, digest: remoteOrcaInputDigest(item) };
+          inputProofs.set(params.clientId, proof);
+          try {
+            await deps.invoke(ref.deviceId, 'maker:input:enqueue', [ref.remoteSessionId, item]);
+          } finally {
+            if (inputProofs.get(params.clientId) === proof) inputProofs.delete(params.clientId);
+          }
         } catch (err) {
           // 请求可能已送达、只是回执丢了：按 clientId 查一次投递回执，已在队列或对话里就算送达，
           // 不重发(enqueue 按 clientId 幂等，但这里不做盲重试)。查不到再按失败处理。
