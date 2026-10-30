@@ -904,6 +904,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           .catch(() => null);
         if (boundMeta?.workDir?.trim()) hookCwd = boundMeta.workDir;
       }
+      if (ctx.expectedPreRunWorkingDir !== undefined && hookCwd !== ctx.expectedPreRunWorkingDir) {
+        throw new Error('Schedule execution directory changed; refresh before executing the approved action');
+      }
       const hook = await executePreRunHook({
         command: schedule.preRunHook.command,
         timeoutMs: schedule.preRunHook.timeoutMs,

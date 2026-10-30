@@ -1,3 +1,5 @@
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import { useEffect, useMemo, useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource';
@@ -134,7 +136,8 @@ export function codexWeeklyQuota(
 export { providerWeeklyQuotaSource };
 
 export interface ProviderUsageSnapshots {
-  source: 'codex' | 'claude' | 'xai' | null;
+  source: 'codex' | 'claude' | 'xai' | 'kimi' | null;
+  kimi?: KimiCodingUsageSnapshot | null;
   codex: CodexQuotaView | null;
   claude: ClaudeSubscriptionUsageSnapshot | null;
   xai: XaiSubscriptionUsageSnapshot | null;
@@ -160,6 +163,7 @@ export function useProviderUsageSnapshots(
     undefined,
     provider.id,
   );
+  const kimi = useProviderAccountUsage(source === 'kimi' ? provider : undefined, undefined, scope.deviceId);
   const localClaude = useClaudeSubscriptionUsage(local && source === 'claude', provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
   const remoteCodex = useRemoteCodexAccountUsage(
@@ -186,6 +190,7 @@ export function useProviderUsageSnapshots(
   );
   return {
     source,
+    kimi: kimi.result?.status === 'ready' && !kimi.result.stale && kimi.result.snapshot.kind === 'kimi-coding-quota' ? kimi.result.snapshot : null,
     codex,
     claude: source === 'claude' ? (local ? localClaude : remoteClaude) : null,
     xai: source === 'xai' ? (local ? localXai : remoteXai) : null,
@@ -196,7 +201,7 @@ export function useProviderWeeklyQuota(
   provider: ProviderView,
   scope: ProviderUsageScope,
 ): ProviderWeeklyQuota | null {
-  const { source, codex, claude, xai } = useProviderUsageSnapshots(provider, scope);
+  const { source, codex, claude, xai, kimi } = useProviderUsageSnapshots(provider, scope);
   const [nowMs, setNowMs] = useState(Date.now);
   // Local display clock only; fetching and cached-first updates remain in the
   // existing hooks. Hide expired windows even when the panel is left open.
@@ -205,6 +210,10 @@ export function useProviderWeeklyQuota(
     const timer = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [source]);
+  if (source === 'kimi') {
+    const window = kimi?.windows.find(w => w.id === 'limit_7d');
+    return weeklyQuota(window?.usedPercent, window?.resetsAt ? window.resetsAt / 1000 : null, nowMs);
+  }
   if (source === 'codex') return codexWeeklyQuota(codex, nowMs);
   if (source === 'claude')
     return weeklyQuota(claude?.sevenDay?.utilization, claude?.sevenDay?.resetsAt, nowMs);

@@ -80,7 +80,7 @@ it.each([false,true])('production Auto context checks uninstall after its projec
     let load!:(id:string)=>Promise<unknown>;
     const deps={setAutoReviewContextResolver:(callback:typeof load)=>{load=callback;},createPluginTaskReviewResolver:(callback:typeof load)=>callback,
       getCurrentDbClientSnapshot:()=>epoch,sessions:{},orcaWorkers:{},orcaTeams:{},eq:()=>true,fastModeToStorage,
-      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},
+      createPluginTaskStore:()=>f.deps.store,drainPersistQueue:async()=>{},loadPluginTargetReview:async()=>null,
       pluginTaskServiceForCurrentOwner:()=>f.service,getPluginTaskDefaults:()=>({permissionMode:'auto'}),
       readPluginTaskPlanReceipt,isPluginTaskPermissionAllowed,pluginTaskAuthorizationRevision:()=> 'new-install',isPluginTaskAuthorized:()=>true};
     const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');

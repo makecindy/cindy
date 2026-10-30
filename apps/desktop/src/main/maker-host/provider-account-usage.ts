@@ -1,12 +1,13 @@
 /**
- * provider-account-usage —— API Key 供应商账户余额查询（设置页余额卡的数据源）。
+ * provider-account-usage —— 供应商官方余额与订阅配额查询。
  *
  * 设计要点：
  *   - **端点钉死在 main**：integration 表是硬编码的官方端点（deepseek →
  *     `https://api.deepseek.com/user/balance`）。renderer 只传 providerId，不传 URL；
  *     key 只发给官方端点，永远不会发到用户配置的第三方代理。
  *   - **按官方 origin 认领**：只有当供应商某个 runtime 的 baseUrl origin 与官方端点
- *     origin 一致且鉴权方式是 apiKey 时才启用。走代理 / 自定义域名的连接不查（key 属于
+ *     origin 一致且鉴权方式是 apiKey 时才启用；Kimi Code 也接受宿主保存的 OAuth，
+ *     且仅认领官方 Coding 路径。走代理 / 自定义域名的连接不查（key 属于
  *     代理，不属于官方账户）；这也让官方预设创建的老连接无需迁移就能直接生效。
  *   - **key 读取器注入**：同 provider-diagnostics 的 setDiagnosticsKeyReader 模式，模块
  *     不直接 import safeStorage（maker-host 不触电 Electron），host 注册期接通。
@@ -29,6 +30,7 @@ import {
   type ProviderAccountUsageSnapshot,
   type ZhipuCodingPlanQuotaSnapshot,
 } from '../../shared/providerAccountUsage.js';
+import { isKimiCodingProvider, kimiCodingUsageEndpoint, parseKimiCodingUsage } from '../../shared/kimiCodingUsage.js';
 import { createMakerLogger } from './logger-adapter.js';
 
 const log = createMakerLogger('provider-account-usage');
@@ -41,6 +43,7 @@ const MAX_RETRY_AFTER_MS = 60 * 60_000;
 
 /** 官方账户接口清单。端点是唯一事实源，不从目录 / 用户配置推导。 */
 const INTEGRATIONS = {
+  'kimi-coding-quota-v1': { origins: ['https://api.kimi.com', 'https://api.kimi.ai'], pathPrefixes: ['/coding'], endpointFor: (origin: string) => `${origin}/coding/v1/usages` },
   'deepseek-balance-v1': {
     origins: ['https://api.deepseek.com'],
     endpoint: 'https://api.deepseek.com/user/balance',
@@ -94,6 +97,13 @@ type ProviderReader = (providerId: string) => Provider | undefined;
 type KeyReader = (providerId: string, agent: AgentKind) => string | null;
 type OwnerStampReader = () => { dataOwnerId: string | null; generation: number };
 
+let oauthReader: KeyReader = () => null;
+let prepareOAuth: (providerId: string) => Promise<void> = async () => {};
+export function setAccountUsageOAuthReader(read: KeyReader, prepare: typeof prepareOAuth): void {
+  oauthReader = read;
+  prepareOAuth = prepare;
+}
+
 let providerReader: ProviderReader = () => undefined;
 let keyReader: KeyReader = () => null;
 let ownerStampReader: OwnerStampReader = () => ({ dataOwnerId: null, generation: 0 });
@@ -114,7 +124,7 @@ export function setAccountUsageOwnerStampReader(reader: OwnerStampReader): void 
   ownerStampReader = reader;
 }
 
-/** 测试注入 fetch。 */
+/** host 注入统一出站 fetch；测试注入离线替身。 */
 export function setAccountUsageFetch(impl: typeof fetch): void {
   fetchImpl = impl;
 }
@@ -135,6 +145,16 @@ interface CacheRecord {
 }
 
 const cache = new Map<string, CacheRecord>();
+let kimiRevision = 0;
+let kimiMutationEpoch = 0;
+const kimiIdentities = new Map<string, { identity: string | null; revision: number }>();
+/** Provider edits/login/logout revoke pending quota reads, even when a token is later reused. */
+export function invalidateKimiAccountUsage(): void {
+  kimiMutationEpoch += 1;
+  kimiIdentities.clear();
+  for (const key of cache.keys()) if (key.includes(':kimi-coding-quota-v1:')) cache.delete(key);
+}
+const kimiInFlight = new Map<string, Promise<ProviderAccountUsageResult>>();
 
 class AccountUsageRequestError extends Error {
   constructor(
@@ -195,13 +215,13 @@ export function resolveProviderAccountUsage(
   agent?: AgentKind,
 ): ProviderAccountUsageResolution | null {
   const provider = providerReader(providerId);
-  if (!provider || provider.auth.method !== 'apiKey') return null;
+  if (!provider || (provider.auth.method !== 'apiKey' && !isKimiCodingProvider(provider, agent))) return null;
   // 指定 agent 时只认领该 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 会话查询必须对准当前会话实际路由的账户。
   const agents = agent ? [agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
   for (const agent of agents) {
     const upstream = provider.routing[agent]?.upstream;
-    if (!upstream) continue;
+    if (!upstream || provider.routing[agent]?.disabled) continue;
     let url: URL;
     try {
       url = new URL(upstream);
@@ -215,13 +235,15 @@ export function resolveProviderAccountUsage(
       IntegrationView,
     ][]) {
       if (!integration.origins.includes(origin)) continue;
+      if (integrationId === 'kimi-coding-quota-v1' && !kimiCodingUsageEndpoint(upstream)) continue;
+      if (provider.auth.method === 'oauth' && integrationId !== 'kimi-coding-quota-v1') continue;
       if (
         integration.pathPrefixes
         && !integration.pathPrefixes.some((p) => url.pathname === p || url.pathname.startsWith(p))
       ) {
         continue;
       }
-      const key = keyReader(providerId, agent)?.trim();
+      const key = (provider.auth.method === 'oauth' ? oauthReader : keyReader)(providerId, agent)?.trim();
       if (!key) continue;
       const endpoint = integration.endpointFor
         ? integration.endpointFor(origin)
@@ -235,6 +257,7 @@ export function resolveProviderAccountUsage(
 /** key 归属该 provider 的哪个 runtime 都不关键；额度对全账号生效，取任一可用 key。 */
 export function providerAccountUsageSupported(providerId: string): boolean {
   const provider = providerReader(providerId);
+  if (isKimiCodingProvider(provider)) return true;
   if (!provider || provider.auth.method !== 'apiKey') return false;
   return PROVIDER_ACCOUNT_USAGE_AGENTS.some((agent) => {
     const upstream = provider.routing[agent]?.upstream;
@@ -254,6 +277,7 @@ function matchesAnyIntegration(upstream: string): boolean {
   return Object.values(INTEGRATIONS).some((integration) => {
     const view = integration as IntegrationView;
     if (!view.origins.includes(url.origin)) return false;
+    if (view.origins.includes('https://api.kimi.com')) return kimiCodingUsageEndpoint(upstream) !== null;
     if (view.pathPrefixes) {
       return view.pathPrefixes.some((p) => url.pathname === p || url.pathname.startsWith(p));
     }
@@ -340,8 +364,9 @@ export function parseZhipuCodingPlanQuota(
 function parseRetryAfterMs(header: string | null, now: number): number | undefined {
   if (!header) return undefined;
   const seconds = Number(header);
-  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
-  return now + Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+  const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - now;
+  if (!Number.isFinite(delay) || delay <= 0) return undefined;
+  return now + Math.min(delay, MAX_RETRY_AFTER_MS);
 }
 
 async function fetchDeepSeekBalance(
@@ -371,11 +396,25 @@ async function fetchAccountJson<T>(
       headers['Content-Type'] = 'application/json';
       headers['Accept-Language'] = 'en-US,en';
     }
-    const response = await fetchImpl(resolution.endpoint, { headers, signal: controller.signal });
+    const response = await fetchImpl(resolution.endpoint, { headers, signal: controller.signal, redirect: 'error' });
     const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'), accountUsageNow());
     const mapped = mapHttpStatusToError(response.status);
-    if (mapped) throw new AccountUsageRequestError(mapped, retryAfterMs);
-    const text = await response.text();
+    if (mapped) throw new AccountUsageRequestError(mapped, mapped === 'rate-limited' ? retryAfterMs ?? accountUsageNow() + 60_000 : retryAfterMs);
+    if (!response.ok) throw new AccountUsageRequestError('invalid-response');
+    const reader = response.body?.getReader();
+    if (!reader) throw new AccountUsageRequestError('invalid-response');
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.byteLength;
+        if (size > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new AccountUsageRequestError('invalid-response'); }
+        chunks.push(chunk.value);
+      }
+    } finally { reader.releaseLock(); }
+    const text = Buffer.concat(chunks).toString('utf8');
     if (text.length > MAX_RESPONSE_BYTES) {
       throw new AccountUsageRequestError('invalid-response');
     }
@@ -406,7 +445,29 @@ export async function readProviderAccountUsage(
   request: ProviderAccountUsageRequest,
 ): Promise<ProviderAccountUsageResult> {
   const ownerStamp = ownerStampReader();
+  const provider = providerReader(request.providerId);
+  const kimi = isKimiCodingProvider(provider, request.agent);
+  const scope = `${ownerStamp.dataOwnerId}:${ownerStamp.generation}:${request.providerId}:${request.agent ?? ''}`;
+  const epoch = kimiMutationEpoch;
+  const config = JSON.stringify(provider);
+  const ownerCurrent = () => JSON.stringify(ownerStampReader()) === JSON.stringify(ownerStamp)
+    && JSON.stringify(providerReader(request.providerId)) === config;
+  if (kimi && provider?.auth.method === 'oauth') {
+    try { await prepareOAuth(request.providerId); }
+    catch {
+      kimiIdentities.delete(scope);
+      return { status: 'unavailable', error: 'auth' };
+    }
+    if (!ownerCurrent() || epoch !== kimiMutationEpoch) return { status: 'unavailable', error: 'updating' };
+  }
   const resolution = resolveProviderAccountUsage(request.providerId, request.agent);
+  const identity = resolution ? createHash('sha256').update(JSON.stringify([config, resolution])).digest('hex') : null;
+  if (kimi && kimiIdentities.get(scope)?.identity !== identity) {
+    kimiIdentities.set(scope, { identity, revision: ++kimiRevision });
+  }
+  const generation = kimiIdentities.get(scope);
+  const current = () => !kimi || (ownerCurrent() && kimiIdentities.get(scope) === generation
+    && JSON.stringify(resolveProviderAccountUsage(request.providerId, request.agent)) === JSON.stringify(resolution));
   if (!resolution) {
     // 没认领到官方端点，或 key 读不到。区分「本来就没有接口」与「有接口但 key 缺失」。
     if (providerAccountUsageSupported(request.providerId)) {
@@ -414,7 +475,18 @@ export async function readProviderAccountUsage(
     }
     return { status: 'unsupported' };
   }
-  const result = await readResolvedAccountUsage(request, resolution, ownerStamp);
+  const run = () => readResolvedAccountUsage(request, resolution, ownerStamp, current, kimi ? String(generation?.revision) : '');
+  const flightKey = `${scope}:${identity}:${generation?.revision}`;
+  let pending = kimi ? kimiInFlight.get(flightKey) : undefined;
+  if (!pending) {
+    pending = run();
+    if (kimi) {
+      kimiInFlight.set(flightKey, pending);
+      void pending.finally(() => { if (kimiInFlight.get(flightKey) === pending) kimiInFlight.delete(flightKey); });
+    }
+  }
+  const result = await pending;
+  if (!current()) return { status: 'unavailable', error: 'updating' };
   return { ...result, dashboardUrl: getProviderAccountUsageDashboardUrl(resolution.endpoint) };
 }
 
@@ -422,12 +494,18 @@ async function readResolvedAccountUsage(
   request: ProviderAccountUsageRequest,
   resolution: ProviderAccountUsageResolution,
   ownerStamp: ReturnType<OwnerStampReader>,
+  current: () => boolean,
+  revision: string,
 ): Promise<ProviderAccountUsageResult> {
   // 缓存键含凭证指纹：同一供应商下换 key（不同账户）后旧账户快照绝不复用。
   const keyFingerprint = createHash('sha256').update(resolution.key).digest('hex').slice(0, 12);
-  const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}`;
+  const cacheKey = `${ownerStamp.dataOwnerId ?? 'local'}:${ownerStamp.generation}:${request.providerId}:${resolution.integrationId}:${resolution.endpoint}:${resolution.agent}:${keyFingerprint}:${revision}`;
   const now = accountUsageNow();
   const record = cache.get(cacheKey);
+  const kimi = resolution.integrationId === 'kimi-coding-quota-v1';
+  if (kimi && record?.lastError && now - record.lastAttemptAt < MIN_MANUAL_REFRESH_INTERVAL_MS) {
+    return record.snapshot ? { status: 'ready', snapshot: record.snapshot, stale: true, error: record.lastError, agent: resolution.agent } : { status: 'unavailable', error: record.lastError };
+  }
   const manualRefreshBlocked =
     request.forceRefresh === true
     && record !== undefined
@@ -459,18 +537,27 @@ async function readResolvedAccountUsage(
   }
   try {
     const snapshot =
-      resolution.integrationId === 'zhipu-coding-plan-quota-v1'
+      resolution.integrationId === 'kimi-coding-quota-v1'
+        ? await fetchAccountJson(resolution, `Bearer ${resolution.key}`, parseKimiCodingUsage)
+        : resolution.integrationId === 'zhipu-coding-plan-quota-v1'
         ? await fetchZhipuCodingPlanQuota(resolution)
         : await fetchDeepSeekBalance(resolution);
+    if (!current()) return { status: 'unavailable', error: 'updating' };
     cache.set(cacheKey, {
       snapshot,
-      expiresAt: accountUsageNow() + CACHE_TTL_MS,
+      expiresAt: Math.min(accountUsageNow() + CACHE_TTL_MS, ...(snapshot.kind === 'kimi-coding-quota'
+        ? snapshot.windows.flatMap(window => window.resetsAt !== null && window.resetsAt > accountUsageNow() ? [window.resetsAt] : []) : [])),
       lastAttemptAt: accountUsageNow(),
       retryAt: 0,
     });
     return { status: 'ready', snapshot, stale: false, agent: resolution.agent };
   } catch (err) {
+    if (!current()) return { status: 'unavailable', error: 'updating' };
     const code = err instanceof AccountUsageRequestError ? err.code : 'unknown';
+    if (kimi && code === 'auth') {
+      cache.set(cacheKey, { expiresAt: 0, lastAttemptAt: now, lastError: code, retryAt: 0 });
+      return { status: 'unavailable', error: code };
+    }
     log.warn(
       'provider account usage fetch failed',
       { providerId: request.providerId, integrationId: resolution.integrationId, code },
@@ -526,9 +613,24 @@ async function readResolvedAccountUsage(
 /** 测试辅助：清空缓存与注入重置。 */
 export function resetProviderAccountUsageForTest(): void {
   cache.clear();
+  kimiIdentities.clear();
+  kimiInFlight.clear();
+  oauthReader = () => null;
+  prepareOAuth = async () => {};
   providerReader = () => undefined;
   keyReader = () => null;
   ownerStampReader = () => ({ dataOwnerId: null, generation: 0 });
   fetchImpl = globalThis.fetch;
   accountUsageNow = Date.now;
+}
+
+/** Only the fixed Kimi integration is exposed to linked same-account computers. */
+export async function readKimiCodingAccountUsage(request: ProviderAccountUsageRequest): Promise<ProviderAccountUsageResult> {
+  const provider = providerReader(request.providerId);
+  const agents = request.agent ? [request.agent] : PROVIDER_ACCOUNT_USAGE_AGENTS;
+  const agent = agents.find(candidate => isKimiCodingProvider(provider, candidate));
+  if (!agent) return { status: 'unsupported' };
+  // A mixed provider can also expose DeepSeek/Zhipu routes. Pin the generic reader
+  // to the Kimi route so it cannot select another integration or its credentials.
+  return readProviderAccountUsage({ ...request, agent });
 }

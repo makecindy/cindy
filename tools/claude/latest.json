@@ -6,25 +6,25 @@
     "url": "https://github.com/anthropics/claude-code/issues"
   },
   "dist": {
-    "shasum": "c07c326b6fdff6f1c20c8a1b863a9af7fa395ba5",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.296.tgz",
+    "shasum": "de62c221b1c50d0a946a0005123b37bf047ba3d4",
+    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.312.tgz",
     "fileCount": 7,
-    "integrity": "sha512-OX/k/rpcthMqnFKOWcpNcbiLsMKtAjLOpQNJHlYiDCFUznWCIwdRTyl/p9SdHVrsrzZuPMCNqZjnpakIni6upw==",
+    "integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==",
     "signatures": [
       {
-        "sig": "MEUCICBMFMtjsKwFeHO35e9F6Yw0ljma8BfVsT2z2wzZOhyYAiEAonivQmtjyJkoujYwqpqM+yKpwKf9/GnrR589e5JZ0rE=",
+        "sig": "MEUCIFqtXNWvGV9EW3mdAR6gJ24FgxwrruR8WhMsWF52oxsvAiEAm3C9G7GUIw9+4mUZIL2Ibbk5im6KTP6lHuNXnUKyn1o=",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       },
       {
-        "sig": "MEYCIQC1bjgP3bP5sGzqMDHJof/ky8z+26LJoiCUO7EVTOeMfgIhAO6X1avT3jqQT/VOMrf/vArgNPLP7iQ/Gu6I6m+Yk1QT",
+        "sig": "MEQCIFzWxMNObg/Tpxe0Kqb0LhaVmAVGXmqlMYa4eL233Ms2AiA6IUvBeTpriqJDUscYqqyFAS4N5oL//SZTGIAvKQMJ6A==",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       }
     ],
-    "unpackedSize": 188981
+    "unpackedSize": 190085
   },
   "name": "@anthropic-ai/claude-code",
   "type": "module",
-  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.296.tgz",
+  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.312.tgz",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"
@@ -46,8 +46,8 @@
     }
   },
   "homepage": "https://github.com/anthropics/claude-code",
-  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.296.tgz",
-  "_integrity": "sha512-OX/k/rpcthMqnFKOWcpNcbiLsMKtAjLOpQNJHlYiDCFUznWCIwdRTyl/p9SdHVrsrzZuPMCNqZjnpakIni6upw==",
+  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.312.tgz",
+  "_integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==",
   "_npmVersion": "11.19.0",
   "description": "Use Claude, Anthropic's AI assistant, right from your terminal. Claude can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
   "directories": {},
@@ -116,48 +116,47 @@
   "_nodeVersion": "24.21.0",
   "dependencies": {},
   "_hasShrinkwrap": false,
-  "readmeFilename": "README.md",
   "optionalDependencies": {
-    "@anthropic-ai/claude-code-linux-x64": "2.1.296",
-    "@anthropic-ai/claude-code-win32-x64": "2.1.296",
-    "@anthropic-ai/claude-code-darwin-x64": "2.1.296",
-    "@anthropic-ai/claude-code-linux-arm64": "2.1.296",
-    "@anthropic-ai/claude-code-win32-arm64": "2.1.296",
-    "@anthropic-ai/claude-code-darwin-arm64": "2.1.296",
-    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.296",
-    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.296"
+    "@anthropic-ai/claude-code-linux-x64": "2.1.312",
+    "@anthropic-ai/claude-code-win32-x64": "2.1.312",
+    "@anthropic-ai/claude-code-darwin-x64": "2.1.312",
+    "@anthropic-ai/claude-code-linux-arm64": "2.1.312",
+    "@anthropic-ai/claude-code-win32-arm64": "2.1.312",
+    "@anthropic-ai/claude-code-darwin-arm64": "2.1.312",
+    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.312",
+    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.312"
   },
   "_npmOperationalInternal": {
-    "tmp": "tmp/claude-code_2.1.296_1791565090817_0.6134834176800041",
+    "tmp": "tmp/claude-code_2.1.312_1793126170045_0.6020059861887522",
     "host": "s3://npm-registry-packages-npm-production"
   },
-  "_id": "@anthropic-ai/claude-code@2.1.296",
-  "version": "2.1.296",
+  "_id": "@anthropic-ai/claude-code@2.1.312",
+  "version": "2.1.312",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.296/darwin-arm64/claude",
-      "sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
-      "size": 240664432
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/darwin-arm64/claude",
+      "sha256": "6b5ec691195e551b02c41df9f7d723f4ea61eaa03c2df90acefe3736f1aeb620",
+      "size": 275988512
     },
     "darwin-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.296/darwin-x64/claude",
-      "sha256": "a6bf4f30be241053a923f3820ad23c5991d2f5ac2935b3a8dd64da218d9cc603",
-      "size": 249194752
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/darwin-x64/claude",
+      "sha256": "9534770e162cfd6e39301d9ab775affce214df032a68484085bdbab966a7f8cf",
+      "size": 287239296
     },
     "linux-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.296/linux-x64/claude",
-      "sha256": "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de",
-      "size": 257068216
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/linux-x64/claude",
+      "sha256": "4f4178ce41d83e23341ebfbaecdbcf8ea6bf7baea0690025abe49eeec3a5d01d",
+      "size": 293592432
     },
     "linux-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.296/linux-arm64/claude",
-      "sha256": "f1f6e96e0d8342b9dbf41d7e88255397a6a52ce3d8736ad6a4c6b59c9b62fefa",
-      "size": 256434168
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/linux-arm64/claude",
+      "sha256": "dc4af28917455e009d26704b82a438353a06149e825b6cdf782908b2d28661f5",
+      "size": 293462200
     },
     "win32-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.296/win32-x64/claude.exe",
-      "sha256": "76de74f7694a5bdc03378a5f837c9e132827bf004c98c276bc4e9094ff06769a",
-      "size": 260489376
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/win32-x64/claude.exe",
+      "sha256": "6099672ebe5dcb518b67d1d32dde1e3360bc6bee1dae7f8d28a69c49acc7c865",
+      "size": 298690208
     }
   }
 }

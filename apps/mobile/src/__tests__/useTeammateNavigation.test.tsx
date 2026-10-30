@@ -50,24 +50,39 @@ describe('header/home shared navigation', () => {
     routeAfterClose?.();
     expect(h.push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
   });
-  // Unit: menu and section share the account-scoped hook; remounts must retain the override,
-  // while changing it must not overwrite the independent expanded/collapsed choice.
-  it('restores avatar opt-in, keeps the fold independent, and isolates another account', async () => {
+  // Unit: #7929 changed the existing default. An old fold-only record must show avatars
+  // without writing an override; explicit false must survive remounts and account switches.
+  it('defaults avatars on without saving, retains an explicit off choice, and isolates accounts', async () => {
     const originalUser = h.user;
-    await saveHomeNavigationPreferences(homeNavigationOwner(h.user), { showCollapsedTeammateAvatars: true });
+    await saveHomeNavigationPreferences(homeNavigationOwner(h.user), { teammatesCollapsed: true });
+    h.set.mockClear();
     await render();
     expect(result.showCollapsedTeammateAvatars).toBe(true);
-    expect(result.teammatesCollapsed).toBe(false);
+    expect(result.teammatesCollapsed).toBe(true);
+    expect(h.set).not.toHaveBeenCalled();
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ teammatesCollapsed: true });
     await act(async () => result.setShowCollapsedTeammateAvatars(false));
-    expect(result.teammatesCollapsed).toBe(false);
+    expect(result.teammatesCollapsed).toBe(true);
     await act(async () => root!.unmount()); root = undefined;
     await render(); expect(result.showCollapsedTeammateAvatars).toBe(false);
-    await act(async () => result.setShowCollapsedTeammateAvatars(true));
     h.user = { ...h.user, id: 'avatar-other-account' }; await render();
-    expect(result.showCollapsedTeammateAvatars).toBe(false);
-    h.user = originalUser; await render();
     expect(result.showCollapsedTeammateAvatars).toBe(true);
-    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ showCollapsedTeammateAvatars: true });
+    expect(result.teammatesCollapsed).toBe(false);
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({});
+    h.user = originalUser; await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(false);
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ teammatesCollapsed: true, showCollapsedTeammateAvatars: false });
+    await act(async () => result.setShowCollapsedTeammateAvatars(true));
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(result.teammatesCollapsed).toBe(true);
+  });
+  // Unit: a rejected storage read has no user override and must retain the original default.
+  it('keeps avatars on without writing an override when reading preferences fails', async () => {
+    h.get.mockRejectedValueOnce(new Error('storage unavailable'));
+    await render();
+    expect(result.hydrated).toBe(true);
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(h.set).not.toHaveBeenCalled();
   });
   it('restores the remembered teammate and section fold, and returning home keeps them', async () => {
     const owner = homeNavigationOwner(h.user);
@@ -162,15 +177,18 @@ describe('header/home shared navigation', () => {
     await act(async () => { finish(JSON.stringify({ teammatesCollapsed: false, lastTeammate: teammateIdentity(teammate) })); await change; });
     expect(result.teammatesCollapsed).toBe(true); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
   });
-  it('does not let a hung preference read blank home forever, then fills in the late values', async () => {
+  it.each([undefined, false, true])('keeps avatars on during a hung read, then restores the late override %s', async (showCollapsedTeammateAvatars) => {
     vi.useFakeTimers();
     let finish!: (raw: string) => void;
     h.get.mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
     await render(); expect(result.hydrated).toBe(false);
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
     await act(async () => vi.advanceTimersByTimeAsync(2000));
     expect(result.hydrated).toBe(true); expect(result.teammatesCollapsed).toBe(false);
-    await act(async () => finish(JSON.stringify({ teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate) })));
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    await act(async () => finish(JSON.stringify({ teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate), showCollapsedTeammateAvatars })));
     expect(result.teammatesCollapsed).toBe(true); expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
+    expect(result.showCollapsedTeammateAvatars).toBe(showCollapsedTeammateAvatars ?? true);
     expect(h.set).not.toHaveBeenCalled(); expect(h.push).not.toHaveBeenCalled();
   });
   it('fences rapid selections before asynchronous storage so the remembered identity matches the opened route', async () => {

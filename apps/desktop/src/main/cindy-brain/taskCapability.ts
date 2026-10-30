@@ -33,6 +33,10 @@ export function hasPluginTargetApproval(ghost: InstalledGhost | null | undefined
   return hasPluginTaskApproval(ghost) && ghost?.manifest.agent?.targets === true && ghost.targetCapabilityApproved === true;
 }
 
+export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undefined): boolean {
+  return hasPluginTargetApproval(ghost) && ghost?.manifest.agent?.delegation === true && ghost.delegationCapabilityApproved === true;
+}
+
 /** Reuse Host permission UI; no plugin-supplied confirmation or manifest flag is authority. */
 export async function ensurePluginTaskApproval(
   id: string,
@@ -42,16 +46,17 @@ export async function ensurePluginTaskApproval(
     confirm(facts: GhostInstallConsentFacts): Promise<boolean>;
     approve(id: string, revision: string, isCurrent: () => boolean): Promise<boolean>;
   },
-  capability: 'tasks' | 'targets' = 'tasks',
+  capability: 'tasks' | 'targets' | 'delegation' = 'tasks',
 ): Promise<boolean> {
   const ghost = deps.getGhost(id);
   if (!deps.isCurrent()) return false;
-  if ((capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval)(ghost)) return true;
+  if ((capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval)(ghost)) return true;
   if (
     !ghost?.enabled ||
     ghost.manifest.agent?.tasks !== true ||
     ghost.approval?.state !== 'approved' ||
-    (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent.targets !== true))
+    (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent.targets !== true)) ||
+    (capability === 'delegation' && (!hasPluginTargetApproval(ghost) || ghost.manifest.agent.delegation !== true))
   )
     return false;
   const revision = ghost.approval.revision;

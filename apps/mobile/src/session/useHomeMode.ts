@@ -16,7 +16,7 @@ interface Snapshot {
   teammatesCollapsed: boolean;
   showCollapsedTeammateAvatars: boolean;
 }
-const initial: Snapshot = { hydrated: false, lastTeammate: null, teammatesCollapsed: false, showCollapsedTeammateAvatars: false };
+const initial: Snapshot = { hydrated: false, lastTeammate: null, teammatesCollapsed: false, showCollapsedTeammateAvatars: true };
 interface Entry { snapshot: Snapshot; revision: number; loading?: Promise<void> }
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -39,12 +39,12 @@ function hydrate(owner: string, entry: Entry): Promise<void> {
     publish(entry, entry.revision === revision
       ? { hydrated: true, lastTeammate: stored.lastTeammate ?? null,
         teammatesCollapsed: stored.teammatesCollapsed ?? false,
-        showCollapsedTeammateAvatars: stored.showCollapsedTeammateAvatars ?? false }
+        showCollapsedTeammateAvatars: stored.showCollapsedTeammateAvatars ?? true }
       : { hydrated: true });
     if (timedOut) void read.completion.then((result) => {
       // Late values only fill in what the user has not changed since the timeout.
       if (result.ok && entry.revision === revision) publish(entry, {
-        showCollapsedTeammateAvatars: result.value.showCollapsedTeammateAvatars ?? false,
+        showCollapsedTeammateAvatars: result.value.showCollapsedTeammateAvatars ?? true,
         lastTeammate: result.value.lastTeammate ?? null, teammatesCollapsed: result.value.teammatesCollapsed ?? false,
       });
     });

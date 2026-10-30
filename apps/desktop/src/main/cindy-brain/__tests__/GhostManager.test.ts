@@ -566,6 +566,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.targetCapabilityApproved');
   });
 
+  it('preserves delegation consent only on the same approved instance and declared capability', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true, targets: true, delegation: true } };
+    const pkg = await makeCindy('delegation.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true, targetCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected.delegationCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'delegation')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'delegation')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'delegation')).toBe(true);
+    const update = await makeCindy('delegation-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.delegationCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('delegation-removed.cindy', { ...manifest, version: '1.0.2', agent: { tasks: true, targets: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).toHaveProperty('ghost.targetCapabilityApproved', true);
+    expect(result).not.toHaveProperty('ghost.delegationCapabilityApproved');
+  });
+
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
     await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
     await manager.migrateLegacyApprovalsOnce();

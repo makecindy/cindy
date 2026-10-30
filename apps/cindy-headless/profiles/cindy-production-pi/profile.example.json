@@ -3,7 +3,7 @@
   "version": 1,
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
-  "agentBinaryVersion": "1.0.2",
+  "agentBinaryVersion": "1.4.0",
   "supportedModelIds": ["claude-sonnet-4-6"],
   "model": {
     "provider": "cindy",

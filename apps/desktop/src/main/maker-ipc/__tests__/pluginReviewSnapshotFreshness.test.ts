@@ -77,6 +77,7 @@ function fixture() {
   const deps={setAutoReviewContextResolver:(fn:typeof resolve)=>{resolve=fn;},
     createPluginTaskReviewResolver:(fn:typeof load)=>{load=fn;return createPluginTaskReviewResolver(fn);},
     fsp: {realpath: resolvePath},
+    loadPluginTargetReview: async () => null,
     getCurrentDbClientSnapshot:()=>control.accountChanged ? null : epoch,sessions,orcaWorkers,orcaTeams,eq,fastModeToStorage,
     createPluginTaskStore:()=>({get:async()=>db.prepare('SELECT id,target_id AS targetId,plugin_id AS pluginId,operation,payload,revision FROM plugin_task_requests').get()}),
     drainPersistQueue:async()=>mutate('drain'),pluginTaskServiceForCurrentOwner:()=>({get:async()=>{mutate('ownership');if(!control.ownershipValid)throw Error('ownership revoked');}}),

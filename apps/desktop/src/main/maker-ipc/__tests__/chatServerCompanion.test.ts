@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture = vi.hoisted(() => ({ handle: vi.fn(), token: 'isolated-test-token', refresh: vi.fn(async () => true), profiles: [] as unknown[], sockets: [] as import('ws').WebSocket[] }));
+import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
+const fixture = vi.hoisted(() => ({ handle: vi.fn(), token: 'isolated-test-token', refresh: vi.fn(async () => true),
+  profiles: [] as unknown[], savedProfiles: null as unknown[] | null,
+  capabilitiesJson: '{}', sockets: [] as import('ws').WebSocket[] }));
 vi.mock('../../authManager.js', () => ({ getAccessToken: () => fixture.token, refresh: fixture.refresh }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.cindy.app' }));
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: vi.fn(async () => []), download: vi.fn() }) }));
@@ -9,7 +12,13 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/isolated
 vi.mock('node:fs', () => ({ existsSync: () => true, readFileSync: () => '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}' }));
 vi.mock('../botGroupChatService.js', () => ({ readPersistedReplyText: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
-  select: () => ({ from: () => ({ where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }) }) }),
+  select: () => ({ from: () => ({
+    where: () => Object.assign(Promise.resolve(fixture.profiles), { limit: async () => [{ id: 'existing-local-group' }] }),
+    innerJoin: () => ({ where: (condition: import('drizzle-orm').SQL) => ({ limit: async () => [{
+      profile: (fixture.savedProfiles ?? fixture.profiles).find(p => (p as { id: string }).id === new SQLiteSyncDialect().sqlToQuery(condition).params[0]),
+      capabilitiesJson: fixture.capabilitiesJson,
+    }] }) }),
+  }) }),
   insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
 } }) }));
 vi.mock('node:http', async () => {
@@ -88,6 +97,8 @@ describe('Chat Server cloud companions', () => {
     fixture.sockets = [];
     fixture.token = 'isolated-test-token';
     fixture.refresh.mockReset().mockResolvedValue(true);
+    fixture.capabilitiesJson = '{}';
+    fixture.savedProfiles = null;
     me = { actor: { id: selfId }, deviceId: 'desk-1', capabilities: { companionHome: true, directRoomClaim: true } };
     home = null; claimed = false;
     directMembers = [{ id: selfId, state: 'joined' }, { id: botActor, state: 'joined' }];
@@ -420,6 +431,45 @@ describe('Chat Server cloud companions', () => {
     expect(host.homes.homeOf('local-bot')).toBe('laptop');
     expect(calls('/executions/claim')).toHaveLength(before);
     expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '42' }));
+  });
+
+  // #6897: the profile survives a lost/corrupt sync file and an unsuccessful bookkeeping write.
+  // Exercise real registration and the outbound actor payload, not a cached flag alone.
+  it.each(['missing', 'corrupt', 'write-failed'])(
+    'preserves the cloud avatar after restart with %s sync bookkeeping', async failure => {
+    service.dispose();
+    fixture.capabilitiesJson = JSON.stringify({ cloudAvatarFallback: true });
+    host = {
+      ...host,
+      openState: (_endpoint, _human, current) => {
+        const state = createCompanionCloudState({ filePath: 'state.json', current,
+          io: { read: () => failure === 'corrupt' ? 'not json' : null, write: () => {
+            if (failure === 'write-failed') throw new Error('disk full');
+          } } });
+        return state;
+      },
+    } as typeof host;
+    deps = { ...deps, companionCloud: host } as BotGroupChatServiceDeps;
+    service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Old local copy', avatar: '🦊', status: 'active' }];
+    // Reconciliation can replace the initially read roster before publication.
+    fixture.savedProfiles = [{ id: 'local-bot', displayName: 'Mia (renamed)', avatar: '🤖', status: 'active' }];
+    home = 'desk-1';
+    claimed = true;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' && method === 'GET'
+      ? { body: [{ id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', avatar: 'https://cdn.example/old.png', avatarSource: 'cloud', homeDeviceId: 'desk-1' }] }
+      : respond(route, method, body));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST').map(call => call[2])).toEqual([
+      { name: 'Mia (renamed)', avatar: 'https://cdn.example/old.png', avatarSource: 'cloud' },
+    ]);
+    // A deliberate portable avatar with no fallback provenance remains publishable.
+    fixture.capabilitiesJson = '{}';
+    fixture.handle.mockClear();
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST').map(call => call[2])).toContainEqual(
+      { name: 'Mia (renamed)', avatar: '🤖', avatarSource: null },
+    );
   });
 
   it('publishes each companion\'s name on its own, so one broken avatar never blocks the others', async () => {

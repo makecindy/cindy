@@ -269,8 +269,18 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     必须显式交出确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，
     新增路径无法漏掉。
   - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
-    策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录仍标
-    `defaultInstall`、但用户已退订后再自行从市场安装的，扩权更新必须确认。
+    策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录标
+    `defaultInstall` 且该用户没有仍生效的 default-install opt-out。只有用户显式卸载写
+    opt-out；用户之后显式从市场安装或更新（插件页、Agent 安装确认卡，即确认策略 `prompt`）
+    并落位成功，即视为重新订阅，与安装记录在同一次账本写入里清除该用户对此插件的 opt-out，
+    此后扩权更新恢复免确认。落位失败、回滚或用户拒绝确认时 opt-out 保持不变；`automatic`
+    与 `exempt` 路径（后台更新、默认安装、组织接管）不清除，自定义市场不涉及。旧版本遗留的
+    「已安装 + opt-out」（旧版重装不清 opt-out；早期同步扫描、本地／Forge 换源误写的
+    opt-out 在之后重装或断开路由恢复后也落成这一状态）由维护对账修复：账本记录仍为已安装的
+    `market`／`legacy-adopted`、带清单摘要，已装包已批准且原始 manifest 与记录一致时，按
+    捕获的记录 compare-and-write 清除。未安装记录上的 opt-out 无法与真实卸载区分，一律保留；
+    缺清单摘要的旧记录不足以证明包身份，也保留；记录在对账期间被并发卸载改变则不清除。修复
+    逻辑幂等，不新增账本字段或持久标记。仍有 opt-out 的服务端插件扩权更新必须确认。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
   任一来源账本文件存在却损坏时，读写都必须拒绝，不得把其它来源的记录当成完整视图重写并覆盖损坏文件。
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
@@ -288,6 +298,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不进入自动接管；普通 `.cindy` 导入仍是 `manual`，不享受这项保护。自动接管不得复用用户手动
   换源的退订语义，不写 `markRemoved` 或 default-install opt-out。普通本地／Forge 换源只把
   旧来源记录置为 `installed=false`，不得新增或清除 opt-out；只有用户显式卸载才写 opt-out。
+  清除只来自显式市场安装／更新成功、历史断开路由的恢复与上述「已安装 + opt-out」修复；
+  换源落位前失败的回滚只恢复原有 opt-out 状态。
 - 仍匹配稳定来源的已装插件自动更新，不限 public／organization；更新保持现有启用状态，
   不弹成功 toast；插件正有调用、派活或 Cindy 工作时跳过，下一轮重试。权限没变多的更新
   静默完成；新版本权限变多时（按下载后的真实包判定，策略 `automatic`）放弃本轮、不记失败、
@@ -303,7 +315,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   真实包身份、Release 摘要、能力上限、Manifest schema 与当前 Host 是否能解析仍按各自
   安全边界校验，不能把包内容异常降级成“仍要安装”。
 - 自动对账在 owner 稳定后的启动／登录切换、应用回前台、系统唤醒和 30 分钟周期触发。
-  不新增持久化任务队列或“是否自动更新”设置；卸载写下的 opt-out 继续阻止默认安装复活。
+  不新增持久化任务队列或“是否自动更新”设置；卸载写下的 opt-out 继续阻止默认安装复活，
+  直到用户再次显式从市场安装。
 - 当前组织的历史市场安装即使已指向当前 release，也须恢复遗漏的来源证明：有效批准与
   原始 manifest 仍匹配更新路由，且已完成旧迁移但缺包 SHA，或 `legacy-adopted` 记录与
   批准包 SHA 一致时，通过同一市场更新事务重新下载、校验并原位落位。仅补来源字段不能
@@ -1003,3 +1016,20 @@ public 身份归属；共享访客及插件托管/errand 任务与其 Worker 沿
 详见 [客户端实现与验证边界](../plugin-community-contribution.md) 和
 [HTTP 契约](../plugin-community-contribution-contract.md)。此改动涉及打包原语和授权边界，仍须人工 review
 及本规则第 5 节的插件基座白名单确认后方可合并；本地代码检查不替代该门禁。
+
+
+## 插件伙伴委派协议与回执（未发布）
+
+agent.delegation 为可选独立能力，依赖 tasks + targets，只有 Host 确认的
+delegationCapabilityApproved 才授予；历史未知字段、旧 tasks/targets 批准不推断新授权。
+缺省不改变旧权限项、批准、配置或回执摘要；已安装的历史字段保留，不因新校验停用。
+新包严格校验声明，旧 receipt 缺少新可选字段照常读取。无需 schema migration。
+
+targets.capabilities 新增只读协议发现；delegation.version=1 与 execution 就绪状态分开。
+执行端接入现有 Auto 审核后才报告 execution=true；未就绪时显式 delegation 请求在预留/投递前返回
+UNSUPPORTED_CAPABILITY，不降级为普通消息或另建任务。旧 Host 无入口时不发送。
+委派只允许 bot + queue，scope 最多 8000 字符并参与请求摘要，持久回执保存版本、
+执行范围及原目标/批准事实。取消、撤权、换批准版本和恢复排队沿原接口复核。
+Main 从当前接受的输入、原批准和持久回执读取 scope，交给现有 Auto 审核投影；
+不伪造主人原话，不提升伙伴权限，不新增团队，Core 不包含业务插件流程。
+作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。

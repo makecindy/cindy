@@ -36,8 +36,11 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
-// Keep the real attachment components; only replace native reader and filesystem surfaces for jsdom.
+// Keep production message components; adapt native surfaces for jsdom.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('react-native-uitextview', () => ({
+  UITextView: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+}));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
@@ -60,10 +63,10 @@ vi.mock('react-native', () => {
       { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
-    StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
+    StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1, scale: 3 }),
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
       h.appStateListeners.add(listener); return { remove: () => h.appStateListeners.delete(listener) };
     } },
@@ -122,6 +125,7 @@ vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   },
 }));
 vi.mock('@/components/AppText', () => ({
+  MAX_FONT_SIZE_MULTIPLIER: 1.5,
   Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
   TextInput: ({ testID, ...props }: any) => { h.inputs[testID] = props; return el('input', { 'data-testid': testID, value: props.value ?? '', readOnly: true }); },
 }));

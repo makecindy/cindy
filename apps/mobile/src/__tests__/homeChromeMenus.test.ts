@@ -270,12 +270,14 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("group", displayState)).toBeNull();
   });
   // Unit: the appearance submenu is distinct from filtering teammate-created tasks.
-  // Existing menu tests did not cover this independently checked, default-off action.
-  it('places avatar opt-in in a normal Teammates appearance submenu', () => {
+  // Existing menu tests did not cover this independently checked, default-on action and the first click with no stored override.
+  it('keeps avatars checked by default and toggles an absent or explicit override', () => {
     const menu = build().find(action => action.id === 'appearance')!;
     const submenu = menu.subactions!.find(action => action.id === 'teammates')!;
-    expect(submenu.subactions).toEqual([{ id: 'teammates.showCollapsedAvatars', title: 'devices.list.menu.showCollapsedTeammateAvatars', state: 'off' }]);
-    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', displayState)).toEqual({ showCollapsedTeammateAvatars: true });
+    expect(submenu.subactions).toEqual([{ id: 'teammates.showCollapsedAvatars', title: 'devices.list.menu.showCollapsedTeammateAvatars', state: 'on' }]);
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', displayState)).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(find(build({ showCollapsedTeammateAvatars: false }), 'teammates.showCollapsedAvatars')?.state).toBe('off');
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: false })).toEqual({ showCollapsedTeammateAvatars: true });
     expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: true })).toEqual({ showCollapsedTeammateAvatars: false });
   });
 

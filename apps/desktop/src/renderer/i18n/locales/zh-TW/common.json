@@ -1,5 +1,25 @@
 {
   "providerAccountUsage": {
+    "kimi": {
+      "refresh": "重新整理配額",
+      "usage": "查看 Kimi Code 用量",
+      "error": {
+        "no-credentials": "沒有可用的 Kimi Code 憑證，請先連接此供應商。",
+        "auth": "Kimi Code 拒絕了憑證，請檢查連接後重試。",
+        "rate-limited": "Kimi Code 限制了配額查詢頻率，請稍後重試。",
+        "network": "Cindy 無法連接 Kimi Code，請檢查網路後重試。",
+        "server": "Kimi Code 暫時無法回傳配額，請稍後重試。",
+        "invalid-response": "Kimi Code 回傳了無法辨識的配額資料，請稍後重試。",
+        "throttled": "剛剛重新整理過配額，請稍後重試。",
+        "unknown": "Cindy 無法載入 Kimi Code 配額，請稍後重試。",
+        "updating": "連接已變更，請重新整理以取得配額。"
+      },
+      "limit_5h": "5 小時",
+      "limit_7d": "每週",
+      "limit_month_total": "每月總配額",
+      "limit_month_code": "每月程式開發配額",
+      "stale": "顯示上次取得的配額，最新查詢未完成"
+    },
     "openDashboard": "開啟 DeepSeek 用量頁",
     "deepSeek": {
       "balanceLine": "餘額 {{total}}（儲值 {{toppedUp}} / 贈送 {{granted}}）",
@@ -1392,6 +1412,8 @@
       "minutes": "{{m}}分"
     },
     "window": {
+      "kimiMonthTotal": "每月總配額",
+      "kimiMonthCode": "每月程式開發配額",
       "session": "{{hours}} 小時",
       "week": "本週",
       "scoped": "{{model}} 本週"
@@ -7370,6 +7392,8 @@
         "agentTasksRequest": "確認任務權限",
         "agentTasks": "可建立和管理本插件的 Cindy 任務",
         "agentTasksDetail": "可傳送訊息、讀取結果和停止本插件的執行，任務對你可見。沿用插件的 AI 配置，可能產生模型費用；不授予其他任務的存取權。",
+        "agentDelegation": "可委派任務給夥伴",
+        "agentDelegationDetail": "夥伴按委派範圍執行並接受自動審核；不冒用主人身分，不修改夥伴權限。",
         "agentTargets": "可向專案、現有任務和夥伴投遞訊息",
         "agentTargetsDetail": "可查看本機專案目錄、任務和夥伴的名稱與識別碼，在專案中新建任務或向現有任務、夥伴傳送文字和圖片。可能觸發 AI 執行並產生模型費用；不授予其他任務的歷史讀取、設定修改或停止權限。",
         "agentHiddenTasks": "可建立不顯示在任務列表裡的後臺任務",
@@ -11636,6 +11660,7 @@
         "cancelled": "已取消"
       },
       "timeout": "等待超時",
+      "cancelled": "使用者取消了插件設定，本次呼叫未執行。",
       "oauthCancelled": "授權已取消",
       "oauthFailed": "授權失敗：{{detail}}",
       "pluginUninstalledDuringOauth": "目標插件已解除安裝或不可用",

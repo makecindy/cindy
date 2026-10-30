@@ -8,7 +8,16 @@ import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupSt
 import { ControlledBanner } from '../../../src/renderer/features/remote-device/ControlledBanner';
 import { applyRemoteSessionActivity } from '../../../src/renderer/features/device-link/remoteSessionActivityStore';
 
+// The fixture's custom origin lacks secure-context randomUUID. Only correlation
+// IDs in this isolated renderer use these tokens; production crypto is unchanged.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
+
 interface GroupData {
+  /** Controlled receipts for the real renderer send/settle layout regression. */
+  sendStatus?: boolean;
   workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown';
   workRemote?: boolean;
   workParallel?: boolean;
@@ -316,7 +325,18 @@ void mountPage({
         listBotGroups: async () => ({ ok: true, groups: (ctx.data as unknown as GroupData).settings ? [group] : [] }),
         getBotGroup: async () => ({ ok: true, group }),
         onBotGroupChanged: subscription('botGroupChanged'),
-        sendBotGroupMessage: forbid('maker.sendBotGroupMessage'),
+        sendBotGroupMessage: data.sendStatus ? (input: { text: string; clientId: string }) => new Promise((resolve) => {
+          window.addEventListener('fixture-send-receipt', (event) => {
+            if ((event as CustomEvent).detail === 'failed') {
+              resolve({ ok: false, errorCode: 'SEND_FAILED', message: 'Fixture send failed' });
+              return;
+            }
+            const id = `sent-${input.clientId}`;
+            group.messages = [...group.messages, message({ id, sequence: group.messages.length + 1,
+              content: input.text, createdAt: Date.now(), isSelf: true }) as (typeof group.messages)[number]];
+            resolve({ ok: true, messageId: id });
+          }, { once: true });
+        }) : forbid('maker.sendBotGroupMessage'),
         stopBotGroupRound: forbid('maker.stopBotGroupRound'),
         chatServer: {
           reactors: async () => ({ ok: true, reactors: [{ actorId: 'me', isSelf: true, name: 'You', formerMember: false }] }),

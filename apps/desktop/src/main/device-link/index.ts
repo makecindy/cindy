@@ -774,6 +774,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   responsivenessTracker = createResponsivenessTracker({
+    confirmRelayForTimeout: () => client?.confirmRelayForPeerTimeout() ?? false,
     // 探测直接走 client.invoke(guardInvoke 已在 tracker 内持有探测席位,不能再套
     // remoteInvoke 的外层门禁,否则自旋)。曾协商可靠传输的 peer 必须先恢复 link，
     // 否则 sessions:list 也只会滞留发送队列，反复得到 BACKPRESSURE。

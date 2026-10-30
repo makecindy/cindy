@@ -2454,7 +2454,8 @@ export function registerProviderHandlers(
   );
 
   // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。
-  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_ACCOUNT_USAGE, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const parsed = parseAccountUsageInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid account-usage input');
     return deps.accountUsage(parsed);

@@ -578,7 +578,7 @@ export function RemoteDesktopSession({
     keyboard,
   );
   const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
-  const foldSkinAvailable = Platform.OS === "ios" && Boolean(foldLayout);
+  const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
     foldSkin !== "modern" &&

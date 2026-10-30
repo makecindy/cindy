@@ -2,6 +2,7 @@
  * 启动「继续上次中断的任务」弹窗的数据源。
  *
  * 中断判定完全复用 listInterruptedPendingRows(startedAt > endedAt 且早于本进程启动),
+ * 并额外纳入可继续的伙伴任务(主对话、委派、例行与渠道专线;来源是 bot,不在桌面来源白名单里),
  * 这里只为每个中断会话补两项展示素材:
  *  - interruptedAt:中断那一轮最后一条落库消息的时间(崩溃时刻无从得知,最后一次
  *    落库是最接近的可观察值);该轮没有任何落库消息时回退到 turn 开始时间;
@@ -15,7 +16,7 @@
 import { and, desc, eq, gte, isNull, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
-import { listInterruptedPendingRows } from './sessionActiveTurn';
+import { listInterruptedPendingRows, type InterruptedBotTaskLink } from './sessionActiveTurn';
 import { messages } from './schema';
 
 export interface InterruptedTurnToolUse {
@@ -44,10 +45,16 @@ function parseToolUse(raw: string | null): InterruptedTurnToolUse | null {
   }
 }
 
-export async function listInterruptedResumeCandidateRows(): Promise<
-  InterruptedResumeCandidateRow[]
-> {
-  const pending = await listInterruptedPendingRows();
+/**
+ * `canResumeBotTask` 必须复用「继续」发送路径同一套守卫(伙伴启用、未降级到别的电脑等),
+ * 候选不再自己复刻判据 —— 弹窗默认勾选候选,列出点了必失败的任务只会留下一条失败提示。
+ */
+export async function listInterruptedResumeCandidateRows(
+  canResumeBotTask: (task: InterruptedBotTaskLink) => boolean,
+): Promise<InterruptedResumeCandidateRow[]> {
+  const pending = (await listInterruptedPendingRows({ includeBotTasks: true })).filter(
+    (row) => !row.botTask || canResumeBotTask(row.botTask),
+  );
   if (pending.length === 0) return [];
   const db = getDbClient().drizzle;
   return Promise.all(

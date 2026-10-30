@@ -334,7 +334,7 @@ export function buildHomeDisplayPullDownActions(input: {
         HOME_TASK_INFO_FIELDS.map((field) =>
           checkable(`taskInfo.${field}`, t(`${MENU}.taskInfo.${field}`), state.taskInfoFields.includes(field), true))),
       submenu("teammates", t("devices.companions.title"), "", "person.2", [
-        checkable("teammates.showCollapsedAvatars", t(`${MENU}.showCollapsedTeammateAvatars`), state.showCollapsedTeammateAvatars === true),
+        checkable("teammates.showCollapsedAvatars", t(`${MENU}.showCollapsedTeammateAvatars`), state.showCollapsedTeammateAvatars !== false),
       ]),
     ]),
   ];
@@ -345,7 +345,7 @@ export function homeDisplayActionPatch(
   id: string,
   state: HomeDisplayMenuState,
 ): HomeDisplayPatch | null {
-  if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !state.showCollapsedTeammateAvatars };
+  if (id === "teammates.showCollapsedAvatars") return { showCollapsedTeammateAvatars: !(state.showCollapsedTeammateAvatars ?? true) };
   if (id === "group.project") return { groupByProject: !state.groupByProject };
   if (id === "group.dialogue") return { groupDialogue: !state.groupDialogue };
   if (id === "filter.reset") return { lastActivityFilter: "all", projectFilter: "all", teammateFilter: "all", vendorFilter: "all" };

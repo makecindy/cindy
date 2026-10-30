@@ -1120,6 +1120,17 @@ export class DeviceLinkClient {
     }, delay);
   }
 
+  /** A peer timeout is inconclusive when even the shared relay has gone quiet.
+   * Use the existing bounded, single-flight network probe before blaming a peer.
+   * Any valid relay traffic settles that probe; one silent peer cannot reset a
+   * shared connection that is still serving other peers. */
+  confirmRelayForPeerTimeout(): boolean {
+    if (this.status !== 'online') return false;
+    if (this.monotonicNow() - this.lastInboundAt <= this.timing.pingIntervalMs) return true;
+    this.notifyNetworkChanged({ urgent: true });
+    return false;
+  }
+
   private clearNetworkProbe(): void {
     if (this.networkChangeTimer) clearTimeout(this.networkChangeTimer);
     if (this.networkProbeTimer) clearTimeout(this.networkProbeTimer);
@@ -1132,12 +1143,9 @@ export class DeviceLinkClient {
    * 有界等待连接就绪。online 立即 resolve;否则订阅状态变化,在 timeoutMs 内
    * 等到 online 就 resolve,超时 / stopped 则 reject(NOT_CONNECTED)。
    *
-   * 关键:若当前正 park 在重连退避计时器上,先 connectNow() un-park 立即重连——
-   * 让"掉线/重连窗口里发起的请求"主动促成重连并在上线后放行,而不是被退避 gap
-   * (最坏 30s)拖成干等十几秒。退避被打断后又会立刻重连成功,所以等待通常 <1s。
-   *
-   * additive + opt-in:此方法供"用户正在等"的场景(移动端发请求)显式调用;
-   * 桌面端不调用它,默认重连/退避曲线完全不变。已 stopped 时不自动拉起连接
+   * Desktop/Mobile 请求等待时可打断普通退避，促成一次立即重连；
+   * 已在途的握手和 relay 1013 拥塞冷却仍保留。
+   * 已 stopped 时不自动拉起连接
    * (start/stop 仍由宿主生命周期掌管),直接快速失败让上层感知。
    */
   waitUntilOnline(timeoutMs?: number): Promise<void> {
@@ -1145,8 +1153,7 @@ export class DeviceLinkClient {
     if (this.stopped) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
     }
-    // 仅在 park 在退避计时器上时 un-park(connectNow);若已有 connect 在途
-    // (reconnectTimer 为 null),不重复打断,避免并发等待者互相 thrash。
+    // Only un-park a pending retry; concurrent waiters keep the in-flight handshake.
     if (this.reconnectTimer) this.connectNow('wait-until-online');
 
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
@@ -1679,6 +1686,10 @@ export class DeviceLinkClient {
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
+      if (resolveInvokePriority(payload.channel, options?.background) === 'background'
+        && (this.networkProbeTimer || this.networkChangeTimer)) {
+        throw new DeviceLinkError('BACKPRESSURE', 'background refresh paused while checking relay connectivity');
+      }
       // Prepare at dispatch, not when joining the admission queue. Earlier
       // reads may have filled the existing cache while this one was waiting.
       const reuse = this.messageReuse.prepare(dst, payload);
@@ -1700,10 +1711,16 @@ export class DeviceLinkClient {
           }
         : result;
     };
-    return bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
+    const queuedAt = this.monotonicNow();
+    return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, resolveInvokePriority(payload.channel, options?.background),
       Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send,
-    );
+    )).catch((error: unknown) => {
+      if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight) {
+        this.log.debug(`device-link invoke admission failed dst=${dst.slice(0, 8)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
+      }
+      throw error;
+    });
   }
 
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */

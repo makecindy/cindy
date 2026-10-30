@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
   openTeammate: vi.fn(async (_row: unknown) => {}),
-  cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: false, unread: false,
+  cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: true, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
   stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getPendingInteractions: () => [], getSessionLiveActivity: () => null } }));
@@ -76,7 +76,7 @@ const roster = { items: [item], createTargets: [], groupTargets: [], loading: fa
   isOnline: () => true, connectionState: undefined, refresh: vi.fn(async () => {}) };
 const groups = { items: [] as any[], supported: true, refreshing: false, error: null, isOnline: () => true, refresh: vi.fn(async () => {}) };
 let root: Root; let node: HTMLDivElement;
-beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.showAvatars = false; h.unread = false; groups.items = [];
+beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.showAvatars = true; h.unread = false; groups.items = [];
   h.cacheRevision = 0; h.unreadIds.clear(); h.stripRenders = []; h.avatarRenders = []; h.identityReads = 0;
   h.cloudError = null; getHomeViewSession().write('teammatesShowAll', false);
 });
@@ -235,10 +235,10 @@ it('retries a cloud roster failure without restarting healthy computer or group 
   expect(roster.refresh).not.toHaveBeenCalled(); expect(groups.refresh).not.toHaveBeenCalled();
 });
 
-// Unit: the approved space-saving default must hide the entire body, including an empty create row.
-// Existing strip coverage requires the explicit opt-in and never covered header-only/search transitions.
-it('keeps only the header by default, restores the strip on opt-in, and never changes the fold when the setting changes', async () => {
-  h.collapsed = true;
+// Unit: explicitly hiding avatars must remove the entire body, including an empty create row.
+// Keep header-only/search transitions and the independent fold covered through the real section.
+it('keeps only the header when avatars are disabled, restores the strip when enabled, and never changes the fold when the setting changes', async () => {
+  h.collapsed = true; h.showAvatars = false;
   await render(0);
   expect(byId('home.teammatesHeader')).not.toBeNull();
   expect(byId('home.teammatesStrip')).toBeNull();
@@ -259,8 +259,8 @@ it('keeps only the header by default, restores the strip on opt-in, and never ch
   expect(byId('row.bot')).toBeNull();
   expect(byId('home.teammatesStrip')).toBeNull();
 });
-it('keeps the compact create action without an empty body when collapsed', async () => {
-  h.collapsed = true;
+it('keeps the compact create action without an empty body when collapsed with avatars disabled', async () => {
+  h.collapsed = true; h.showAvatars = false;
   await render(0, { context: { navigation: null, route: null, shared: {
     roster: { ...roster, items: [], createTargets: [item.host] }, groups,
   } } } as any);
@@ -271,7 +271,7 @@ it('keeps the compact create action without an empty body when collapsed', async
   expect(byId('home.teammatesAdd')).not.toBeNull();
 });
 it('carries unread and pending attention on the hidden header without opening it or changing read receipts', async () => {
-  h.collapsed = true;
+  h.collapsed = true; h.showAvatars = false;
   const group = { ...item, key: 'host:group', chatUnread: { count: 1, threadCount: 1 },
     item: { ...item.item, ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'group' }, display: { title: 'Team' } } };
   groups.items = [group];

@@ -259,7 +259,7 @@ export interface HomeNavigationPreferences {
   lastTeammate?: LastTeammateIdentity;
   /** The task home's teammate section: expanded rows or collapsed header. */
   teammatesCollapsed?: boolean;
-  /** Explicit account override; absent defaults to hiding the collapsed avatar strip. */
+  /** Explicit account override; absent defaults to showing the collapsed avatar strip. */
   showCollapsedTeammateAvatars?: boolean;
 }
 const NAVIGATION_PREFIX = 'cindy.mobile.home.navigation.v1.';

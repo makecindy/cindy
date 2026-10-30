@@ -5567,6 +5567,45 @@ describe("remote desktop controls", () => {
     ).toBeGreaterThanOrEqual(82);
     expect(render(geometry)).toMatchObject({ top: 26, left: 16 });
   });
+  // Android fold support: exercise the real screen (not a layout copy). Previous
+  // coverage used iOS only and missed its platform-gated skin selector. Folding,
+  // keyboard resize and unfolding must not replace the viewer/control lease.
+  it("offers the same tabletop keyboard on Android and retains the viewer across posture changes", async () => {
+    fixture.platform = "android";
+    fixture.size = { width: 700, height: 900 };
+    fixture.safe = { top: 24, bottom: 24, left: 0, right: 0 };
+    const geometry: WindowGeometry = {
+      ...fixture.size, insets: fixture.safe, regularWidth: true, regularHeight: true,
+      barEdge: "none", reservedRegionsSupported: true,
+      regions: [{ kind: "division", x: 0, y: 450, width: 700, height: 0 }],
+    };
+    const render = (g: WindowGeometry) => act(() => root.render(
+      <GeometryContext.Provider value={g}><RemoteDesktopScreen /></GeometryContext.Provider>,
+    ));
+    render(geometry);
+    await connect();
+    const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
+    const starts = requests().filter((r) => r.op === "start").length;
+    const stops = requests().filter((r) => r.op === "stop").length;
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
+    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
+    act(() => letter.onPressIn());
+    act(() => letter.onPressOut());
+    expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
+    // Android IME resizes the window instead of adding an iOS keyboard inset.
+    fixture.size = { width: 700, height: 550 };
+    render({ ...geometry, ...fixture.size });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    fixture.size = { width: 700, height: 900 };
+    render(geometry);
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    render({ ...geometry, regions: [] });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+  });
   it("folding and unfolding preserve the viewer and control lease", async () => {
     const geometry: WindowGeometry = {
       width: 900,
