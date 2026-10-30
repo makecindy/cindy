@@ -22,7 +22,7 @@
 
 错误码:
 
-- `NO_CHAT_CONTEXT` —— 既不在飞书 / Lark session,bot 又没有绑定过 owner(用户从未私聊过 bot)。告诉用户先在已配置的 IM 服务里私聊机器人一次完成绑定,再重试。不要自己重试。
+- `NO_CHAT_CONTEXT` —— 当前任务没有可用的飞书 / Lark 收件人路由。请用户检查当前账号的机器人连接、共享开关和主人绑定；仅在尚未绑定时建议私聊对应机器人完成绑定。不要断言用户从未私聊过机器人，不要自己重试。
 - `FILE_NOT_FOUND` —— absPath 不存在,检查路径
 - `FILE_EMPTY` —— 0 字节文件,平台拒收
 - `FILE_TOO_LARGE` —— 超过 30MB

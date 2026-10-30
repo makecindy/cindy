@@ -4318,7 +4318,18 @@
         "hint": "透過已繫結的飛書或 Lark 機器人，向你私聊傳送一條訊息；僅在視窗失焦時傳送。",
         "disabledHint": "需要先配置 Bot 並向它傳送一條訊息以完成繫結。"
       },
-      "bind": "繫結"
+      "bind": "繫結",
+      "sharing": {
+        "help": "共用連線： /share on 開啟，/share off 恢復專屬連線。開啟後 /bot 查看夥伴，/bot 名稱或ID 切換，/bot cindy 切回 Cindy。此連線將允許本帳號的一般任務、自動化及夥伴通知你。",
+        "alreadyShared": "已有另一條共用連線。請先在該連線的私訊中傳送 /share off。",
+        "enabled": "已共用此連線，目前為 Cindy。傳送 /bot 選擇夥伴；/share off 可恢復原夥伴專屬連線。",
+        "disabled": "已關閉共用，恢復原夥伴專屬連線。",
+        "list": "可切換至以下夥伴；同名時請使用完整 ID。",
+        "unknown": "找不到唯一且可用的夥伴。傳送 /bot 查看清單，並使用完整 ID。",
+        "switched": "目前夥伴： ",
+        "controlBusy": "請先完成或退出目前的任務選擇，再切換夥伴。",
+        "unavailable": "目前的夥伴暫時無法使用。請在 Cindy 中恢復該夥伴，或傳送 /bot 選擇其他夥伴。"
+      }
     },
     "wechatBot": {
       "title": "個人微信",

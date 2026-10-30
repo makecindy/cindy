@@ -52,7 +52,7 @@ import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
 import { feishuIm, wechatIm } from '../im';
-import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
+import { getBotFeishuTransport, getSharedFeishuTransport, isSharedFeishuTransport } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
 import { hasImChannelVendorOptions } from '../../shared/botImConnection.js';
@@ -201,6 +201,8 @@ function readFeishuTurnScope(
 const feishuTransportFor = createFeishuTransportResolver({
   readTurnScope: readFeishuTurnScope,
   getCompanionTransport: getBotFeishuTransport,
+  getSharedTransport: getSharedFeishuTransport,
+  isSharedTransport: isSharedFeishuTransport,
   personalIm: feishuIm,
 });
 
@@ -518,8 +520,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       sendFile: async (chatId: string, absPath: string, displayName?: string, session?) => {
         try {
-          const { im, assertCurrent } = await feishuTransportFor(session, chatId);
+          const { im, assertCurrent, sourceLabel } = await feishuTransportFor(session, chatId);
           assertCurrent();
+          if (sourceLabel) {
+            await im.sendText(chatId, `【${sourceLabel.replace(/[\r\n\[\]<>]/g, ' ')}】`);
+            assertCurrent();
+          }
           return await im.sendFile(chatId, absPath, displayName);
         } catch (err) {
           createLogger('mcp/cindy_feishu_bot').warn(
@@ -537,16 +543,16 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // into `reason` for logging without leaking axios internals to the tool.
       sendMessage: async (chatId, markdown, notificationSessionId, session) => {
         try {
-          const { im, assertCurrent } = await feishuTransportFor(session, chatId);
+          const { im, assertCurrent, sourceLabel } = await feishuTransportFor(session, chatId);
           assertCurrent();
-          // 只有个人 bot 维护通知到普通任务的回复关联; 伙伴连接已有自己的主任务。
-          if (im === feishuIm && notificationSessionId && chatId === feishuIm.getOwnerOpenId()) {
+          const text = sourceLabel ? `【${sourceLabel.replace(/[\r\n\[\]<>]/g, ' ')}】\n\n${markdown}` : markdown;
+          if (notificationSessionId && chatId === im.getOwnerOpenId()) {
             const { messageId, sessionLinked } = await sendFeishuSessionNotification(
-              feishuIm, notificationSessionId, markdown,
+              im, notificationSessionId, text,
             );
             return { ok: true, messageId, sessionLinked };
           }
-          const { messageId } = await im.sendMarkdownText(chatId, markdown);
+          const { messageId } = await im.sendMarkdownText(chatId, text);
           return { ok: true, messageId };
         } catch (err) {
           const r = (err as { response?: { data?: { code?: number; msg?: string }; status?: number } }).response;

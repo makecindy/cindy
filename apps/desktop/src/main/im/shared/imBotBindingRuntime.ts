@@ -42,9 +42,9 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
   return row?.status === 'active' && row.source === 'bot';
 }
 
-export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
+export function createImCompanionRouteDeps(ownerBotId: string | ((botContextId: string, userId?: string) => string | null)): ImCompanionRouteDeps {
   return {
-    readBinding: () => typeof ownerBotId === 'function' ? ownerBotId() : ownerBotId,
+    readBinding: (contextId, userId) => typeof ownerBotId === 'function' ? ownerBotId(contextId, userId) : ownerBotId,
 
     async resolveSession({ botId, target, create }): Promise<ImCompanionSessionResult | null> {
       if (!create) {

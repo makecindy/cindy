@@ -66,6 +66,7 @@ import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
+import { createFeishuTransportResolver } from '../mcp-integrations/feishuTransportRouting';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
@@ -76,6 +77,8 @@ export interface StartSchedulerDeps {
   getDb: () => SchedulerDrizzleDb;
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
+  getCompanionFeishuTransport?: (botId: string, ownerOpenId?: string) => FeishuIM | null;
+  getSharedFeishuTransport?: (ownerOpenId?: string) => FeishuIM | null;
   logger: Logger;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
@@ -108,11 +111,20 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
 
   const storage = new DrizzleScheduleStorage(deps.getDb);
   _storage = storage;
+  const resolveFeishu = createFeishuTransportResolver({
+    personalIm: deps.feishuIm, readTurnScope: () => null,
+    getCompanionTransport: deps.getCompanionFeishuTransport ?? (() => null),
+    getSharedTransport: deps.getSharedFeishuTransport,
+  });
   const notifier = new DesktopNotifier({
     hasUnrecoveredMatchingFailure: (run) => storage.hasUnrecoveredMatchingFailure(run),
     sendFeishuSessionNotification: async (sessionId, text) => {
-      await sendFeishuSessionNotification(deps.feishuIm, sessionId, text);
+      const { im, assertCurrent, sourceLabel } = await resolveFeishu({ sessionId });
+      assertCurrent();
+      await sendFeishuSessionNotification(im, sessionId,
+        sourceLabel ? `【${sourceLabel.replace(/[\r\n\[\]<>]/g, ' ')}】\n\n${text}` : text);
     },
+    getFeishuIm: () => deps.getSharedFeishuTransport?.() ?? deps.feishuIm,
     getMainWindow: deps.getMainWindow,
     feishuIm: deps.feishuIm,
     logger: deps.logger,

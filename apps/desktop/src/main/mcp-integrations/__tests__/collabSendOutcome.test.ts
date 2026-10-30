@@ -28,7 +28,9 @@ const mockState = vi.hoisted(() => ({
     sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_personal_file' })),
   },
   companionFeishu: {
+    getStatus: () => ({ kind: 'connected', appId: 'cli_companion' }),
     getOwnerOpenId: () => 'ou_companion',
+    sendNotification: vi.fn(async () => ({ messageId: 'om_companion_text', chatId: 'oc_companion' })),
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_companion_text' })),
     sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_companion_file' })),
   },
@@ -90,6 +92,10 @@ vi.mock('../../im/index.js', () => ({
 }));
 
 vi.mock('../../im/shared/botImConnectionRuntime', () => ({
+  // These host-callback regressions exercise the existing dedicated connection;
+  // sharing is off. Keep the runtime mock complete as the resolver evolves.
+  getSharedFeishuTransport: () => null,
+  isSharedFeishuTransport: () => false,
   getBotFeishuTransport: (botId: string) => {
     if (mockState.afterSelectCompanion) queueMicrotask(mockState.afterSelectCompanion);
     return botId === 'bot-feishu' ? mockState.companionFeishu : null;
@@ -277,14 +283,19 @@ describe('collab send outcome semantics', () => {
 
   // #6439: real Desktop host callbacks + worker DB, only the external IM service
   // is replaced. Covers missing awaits at host call sites, beyond resolver tests.
+  // PR #7652 CI: a canonical owner's background send now uses sendNotification,
+  // so this unit fixture must expose its receipt API and persist the origin.
+  // Minimal input is one active canonical link + owner notification; resolver-only
+  // tests cannot catch missing host runtime exports or worker schema columns.
   it('sends canonical background text and files through companion host callbacks with a worker DB', async () => {
     const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
     try {
       commitVolatileAppSession('cloud', 'feishu-test-owner');
       await client.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)');
       await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
-      await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT)');
-      await client.exec("INSERT INTO bot_profiles VALUES ('bot-feishu', 'active')");
+      await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT, display_name TEXT)');
+      await client.exec('CREATE TABLE im_notification_origins (channel TEXT, bot_context_id TEXT, user_id TEXT, message_id TEXT, chat_id TEXT, session_id TEXT, created_at INTEGER)');
+      await client.exec("INSERT INTO bot_profiles VALUES ('bot-feishu', 'active', 'Feishu companion')");
       await client.exec("INSERT INTO sessions VALUES ('background-receipt', 'bot')");
       await client.exec("INSERT INTO bot_session_links VALUES ('background-receipt', 'bot-feishu', 'canonical')");
       setCurrentDbClient(client, 'feishu-test-owner');
@@ -300,10 +311,13 @@ describe('collab send outcome semantics', () => {
       const owner = await feishu.getOwnerOpenId(session);
       expect(owner).toBe('ou_companion');
       expect(await feishu.sendMessage(owner!, 'task complete', session.sessionId, session))
-        .toMatchObject({ ok: true, messageId: 'om_companion_text' });
+        .toMatchObject({ ok: true, messageId: 'om_companion_text', sessionLinked: true });
       expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
         .toMatchObject({ ok: true, messageId: 'om_companion_file' });
-      expect(mockState.companionFeishu.sendMarkdownText).toHaveBeenCalledWith('ou_companion', 'task complete');
+      expect(mockState.companionFeishu.sendNotification).toHaveBeenCalledWith('ou_companion', 'task complete');
+      expect(await client.query('SELECT session_id, bot_context_id, user_id FROM im_notification_origins'))
+        .toEqual([{ session_id: 'background-receipt', bot_context_id: 'cli_companion', user_id: 'ou_companion' }]);
+      expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
       expect(mockState.companionFeishu.sendFile).toHaveBeenCalledWith('ou_companion', '/tmp/report.txt', 'report.txt');
 
       // A boundary may start after the resolver fulfills but before its caller
@@ -315,6 +329,7 @@ describe('collab send outcome semantics', () => {
         ]) {
           let release: (() => void) | undefined;
           mockState.companionFeishu.sendMarkdownText.mockClear();
+          mockState.companionFeishu.sendNotification.mockClear();
           mockState.companionFeishu.sendFile.mockClear();
           mockState.afterSelectCompanion = () => {
             if (transition === 'pending') release = beginAppSessionBoundary();
@@ -323,6 +338,7 @@ describe('collab send outcome semantics', () => {
           try {
             expect(await send()).toMatchObject({ ok: false, reason: 'SEND_FAIL' });
             expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+            expect(mockState.companionFeishu.sendNotification).not.toHaveBeenCalled();
             expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
           } finally {
             mockState.afterSelectCompanion = null;
@@ -341,6 +357,7 @@ describe('collab send outcome semantics', () => {
         expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
           .toMatchObject({ ok: false, reason: 'SEND_FAIL' });
         expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+        expect(mockState.companionFeishu.sendNotification).not.toHaveBeenCalled();
         expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
         expect(mockState.personalFeishu.sendMarkdownText).not.toHaveBeenCalled();
         expect(mockState.personalFeishu.sendFile).not.toHaveBeenCalled();

@@ -4318,7 +4318,18 @@
         "hint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
         "disabledHint": "需要先配置 Bot 并向它发送一条消息以完成绑定。"
       },
-      "bind": "绑定"
+      "bind": "绑定",
+      "sharing": {
+        "help": "共享连接： /share on 开启，/share off 恢复专属连接。开启后 /bot 查看伙伴，/bot 名称或ID 切换，/bot cindy 切回 Cindy。此连接将允许本账号的普通任务、自动化和伙伴通知你。",
+        "alreadyShared": "已有另一条共享连接。请先在那条连接的私聊中发送 /share off。",
+        "enabled": "已共享此连接，当前为 Cindy。发送 /bot 选择伙伴；/share off 可恢复原伙伴专属连接。",
+        "disabled": "已关闭共享，恢复原伙伴专属连接。",
+        "list": "可切换到以下伙伴；同名时请使用完整 ID。",
+        "unknown": "没有找到唯一且可用的伙伴。发送 /bot 查看列表，并使用完整 ID。",
+        "switched": "当前伙伴： ",
+        "controlBusy": "请先完成或退出当前任务选择，再切换伙伴。",
+        "unavailable": "当前伙伴暂不可用。请在 Cindy 中恢复该伙伴，或发送 /bot 选择其他伙伴。"
+      }
     },
     "wechatBot": {
       "title": "个人微信",

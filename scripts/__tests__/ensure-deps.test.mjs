@@ -9,7 +9,45 @@ import {
   checkWorkspaceDependencies,
   electronBinaryCheckSkipReason,
   resolvePnpmInstallInvocation,
+  withElectronNativeBuildDirectory,
 } from '../ensure-deps.mjs';
+
+// Regression: 284-character native-cache cwd exists but Windows spawn returns
+// ENOENT/ENOTCONN. Production helper must stage, publish only a completed build,
+// and clean up on error. Unit: fake rebuild writes a file, no compiler/network.
+test('stages Windows long-path native builds and publishes only completed output', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'native-build-test-'));
+  const cache = path.join(root, 'long-'.repeat(40), 'cache');
+  const moduleDir = path.join(cache, 'node_modules', 'better-sqlite3');
+  const prebuild = path.join(root, 'prebuild-install');
+  let stage;
+  try {
+    fs.mkdirSync(moduleDir, { recursive: true });
+    fs.mkdirSync(prebuild);
+    fs.writeFileSync(path.join(moduleDir, 'package.json'), '{}');
+    withElectronNativeBuildDirectory(cache, (dir) => {
+      stage = dir;
+      assert.notEqual(dir, cache);
+      assert.ok(path.join(dir, 'node_modules', 'better-sqlite3').length < 240);
+      assert.ok(fs.existsSync(path.join(dir, 'node_modules', 'prebuild-install')));
+      fs.mkdirSync(path.join(dir, 'node_modules', 'better-sqlite3', 'build'));
+      fs.writeFileSync(path.join(dir, 'node_modules', 'better-sqlite3', 'build', 'result'), 'electron output');
+    }, { platform: 'win32', prebuildInstallDir: prebuild });
+    assert.equal(fs.readFileSync(path.join(moduleDir, 'build', 'result'), 'utf8'), 'electron output');
+    assert.equal(fs.existsSync(stage), false);
+    assert.throws(() => withElectronNativeBuildDirectory(cache, (dir) => {
+      stage = dir;
+      fs.writeFileSync(path.join(dir, 'node_modules', 'better-sqlite3', 'build', 'result'), 'incomplete');
+      throw new Error('compile failed');
+    }, { platform: 'win32', prebuildInstallDir: prebuild }), /compile failed/);
+    assert.equal(fs.existsSync(stage), false);
+    assert.equal(fs.readFileSync(path.join(moduleDir, 'build', 'result'), 'utf8'), 'electron output');
+    withElectronNativeBuildDirectory(cache, (dir) => assert.equal(dir, cache), { platform: 'darwin' });
+  } finally {
+    if (!path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep)) throw Error('Unexpected test root');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('runs a native pnpm binary directly instead of feeding it to node', () => {
   // pnpm 的原生二进制发行版把 npm_execpath 指向可执行文件本身；交给 node 会抛

@@ -73,7 +73,7 @@ import {
   type SanitizedSendOutcomeError,
 } from '../../maker-host/send-outcome';
 import { getDbClient } from '../../localDb/client/current';
-import { sessions as sessionsTable } from '../../localDb/schema';
+import { botSessionLinks, sessions as sessionsTable } from '../../localDb/schema';
 import { hydrateSessionProvider } from '../../maker-host/session-provider-store';
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
@@ -648,7 +648,7 @@ export interface ImTurnRunner {
    * 连接已交给的伙伴 id(本渠道支持交给伙伴且有归属记录时); 否则 null。
    * 只读归属记录, 不解析伙伴是否可用。
    */
-  companionBotIdFor?(botContextId: string): string | null;
+  companionBotIdFor?(botContextId: string, userId?: string): string | null;
   /**
    * 连接已交给伙伴时的 `/new`: 群 / 话题 → 归档当前专线并新开一条('rotated');
    * 主人私聊 → 不轮换伙伴主任务('owner-dm')。未交出或伙伴当前解析不出 →
@@ -805,17 +805,28 @@ export function createTurnRunner(
   }
 
   async function resolveNotificationTarget(sessionId: string, scopeKey?: string): Promise<RouteTarget> {
-    const [row] = await getDbClient().drizzle.select().from(sessionsTable)
+    const db = getDbClient().drizzle;
+    const [row] = await db.select().from(sessionsTable)
       .where(eq(sessionsTable.id, sessionId)).limit(1);
     if (!row?.workingDir || row.status === 'deleted' || row.status === 'archived' || row.orcaRole === 'worker') {
       throw new Error('Notification target session is unavailable');
+    }
+    let botOwned: RouteTarget['botOwned'];
+    if (row.source === 'bot') {
+      const [link] = await db.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+        .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
+      // Owner notifications may resume the original main task, private topic or
+      // routine. Do not convert group/guest lanes into an owner private chat.
+      if (!link || !['canonical', 'thread', 'routine'].includes(link.role)
+        || !deps.companion?.prepareSend) throw new Error('Notification companion target is unavailable');
+      botOwned = { botId: link.botId, lane: 'canonical' };
     }
     return {
       row: { id: row.id, agentKind: toCoreAgentKind(row.agentKind), workingDir: row.workingDir,
         model: row.model, effort: row.effort, permissionMode: row.permissionMode, fastMode: row.fastMode,
         sdkSessionId: row.sdkSessionId, remoteHostId: row.remoteHostId ?? null, providerId: row.providerId ?? null,
         agentDeviceId: row.agentDeviceId ?? null },
-      attached: false, notificationReply: true, scopeKey,
+      attached: false, notificationReply: true, scopeKey, botOwned,
     };
   }
 
@@ -852,16 +863,17 @@ export function createTurnRunner(
   /** 只告警一次的伙伴解析失败(按连接); 恢复后清掉, 下次再失败会再记一次。 */
   const companionFallbackWarned = new Set<string>();
 
-  function companionBotIdFor(botContextId: string): string | null {
+  function companionBotIdFor(botContextId: string, userId?: string): string | null {
     if (!deps.companion || !adapter.companionLane) return null;
-    return deps.companion.readBinding(botContextId);
+    return deps.companion.readBinding(botContextId, userId);
   }
 
   /**
    * 连接已交给伙伴时的落点: 主人私聊 → 伙伴主任务; 群 / 话题 / 陌生人私聊 →
    * 伙伴的 channel 专线。未交出返回 null。伙伴解析不出(资料缺失 / 暂停 / 没有可用
    * 模型 / 主任务服务未就绪)时也返回 null, 由调用方走原有渠道路由 —— 主人不能
-   * 因为伙伴出问题就收不到任何回复; 每个连接只告警一次。
+   * 因为伙伴出问题就收不到任何回复; 每个连接只告警一次。显式共享选择通过
+   * companion.failClosed 拒绝这种身份回退。
    *
    * create=false(停止、提前落库、接管预接线)只找已有任务, 不建行; 伙伴可用但
    * 还没有这条任务时返回 'absent'(调用方不能回落到渠道自己的旧行 —— 那不是这条
@@ -874,7 +886,7 @@ export function createTurnRunner(
     create: boolean,
   ): Promise<RouteTarget | 'absent' | null> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return null;
     const lane = adapter.companionLane(userId);
     const target: ImCompanionSessionTarget =
@@ -910,12 +922,16 @@ export function createTurnRunner(
       }
       resolved = { ok: false, errorCode: 'SESSION_UNAVAILABLE', message: 'companion session row missing' };
     }
+    const failClosed = typeof companion.failClosed === 'function' ? companion.failClosed(userId) : companion.failClosed;
     if (!companionFallbackWarned.has(botContextId)) {
       companionFallbackWarned.add(botContextId);
       log.warn(
         `connection bound to companion bot=...${botId.slice(-8)} but its ${target.kind} task is unavailable ` +
-          `(${resolved.errorCode}: ${resolved.message}) — falling back to the channel's own routing`,
+          `(${resolved.errorCode}: ${resolved.message}) — ${failClosed ? 'rejecting route' : "falling back to the channel's own routing"}`,
       );
+    }
+    if (failClosed) {
+      throw new Error(adapter.routeUnavailableText?.() ?? 'Companion route unavailable');
     }
     return null;
   }
@@ -933,7 +949,7 @@ export function createTurnRunner(
     userId: string,
   ): Promise<'unbound' | 'owner-dm' | 'rotated'> {
     const companion = deps.companion;
-    const botId = companionBotIdFor(botContextId);
+    const botId = companionBotIdFor(botContextId, userId);
     if (!companion || !botId || !adapter.companionLane) return 'unbound';
     const lane = adapter.companionLane(userId);
     if (lane.kind === 'owner-dm') {
@@ -1166,7 +1182,7 @@ export function createTurnRunner(
       done: false,
       activityTicker: null,
       outputCardMessageId: args.outputCardMessageId ?? null,
-      outputCardPrefix: args.outputCardPrefix ?? '',
+      outputCardPrefix: (await adapter.outputPrefixForSession?.(target.row.id) ?? '') + (args.outputCardPrefix ?? ''),
       onTurnComplete: args.onTurnComplete ?? null,
       userMessageId: userMessageId ?? null,
       ackReactionIdPromise,

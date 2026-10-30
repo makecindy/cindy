@@ -210,6 +210,11 @@ export interface ImChannelAdapter {
    * threadScoped 渠道会收到 scopeKey(thread root ts), 供 MCP 出站定位 thread。
    */
   buildVendorOptions(userId: string, scopeKey?: string): Record<string, unknown>;
+  /** Host-only control commands, evaluated inside the inbound serial/account fence. */
+  handleControlMessage?(event: IMMessageEvent): Promise<boolean>;
+  routeUnavailableText?(): string;
+  /** Host-derived identity heading, frozen for this turn rather than the current DM selection. */
+  outputPrefixForSession?(sessionId: string): Promise<string>;
   /**
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.

@@ -42,6 +42,7 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 function createNotifier(opts?: {
   hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
   sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
+  ownerOpenId?: string | null;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
   isAgentIslandEnabled?: () => boolean;
@@ -60,7 +61,7 @@ function createNotifier(opts?: {
     sendFeishuSessionNotification: opts?.sendFeishuSessionNotification,
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
-      getOwnerOpenId: vi.fn(() => 'ou_owner'),
+      getOwnerOpenId: vi.fn(() => opts?.ownerOpenId === undefined ? 'ou_owner' : opts.ownerOpenId),
       sendMarkdownText,
     } as unknown as FeishuIM,
     logger: { warn },
@@ -282,6 +283,32 @@ describe('DesktopNotifier desktop status mapping', () => {
 
 
 describe('Feishu notification origin receipt', () => {
+  // PR #7652 review: linked sends bypassed structured Feishu failure logging.
+  // Unit: actual notify entry, one rejected session sender, no fallback/retry.
+  it('logs platform status and error details for a rejected linked notification without resending', async () => {
+    const error = Object.assign(new Error('permission denied'), { response: { status: 403, data: { code: 99991672, msg: 'permission denied' } } });
+    const sender = vi.fn(async () => { throw error; });
+    const { notifier, warn, sendMarkdownText } = createNotifier({ ownerOpenId: null, sendFeishuSessionNotification: sender });
+    await expect(notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'))).resolves.toBeUndefined();
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/status=403.*99991672.*permission denied/));
+    expect(warn).toHaveBeenCalledWith('feishu notify failed', error);
+  });
+  // Regression: adopting the personal connection left ordinary scheduler runs
+  // without an owner; the old precheck skipped the shared resolver entirely.
+  // Unit; one completed run, null personal owner, explicit notify on/off.
+  it('uses the shared session sender without a personal owner and preserves the notification opt-out', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => undefined);
+    const { notifier, sendMarkdownText } = createNotifier({ ownerOpenId: null, sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledWith('session-1', expect.any(String));
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    sendFeishuSessionNotification.mockClear();
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: false } }, run('success'));
+    expect(sendFeishuSessionNotification).not.toHaveBeenCalled();
+  });
+
   it('passes the original run session to the receipt writer', async () => {
     const sendFeishuSessionNotification = vi.fn(async () => undefined);
     const { notifier, sendMarkdownText } = createNotifier({ sendFeishuSessionNotification });

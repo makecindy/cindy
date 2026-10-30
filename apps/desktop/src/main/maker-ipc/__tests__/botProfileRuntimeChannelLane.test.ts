@@ -1,18 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ rows: [] as unknown[][] }));
+const state = vi.hoisted(() => ({
+  rows: [] as unknown[][],
+  snapshot: undefined as { profileVersion: number; resolvedJson: string } | undefined,
+}));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: { select: () => {
   const q: Record<string, unknown> = {};
   for (const method of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy']) q[method] = () => q;
-  q.limit = async () => state.rows.shift() ?? [];
+  q.limit = async () => state.rows.shift() ?? (state.snapshot ? [state.snapshot] : []);
   return q;
-} } }) }));
+} }, tx: async (_name: string, input: { snapshot: { profileVersion: number; resolvedJson: string } }) => {
+  state.snapshot = input.snapshot;
+} }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../../shared/botImConnection';
 
 const SOUL = '我是小满，主人的老搭档。\n\n说话简短直接，群里少说话。\n';
+
+beforeEach(() => { state.snapshot = undefined; });
 
 function seed(
   role: string,
@@ -31,6 +38,36 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  // PR #7652 review: a running owner task must rebuild after /share on/off.
+  // Existing mount tests only hydrated a fresh task. Unit: production hydration
+  // persists/reloads its prior snapshot, then exposes the next-turn refresh signal.
+  it.each(['canonical', 'thread', 'routine'])('refreshes %s tools when shared channels change without a profile update', async role => {
+    let channels: BotImChannel[] = [];
+    const deps = {
+      listBotImChannels: () => channels,
+      listMcpServers: async () => [{ name: 'cindy_feishu_bot', source: 'builtin' as const, available: true }],
+      listToolsets: async () => [{ id: 'feishu_bot', name: 'Feishu bot', available: true }],
+    };
+    let vendorOptions: MakerSessionCreateOpts['vendorOptions'] = { existing: 'kept' };
+    const hydrate = async () => {
+      seed(role, null, { toolCapabilityVersion: 1, memory: false, mcpMode: 'allowlist', mcpServers: [], toolsetMode: 'allowlist', toolsets: [] });
+      const opts = { id: 'main', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm', vendorOptions } as MakerSessionCreateOpts;
+      const snapshot = await hydrateBotProfileRuntime(opts, deps);
+      vendorOptions = opts.vendorOptions;
+      return { opts, snapshot };
+    };
+    expect((await hydrate()).snapshot?.runtimeEpochChanged).toBe(false);
+    channels = ['feishu'];
+    const enabled = await hydrate();
+    expect(enabled.opts.botRuntimeProfile?.mcpPolicy.configured).toContain('cindy_feishu_bot');
+    expect(enabled.snapshot?.runtimeEpochChanged).toBe(true);
+    expect((await hydrate()).snapshot?.runtimeEpochChanged).toBe(false);
+    channels = [];
+    const disabled = await hydrate();
+    expect(disabled.opts.botRuntimeProfile?.mcpPolicy.configured).not.toContain('cindy_feishu_bot');
+    expect(disabled.opts.vendorOptions).toEqual({ existing: 'kept' });
+    expect(disabled.snapshot?.runtimeEpochChanged).toBe(true);
+  });
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

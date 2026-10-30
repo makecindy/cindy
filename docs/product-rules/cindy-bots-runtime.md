@@ -146,7 +146,10 @@ Chris：「引用可以有个设置，做个开关。默认关就好。你太智
 凭证只在 main 里搬（`im/shared/botImPersonalAdoption.ts`）：先静默停掉个人 bot（不给主人发「已断开」、不删命令菜单），
 再走同一个 `addBotImConnection`；成功后个人 bot 清空（设置页按既有广播显示未配置），失败则把个人 bot 的凭证原样写回并
 重新起来。随连接带过去的：Telegram / Discord 的主人 id、企业微信 / 钉钉 / 飞书已认定的主人（不再重新 TOFU）、
-Telegram 设为全响应的群；设置页的人格与行为配置不带。移过去之后没有共用，想再要个人 bot 需另配一个。
+Telegram 设为全响应的群；设置页的人格与行为配置不带。移过去之后默认仍为伙伴专属连接。
+飞书主人可显式开启[共享连接与伙伴切换](feishu-shared-connection.md)，让同一 Desktop 实例的
+Cindy、其他伙伴及普通任务共用原连接通知主人；不复制凭证，不改变群与访客的原归属。
+其他渠道如需独立个人 bot，仍需另配一个。
 个人微信复用既有扫码授权通道：伙伴设置「消息平台」可连接或接管当前个人微信，单个本地账号只绑定一位伙伴；
 绑定只保存伙伴归属，不复制凭证、不创建第二份轮询。主人私聊进入主任务，其他私聊进入渠道专线。
 解除伙伴关联恢复个人微信独立路由，保留微信授权与原工作目录；有排队消息或运行中的任务时拒绝切换。
@@ -521,7 +524,7 @@ SSH Codex 不提供这项本机原生能力，目录如实标为不可用。
   与触发者身份来自逐轮作用域租约（`im/shared/channelToolScope.ts`），不来自模型参数——群轮次只能操作
   本群，成员触发的轮次只能读取 / 发送，管理动作（置顶、撤回 / 删消息、改群）需主人触发，任意 API
   直通与删消息按次走会话权限档。伙伴主任务（主人私聊落点）与桌面共用、不带专线的 chat 字段，改由
-  `botProfileRuntime` 按该伙伴**绑了哪些渠道**写 `cindyBotImChannels` 标记并强制挂载对应工具
+  `botProfileRuntime` 按该伙伴专属渠道及主人显式开启的共享飞书写 `cindyBotImChannels` 标记并挂载对应工具
   （`shared/botImConnection.ts` 的 `hasImChannelVendorOptions` 是三个 Harness 共用的判定：Claude Code 走
   provider `isEnabled`，Codex 走 `buildSessionMcpConfig` 逐线程 `enabled`，Pi 走 `capabilityGated`；Codex /
   Pi 的共享 bridge 在空 ctx 阶段必须先注册该 server，否则永远挂不上）。桌面轮次没有作用域租约，

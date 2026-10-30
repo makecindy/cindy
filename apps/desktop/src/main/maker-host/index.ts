@@ -261,7 +261,7 @@ import {
 } from './auto-review-model-router.js';
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
-import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { listBotImToolChannels } from '../im/shared/botImConnectionStore.js';
 import {
   armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
@@ -2861,9 +2861,8 @@ export function getMaker(): Maker {
         return result.skills;
       },
       listMcpServers: listBotRuntimeMcpServers,
-      // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
-      listBotImChannels: ({ botId }) =>
-        [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
+      // 专属连接及主人显式开启的共享飞书都需挂载通知工具；收件人与原生 API 权限仍逐轮核验。
+      listBotImChannels: ({ botId }) => listBotImToolChannels(botId),
       listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
         const registry = getPluginRegistry();
         return Promise.all(

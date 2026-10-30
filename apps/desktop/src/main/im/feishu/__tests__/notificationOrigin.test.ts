@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   values: vi.fn(), origin: null as null | { sessionId: string },
   session: { workingDir: '/tmp/task', status: 'active' } as Record<string, unknown>,
   where: vi.fn(),
+  profileStatus: 'active' as string | null,
 }));
 vi.mock('../../../logger', () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
 vi.mock('drizzle-orm', () => ({
@@ -14,14 +15,20 @@ vi.mock('drizzle-orm', () => ({
 vi.mock('../../../localDb/schema', () => ({
   imNotificationOrigins: { channel: 'channel', botContextId: 'bot', userId: 'user', messageId: 'message', chatId: 'chat' },
   sessions: { id: 'session' },
+  botProfiles: { id: 'bot', status: 'profile-status' },
+  botSessionLinks: { sessionId: 'link-session', botId: 'link-bot', links: true },
 }));
 vi.mock('../../../localDb/client/current', () => ({
   getDbClient: () => ({ drizzle: {
     insert: () => ({ values: mocks.values }),
-    select: () => ({ from: (table: { id?: string }) => ({ where: (condition: unknown) => {
-      mocks.where(condition);
-      return { limit: async () => table.id ? [mocks.session] : mocks.origin ? [mocks.origin] : [] };
-    } }) }),
+    select: () => ({ from: (table: { id?: string; links?: boolean }) => {
+      const query = { innerJoin: () => query, where: (condition: unknown) => {
+        mocks.where(condition);
+        return { limit: async () => table.links ? [{ status: mocks.profileStatus }]
+          : table.id ? [mocks.session] : mocks.origin ? [mocks.origin] : [] };
+      } };
+      return query;
+    } }),
   } }),
 }));
 import { activateImAccountBoundary, deactivateImAccountBoundary } from '../../accountBoundary';
@@ -42,11 +49,23 @@ beforeEach(() => {
   activateImAccountBoundary();
   mocks.origin = { sessionId: 'original' };
   mocks.session = { workingDir: '/tmp/task', status: 'active' };
+  mocks.profileStatus = 'active';
   mocks.values.mockResolvedValue(undefined);
   sendNotification.mockResolvedValue({ messageId: 'om_root', chatId: 'oc_chat' });
 });
 
 describe('Feishu notification origins', () => {
+  // Sharing adds receipts for companion notifications. Replying to an old
+  // notification must not bypass the companion's pause/deletion state. Unit;
+  // existing receipt + bot session, no live input or network required.
+  it('keeps replies on the original companion and refuses paused or deleted profiles', async () => {
+    mocks.session.source = 'bot';
+    expect(await resolveFeishuNotificationReply(im, event)).toBe('original');
+    for (const status of ['paused', null]) {
+      mocks.profileStatus = status;
+      await expect(resolveFeishuNotificationReply(im, event)).rejects.toThrow('Notification companion is unavailable');
+    }
+  });
   it('stores the provider receipt and resolves the original session by bot, owner, chat and root', async () => {
     await expect(sendFeishuSessionNotification(im, 'original', 'done')).resolves.toEqual({
       messageId: 'om_root', chatId: 'oc_chat', sessionLinked: true,

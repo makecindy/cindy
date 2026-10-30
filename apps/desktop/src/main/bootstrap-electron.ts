@@ -297,7 +297,7 @@ import {
   startImConnection,
   stopImConnection,
 } from './im';
-import { buildBotImConnectionListPayload } from './im/shared/botImConnectionRuntime.js';
+import { buildBotImConnectionListPayload, getBotFeishuTransport, getSharedFeishuTransport } from './im/shared/botImConnectionRuntime.js';
 import { readWechatChannelSettings } from './im/wechat/channelSettings.js';
 import { readXCompanionAssignment } from './hook-control/ipc.js';
 import type { BotControlState } from '@cindy/mcps';
@@ -1332,6 +1332,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       getDb: () => getDbClient().drizzle,
       getMainWindow: () => mainWindowRef,
       feishuIm,
+      getCompanionFeishuTransport: getBotFeishuTransport,
+      getSharedFeishuTransport,
       logger: createSchedulerLogger('scheduler-host'),
       ...automationGitBaselineHooks,
     });

@@ -4350,7 +4350,18 @@
         "hint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
         "disabledHint": "First set up the bot and DM it once to complete binding."
       },
-      "bind": "Bind"
+      "bind": "Bind",
+      "sharing": {
+        "help": "Share this connection: /share on enables sharing; /share off restores the dedicated teammate. Then use /bot to list teammates, /bot name-or-ID to switch, or /bot cindy to return to Cindy. Ordinary sessions, automations and teammates in this account can notify you through this connection.",
+        "alreadyShared": "Another connection is already shared. Send /share off in its private chat first.",
+        "enabled": "Connection shared. You are talking to Cindy. Use /bot to choose a teammate, or /share off to restore the original dedicated teammate.",
+        "disabled": "Sharing disabled. The original dedicated teammate has been restored.",
+        "list": "Choose a teammate below. Use the full ID if names match.",
+        "unknown": "No unique, active teammate found. Use /bot to list teammates and select a full ID.",
+        "switched": "Current teammate: ",
+        "controlBusy": "Finish or close the current session picker before switching teammates.",
+        "unavailable": "The selected teammate is unavailable. Resume it in Cindy or use /bot to choose another teammate."
+      }
     },
     "wechatBot": {
       "title": "Personal WeChat",

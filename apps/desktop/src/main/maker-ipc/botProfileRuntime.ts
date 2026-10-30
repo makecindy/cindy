@@ -819,6 +819,9 @@ export async function hydrateBotProfileRuntime(
     ownerChat ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
   if (boundImChannels.length > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
+  } else if (ownerChat && opts.vendorOptions && BOT_IM_CHANNELS_VENDOR_KEY in opts.vendorOptions) {
+    opts.vendorOptions = { ...opts.vendorOptions };
+    delete opts.vendorOptions[BOT_IM_CHANNELS_VENDOR_KEY];
   }
   // IM 专线(飞书连接交给伙伴后的群 / 话题)的渠道出站工具是这条专线回消息、回文件的
   // 载体, 不是伙伴的可选能力: 会话带飞书渠道 vendorOptions 时始终挂上, 伙伴显式收窄的
@@ -1045,6 +1048,12 @@ export async function hydrateBotProfileRuntime(
   });
   const runtimeEpochSha256 = createHash('sha256').update(JSON.stringify({
     profileVersion: row.profileVersion,
+    // Shared/dedicated channel mounts can change without a Profile revision.
+    // Include the effective mounts, not only the user-selected tool catalogs,
+    // so the existing before-send refresh rebuilds already-open owner tasks.
+    imChannels: [...boundImChannels].sort(),
+    runtimeMcpServers: [...runtimeConfiguredMcpServers].sort(),
+    runtimeToolsets: [...runtimeConfiguredToolsets].sort(),
     profilePrompt: opts.botProfilePrompt ?? '',
     contextPrompt: opts.botProfileContextPrompt ?? '',
     userProfilePrompt: opts.botUserProfilePrompt ?? '',

@@ -20,6 +20,7 @@ import {
   archiveBotImTaskRow,
   listBotImConnections,
   listBotImConnectionsForBot,
+  listBotImToolChannels,
   readBotImConnection,
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
@@ -73,6 +74,35 @@ describe('bot im connection store', () => {
     expect(updated?.botContextId).toBe('cli_x');
     expect(listBotImConnectionsForBot('bot-a').map((r) => r.id)).toEqual(['aaaaaaaaaaaa']);
     expect(listBotImConnections().map((r) => r.id)).toEqual(['aaaaaaaaaaaa', 'bbbbbbbbbbbb']);
+  });
+
+  // Explicit sharing is an owner-wide override, never an automatic migration.
+  // Unit; real disk store, old record -> opt-in -> reload -> disable, two apps.
+  it('persists selection without moving the dedicated binding and permits only one shared connection per owner', async () => {
+    const a = await addBotImConnectionRecord({ botId: 'bot-a', channel: 'feishu' });
+    const b = await addBotImConnectionRecord({ botId: 'bot-b', channel: 'feishu' });
+    expect(readBotImConnection(a.id)?.sharedFeishu).toBeUndefined();
+    expect(listBotImToolChannels('cindy-default')).toEqual([]);
+    const sharedFeishu = { appId: 'cli_a', ownerOpenId: 'ou_a', selectedBotId: 'bot-b' };
+    await updateBotImConnectionRecord(a.id, { sharedFeishu });
+    expect(readBotImConnection(a.id)).toMatchObject({ botId: 'bot-a', sharedFeishu });
+    // Regression: formal Cindy canonical lacked the MCP despite an active shared
+    // connection. Existing routing tests bypassed profile tool mounting. Unit:
+    // real account store -> mount channels for Cindy and two unbound companions.
+    for (const botId of ['cindy-default', 'bot-b', 'bot-c']) {
+      expect(listBotImToolChannels(botId)).toEqual(['feishu']);
+    }
+    await expect(updateBotImConnectionRecord(b.id, { sharedFeishu })).rejects.toThrow('FEISHU_ALREADY_SHARED');
+    h.owner = 'owner-b';
+    expect(listBotImConnections()).toEqual([]);
+    expect(listBotImToolChannels('cindy-default')).toEqual([]);
+    h.owner = 'owner-a';
+    expect(readBotImConnection(a.id)?.sharedFeishu).toEqual(sharedFeishu);
+    await updateBotImConnectionRecord(a.id, { sharedFeishu: undefined });
+    expect(readBotImConnection(a.id)?.botId).toBe('bot-a');
+    expect(readBotImConnection(a.id)?.sharedFeishu).toBeUndefined();
+    expect(listBotImToolChannels('cindy-default')).toEqual([]);
+    expect(listBotImToolChannels('bot-a')).toEqual(['feishu']);
   });
 
   it('removes a record and ignores ids that do not match the id shape', async () => {
