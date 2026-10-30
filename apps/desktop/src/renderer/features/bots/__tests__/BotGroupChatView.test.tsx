@@ -3343,7 +3343,7 @@ describe('Telegram / Slack-grade timeline', () => {
     });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running, [], {
       speakingBotIds: ['mimi'],
-      round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 'plan-mimi', activity: 'step' }], canContinue: false },
+      round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 'plan-mimi', activity: 'step', startedAt: Date.now() - 125_000 }], canContinue: false },
     }) });
     renderView();
     const strip = await screen.findByTestId('bot-group-progress');
@@ -4191,6 +4191,23 @@ it('keeps only the current public progress note between tool calls', () => {
     expect(botGroupWorkPreview({ ...state, messages: [{ ...note, ...patch }] } as Parameters<typeof botGroupWorkPreview>[0], 2)).toBe('');
   }
   expect(botGroupWorkPreview({ ...state, streamingText: 'NO_REPLY' }, 2)).toBe('');
+});
+
+// #7583, unit: missing start timestamps must not turn a stale waiting execution
+// into a newly started timer. Existing progress cases all supplied a timestamp.
+it('keeps waiting work inspectable without inventing an elapsed time', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
+    status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', activity: 'reply', executionId: 'waiting', sessionId: 'lane-mimi', executionStatus: 'needs_input' },
+    ],
+  } }) });
+  renderView();
+  const strip = await screen.findByTestId('bot-group-progress');
+  expect(strip.textContent).toContain('bots.groupChat.waitingConfirm');
+  expect(strip.textContent).not.toContain('bots.groupChat.progress.elapsed');
+  expect(screen.queryByTestId('bot-group-speaking')).toBeNull();
+  fireEvent.click(within(strip).getByRole('button', { name: 'bots.groupChat.progress.viewProcess' }));
+  expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lane-mimi');
 });
 
 // Group work identity: the source computer returns two concurrent executions of the

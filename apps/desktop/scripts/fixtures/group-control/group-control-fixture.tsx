@@ -22,6 +22,7 @@ interface GroupData {
   workRemote?: boolean;
   workParallel?: boolean;
   workLastStopping?: boolean;
+  workNoStart?: boolean;
   bodyAnswer?: boolean;
   remoteLimits?: boolean;
   name: string;
@@ -291,7 +292,7 @@ function groupFrom(data: GroupData) {
       createdAt: 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' ? null : 'fixture-work', activity: 'reply', executionStatus: data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: Date.now() - 83_000, stopping: data.workState === 'stopping' },
+    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' ? null : 'fixture-work', activity: 'reply', executionStatus: data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
       ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
@@ -318,7 +319,13 @@ void mountPage({
     };
     return {
       agentIsland: { onSessionActivity: subscription('sessionActivity') },
+      // The missing-card scenario follows the real history/interaction hydration path.
+      localDb: {
+        sessions: { get: async (id: string) => ({ id, agentKind: 'claude', sdkSessionId: null }) },
+        messages: { list: async () => [] },
+      },
       maker: {
+        getPendingInteractions: async () => [],
         getCompanionCloudState: async () => ({ enabled: !!data.workRemote, selfDeviceId: null, humanActorId: null, actors: data.workRemote ? [{ id: 'a', externalId: 'a', name: 'Aster', avatar: null, homeDeviceId: 'fixture-mac', homeDevice: { deviceId: 'fixture-mac', name: 'Mac Studio', online: true, remoteControlEnabled: true, isSelf: false } }] : [], demotedBotIds: [] }),
         onCompanionCloudChanged: subscription('companionCloudChanged'),
         polishWorkingStatus: async () => null,

@@ -85,7 +85,7 @@ import { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageTex
 import { t } from '../../i18n.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
-import { botGroupRuntimeFailureCode, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
+import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
@@ -883,6 +883,25 @@ describe('Chat Server result delivery and refresh', () => {
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  // #7583, unit: runtime close without an SDK terminal left the leased execution
+  // alive. Existing cases start from done/error; exercise the close adapter with
+  // the real Chat Server service and assert the terminal wire result and lease retirement.
+  it('retires a closed group turn without terminating recovery or a different input', async () => {
+    await start();
+    const inputId = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, true)).toBe(false);
+    expect(await settleClosedBotGroupTurn(service, 'lane', 'bot-group:old-input', false)).toBe(false);
+    expect(failures()).toHaveLength(0);
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, false)).toBe(true);
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0][2]).toMatchObject({ action: 'fail', detail: 'cindy-runtime-error:RUNTIME_ERROR', epoch: execution.epoch });
+    const heartbeats = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat').length;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat')).toHaveLength(heartbeats);
+    expect(deliveries()).toHaveLength(0);
+  });
 
   // #6418: media visibility changes, but the original reply still determines
   // continuation. The helper mock isolates import/ledger tests from settlement.

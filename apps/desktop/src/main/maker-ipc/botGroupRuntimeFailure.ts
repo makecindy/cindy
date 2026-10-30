@@ -1,4 +1,4 @@
-import { isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
+import { isBotGroupClientId, isBotGroupRuntimeFailureCode, type BotGroupRuntimeFailureCode } from '../../shared/botGroupChat.js';
 import { isPiImageInputUnsupportedError, isPiPromptRpcTimeoutError } from '../../shared/inputError.js';
 import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits.js';
@@ -55,4 +55,17 @@ export async function settleUndispatchedBotGroupTurn(
   if (disposition !== 'failed' || !service) return false;
   return service.settleLaneTurn({ sessionId, activeInputClientId: clientId, outcome: 'error',
     resultText: '', failureCode: botGroupRuntimeFailureCode(error), undispatched: true });
+}
+
+/** A closed runtime may never emit done/error. Capture its input before close
+ * cleanup clears the coordinator. Recovery-owned closes keep the same execution. */
+export async function settleClosedBotGroupTurn(
+  service: Pick<BotGroupChatService, 'settleLaneTurn'> | null,
+  sessionId: string,
+  activeInputClientId: string | null,
+  preserveInput: boolean,
+): Promise<boolean> {
+  if (preserveInput || !service || !isBotGroupClientId(activeInputClientId)) return false;
+  return service.settleLaneTurn({ sessionId, activeInputClientId, outcome: 'error',
+    resultText: '', failureCode: 'RUNTIME_ERROR' });
 }

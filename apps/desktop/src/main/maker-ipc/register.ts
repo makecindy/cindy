@@ -658,7 +658,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
-import { settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
+import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
 import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
@@ -6122,6 +6122,16 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
+    // Normal terminal events already release this input. A close without one
+    // must retire the exact group execution before its identity is discarded.
+    const inputId = agentInputCoordinatorHolder?.getActiveInputClientId(session.id) ?? null;
+    const provenance = agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
+    const groupInputId = inputId && provenance?.clientId === inputId && provenance.autoResume
+      ? provenance.retrySourceClientId ?? inputId : inputId;
+    void settleClosedBotGroupTurn(botGroupChatServiceHolder, session.id, groupInputId,
+      context.preserveAutoResumeIntent || rehydrateCloseSuppression.isSuppressed(session.id) ||
+      hasPendingProviderGroupContinuation(session.id)).catch(() =>
+      log.warn('Bot group closed lane settlement failed', { sessionId: session.id }));
     runSessionCloseCleanup(context.preserveAutoResumeIntent, {
       cleanupInteractions: () => cleanupPendingInteractionsForSession(session.id, 'session_closed'),
       preserveAutoResume: () => {
