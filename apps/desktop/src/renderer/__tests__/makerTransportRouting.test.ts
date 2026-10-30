@@ -29,6 +29,7 @@ function stubElectron() {
     dispatchOrcaUiAssignment: vi.fn(),
     disableOrca: vi.fn(),
     regenerateSessionTitle: vi.fn().mockResolvedValue({ title: 'local title' }),
+    translateThinking: vi.fn().mockResolvedValue({ text: 'local translation' }),
     predictNextPrompt: vi.fn().mockResolvedValue({ prompt: 'local prompt' }),
     getSessionTurnActive: vi.fn().mockResolvedValue({ inTurn: false }),
     plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
@@ -653,4 +654,18 @@ describe('drift 守卫:makerTransport 隧道的每个 channel 都在 REMOTE_INVO
     const offenders = [...channels].filter((c) => !REMOTE_INVOKE_ALLOWLIST.has(c));
     expect(offenders).toEqual([]);
   });
+});
+
+
+it('routes explicit thinking translation to its owner and never falls back on remote failure', async () => {
+  const { makerSpies, invoke } = stubElectron();
+  const { translateThinkingFor } = await import('@/lib/makerTransport');
+  const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+  const request = { sessionId: 'local', text: 'Inspect files.', locale: 'zh-CN' as const };
+  expect(await translateThinkingFor(request)).toEqual({ text: 'local translation' });
+  remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+  invoke.mockRejectedValueOnce(new Error('[CHANNEL_NOT_ALLOWED]'));
+  await expect(translateThinkingFor({ ...request, sessionId: 'rs' })).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+  expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:translate-thinking', [{ ...request, sessionId: 'rs' }]);
+  expect(makerSpies.translateThinking).toHaveBeenCalledTimes(1);
 });

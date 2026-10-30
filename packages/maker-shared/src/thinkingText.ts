@@ -1,3 +1,16 @@
+/** Display-only translation. Never write this response into agent history. */
+export interface ThinkingTranslationRequest {
+  sessionId: string;
+  text: string;
+  locale: 'zh-CN' | 'zh-TW' | 'en' | 'ja' | 'ko';
+}
+
+export type ThinkingTranslationResult =
+  | { text: string; error?: never }
+  | { text?: never; error: 'unavailable' | 'failed' | 'busy' | 'stale' };
+
+export const THINKING_TRANSLATION_MAX_LENGTH = 16_000;
+
 /** Narrow inline tokenizer for compact model reasoning text. */
 export type ThinkingTextToken =
   | { kind: 'text'; value: string }

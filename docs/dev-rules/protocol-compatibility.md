@@ -565,6 +565,16 @@ fingerprint，须遵守 [冷更边界](mobile-development.md#原生配置与-run
 
 > **增量适用原则**：wire protocol 兼容对所有跨端改动生效，不因是小改而豁免。
 
+## 思考内容的手动翻译
+
+新增同账号 invoke `maker:translate-thinking({ sessionId, text, locale })`，仅在用户点击后调用
+被控桌面的辅助模型。返回 `{ text }` 或固定错误 `{ error }`，不改写消息、引擎状态或既有协议。
+本机保留可信 Renderer 校验；共享任务访客与供应商分享不开放此通道。Desktop、Mobile
+超时预算为 65 秒，模型请求预算 60 秒；不加入自动重试清单，不改变连接恢复行为。
+旧主机返回 `CHANNEL_NOT_ALLOWED` 时提示更新，不回落控制端。无需服务端部署、数据库迁移
+或 Mobile 原生配置变更。产品行为见 [思考内容的手动翻译](../product-rules/thinking-translation.md)。
+
+
 ## Model Access 复杂价目
 
 保持 V5，新增可组合的 `display_pricing` 能力声明，复用 `X-Cindy-Model-Capabilities` 与

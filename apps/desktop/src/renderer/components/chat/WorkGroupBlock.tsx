@@ -49,6 +49,7 @@ import {
 import { AgentActionRow } from './AgentActionRow';
 import { ThinkingCard, formatDuration } from './ThinkingCard';
 import { ThinkingText } from './ThinkingText';
+import { useThinkingTranslation } from './useThinkingTranslation';
 import {
   projectRecentWorkActivities,
   projectWorkActivities,
@@ -134,9 +135,10 @@ function ToolActivityRow({ activity }: { activity: ProjectedToolActivity }) {
   );
 }
 
-function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity }) {
+function ThinkingActivityRow({ activity, isStreaming }: { activity: ProjectedThinkingActivity; isStreaming?: boolean }) {
   const rawContent = activity.rawContent;
-  const hasExplicitLineBreak = /[\r\n]/.test(rawContent);
+  const translation = useThinkingTranslation(rawContent, activity.key, isStreaming);
+  const hasExplicitLineBreak = /[\r\n]/.test(rawContent) || translation.controls !== null;
   const textRef = useRef<HTMLSpanElement>(null);
   const [canExpand, setCanExpand] = useState(hasExplicitLineBreak);
   const { expanded, setExpanded } = useExpandedBlockMemory(`thinking:${activity.key}`);
@@ -159,53 +161,56 @@ function ThinkingActivityRow({ activity }: { activity: ProjectedThinkingActivity
   }, [activity.content, expanded, hasExplicitLineBreak]);
 
   return (
-    <button
-      type="button"
-      data-live-work-activity="thinking"
-      data-message-client-id={activity.key}
-      data-work-thinking-expandable={canExpand ? 'true' : 'false'}
-      data-scroll-disclosure-header=""
-      disabled={!canExpand}
-      aria-expanded={canExpand ? expanded : undefined}
-      onClick={() => setExpanded((value) => !value)}
-      className={cn(
-        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
-        ACTIVITY_ROW_RADIUS_CLASS,
-        expanded ? 'items-start' : 'items-center',
-        canExpand
-          ? [
-              'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-              ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
-              ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-            ]
-          : 'cursor-default',
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
-      >
-        <Sparkles size={13} />
-      </span>
-      <span
-        ref={textRef}
+    <div className="min-w-0">
+      <button
+        type="button"
+        data-live-work-activity="thinking"
+        data-message-client-id={activity.key}
+        data-work-thinking-expandable={canExpand ? 'true' : 'false'}
+        data-scroll-disclosure-header=""
+        disabled={!canExpand}
+        aria-expanded={canExpand ? expanded : undefined}
+        onClick={() => setExpanded((value) => !value)}
         className={cn(
-          'min-w-0 flex-1 text-14 italic text-[var(--thinking-body-text)]',
-          expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
+          'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
+          ACTIVITY_ROW_RADIUS_CLASS,
+          expanded ? 'items-start' : 'items-center',
+          canExpand
+            ? [
+                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+                ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+              ]
+            : 'cursor-default',
         )}
-        title={expanded ? undefined : activity.content}
       >
-        <ThinkingText content={expanded ? rawContent : activity.content} />
-      </span>
-      <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-        {canExpand ? (
-          <ChevronRight
-            size={13}
-            className={cn(CHAT_CHEVRON_TRANSITION_CLASS, expanded && 'rotate-90')}
-          />
-        ) : null}
-      </span>
-    </button>
+        <span
+          aria-hidden="true"
+          className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
+        >
+          <Sparkles size={13} />
+        </span>
+        <span
+          ref={textRef}
+          className={cn(
+            'min-w-0 flex-1 text-14 italic text-[var(--thinking-body-text)]',
+            expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
+          )}
+          title={expanded ? undefined : activity.content}
+        >
+          <ThinkingText content={expanded ? translation.displayContent : activity.content} />
+        </span>
+        <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+          {canExpand ? (
+            <ChevronRight
+              size={13}
+              className={cn(CHAT_CHEVRON_TRANSITION_CLASS, expanded && 'rotate-90')}
+            />
+          ) : null}
+        </span>
+      </button>
+      {expanded && translation.controls}
+    </div>
   );
 }
 
@@ -297,7 +302,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
     );
   }
 
-  return <ThinkingActivityRow activity={activity} />;
+  return <ThinkingActivityRow activity={activity} isStreaming={message.isStreaming} />;
 }
 
 /** 同一个子项渲染器递归服务运行态动作组、完成态内层动作组和外层文字时间线。 */
@@ -540,7 +545,7 @@ export function WorkGroupBlock({
                   activity.kind === 'tool' ? (
                     <ToolActivityRow key={activity.key} activity={activity} />
                   ) : (
-                    <ThinkingActivityRow key={activity.key} activity={activity} />
+                    <ThinkingActivityRow key={activity.key} activity={activity} isStreaming={isStreaming} />
                   ),
                 )}
           </div>

@@ -314,6 +314,7 @@ import {
 import { buildMobileMessageListExtraData } from '@/session/pendingSendItems';
 import { dedupeToolMediaByUrl } from '@cindy/maker-shared/message-render';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
+import { useThinkingTranslation } from './useThinkingTranslation';
 import {
   buildAgentTaskCardModel,
   type AgentTaskCardModel,
@@ -3055,6 +3056,7 @@ const RenderItemView = memo(function RenderItemView({
       node = (
         <ThinkingCard
           item={item}
+          deviceId={actions.remoteDeviceId}
           screenWidth={actions.screenWidth}
           isSessionStreaming={actions.isSessionStreaming === true}
         />
@@ -4308,10 +4310,12 @@ function ThinkingInlineText({ content }: { content: string }) {
 
 function ThinkingCard({
   item,
+  deviceId,
   isSessionStreaming = false,
   screenWidth,
 }: {
   item: MobileThinkingItem;
+  deviceId?: string;
   isSessionStreaming?: boolean;
   screenWidth?: number;
 }) {
@@ -4327,6 +4331,7 @@ function ThinkingCard({
     && item.durationMs === undefined
     && isSessionStreaming
     && item.message.isStreaming === true;
+  const translation = useThinkingTranslation(item.redacted ? '' : item.message.body, item.key, item.message.source.sessionId, deviceId, running);
   const elapsedMs = useLiveElapsedMs(running, item.message.createdAt);
   const title = item.redacted
     ? t('message.renderer.thinkingHidden')
@@ -4346,8 +4351,9 @@ function ThinkingCard({
         <Text style={[styles.detailText, styles.italicText]}>
           {item.redacted
             ? t('message.renderer.thinkingEmpty')
-            : <ThinkingInlineText content={item.message.body || t('message.renderer.thinkingNoContent')} />}
+            : <ThinkingInlineText content={translation.displayContent || t('message.renderer.thinkingNoContent')} />}
         </Text>
+        {translation.controls}
       </Rail>
     </FoldablePanel>
   );
@@ -4981,7 +4987,7 @@ function WorkGroupCard({
             )}
             {!holdLines && item.children.map((child) => {
               if (child.type === 'thinking') {
-                return <ExpandedWorkThinkingRow key={child.key} item={child} />;
+                return <ExpandedWorkThinkingRow key={child.key} item={child} deviceId={actions.remoteDeviceId} running={isStreaming} />;
               }
               if (child.type === 'tool_group') {
                 return (
@@ -5092,8 +5098,12 @@ const WorkToolActivityRow = memo(function WorkToolActivityRow({
 
 const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
   item,
+  deviceId,
+  running,
 }: {
   item: MobileThinkingItem;
+  deviceId?: string;
+  running: boolean;
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -5101,55 +5111,59 @@ const ExpandedWorkThinkingRow = memo(function ExpandedWorkThinkingRow({
   const [expanded, toggleExpanded] = useFoldableExpandedState(`work-${item.key}`, false);
   const [measuredLineCount, setMeasuredLineCount] = useRecyclingState(1);
   const rawContent = item.message.body.trim();
-  const canExpand = rawContent.includes('\n') || measuredLineCount > 1;
+  const translation = useThinkingTranslation(item.redacted ? '' : rawContent, item.key, item.message.source.sessionId, deviceId, running);
+  const canExpand = !!translation.controls || rawContent.includes('\n') || measuredLineCount > 1;
   return (
-    <Pressable
-      accessibilityLabel={expanded ? t('message.renderer.collapseThinking') : t('message.renderer.expandThinking')}
-      accessibilityRole="button"
-      accessibilityState={{ expanded: canExpand ? expanded : undefined }}
-      disabled={!canExpand}
-      onPress={canExpand ? toggleExpanded : undefined}
-      style={({ pressed }) => [
-        styles.workThinkingRow,
-        expanded && styles.workThinkingRowExpanded,
-        pressed && canExpand && styles.pressed,
-      ]}
-      testID="message.workThinkingToggle"
-    >
-      <View style={stylesStatic.workActivityIconSlot}>
-        <Sparkles color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      </View>
-      <View style={styles.workThinkingText}>
-        <Text
-          numberOfLines={expanded ? undefined : 1}
-          style={[styles.workActivityText, styles.italicText]}
-        >
-          <ThinkingInlineText content={rawContent || t('message.renderer.thinkingNoContent')} />
-        </Text>
-        {!expanded ? (
-          <View
-            accessibilityElementsHidden
-            accessible={false}
-            importantForAccessibility="no-hide-descendants"
-            pointerEvents="none"
-            style={styles.workThinkingMeasureWrap}
+    <View>
+      <Pressable
+        accessibilityLabel={expanded ? t('message.renderer.collapseThinking') : t('message.renderer.expandThinking')}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: canExpand ? expanded : undefined }}
+        disabled={!canExpand}
+        onPress={canExpand ? toggleExpanded : undefined}
+        style={({ pressed }) => [
+          styles.workThinkingRow,
+          expanded && styles.workThinkingRowExpanded,
+          pressed && canExpand && styles.pressed,
+        ]}
+        testID="message.workThinkingToggle"
+      >
+        <View style={stylesStatic.workActivityIconSlot}>
+          <Sparkles color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </View>
+        <View style={styles.workThinkingText}>
+          <Text
+            numberOfLines={expanded ? undefined : 1}
+            style={[styles.workActivityText, styles.italicText]}
           >
-            <Text
-              numberOfLines={2}
-              onTextLayout={(event) => setMeasuredLineCount(event.nativeEvent.lines.length)}
-              style={[styles.workActivityText, styles.italicText]}
+            <ThinkingInlineText content={(expanded ? translation.displayContent : rawContent) || t('message.renderer.thinkingNoContent')} />
+          </Text>
+          {!expanded ? (
+            <View
+              accessibilityElementsHidden
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              pointerEvents="none"
+              style={styles.workThinkingMeasureWrap}
             >
-              <ThinkingInlineText content={rawContent || t('message.renderer.thinkingNoContent')} />
-            </Text>
-          </View>
-        ) : null}
-      </View>
-      {canExpand
-        ? expanded
-          ? <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          : <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-        : null}
-    </Pressable>
+              <Text
+                numberOfLines={2}
+                onTextLayout={(event) => setMeasuredLineCount(event.nativeEvent.lines.length)}
+                style={[styles.workActivityText, styles.italicText]}
+              >
+                <ThinkingInlineText content={rawContent || t('message.renderer.thinkingNoContent')} />
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        {canExpand
+          ? expanded
+            ? <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            : <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          : null}
+      </Pressable>
+      {expanded && translation.controls}
+    </View>
   );
 });
 

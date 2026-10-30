@@ -1,4 +1,16 @@
 {
+  "thinkingTranslation": {
+    "translate": "翻译",
+    "loading": "翻译中…",
+    "showOriginal": "显示原文",
+    "showTranslation": "显示译文",
+    "machineTranslated": "机器翻译",
+    "disclosure": "原文将发送给设置中的辅助模型服务，并产生额外用量。",
+    "tooLong": "这段思考内容过长，暂不支持翻译。",
+    "failed": "翻译未完成，原文已保留。你可以再次点击翻译。",
+    "unavailable": "没有可用的辅助模型，请先在设置中配置。",
+    "unsupported": "这台电脑的版本暂不支持思考翻译，请更新后再试。"
+  },
   "pluginInvocation": {
     "listSeparator": "、",
     "status": {

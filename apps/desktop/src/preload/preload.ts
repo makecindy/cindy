@@ -8099,6 +8099,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId?: string,
     ): Promise<{ title: string | null }> =>
       ipcRenderer.invoke('maker:generate-title', { message, agentKind, sessionId }),
+    translateThinking: (
+      request: import('../shared/thinkingTranslation').ThinkingTranslationRequest,
+    ): Promise<import('../shared/thinkingTranslation').ThinkingTranslationResult> =>
+      ipcRenderer.invoke('maker:translate-thinking', request),
     // Optional status copy: only public semantic phases cross this boundary.
     polishWorkingStatus: (
       request: import('../shared/workingStatus').WorkingStatusRequest,

@@ -87,3 +87,7 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     );
   });
 });
+
+it('allows a manually requested thinking translation to finish within the host budget', () => {
+  expect(resolveMobileInvokeTimeoutMs('maker:translate-thinking')).toBe(65_000);
+});

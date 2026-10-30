@@ -12493,6 +12493,18 @@
       "cancelled": "취소됨"
     },
     "thinking": {
+      "translation": {
+        "translate": "번역",
+        "loading": "번역 중…",
+        "showOriginal": "원문 보기",
+        "showTranslation": "번역 보기",
+        "machineTranslated": "기계 번역",
+        "disclosure": "원문은 설정된 보조 모델 서비스로 전송되며 추가 사용량이 발생합니다.",
+        "tooLong": "이 사고 내용은 너무 길어 번역할 수 없습니다.",
+        "failed": "번역을 완료하지 못했습니다. 원문은 유지됩니다. 다시 번역할 수 있습니다.",
+        "unavailable": "사용 가능한 보조 모델이 없습니다. 설정에서 먼저 구성하세요.",
+        "unsupported": "이 컴퓨터는 아직 사고 내용 번역을 지원하지 않습니다. 업데이트해 주세요."
+      },
       "completed": "생각 {{duration}}",
       "aborted": "생각 {{duration}} (중단됨)"
     },

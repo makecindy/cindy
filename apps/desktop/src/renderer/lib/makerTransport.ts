@@ -484,6 +484,13 @@ export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: s
   }>;
 }
 
+/** Explicit translation runs on the task's owning desktop; never fall back locally. */
+export function translateThinkingFor(request: import('../../shared/thinkingTranslation').ThinkingTranslationRequest): Promise<import('../../shared/thinkingTranslation').ThinkingTranslationResult> {
+  const deviceId = getStickySessionDeviceId(request.sessionId);
+  if (!deviceId) return window.electronAPI.maker.translateThinking(request);
+  return invokeRemote(deviceId, 'maker:translate-thinking', [request]) as Promise<import('../../shared/thinkingTranslation').ThinkingTranslationResult>;
+}
+
 /** 读会话元数据:远程走隧道 local-db:sessions:get(本地 DB 没有该 row,直接调会 404)。 */
 export function getSessionFor(sessionId: string): Promise<Session> {
   // Session metadata is part of the same remote send attempt as the later

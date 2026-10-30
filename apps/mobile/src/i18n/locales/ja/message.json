@@ -1,4 +1,16 @@
 {
+  "thinkingTranslation": {
+    "translate": "翻訳",
+    "loading": "翻訳中…",
+    "showOriginal": "原文を表示",
+    "showTranslation": "訳文を表示",
+    "machineTranslated": "機械翻訳",
+    "disclosure": "原文は設定の補助モデルサービスに送信され、追加の使用量が発生します。",
+    "tooLong": "この思考内容は長すぎるため翻訳できません。",
+    "failed": "翻訳が完了しませんでした。原文は保持されています。もう一度翻訳できます。",
+    "unavailable": "利用可能な補助モデルがありません。設定で構成してください。",
+    "unsupported": "このコンピューターは思考の翻訳に未対応です。更新してください。"
+  },
   "pluginInvocation": {
     "listSeparator": "、",
     "status": {

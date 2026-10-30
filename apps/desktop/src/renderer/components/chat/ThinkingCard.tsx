@@ -43,6 +43,7 @@ import { Collapse } from '@/components/ui/collapse';
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 
 import { ThinkingText } from './ThinkingText';
+import { useThinkingTranslation } from './useThinkingTranslation';
 
 interface ThinkingCardProps {
   renderItemKey?: string;
@@ -118,6 +119,8 @@ export function ThinkingCard({
     return 'thinking:unknown';
   }, [blockKey, startedAt]);
   const { expanded, setExpanded } = useExpandedBlockMemory(persistedKey);
+
+  const translation = useThinkingTranslation(isRedacted ? '' : content, blockKey, isStreaming);
 
   const onToggle = useCallback(() => {
     setExpanded((v) => !v);
@@ -204,7 +207,7 @@ export function ThinkingCard({
             <BodyRail>
               {content ? (
                 <p className="whitespace-pre-wrap italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
-                  <ThinkingText content={content} />
+                  <ThinkingText content={translation.displayContent} />
                 </p>
               ) : (
                 <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
@@ -264,13 +267,14 @@ export function ThinkingCard({
           <BodyRail>
             {content ? (
               <p className="whitespace-pre-wrap italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
-                <ThinkingText content={content} />
+                <ThinkingText content={translation.displayContent} />
               </p>
             ) : (
               <p className="italic text-14 leading-[1.6] text-[var(--thinking-body-text)]">
                 (no thinking content captured)
               </p>
             )}
+            {expanded && translation.controls}
           </BodyRail>
         </Collapse>
       </div>

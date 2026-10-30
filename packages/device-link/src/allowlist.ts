@@ -498,6 +498,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 重生成标题(与 generate-title 同一 oneShot 通道)。老被控端无此 channel →
   // CHANNEL_NOT_ALLOWED → 控制端按生成失败提示。
   'maker:regenerate-title',
+  // Explicit display-only translation, using the controlled device's auxiliary models.
+  // Same-account only; never add to shared-task or unlinked access.
+  'maker:translate-thinking',
   // 输入框推荐提示词：在被控端读取会话素材并使用被控端模型凭证生成。
   'maker:predict-prompt',
   'maker:get-context-usage',
@@ -864,6 +867,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
  * client-agnostic:mobile/web 控制端应使用同一映射(与 allowlist 同为协议契约)。
  */
 export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
+  'maker:translate-thinking': 65_000,
   // Evidence collection may include git diff and bounded artifact reads before
   // the host can acknowledge the newly-created Reviewer session.
   'maker:review:start': 90_000,

@@ -12535,6 +12535,18 @@
       "cancelled": "Cancelled"
     },
     "thinking": {
+      "translation": {
+        "translate": "Translate",
+        "loading": "Translating…",
+        "showOriginal": "Show original",
+        "showTranslation": "Show translation",
+        "machineTranslated": "Machine translation",
+        "disclosure": "The original text will be sent to the auxiliary model services configured in Settings and will use additional quota.",
+        "tooLong": "This thinking block is too long to translate.",
+        "failed": "Translation did not finish. The original is preserved. You can translate again.",
+        "unavailable": "No auxiliary model is available. Configure one in Settings first.",
+        "unsupported": "This computer does not support thinking translation yet. Update it to use this feature."
+      },
       "completed": "Thought for {{duration}}",
       "aborted": "Thought for {{duration}} (aborted)"
     },

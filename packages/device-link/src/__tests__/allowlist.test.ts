@@ -174,6 +174,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       'local-db:sessions:patch-meta',
       'maker:generate-title',
       'maker:regenerate-title',
+      'maker:translate-thinking',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }

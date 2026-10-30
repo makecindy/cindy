@@ -6972,6 +6972,10 @@ interface ElectronAPI {
       agentKind: 'claude-code' | 'codex' | 'pi',
       sessionId?: string,
     ) => Promise<{ title: string | null }>;
+    /** Display-only translation through the task owner's auxiliary models. */
+    translateThinking: (
+      request: import('../shared/thinkingTranslation').ThinkingTranslationRequest,
+    ) => Promise<import('../shared/thinkingTranslation').ThinkingTranslationResult>;
     /** Optional status copy from public execution facts only. */
     polishWorkingStatus: (
       request: import('../shared/workingStatus').WorkingStatusRequest,

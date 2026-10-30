@@ -438,6 +438,7 @@ describe("mobile maker transport", () => {
       "local-db:messages:dismiss-error",
       "local-db:sessions:ack-interrupted",
       "maker:regenerate-title",
+      "maker:translate-thinking",
       "maker:predict-prompt",
       "local-db:messages:list",
       "local-db:messages:view",
