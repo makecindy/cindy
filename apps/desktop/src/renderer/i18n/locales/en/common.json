@@ -2274,7 +2274,7 @@
         "title": "Close Cindy",
         "message": "What should happen when you close the main window?",
         "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings.",
-        "linuxDetail": "Tasks keep running while the window is minimized. Restore Cindy from the taskbar or window overview, or change this choice later in Settings."
+        "linuxDetail": "Tasks keep running with the window out of the way; open Cindy again to bring the window back, or change this choice later in Settings."
       },
       "trayMenu": {
         "show": "Open Cindy",

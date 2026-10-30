@@ -2,19 +2,86 @@ import type { LinuxCloseBehavior } from '../shared/windowBehavior.js';
 
 /** BrowserWindow surface needed for Linux's keep-running close action. */
 export interface LinuxCloseBehaviorWindow {
+  hide(): void;
   minimize(): void;
+}
+
+/**
+ * How the "keep running" close choice keeps the app alive. On Linux Wayland most
+ * compositors (e.g. Hyprland) never act on toplevel minimize requests, so the
+ * window must hide to tray instead; X11 keeps the classic minimize.
+ */
+export interface LinuxCloseBehaviorActions {
+  quit(): void;
+  keepRunning(window: LinuxCloseBehaviorWindow): void;
+}
+
+/**
+ * True when running under a Wayland session. `XDG_SESSION_TYPE` is the primary
+ * signal, but compositors started from a TTY (Hyprland, Sway) can leave it at
+ * `tty`, so any value other than an explicit `x11` falls back to a set
+ * `WAYLAND_DISPLAY` — the same independent positive signal as
+ * remote-desktop/waylandCapture.ts `isWaylandDesktop`.
+ */
+export function isWaylandSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.XDG_SESSION_TYPE === 'x11') return false;
+  if (env.XDG_SESSION_TYPE === 'wayland') return true;
+  return Boolean(env.WAYLAND_DISPLAY);
+}
+
+/** Where the Linux keep-running choice parks the main window. */
+export type LinuxKeepRunningSurface = 'tray' | 'minimize';
+
+/**
+ * Wayland compositors ignore toplevel minimize requests, so keep-running must
+ * hide the main window to tray there; X11 keeps the classic minimize.
+ */
+export function resolveLinuxKeepRunningSurface(
+  wayland: boolean,
+): LinuxKeepRunningSurface {
+  return wayland ? 'tray' : 'minimize';
+}
+
+/**
+ * True only for the main window's minimize intent on Wayland, which must map to
+ * hide-to-tray; secondary windows keep the classic minimize on every platform.
+ */
+export function minimizeRequestMapsToTray(isWayland: boolean, isMainWindow: boolean): boolean {
+  return isWayland && isMainWindow;
+}
+
+/** Injectable side effects for hiding to tray, kept out of the Electron adapter. */
+export interface TrayHideFallbackDependencies<TWindow> {
+  ensureTray(): boolean;
+  hideToTray(window: TWindow): void;
+  reportTrayError(window: TWindow): void;
+}
+
+/**
+ * Hide to tray only when the tray icon exists; otherwise surface the error and
+ * keep the window open so running tasks stay reachable.
+ */
+export function hideToTrayWithFallback<TWindow>(
+  window: TWindow,
+  deps: TrayHideFallbackDependencies<TWindow>,
+): void {
+  if (deps.ensureTray()) {
+    deps.hideToTray(window);
+    return;
+  }
+  deps.reportTrayError(window);
 }
 
 /** Apply the persisted Linux choice without coupling the policy to Electron globals. */
 export function applyLinuxMainWindowCloseBehavior(
   window: LinuxCloseBehaviorWindow,
   behavior: LinuxCloseBehavior,
-  quit: () => void,
+  actions: LinuxCloseBehaviorActions,
 ): void {
   if (behavior === 'minimize') {
-    window.minimize();
+    actions.keepRunning(window);
   } else {
-    quit();
+    actions.quit();
   }
 }
 

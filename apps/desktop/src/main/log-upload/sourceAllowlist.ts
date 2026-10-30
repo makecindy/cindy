@@ -42,7 +42,7 @@ const ALLOWED_ROOT_SCOPES: readonly string[] = [
   'renderer-guard',
   'csp', //                  CSP 违规上报(注入/加载异常)
   'secondary-windows', //    子窗口创建与销毁
-  'windows-tray', //         Windows 托盘生命周期
+  'windows-tray', //         托盘生命周期(Windows 及 Linux Wayland 隐藏到托盘;历史 tag 名,勿改)
   'dock-icon', //            macOS Dock 图标状态
   'relaunch-activity', //    重启前的忙碎判定
 
