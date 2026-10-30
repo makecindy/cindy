@@ -9,6 +9,7 @@ export function DefaultOverrideControls({
   disabled,
   alwaysVisible = false,
   showCustomizedBadge = isCustomized,
+  label,
   onReset,
 }: {
   isCustomized: boolean;
@@ -17,6 +18,8 @@ export function DefaultOverrideControls({
   alwaysVisible?: boolean;
   /** Draft-only settings can keep the reset action without claiming a saved override. */
   showCustomizedBadge?: boolean;
+  /** 同屏有多个还原入口时给出可区分的无障碍名。 */
+  label?: string;
   onReset: () => void;
 }) {
   const { t } = useTranslation();
@@ -36,7 +39,7 @@ export function DefaultOverrideControls({
           type="button"
           onClick={onReset}
           disabled={resetDisabled}
-          aria-label={t('settings.defaults.restore')}
+          aria-label={label ?? t('settings.defaults.restore')}
           className={cn(
             'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg',
             'text-[var(--settings-section-desc)] transition-colors',

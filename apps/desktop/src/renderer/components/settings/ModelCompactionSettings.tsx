@@ -1,12 +1,20 @@
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from '@/components/ui/dropdown-menu';
-import type { ModelContextLimitView } from '../../../shared/modelContextLimit';
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { Slider } from '@/components/ui/slider';
+import {
+  MAX_MODEL_COMPACTION_PCT,
+  MIN_MODEL_COMPACTION_PCT,
+  type ModelContextLimitView,
+} from '../../../shared/modelContextLimit';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
+
+/** 连续提交（键盘连按）的合并窗口：一次按键风暴最多落一次盘。 */
+const COMMIT_DEBOUNCE_MS = 300;
 
 /** One supplier/model preference shared by every harness. */
 export function ModelCompactionSettings({
@@ -20,48 +28,137 @@ export function ModelCompactionSettings({
 }) {
   const { t } = useTranslation();
   const key = 'settings.providers.models.advanced.compaction';
-  const value = policy.isCustomized ? String(policy.pct) : 'default';
-  const values = [...new Set([50, 60, 70, 80, 85, 90, policy.pct])].sort((a, b) => a - b);
+  // Drag preview stays local; only the released value is persisted.
+  const [draft, setDraft] = useState<number | null>(null);
+  const pending = useRef<{
+    pct: number;
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const writing = useRef<number | null>(null);
+  const lastWriteAt = useRef(0);
+  // 取消手势后，共享 Slider 会回放一次按下前的值；这一次不是新预览。
+  const cancelling = useRef(false);
+  const value = draft ?? policy.pct;
+
+  // 策略变化（自己写入的确认、还原、换模型、外部改写）→ 预览跟住落盘值；
+  // 但属于还没发送的尾部提交或在途写入的预览要留住，否则连按的最后一格会被确认吃掉。
+  useEffect(() => {
+    setDraft((current) =>
+      current !== null && (pending.current?.pct === current || writing.current === current)
+        ? current
+        : null,
+    );
+  }, [policy.pct, policy.isCustomized]);
+
+  // 卸载或换模型（onChange 换了）时，作废还没发送的尾部提交。
+  useEffect(
+    () => () => {
+      if (pending.current) clearTimeout(pending.current.timer);
+      pending.current = null;
+      setDraft(null);
+    },
+    [onChange],
+  );
+
+  const write = async (pct: number) => {
+    writing.current = pct;
+    lastWriteAt.current = Date.now();
+    await onChange(pct);
+    if (writing.current === pct) writing.current = null;
+    // 写失败时策略不变，这里把预览收回，显示主进程真正保存的值。
+    setDraft((current) => (current === pct ? null : current));
+  };
+  const commit = (pct: number) => {
+    const since = Date.now() - lastWriteAt.current;
+    if (pending.current) clearTimeout(pending.current.timer);
+    if (since >= COMMIT_DEBOUNCE_MS) {
+      // 距上次写入够久：立刻落盘（拖拽只有一次提交，不该让人等窗口）。
+      pending.current = null;
+      void write(pct);
+      return;
+    }
+    // 窗口内的连续提交（键盘连按）：合并成窗口末尾的一次写入；
+    // 绑定提交时的账号代次，账号已切换就作废，不把旧值写进新账号。
+    const owner = getDataOwnerGeneration();
+    pending.current = {
+      pct,
+      owner,
+      timer: setTimeout(() => {
+        pending.current = null;
+        if (!isDataOwnerGenerationCurrent(owner)) return;
+        void write(pct);
+      }, COMMIT_DEBOUNCE_MS - since),
+    };
+  };
+  const restoreDefault = () => {
+    if (pending.current) clearTimeout(pending.current.timer);
+    pending.current = null;
+    setDraft(null);
+    void onChange(null);
+  };
   return (
     <details
       className="mt-3 border-t border-[var(--settings-theme-card-border)] pt-3"
       data-model-compaction
     >
+      {/* 状态标记挂在标题行：它出现/消失时不会挤压下面的滑杆，滑杆宽度保持恒定。 */}
       <summary className="cursor-pointer text-12 font-medium text-[var(--text-secondary)]">
         {t(`${key}.title`)}
+        <span className="ml-2 inline-flex items-center rounded-full bg-[var(--surface-chip)] px-2 py-0.5 align-middle text-11 font-medium leading-none text-[var(--text-secondary)]">
+          {policy.isCustomized ? t('settings.defaults.customizedBadge') : t(`${key}.defaultBadge`)}
+        </span>
       </summary>
       <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
         {t(`${key}.hint`)}
       </p>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
+      <div className="mt-2 flex items-center gap-[14px]">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <Slider
+            value={[value]}
+            min={MIN_MODEL_COMPACTION_PCT}
+            max={MAX_MODEL_COMPACTION_PCT}
+            step={1}
             disabled={disabled}
-            className="mt-2 inline-flex min-h-7 items-center gap-2 rounded-full border border-[var(--settings-theme-card-border)] px-3 text-12 disabled:opacity-50"
-          >
-            {policy.isCustomized ? `${policy.pct}%` : t(`${key}.default`, { pct: policy.pct })}
-            <span aria-hidden="true">⌄</span>
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="z-[10003]" align="start">
-          <DropdownMenuRadioGroup
-            value={value}
-            onValueChange={(next) => {
-              void onChange(next === 'default' ? null : Number(next));
+            onValueCancel={() => {
+              // 取消：预览作废，界面跟住落盘值。
+              cancelling.current = true;
+              setDraft(null);
             }}
-          >
-            <DropdownMenuRadioItem value="default">
-              {t('settings.providers.models.advanced.restoreDefault')}
-            </DropdownMenuRadioItem>
-            {values.map((pct) => (
-              <DropdownMenuRadioItem key={pct} value={String(pct)}>
-                {pct}%
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+            onValueChange={(next: number[]) => {
+              const pct = next[0];
+              if (typeof pct !== 'number') return;
+              if (cancelling.current) {
+                // 取消回放：共享 Slider 把按下前的值再发一次，丢弃它。
+                cancelling.current = false;
+                return;
+              }
+              setDraft(pct);
+            }}
+            onValueCommit={(next: number[]) => {
+              const pct = next[0];
+              if (typeof pct === 'number') commit(pct);
+            }}
+            aria-label={t(`${key}.sliderAria`)}
+          />
+          <div className="flex items-center justify-between text-11 leading-none text-[var(--text-tertiary)]">
+            <span>{MIN_MODEL_COMPACTION_PCT}%</span>
+            <span>{MAX_MODEL_COMPACTION_PCT}%</span>
+          </div>
+        </div>
+        {/* 定宽数值块：50%–95% 数字位数相同，滑杆不会随数值长短跳动。 */}
+        <span className="w-[52px] shrink-0 text-center text-13 font-medium leading-none tabular-nums text-[var(--text-primary)]">
+          {value}%
+        </span>
+        <DefaultOverrideControls
+          isCustomized={policy.isCustomized}
+          disabled={disabled}
+          alwaysVisible
+          showCustomizedBadge={false}
+          label={t(`${key}.restoreAria`)}
+          onReset={restoreDefault}
+        />
+      </div>
       <p className="mt-2 text-11 leading-relaxed text-[var(--text-secondary)]">
         {t(`${key}.timing`)}
       </p>

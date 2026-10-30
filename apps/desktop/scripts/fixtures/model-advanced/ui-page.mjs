@@ -31,17 +31,25 @@ export default {
     await ui.capture('ultra-selected');
     const compaction = page.locator('[data-model-compaction]');
     await compaction.locator('summary').click();
-    const trigger = compaction.getByRole('button');
-    await trigger.click();
-    await ui.capture('compaction-options');
-    await page.getByRole('menuitemradio', { name: '80%', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[data-model-compaction] button')?.textContent?.includes('80%'));
+    // 滑杆用键盘驱动（与 model-speed fixture 同一手法）：90 → 80 共十次 ArrowLeft。
+    const thumb = compaction.getByRole('slider');
+    await thumb.focus();
+    await ui.capture('compaction-slider');
+    for (let step = 0; step < 10; step += 1) {
+      const before = await thumb.getAttribute('aria-valuenow');
+      await thumb.press('ArrowLeft');
+      // 等数值真的前进一步再按下一格，不靠固定时序赌写入快慢。
+      await page.waitForFunction(
+        (prev) => document.querySelector('[data-model-compaction] [role="slider"]')?.getAttribute('aria-valuenow') !== prev,
+        before,
+      );
+    }
+    await page.waitForFunction(() => document.querySelector('[data-model-compaction] span.tabular-nums')?.textContent?.trim() === '80%');
     await compaction.scrollIntoViewIfNeeded();
     await ui.capture('model-compaction');
     await ui.capture('model-compaction-closeup', { locator: compaction });
-    await trigger.click();
-    await page.getByRole('menuitemradio', { name: await ui.t('settings.providers.models.advanced.restoreDefault'), exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[data-model-compaction] button')?.textContent?.includes('90%'));
+    await compaction.getByRole('button', { name: await ui.t('settings.providers.models.advanced.compaction.restoreAria'), exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[data-model-compaction] span.tabular-nums')?.textContent?.trim() === '90%');
     await compaction.scrollIntoViewIfNeeded();
     await ui.capture('default-compaction');
     await ui.capture('default-compaction-closeup', { locator: compaction });

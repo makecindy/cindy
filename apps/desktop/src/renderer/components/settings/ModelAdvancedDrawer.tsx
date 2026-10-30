@@ -880,7 +880,9 @@ export function ModelAdvancedDrawer({
                       )}
                       {ctx.compaction && (
                         <ModelCompactionSettings policy={ctx.compaction}
-                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
+                          // 不用 ctx.loading 禁用：Radix 在 disabled 时会吞掉方向键，
+                          // 键盘用户就只能一下一格地等写入完成。写入在 main 侧已串行。
+                          disabled={paymentRequired || localConfigurationBlocked}
                           onChange={ctx.setCompaction} />
                       )}
                     </Section>

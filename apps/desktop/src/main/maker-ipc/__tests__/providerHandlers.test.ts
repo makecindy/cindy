@@ -4653,11 +4653,17 @@ describe('model context limit IPC', () => {
     });
     await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 80, stamp);
     expect(writeModelCompaction).toHaveBeenCalledExactlyOnceWith([primary, related], 80);
-    for (const invalid of [49, 91, 80.5, '80', NaN]) {
+    // Owner ruling 2026-10-29: the ratio range is back to 50–95 with 1% granularity.
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 95, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 95);
+    await harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 91, stamp);
+    expect(writeModelCompaction).toHaveBeenLastCalledWith([primary, related], 91);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
+    for (const invalid of [49, 96, 80.5, '80', NaN]) {
       await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, invalid, stamp)).rejects.toThrow();
     }
     await expect(harness.invoke(MAKER_INVOKE.MODEL_COMPACTION_SET, target, 70, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
-    expect(writeModelCompaction).toHaveBeenCalledTimes(1);
+    expect(writeModelCompaction).toHaveBeenCalledTimes(3);
   });
 
   it('returns native facts separately from model preferences without writing or launching a task', async () => {
