@@ -1706,7 +1706,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const speakers: BotGroupSpeaker[] = [];
     for (const e of executions.filter(e => ['queued', 'running', 'needs_input', 'stopping'].includes(e.status))) {
       const run = running.get(e.id);
-      const startedAt = run?.started ?? (e.created_at ? Date.parse(e.created_at) : undefined);
+      // created_at is the enqueue time, not the start of work; showing it as elapsed time
+      // made queued executions look like they had already been working.
+      const startedAt = run?.started;
       const speaker: BotGroupSpeaker = { botId: localBot(e.bot_id)?.id ?? e.bot_id, sessionId: run?.sessionId || null,
         executionId: e.id, ...(Number.isFinite(startedAt) ? { startedAt } : {}), stopping: e.status === 'stopping',
         executionStatus: e.status as BotGroupSpeaker['executionStatus'],

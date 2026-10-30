@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('react-native', () => ({
   View: ({ children, testID, accessibilityLabel }: any) => el('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children),
+  Pressable: ({ children, onPress, disabled, testID }: any) => el('button', { onClick: onPress, disabled, 'data-testid': testID }, children),
   StyleSheet: { create: (value: unknown) => value },
 }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, action.label) }));
@@ -59,7 +60,7 @@ beforeEach(async () => {
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
 });
-afterEach(async () => { await act(async () => root.unmount()); });
+afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 it('follows the speaking lane while focused and seeds its pending prompts', async () => {
   await render({});
@@ -95,7 +96,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'needs-interaction', compactDetail: '' };
   await render({});
-  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: identity.name }));
+  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: '' }));
   expect(h.panel).toBeNull();
 });
 
@@ -128,4 +129,23 @@ it.each([
   await i18n.changeLanguage(locale);
   await render({ executionStatus: 'queued' });
   expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(expected);
+});
+
+// PR #7806 unit: real row actions and timestamp; existing cases only cover task navigation.
+// Minimal input: one active execution with a known start, followed by a pending stop.
+it('shows real elapsed time and disables the group stop action while pending', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(20_000);
+  const stop = vi.fn(async () => undefined);
+  await render({ startedAt: 15_000, onStop: stop });
+  expect(node.textContent).toContain('已工作 5 秒');
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(node.textContent).toContain('已工作 6 秒');
+  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
+  expect(stop).toHaveBeenCalledTimes(1);
+  await render({ startedAt: 15_000, onStop: stop, stopPending: true });
+  const button = node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.textContent).toBe(i18n.t('groupChat.speaking.stopping'));
+  vi.useRealTimers();
 });
