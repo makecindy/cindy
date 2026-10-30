@@ -1,3 +1,4 @@
+import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
@@ -28,7 +29,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
-import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
+import { isWizardOAuthChoice, isWizardApiKeyChoice, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
@@ -57,7 +58,6 @@ import { SpeechModelChoices } from './SpeechModelChoices';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
 import {
-  PROVIDER_MEDIA_FIELDS,
   providerModelsForRoute,
   isOpenRouterModelsUrl,
   isLoopbackProviderUrl,
@@ -79,14 +79,14 @@ import type {
  *   - builtin(左栏检测建议 / 引导卡 OAuth 行):直接进入该内置渠道的授权步。
  *   - preset(引导卡「其他供应商」行):presets 异步载入后直达该预设的表单步。
  */
-export type WizardEntry =
-  { kind: 'builtin'; providerId: string } | { kind: 'preset'; presetId: string; speechOnly?: boolean };
+export type WizardEntry = ProviderSearchTarget;
 
 interface AddProviderWizardProps {
   detected?: DetectedProviderDraft;
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  onEntryUnavailable?: () => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
   onOpenCustomForm: () => void;
   onClose: () => void;
@@ -357,15 +357,12 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
-  return !provider.removed && (provider.connected || provider.removed === false);
-}
-
 export function AddProviderWizard({
   detected,
   onReturnCustom,
   providers,
   entry,
+  onEntryUnavailable,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
@@ -385,6 +382,7 @@ export function AddProviderWizard({
   );
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const [presetsLoaded, setPresetsLoaded] = useState(false);
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -480,9 +478,9 @@ export function AddProviderWizard({
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) setPresets(withSpeechApiPresets(r.presets));
+        if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoaded(true); }
       })
-      .catch(() => { if (!cancelled) setPresets(withSpeechApiPresets([])); });
+      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets([])); setPresetsLoaded(true); if (entry?.kind === 'preset') onEntryUnavailable?.(); } });
     return () => {
       cancelled = true;
     };
@@ -526,28 +524,14 @@ export function AddProviderWizard({
   // Native subscription brands remain available for adding another independent account.
   const oauthChoices = useMemo(
     () =>
-      providers.filter(
-        (p) =>
-          p.id !== 'xd' &&
-          p.source === 'builtin' &&
-          (!hasRetainedBuiltinConnection(p) || ['anthropic', 'openai', 'xai'].includes(p.id)) &&
-          (['anthropic', 'openai', 'xai'].includes(p.id) ||
-            (p.auth.method === 'oauth' && !!p.auth.oauth)),
-      ),
+      providers.filter(isWizardOAuthChoice),
     [providers],
   );
   // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目):
   // 已添加（包括断开后保留）的连接不再进向导；声明了媒体清单才展示。
   const builtinApiKeyChoices = useMemo(
     () =>
-      providers.filter(
-        (p) =>
-          p.source === 'builtin' &&
-          p.auth.method === 'apiKey' &&
-          isBuiltinApiKeyProviderId(p.id) &&
-          !hasRetainedBuiltinConnection(p) &&
-          PROVIDER_MEDIA_FIELDS.some((field) => (p[field]?.length ?? 0) > 0),
-      ),
+      providers.filter(isWizardApiKeyChoice),
     [providers],
   );
   const sortedPresets = useMemo(
@@ -683,11 +667,12 @@ export function AddProviderWizard({
       await onDone(MANAGED_LLAMACPP_PROVIDER_ID);
     } catch {
       toast.error(t('settings.providers.llamacpp.failed'));
+      if (entry?.kind === 'llamacpp') onEntryUnavailable?.();
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [onDone, providers, t]);
+  }, [onDone, providers, t, entry, onEntryUnavailable]);
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
@@ -738,10 +723,12 @@ export function AddProviderWizard({
       }
       if (status.kind === 'port-conflict') {
         toast.error(t('settings.providers.local.conflict'));
+        if (entry?.kind === 'ollama') onEntryUnavailable?.();
         return;
       }
       if (status.kind !== 'ready') {
         toast.error(t(`settings.providers.local.status.${status.kind}`));
+        if (entry?.kind === 'ollama') onEntryUnavailable?.();
         return;
       }
       await window.electronAPI.maker.localModelEnsure();
@@ -753,10 +740,29 @@ export function AddProviderWizard({
           ? t('settings.providers.local.notReady')
           : t('settings.providers.local.connectFailed'),
       );
+      if (entry?.kind === 'ollama') onEntryUnavailable?.();
     } finally {
       setSaving(false);
     }
-  }, [onDone, t]);
+  }, [onDone, t, entry, onEntryUnavailable]);
+
+  useEffect(() => {
+    if (entry?.kind === 'builtin' && !providers.some(p => p.id === entry.providerId)) onEntryUnavailable?.();
+  }, [entry, providers, onEntryUnavailable]);
+
+  const llamaCppEntryConsumed = useRef(false);
+  useEffect(() => {
+    if (entry?.kind !== 'llamacpp' || llamaCppEntryConsumed.current) return;
+    llamaCppEntryConsumed.current = true;
+    void connectLlamaCpp();
+  }, [entry, connectLlamaCpp]);
+
+  const ollamaEntryConsumed = useRef(false);
+  useEffect(() => {
+    if (entry?.kind !== 'ollama' || ollamaEntryConsumed.current) return;
+    ollamaEntryConsumed.current = true;
+    void connectOllama();
+  }, [entry, connectOllama]);
 
   // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
   // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
@@ -764,11 +770,12 @@ export function AddProviderWizard({
   const presetEntryConsumedRef = useRef<string | null>(null);
   useEffect(() => {
     if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
-    if (presets.length === 0) return;
+    if (!presetsLoaded) return;
     presetEntryConsumedRef.current = entry.presetId;
     const preset = presets.find((p) => p.id === entry.presetId) ?? [...Object.values(OFFICIAL_API_PRESETS), ...SPEECH_API_PRESETS].find(p => p.id === entry.presetId);
     if (preset) pickPreset(preset, entry.speechOnly === true);
-  }, [entry, presets, pickPreset]);
+    else onEntryUnavailable?.();
+  }, [entry, presets, presetsLoaded, pickPreset, onEntryUnavailable]);
 
   const localLoginRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => () => {
@@ -1531,6 +1538,17 @@ export function AddProviderWizard({
     presetBaseUrlsValid &&
     (!presetNeedsApiKey || apiKey.trim().length > 0 || (detected?.catalog?.ok === true && apiKey === detected.apiKey
       && presetRuntimeBaseUrl(sel.preset, detected.agent, presetBaseUrls) === detected.preset.runtimes[detected.agent]?.baseUrl));
+
+  // The existing Radix dialog owns focus; refocus once the asynchronous search target is ready.
+  const searchTargetFocused = useRef(false);
+  useEffect(() => {
+    if (!onEntryUnavailable || step !== 2 || searchTargetFocused.current) return;
+    const frame = requestAnimationFrame(() => {
+      const target = panelRef.current?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])');
+      if (target) { target.focus(); searchTargetFocused.current = true; }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [onEntryUnavailable, step]);
 
   const wizardTitle = sel
               ? t('settings.providers.wizard.titleWith', {

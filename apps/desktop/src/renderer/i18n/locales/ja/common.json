@@ -3500,6 +3500,8 @@
         "simpleSubtitle": "複数のモデルをひとつのアカウントで精算。"
       },
       "custom": {
+        "nameSearchUnavailable": "このプロバイダーは現在利用できません。カスタムエンドポイントの設定を続けるか、再検索してください。",
+        "nameSearchHint": "この名前のまま、カスタムエンドポイントを設定できます。",
         "tag": "カスタム",
         "editAria": "接続設定を編集",
         "deleteAria": "削除",

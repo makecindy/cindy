@@ -481,3 +481,35 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+
+describe('ProviderConnectionDialog name search', () => {
+  it('selects the existing preset entry without applying it to the custom draft', async () => {
+    const onSelect = vi.fn();
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} onSelectProvider={onSelect} />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'english' } });
+    const option = await screen.findByRole('option', { name: /繁體供應商/ });
+    fireEvent.click(option);
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'preset', presetId: localizedPreset.id });
+    expect((input as HTMLInputElement).value).toBe('english');
+    expect(createCustomProvider).not.toHaveBeenCalled();
+  });
+  it('keeps free text, closes search before the form, and preserves the draft while suspended', async () => {
+    const onClose = vi.fn();
+    const props = { onSaved: vi.fn(), onClose, onSelectProvider: vi.fn() };
+    const { rerender } = render(<ProviderConnectionDialog {...props} />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'my private gateway' } });
+    expect(await screen.findByRole('listbox')).toBeTruthy();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(<ProviderConnectionDialog {...props} suspended />);
+    expect(screen.queryByRole('combobox')).toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    rerender(<ProviderConnectionDialog {...props} />);
+    expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('my private gateway');
+  });
+});

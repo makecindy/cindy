@@ -18,6 +18,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 const {
   wizardSpy,
+  wizardPropsSpy,
   providersState,
   codexAuthState,
   codexAuthActions,
@@ -26,6 +27,7 @@ const {
   customDialogSpy,
 } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
+  wizardPropsSpy: vi.fn(),
   providersState: { providers: [] as unknown[], order: [] as string[] },
   codexAuthState: {
     state: { kind: 'unauthenticated' } as Record<string, unknown>,
@@ -126,6 +128,7 @@ vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
 vi.mock('@/components/settings/AddProviderWizard', () => ({
   AddProviderWizard: (props: { entry?: unknown }) => {
     wizardSpy(props.entry);
+    wizardPropsSpy(props);
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
   },
 }));
@@ -1200,4 +1203,19 @@ describe('ProvidersSection — 分享来的供应商深链', () => {
     expect(screen.queryByTestId('provider-share-received-detail')).toBeNull();
     expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
   });
+});
+
+
+it('routes a custom-name search through the existing wizard and resumes its draft on cancel', async () => {
+  renderAt('?tab=providers&wizard=1');
+  await screen.findByTestId('wizard-stub');
+  act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+  await screen.findByTestId('custom-provider-dialog-stub');
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+  act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'preset', presetId: 'deepseek' }));
+  expect(wizardSpy).toHaveBeenLastCalledWith({ kind: 'preset', presetId: 'deepseek' });
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(true);
+  act(() => wizardPropsSpy.mock.lastCall![0].onClose());
+  expect(screen.queryByTestId('wizard-stub')).toBeNull();
+  expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
 });

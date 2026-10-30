@@ -2010,3 +2010,24 @@ describe('general manual fallback beside speech suggestions', () => {
     expect(screen.queryByPlaceholderText('settings.providers.wizard.manualModelPlaceholder')).toBeNull();
   });
 });
+
+
+it('focuses a search target and reports a missing or empty-directory target to its caller', async () => {
+  const onUnavailable = vi.fn();
+  const { unmount } = render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect((document.activeElement as HTMLInputElement)?.value).toBe('DeepSeek'));
+  expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  unmount();
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [] });
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'gone' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
+});
+
+it('uses the existing Ollama connector once and returns to the search draft on failure', async () => {
+  const onUnavailable = vi.fn();
+  const status = vi.fn(async () => { throw new Error('unavailable'); });
+  Object.assign(window.electronAPI.maker, { localModelStatus: status });
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'ollama' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
+  expect(status).toHaveBeenCalledTimes(1);
+});
