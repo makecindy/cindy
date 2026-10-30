@@ -96,6 +96,17 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
 Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
 不支持 UI 扩展的普通 MCP 保持文本工具使用方式。
+
+App 发起的 `tools/call` 在 Host 到 MCP server 这一段有 30 分钟总时限；服务端进度不会
+延长这个总时限。Host 按单次请求映射进度 token，再将原始进度值、总量与消息转发给
+发起的 View。不同 View 可以使用相同的本地 token，不会互相接收进度。
+检查归属期间积压的进度只保留最新一条，避免高频上报造成无界队列。
+`@modelcontextprotocol/ext-apps@1.7.5` 的 `app.callServerTool(params, options)` 默认注册
+进度回调并启用 `resetTimeoutOnProgress`，因此服务端持续报告进度时，App 的默认
+60 秒等待时限会续期。服务端不报告进度时，App 应通过 `options.timeout` 显式设置
+所需等待时间（单位为毫秒）；App 自己的超时或取消仍会传递给对应的上游请求。
+Host 不生成虚构的服务端进度，也不自动重放超时的工具调用。
+
 模型侧 facade 继承下游 harness 实际声明的 client capabilities（含其他 extensions），
 再追加 Apps extension；roots、sampling、elicitation 与普通服务器回调只返回产生该
 连接的 harness，客户端通知（如 roots/list_changed）沿同一连接转发。回调返回前

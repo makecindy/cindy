@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppBridge } from '@modelcontextprotocol/ext-apps/app-bridge';
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { JSONRPCMessage, Notification } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import type { AppConnection } from '../connection.js';
@@ -136,14 +137,18 @@ async function fixture(caller = 'renderer:1') {
       appCapabilities: {},
     },
   });
-  await vi.waitFor(() =>
-    expect(outgoing).toContainEqual(expect.objectContaining({ id: 1, result: expect.anything() })),
+  await vi.waitFor(
+    () =>
+      expect(outgoing).toContainEqual(expect.objectContaining({ id: 1, result: expect.anything() })),
+    { interval: 1 },
   );
   await dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
-  await vi.waitFor(() =>
-    expect(outgoing).toContainEqual(
-      expect.objectContaining({ method: 'ui/notifications/tool-input' }),
-    ),
+  await vi.waitFor(
+    () =>
+      expect(outgoing).toContainEqual(
+        expect.objectContaining({ method: 'ui/notifications/tool-input' }),
+      ),
+    { interval: 1 },
   );
   outgoing.length = 0;
   return {
@@ -435,25 +440,82 @@ describe('MCP App upstream result authorization', () => {
     expect(f.methods.tools).toHaveBeenCalledOnce();
   });
 
+  it('retains the latest tool progress while the card authorization read is pending', async () => {
+    const f = await fixture();
+    const result = deferred<unknown>();
+    f.methods.callTool.mockReturnValueOnce(result.promise);
+    await f.dispatch({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { ...requests[0][1], _meta: { progressToken: 'view-local-token' } },
+    });
+    await vi.waitFor(() => expect(f.methods.callTool).toHaveBeenCalledOnce());
+    const options = f.methods.callTool.mock.calls[0][2] as RequestOptions;
+    const authorization = deferred<McpAppRecord>();
+    f.readCard.mockReturnValueOnce(authorization.promise);
+    options.onprogress?.({ progress: 1 });
+    await vi.waitFor(() => expect(f.readCard.mock.results.at(-1)?.value).toBe(authorization.promise));
+    options.onprogress?.({ progress: 2 });
+    options.onprogress?.({ progress: 3, total: 10, message: 'latest' });
+    authorization.resolve(await f.readCard());
+    await vi.waitFor(() =>
+      expect(f.outgoing).toContainEqual({
+        jsonrpc: '2.0',
+        method: 'notifications/progress',
+        params: { progressToken: 'view-local-token', progress: 3, total: 10, message: 'latest' },
+      }),
+    );
+    expect(
+      f.outgoing.filter(
+        (message) => 'method' in message && message.method === 'notifications/progress',
+      ),
+    ).toHaveLength(1);
+    result.resolve(requests[0][3]);
+    await vi.waitFor(() =>
+      expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: requests[0][3] })),
+    );
+  });
+
   it.each(['card', 'owner', 'server', 'config'] as const)(
-    'discards a completed App tool result after %s revocation without replaying it',
+    'discards App tool progress and results after %s revocation without replaying it',
     async (revocation) => {
       const f = await fixture();
       const pending = deferred<unknown>();
       f.methods.callTool.mockReturnValueOnce(pending.promise);
-      await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: requests[0][1] });
+      await f.dispatch({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { ...requests[0][1], _meta: { progressToken: 'view-local-token' } },
+      });
       await vi.waitFor(() => expect(f.methods.callTool).toHaveBeenCalledOnce());
+      const options = f.methods.callTool.mock.calls[0][2] as RequestOptions;
+      options.onprogress?.({ progress: 1, total: 2, message: 'authorized progress' });
+      await vi.waitFor(() =>
+        expect(f.outgoing).toContainEqual({
+          jsonrpc: '2.0',
+          method: 'notifications/progress',
+          params: {
+            progressToken: 'view-local-token',
+            progress: 1,
+            total: 2,
+            message: 'authorized progress',
+          },
+        }),
+      );
+      f.outgoing.length = 0;
       f.revoke(revocation);
+      options.onprogress?.({ progress: 2, total: 2, message: marker });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(JSON.stringify(f.outgoing)).not.toContain(marker);
       pending.resolve(requests[0][3]);
       await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2 })));
-      expect(f.outgoing).toContainEqual(
-        expect.objectContaining({ id: 2, error: expect.anything() }),
-      );
+      expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() }));
       expect(JSON.stringify(f.outgoing)).not.toContain(marker);
       expect(f.methods.callTool).toHaveBeenCalledOnce();
     },
   );
-
   it.each(requests.slice(1))(
     'discards %s results if the card is revoked while awaiting the server',
     async (method, params, upstream, result) => {

@@ -9,6 +9,8 @@ import {
   type JSONRPCMessage,
   type Tool,
   type CallToolResult,
+  type Progress,
+  type ProgressNotification,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord, McpAppDocument } from '../../shared/mcpApps.js';
 import { MCP_APP_LINK_GRANT_MS, type McpAppLinkAuthorization } from '../../shared/mcpApps.js';
@@ -24,6 +26,10 @@ import {
   MCP_APPS_MAX_BYTES,
   MCP_APPS_MAX_REMOTE_BYTES,
 } from './protocol.js';
+
+// A fixed total budget: server progress may renew the View's idle timer, but
+// must not keep a Main-owned tool request alive indefinitely.
+const MCP_APP_TOOL_TIMEOUT_MS = 30 * 60_000;
 
 export interface McpAppsHostDeps {
   owner(): object | undefined;
@@ -439,10 +445,56 @@ export class McpAppsHost {
         if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
         await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal);
         const client = await currentClient(extra.signal);
-        return (await currentResult(
-          client.callTool(params, CallToolResultSchema, { signal: extra.signal }),
-          extra.signal,
-        )) as CallToolResult;
+        const token = params._meta?.progressToken;
+        let active = true;
+        let forwarding = false;
+        let pendingProgress: Progress | undefined;
+        try {
+          return (await currentResult(
+            client.callTool(params, CallToolResultSchema, {
+              signal: extra.signal,
+              timeout: MCP_APP_TOOL_TIMEOUT_MS,
+              // The SDK allocates a connection-scoped token when onprogress is
+              // registered. View-local tokens can collide on this shared client.
+              onprogress:
+                token === undefined
+                  ? undefined
+                  : (update) => {
+                      if (!active || extra.signal.aborted) return;
+                      pendingProgress = update;
+                      if (forwarding) return;
+                      forwarding = true;
+                      // Retain only the latest update while authorization is
+                      // checked, rather than queueing unbounded server progress.
+                      void (async () => {
+                        try {
+                          while (active && !extra.signal.aborted && pendingProgress) {
+                            await assertCurrent();
+                            if (!active || extra.signal.aborted) return;
+                            const latest = pendingProgress;
+                            pendingProgress = undefined;
+                            const notification: ProgressNotification = {
+                              method: 'notifications/progress',
+                              params: { ...latest, progressToken: token },
+                            };
+                            // AppBridge 1.7's helper type omits core MCP progress.
+                            await transport.send({ jsonrpc: '2.0', ...notification });
+                          }
+                        } catch {
+                          // Revoked Views must not receive late progress.
+                          pendingProgress = undefined;
+                        } finally {
+                          forwarding = false;
+                        }
+                      })();
+                    },
+            }),
+            extra.signal,
+          )) as CallToolResult;
+        } finally {
+          active = false;
+          pendingProgress = undefined;
+        }
       };
       bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
         await assertCurrent();
