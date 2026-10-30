@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { cn } from '@/lib/utils';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import { BotDmThreadPanel, type BotDmThreadPanelState } from './BotDmThreadViews';
@@ -17,9 +18,11 @@ import { isBotDmThreadUnread, useBotDmThreadList } from './botDmThreads';
 import { BotDmThreadsProvider, type BotDmThreadsValue } from './botDmThreadsContext';
 import { useBotProfiles } from './botStore';
 import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
+import { useThreadPanelResize } from './useThreadPanelResize';
 
 
 const TITLE_LIMIT = 60;
+const NO_OPENING_MOTION = () => {};
 
 function topicTitle(text: string | undefined): string {
   const line = text?.replace(/\s+/g, ' ').trim() ?? '';
@@ -44,6 +47,9 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const { threads, reload, readVersion } = useBotDmThreadList(enabled ? bot.id : null, enabled ? rootSessionId : null, topicSessionIds);
 
   const [open, setOpen] = useState<{ rootClientId: string; state: BotDmThreadPanelState } | null>(null);
+  // Same divider as group topics; the chosen width survives switching and reopening topics here.
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const resize = useThreadPanelResize(layoutRef, enabled ? open?.rootClientId ?? null : null, NO_OPENING_MOTION);
   const attempt = useRef(0);
   const ensure = useCallback((rootClientId: string) => {
     const request = ++attempt.current;
@@ -115,7 +121,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const openThread = open ? threads.get(open.rootClientId) : undefined;
   return (
     <BotDmThreadsProvider value={value}>
-      <div className="flex h-full min-w-0 flex-1">
+      <div ref={layoutRef} className={cn('flex h-full min-w-0 flex-1', resize.isDragging && 'select-none [&_*]:cursor-col-resize')}>
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
         {enabled && open ? (
           <BotDmThreadPanel
@@ -129,6 +135,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
             replyCount={openThread?.replyCount}
             onRetry={() => ensure(open.rootClientId)}
             onClose={close}
+            resize={resize}
           />
         ) : null}
       </div>

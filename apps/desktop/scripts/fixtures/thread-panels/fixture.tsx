@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { mountPage, subscription } from '../../ui-page/harness';
+import { BotDmThreadHost } from '../../../src/renderer/features/bots/BotDmThreadHost';
 import { BotDmThreadPanel } from '../../../src/renderer/features/bots/BotDmThreadViews';
+import { useBotDmThreads } from '../../../src/renderer/features/bots/botDmThreadsContext';
 import { ChatThreadPanel } from '../../../src/renderer/features/bots/ChatThreadPanel';
 import type { BotGroupDetail } from '../../../src/shared/botGroupChat';
 
@@ -11,8 +13,23 @@ const root = { id: 'root', sequence: 1, kind: 'message' as const, authorKind: 'b
   authorBotId: bot.id, authorName: bot.name, content: text, mentions: { all: false, botIds: [] },
   noticeCode: null, planId: null, files: [], attachments: [], createdAt: 1792990000000 };
 
+/** The private chat side: opens the topic on the root message once, as its bubble button would. */
+function OpenTopic() {
+  const topics = useBotDmThreads();
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!topics || opened.current) return;
+    opened.current = true;
+    topics.openThread('root');
+  }, [topics]);
+  return <main className="min-w-0 flex-1" />;
+}
+
 function Scenario({ kind }: { kind: string }) {
   const [closed, setClosed] = useState(false);
+  if (kind === 'resized') return <div className="flex h-screen" data-ui-page-subject>
+    <BotDmThreadHost enabled bot={bot} rootSessionId="fixture-main" mentions={[]}><OpenTopic /></BotDmThreadHost>
+  </div>;
   return <div className="flex h-screen" data-ui-page-subject>
     <div className="min-w-0 flex-1" />
     {closed ? <span data-closed="" /> : kind === 'group' ? <ChatThreadPanel
@@ -30,6 +47,8 @@ void mountPage({
     maker: { onBotGroupChanged: subscription('groupChanged'), chatServer: {
       thread: async () => ({ ok: true, root, replies: [], hasMore: false }),
     } },
+    // The private topic stays opening: its ready-state task runtime is outside this fixture.
+    localDb: { bots: { dmThread: { list: async () => [], ensure: () => new Promise(() => {}) } } },
   },
   render: ctx => {
     // Only the source snapshot is simulated; both panels and root rendering are real.

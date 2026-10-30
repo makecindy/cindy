@@ -12,6 +12,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
+import type { ThreadPanelResize } from './useThreadPanelResize';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { botDmThreadReadKey, markBotRead } from './botReadState';
 
@@ -35,7 +36,7 @@ export type BotDmThreadPanelState =
  * The topic beside the private chat: its root message on top, then the topic's own task view.
  * Read while open — the newest companion reply in it counts as seen.
  */
-export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, mentions, lastAssistantAt, replyCount, onRetry, onClose }: {
+export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, mentions, lastAssistantAt, replyCount, onRetry, onClose, resize }: {
   bot: BotChatIdentity;
   rootSessionId: string;
   rootClientId: string;
@@ -46,6 +47,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
   replyCount?: number;
   onRetry: () => void;
   onClose: () => void;
+  resize?: ThreadPanelResize;
 }) {
   const { t, i18n } = useTranslation();
   const root = useRootMessage(rootSessionId, rootClientId);
@@ -111,7 +113,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
       )}
   </ThreadPanelRoot>;
   return (
-    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} onClose={onClose}>
+    <ThreadPanel panelRef={panelRef} rootClientId={rootClientId} resize={resize} onClose={onClose}>
       <div className="flex min-h-0 flex-1 flex-col">
         {state.kind === 'ready' ? (
           <CCAgentSessionView
