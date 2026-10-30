@@ -4027,6 +4027,7 @@
         "authorizeFailed": "{{name}} 登录失败，请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
+        "unconfirmedAgents": "接入资料待确认：{{agents}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "signIn": "登录",

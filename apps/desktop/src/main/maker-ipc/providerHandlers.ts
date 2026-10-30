@@ -2480,7 +2480,7 @@ export function registerProviderHandlers(
   // 只读：目录 presets 段（创建对话框「从模板创建」消费）。
   registry.handle(
     MAKER_INVOKE.PROVIDER_PRESETS_LIST,
-    async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
+    async () => ({ presets: deps.listPresets(), modelRegistry: deps.getModelCatalog().modelRegistry }),
   );
 
   // 账户余额查询：查询型结构化返回（同 test-connection 例外条款）；仅网络/上游失败在结果 error 里，不抛。

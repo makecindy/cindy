@@ -4027,6 +4027,7 @@
         "authorizeFailed": "{{name}} にログインできませんでした。再試行してください。",
         "nameLabel": "表示名",
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
+        "unconfirmedAgents": "接続情報は未確認です：{{agents}}",
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",
         "signIn": "ログイン",

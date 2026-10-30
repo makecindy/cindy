@@ -21,9 +21,11 @@ import {
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
-import { buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse,
+import { BUNDLED_CATALOG, buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse,
   type CustomProviderConfig } from '@cindy/model-providers';
 import { mapCodexAppServerModelsToCatalog } from '../codex-model-discovery.js';
+import { presetSupplementalModels } from '../../../shared/providerModelCandidates.js';
+import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime.js';
 
 const CREATE_SQL = `
   CREATE TABLE custom_providers (
@@ -80,6 +82,25 @@ afterEach(() => {
 });
 
 describe('custom provider updates through the runtime database proxy', () => {
+  it('keeps an imported Chat-only interface after real CRUD normalization and reload', async () => {
+    mountDb();
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const id = 'deepseek-v4-flash-vision-exp';
+    for (const runtime of Object.values(preset.runtimes)) runtime!.models = runtime!.models.filter(model => model.id !== id);
+    registry.models.push({ id: 'review/chat-only', name: 'Chat-only fixture', routes: [{ providerId: preset.id, modelId: id,
+      agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+    const candidate = presetSupplementalModels(preset, 'claude-code', registry).find(model => model.id === id)!;
+    await createCustomProvider({ id: 'chat-only', name: 'Chat-only', runtimes: {
+      'claude-code': presetConnectionRuntime(preset, 'claude-code', [candidate]),
+    } });
+    const saved = (await getCustomProvider('chat-only'))!;
+    expect(saved.runtimes['claude-code']!.models[0]).toMatchObject({ interfaceId: 'deepseek-openai-completions' });
+    const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+    expect(provider.models['claude-code']![0]).toMatchObject({ id, api: 'openai-completions',
+      route: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } });
+  });
+
   // Regression: account model/list -> storage normalization -> reload used to drop
   // Ultrafast. Exercise real CRUD/CAS and catalog projection, including revocation.
   it('persists native account speed discovery without granting another account or engine access', async () => {

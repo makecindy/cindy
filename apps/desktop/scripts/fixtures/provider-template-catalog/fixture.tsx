@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { mountPage, forbid, subscription } from '../../ui-page/harness';
 import { ProviderConnectionDialog } from '../../../src/renderer/components/settings/ProviderConnectionDialog';
 import { AddProviderWizard } from '../../../src/renderer/components/settings/AddProviderWizard';
@@ -21,7 +22,7 @@ mountPage({
   host: ctx => {
     const item = cases.find(c => c.id === ctx.case) ?? cases[0];
     return { maker: {
-      listProviderPresets: async () => ({ presets }),
+      listProviderPresets: async () => ({ presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }),
       fetchProviderModels: async (input: unknown) => { evidence.fetches.push(input); return { ok: true, models }; },
       detectProvider: async (input: { cancel?: boolean }) => ({ candidates: !input.cancel && deployments.includes(item.providerId) ? [item.providerId] : [], reason: 'matched', catalog: { ok: true, models } }),
       localModelList: async () => ({ status: { kind: 'absent', appInstalled: false }, models: [], memoryGb: 0 }),
