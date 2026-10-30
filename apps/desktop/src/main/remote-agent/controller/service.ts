@@ -32,6 +32,7 @@ import type { ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
 import type { GuardedFetch } from '../executor/webFetch';
 import { RemoteConnectionPool } from './connectionPool';
+import { isRetryableLinkError, remoteAgentErrorFrom } from './poller';
 import { remoteAgentEventMapper } from './eventMap';
 import {
   collectAncestorInstructionFiles,
@@ -147,12 +148,14 @@ const liveDirectGuestSessions = new Map<string, {
   identity: object;
   ownerRoute: string;
   requestSwitch(): Promise<string | undefined>;
+  probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
 }>();
 const DIRECT_GRANT_ID = /^[0-9a-f-]{36}$/;
 
 export function liveDirectGuestSession(sessionId: string): Readonly<{
   ownerRoute: string;
   requestSwitch(): Promise<string | undefined>;
+  probeReconnect?(isCurrent?: () => boolean): Promise<'ok' | 'offline' | 'unavailable'>;
 }> | null {
   return liveDirectGuestSessions.get(sessionId) ?? null;
 }
@@ -343,6 +346,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     requireCurrent();
     const poller = pollerFor(target);
     const directIdentity = {};
+    let reconnectAuthorization: ((isCurrent: () => boolean) => Promise<void>) | undefined;
     if (shareId && sessionId && target !== input.deviceId) {
       liveDirectGuestSessions.set(sessionId, {
         identity: directIdentity,
@@ -384,6 +388,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     let cancelPreparedHandle: (() => void) | undefined;
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
+      reconnectAuthorization: isCurrent => reconnectAuthorization?.(isCurrent) ?? Promise.resolve(),
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
       invoke: poller.invoke,
       poller,
@@ -526,6 +531,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       let nextRenewAt = Math.min(Date.now() + 20 * 60_000, authorizedUntil - 9 * 60_000);
       // The proxy's model snapshot can lag behind a successful setModel RPC.
       let authorizedModel = handle.model;
+      let changingModel = false;
       let renewing = false;
       let stopped = false;
       const clearLiveTarget = trackLiveSharedTaskTarget(sessionId, input.deviceId, target,
@@ -537,8 +543,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         authorizationTurn = result.then(() => undefined, () => undefined);
         return result;
       };
-      const authorizeCurrentExecutor = async (model: string): Promise<void> => {
-        if (stopped || !targetDeviceId || !deps.renewSharedProviderLink) {
+      const applyAuthorization = async (model: string, isCurrent: () => boolean = () => true): Promise<void> => {
+        if (stopped || !isCurrent() || performance.now() >= leaseDeadline || !targetDeviceId || !deps.renewSharedProviderLink) {
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared executor authorization cannot be renewed');
         }
         const allocationStartedAt = Date.now();
@@ -558,9 +564,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           await releaseFailedDirectAllocation(generation);
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task has closed');
         };
-        if (stopped) return releaseStoppedGrant();
-        await deps.renewSharedProviderLink(target);
-        if (stopped) return releaseStoppedGrant();
+        if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
+        try { await deps.renewSharedProviderLink(target); }
+        catch (error) {
+          if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
+          throw error;
+        }
+        if (stopped || !isCurrent() || performance.now() >= leaseDeadline) return releaseStoppedGrant();
         const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
         directTasks.set(taskKey, { target, agentKind: input.agentKind, model,
           until: allocationStartedAt + 25 * 60_000,
@@ -573,6 +583,29 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         armLeaseExpiry();
         nextRenewAt = Math.min(Date.now() + 20 * 60_000, authorizedUntil - 9 * 60_000);
       };
+      // Poll recovery can run while send is waiting for a terminal. Serialize
+      // grants separately from sends, or renewal would deadlock behind that turn.
+      let grantTurn = Promise.resolve();
+      const authorizeCurrentExecutor = (model: string, isCurrent?: () => boolean): Promise<void> => {
+        const result = grantTurn.then(() => applyAuthorization(model, isCurrent));
+        grantTurn = result.catch(() => undefined);
+        return result;
+      };
+      // setModel already owns the grant for its new model until its RPC settles.
+      // An outage callback must not replace that grant with the previous model.
+      reconnectAuthorization = isCurrent => changingModel ? Promise.resolve()
+        : authorizeCurrentExecutor(authorizedModel, () => !changingModel && isCurrent());
+      const direct = liveDirectGuestSessions.get(sessionId);
+      if (direct?.identity === directIdentity) direct.probeReconnect = (isCurrent = () => true) => serializeAuthorization(async () => {
+        try {
+          await authorizeCurrentExecutor(authorizedModel, isCurrent);
+          await RemoteAgentRunClient.caps(remoteAgentInvoker(target, deps.remoteInvoke));
+          return stopped || !isCurrent() ? 'unavailable' : 'ok';
+        } catch (error) {
+          return !stopped && (isRetryableLinkError(error) || remoteAgentErrorFrom(error).code === 'REMOTE_AGENT_UNAVAILABLE')
+            ? 'offline' : 'unavailable';
+        }
+      });
       const renewTimer = deps.renewSharedProviderLink ? setInterval(() => {
         if (renewing || Date.now() < nextRenewAt) return;
         renewing = true;
@@ -595,6 +628,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           }
           // The executor's lease pins one model. Reauthorize the same M before
           // asking its live Agent to switch, then restore the old model on failure.
+          changingModel = true;
           try {
             await authorizeCurrentExecutor(model);
             await setModel(model, options);
@@ -612,6 +646,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               throw new Error('[REMOTE_AGENT_UNAVAILABLE] previous shared model authorization could not be confirmed');
             }
             throw error;
+          } finally {
+            changingModel = false;
           }
         });
       }

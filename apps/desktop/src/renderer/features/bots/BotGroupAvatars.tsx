@@ -21,7 +21,7 @@ export function BotGroupSidebarAvatar({
   selected?: boolean;
   compact?: boolean;
 }) {
-  const frameClass = compact ? 'h-7 w-7' : 'h-10 w-10';
+  const frameClass = compact ? 'h-12 w-12' : 'h-11 w-11';
   const [first, second] = members;
   if (!first) {
     return (
@@ -36,11 +36,11 @@ export function BotGroupSidebarAvatar({
       </span>
     );
   }
-  if (!second) return <BotAvatar bot={first} size={compact ? 'sm' : 'md'} />;
+  if (!second) return <BotAvatar bot={first} size={compact ? 'strip' : 'row'} />;
   if (members.length >= 3) {
     // 先取群里的前五位，再从后向前绘制：第一位最后绘制，完整露在最前层。
     const visible = members.slice(0, 5).reverse();
-    // 以 40px 头像区为基准：3/4/5 人分别用 24/22/20px，收起时同比缩放。
+    // 与手机共用比例：3/4/5 人分别占头像框的 60%/55%/50%。
     const diameter = visible.length === 3 ? 60 : visible.length === 4 ? 55 : 50;
     const radius = (100 - diameter) / 2;
     return (
@@ -52,9 +52,9 @@ export function BotGroupSidebarAvatar({
               key={member.botId}
               className={cn(
                 'absolute flex rounded-full',
-                compact ? 'border-[1.5px]' : 'border-2',
+                'border-2',
                 selected
-                  ? 'border-sidebar-item-active'
+                  ? 'border-sidebar'
                   : 'border-sidebar group-hover:border-sidebar-item-hover',
               )}
               style={{
@@ -78,22 +78,22 @@ export function BotGroupSidebarAvatar({
         size="xs"
         className={cn(
           'absolute',
-          compact ? 'left-0 top-0 h-[18px] w-[18px] text-10' : 'left-0.5 top-0.5 h-6 w-6 text-12',
+          compact ? 'left-0 top-0 size-[34px] text-14' : 'left-0 top-0 size-[30px] text-14',
         )}
       />
       <span
         className={cn(
           'absolute bottom-0 right-0 flex rounded-full',
-          compact ? 'border-[1.5px]' : 'border-2',
+          'border-2',
           selected
-            ? 'border-sidebar-item-active'
+            ? 'border-sidebar'
             : 'border-sidebar group-hover:border-sidebar-item-hover',
         )}
       >
         <BotAvatar
           bot={first}
           size="xs"
-          className={compact ? 'h-[18px] w-[18px] text-10' : 'h-6 w-6 text-12'}
+          className={compact ? 'size-[34px] text-14' : 'size-[30px] text-14'}
         />
       </span>
     </span>

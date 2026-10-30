@@ -548,6 +548,7 @@ describe('botGroupChatService', () => {
     await vi.advanceTimersByTimeAsync(2_500);
     const waiting = await harness.service.getGroup(groupId);
     expect(waiting.ok && waiting.group.round.speakers.map((speaker) => speaker.botId)).toEqual(['mimi']);
+    expect(waiting.ok && waiting.group.teammateActivity).toEqual({ phase: 'needs-interaction' });
     pending = false;
     await vi.advanceTimersByTimeAsync(1_100);
     const group = await waitForIdle(harness, groupId);

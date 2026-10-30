@@ -11,6 +11,7 @@
     "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
+    "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
     "currentlyOnline": "Currently online",
     "availableSection": "Online",
     "offlineSection": "Offline",
@@ -403,6 +404,7 @@
         "30d": "30d",
         "all": "All"
       },
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "displayHeading": "Display",
       "view": {
         "text": "Text",
@@ -694,7 +696,14 @@
     "createMenu": "New",
     "awaiting": "Needs your OK",
     "taskResult": "Task result",
-    "collapseResult": "Hide result"
+    "collapseResult": "Hide result",
+    "avatarStatus": {
+      "awaiting": "Needs your confirmation",
+      "error": "Needs attention",
+      "running": "Working",
+      "done": "Completed",
+      "unread": "Unread"
+    }
   },
   "companionProfile": {
     "avatar": "Avatar",

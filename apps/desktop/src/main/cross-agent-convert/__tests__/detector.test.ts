@@ -38,15 +38,12 @@ describe('isMissingOrEmptyTextFile / isNonEmptyTextFile', () => {
 });
 
 describe('detect — agents-md kind', () => {
-  it('claude-code session: AGENTS.md non-empty + CLAUDE.md missing → 1 item to-claude', async () => {
+  it('claude-code session: AGENTS.md alone does not prompt or create CLAUDE.md', async () => {
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# agents');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
-    expect(r.items[0]).toMatchObject({
-      kind: 'agents-md',
-      direction: 'to-claude',
-      label: 'AGENTS.md → CLAUDE.md',
-    });
+    expect(r.items).toEqual([]);
+    await expect(fs.stat(path.join(tmpDir, 'CLAUDE.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# agents');
   });
 
   it('codex session: CLAUDE.md non-empty + AGENTS.md missing → 1 item to-codex', async () => {
@@ -73,11 +70,13 @@ describe('detect — agents-md kind', () => {
     expect((await detect({ workingDir: tmpDir, agentKind: 'claude-code' })).items).toHaveLength(0);
   });
 
-  it('CLAUDE.md 是空文件 + AGENTS.md 非空 → 仍然推（codex 语义：目标 trim 为空算缺失）', async () => {
+  it('empty CLAUDE.md + non-empty AGENTS.md does not prompt or overwrite either file', async () => {
     await fs.writeFile(path.join(tmpDir, 'CLAUDE.md'), '\n  ');
     await fs.writeFile(path.join(tmpDir, 'AGENTS.md'), '# real');
     const r = await detect({ workingDir: tmpDir, agentKind: 'claude-code' });
-    expect(r.items).toHaveLength(1);
+    expect(r.items).toEqual([]);
+    expect(await fs.readFile(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('\n  ');
+    expect(await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8')).toBe('# real');
   });
 
   it('empty workingDir → 0 items', async () => {

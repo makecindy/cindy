@@ -669,6 +669,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       // 不再带该字段），并重放同一轮用户消息。只做一次：已学过的 (provider, model)
       // 再失败就交给常规错误面，绝不循环重试。
       if (unsupportedOption) {
+        // Native provider recovery owns this failure, including the decision
+        // not to retry. Never stack a legacy process rebuild on top of it.
+        if ((errorData as { piCacheRecoveryHandled?: boolean }).piCacheRecoveryHandled) return false;
         if (!live && turnIdentity?.instanceId) return false;
         const compat = unsupportedRequestOptionCompatOverride(
           unsupportedRequestOptionErrorText(errorData),

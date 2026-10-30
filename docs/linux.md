@@ -45,9 +45,14 @@ For Wayland screen sharing and file dialogs, keep your compositor's portal
 backend and PipeWire installed and working. Omarchy normally configures these;
 this installer deliberately does not rewrite Hyprland, PAM or portal settings.
 See the [Electron safeStorage documentation](https://www.electronjs.org/docs/latest/api/safe-storage)
-for the backend model. KDE and GNOME retain Electron's existing selection;
-Hyprland selects `gnome-libsecret` before app readiness; other desktops retain
-Electron's selection. Desktop identity uses the first non-empty value from
+for the backend model. KDE, GNOME, XFCE and other recognized desktops retain
+Electron's existing selection. Before app readiness, Cindy selects
+`gnome-libsecret` for Hyprland, labwc, and a session with no desktop identity.
+Named desktops Chromium does not recognize, including sway and niri, keep
+Electron's selection. An empty identity otherwise falls back to `basic_text`,
+which a packaged build cannot use to save a login. Selecting libsecret does not
+install or unlock a keyring; if libsecret is missing, Chromium still falls back
+and Cindy refuses plaintext. Desktop identity uses the first non-empty value from
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, and `DESKTOP_SESSION`.
 An explicit `--password-store` always wins and survives an in-app update restart.
 

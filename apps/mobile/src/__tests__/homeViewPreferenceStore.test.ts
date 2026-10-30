@@ -219,6 +219,19 @@ describe('homeViewPreferenceStore', () => {
     });
   });
 
+  it('keeps group collapse per account, merges patches, and bounds stored keys', async () => {
+    const { readHomeCollapsePreferences, saveHomeCollapsePreferences } = await import('@/session/homeViewPreferenceStore');
+    await saveHomeCollapsePreferences(OWNER, { pinnedCollapsed: true, collapsedProjectKeys: ['dev:/a'] });
+    await saveHomeCollapsePreferences(OWNER, { expandedAutomationGroups: ['auto-1'] });
+    await expect(readHomeCollapsePreferences(OWNER)).resolves.toEqual({
+      pinnedCollapsed: true, collapsedProjectKeys: ['dev:/a'], expandedAutomationGroups: ['auto-1'],
+    });
+    await expect(readHomeCollapsePreferences('another-owner')).resolves.toEqual({});
+    const keys = Array.from({ length: 250 }, (_, index) => `dev:/p${index}`);
+    await saveHomeCollapsePreferences(OWNER, { collapsedProjectKeys: keys });
+    expect((await readHomeCollapsePreferences(OWNER)).collapsedProjectKeys).toEqual(keys.slice(-200));
+  });
+
   it('keeps old-blob defaults: project on, dialogue group off, time sort, active', async () => {
     const { __testing, readHomeViewPreferences } =
       await import('@/session/homeViewPreferenceStore');

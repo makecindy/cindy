@@ -275,6 +275,42 @@ describe('idle reclaim by the provider', () => {
     return { host, handle: () => handle, pass, rows, cursor: () => cursor };
   }
 
+  // Unit regression: app shutdown used to mark even idle runs aborted. Read the
+  // real shutdown stream, including the reason an older controller will see.
+  it.each([
+    ['dispose', false], ['dispose', true], ['shutdown', false], ['shutdown', true],
+    ['shutdown-then-dispose', false], ['shutdown-then-dispose', true],
+  ] as const)('publishes a compatible shutdown boundary through %s; running=%s', async (entry, running) => {
+    const { host, pass, cursor } = await openBusy(0, { turn: running, background: 0, wake: 0 });
+    await pass(0);
+    const pending = host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: cursor() }], waitMs: 10_000 });
+    const closing = entry === 'dispose' ? undefined : host.abortAll('app-quit');
+    if (entry !== 'shutdown') host.dispose();
+    await closing;
+    const result = await pending as { runs: Array<{ data?: string }> };
+    const rows = result.runs.flatMap(run => run.data ? Buffer.from(run.data, 'base64').toString().trim().split('\n').map(line => JSON.parse(line)) : []);
+    expect(rows.at(-1)).toEqual(running
+      ? { t: 'closed', reason: 'provider-restarting' }
+      : { t: 'closed', reason: 'ended', idleReclaimed: true });
+    host.dispose();
+    await settle();
+  });
+
+  // An explicit disconnect can race the later host dispose; it must never acquire
+  // idleReclaimed, otherwise the controller would reconnect despite user intent.
+  it.each([false, true])('keeps intentional disconnect terminal across disposal; running=%s', async running => {
+    const { host, pass, cursor } = await openBusy(0, { turn: running, background: 0, wake: 0 });
+    await pass(0);
+    const pending = host.handle('controller-1', { op: 'poll', runs: [{ runId: RUN_1, cursor: cursor() }], waitMs: 10_000 });
+    const closing = host.abortAll('navigation');
+    host.dispose();
+    await closing;
+    const result = await pending as { runs: Array<{ data?: string }> };
+    const rows = result.runs.flatMap(run => run.data ? Buffer.from(run.data, 'base64').toString().trim().split('\n').map(line => JSON.parse(line)) : []);
+    expect(rows.at(-1)).toEqual({ t: 'closed', reason: 'controller-disconnected' });
+    await settle();
+  });
+
   it.each(['turn', 'background', 'wake', 'hold', 'rewind'] as const)('keeps a run while it is busy (%s) and reclaims it after a full idle period', async (reason) => {
     const busy: Busy = { turn: reason === 'turn', background: reason === 'background' ? 1 : 0, wake: reason === 'wake' ? 1 : 0 };
     const { host, handle, pass, rows } = await openBusy(1, busy);

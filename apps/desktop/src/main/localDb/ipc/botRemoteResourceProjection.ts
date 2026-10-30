@@ -116,6 +116,8 @@ export function botRemoteCollectionItemFromSource(
     ref: resourceRef(source.id),
     display: {
       title: source.name,
+      teammateActivity: { phase: source.needsAttention ? 'error'
+        : source.lastMessageRole === 'assistant' && source.lastMessageAt === source.lastReplyAt ? 'completed' : 'idle' },
       lastReplyAt: source.lastReplyAt ?? 0,
       ...(source.description ? { subtitle: source.description } : {}),
       ...(source.lastMessagePreview ? { preview: source.lastMessagePreview } : {}),

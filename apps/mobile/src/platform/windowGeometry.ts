@@ -76,6 +76,29 @@ export function keyboardControlRegion(g: WindowGeometry, keyboardBottom: number)
 }
 
 /**
+ * Edges of a page's own floating top row (close, title, menu) where no native bar hosts it.
+ * Duo portrait reports its status area as a trailing-corner reservation; like the native bar,
+ * the row then shares that status row, its controls `spacing.md` above the row's bottom and
+ * ending before the reservation. A vertical system bar (Duo landscape) leaves no top inset,
+ * so the row keeps its own margin from the screen edge.
+ */
+export function floatingTopRow(g: WindowGeometry, rowHeight: number): {
+  top: number; left: number; right: number; sharedStatusRow: boolean;
+} {
+  const left = g.insets.left + spacing.md, right = g.insets.right + spacing.md;
+  if (g.barEdge !== 'none') return { top: Math.max(g.insets.top, spacing.md), left, right, sharedStatusRow: false };
+  const ordinary = { top: g.insets.top, left, right, sharedStatusRow: false };
+  const status = g.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= g.width);
+  const top = g.insets.top - rowHeight - spacing.md;
+  if (!g.reservedRegionsSupported || !g.regularWidth || !status.length || top < spacing.md) return ordinary;
+  const sharedRight = Math.max(right, g.width - Math.min(...status.map(r => r.x)) + spacing.sm);
+  const row = { x: left, y: top, width: g.width - left - sharedRight, height: rowHeight };
+  // Close, title and menu must all fit beside the status area, clear of any other reservation.
+  if (row.width < rowHeight * 5 || avoidReservedRegions(row, g.regions.filter(r => !status.includes(r))) !== row) return ordinary;
+  return { top, left, right: sharedRight, sharedStatusRow: true };
+}
+
+/**
  * Top padding for the temporary task-list drawer when the native top bar shares the status row
  * (Duo portrait), so the drawer header lands where the hidden bar's buttons were. Duo (iOS 27.1)
  * centers toolbar items `spacing.md` above the row's bottom; the drawer header adds `spacing.lg`

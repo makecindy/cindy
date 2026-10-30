@@ -281,6 +281,19 @@ describe('mobileAttachmentUpload', () => {
     }, { signal: expect.any(AbortSignal), onProgress: expect.any(Function) });
   });
 
+  // Unit regression: real direct-chat PUT returned SignatureDoesNotMatch because the
+  // device-link uploader added an ACL header absent from the Chat Server signature.
+  // Existing native upload coverage checks only the device-link header contract.
+  it('uploads a Chat Server file without adding unsigned OSS headers', async () => {
+    const uploadFile = vi.fn(async (_url: string, _uri: string, headers: Record<string, string>) =>
+      Object.keys(headers).length === 1 && headers['Content-Type'] === 'image/png'
+        ? { status: 200 }
+        : { status: 403, body: '<Error><Code>SignatureDoesNotMatch</Code></Error>' });
+    await expect(putMobileAttachmentUploadFromFile('https://chat-upload.example/signed', 'file:///photo.png', 'image/png',
+      { uploadFile }, { signedHeaders: { 'Content-Type': 'image/png' } })).resolves.toBeUndefined();
+    expect(uploadFile).toHaveBeenCalledOnce();
+  });
+
   it('returns an OSS-ref attachment after successful native file upload', async () => {
     const apiFetch = vi.fn(async () => ({
       putUrl: 'https://oss.example/upload',

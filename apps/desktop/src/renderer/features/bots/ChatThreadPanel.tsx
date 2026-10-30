@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { findThreadMessageElement, flashThreadTarget } from './BotGroupThreadViews';
+import { useReadLocatedMention } from './groupMaskPresentation';
 import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
@@ -177,6 +178,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const shareScope = `bot-group:${group.id}:thread:${rootId}`;
+  const readLocatedMention = useReadLocatedMention(group.id);
   const sharing = useShareSelectionActive(shareScope);
   const readOnly = Boolean(group.archived || group.dissolvedAt);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -276,9 +278,10 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const anchorId = before ? shown[0]?.id : undefined;
     const anchored = (replies: BotGroupMessageView[]) => !anchorId || replies.some(reply => reply.id === anchorId);
     try {
-      // Reading the latest page marks the Thread read only while the reader is at the newest reply:
-      // a reply that arrives while they read further up stays unread until they scroll down to it.
-      const markRead = !before && stickToBottomRef.current;
+      // Background updates (including a companion's replies) never consume human unread.
+      // Match the main timeline: only a focused, visible reader at the newest reply acknowledges it.
+      const markRead = !before && stickToBottomRef.current
+        && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
       const result = await api().thread({ groupId: group.id, rootId, before,
@@ -418,10 +421,20 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   useEffect(() => {
     aliveRef.current = true;
     refreshRef.current();
+    const acknowledgeVisible = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus() && stickToBottomRef.current)
+        refreshRef.current();
+    };
+    window.addEventListener('focus', acknowledgeVisible);
+    document.addEventListener('visibilitychange', acknowledgeVisible);
     const stop = window.electronAPI.maker.onBotGroupChanged((event, stamp) => {
       if (isDataOwnerPushCurrent(stamp) && event.groupId === group.id) refreshRef.current();
     });
-    return () => { aliveRef.current = false; stop(); };
+    return () => {
+      aliveRef.current = false; stop();
+      window.removeEventListener('focus', acknowledgeVisible);
+      document.removeEventListener('visibilitychange', acknowledgeVisible);
+    };
   }, [group.id, rootId]);
 
   const members = group.members;
@@ -476,12 +489,16 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     const search = focusSearch.current;
     if (search.pages < 0) return;
     const target = findThreadMessageElement(contentRef.current, focus.messageId);
-    if (target) { stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target); return; }
+    if (target) {
+      stickToBottomRef.current = false; search.pages = -1; flashThreadTarget(target);
+      if (!replies.find(reply => reply.id === focus.messageId)?.deleted) readLocatedMention(focus.messageId, target);
+      return;
+    }
     if (!hasMore || search.pages >= FOCUS_PAGE_LIMIT) { search.pages = -1; return; }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
     void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore]);
+  }, [focus, replies, hasMore, readLocatedMention]);
 
   /** One server operation per reply and person, so a retry never posts twice. */
   async function postToMain(messageId: string, fromComposer: boolean) {
@@ -660,7 +677,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
                     alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
                     {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
                   </span>
-                  <span className="min-w-0 truncate">{t(key('thread.alsoSend'))}</span>
+                  <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
                 </button>
               )}
               sendReply={sendReply}

@@ -39,6 +39,7 @@ import type {
 
 import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
 import { getDbClient } from './client/current';
+import { HistoryPageBudget } from './historyPageBudget';
 import { messages as messagesTable, sessions as sessionsTable } from './schema';
 import { messageToCamel } from './mapper';
 import { fuseRRF, buildMessagesFtsMatch, extractMessagesFtsTokens } from './chatHistorySearch.pure';
@@ -88,6 +89,8 @@ interface HitMeta {
 type SearchSessionStatus = 'active' | 'archived' | 'deleted';
 
 interface SearchChatHistoryEngineArgs extends SearchChatHistoryArgs {
+  /** Set only by search_chat_history's host invocation, never by UI/learn consumers. */
+  historyToolPageBudget?: boolean;
   /** Host-owned remote visibility scope, applied to both retrieval arms before ranking. */
   remoteVisibleOnly?: boolean;
   /**
@@ -194,18 +197,20 @@ export async function searchChatHistoryHybrid(
   }
   const start = Math.max(0, Math.min(args.offset, pool.length));
   const pageEntries = pool.slice(start, start + args.limit);
-  const nextOffset = start + args.limit < pool.length ? start + args.limit : null;
+  let nextOffset = start + args.limit < pool.length ? start + args.limit : null;
+  const pageBudget = args.historyToolPageBudget === true ? new HistoryPageBudget() : null;
 
   // radius=0 is the conversation-search hot path. Hydrate the whole page in
   // one worker RPC; callers that need neighbours keep the original window query.
   const anchorContexts =
-    args.contextRadius <= 0
+    args.contextRadius <= 0 && !pageBudget
       ? await fetchAnchorContexts(pageEntries.map((entry) => entry.messageId))
       : null;
 
   // 5) 按命中顺序组装上下文窗口
   const hits: SearchChatHistoryHit[] = [];
-  for (const fe of pageEntries) {
+  for (const [index, fe] of pageEntries.entries()) {
+    if (pageBudget?.full) { nextOffset = start + index; break; }
     const meta = metaById.get(fe.messageId);
     if (!meta) continue; // 理论不会发生(fused 的 id 必来自两路 arm)
     const context =
@@ -219,7 +224,7 @@ export async function searchChatHistoryHybrid(
             args.roles,
             args.contextRadius,
           ));
-    hits.push({
+    const hit: SearchChatHistoryHit = {
       messageId: fe.messageId,
       sessionId: meta.sessionId,
       role: meta.role,
@@ -230,7 +235,12 @@ export async function searchChatHistoryHybrid(
       vectorRank: fe.vectorRank,
       vectorDistance: meta.distance,
       context,
-    });
+    };
+    if (pageBudget && !pageBudget.tryAdd(hit)) {
+      nextOffset = start + index;
+      break;
+    }
+    hits.push(hit);
   }
 
   // 6) session 元数据(顶层 map, 避免逐条命中重复)

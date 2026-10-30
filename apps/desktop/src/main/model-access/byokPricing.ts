@@ -4,7 +4,7 @@ import type { ModelPricingCatalog } from '../../shared/regionalMoney.js';
 
 let pricing: ModelPricingCatalog = {};
 
-/** Enterprise reference prices are separate from Cindy retail prices and discounts. */
+/** Enterprise reference prices and discounts stay scoped to their own provider. */
 export function buildByokPricing(providers: readonly ByokProvider[]): ModelPricingCatalog {
   const result: ModelPricingCatalog = {};
   for (const provider of providers) {
@@ -13,7 +13,7 @@ export function buildByokPricing(providers: readonly ByokProvider[]): ModelPrici
       // Missing currency is unknown, not a reason to guess from the client's region.
       if (!model.currency) continue;
       const quote = gatewayModelPriceQuote(
-        { ...model, costDiscount: undefined },
+        model,
         model.currency,
         false,
         {

@@ -60,6 +60,12 @@ it('rejects a previously discovered hidden companion and allows it again after r
     expect((await list()).items[0].display.generation).toEqual({ phase: workingPhase, startedAt: 123 });
     expect(activity.invalidate).toHaveBeenCalledWith('session-1');
   }
+  // Previously the roster dropped waiting/error/completion and only sent generation.
+  for (const phase of ['needs-interaction', 'error', 'completed']) {
+    activity.snapshot.mockReturnValue({ phase });
+    expect((await list()).items[0].display.teammateActivity).toEqual({ phase });
+    expect((await list()).items[0].display.generation).toBeUndefined();
+  }
   activity.snapshot.mockReturnValue({ phase: 'idle' });
   expect((await list()).items[0].display.generation).toBeUndefined();
   const get = () => remoteResourceRegistry.get(context, { client, ref: discovered.ref });

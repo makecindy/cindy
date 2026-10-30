@@ -1,4 +1,6 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -733,6 +735,7 @@ export function MainLayout() {
         | { type: 'provider-share-join'; link: string }
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
+        | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
       if (payload.type === 'chat-message') {
@@ -764,6 +767,19 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'installed-plugin') {
+        // The link carries the plugin's own id; the plugin page selects by instance key
+        // (`_root__my-browser`), so resolve it against what is installed.
+        const resolved = payload.ghostId
+          ? resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), payload.ghostId)
+          : null;
+        navigate(
+          resolved?.status === 'unique'
+            ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(resolved.ghost))}`
+            : '/plugins',
+        );
         return;
       }
       if (payload.type === 'session') {

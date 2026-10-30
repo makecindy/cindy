@@ -173,6 +173,10 @@ export interface PluginTaskServiceDeps {
   setHidden?(taskId: string, hidden: boolean, assertAllowed: () => void): Promise<void>;
   /** Uninstall fallback: reveal this plugin's background tasks before ownership is revoked. */
   revealPluginTasks?(pluginId: string): Promise<void>;
+  /** Host archive writer (same path as the sidebar); `assertAllowed` runs right before the write. */
+  archive?(taskId: string, assertAllowed: () => void): Promise<void>;
+  /** Live execution or queued input right now; read synchronously so it can run under the write lock. */
+  isBusy?(taskId: string): boolean;
   setModel?(taskId: string, route: PluginTaskRoute, assertCurrent: () => Promise<void>): Promise<{ status: string }>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
   readLiveSession(taskId: string): Pick<Session, 'instanceId' | 'stablePlanModeState'> | undefined;
@@ -505,6 +509,25 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           assertHiddenTasksAllowed(pluginId);
         });
       }
+      return ownTask(pluginId, request.taskId);
+    }),
+    /**
+     * Archive this plugin's own idle local task. Reversible by the user (unarchive) and never a
+     * delete; a task with live execution or queued input stays active so nothing is cut off.
+     */
+    archive: (pluginId: string, request: { taskId: string }) => exclusive(async () => {
+      const task = await ownTask(pluginId, request.taskId);
+      if (task.status === 'archived') return task;
+      if (!deps.archive) return fail('HOST_NOT_READY', 'Task archive service is not ready');
+      const observed = await deps.inspect(request.taskId);
+      if (observed.execution || observed.pending.length) return fail('TASK_BUSY', 'The task is still working');
+      await deps.archive(request.taskId, () => {
+        deps.assertCurrent();
+        deps.assertAuthorized(pluginId);
+        // The idle check above ran before this write waited for the session lock; input sent in
+        // between must still stop the archive.
+        if (deps.isBusy?.(request.taskId)) throw new PluginTaskError('TASK_BUSY', 'The task is still working');
+      });
       return ownTask(pluginId, request.taskId);
     }),
     list: (pluginId: string, after = '', limit = 50) =>

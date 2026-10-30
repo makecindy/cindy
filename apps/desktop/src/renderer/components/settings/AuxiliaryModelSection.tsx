@@ -84,6 +84,7 @@ export function AuxiliaryModelSection() {
         // or an in-flight save whose options may still carry the old locale.
         ...(option.providerId === 'xd' && cindyAiName ? {
           group: cindyAiName,
+          logoKind: cindyAiProvider?.logoKind,
           label: `${option.agentSuffix} · ${option.modelName} · ${cindyAiName}`,
         } : {}),
         available:
@@ -93,7 +94,7 @@ export function AuxiliaryModelSection() {
             defaultEnabled: option.defaultEnabled,
           }),
       })),
-    [cindyAiName, modelVisibilityVersion, settings?.options],
+    [cindyAiName, cindyAiProvider?.logoKind, modelVisibilityVersion, settings?.options],
   );
 
   if (!settings) return null;

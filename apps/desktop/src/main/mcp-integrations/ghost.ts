@@ -1672,6 +1672,24 @@ const ghostVisibilityDeps = {
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
 };
 
+/**
+ * 「我的浏览器」由哪个插件提供(宿主正在经它的扩展承接页面控制)。该插件声明的
+ * pageControlReplaces 工具与手册此时对 Agent 隐藏:操作用户浏览器只留 Browser Use
+ * 一套。未接线或桥接未运行时返回 null,插件工具照常可用。
+ */
+/** 返回承接页面控制的插件实例标识(installedGhostStoragePart)。 */
+let pageControlGhostProvider: () => string | null = () => null;
+export function setPageControlGhostProvider(provider: () => string | null): void {
+  pageControlGhostProvider = provider;
+}
+function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual: Set<string> } | null {
+  const replaces = ghost.manifest.browserExtension?.pageControlReplaces;
+  if (!replaces || pageControlGhostProvider() !== installedGhostStoragePart(ghost)) return null;
+  return { tools: new Set(replaces.tools), manual: new Set(replaces.manual ?? []) };
+}
+const PAGE_CONTROL_TOOL_MESSAGE =
+  '这个插件工具已由 Cindy 的 browser 工具取代:读取或操作用户自己的浏览器,请用 cindy_browser 的 browser 工具,浏览器目标选「我的浏览器」(user-browser)。';
+
 function ghostRecall(ghost: InstalledGhost): string | undefined {
   return ghost.manifest.whenToUse ?? ghost.manifest.description;
 }
@@ -1694,6 +1712,7 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
 
 function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
   const recall = ghostRecall(ghost);
+  const hidden = pageControlHidden(ghost);
   let setup: CindyGhostInfo['setup'];
   try {
     setup = getGhostSetupAssessment(installedGhostStoragePart(ghost));
@@ -1713,14 +1732,16 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
     ...(recall ? { recall } : {}),
     ...(ghost.manifest.manual
       ? {
-          manual: ghost.manifest.manual.items.map(({ name, description }) => ({
-            name,
-            description,
-          })),
+          manual: ghost.manifest.manual.items
+            .filter(({ name }) => !hidden?.manual.has(name))
+            .map(({ name, description }) => ({
+              name,
+              description,
+            })),
         }
       : {}),
     ...(setup ? { setup } : {}),
-    tools: (ghost.manifest.tools ?? []).map((tool) => ({
+    tools: (ghost.manifest.tools ?? []).filter((tool) => !hidden?.tools.has(tool.name)).map((tool) => ({
       name: tool.name,
       description: tool.description,
       ...(tool.parameters ? { parameters: tool.parameters } : {}),
@@ -2087,6 +2108,10 @@ export function getCindyGhostsMcpDeps(
           message: '该插件未声明可供读取的手册;不要重试,改用其它方式完成。',
         };
       }
+      const hiddenManual = pageControlHidden(visibility.ghost)?.manual;
+      if (hiddenManual?.size && hiddenManual.has(String(manualPath ?? '').split('/')[0])) {
+        return { ok: false, manual: [], content: '', errorCode: 'GHOST_NOT_FOUND', message: PAGE_CONTROL_TOOL_MESSAGE };
+      }
       return readInstalledGhostManual(visibility.ghost, manualPath);
     },
     async callGhostTool({
@@ -2136,6 +2161,9 @@ export function getCindyGhostsMcpDeps(
       // Runtime setup gate: the shared visibility check above runs before any
       // durable attachment grant, directory ticket, sandbox, card call, or dispatch.
       // grant_only never dispatches and intentionally ignores its tool field.
+      if (!grantOnly && pageControlHidden(target)?.tools.has(tool)) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: PAGE_CONTROL_TOOL_MESSAGE };
+      }
       if (
         !grantOnly &&
         !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)

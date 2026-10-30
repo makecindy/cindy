@@ -30,6 +30,28 @@ const targets = (group: string) => {
   ];
 };
 const syncing = new Map<string, Promise<void>>();
+const RETRY_INITIAL_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
+interface TargetRetry {
+  delayMs: number;
+  retryAt: number;
+}
+let retryOwner: string | undefined;
+const retries = new Map<string, { revision: number; targets: Map<string, TargetRetry> }>();
+
+function retriesFor(group: string, revision: number): Map<string, TargetRetry> {
+  const owner = activeOwnerScopeKey();
+  if (retryOwner !== owner) {
+    retries.clear();
+    retryOwner = owner;
+  }
+  let state = retries.get(group);
+  if (state?.revision !== revision) {
+    state = { revision, targets: new Map() };
+    retries.set(group, state);
+  }
+  return state.targets;
+}
 
 async function send(
   device: string,
@@ -224,22 +246,40 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
       assertCurrent,
       true,
     );
+    assertCurrent();
     const active = new Set(destinations);
+    const retryTargets = retriesFor(group, state.revision);
+    for (const device of retryTargets.keys()) {
+      if (state.targets[device] === undefined || state.targets[device] === state.revision) {
+        retryTargets.delete(device);
+      }
+    }
     await Promise.allSettled(
       Object.entries(state.targets)
         .filter(([, ack]) => ack !== state.revision)
         .map(async ([device]) => {
+          const retry = retryTargets.get(device);
+          if (retry && performance.now() < retry.retryAt) return;
           const command = {
             group,
             revision: state.revision,
             allowFast: active.has(device) ? state.allowFast : true,
           };
-          if (device === LOCAL_TARGET) {
-            const self = getSelfDeviceId();
-            if (!self) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
-            await receiveGroupFastPolicy(self, command);
-          } else await send(device, command, assertCurrent);
-          await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+          try {
+            if (device === LOCAL_TARGET) {
+              const self = getSelfDeviceId();
+              if (!self)
+                throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
+              await receiveGroupFastPolicy(self, command);
+            } else await send(device, command, assertCurrent);
+            await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+            retryTargets.delete(device);
+          } catch (error) {
+            assertCurrent();
+            const delayMs = retry ? Math.min(retry.delayMs * 2, RETRY_MAX_MS) : RETRY_INITIAL_MS;
+            retryTargets.set(device, { delayMs, retryAt: performance.now() + delayMs });
+            throw error;
+          }
         }),
     );
     assertCurrent();
@@ -251,7 +291,7 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
   return work;
 }
 
-/** Retry only unacknowledged policy changes; never reset a shared device-link connection. */
+/** Poll pending revisions; each failed target backs off without resetting shared links. */
 export function startGroupFastPolicySync(): () => void {
   const sync = () => {
     const outgoing = groupFastPolicyStore.outgoing();
@@ -272,5 +312,8 @@ export function startGroupFastPolicySync(): () => void {
   };
   const timer = setInterval(sync, 5_000);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    retries.clear();
+  };
 }

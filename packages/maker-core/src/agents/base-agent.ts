@@ -916,11 +916,10 @@ export interface AgentDeps {
     context?: { remote: boolean; runtimeBinaryPath?: string },
   ) => PiGatewayModelSpec | null | undefined;
 
-  /**
-   * Pi-only：host 已学到（自愈写入）的 per-model compat 覆盖。写 models.json 时
-   * 合并进该原生 provider 模型的 compat；undefined = 无覆盖。不改变路由与凭证，
-   * 只关掉上游已明确拒收的可选字段（如 supportsLongCacheRetention: false）。
-   */
+  /** Execution-local cache compatibility store; never copy local records to SSH. */
+  resolvePiNativeCompatStorePath?: (remoteHostId?: string | null) => string;
+
+  /** Legacy host recovery snapshot; native Pi applies learning at final payload time. */
   resolvePiNativeCompatOverride?: (
     providerId: string,
     modelId: string,

@@ -400,7 +400,14 @@ class QueuedDispatchTimeoutError extends Error {}
  */
 class QueuedSlotUnavailableError extends Error {}
 
-class RoutineDispatchDeferredError extends Error {}
+/**
+ * A routine occurrence that must not be dispatched. It is also an
+ * AcceptedCallbackDispatchCancelled so the accepted-callback bridge rethrows it
+ * instead of swallowing it as a side-effect failure, while the runner's existing
+ * `instanceof RoutineDispatchDeferredError` branches keep the deferral/rewind
+ * semantics.
+ */
+class RoutineDispatchDeferredError extends AcceptedCallbackDispatchCancelled {}
 
 /**
  * 落库权限 / Plan 与运行中的会话都可读且稳定，但两者不同。权限切换在途时会话读不到稳定
@@ -1910,7 +1917,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由
     // coordinator 按「仍在排队 / 已派发」分别撤项或中断，不能让这个监听器误杀
     // 异步入队期间刚好开始的用户 turn。
+    //
+    // 发送尚未越过 vendor 边界时只取消这次 send reservation；只有 send 已开始且
+    // 没有可取消的预约（已接受 / 正在中断）时才 abort 整个会话。否则 pause/delete
+    // 落在 onAccepted 的 await 里会调用整会话 abort，触发 15s 恢复复核并可能关闭
+    // 用户会话（#6931）。
+    // Whether the vendor send call has started. A pause/delete that lands before
+    // this point should only cancel the pending reservation (if any), never abort
+    // the whole session.
+    let sendStarted = false;
     const onAbort = (): void => {
+      if (session.cancelPendingSend?.()) return;
+      if (!sendStarted) return;
       this.deps.logger.info?.(
         `[runner] ctx.signal aborted, calling session.abort() for ${session.id}`,
       );
@@ -2049,6 +2067,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
       }
+      sendStarted = true;
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
         ...(isHeartbeat || schedule.source === 'bot' || agentDeviceId
@@ -2145,11 +2164,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
             baselineStarted = true;
           }
           if (ctx.canDispatch && !ctx.canDispatch()) {
-            // abort synchronously cancels the send reservation; do not wait for
-            // a potentially stalled provider interrupt before deferring the run.
-            void session.abort().catch((err) => {
-              this.deps.logger.warn?.('[runner] obsolete routine turn abort failed', err);
-            });
+            // Throw before Session.send reaches its vendor-dispatch boundary. The
+            // deferral error is itself an AcceptedCallbackDispatchCancelled, so the
+            // direct Session.send path and any accepted-callback wrapper both cancel
+            // instead of swallowing it. The runner's catch turns it into a deferral
+            // and rewinds the persisted scheduler row below. Do not abort the Session
+            // here: abort is user-Stop semantics for the whole conversation (it arms
+            // the abort-recovery watchdog and sends a provider interrupt), not a way
+            // to cancel this one pre-dispatch send.
             throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
           // 保留 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
@@ -2521,31 +2543,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
     /**
      * onAccepted 里"本轮绝不能真的跑起来"的统一阻断出口。
      *
-     * 阻断手段是 `live.abort()`,但它拦的**不是"已经在跑的 turn"** —— 此刻 vendor 还没
-     * 派发。这个回调运行在 `Session.send` 的 onAccepted 链里(register.ts 把
-     * persistUserMessage 装在那儿,coordinator 的 onPersisted 又挂在它下面),而
-     * `Session.abort()` 的第一件事就是同步 `cancelSendReservation`:回调返回后 send 立刻
-     * 复核 `reservation.cancelled`,以 cancelled-before-dispatch 收场,coordinator 走
-     * handleSendNotDispatched 干净回滚(activeTurn 置空)。所以它取消的是**这次派发本身**。
+     * 这个回调运行在 `Session.send` 的 onAccepted 链里(register.ts 把
+     * persistUserMessage 装在那儿,coordinator 的 onPersisted 又挂在它下面),此刻
+     * vendor 还没派发。它需要的只是取消**这次派发本身**，不是中断整个会话。
      *
-     * 拿不到 live 时没有这个手段:正常返回就等于放行,coordinator 紧接着把 turn 交给
-     * vendor,产生一次没人跟踪、还可能与顺延重试重叠的执行(review #944 第八轮 P1)。
-     * 此时抛 AcceptedCallbackDispatchCancelled —— **必须是这个类**:accepted 回调的普通
-     * 异常被 runAcceptedCallback 刻意吞掉(副作用失败不该毁掉已受理的 turn),第八轮我抛
-     * 的普通 Error 因此根本没到 coordinator,turn 照样发了出去(review #944 第十一轮 P1)。
-     * 这条通道会被原样上抛,coordinator 走 persisted 分支回滚;那条分支对 scheduler 项
-     * 已经会放掉 activeTurn 并唤醒队列(第十轮)。
+     * 取消通道必须是 `AcceptedCallbackDispatchCancelled`:accepted 回调的普通异常被
+     * runAcceptedCallback 刻意吞掉(副作用失败不该毁掉已受理的 turn),普通 Error
+     * 根本到不了 coordinator,turn 照样会发出去(review #944 第十一轮 P1)。这条通道
+     * 会被原样上抛,coordinator 走 persisted 分支回滚 —— 对 scheduler 项会放掉
+     * activeTurn 并唤醒队列(第十轮，见 agent-input-coordinator 的回归用例)。
+     *
+     * 不要在这里调用 `Session.abort()`。它是用户按 Stop 的整会话操作:会置
+     * `aborting`、向 vendor 发 interrupt,并启动 MANUAL_ABORT_RECOVERY_GRACE_MS
+     * (15s)的兜底复核。后台例行任务只需要撤销自己的发送预约；借用 abort 会把
+     * 用户正在使用的会话拖进中断链,而 Pi 的 abort RPC 超时是 30s —— 15s 复核
+     * 会先判"中断没生效"并关闭会话,用户随后发送即报 `Session <id> is closed`
+     * (#6931)。抛错发生在 vendor dispatch 之前,Session.send 不会执行 handle.send,
+     * 其 finally 会清掉 send reservation,因此不需要 abort 来取消预约。
      */
     const blockAcceptedDispatch = (live: Session | undefined, why: string): void => {
-      if (live) {
-        void live.abort().catch((err) => {
-          this.deps.logger.warn?.(`[runner] ${why} turn abort failed`, err);
-        });
-        return;
-      }
       this.deps.logger.warn?.(
-        '[runner] no live session to cancel the accepted dispatch; signalling the coordinator to roll it back',
-        { scheduleId: schedule.id, runId: ctx.runId, sessionId, why },
+        '[runner] cancelling accepted dispatch before vendor dispatch; signalling the coordinator to roll it back',
+        { scheduleId: schedule.id, runId: ctx.runId, sessionId, why, liveSessionPresent: Boolean(live) },
       );
       throw new AcceptedCallbackDispatchCancelled(
         `[SEND_CANCELLED_BEFORE_DISPATCH] queued heartbeat dispatch cancelled before vendor dispatch (${why})`,
@@ -2846,9 +2865,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (dispatched) {
         const live = this.deps.maker.getSession(sessionId);
         if (live) {
-          void live.abort().catch((err) => {
-            this.deps.logger.warn?.('[runner] session.abort failed', err);
-          });
+          // pause/delete can land after onAccepted but before Session.send crosses
+          // the vendor boundary. Cancel that pre-dispatch reservation without
+          // turning the whole session into 'aborting'; abort only when no such
+          // reservation is left (the turn already crossed the boundary).
+          if (!live.cancelPendingSend?.()) {
+            void live.abort().catch((err) => {
+              this.deps.logger.warn?.('[runner] session.abort failed', err);
+            });
+          }
         }
       }
     };

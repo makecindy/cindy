@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   disk: new Map<string, string>(),
   history: new Map<string, string>(),
   foreground: new Set<(state: string) => void>(),
+  put: vi.fn(async (..._args: unknown[]) => {}),
 }));
 vi.mock('@/session/historyDiskStoreExpo', () => ({ createHistoryDiskIO: () => ({
   read: async (key: string) => h.history.get(key) ?? null,
@@ -25,6 +26,7 @@ vi.mock('@/session/mobileDurableOutbox', async () => {
   return { mobileDurableOutbox: createDurableOutbox(storage) };
 });
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'fixture-operation-id' }));
+vi.mock('@/session/mobileAttachmentUpload', () => ({ putMobileAttachmentUploadFromFile: (...args: unknown[]) => h.put(...args) }));
 vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: (_: string, fn: (state: string) => void) => { h.foreground.add(fn); return { remove: () => h.foreground.delete(fn) }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: any) => useEffect(fn, [fn]) }; });
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
@@ -73,6 +75,7 @@ beforeEach(async () => {
   await mobileDurableOutbox.activate(''); h.disk.clear(); h.history.clear(); setMobileAuthOwner('owner');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
   vi.clearAllMocks(); h.foreground.clear(); showChat = false; h.auth.accountGeneration = 1; h.legacy.items = []; h.targets = []; h.legacy.isOnline.mockReturnValue(false);
+  h.put.mockImplementation(async () => {});
   vi.stubGlobal('WebSocket', class { close() {} });
   h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
     options.assertCurrent();
@@ -173,6 +176,54 @@ it('keeps the account owner label when quoting from a direct phone entry', async
     mentions: [botId], content: [expect.objectContaining({ data: expect.objectContaining({ authorName: 'Companion X (Account B)' }) }), { type: 'text', text: 'Agreed' }],
   }) }));
 });
+it.each(['', 'look at this'])('uploads and sends direct media with all computers offline, text=%s', async text => {
+  const mediaId = '00000000-0000-4000-8000-000000000003';
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/media')) return { id: mediaId, uploadUrl: 'https://upload.example.invalid/signed' };
+    if (path.endsWith('/complete')) return {};
+    return original(path, options);
+  });
+  showChat = true; await render();
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { supportsAttachments: true } });
+  const attachment = await chat.uploadAttachment!({ name: 'photo.jpg', mimeType: 'image/jpeg', size: 42 }, 'file:///photo', { token: 'fixture' });
+  const input = { clientId: 'same-media-send', text, mentions: { all: false, botIds: [] }, attachments: [attachment] };
+  await act(async () => { await send(input); });
+  const posts = h.auth.apiFetch.mock.calls.filter(([path]) => path.endsWith('/messages'));
+  expect(posts).toHaveLength(1);
+  expect(posts[0][1].body).toEqual({ operationId: 'same-media-send', mentions: [],
+    content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId, caption: 'photo.jpg' }] });
+  expect(h.put).toHaveBeenCalledWith('https://upload.example.invalid/signed', 'file:///photo', 'image/jpeg', {},
+    { signal: undefined, signedHeaders: { 'Content-Type': 'image/jpeg' } });
+  expect(h.link.invoke).not.toHaveBeenCalled(); expect(h.link.openLink).not.toHaveBeenCalled();
+});
+
+it('clears a group when the upload prepare rejects its membership', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    if (path.endsWith('/media')) throw Object.assign(new Error('NOT_MEMBER'), { status: 403 });
+    return original(path, options);
+  });
+  showChat = true; await render();
+  await act(async () => {
+    await expect(chat.uploadAttachment!({ name: 'a.pdf', size: 42 }, 'file:///picked', { token: 'fixture' })).rejects.toMatchObject({ status: 403 });
+  });
+  expect(chat.state.kind).toBe('missing');
+  expect(h.put).not.toHaveBeenCalled();
+});
+
+it('refuses a late PUT result after account changes before media completion', async () => {
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  h.auth.apiFetch.mockImplementation(async (path, options) => path.endsWith('/media')
+    ? { id: self, uploadUrl: 'https://upload.example.invalid/signed' } : original(path, options));
+  h.put.mockImplementation(async () => { h.auth.accountGeneration++; await render(); });
+  showChat = true; await render();
+  const upload = chat.uploadAttachment!;
+  await expect(upload({ name: 'a.pdf', size: 42 }, 'file:///picked', { token: 'fixture' })).rejects.toThrow('OWNER_CHANGED');
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/complete'))).toBe(false);
+  expect(h.auth.apiFetch.mock.calls.some(([path]) => path.endsWith('/messages'))).toBe(false);
+});
+
 it('never includes the current human actor in explicit or everyone server mentions', async () => {
   const other = '00000000-0000-4000-8000-000000000003';
   const original = h.auth.apiFetch.getMockImplementation()!;
@@ -678,12 +729,13 @@ it.each(['missing', 'empty', 'read-error'] as const)('keeps initial loading corr
 
 // Integration: the actual ledger and HTTP adapter survive a process restart after
 // a committed POST loses its response. Existing direct-send tests cannot cover it.
-it('persists the exact uncertain send across restart and never rebuilds its recipients', async () => {
+it.each([false, true])('persists the exact uncertain send across restart and never rebuilds its recipients (media=%s)', async withMedia => {
   const storage = { getAllKeys: async () => [...h.disk.keys()], getItem: async (key: string) => h.disk.get(key) ?? null,
     setItem: async (key: string, value: string) => { h.disk.set(key, value); }, removeItem: async (key: string) => { h.disk.delete(key); } };
   const account = getMobileAuthOwner().accountKey;
   let store = createDurableOutbox(storage); await store.activate(account);
-  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] } }, 1);
+  const attachments = withMedia ? [{ id, name: 'report.pdf', path: '', ext: 'pdf', size: 42, mimeType: 'application/pdf', category: 'file' as const }] : [];
+  await enqueueChatMessage(store, account, id, { clientId: 'lost-response', text: 'saved offline', mentions: { all: true, botIds: [] }, attachments }, 1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', item: { text: 'saved offline' } });
   const posted: unknown[] = [];
   let memberReads = 0;
@@ -696,7 +748,9 @@ it('persists the exact uncertain send across restart and never rebuilds its reci
   const delivery = () => createChatOutboxDelivery({ store, client, current: () => true, canRun: () => true, accessLost: async () => {} });
   await delivery().run();
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'queued', enqueueStarted: true, chat: { body: { operationId: 'lost-response', mentions: [id] } } });
+  expect(posted[0]).toMatchObject({ content: [{ type: 'text', text: 'saved offline' }, ...(withMedia ? [{ type: 'media', mediaId: id, caption: 'report.pdf' }] : [])] });
   store = createDurableOutbox(storage); await store.activate(account);
+  expect(store.getSnapshot()[0].chat?.input.attachments).toEqual(attachments);
   await delivery().run();
   expect(posted).toHaveLength(2); expect(posted[1]).toEqual(posted[0]); expect(memberReads).toBe(1);
   expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', chat: { messageId: self } });

@@ -8,6 +8,8 @@
  * official Simple Icons glyph; `llamacpp` is an original stack mark.
  */
 
+export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR } from './cindyMark.js';
+
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
   // Agnes official foreground mark: https://platform.agnes-ai.com/images/biglogo.svg
@@ -68,7 +70,7 @@ export const PROVIDER_LOGO_PATHS = {
   vllm: 'm23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z',
 } as const;
 
-export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd';
+export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd' | 'cindy';
 
 /** Device-link 等运行时边界不能信任静态 union；未知未来值应安全回退。 */
 export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
@@ -76,6 +78,7 @@ export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
     value === 'anthropic'
     || value === 'openai'
     || value === 'xd'
+    || value === 'cindy'
     || (
       typeof value === 'string'
       && Object.prototype.hasOwnProperty.call(PROVIDER_LOGO_PATHS, value)
@@ -125,7 +128,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
   anthropic: 'anthropic',
   openai: 'openai',
-  xd: 'xd',
+  xd: 'cindy',
   xai: 'xai',
   gemini: 'google',
   openrouter: 'openrouter',

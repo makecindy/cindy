@@ -27,6 +27,7 @@ import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/re
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
+import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
 import bundledSkillsLegacy from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills-legacy.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
@@ -67,6 +68,7 @@ export const FORGE_GUIDE = [
   sessionContext,
   directoryPicker,
   panelPreview,
+  browserExtension,
   bundledSkillsLegacy,
   workspaceSessions,
   confirmDialog,

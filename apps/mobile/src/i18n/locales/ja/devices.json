@@ -11,6 +11,7 @@
     "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。再度ログインすると追加できます。",
     "deleteFailed": "デバイスを削除できませんでした。",
     "deleteOnline": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
+    "deleteRejectedWhileOffline": "デバイスを削除できませんでした。一覧ではオフラインですが、サーバーではまだオンラインとして記録されています。",
     "currentlyOnline": "現在オンライン",
     "availableSection": "オンラインのデバイス",
     "offlineSection": "オフラインのデバイス",
@@ -403,6 +404,7 @@
         "30d": "30日",
         "all": "すべて"
       },
+      "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
       "displayHeading": "表示",
       "view": {
         "text": "テキスト",
@@ -694,7 +696,14 @@
     "createMenu": "新規作成",
     "awaiting": "確認待ち",
     "taskResult": "タスクの結果",
-    "collapseResult": "結果を閉じる"
+    "collapseResult": "結果を閉じる",
+    "avatarStatus": {
+      "awaiting": "確認待ち",
+      "error": "要確認",
+      "running": "作業中",
+      "done": "完了",
+      "unread": "未読"
+    }
   },
   "companionProfile": {
     "avatar": "アバター",

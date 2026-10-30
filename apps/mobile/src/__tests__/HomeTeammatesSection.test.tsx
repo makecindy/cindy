@@ -4,9 +4,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ cloudRefresh: vi.fn(async () => {}), cloudError: null as string | null, push: vi.fn(),
   openTeammate: vi.fn(async (_row: unknown) => {}),
-  cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, unread: false,
+  cloudActor: null as null | { id: string }, createOptions: null as any, collapsed: false, showAvatars: false, unread: false,
   cacheRevision: 0, cacheListeners: new Set<() => void>(), unreadIds: new Set<string>(),
   stripRenders: [] as string[], avatarRenders: [] as string[], identityReads: 0 }));
+vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { subscribe: () => () => {}, getPendingInteractions: () => [], getSessionLiveActivity: () => null } }));
 vi.mock('react-native', () => ({
   View: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
   ScrollView: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children),
@@ -58,12 +59,12 @@ vi.mock('@/session/TeammateCreateController', () => ({ useTeammateCreateControll
   return { renderTrigger: (trigger: unknown) => trigger, press: () => {}, label: 'create', sheets: null };
 } }));
 vi.mock('@/session/TeammateList', () => ({
-  useTeammateEntries: (items: any[], groups: any[] = []) => [...items.map(row => ({ kind: 'bot', row })), ...groups.map(row => ({ kind: 'group', row }))],
+  useTeammateEntries: (items: any[], groups: any[] = [], query = '') => [...items.map(row => ({ kind: 'bot', row })), ...groups.map(row => ({ kind: 'group', row }))].filter(entry => entry.row.item.display.title.includes(query)),
   useTeammateRowRenderer: (options: any) => (entry: any) => el('button', { key: entry.row.key,
     'data-testid': `row.${entry.kind}`, onClick: () => entry.kind === 'bot' ? options.onSelect(entry.row) : options.groups.onSelect(entry.row) }, entry.row.item.display.title),
 }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({
-  owner: 'owner', teammatesCollapsed: h.collapsed, lastTeammate: null,
+  owner: 'owner', teammatesCollapsed: h.collapsed, showCollapsedTeammateAvatars: h.showAvatars, lastTeammate: null,
   setTeammatesCollapsed: async () => {}, openTeammate: h.openTeammate, openCreatedTeammate: async () => {} }) }));
 import { HomeTeammatesSection } from '../session/HomeTeammatesSection';
 import { getHomeViewSession } from '../session/homeViewSession';
@@ -75,7 +76,7 @@ const roster = { items: [item], createTargets: [], groupTargets: [], loading: fa
   isOnline: () => true, connectionState: undefined, refresh: vi.fn(async () => {}) };
 const groups = { items: [] as any[], supported: true, refreshing: false, error: null, isOnline: () => true, refresh: vi.fn(async () => {}) };
 let root: Root; let node: HTMLDivElement;
-beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.unread = false; groups.items = [];
+beforeEach(() => { Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); node = document.createElement('div'); root = createRoot(node); vi.clearAllMocks(); h.cloudActor = null; vi.useFakeTimers(); roster.error = 'LIST_FAILED'; h.collapsed = false; h.showAvatars = false; h.unread = false; groups.items = [];
   h.cacheRevision = 0; h.unreadIds.clear(); h.stripRenders = []; h.avatarRenders = []; h.identityReads = 0;
   h.cloudError = null; getHomeViewSession().write('teammatesShowAll', false);
 });
@@ -129,20 +130,20 @@ it('re-reads cloud companions on each manual home refresh', async () => {
 // The new collapsed home must retain the chat receipt semantics of expanded rows:
 // a thread can be unread after main is read, while a server-read room stays quiet.
 it('uses server read receipts and thread unread state in the collapsed group strip', async () => {
-  h.collapsed = true;
+  h.collapsed = true; h.showAvatars = true;
   const group = { ...item, key: 'host:group', chatUnread: { count: 1, threadCount: 1 },
     item: { ...item.item, ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'group' }, display: { title: 'Team' } } };
   groups.items = [group];
   await render(0);
   const cell = () => byId('home.teammatesStrip.group.host.group');
-  expect(cell()?.querySelector('[data-testid="home.teammatesStrip.unread"]')).not.toBeNull();
+  expect(cell()?.querySelector('[data-testid="teammate.status.unread"]')).not.toBeNull();
   h.unread = true;
   group.chatUnread = { count: 0, threadCount: 0 };
   await render(0);
-  expect(cell()?.querySelector('[data-testid="home.teammatesStrip.unread"]')).toBeNull();
+  expect(cell()?.querySelector('[data-testid="teammate.status.unread"]')).toBeNull();
   group.chatUnread = { count: 2, threadCount: 0 };
   await render(0);
-  expect(cell()?.querySelector('[data-testid="home.teammatesStrip.unread"]')).not.toBeNull();
+  expect(cell()?.querySelector('[data-testid="teammate.status.unread"]')).not.toBeNull();
 });
 
 // PR #7079: unit-tier component coverage of the cloud/group routes that bypass the teammate hook.
@@ -171,7 +172,7 @@ it.each(['cloud', 'group', 'created-group'] as const)('defers the %s route until
 // One bot plus one unrelated notification is the minimal trigger; 50 x 10
 // exercises the representative repeated-refresh load without a timing assertion.
 it('keeps a 50-companion strip quiet through ten refreshes and updates only the affected cell', async () => {
-  h.collapsed = true;
+  h.collapsed = true; h.showAvatars = true;
   const items = Array.from({ length: 50 }, (_, index) => ({ ...item, key: `host:bot${index}`,
     item: { ...item.item, ref: { ...item.item.ref, id: `bot${index}` }, display: { title: `Bot ${index}`, avatar: undefined as any } } }));
   const show = (rows: typeof items) => render(0, { context: {
@@ -192,12 +193,12 @@ it('keeps a 50-companion strip quiet through ten refreshes and updates only the 
   expect(h.identityReads).toBe(0);
   await act(async () => { h.unreadIds.add('bot17'); h.cacheRevision++; h.cacheListeners.forEach(listener => listener()); });
   expect(h.stripRenders).toEqual(['home.teammatesStrip.bot.host.bot17']);
-  expect(byId('home.teammatesStrip.bot.host.bot17')?.querySelector('[data-testid="home.teammatesStrip.unread"]')).not.toBeNull();
+  expect(byId('home.teammatesStrip.bot.host.bot17')?.querySelector('[data-testid="teammate.status.unread"]')).not.toBeNull();
   expect(h.avatarRenders).toHaveLength(0);
   h.stripRenders = [];
   await act(async () => { h.unreadIds.clear(); h.cacheRevision++; h.cacheListeners.forEach(listener => listener()); });
   expect(h.stripRenders).toEqual(['home.teammatesStrip.bot.host.bot17']);
-  expect(byId('home.teammatesStrip.bot.host.bot17')?.querySelector('[data-testid="home.teammatesStrip.unread"]')).toBeNull();
+  expect(byId('home.teammatesStrip.bot.host.bot17')?.querySelector('[data-testid="teammate.status.unread"]')).toBeNull();
   expect(h.avatarRenders).toHaveLength(0);
   h.stripRenders = [];
   latest[17] = { ...latest[17], item: { ...latest[17].item, display: {
@@ -232,4 +233,74 @@ it('retries a cloud roster failure without restarting healthy computer or group 
   await act(async () => byId('home.teammatesRetry')!.click());
   expect(h.cloudRefresh).toHaveBeenCalledTimes(1);
   expect(roster.refresh).not.toHaveBeenCalled(); expect(groups.refresh).not.toHaveBeenCalled();
+});
+
+// Unit: the approved space-saving default must hide the entire body, including an empty create row.
+// Existing strip coverage requires the explicit opt-in and never covered header-only/search transitions.
+it('keeps only the header by default, restores the strip on opt-in, and never changes the fold when the setting changes', async () => {
+  h.collapsed = true;
+  await render(0);
+  expect(byId('home.teammatesHeader')).not.toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
+  expect(byId('row.bot')).toBeNull();
+  h.showAvatars = true; await render(0);
+  expect(byId('home.teammatesStrip')).not.toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.click());
+  h.showAvatars = false; await render(0);
+  expect(byId('row.bot')).not.toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.click());
+  expect(byId('row.bot')).toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
+  await render(0, { query: 'Mimi' });
+  expect(byId('row.bot')).not.toBeNull();
+  await render(0, { query: 'no match' });
+  expect(byId('home.teammates')).toBeNull();
+  await render(0);
+  expect(byId('row.bot')).toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
+});
+it('keeps the compact create action without an empty body when collapsed', async () => {
+  h.collapsed = true;
+  await render(0, { context: { navigation: null, route: null, shared: {
+    roster: { ...roster, items: [], createTargets: [item.host] }, groups,
+  } } } as any);
+  expect(byId('home.teammatesCreate')).not.toBeNull();
+  expect(byId('home.teammatesAdd')).toBeNull();
+  expect(byId('home.teammatesStripCreate')).toBeNull();
+  await act(async () => byId('home.teammatesHeader')!.click());
+  expect(byId('home.teammatesAdd')).not.toBeNull();
+});
+it('carries unread and pending attention on the hidden header without opening it or changing read receipts', async () => {
+  h.collapsed = true;
+  const group = { ...item, key: 'host:group', chatUnread: { count: 1, threadCount: 1 },
+    item: { ...item.item, ref: { collectionId: 'bot-groups', kind: 'bot-group', id: 'group' }, display: { title: 'Team' } } };
+  groups.items = [group];
+  await render(0);
+  expect(byId('home.teammatesAttention')).not.toBeNull();
+  expect(byId('home.teammatesHeader')?.getAttribute('aria-label')).toContain('devices.companions.unread');
+  group.chatUnread = { count: 0, threadCount: 0 };
+  await render(0);
+  expect(byId('home.teammatesAttention')).toBeNull();
+  await act(async () => { h.unreadIds.add('bot'); h.cacheListeners.forEach(listener => listener()); });
+  expect(byId('home.teammatesAttention')).not.toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
+  expect(byId('row.bot')).toBeNull();
+  await act(async () => { h.unreadIds.clear(); h.cacheListeners.forEach(listener => listener()); });
+  expect(byId('home.teammatesAttention')).toBeNull();
+  await render(0, { context: { navigation: null, route: null, shared: {
+    roster: { ...roster, items: [{ ...item, item: { ...item.item, display: { title: 'Mimi', status: { tone: 'warning', label: 'Needs attention' } } } }] }, groups,
+  } } } as any);
+  expect(byId('home.teammatesAttention')).not.toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
+  // Merge regression: hidden avatars must keep a pending decision visible even
+  // when the host also sends generation/warning, without changing the fold or receipt.
+  await render(0, { context: { navigation: null, route: null, shared: {
+    roster: { ...roster, items: [{ ...item, item: { ...item.item, display: { title: 'Mimi',
+      teammateActivity: { phase: 'needs-interaction' }, generation: { phase: 'replying', startedAt: 1 },
+      status: { tone: 'warning', label: 'Needs attention' } } } }] }, groups,
+  } } } as any);
+  expect(byId('home.teammatesHeader')?.getAttribute('aria-label')).toContain('devices.companions.awaiting');
+  expect(byId('home.teammatesHeader')?.getAttribute('aria-label')).not.toContain('Needs attention');
+  expect(byId('home.teammatesAttention')).not.toBeNull();
+  expect(byId('home.teammatesStrip')).toBeNull();
 });

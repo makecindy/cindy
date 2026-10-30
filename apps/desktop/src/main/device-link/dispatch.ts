@@ -18,6 +18,7 @@ import {
   PROVIDER_SHARE_GROUP_STATUS_REQUEST,
   readProviderShareGroupStatus,
   type ProviderShareGroupState,
+  type RemoteAgentTeardownReason,
   PROVIDER_SHARE_GUEST_RUNNING_FIELD,
   CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1,
   isListMessagePush,
@@ -441,7 +442,7 @@ function logProviderShareDenial(src: string, where: string, reason?: string): vo
 export interface RemoteAgentHandler {
   revalidateModelAccess?(): Promise<void>;
   handle(controller: string, raw: unknown): Promise<unknown>;
-  abortAll(): void;
+  abortAll(reason: RemoteAgentTeardownReason): void;
   /** 结束匹配控制端的任务(供应商分享被关闭)。 */
   abortControllers?(match: (controller: string) => boolean): Promise<void>;
   /** 结束匹配控制端替某个人(转分享键)转来的任务(转分享的同意被撤回)。 */
@@ -827,10 +828,13 @@ function projectInvokeResultForTunnel(
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
-    const logoKind = typeof p.id === 'string'
-      ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
-      : null;
-    // Never trust/pass through an arbitrary pre-existing value: only shared resolver output crosses.
+    // Only the host's narrow Cindy AI identity override may supersede brand inference.
+    const logoKind = p.id === 'xd' && p.logoKind === 'xd'
+      ? 'xd'
+      : typeof p.id === 'string'
+        ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
+        : null;
+    // Other pre-existing values remain untrusted.
     delete rest.logoKind;
     if (
       logoKind
@@ -2469,7 +2473,7 @@ export function dropAllControllers(
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
   stopFilePeers();
-  remoteAgentHandler?.abortAll();
+  remoteAgentHandler?.abortAll(reason === 'shutdown' ? 'app-quit' : 'navigation');
   remoteDesktop.stop(
     undefined,
     undefined,

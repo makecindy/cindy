@@ -1,3 +1,4 @@
+import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
@@ -22,7 +23,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
-import { teammateVisualFixture, VISUAL_TEAMMATE_SESSION_ID } from '@/debug/teammateVisualFixture';
+import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -218,6 +219,8 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  const mask = groupMaskVisualFixture(channel, args[0]);
+  if (mask !== undefined) return mask as T;
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
@@ -543,7 +546,7 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
-  if (id === VISUAL_TEAMMATE_SESSION_ID) return {
+  if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
   };
   return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
@@ -567,9 +570,13 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
-  if (sessionId === VISUAL_TEAMMATE_SESSION_ID) return visualMockMessages('ui-mock-rich-answer').map(row => ({
-    ...row, id: `${sessionId}-${row.id}`, clientId: `${sessionId}-${row.clientId}`, sessionId,
-  }));
+  if (sessionId === VISUAL_TEAMMATE_SESSION_ID || sessionId.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) {
+    const rows = visualMockMessages('ui-mock-rich-answer');
+    return rows.map((row, index) => ({
+      ...row, id: `${sessionId}-${row.id}`, clientId: `${sessionId}-${row.clientId}`, sessionId,
+      createdAt: new Date(teammateVisualReplyAt(sessionId) - (rows.length - 1 - index) * 1_000).toISOString(),
+    }));
+  }
   if (sessionId === VISUAL_MOCK_SESSION_ID) {
     return SHARED_REMOTE_CONTROL_FIXTURE.rawMessages.map((message) => ({
       ...message,

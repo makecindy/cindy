@@ -1,10 +1,4 @@
-/**
- * The private chat's way into group chat: start a new group with this teammate
- * already picked, or bring them into a group you are in. It reuses the group
- * creation dialog and the same member invitation the group settings use, so the
- * server's membership rules stay the only authority. The private chat itself is
- * untouched — group lanes never carry its history.
- */
+/** Create a group with the current teammate or add it to an existing group. */
 import { useRef, useState } from 'react';
 import { MessagesSquare, UserPlus, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -124,9 +118,9 @@ export function BotAddToGroupMenu({ botId }: { botId: string }) {
       </DropdownMenu>
       {creating ? (
         <BotGroupCreateDialog
-          initialBotIds={[botId]}
+          privateChatBotId={botId}
           onOpenChange={open => { if (!open) { setCreating(false); trigger.current?.focus(); } }}
-          onCreated={id => { setCreating(false); navigate(groupRoute(id)); }}
+          onCreated={id => { setCreating(false); navigate(groupRoute(id), { state: { createdGroupInvite: id } }); }}
         />
       ) : null}
     </>

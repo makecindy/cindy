@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyboardControlRegion, controlRegion, sharedStatusRowDrawerTop, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
 import { foldDesktopLayout } from '@/remote-desktop/foldDesktopLayout';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 
@@ -112,5 +112,26 @@ describe('task-list drawer top when the system bar shares the status row', () =>
     expect(sharedStatusRowDrawerTop(40, 82)).toBe(0);
     expect(sharedStatusRowDrawerTop(103, 59)).toBeUndefined();
     expect(sharedStatusRowDrawerTop(0, 82)).toBeUndefined();
+  });
+});
+
+// Regression: Duo file preview (2026-10-29). Its floating close/title/menu row sat under the whole
+// status area in portrait, and against the top screen edge (clipped) beside the landscape rail.
+describe('floating top row beside the Duo status area', () => {
+  const portrait = (patch: Partial<WindowGeometry> = {}) => window({ width: 662, height: 942, barEdge: 'none',
+    insets: { top: 82, left: 0, right: 0, bottom: 20 },
+    regions: [{ kind: 'occlusion', x: 520, y: 0, width: 142, height: 82 }], ...patch });
+  it('shares the status row in portrait, ending before the status area', () => {
+    expect(floatingTopRow(portrait(), 44)).toEqual({ top: 26, left: 12, right: 150, sharedStatusRow: true });
+  });
+  it('keeps the row below the status area for ordinary bars, other reservations and narrow rows', () => {
+    const below = { top: 82, left: 12, right: 12, sharedStatusRow: false };
+    expect(floatingTopRow(portrait({ regions: [] }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ reservedRegionsSupported: false }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ regions: [...portrait().regions, { kind: 'occlusion', x: 280, y: 20, width: 100, height: 40 }] }), 44)).toEqual(below);
+    expect(floatingTopRow(portrait({ width: 300, regularWidth: false, regions: [{ kind: 'occlusion', x: 160, y: 0, width: 140, height: 82 }] }), 44)).toMatchObject({ sharedStatusRow: false });
+  });
+  it('keeps a margin from the top edge beside a vertical system bar', () => {
+    expect(floatingTopRow(window(), 44)).toEqual({ top: 12, left: 12, right: 72, sharedStatusRow: false });
   });
 });

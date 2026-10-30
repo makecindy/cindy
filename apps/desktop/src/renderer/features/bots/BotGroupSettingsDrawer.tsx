@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Folder, Plus, X } from 'lucide-react';
+import { ArrowLeft, Folder, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -29,6 +29,8 @@ import {
   type BotGroupSpeakingMode,
   type BotGroupSummary,
 } from '../../../shared/botGroupChat';
+import { GroupMaskSettings } from './GroupMaskSettings';
+import { GROUP_MASK_SETTINGS_PARAM, useGroupMask } from './groupMaskPresentation';
 import { ChatGroupSettings } from './ChatGroupSettings';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupAvatarStack } from './BotGroupAvatars';
@@ -52,6 +54,9 @@ export function BotGroupSettingsDrawer() {
   const match = matchPath('/bots/groups/:groupId', location.pathname);
   const { groups } = useBotGroupList();
   const group = groups.find((candidate) => candidate.id === match?.params.groupId) ?? null;
+  const mask = useGroupMask(group?.id);
+  const maskOpen = !!mask && searchParams.get(GROUP_MASK_SETTINGS_PARAM) === '1';
+  const back = () => setSearchParams(current => { const next = new URLSearchParams(current); next.delete(GROUP_MASK_SETTINGS_PARAM); return next; }, { replace: true });
   const open = searchParams.get(BOT_GROUP_SETTINGS_PARAM) === '1' && group !== null;
 
   const close = () => {
@@ -59,6 +64,7 @@ export function BotGroupSettingsDrawer() {
       (current) => {
         const next = new URLSearchParams(current);
         next.delete(BOT_GROUP_SETTINGS_PARAM);
+        next.delete(GROUP_MASK_SETTINGS_PARAM);
         return next;
       },
       { replace: true },
@@ -78,6 +84,7 @@ export function BotGroupSettingsDrawer() {
             // CJK IME: Escape during composition only cancels the candidate.
             onEscapeKeyDown={(event) => {
               if (event.isComposing || event.keyCode === 229) event.preventDefault();
+              else if (maskOpen) { event.preventDefault(); back(); }
             }}
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-[var(--border-default)] bg-[var(--surface)] outline-none"
             // The header shares the window title strip; without no-drag the page's drag
@@ -85,8 +92,10 @@ export function BotGroupSettingsDrawer() {
             style={WINDOW_NO_DRAG_STYLE}
           >
             <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--border-default)] px-5">
-              <Dialog.Title className="text-15 font-medium text-[var(--text-primary)]">
-                {t('bots.groupChat.settings.title')}
+              {maskOpen && <button type="button" onClick={back} aria-label={t('bots.groupChat.settings.title')}
+                className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ArrowLeft size={17} /></button>}
+              <Dialog.Title className="flex-1 text-15 font-medium text-[var(--text-primary)]">
+                {t(maskOpen ? 'bots.groupChat.mask.title' : 'bots.groupChat.settings.title')}
               </Dialog.Title>
               <Tip text={t('bots.close')}>
                 <Dialog.Close
@@ -97,7 +106,10 @@ export function BotGroupSettingsDrawer() {
                 </Dialog.Close>
               </Tip>
             </header>
+            <div className={maskOpen ? 'hidden' : 'flex min-h-0 flex-1 flex-col'}>
             {group.serverBacked ? <ChatGroupSettings key={group.id} group={group} /> : <BotGroupSettingsBody key={group.id} group={group} />}
+            </div>
+            {maskOpen && <GroupMaskSettings groupId={group.id} />}
           </Dialog.Content>
         </Dialog.Overlay>
       </Dialog.Portal>

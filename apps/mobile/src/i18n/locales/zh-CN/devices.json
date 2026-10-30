@@ -11,6 +11,7 @@
     "deleteMessage": "将此设备从账号中移除并断开远程连接。设备上的任务和文件会保留，重新登录后可再次加入。",
     "deleteFailed": "删除设备失败。",
     "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
+    "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致",
     "currentlyOnline": "当前在线",
     "availableSection": "在线设备",
     "offlineSection": "离线设备",
@@ -403,6 +404,7 @@
         "30d": "30 天",
         "all": "全部"
       },
+      "showCollapsedTeammateAvatars": "收起时显示头像",
       "displayHeading": "显示",
       "view": {
         "text": "文字",
@@ -694,7 +696,14 @@
     "createMenu": "新建",
     "awaiting": "等你确认",
     "taskResult": "任务结果",
-    "collapseResult": "收起结果"
+    "collapseResult": "收起结果",
+    "avatarStatus": {
+      "awaiting": "待你确认",
+      "error": "需要关注",
+      "running": "正在工作",
+      "done": "已完成",
+      "unread": "未读"
+    }
   },
   "companionProfile": {
     "avatar": "头像",

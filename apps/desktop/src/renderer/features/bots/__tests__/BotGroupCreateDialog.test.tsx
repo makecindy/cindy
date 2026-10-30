@@ -63,6 +63,27 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('BotGroupCreateDialog', () => {
+  it('creates from a private chat with only its teammate and no member picker', async () => {
+    mocks.status.mockResolvedValue({ enabled: true });
+    const onCreated = vi.fn();
+    render(<BotGroupCreateDialog privateChatBotId="c" onOpenChange={vi.fn()} onCreated={onCreated} />);
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(document.activeElement).toBe(screen.getByRole('textbox'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '  项目讨论  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));
+    expect(mocks.createBotGroup).toHaveBeenCalledExactlyOnceWith({ name: '项目讨论', botIds: ['c'] });
+  });
+
+  it('does not silently create a local-only group from a private chat', async () => {
+    render(<BotGroupCreateDialog privateChatBotId="c" onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '项目讨论' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.groupChat.errors.chatUnavailable');
+    expect(screen.getByRole('textbox')).toHaveProperty('value', '项目讨论');
+    expect(mocks.createBotGroup).not.toHaveBeenCalled();
+  });
+
   it('focuses the name, lists local teammates and blocks paused or archived ones', () => {
     renderDialog();
     expect(document.activeElement).toBe(screen.getByRole('textbox'));
@@ -110,18 +131,6 @@ describe('BotGroupCreateDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'bots.groupChat.errors.memberLimit');
     expect(onCreated).not.toHaveBeenCalled();
-  });
-
-  it('starts with the private-chat teammate already picked and still lets the user change it', async () => {
-    const onCreated = vi.fn();
-    render(<BotGroupCreateDialog initialBotIds={['c']} onOpenChange={vi.fn()} onCreated={onCreated} />);
-    expect(checkbox('Bot c').getAttribute('aria-checked')).toBe('true');
-    expect(checkbox('Bot a').getAttribute('aria-checked')).toBe('false');
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: '新项目' } });
-    fireEvent.click(checkbox('Bot a'));
-    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.create.submit' }));
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('g-new'));
-    expect(mocks.createBotGroup).toHaveBeenCalledWith({ name: '新项目', botIds: ['a', 'c'] });
   });
 
   it('closes from Cancel', () => {

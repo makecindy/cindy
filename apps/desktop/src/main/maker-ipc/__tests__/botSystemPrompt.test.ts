@@ -51,7 +51,8 @@ describe('稳定层:能力必须写进提示词', () => {
     const stable = buildBotStableTier(main);
     expect(stable).toContain('你能看、能管主人的任务');
     // The prompt states the same principal boundary the host gate enforces.
-    expect(stable).toContain('NEEDS_OWNER_REQUEST');
+    expect(stable).toContain('同意后继续本次调用');
+    expect(stable).not.toContain('NEEDS_OWNER_REQUEST');
     expect(stable).toContain('照常走当前任务的权限档');
     expect(stable).not.toContain('OWNER_TURN_REQUIRED');
     expect(stable).not.toContain('TASK_OUT_OF_SCOPE');

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { pluginTaskRouteAttempts, pluginTaskSelectionIsOpen } from '../pluginTaskDefaultRoute.js';
 import { createSessionExecutionResolver } from '../sessionExecutionSelection.js';
 import { Session } from '@cindy/maker-core';
 import { fastModeToStorage } from '@cindy/maker-shared';
@@ -1399,6 +1400,86 @@ it('rechecks saved preferences at the runtime mutation boundary', async () => {
   expect(apply).not.toHaveBeenCalled();
 });
 
+it('an open plugin selection without a source session follows the auxiliary chain at low effort', async () => {
+  // Rule: a plugin's own persistent task must not borrow the new-task composer
+  // model; the settings copy says it follows the system auxiliary model. It runs
+  // on Pi when the provider offers the model there (2026-10-28). tier: unit.
+  const f = fixture();
+  const selected = { harness: 'codex' as const, model: 'next', providerId: f.route.providerId, effort: 'high' as const, fastMode: false };
+  const resolver = createSessionExecutionResolver({
+    captureOwner: () => () => {}, readCaller: async () => { throw Error('unexpected caller'); },
+    readDefault: () => ({ agentKind: selected.harness, model: selected.model, providerId: selected.providerId, effort: selected.effort, fastMode: selected.fastMode }),
+    availableAgents: () => ['codex', 'pi'],
+    availableModels: () => [{ id: 'next', efforts: ['high'] }, { id: 'cheap', efforts: ['low', 'high'] }, { id: 'nolow', efforts: ['high'] }, { id: 'onpi', efforts: ['medium', 'high'] }],
+    hasCindyAiApiKey: () => true,
+    readProviderRouting: async () => ({ availability: { 'claude-code': [],
+      pi: [{ id: f.route.providerId, name: 'provider', models: ['onpi'] }],
+      codex: [{ id: f.route.providerId, name: 'provider', models: ['next', 'cheap', 'nolow', 'onpi'] }] },
+      resolveDefaultProviderIdForModel: () => f.route.providerId }),
+  });
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const resolveStart = source.indexOf('    const resolveRoute = async');
+  const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
+  const run = (candidates: Array<{ agentKind: 'codex'; providerId: string; model: string }>, config = {}, sourceSessionId?: string) => {
+    const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
+      activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => sourceSessionId,
+      resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+      getEffectiveAuxiliaryModelRefs: () => ['chain'], getEffectiveAuxiliaryModelChainSnapshot: () => 'chain',
+      auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
+    const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    return new Function(...Object.keys(deps), js)(...Object.values(deps))('p') as Promise<{ model: string; effort: string }>;
+  };
+  // First usable candidate wins, at low effort; a model Pi does not offer stays on the chain's harness.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low', agentKind: 'codex' });
+  // A model the provider offers on Pi runs on Pi, at its lightest level.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'onpi' }]))
+    .resolves.toMatchObject({ model: 'onpi', effort: 'medium', agentKind: 'pi' });
+  // A chain head without a light effort level yields to the next candidate that has one.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }, { agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }]))
+    .resolves.toMatchObject({ model: 'cheap', effort: 'low' });
+  // Only when no candidate offers a light level does a model route at its default effort.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'nolow' }])).resolves.toMatchObject({ model: 'nolow' });
+  // No usable candidate: the new-task selection remains the last resort.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'missing' }])).resolves.toMatchObject({ model: 'next', effort: 'high' });
+  // An explicit plugin model never consults the chain.
+  await expect(run([{ agentKind: 'codex', providerId: f.route.providerId, model: 'cheap' }], { model: 'next' })).resolves.toMatchObject({ model: 'next' });
+});
+
+it('archives only its own idle task through the host writer and treats archived tasks as done', async () => {
+  // Rule: plugins rotate per-video tasks and archive the previous one; a working task is never cut off. tier: unit.
+  const f = fixture(), task = await f.create();
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  (f.deps.inspect as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ execution: f.execution, pending: [] });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.deps.archive).not.toHaveBeenCalled();
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect((await f.service.archive('p', { taskId: task.taskId })).status).toBe('archived');
+  expect(f.deps.archive).toHaveBeenCalledTimes(1);
+  await expect(f.service.archive('other', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  await expect(f.service.send('p', { taskId: task.taskId, requestKey: 'late', expectedRevision: task.revision, text: 'x' })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  const bare = fixture(), plain = await bare.create();
+  await expect(bare.service.archive('p', { taskId: plain.taskId })).rejects.toMatchObject({ code: 'HOST_NOT_READY' });
+});
+
+// Review 2026-10-29 (Greptile P1): the idle check ran before the archive waited for the session
+// write lock, so input sent in between was archived out from under the user. tier: unit.
+it('does not archive a task that became busy while the archive waited for the session lock', async () => {
+  const f = fixture(), task = await f.create();
+  let busy = false;
+  f.deps.isBusy = () => busy;
+  f.deps.archive = vi.fn(async (taskId: string, assertAllowed: () => void) => {
+    busy = true; // the user sends input while the write waits for the lock
+    assertAllowed();
+    f.tasks.set(taskId, { ...f.tasks.get(taskId)!, status: 'archived' });
+  });
+  await expect(f.service.archive('p', { taskId: task.taskId })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  expect(f.tasks.get(task.taskId)!.status).toBe('active');
+});
+
 it.each([
   ['provider', 'reset'], ['provider', 'partial'],
   ['mutation', 'reset'], ['mutation', 'partial'],
@@ -1437,7 +1518,10 @@ it.each([
   const resolve = source.slice(resolveStart, source.indexOf('    const readExecution', resolveStart));
   const deps = { getPluginTaskDefaults: () => config, getSelectedNewMakerRoute: () => selected,
     activeOwnerScopeKey: () => 'owner', assertPlugin: () => {}, getPluginTaskSourceSessionId: () => undefined,
-    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); } };
+    resolveSessionExecution: resolver, PluginTaskError, routeUnavailable: () => { throw Error('unavailable'); },
+    // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
+    getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
+    auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;

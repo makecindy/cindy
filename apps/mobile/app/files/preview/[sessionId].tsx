@@ -66,6 +66,7 @@ import { HtmlBrowserChrome } from '@/session/HtmlBrowserChrome';
 import { HtmlWebsiteBrowser, type WebsiteVisit } from '@/session/HtmlWebsiteBrowser';
 import { normalizeBrowserAddress } from '@/session/browserAddress';
 import { HTML_BROWSER_CONTROL_SIZE, type HtmlBrowserChromeProps } from '@/session/HtmlBrowserChrome.types';
+import { usePreviewChromeFrame } from '@/session/usePreviewChromeFrame';
 import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
 import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
@@ -197,7 +198,7 @@ function RemoteFilePreviewContent() {
   const targetLine = Number.isInteger(targetLineRaw) && targetLineRaw > 0 ? targetLineRaw : null;
   const router = useRouter();
   const previewWindow = useAdaptiveWindow();
-  const pageInsets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const [measuredPageWidth, setMeasuredPageWidth] = useState<number | null>(null);
   const pageWidth = measuredPageWidth ?? Math.max(1, previewWindow.width - previewWindow.insets.left - previewWindow.insets.right);
   const { openLink } = useDeviceLink();
@@ -633,10 +634,10 @@ function RemoteFilePreviewContent() {
             path={absolutePathOf(pendingPath)}
             address={absolutePathOf(pendingPath)}
             onNavigate={() => true}
-            top={pageInsets.top}
-            bottom={pageInsets.bottom}
-            left={pageInsets.left + spacing.md}
-            right={pageInsets.right + spacing.md}
+            top={chromeFrame.top}
+            bottom={chromeFrame.bottom}
+            left={chromeFrame.left}
+            right={chromeFrame.right}
             canGoBack={false}
             canGoForward={false}
             source={false}
@@ -670,10 +671,10 @@ function RemoteFilePreviewContent() {
           document
           title={pathDisplayName(pendingPath)}
           path={absolutePathOf(pendingPath)}
-          top={pageInsets.top}
-          bottom={pageInsets.bottom}
-          left={pageInsets.left + spacing.md}
-          right={pageInsets.right + spacing.md}
+          top={chromeFrame.top}
+          bottom={chromeFrame.bottom}
+          left={chromeFrame.left}
+          right={chromeFrame.right}
           busy
           pending
           onClose={() => goBackGuarded(router)}
@@ -835,8 +836,9 @@ function FilePreviewPage({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const contentPadding = {
-    paddingTop: insets.top + HTML_BROWSER_CONTROL_SIZE + spacing.xs,
+    paddingTop: chromeFrame.contentTop,
     paddingBottom: insets.bottom + spacing.xs,
     paddingLeft: insets.left,
     paddingRight: insets.right,
@@ -891,10 +893,10 @@ function FilePreviewPage({
         {...htmlBrowserActions}
         title={item.name}
         path={absolutePathOf(item.relPath)}
-        top={insets.top}
-        bottom={insets.bottom}
-        left={insets.left + spacing.md}
-        right={insets.right + spacing.md}
+        top={chromeFrame.top}
+        bottom={chromeFrame.bottom}
+        left={chromeFrame.left}
+        right={chromeFrame.right}
       /> : null}
     </View>
   );
@@ -1042,8 +1044,9 @@ function PdfPreviewPage({
   workdir: string;
 }) {
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const { viewRef, measure, viewportStyle, obscuredContentInsets } = useHtmlBrowserViewport({
-    top: insets.top + HTML_BROWSER_CONTROL_SIZE + spacing.xs,
+    top: chromeFrame.contentTop,
     bottom: insets.bottom + spacing.xs,
     left: insets.left,
     right: insets.right,
@@ -1172,9 +1175,10 @@ function TextPreviewPage({
   const richKind = richTextKindOf(item.relPath);
   const insets = useSafeAreaInsets();
   // Sit directly against the safe-area edges; only a small gap separates page content.
-  const browserTop = insets.top;
-  const browserBottom = insets.bottom;
-  const browserContentInset = { top: browserTop + HTML_BROWSER_CONTROL_SIZE + spacing.xs, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
+  const chromeFrame = usePreviewChromeFrame();
+  const browserTop = chromeFrame.top;
+  const browserBottom = chromeFrame.bottom;
+  const browserContentInset = { top: chromeFrame.contentTop, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
   const browserRef = useRef<WebView>(null);
   const [website, setWebsite] = useState<WebsiteVisit | null>(null);
   const [browserNavigation, setBrowserNavigation] = useState<{
@@ -1297,7 +1301,7 @@ function TextPreviewPage({
   if (website) return visible ? <HtmlWebsiteBrowser
     visit={website}
     insets={{ ...browserContentInset, left: insets.left, right: insets.right }}
-    chrome={{ top: browserTop, bottom: browserBottom, left: insets.left + spacing.md, right: insets.right + spacing.md, onClose: htmlBrowserActions.onClose }}
+    chrome={{ top: browserTop, bottom: browserBottom, left: chromeFrame.left, right: chromeFrame.right, onClose: htmlBrowserActions.onClose }}
     onReturn={() => { setBrowserNavigation(null); setWebsite(null); }}
   /> : <View style={styles.textPage} />;
 
@@ -1412,8 +1416,8 @@ function TextPreviewPage({
         path={absolutePathOf(item.relPath)}
         top={browserTop}
         bottom={browserBottom}
-        left={insets.left + spacing.md}
-        right={insets.right + spacing.md}
+        left={chromeFrame.left}
+        right={chromeFrame.right}
         source={richView === 'source'}
         onToggleSource={canRenderRich ? () => setRichView(value => value === 'rendered' ? 'source' : 'rendered') : undefined}
       /> : null}
@@ -1435,8 +1439,8 @@ function TextPreviewPage({
           }}
           top={browserTop}
           bottom={browserBottom}
-          left={insets.left + spacing.md}
-          right={insets.right + spacing.md}
+          left={chromeFrame.left}
+          right={chromeFrame.right}
           source={richView === 'source'}
           loading={richView === 'rendered' && !htmlError && (!htmlSnapshot.preview || navigation?.loading === true)}
           canGoBack={richView === 'source' || navigation?.canGoBack === true}

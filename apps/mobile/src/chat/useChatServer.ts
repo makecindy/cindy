@@ -18,6 +18,10 @@ import { subscribeChatServer } from './chatServerSubscription';
 import { createChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore } from './chatHistoryStore';
 import { cacheChatMessages, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
+import { createChatServerUpload } from './chatServerUpload';
+import type { MobileLocalAttachmentUploadDeps } from '@/session/mobileLocalAttachmentUpload';
+import type { RemoteSerializedAttachment } from '@/session/types';
+import { useTranslation } from 'react-i18next';
 
 // Shared only within the current authenticated account generation and realm.
 let listOwner = '';
@@ -73,7 +77,15 @@ export function useChatClient() {
       return createChatHistory({ api: request, current, newGeneration: randomUUID,
         store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
     });
-    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client,
+    const upload = createChatServerUpload({ request, current,
+      operationId: () => `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      put: async (url, uri, type, signal) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, type, {}, { signal, signedHeaders: { 'Content-Type': type } });
+      },
+    });
+    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client, upload,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
 }
@@ -119,7 +131,10 @@ export function useChatServerRoster(enabled: boolean) {
                 || run.reasons.some(reason => ['focus', 'connected', 'visible'].includes(reason)));
             fresh.set(room.id, { owner: api.owner, head: room.head, value });
             // An archive can land between the list and the newer snapshot.
-            if (!value.room.archived) rows.push(chatRoomRow(room, value, self));
+            if (!value.room.archived) {
+              const activity = await api.client.rosterActivity(room.id, value);
+              rows.push(chatRoomRow(room, value, self, activity));
+            }
           } catch (error) {
             if (!chatAccessLost(error)) {
               mobileDebugLog('warn', 'recovery', 'companion-roster-refresh', { source: 'group-detail', status: (error as { status?: number })?.status });
@@ -215,6 +230,7 @@ export function useChatServerRoster(enabled: boolean) {
 /** Reads and sends use the account's Chat Server identity, never its computer identity. */
 export function useChatServerGroup(groupId: string, enabled: boolean, threadRootId?: string) {
   const api = useChatClient();
+  const { t } = useTranslation();
   const identity = `${api.owner}:${groupId}:${threadRootId ?? 'main'}`;
   const active = useRef(identity); active.current = identity;
   const ledger = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
@@ -369,7 +385,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
       return { effects: [] };
     }
-    if (action !== 'send' || !input || input.division || (Array.isArray(input.attachments) && input.attachments.length)) throw new Error('UNSUPPORTED_CHAT_ACTION');
+    if (action !== 'send' || !input || input.division) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const owner = getMobileAuthOwner();
@@ -381,6 +397,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
+      attachments: input.attachments as RemoteSerializedAttachment[] | undefined,
       ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
         ? { quote: { messageId: String(input.quote.messageId) } } : {}),
       mentions: { all: mentions.all, botIds: [...new Set(recipients)] },
@@ -388,6 +405,23 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     latest.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) > BigInt(seq) ? message.seq : seq, undefined));
     if (!isMobileAuthOwnerCurrent(owner)) throw new Error('OWNER_CHANGED');
     return { effects: [] };
+  };
+  const uploadAttachment: MobileLocalAttachmentUploadDeps['upload'] = async (candidate, uri, options) => {
+    const generation = accessGeneration.current;
+    if (!enabled || !valid() || page.current?.identity !== identity) throw new Error('OWNER_CHANGED');
+    try {
+      const attachment = await api.upload(groupId, candidate, uri, options.signal);
+      if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
+      return attachment;
+    } catch (error) {
+      if (valid() && generation === accessGeneration.current && chatAccessLost(error)) loseAccess();
+      if (error instanceof Error && error.message === 'ATTACHMENT_TOO_LARGE') {
+        throw new Error(t('groupChat.server.attachmentTooLarge', { size: 100 }));
+      }
+      if (error instanceof Error && error.message === 'ATTACHMENT_UNAVAILABLE') throw new Error(t('composer.upload.noFileRead'));
+      if (error instanceof Error && error.message === 'UPLOAD_CANCELLED') throw new Error(t('composer.upload.cancelled'));
+      throw error;
+    }
   };
   const media = async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
     const generation = accessGeneration.current;
@@ -432,5 +466,5 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     listHidden: api.current() && api.client.personalList.hidden(groupId),
     online: state.identity === identity && state.online, reload, act, pending, pendingAction,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
-    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead };
+    acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };
 }

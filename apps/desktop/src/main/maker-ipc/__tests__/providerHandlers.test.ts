@@ -4637,6 +4637,30 @@ describe('model context limit IPC', () => {
   const related = { providerId: 'openai', agent: 'claude-code' as const, modelId: 'chatgpt/gpt-6' };
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
 
+  // Unit: capability writes use the real IPC handler; no prior coverage of its owner/membership gate.
+  // A stale owner or unknown alias must not reach the persistent writer.
+  it('writes explicit false for all aliases and rejects stale owners, missing models and invalid values', async () => {
+    const harness = new IpcHarness();
+    const write = vi.fn(async () => {});
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      listProviders: async () => [catalogView('openai', { codex: ['gpt-6'], 'claude-code': ['chatgpt/gpt-6'] })],
+      readModelImageInputOverride: () => false,
+      writeModelImageInputOverride: write,
+    }));
+    const target = { ...primary, relatedTargets: [related] };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, false, stamp))
+      .resolves.toEqual({ value: false, mixed: false });
+    expect(write).toHaveBeenCalledExactlyOnceWith([primary, related], false);
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, true, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...target, modelId: 'missing' }, true, stamp)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, target, 'false', stamp)).rejects.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+    // Reset remains possible after a model disappears from discovery.
+    await harness.invoke(MAKER_INVOKE.MODEL_IMAGE_INPUT_SET, { ...primary, modelId: 'missing' }, null, stamp);
+    expect(write).toHaveBeenLastCalledWith([{ ...primary, modelId: 'missing' }], null);
+  });
+
   it('saves model compaction for all aliases with owner and range validation', async () => {
     const harness = new IpcHarness();
     const writeModelCompaction = vi.fn(async () => {});

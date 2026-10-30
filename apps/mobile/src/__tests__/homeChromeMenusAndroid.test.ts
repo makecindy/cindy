@@ -104,6 +104,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
       ["filter", "devices.list.menu.summaryNone", true],
       ["view", "devices.list.menu.view.list", true],
       ["taskInfo", "devices.list.menu.taskInfo.time", true],
+      ["teammates", "", true],
     ]);
     const sort = resolvePullDownSubmenu(actions, ["sort"]);
     expect(sort?.subactions?.map((action) => [action.id, action.state])).toEqual([

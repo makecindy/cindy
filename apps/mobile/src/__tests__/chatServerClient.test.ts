@@ -18,6 +18,20 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
 ] });
 
 describe('group list activity', () => {
+  it('refreshes pending execution state without a new message and tolerates an older server', async () => {
+    const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
+    const client = createChatServerClient(request);
+    const value = snapshot();
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'running' });
+    const awaiting = await client.rosterActivity(value.room.id, value);
+    expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
+      .toEqual({ phase: 'needs-interaction' });
+    expect(await client.rosterActivity(value.room.id, value)).toBeUndefined();
+    expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
+  });
+
   it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
     const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
     const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });
@@ -441,6 +455,17 @@ describe('direct Chat Server client', () => {
     expect(request.mock.calls.at(-1)).toEqual(posted);
     expect(request.mock.calls.filter(([, method]) => method !== 'POST')).toHaveLength(2);
   });
+  it.each(['', 'with files'])('sends sealed attachment IDs with text=%s and preserves the retry body', async text => {
+    const request = vi.fn().mockResolvedValue({ id: id(9) });
+    const client = createChatServerClient(request);
+    const input = { text, clientId: 'same-media-message', mentions: { all: false, botIds: [] },
+      attachments: [{ id: id(2), name: 'report.pdf', category: 'file' as const, path: '', ext: 'pdf', mimeType: 'application/pdf', size: 42 }] };
+    await client.send(id(1), input); await client.send(id(1), input);
+    expect(request.mock.calls[0][2]).toEqual({ operationId: 'same-media-message', mentions: [],
+      content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId: id(2), caption: 'report.pdf' }] });
+    expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+    expect(chatGroupView({ snapshot: snapshot(), messages: [], before: null }, id(10)).supportsAttachments).toBe(true);
+  });
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
     const request = vi.fn().mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(recent)
@@ -555,4 +580,33 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+});
+
+// Personal delegation is a separate server contract: viewing/AI output never consumes human unread (unit).
+describe('personal mask transport', () => {
+  it('does not call unsupported mask endpoints on an older server', async () => {
+    const request = vi.fn(async (_path: string) => ({ actor: { id: id(1), kind: 'human' } }));
+    const client = createChatServerClient(request as never);
+    expect(await client.mask(id(2))).toBeNull();
+    expect(await client.maskMentions(id(2))).toEqual({ mentions: [], hasMore: false });
+    expect(request.mock.calls.every(call => call[0] === '/me')).toBe(true);
+  });
+  it('pairs the original mention with its reply and acknowledges only the selected message', async () => {
+    const companion = { id: id(3), name: 'Cindy', avatarUrl: null };
+    const request = vi.fn(async (path: string, method?: string, body?: unknown) => {
+      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1 } };
+      if (path.endsWith('/read')) return {};
+      return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
+    });
+    const client = createChatServerClient(request as never);
+    expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+    await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
+  });
+  it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
+    const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };
+    const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };
+    expect(chatGroupView(page, id(10)).messages[0]).toMatchObject({ authorKind: 'user', isSelf: true, maskAttribution: attribution });
+  });
 });

@@ -2059,6 +2059,19 @@ describe('Bot canonical Session lifecycle', () => {
     if (!first.ok) throw new Error(first.message);
     await expect(ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'ignored' }))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
+    // The owner archived the lane from the task list: the next message resumes it, not a second lane.
+    // Restoring re-reads the task row with its tags, as in the production schema.
+    h.sqlite!.exec(`CREATE TABLE IF NOT EXISTS task_tags(id TEXT PRIMARY KEY,name TEXT,color TEXT,favorite_order INTEGER,sort_order INTEGER,revision INTEGER,name_customized INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS session_task_tags(session_id TEXT,tag_id TEXT);`);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run(first.sessionId);
+    await expect(ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'ignored' }))
+      .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
+    expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get(first.sessionId)).toEqual({ status: 'active' });
+    // A restore failure other than deletion must surface for retry, never replace the lane.
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived', orca_role = 'worker' WHERE id = ?").run(first.sessionId);
+    await expect(ensureBotChannelLaneSession({ botId: 'bot-1', routeKey, title: 'ignored' }))
+      .rejects.toThrow(/Restore the managed task/);
+    h.sqlite!.prepare("UPDATE sessions SET status = 'active', orca_role = NULL WHERE id = ?").run(first.sessionId);
     expect(emitSessionCreated).toHaveBeenCalledExactlyOnceWith(first.sessionId);
     await expect(findBotChannelLaneSession('bot-1', routeKey)).resolves.toBe(first.sessionId);
     const canonical = h.sqlite!.prepare(

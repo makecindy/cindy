@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { G, Path } from 'react-native-svg';
 
 import {
   ANTHROPIC_PROVIDER_PATH,
@@ -21,6 +21,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
   PROVIDER_LOGO_PATHS,
+  CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -139,6 +140,8 @@ export function MobileProviderMark({
         GLYPH_INSET,
         fill,
       );
+    case 'cindy':
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     case 'xd':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -212,19 +215,9 @@ export function MobileModelIconMark({
   if (kind) {
     const fill = color ?? colors.textSecondary;
     if (kind === 'cindy') {
-      return withRemote(
-        <View accessible={false} style={styles.markBox}>
-          <Svg width={XD_WIDTH} height={XD_WIDTH * XD_ASPECT} viewBox={XD_VIEW_BOX}>
-            {XD_SYMBOL_PATHS.map((p) => (
-              <Path key={p} d={p} fill={fill} />
-            ))}
-          </Svg>
-        </View>,
-        remote,
-        XD_INSET,
-        fill,
-      );
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
     }
+
     return withRemote(
       <View accessible={false} style={styles.markBox}>
         <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
@@ -249,4 +242,13 @@ export function MobileModelIconMark({
       remote={remote}
     />
   );
+}
+
+function CindyArtwork({ fill }: { fill: string }) {
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <G transform={CINDY_MARK_TRANSFORM}>
+      <Path d={CINDY_MARK_PATH} fill={fill} />
+      <Path d={CINDY_MARK_EARRING_PATH} fill={CINDY_MARK_EARRING_COLOR} />
+    </G>
+  </Svg>;
 }

@@ -37,6 +37,7 @@ type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) =
 
 type SettingsProps = {
   visible: boolean;
+  onMask?(): void;
   readOnly?: boolean;
   group: BotGroupRemoteChatData;
   host: RemoteResourceHostTarget;
@@ -68,7 +69,7 @@ function ServerGroupSettings(props: SettingsProps) {
     management={management} lifecycle={props} />;
 }
 
-function BotGroupSettingsContent({ visible, group, host, identityFor, online, act, onClose, onClosed, onDeleted, readOnly = false, management, lifecycle }: SettingsProps & {
+function BotGroupSettingsContent({ visible, onMask, group, host, identityFor, online, act, onClose, onClosed, onDeleted, readOnly = false, management, lifecycle }: SettingsProps & {
   management?: ReturnType<typeof useBotGroupSettingsManagement>;
   lifecycle?: SettingsProps;
 }) {
@@ -228,6 +229,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
         onPress: () => void saveDescription(), testID: 'botGroup.settings.descriptionSave' }} />
     </View> : undefined}>
     <View style={styles.content}>
+      {onMask ? <MainWindowActionButton action={{ label: t('groupChat.mask.title'), onPress: onMask, testID: 'botGroup.settings.mask' }} /> : null}
       {management && (management.loading || management.reason) ? <View style={styles.managementRow} testID="botGroup.settings.management">
         {management.loading ? <ActivityIndicator size="small" color={colors.textSecondary} testID="botGroup.settings.connecting" /> : null}
         <Text style={[styles.managementText, styles.flex]} testID="botGroup.settings.managementStatus">

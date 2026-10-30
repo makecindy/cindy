@@ -37,7 +37,7 @@ import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
  * 全部纯函数；输入为空 / 异常 → 静默返回合理默认。
  */
 
-import { extractDisplayName, splitPathSegments, tailJoin } from '../../../../shared/projectDisplayName';
+import { splitPathSegments, tailJoin } from '../../../../shared/projectDisplayName';
 export { extractDisplayName } from '../../../../shared/projectDisplayName';
 
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
@@ -358,7 +358,7 @@ function extractDisplayNameFromIndex(
   return { name: fallback, segments: maxSegments };
 }
 
-function normalizeProjectAliases(
+export function normalizeProjectAliases(
   raw: GroupSessionsOptions['projectAliases'],
   localPlatform: string,
 ): Map<string, string> {

@@ -22,6 +22,7 @@ import {
   closeAdoptedManagedBrowser,
   isManagedBrowserGone,
 } from './proxy-auth.js';
+import type { ExternalLinkHandoff } from './external-link-handoff.js';
 
 interface BackendLogger {
   warn(message: string, ...args: unknown[]): void;
@@ -51,7 +52,16 @@ export interface ExternalChromeBackendOptions {
   closeAdoptedBrowser?: (cdpHttpUrl: string, expectedUserDataDir: string) => Promise<boolean>;
   /** Non-destructive liveness probe; must not close the browser. */
   isBrowserGone?: (cdpHttpUrl: string, managedUserDataDir?: string) => Promise<boolean>;
+  /**
+   * macOS only: hands links that LaunchServices delivered to the managed
+   * browser back to the user's own browser. Given whether an agent `open` may
+   * be creating a tab right now, so agent tabs are never taken away.
+   */
+  createLinkHandoff?: (isAgentOpeningTab: () => boolean) => Pick<ExternalLinkHandoff, 'ensure' | 'dispose'>;
 }
+
+/** An agent tab's creation event can trail the end of its `open` call slightly. */
+const AGENT_TAB_OPEN_GRACE_MS = 1_000;
 
 function invalidRequest(action: BrowserControlRequest['action'], message: string): BrowserControlResult {
   return {
@@ -151,6 +161,9 @@ export class ExternalChromeBackend implements BrowserBackend {
    */
   private routeBlockedByUnprovenLiveness = false;
   private quiescing = false;
+  private readonly linkHandoff: Pick<ExternalLinkHandoff, 'ensure' | 'dispose'> | undefined;
+  private tabOpensInFlight = 0;
+  private lastTabOpenEndedAt = Number.NEGATIVE_INFINITY;
 
   constructor(
     runtime: BackendRuntimeShape,
@@ -158,6 +171,11 @@ export class ExternalChromeBackend implements BrowserBackend {
     private readonly options: ExternalChromeBackendOptions = {},
   ) {
     this.runtime = runtime;
+    this.linkHandoff = options.createLinkHandoff?.(() => (
+      this.tabOpensInFlight > 0 || Date.now() - this.lastTabOpenEndedAt < AGENT_TAB_OPEN_GRACE_MS
+    ));
+    // A browser left running by the previous app session takes links too.
+    this.linkHandoff?.ensure();
   }
 
   private resolveCdpHttpUrl(): string {
@@ -181,7 +199,20 @@ export class ExternalChromeBackend implements BrowserBackend {
         message: 'managed browser is shutting down; new calls are not accepted',
       });
     }
-    return this.withBackendIdentity(request, await this.enqueue(() => this.handleCall(request)));
+    const result = await this.enqueue(() => this.trackTabOpen(request, () => this.handleCall(request)));
+    this.linkHandoff?.ensure();
+    return this.withBackendIdentity(request, result);
+  }
+
+  private async trackTabOpen(request: BackendRequest, operation: () => Promise<BackendResult>): Promise<BackendResult> {
+    if (request.action !== 'open') return operation();
+    this.tabOpensInFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      this.tabOpensInFlight -= 1;
+      this.lastTabOpenEndedAt = Date.now();
+    }
   }
 
   /**
@@ -202,6 +233,7 @@ export class ExternalChromeBackend implements BrowserBackend {
   }
 
   async dispose(): Promise<void> {
+    this.linkHandoff?.dispose();
     return this.enqueue(async () => {
       if (!this.used) return;
       try {

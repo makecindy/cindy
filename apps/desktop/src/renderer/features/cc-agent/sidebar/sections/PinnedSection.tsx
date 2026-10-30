@@ -58,6 +58,10 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { aggregateSessionLamps } from '../../lib/sessionLampAggregation';
 import {
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
+} from '../../hooks/helpers/sidebarFilterCore';
+import {
   getRemoteSessionActivity,
   isRemoteSessionActivityActive,
   subscribeRemoteSessionActivity,
@@ -203,7 +207,12 @@ export function PinnedSection({
   const { mode, setMode } = useSidebarCardMode();
   // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadPinnedSectionCollapsed);
+  const toggleCollapsed = useCallback(() => {
+    const next = !collapsed;
+    setCollapsed(next);
+    persistPinnedSectionCollapsed(next);
+  }, [collapsed]);
 
   const visibleEntries = entries;
   // 聚合不受段级折叠影响；远程状态与 rail 入口复用同一设备隔离的灯语。
@@ -374,7 +383,7 @@ export function PinnedSection({
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={toggleCollapsed}
             aria-expanded={!collapsed}
             className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
@@ -384,7 +393,7 @@ export function PinnedSection({
             <Tip text={toggleLabel} side="bottom">
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
+                onClick={toggleCollapsed}
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(

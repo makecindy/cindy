@@ -1,3 +1,4 @@
+import { effectiveGatewayModelCost } from '../../shared/modelPriceQuote.js';
 import type { ModelDisplayPricing } from '@cindy/model-providers';
 import {
   projectProviderMediaModels,
@@ -530,41 +531,6 @@ export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
   // 剥到目录身份再查，否则投影特例不命中、误走 Responses 面。
   const normalized = stripCodexGatewayWirePrefix(modelId.replace(/\[1m\]$/, ''));
   return xdCodexAnthropicBridgeModelIds.has(normalized);
-}
-
-function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cost'] | undefined {
-  const input = model.inputCostPerToken;
-  const output = model.outputCostPerToken;
-  if (
-    typeof input !== 'number' ||
-    !Number.isFinite(input) ||
-    input < 0 ||
-    typeof output !== 'number' ||
-    !Number.isFinite(output) ||
-    output < 0
-  ) {
-    return undefined;
-  }
-  const discount =
-    typeof model.costDiscount === 'number' &&
-    Number.isFinite(model.costDiscount) &&
-    model.costDiscount > 0 &&
-    model.costDiscount <= 1
-      ? model.costDiscount
-      : 0;
-  const multiplier = 1 - discount;
-  const cacheRead = nonNegativeFiniteOrUndefined(model.cacheReadInputTokenCost);
-  const cacheWrite = nonNegativeFiniteOrUndefined(model.cacheCreationInputTokenCost);
-  return {
-    input: input * 1_000_000 * multiplier,
-    output: output * 1_000_000 * multiplier,
-    ...(cacheRead !== undefined ? { cacheRead: cacheRead * 1_000_000 * multiplier } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * 1_000_000 * multiplier } : {}),
-  };
 }
 
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */

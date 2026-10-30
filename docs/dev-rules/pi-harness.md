@@ -74,6 +74,12 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   MCP 请求接入 Pi 的取消信号；Bun fetch 的独立空闲计时关闭，由既有请求期限统一约束响应头与
   正文。取消只中止本次 HTTP 等待，不承诺撤销服务端已执行的动作。网络错误只附白名单错误码，
   仅 JSON-RPC `-32602` 明确参数错误附 schema，工具业务错误保留原反馈。
+  启动失败、传输断开、请求超时或已建立的 MCP session 返回 404 后，下一次定向发现／调用
+  按服务重新 initialize + tools/list，复用既有启动期限；并发等待共享一次握手，取消只退出
+  当前等待。恢复不自动重放 tools/call，不重启 Pi 或其它服务；新工具表替换旧表，定义改变
+  或删除时拒绝用旧定义继续调用。只恢复启动快照里的服务，不热加载配置变更。
+  工具批准按 toolCallId 绑定审批时的定义指纹；即使同批前面的发现已披露新定义，也不得
+  沿用旧批准。SSE 在匹配响应前结束或失效时同样标记连接需恢复，不重放原操作。
 - **plan 模式**:自动挂载 Pi 分发包自带的 plan-mode 扩展，无需用户另装。UI 勾选是下一条
   消息的一次性意图，与原生运行态分开；`StartSessionOptions.planMode` 设置起始档，
   `SendOptions.planMode` 快照决定本轮，切档与 prompt 在同一 RPC 串行段执行。发送后消耗
@@ -104,7 +110,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 本机 Pi bridge 在原生 `before_provider_request` 处理后，通过既有单向通知发送白名单
 请求摘要。宿主以 `startupTraceId + requestSequence` 记录 debug 级 `pi request stage`：
-`provider-request-prepared`（本桥处理后的工具数、消息数、wire effort）、`first-output`
+`provider-request-prepared`（本桥处理后的工具数、消息数、wire effort、`preparationMs`）、`first-output`
 （首个文本／推理增量或工具调用开始／增量）、`agent-settled`（原生整轮终态，不能用 `agent_end` 替代）。
 请求阶段时长用宿主单调时钟，`elapsedMs` 从最近一次请求摘要到达起算；终态另有
 `turnElapsedMs`，从本轮第一次请求摘要到达起算，包含重试／工具等后续处理。
@@ -115,6 +121,15 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 只记录有界计数和已知档位名，无法识别的请求字段省略，不把未知工具数当成零。
 不记录请求正文、工具定义、模型 ID、凭据或任意上游字符串；
 诊断失败不能阻止发送，也不出现在聊天里，不增加需要宿主应答的 RPC。
+`preparationMs` 单独记录本桥 `before_provider_request` 的单调时钟耗时，包含 Fast 偏好
+查询的等待；它不包含此前 Pi 构造上下文及此后网络传输，也不改变既有 `elapsedMs` 起点。
+
+升级官方 Pi 后可运行 `node scripts/pi-healthcheck.mjs --binary /absolute/path/to/pi`。
+省略参数使用仓库分发二进制；脚本不安装或替换运行时、不读取正式任务或配置、不启用扩展。
+它启动临时 PiAgent 与本机协议端点，逐项检查 Fast、窗口与恢复、线上请求档位投影、图片与
+历史、MCP 批准／拒绝、多服务、结构化结果、SSE 和分页。JSON 报告输出到 stdout，测试输出
+到 stderr；任一必需项失败、跳过或未发现都返回非零。它验证接线兼容性，不证明在线模型
+质量、上游服务可用性或真实网络速度。
 
 Gateway 的档位成员仍以供应商实报为准。目录支持 low 时，Cindy 能传 low；不支持时，
 启动选择按现有默认档收敛，不能把直接调用 SDK 的 low→medium 结果冒充完整宿主路径。
@@ -526,30 +541,45 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - [x] **prompt cache**:Pi 子进程默认注入 `PI_CACHE_RETENTION=long`；明确拒收该可选字段的
       provider 由 compat 自愈学习并关掉该字段(见下条)。已用 ChatGPT 订阅实例确认 `cacheRead`
       命中会端到端落库与展示。
-- [x] **provider compat 自愈**:上游以 `invalid_request_error` 明确拒收某个可选请求字段时
-      (已知形态:Console Go / OpenCode Zen-Go 的 GLM 上游拒收 `prompt_cache_retention`,提示改用
-      `prompt_cache_options`;自定义政企/内网网关只拒 `prompt_cache_key`
-      ，见 issue #5878),Pi translator 打稳定 reason `unsupported-request-option`。
-      仅接受被点名字段与明确拒收关系；普通 400、鉴权、限流、其他参数错误不学习。
-      Desktop 先将 `supportsLongCacheRetention: false` 原子记入
-      `<userData>/pi-native-compat-overrides.json` 的 `routes` 表；键为 JSON 数组
-      `[连接 ID, wire 模型 ID, SHA256(协议 + 真实端点)]`，端点包含路径、端口、查询参数，
-      不保存原始 URL 或错误正文。连接、端点或协议变化均不复用旧记录；无身份不学习，
-      损坏文件保留原样且不授权恢复。未发布 #4791 的无端点记录无法精确归属，不自动套用。
-      当前运行时另持有启动/原生 registry 刷新成功时的应用快照；磁盘已学习不代表旧进程
-      已应用。成功落盘后仅退役空闲的旧实例，新进程重建 models.json 并校验同一路由已应用。
-      Pi 1.0.2 普通 URL 下 compat 会移除两字段，但 URL 含 api.openai.com 时 key 仍可发送；
-      因此既有 before_provider_request hook 按私有运行时规则的 provider/model/baseUrl 精确
-      删除这两个字段，其他路由保持原生行为。原生子代理冻结继承相同规则；刷新失败回滚
-      models/settings 与规则文件，不保留半套配置。
-      自动恢复只对本地 `source=desktop` Pi：整轮无文字/思考/工具调用或执行，原输入仍是
-      最新输入，实例/轮次未更换、未取消、未切路由且无外部恢复 owner。同一输入最多一次，
-      必须存在原生 user entry，使用原生分支重试以保持一条有效输入；缺失 entry 或应用确认
-      时直接失败，禁止追加重复输入。恢复后仍拒收正常报错，不循环、不自动扩展降级。
-      外部派单可学习并退役空闲旧实例，重试由原 owner 负责；原生子代理继承已有学习但不将
-      子错误归给父任务学习/重放。SSH 不消费本地记录；设备互联/手机控制本地桌面任务走同一
-      宿主路径，无新 IPC/UI。恢复只影响出错任务的空闲 Pi 实例，不重启应用、连接或其它任务。
-      删除精确记录并重新创建运行时可重新探测；无后台探测、无自动到期，避免恢复失败循环。
+- [x] **provider compat 自愈**：Chat Completions / Responses 的最终请求实际含
+      `prompt_cache_key` 或 `prompt_cache_retention`，且收到可靠的 HTTP 400 时，原生请求
+      wrapper 可只移除这两个字段对照一次。明确拒收缓存字段与未知原因的可靠 400 均可进入；
+      明确的鉴权、限流、上下文、模型、缺必填、类型或其他字段错误不试，不追逐厂商名单。
+      对照前再次核对最终请求体与认证/路由身份，除两个缓存字段外必须相同；输入尚无
+      文字/思考/工具调用或执行，未取消、未切路由且仍属于原输入，才允许对照。
+      同一输入最多一次；第二次仍失败就返回错误，不重复用户输入或工具副作用。
+      **成功完成生成后才学习**，仅 HTTP 200、断流或取消均不学习；明确拒收记为
+      `explicit`、有效期 **7 天**，未知原因记为 `opaque`、有效期 **24 小时**。
+      成功对照不是因果证明，未知原因记录只是精确线路的短期性能提示，不是永久能力判定。
+      学习记录位于执行端的 `pi-native-compat-overrides.json`，键为 JSON 数组
+      `[连接 ID, wire 模型 ID, SHA256(协议 + 真实端点)]`，端点包含路径、端口、查询参数；
+      不保存原始 URL、凭证或错误正文，身份不完整不学习，连接/端点/协议变化不复用。
+      旧无期限记录按原文件 mtime 固定给予 7 天期限，写其他线路不续期；无端点旧记录不套用。
+      损坏文件保留原样，不把其内容当作已学习或已应用的依据。Pi 与 Desktop 遵循同一普通
+      advisory `.lock` /
+      reclaim gate 协议，持锁后重读、合并，再原子替换，拿锁有界等待。原生 wrapper 写盘
+      失败时保留内存提示，不撤销成功响应，后续输入可重试持久化。释放失败有界退避重试，
+      耗尽后记住自己拥有的
+      nonce，在后续输入/写入补释放；每次删除前核对 nonce，不误删后继锁。该协议不替代安全锁。
+      普通 provider 仅包装 Pi runtime 的 `prepareRequest` 结果，不重新注册或恢复原 provider；
+      原认证、headers、模型定义、serializer 和后来替换/移除的注册保持原生行为。
+      正常输入或已确认 followUp **真正开始**时才建立预算；排队接受立即使旧试探失效，
+      不等于新输入开始。来源确认复用原生队列与宿主/runner 私有 RPC，不产生审批或用户转录；
+      来源不明保守不开放试探，原生执行照常进行。steer、工具续轮和原生重试不补预算。
+      整条输入冻结有效学习记录和线路规则，工具续轮跨 TTL 不重新带回字段；下一独立输入
+      或已确认 followUp 才重新检查到期，无后台探测，不新增用户开关。
+      原生 wrapper 已处理的错误不再叠加 Desktop 第三次重放。旧 registry 保留不接管
+      provider 的 `before_provider_request` hook，按精确线路应用有效记录，并保留既有
+      Desktop 显式拒收恢复：核对已应用快照、原生 user entry 与输入/实例身份后，才允许
+      原生分支重试一次；不能确认就保留原错误，不追加输入，不停用旧运行时能力。
+      SSH 使用执行端独立记录，不消费本地 Desktop 的记录；原生子代理保留有界恢复，
+      不将子错误归给父任务学习/重放。子代理恢复和模型刷新时，模型与线路规则保持同代；
+      旧快照缺规则不借历史规则，刷新失败回滚模型/设置和规则文件。设备互联/手机控制
+      同一执行端路径，不重启应用、连接或其他任务。
+      实现见 [`cache-recovery-source.ts`](../../packages/maker-core/src/agents/pi/cache-recovery-source.ts)、
+      [`native-provider-adapter-source.ts`](../../packages/maker-core/src/agents/pi/native-provider-adapter-source.ts)；
+      真实 Pi 回归见 [`cache-compatibility.integration.test.ts`](../../packages/maker-core/src/agents/pi/__tests__/cache-compatibility.integration.test.ts)，
+      并发/失败语义见 [`pi-native-compat-overrides-store.test.ts`](../../apps/desktop/src/main/maker-host/__tests__/pi-native-compat-overrides-store.test.ts)。
 
 ## 7. 上线后路线图(已与 Chris 对齐)
 

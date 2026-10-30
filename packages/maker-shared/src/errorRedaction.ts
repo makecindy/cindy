@@ -38,6 +38,34 @@ export function redactSensitiveText(input: string): string {
   return output;
 }
 
+/**
+ * Recursively apply `redactSensitiveText` to every string leaf of an unknown
+ * structure, preserving keys and shape.
+ *
+ * Why this exists: error rows are persisted as `{ message, reason?, sdkError?,
+ * toolLoop?, providerId? }` but only `message` / `sdkError` pass through
+ * `redactSensitiveText` on the write path — `reason` is stored verbatim. Any
+ * exit that hands error rows to another process or device must therefore
+ * redact on the way out, otherwise raw operator-visible strings can leave the
+ * controlled device.
+ *
+ * Non-string leaves (number / boolean / null / undefined) are returned as-is;
+ * the intent is masking, not coercion. Input is expected to come from
+ * JSON.parse, so reference cycles are not handled.
+ */
+export function redactSensitiveTextDeep(input: unknown): unknown {
+  if (typeof input === 'string') return redactSensitiveText(input);
+  if (Array.isArray(input)) return input.map((item) => redactSensitiveTextDeep(item));
+  if (input && typeof input === 'object') {
+    const output: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+      output[key] = redactSensitiveTextDeep(value);
+    }
+    return output;
+  }
+  return input;
+}
+
 export interface NonSecretErrorSignals {
   errorStatus?: 401 | 429 | 529;
   usageLimit: boolean;

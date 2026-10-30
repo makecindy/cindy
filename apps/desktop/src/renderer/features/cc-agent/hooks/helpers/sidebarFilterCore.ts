@@ -38,6 +38,7 @@ export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
+export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
@@ -484,6 +485,31 @@ export function persistDialogueGroupCollapsedKeys(keys: ReadonlySet<string>): vo
     storage.setItem(DIALOGUE_GROUP_COLLAPSED_KEY, JSON.stringify([...keys]));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist dialogueGroupCollapsed:', err);
+  }
+}
+
+/* ==================== pinned section collapsed load/persist ==================== */
+
+/** 置顶段整段收起，与设备段、对话组同属本地显示偏好，默认展开。 */
+export function loadPinnedSectionCollapsed(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(PINNED_SECTION_COLLAPSED_KEY) === 'true';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read pinnedSectionCollapsed:', err);
+    return false;
+  }
+}
+
+export function persistPinnedSectionCollapsed(collapsed: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (collapsed) storage.setItem(PINNED_SECTION_COLLAPSED_KEY, 'true');
+    else storage.removeItem(PINNED_SECTION_COLLAPSED_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist pinnedSectionCollapsed:', err);
   }
 }
 

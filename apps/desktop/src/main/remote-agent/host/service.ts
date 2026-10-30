@@ -1446,8 +1446,8 @@ export function installRemoteAgentHost(options: { getMaker: () => Maker; userDat
   stopFastPolicySync = startGroupFastPolicySync();
   setRemoteAgentHandler({
     handle: (controller, raw) => current.handle(controller, raw),
-    abortAll: () => {
-      void current.abortAll();
+    abortAll: (reason) => {
+      void current.abortAll(reason);
     },
     abortControllers: (match) => current.abortControllers(match),
     revalidateModelAccess: () => current.revalidateModelAccess(),

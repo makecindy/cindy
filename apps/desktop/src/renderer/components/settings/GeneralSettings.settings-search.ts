@@ -13,6 +13,7 @@ export default {
     { id: 'general.windowBehavior', tab: 'general', targetId: 'settings-window-behavior', titleKey: 'settings.sections.windowBehavior', sectionKey: 'settings.sections.windowBehavior' },
     { id: 'general.composer', tab: 'general', targetId: 'settings-composer', titleKey: 'settings.sections.composer', sectionKey: 'settings.sections.composer' },
     { id: 'general.collaboration', tab: 'general', targetId: 'settings-collaboration', titleKey: 'settings.sections.collaboration', sectionKey: 'settings.sections.collaboration', aliases: ['collaboration'] },
+    { id: 'general.newChatPermission', tab: 'general', targetId: 'settings-new-chat-default-permission', titleKey: 'settings.newChatDefaults.title', sectionKey: 'settings.newChatDefaults.title' },
     { id: 'general.agentResource', tab: 'general', targetId: 'settings-agent-resource', titleKey: 'settings.sections.agentResource', sectionKey: 'settings.sections.agentResource' },
     { id: 'general.gitSafety', tab: 'general', targetId: 'settings-search-target-general-git-safety', titleKey: 'settings.sections.gitSafety', sectionKey: 'settings.sections.gitSafety' },
     { id: 'general.experimental', tab: 'general', targetId: 'settings-search-target-general-experimental', titleKey: 'settings.sections.experimental', sectionKey: 'settings.sections.experimental' },

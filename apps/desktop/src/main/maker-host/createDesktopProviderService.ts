@@ -131,7 +131,7 @@ import {
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
 import { getAuthState } from '../authManager.js';
-import { getCindyAiProviderName } from '../cindyAiProviderName.js';
+import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
 import { getActiveAppSession } from '../appSessionState.js';
 import { filterProviderCatalogForAccount } from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -1015,6 +1015,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       return {
         ...presentation,
         name: getCindyAiProviderName(),
+        logoKind: getCindyAiProviderLogoKind(),
       };
     },
     getCatalog: getDesktopSelectableCatalog,

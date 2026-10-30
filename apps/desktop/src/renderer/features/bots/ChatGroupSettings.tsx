@@ -11,6 +11,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ProfileEditDialog } from '@/components/settings/ProfileEditDialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
+import { GroupMaskSettingsEntry } from './GroupMaskControls';
 import { ChatBotAccessField } from './ChatBotAccessField';
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
@@ -185,6 +186,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
             <Input {...props} value={nickname} maxLength={40} placeholder={me?.displayName} disabled={busy || !!group.dissolvedAt} onChange={event => { nicknameDirty.current = true; setNickname(event); }} />}</FormField>
           <Button className="mb-6" type="submit" size="sm" variant="secondary" disabled={busy || !me || !!group.dissolvedAt}>{t(key('save'))}</Button>
         </form>
+        <GroupMaskSettingsEntry groupId={group.id} />
       </section>
       {companions.length > 0 && <section className="space-y-4 border-t border-[var(--border-default)] pt-5">
         <h3 className="text-14 font-medium text-[var(--text-primary)]">{t(key('companionPermissions'))}</h3>

@@ -27,7 +27,7 @@ import { RemoteAgentPoller } from '../controller/poller';
 import { RemoteAgentRunClient } from '../controller/runClient';
 import { RemoteExecutor } from '../executor/executor';
 import { ExecServerRelay } from '../controller/execServerRelay';
-import { createDeviceAgentStarter } from '../controller/service';
+import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/service';
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
@@ -318,6 +318,110 @@ describe('remote agent round trip', () => {
       expect(hostInputs).toEqual([]);
     } finally { await host.dispose(); }
   });
+  // Unit: #7783 keeps M's grant only in memory. Restart recovery must regain
+  // that task's grant through O, never use O's health as M's readiness. Existing
+  // lease tests do not lose M's in-memory authorization during a poll outage.
+  it.each(['idle', 'busy', 'revoked', 'expired'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const ownerRoute = 'share:restart-share';
+    let offline = false, granted = false, allowed = true;
+    let allocations = 0, sends = 0, offlineReads = 0;
+    const disposed: string[] = [];
+    const seen: AgentEvent[] = [];
+    const nativeIds: Array<string | undefined> = [];
+    const makeMember = () => createRemoteAgentHost({
+      readLimits: () => DEFAULT_REMOTE_AGENT_LIMITS, isAgentAvailable: () => true,
+      startHosted: async input => {
+        nativeIds.push(input.options.resumeSessionId);
+        const events = queue();
+        let running = false;
+        return { ...fakeHostedAgent(input), id: 'native-original', events: () => events,
+          isTurnRunning: () => running,
+          send: async (message: UserMessage) => {
+            sends++;
+            running = message.content === 'hold';
+            if (!running) events.push({ type: 'done', source: input.kind, data: {} });
+          }, close: async () => { events.end(); } };
+      },
+      controllerTrust: () => 'guest', isControllerAuthorized: () => true,
+      providerAccess: { resolve: async () => 'shared-provider', isAllowed: () => granted },
+      bindGuestProviderRoute: async () => ({ providerId: 'shared-provider', routeToken: 'fixture', modelIds: ['m'], release() {} }),
+      captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot: hostRoot,
+    });
+    let member = makeMember();
+    historyInvoke.mockImplementation(async (device, _channel, [request]) => {
+      if (device === ownerRoute) {
+        if (request.op === 'allocate') {
+          allocations++;
+          if (!allowed) return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'share revoked' } };
+          granted = true;
+          return { ok: true, result: { deviceId: 'executor-m', generation: '11111111-1111-4111-8111-111111111111',
+            leaseDurationMs: mode === 'expired' ? 3_000 : 30 * 60_000 } };
+        }
+        return { ok: true, result: {} };
+      }
+      const requireAccess = () => {
+        if (offline) { offlineReads++; throw Object.assign(new Error('device offline'), { code: 'DEVICE_OFFLINE' }); }
+        if (!granted) throw Object.assign(new Error('share unavailable'), { code: 'ACCESS_REVOKED' });
+      };
+      requireAccess();
+      const result = await member.handle(CONTROLLER, JSON.parse(JSON.stringify(request)));
+      requireAccess();
+      return { ok: true, result: request.op === 'caps' ? { ...result as object, directGuestExecution: true } : result };
+    });
+    const start = createDeviceAgentStarter({
+      remoteInvoke: historyInvoke, rgPath: () => RG, mcpProviders: () => [],
+      prepareMcpBridge: async (_providers, _logger, ctx) => ({ disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } }),
+      makerMemory: () => undefined, captureKnownFileBefore: async () => undefined, noteOpaqueTurnChange() {},
+      logger: historyLogger, renewSharedProviderLink: async () => undefined,
+    });
+    let handle: AgentSessionHandle | undefined;
+    let events: Promise<void> | undefined;
+    try {
+      handle = await start({ agentKind: 'claude-code', deviceId: ownerRoute,
+        options: { sessionId: 'restart-task', workingDir: project, model: 'm' } });
+      events = (async () => { for await (const event of handle!.events()) seen.push(event); })();
+      await handle.send({ type: 'user', content: 'first' });
+      await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
+      if (mode !== 'idle') await handle.send({ type: 'user', content: 'hold' });
+      offline = true;
+      member.dispose();
+      await vi.waitFor(() => expect(offlineReads).toBeGreaterThan(0));
+      await vi.advanceTimersByTimeAsync(1_000);
+      granted = false;
+      allowed = mode !== 'revoked';
+      member = makeMember();
+      if (mode === 'expired') {
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(disposed).toContain('restart-task');
+      }
+      offline = false;
+      if (mode === 'expired' || mode === 'revoked') {
+        await vi.advanceTimersByTimeAsync(130_000);
+        await expect(handle.send({ type: 'user', content: 'must not run' })).rejects.toThrow();
+        expect(nativeIds).toEqual([undefined]);
+        if (mode === 'expired') expect(allocations).toBe(1);
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(seen.filter(event => event.type === 'error')).toEqual(mode === 'busy'
+          ? [expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted' }) })] : []);
+        expect(await liveDirectGuestSession('restart-task')!.probeReconnect!()).toBe('ok');
+        await handle.send({ type: 'user', content: 'continue' });
+        expect(nativeIds).toEqual([undefined, 'native-original']);
+        expect(allocations).toBeGreaterThan(1);
+        expect(sends).toBe(mode === 'idle' ? 2 : 3);
+      }
+    } finally {
+      offline = false; granted = true;
+      const closing = handle?.close({ reason: 'account-boundary' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await closing;
+      await events;
+      member.dispose();
+      vi.useRealTimers(); historyInvoke.mockReset();
+    }
+  });
+
   // 真机到期后控制端命令继续运行：unit 用真实 starter/host，验证本地资源不等已拒绝的远端 close。
   // 新增结果：确切期限清理、续权重置期限、同执行端的另一任务保持可用；原测试只验证下一次请求被拒。
   it.each(['expires', 'renewed', 'late-renewal'] as const)('releases only the expired shared task before an unavailable close RPC: %s', async mode => {

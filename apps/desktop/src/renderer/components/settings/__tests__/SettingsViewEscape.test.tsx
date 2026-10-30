@@ -53,6 +53,9 @@ vi.mock('../GitSafetySection', () => ({ GitSafetySection: Stub }));
 vi.mock('../SessionImportSection', () => ({ SessionImportSection: Stub }));
 vi.mock('../AgentResourceSection', () => ({ AgentResourceSection: Stub }));
 vi.mock('../CollaborationSection', () => ({ CollaborationSection: Stub }));
+// Permission confirmation is covered in NewChatDefaultPermissionSection.test.tsx;
+// this page-level test isolates section contents and exercises only Escape routing.
+vi.mock('../NewChatDefaultPermissionSection', () => ({ NewChatDefaultPermissionSection: Stub }));
 vi.mock('../BuiltinToolsSection', () => ({ BuiltinToolsSection: Stub }));
 vi.mock('../contacts/ContactsSection', () => ({ ContactsSection: Stub }));
 vi.mock('../ComputerUseSection', () => ({ ComputerUseSection: Stub }));

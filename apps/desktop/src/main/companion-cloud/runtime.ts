@@ -96,6 +96,8 @@ export interface CompanionCloudRuntime {
   /** Move the companion to `targetDeviceId` from any computer: hand over here, ask its home, or take over. */
   switchHome: (botId: string, targetDeviceId: string, options?: CompanionSwitchOptions) => Promise<CompanionCloudActionResult>;
   transcript: (botId: string, before?: string) => Promise<CompanionTranscriptPage>;
+  /** Import a server-delivered private report into the same local companion timeline. */
+  receivePrivateReport: (botId: string) => Promise<boolean>;
   /** The copies of Cindy in the cloud when there is more than one (otherwise empty). */
   cindyCopies: () => Promise<CompanionCindyCopy[]>;
   /** Merge the other copies into `keepBotId`, on its home (here, or asked over device-link). */
@@ -605,8 +607,12 @@ export function startCompanionCloud(input: {
         if (actor.kind !== 'bot') continue;
         const botId = actor.externalId;
         const local = localProfiles.find(profile => profile.id === botId);
-        const entry = state.bot(botId);
+        let entry = state.bot(botId);
+        // A local id may now refer to a different cloud actor. In particular, an old
+        // retirement must never disable that replacement (state.update uses the same boundary).
+        if (entry && entry.actorId !== actor.id) entry = state.update(botId, actor.id, () => undefined);
         if (actor.disabled) {
+          if (entry?.retirePending) state.update(botId, actor.id, next => { delete next.retirePending; });
           // Deleted on its main computer (perhaps while this one was offline): a copy here is no
           // longer the companion, so it is hidden and stopped like any other old copy.
           if (local && local.status !== 'deleting' && !entry?.demoted) {
@@ -760,6 +766,20 @@ export function startCompanionCloud(input: {
       return result;
     },
 
+    async receivePrivateReport(botId) {
+      const actor = actorOf(botId), host = input.host.materializer;
+      if (!actor || !host || !live() || actor.homeDeviceId !== input.selfDeviceId || runtime.isShadowed(botId)) return false;
+      const sessionId = await input.host.canonicalSession(botId);
+      if (!sessionId) throw new Error('COMPANION_TASK_UNAVAILABLE');
+      const roomId = await mirror.ensureRoom(botId,actor.id,actor.name);
+      const inserted = await importCloudHistory({api:input.api,host,sessionId,botActorId:actor.id,roomId,fence,
+        ...(input.media ? {download:input.media.download} : {})});
+      if (inserted > 0) state.update(botId,actor.id,entry => {entry.pendingRebuild=true;});
+      transcripts.delete(roomId);
+      publish();
+      return true;
+    },
+
     async transcript(botId, before) {
       const actor = actorOf(botId);
       if (!actor) throw new Error('COMPANION_NOT_FOUND');
@@ -837,9 +857,18 @@ export function startCompanionCloud(input: {
 
     async retire(botId) {
       const self = input.selfDeviceId;
-      const actor = actorOf(botId);
       // A demoted copy is not the companion: deleting it never touches the cloud.
-      if (!self || !live() || !actor || actor.homeDeviceId !== self || runtime.isShadowed(botId)) return;
+      if (!self || !live() || runtime.isShadowed(botId)) return;
+      const actor = actorOf(botId);
+      if (!actor) {
+        // The local deletion has already committed. Keep its intent for a previously
+        // known actor even when the registry cannot resolve it yet; reconcile checks the
+        // actor identity, current home and installation before sending any cloud mutation.
+        const entry = state.bot(botId);
+        if (entry) state.update(botId, entry.actorId, next => { next.retirePending = true; });
+        return;
+      }
+      if (actor.homeDeviceId !== self) return;
       state.update(botId, actor.id, entry => { entry.retirePending = true; });
       await retireOwned(actor);
     },

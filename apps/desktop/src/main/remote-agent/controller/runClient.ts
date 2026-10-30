@@ -64,6 +64,7 @@ export interface RemoteAgentRunHandlers {
   onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  recoverAuthorization?(): Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -101,6 +102,10 @@ export class RemoteAgentRunClient implements PolledRun {
     this.drained = new Promise<void>((resolve) => {
       this.markDrained = resolve;
     });
+  }
+
+  async recoverAuthorization(): Promise<void> {
+    if (!this.closed) await this.handlers.recoverAuthorization?.();
   }
 
   static async caps(invoke: RemoteAgentInvoke): Promise<RemoteAgentCaps> {

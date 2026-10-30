@@ -68,6 +68,8 @@ export interface PreparedRemoteMcp {
 export interface StartRemoteAgentDeps {
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
+  /** A direct share must renew the original executor's grant before reopening. */
+  reconnectAuthorization?(isCurrent: () => boolean): Promise<void>;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   invoke: RemoteAgentInvoke;
   /** 这台电脑的共享拉取器(同一台电脑上的任务共用一个 poll)；缺省时本任务单独一个。 */
@@ -474,6 +476,8 @@ async function prepareAndStartRemoteAgentSession(
    * 第一轮之前可能还没落盘，带 id 接回反而会被当成接不回。
    */
   let hasHistory = isNativeSessionId(opts.resumeSessionId);
+  // Automatic continuation must not silently start with an empty conversation.
+  let restartResumeRequired = false;
   let lastStarted: RemoteStartedInfo | null = null;
 
   let personalRoots: Array<{ relative: string; local: string }> = [];
@@ -653,6 +657,9 @@ async function prepareAndStartRemoteAgentSession(
         if (request.type === 'http') return router(request, signal);
         if (request.type === 'callback' && request.name === 'onInvalidResumeSession') {
           const expected = request.args[0];
+          if (reconnect && restartResumeRequired && expected === expectedResume) {
+            return { type: 'callback', value: false };
+          }
           const value = typeof expected === 'string' && opts.onInvalidResumeSession
             ? await opts.onInvalidResumeSession(expected)
             : false;
@@ -674,7 +681,7 @@ async function prepareAndStartRemoteAgentSession(
       },
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
-        if (active !== client || linkState === 'releasing') return;
+        if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
@@ -682,10 +689,24 @@ async function prepareAndStartRemoteAgentSession(
         active = null;
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
-        if (idleReclaimed && controller) {
+        // 'aborted' is only a legacy-host compatibility fallback: old hosts used it
+        // for both shutdown and deliberate disconnect, with no distinguishing cap.
+        // Such an old host may reconnect after a user disconnect (toggle-off still
+        // refuses access). New hosts send controller-disconnected for user actions.
+        const restart = reason === 'missing' || reason === 'provider-restarting' || reason === 'aborted';
+        if ((idleReclaimed || restart) && controller) {
           relay?.reset();
           linkState = 'released';
-          deps.log?.info('remote agent connection reclaimed by the other computer', { kind, runId: client.runId });
+          deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
+          if (restart) {
+            // A first turn may already have changed local files before its first done.
+            // Resume the native conversation, never replay the original request.
+            if (controller.hasActiveTurn()) {
+              hasHistory = true;
+              restartResumeRequired = true;
+            }
+            controller.onInterrupted();
+          }
           return;
         }
         linkState = 'closed';
@@ -694,6 +715,10 @@ async function prepareAndStartRemoteAgentSession(
       },
       // Codex 经执行环境在本机起的进程还在跑(对方看不到)：拉取时告诉对方，免得被当成闲置收回。
       holdsRemote: () => isCurrent() && relay?.busy() === true,
+      recoverAuthorization: async () => {
+        const current = () => isCurrent() && opened;
+        if (current()) await deps.reconnectAuthorization?.(current);
+      },
     }, deps.newId, deps.log);
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     active = client;
@@ -708,6 +733,10 @@ async function prepareAndStartRemoteAgentSession(
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
+      if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
+        await client.close('close', 'navigation').catch(() => undefined);
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
+      }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
       opened = true;
       linkState = 'connected';
@@ -955,6 +984,8 @@ async function prepareAndStartRemoteAgentSession(
     let attempt: Promise<RemoteAgentRunClient> | null = null;
     attempt = (async () => {
       try {
+        await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
+        requireOpen();
         const client = await connect(true, (started) => {
           controller?.onReconnected(started);
         });
@@ -971,8 +1002,12 @@ async function prepareAndStartRemoteAgentSession(
           throw error;
         }
         if (stateNow() !== 'connected' || activeNow() !== client) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+        restartResumeRequired = false;
         return client;
       } catch (error) {
+        // Automatic recovery failed. A later explicit retry may use the normal
+        // invalid-resume callback/context rebuild instead of being stuck forever.
+        restartResumeRequired = false;
         // 连不回(对方忙、离线等)：保持已让出名额，下次发送再试。
         if (stateNow() === 'connecting') linkState = 'released';
         throw localizeRemoteError(error);

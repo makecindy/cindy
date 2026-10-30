@@ -647,13 +647,38 @@ export interface ResolvedBrowserScreenshot {
   mimeType: 'image/png' | 'image/jpeg';
 }
 
+/** Host-wide automation targets: managed Chrome, sidebar webview, or the user's own browser via extension. */
+export type BrowserBackendKind = 'external' | 'rsb-webview' | 'user-browser';
+
+/** Per-backend capability flags consulted before dispatch; keys mirror the host's status payload. */
+export interface BrowserBackendCapabilities {
+  evaluate?: boolean;
+  screenshot?: boolean;
+  network?: boolean;
+  upload?: boolean;
+  dialog?: boolean;
+  console?: boolean;
+  pdf?: boolean;
+  focus?: boolean;
+  close?: boolean;
+  trustedInput?: boolean;
+  /** Coordinate clicks, drags and viewport resize (synthetic events are enough). */
+  pointer?: boolean;
+  /** Raw protocol commands that recipe adapters drive (needs a debugger attachment). */
+  rawProtocol?: boolean;
+}
+
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   /** Local structural observations only; no URLs, scripts, selectors or input values. */
   experienceStore?: import('./browser/experience.js').BrowserExperienceStore;
   getRuntime(): BrowserControlRuntime;
-  /** Resolve the actual host profile before validation, discovery and execution. */
-  resolveProfile?(profile?: string): string;
+  /**
+   * Resolve the actual host profile before validation, discovery and execution.
+   * undefined keeps the agent's own choice (the user-browser backend picks the
+   * only connected browser, or asks for one when several are connected).
+   */
+  resolveProfile?(profile?: string): string | undefined;
   /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
   getBackendScope?(): { lifecycle: object; backend: object };
   /**
@@ -667,7 +692,12 @@ export interface BrowserMcpDeps {
   /** Shrink the LLM-facing copy to the shared stream-safe byte budget. */
   compressInlineImage?: CompressInlineImageFn;
   /** Switch the host-wide, persisted automation target; returns the actual mode. */
-  setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
+  setBackend?(backend: BrowserBackendKind): Promise<BrowserBackendKind>;
+  /**
+   * Capability flags of the active backend (false = the action/kind must be
+   * refused before dispatch with a clear hint). Absent → everything allowed.
+   */
+  backendCapabilities?(): BrowserBackendCapabilities;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */

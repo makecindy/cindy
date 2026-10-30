@@ -141,6 +141,7 @@ describe("home chrome menus", () => {
       "filter",
       "view",
       "taskInfo",
+      "teammates",
     ]);
     expect(find(actions, "group")?.subtitle).toBe("devices.list.menu.groupProject");
     expect(find(actions, "sort")?.subtitle).toBe("devices.list.menu.sortBy.recency");
@@ -268,4 +269,14 @@ describe("home chrome menus", () => {
     expect(homeDisplayActionPatch("sort.bogus", displayState)).toBeNull();
     expect(homeDisplayActionPatch("group", displayState)).toBeNull();
   });
+  // Unit: the appearance submenu is distinct from filtering teammate-created tasks.
+  // Existing menu tests did not cover this independently checked, default-off action.
+  it('places avatar opt-in in a normal Teammates appearance submenu', () => {
+    const menu = build().find(action => action.id === 'appearance')!;
+    const submenu = menu.subactions!.find(action => action.id === 'teammates')!;
+    expect(submenu.subactions).toEqual([{ id: 'teammates.showCollapsedAvatars', title: 'devices.list.menu.showCollapsedTeammateAvatars', state: 'off' }]);
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', displayState)).toEqual({ showCollapsedTeammateAvatars: true });
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: true })).toEqual({ showCollapsedTeammateAvatars: false });
+  });
+
 });

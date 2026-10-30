@@ -46,6 +46,7 @@ import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
+import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
 import {
   DEEP_LINK_PRIMARY_SCHEME,
@@ -102,6 +103,12 @@ export type DeepLinkPayload =
    */
   | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
   /**
+   * cindy://plugins[/<ghostId>] —— 打开已安装插件列表,带 id 时直达该插件详情页
+   * (随包浏览器扩展等外部表面把用户带回对应插件的启用 / 连接设置)。id 须过
+   * ghost id 白名单,不合法整条拒绝。
+   */
+  | { type: 'installed-plugin'; ghostId?: string }
+  /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
    * 不进 pending 缓存 (冷启动时 app 启动本身就会前台,缓存无意义)。
@@ -141,6 +148,17 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (rest.startsWith('provider/')) {
     const importId = createProviderImportDraftFromRest(rest);
     return importId ? { type: 'provider-import', importId } : null;
+  }
+  if (/^plugins(?:[/?#]|$)/.test(rest)) {
+    const rawId = rest.slice('plugins'.length).replace(/^\//, '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+    if (!rawId) return { type: 'installed-plugin' };
+    let ghostId: string;
+    try {
+      ghostId = decodeURIComponent(rawId);
+    } catch {
+      return null;
+    }
+    return isValidGhostId(ghostId) ? { type: 'installed-plugin', ghostId } : null;
   }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;

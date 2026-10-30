@@ -1180,6 +1180,17 @@ describe('createContextOverflowRollover', () => {
       return deps;
     }
 
+    it('does not stack legacy rebuild or learning on a native cache recovery decision', async () => {
+      const deps = makePiDeps([msg('user', 'Reply OK', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      expect(await rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection,
+        piCacheRecoveryHandled: true })).toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
     it.each([
       rejection,
       ...['prompt_cache_key', 'prompt_cache_retention'].map(field => '400: ' + JSON.stringify({

@@ -50,6 +50,25 @@ describe('header/home shared navigation', () => {
     routeAfterClose?.();
     expect(h.push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: '/resources/[collectionId]/[resourceId]' }));
   });
+  // Unit: menu and section share the account-scoped hook; remounts must retain the override,
+  // while changing it must not overwrite the independent expanded/collapsed choice.
+  it('restores avatar opt-in, keeps the fold independent, and isolates another account', async () => {
+    const originalUser = h.user;
+    await saveHomeNavigationPreferences(homeNavigationOwner(h.user), { showCollapsedTeammateAvatars: true });
+    await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(result.teammatesCollapsed).toBe(false);
+    await act(async () => result.setShowCollapsedTeammateAvatars(false));
+    expect(result.teammatesCollapsed).toBe(false);
+    await act(async () => root!.unmount()); root = undefined;
+    await render(); expect(result.showCollapsedTeammateAvatars).toBe(false);
+    await act(async () => result.setShowCollapsedTeammateAvatars(true));
+    h.user = { ...h.user, id: 'avatar-other-account' }; await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(false);
+    h.user = originalUser; await render();
+    expect(result.showCollapsedTeammateAvatars).toBe(true);
+    expect(await readHomeNavigationPreferences(result.owner)).toEqual({ showCollapsedTeammateAvatars: true });
+  });
   it('restores the remembered teammate and section fold, and returning home keeps them', async () => {
     const owner = homeNavigationOwner(h.user);
     await saveHomeNavigationPreferences(owner, { teammatesCollapsed: true, lastTeammate: teammateIdentity(teammate) });

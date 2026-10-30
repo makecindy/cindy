@@ -127,7 +127,7 @@ describe('BYOK speech catalog settings', () => {
       { id: 'private-voice', name: 'Upstream name', discoveredMetadata: { mode: 'chat', nativeApi: 'openai-responses' } },
     ] });
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={speechConnection([
+    renderExpandedConnection(<ProviderConnectionDialog initial={speechConnection([
       { id: 'private-voice', name: 'My Voice', nativeApi: 'openai-audio-speech', defaultEnabled: false },
     ])} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
@@ -177,7 +177,7 @@ describe('BYOK speech catalog settings', () => {
   it('restores inherited model type without dropping other user settings', async () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={speechConnection([
+    renderExpandedConnection(<ProviderConnectionDialog initial={speechConnection([
       { id: 'private-model', name: 'My model', mode: 'audio_speech', defaultEnabled: false,
         discoveredMetadata: { mode: 'chat' } },
     ])} onSaved={vi.fn()} onClose={vi.fn()} />);
@@ -204,7 +204,7 @@ it('retains standalone Images on edit and saves only the selected runtime when t
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue('invalid-test-key');
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   const checkbox = screen.getByLabelText('settings.providers.custom.fields.openaiImages');
   expect((checkbox as HTMLInputElement).checked).toBe(true);
@@ -214,7 +214,7 @@ it('retains standalone Images on edit and saves only the selected runtime when t
     imageApi: 'openai-images',
   });
   cleanup();
-  render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   await user.click(screen.getByLabelText('settings.providers.custom.fields.openaiImages'));
   await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -233,7 +233,7 @@ it('retains standalone Videos on edit and saves only the selected runtime when t
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue('invalid-test-key');
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   const checkbox = screen.getByLabelText('settings.providers.custom.fields.xaiVideos');
   expect((checkbox as HTMLInputElement).checked).toBe(true);
@@ -243,7 +243,7 @@ it('retains standalone Videos on edit and saves only the selected runtime when t
     videoApi: 'xai-videos',
   });
   cleanup();
-  render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   await user.click(screen.getByLabelText('settings.providers.custom.fields.xaiVideos'));
   await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -266,7 +266,7 @@ it('selects one Images owner while preserving other runtime endpoints, models an
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue('invalid-test-key');
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} focusAgent="pi" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   await user.click(screen.getByLabelText('settings.providers.custom.fields.openaiImages'));
   await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -348,7 +348,7 @@ async function renderImageGenerationHelp() {
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
   // Let the dialog's initial focus settle before testing the help popover's focus behavior.
   await waitForInitialDialogFocus();
@@ -381,7 +381,7 @@ async function renderImageGenerationReloadConfirmation(onSaved = vi.fn(), onClos
     busyCount: 3,
   });
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog initial={initial} onSaved={onSaved} onClose={onClose} />);
+  renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={onSaved} onClose={onClose} />);
   await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
   await user.click(
     screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
@@ -405,7 +405,7 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
     busyCount: 3,
   });
   const user = userEvent.setup();
-  render(<ProviderConnectionDialog onSaved={onSaved} onClose={onClose} />);
+  renderExpandedConnection(<ProviderConnectionDialog onSaved={onSaved} onClose={onClose} />);
   await user.type(
     screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
     'New image provider',
@@ -1123,7 +1123,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
 
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
     await user.click(
       screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }),
@@ -1339,7 +1339,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     };
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     const configuredBadge = () =>
@@ -1393,7 +1393,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     const onClose = vi.fn();
 
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={onClose} />);
+    renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={onClose} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     const headersLabel = screen.getByText('settings.providers.custom.fields.headers');
@@ -1684,7 +1684,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     const user = userEvent.setup();
-    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    renderExpandedConnection(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
     await user.click(
       screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
@@ -1735,7 +1735,7 @@ describe('ProviderConnectionDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     const user = userEvent.setup();
-    render(
+    renderExpandedConnection(
       <ProviderConnectionDialog
         initial={imageGenerationFromModelRouteProvider()}
         onSaved={vi.fn()}
@@ -2229,6 +2229,7 @@ describe('new-connection identification', () => {
   });
   it('preserves header-only credentials on a local new connection', async () => {
     await openIdentification(preset, 'http://127.0.0.1:1234/v1', '');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addHeader' }));
     // Header input labels are shared by the existing form; use its placeholders.
     fireEvent.change(screen.getByPlaceholderText('settings.providers.custom.fields.headerNamePlaceholder'), { target: { value: 'Authorization' } });
@@ -2643,7 +2644,7 @@ it('keeps the outer Codex summary on the saved upstream protocol', async () => {
     },
   };
   const user = userEvent.setup();
-  const { rerender } = render(<ProviderConnectionDialog initial={chat} onSaved={vi.fn()} onClose={vi.fn()} />);
+  const { rerender } = renderExpandedConnection(<ProviderConnectionDialog initial={chat} onSaved={vi.fn()} onClose={vi.fn()} />);
   await screen.findByRole('tab', { name: 'settings.providers.custom.protocol.codex' });
   expect(screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.chat' }).getAttribute('aria-pressed')).toBe('true');
   expect(screen.getAllByText('settings.providers.custom.wireProtocol.chat').length).toBeGreaterThanOrEqual(2);
@@ -2659,6 +2660,27 @@ it('keeps the outer Codex summary on the saved upstream protocol', async () => {
   await screen.findByRole('button', { name: 'settings.providers.custom.wireProtocol.chat' });
   expect(screen.getAllByText('settings.providers.custom.wireProtocol.chat').length).toBeGreaterThanOrEqual(2);
 
-  render(<ProviderConnectionDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  renderExpandedConnection(<ProviderConnectionDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
   expect(screen.getAllByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }).some((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true);
+});
+
+// Advanced-field tests enter the same disclosures as the user.
+function renderExpandedConnection(...args: Parameters<typeof render>) {
+  const result = render(...args);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.manualAdd' }));
+  return result;
+}
+
+// Standard: connection fields remain usable while optional editors start closed.
+it('starts manual models and advanced fields closed without hiding model discovery', async () => {
+  render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect(screen.queryByLabelText('settings.providers.connection.manualModel')).toBeNull();
+  expect(screen.queryByText('settings.providers.custom.fields.headers')).toBeNull();
+  expect(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.manualAdd' }));
+  expect(screen.getByLabelText('settings.providers.connection.manualModel')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
+  expect(screen.getByText('settings.providers.custom.fields.headers')).toBeTruthy();
+  await act(async () => {});
 });

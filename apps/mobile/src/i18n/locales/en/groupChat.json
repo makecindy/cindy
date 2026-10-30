@@ -291,6 +291,7 @@
     "failedStep": "Step {{step}} didn't finish"
   },
   "server": {
+    "attachmentTooLarge": "Group attachments must be {{size}} MB or smaller. Choose a smaller file.",
     "offline": "Can’t connect to group chat. Try again.",
     "loadFailed": "Can’t load this group chat right now. Try again.",
     "loadOlder": "Load Earlier Messages",
@@ -318,5 +319,77 @@
     "dissolved": "This group has been dissolved. You can still read the available history.",
     "failed": "Could not complete this action. Try again.",
     "lastOwner": "Transfer ownership or dissolve this group before leaving."
+  },
+  "mask": {
+    "toolAccess": "Tool access",
+    "catchup": {
+      "title": "Mentions of me",
+      "me": "Me",
+      "markAll": "Mark all as read",
+      "empty": "No unread mentions",
+      "thread": "Thread",
+      "main": "Group chat",
+      "answered": "Replied for you"
+    },
+    "title": "AI reply mode",
+    "settings": "AI reply settings",
+    "companion": "My teammate",
+    "choose": "Choose a teammate",
+    "enabled": "Automatic replies",
+    "triggerLabel": "Trigger",
+    "resumeAfter": "Resume after being away",
+    "start": "Start time",
+    "end": "End time",
+    "startManual": "Start now",
+    "stop": "Stop replies",
+    "todos": "Collect my to-dos",
+    "digestLabel": "Send me a digest",
+    "saving": "Saving…",
+    "saveError": "Couldn't save. Your previous settings still apply. Retry.",
+    "retry": "Retry",
+    "loading": "Loading your settings…",
+    "takeover": "I'll reply",
+    "resume": "Resume AI replies",
+    "status": {
+      "enabled": "Enabled",
+      "paused": "Paused",
+      "off": "Off",
+      "offline": "Offline",
+      "waiting": "Waiting",
+      "unbound": "Not set"
+    },
+    "detail": {
+      "paused": "You've taken over this exchange",
+      "off": "Automatic replies are off",
+      "offline": "Replies paused · Computer offline",
+      "waiting": "Waiting for you to start",
+      "unbound": "No teammate selected",
+      "enabled": "Your teammate is ready to reply for you."
+    },
+    "trigger": {
+      "always": "Always enabled",
+      "manual": "Manual",
+      "scheduled": "Scheduled"
+    },
+    "digest": {
+      "daily": "Daily",
+      "manual": "Manually"
+    },
+    "minutes": "{{count}} minutes",
+    "presence": "You're here · Resumes after {{minutes}} min away",
+    "scheduledWait": "Starts at {{time}}",
+    "attribution": "{{name}} replied for {{owner}}",
+    "digestNow": "Summarize now",
+    "digestWorking": "Summarizing…",
+    "digestSent": "Sent to your teammate chat",
+    "digestFailed": "Could not summarize. Try again.",
+    "digestEmpty": "Nothing new to summarize",
+    "access": {
+      "chat": "Group conversation only",
+      "tools": "Owner authorized tools and information",
+      "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
+      "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
+      "confirm": "Confirm"
+    }
   }
 }

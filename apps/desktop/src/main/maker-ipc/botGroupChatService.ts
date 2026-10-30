@@ -138,6 +138,7 @@ export interface BotGroupChatServiceDeps {
     plan?: { planId: string; workDir: string; sessionId?: string };
     threadRootId?: string;
     talkPlanId?: string;
+    personalDigest?: boolean;
   }) => Promise<LaneResult>;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
@@ -816,6 +817,8 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
             createdAt: latestSpoken.createdAt,
           }
         : null,
+      ...(speakersOf(group.id).some(speaker => speaker.sessionId && deps.hasPendingInteraction?.(speaker.sessionId))
+        ? { teammateActivity: { phase: 'needs-interaction' } } : {}),
       speakingBotIds: [...new Set(speakersOf(group.id).map((speaker) => speaker.botId))],
       createdAt: group.createdAt,
       updatedAt: group.updatedAt,

@@ -346,6 +346,16 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('xdt-maker://focus/')).toBeNull();
   });
 
+  it('parses plugins payload to the installed list or one plugin detail', () => {
+    // Bug/规则依据: 随包浏览器扩展的断连引导要把用户带回该插件的设置页。
+    expect(parseDeepLink('cindy://plugins')).toEqual({ type: 'installed-plugin' });
+    expect(parseDeepLink('cindy://plugins/')).toEqual({ type: 'installed-plugin' });
+    expect(parseDeepLink('cindy://plugins/my-browser')).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
+    expect(parseDeepLink('cindy://plugins/my-browser/?x=1')).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
+    expect(parseDeepLink('cindy://plugins/My Browser')).toBeNull();
+    expect(parseDeepLink('cindy://plugins/..%2Fetc')).toBeNull();
+  });
+
   it('parses settings/providers payload with and without a connect target', () => {
     expect(parseDeepLink('cindy://settings/providers')).toEqual({
       type: 'settings',

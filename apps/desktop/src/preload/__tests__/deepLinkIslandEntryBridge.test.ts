@@ -64,6 +64,18 @@ it('delivers remote-control settings through the live bridge and cold-start buff
   expect(takePendingDeepLink()).toBeNull();
 });
 
+// Review 2026-10-29 (Codex P1): the warm-app path dropped installed-plugin payloads because the
+// preload validator had no branch for them; only the cold-start buffer worked.
+it('delivers cindy://plugins links through the live bridge and cold-start buffer', () => {
+  const { received } = connect();
+  handleIncomingDeepLink('cindy://plugins/my-browser', 'open-url');
+  handleIncomingDeepLink('cindy://plugins', 'open-url');
+  expect(received).toEqual([{ type: 'installed-plugin', ghostId: 'my-browser' }, { type: 'installed-plugin' }]);
+  setDeepLinkMainWindow(null);
+  handleIncomingDeepLink('cindy://plugins/my-browser', 'argv');
+  expect(takePendingDeepLink()).toEqual({ type: 'installed-plugin', ghostId: 'my-browser' });
+});
+
 describe('Agent Island click id across the preload deep-link bridge', () => {
   // External links must keep their owning computer through both the live bridge
   // and the cold-start buffer; otherwise a same-id local task wins.

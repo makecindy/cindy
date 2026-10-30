@@ -113,7 +113,11 @@
   "taskActionConfirmation": {
     "title": "確認任務操作",
     "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。",
-    "delegation": "請核對獨立任務的目標與設定。允許後將啟動任務，並可在本次委託結束前傳送範圍內的訊息或停止任務。代答、恢復暫停與切換模型仍需另行確認。"
+    "remove": "這會刪除自動化。請核對目標，僅允許這一次。",
+    "permission": "這會代你回答另一個任務的授權請求。請核對操作，僅允許這一次。",
+    "resume": "這會恢復已暫停的執行。請核對目標，僅允許這一次。",
+    "command": "這會在電腦上儲存或執行命令，執行時不經過 Agent 的工具審批。請核對命令與工作目錄，僅允許這一次。",
+    "authority": "這會建立或改寫自動執行的指令，後續執行將沿用這份授權。請核對完整指令，批准僅用於本次儲存。"
   },
   "logSupport": {
     "title": "日誌與回饋",
@@ -1645,6 +1649,7 @@
     }
   },
   "settings": {
+    "newChatDefaults": { "title": "新任務預設權限" },
     "imConnection": {
       "reconnect": "重新連線",
       "savedNote": "繫結資訊已保留，可直接重試連線。",
@@ -3594,7 +3599,7 @@
           "modelsAutoNote": "登入後自動取得可用模型"
         },
         "advanced": {
-          "label": "高階配置（模型 / 請求頭）"
+          "label": "進階連線設定"
         },
         "runtimeFill": {
           "action": "填入其他 Runtime",
@@ -3740,6 +3745,7 @@
           },
           "capabilityHint": "優先使用目前供應商宣告的能力；未宣告時，圖片能力參考模型名稱。",
           "imageInput": "圖片輸入",
+          "imageInputMixed": "各引擎不同",
           "supported": "支援",
           "unsupported": "不支援",
           "undeclared": "未宣告",
@@ -3751,16 +3757,16 @@
           "defaultEffort": "預設推理強度",
           "defaultEffortHint": "新任務選中該模型時的初始檔位，任務內仍可臨時調整。",
           "contextLimit": "上下文上限",
-          "contextLimitHint": "套用至此模型所有可用引擎。以整數 K 編輯（1 K = 1,000 tokens）；未編輯時保留精確值。儲存後用於後續執行，不影響正在產生的內容。實際可用長度仍受模型服務限制。",
+          "contextLimitHint": "可直接輸入 token 數，或使用 K、M、萬，例如 1000000、1M。套用至此模型的所有可用引擎，後續執行生效。實際可用長度仍受模型服務限制。",
           "contextLimitLocalMillionHint": "原生 256K（262,144 tokens），可選擴展至 1M（1,000,000）。服務執行時需在「管理服務」中重新啟動以套用變更；已停止時，下次使用自動生效。長輸入會增加記憶體用量和等待時間。",
-          "contextLimitAria": "上下文上限（千 tokens）",
+          "contextLimitAria": "上下文上限（tokens、K、M 或萬）",
           "compaction": {
             "title": "自動壓縮",
             "hint": "占用達到所選比例時整理上下文。比例越低，越早壓縮；實際時機仍受引擎限制。",
             "default": "{{pct}}%（預設）",
             "timing": "套用至此來源下該模型的所有可用引擎。後續執行生效，不中斷正在產生的內容。"
           },
-          "contextLimitRoute": "目前 {{tokens}} tokens · 1 K = 1,000 tokens",
+          "contextLimitRoute": "目前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超過上游宣告的長度，可能導致請求失敗。",
           "restoreDefault": "恢復預設",
           "engines": "引擎支援",
@@ -3787,7 +3793,7 @@
           "close": "關閉",
           "maxOutput": "最大輸出",
           "catalogCapabilities": "目錄宣告的能力",
-          "contextInvalid": "請輸入 {{min}}–100,000 K 的整數。",
+          "contextInvalid": "請輸入 {{min}}–{{max}} tokens，也支援 K、M、萬。",
           "contextWriteFailed": "未儲存，請重試。",
           "contextMixed": "現有引擎設定不同；修改或恢復預設將套用至所有引擎。",
           "inputModalities": "輸入類型",
@@ -5225,7 +5231,7 @@
         "title": "使用我的瀏覽器登入態",
         "description": "Agent 會用你在 Chrome、Edge 或 Brave 裡已登入的身分造訪網站。",
         "toggleAria": "使用我的瀏覽器登入態",
-        "unavailableEmbedded": "僅獨立外置瀏覽器可用。側邊欄內建瀏覽器無法讀取 Chrome 的登入檔。",
+        "unavailableEmbedded": "只對獨立瀏覽器生效。關閉後會刪除已複製的登入檔。",
         "confirmTitle": "允許 Agent 使用你的瀏覽器登入態？",
         "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
         "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完全磁碟存取權」。可以隨時關掉，拷貝會被刪除。",
@@ -5242,33 +5248,54 @@
       },
       "browserBackend": {
         "title": "瀏覽器自動化目標",
-        "description": "選擇 Agent 自動化操作時實際控制哪個瀏覽器。兩種模式登入態相互獨立。",
         "defaultTag": "預設",
         "resetToDefault": "恢復預設",
         "toggleFailed": "切換瀏覽器目標失敗",
         "health": {
-          "ready": "內建瀏覽器已連線。",
-          "error": "內建瀏覽器連線異常：{{reason}}。點選「恢復瀏覽器」重建控制連線。",
+          "ready": "側邊欄瀏覽器已連線。",
+          "error": "側邊欄瀏覽器連線異常：{{reason}}。點選「恢復瀏覽器」重建控制連線。",
           "reasons": {
             "disposing": "上一次關閉尚未完成",
-            "hostUnavailable": "內建瀏覽器介面尚未就緒或連線已中斷",
+            "hostUnavailable": "側邊欄瀏覽器介面尚未就緒或連線已中斷",
             "startFailed": "瀏覽器連線未能啟動",
             "statusFailed": "無法檢查瀏覽器連線狀態",
-            "recoveryFailed": "控制連線未能重建"
+            "recoveryFailed": "控制連線未能重建",
+            "extensionDisconnected": "沒有已連線的瀏覽器擴充功能（安裝並啟用 Cindy Chrome 插件與擴充功能）",
+            "pluginMissing": "尚未安裝或啟用 Cindy Chrome 插件"
           },
           "reconnect": "重新連線瀏覽器",
           "recover": "恢復瀏覽器",
           "recovering": "正在恢復瀏覽器…",
-          "recovered": "內建瀏覽器已重新連線",
-          "recoverFailed": "恢復內建瀏覽器失敗，請根據錯誤原因重試"
+          "recovered": "側邊欄瀏覽器已重新連線",
+          "recoverFailed": "恢復側邊欄瀏覽器失敗，請根據錯誤原因重試",
+          "userBrowserReady": "我的瀏覽器已連線：Agent 可以操作你正在使用的瀏覽器。",
+          "userBrowserError": "我的瀏覽器無法使用：{{reason}}。"
         },
         "rsbWebview": {
-          "title": "側邊欄內建瀏覽器",
-          "description": "Agent 在右側欄內嵌的 webview tab 裡操作。無彈窗、登入態獨立保留。"
+          "title": "側邊欄瀏覽器",
+          "description": "在 Cindy 右側欄裡開啟網頁，你能直接看到 Agent 在做什麼。登入狀態單獨保存。"
         },
         "external": {
-          "title": "獨立外接瀏覽器",
-          "description": "Agent 操作 {{appName}} 專用的獨立 Chrome 視窗（vendored Playwright）。"
+          "title": "獨立瀏覽器",
+          "description": "一個 Cindy 專用的 Chrome 視窗，和你日常用的 Chrome 分開，登入狀態單獨保存。"
+        },
+        "userBrowser": {
+          "title": "我的瀏覽器",
+          "description": "直接操作你正在用的 Chrome 或 Edge，沿用你已有的登入。新頁面在背景視窗開啟，不打擾你。"
+        },
+        "userBrowserSetup": {
+          "installPluginTitle": "安裝 Cindy Chrome 插件",
+          "enablePluginTitle": "啟用 Cindy Chrome 插件",
+          "installExtensionTitle": "把 Cindy 擴充功能裝進瀏覽器",
+          "pluginBody": "「我的瀏覽器」透過 Cindy Chrome 插件和它的瀏覽器擴充功能連接你的 Chrome / Edge。先在 Cindy 裡裝好插件，再依提示把擴充功能裝進瀏覽器。",
+          "extensionBody": "點「安裝瀏覽器擴充功能」會在你的瀏覽器裡開啟 Cindy 擴充功能的商店頁面，點「新增」後這裡會自動變成已連線。已經裝過？在瀏覽器的擴充功能管理裡啟用它。",
+          "installPlugin": "安裝插件",
+          "enablePlugin": "前往啟用",
+          "installExtension": "安裝瀏覽器擴充功能",
+          "updatePluginTitle": "更新 Cindy Chrome 插件",
+          "updatePluginBody": "已安裝的 Cindy Chrome 插件版本較舊，還不支援「我的瀏覽器」。更新到最新版後，再依提示把擴充功能裝進瀏覽器。",
+          "updatePlugin": "前往更新",
+          "storeOpened": "已在瀏覽器裡開啟 Cindy 擴充功能頁面，點「加到 Chrome」後會自動連線"
         }
       },
       "android": {
@@ -5570,10 +5597,7 @@
     "remoteControl": {
       "relay": {
         "summary": {
-          "official": "Cindy 官方中繼",
-          "owner": "這台電腦當中繼",
-          "member": "已加入 {{name}}",
-          "server": "伺服器中繼「{{name}}」"
+          "official": "Cindy 官方中繼"
         },
         "description": "裝置之間的遠端控制預設經 Cindy 官方中繼。你也可以把中繼部署到自己的伺服器、讓這台電腦當中繼，或加入你自己另一台電腦上的中繼。登入、模型等其他服務不受影響。",
         "current": "目前使用",
@@ -5581,12 +5605,10 @@
         "unavailable": "登入 Cindy 帳號，並且系統鑰匙圈可用時，才能使用自己的中繼。",
         "limits": "使用自己的中繼時，手機系統推播、供應商分享和共享任務暫不可用。",
         "actions": {
-          "host": "在這台電腦上開啟",
           "join": "加入別的中繼",
           "useOfficial": "切回官方中繼",
           "editHost": "修改設定",
-          "deploy": "部署到我的伺服器",
-          "useDeployment": "改用這個中繼"
+          "deploy": "部署到我的伺服器"
         },
         "host": {
           "title": "在這台電腦上開啟中繼",
@@ -5667,13 +5689,16 @@
           "START_FAILED": "中繼沒能啟動，可以換一個連接埠再試。",
           "EXTERNAL_URL_REQUIRED": "請先填寫其他裝置連線的位址，或把「允許誰連線」改為所有網路。",
           "SSH_FAILED": "連不上伺服器。請在「遠端」裡檢查這台伺服器的 SSH 設定。",
+          "SHELL_UNAVAILABLE": "這個 SSH 帳號不能執行指令（例如 Git 服務的 git 帳號），不能用來部署。請選擇一台能登入命令列的伺服器。",
           "NEEDS_ROOT": "需要 root 帳號，或這個帳號能免密碼使用 sudo。Cindy 不會索取伺服器密碼。",
           "UNSUPPORTED_SYSTEM": "目前只支援含 systemd 的 64 位元 Linux（x64 / arm64），並且需要 curl 或 wget。",
-          "PORT_BUSY": "伺服器的 80 或 443 連接埠被其他服務佔用，暫時無法自動接入。現有 Nginx 會自動設定，請檢查佔用連接埠的其他服務。",
+          "PORT_BUSY": "伺服器的 80/443 連接埠正被 {{detail}} 使用。Cindy 不會停掉其他程式，可以換一台伺服器，或停掉它後重新檢查。",
+          "PORT_BUSY_CONTAINER": "伺服器的 80/443 連接埠由 Docker 容器 {{detail}} 使用。Cindy 只能自動設定直接裝在系統裡的 Nginx，改不了容器裡的設定，可以換一台伺服器。",
           "NGINX_FAILED": "未能完成 Nginx 設定，部署已停止。請查看詳細原因。",
           "DOWNLOAD_FAILED": "伺服器下載執行環境失敗（官方來源和鏡像都沒成功）。請檢查伺服器能否連上外網。",
-          "RELAY_MISMATCH": "這台伺服器上已有一個不是這台電腦部署的中繼。可以清除它後重新部署。",
+          "RELAY_MISMATCH": "這台伺服器上的中繼不是這台電腦部署的，Cindy 不會更動它。",
           "CERTIFICATE_FAILED": "申請 HTTPS 憑證失敗。通常是雲端主機安全群組沒有放行 80 連接埠，或網域還沒解析到這台伺服器。處理後點重試。",
+          "CA_UNREACHABLE": "伺服器連不上憑證機構 Let's Encrypt，自動重試了幾分鐘仍沒成功。請檢查伺服器能否連上外網，稍後再試。",
           "NOT_REACHABLE": "伺服器上的中繼已經執行，但這台電腦連不上它。請在雲端主機安全群組裡放行 443 連接埠。",
           "BUNDLE_MISSING": "這個版本的 Cindy 沒有附帶中繼程式，請更新 Cindy。",
           "DEPLOY_FAILED": "部署沒有完成。",
@@ -5686,10 +5711,10 @@
         },
         "deploy": {
           "title": "部署到我的伺服器",
-          "hint": "把中繼裝到你自己的 Linux 伺服器上，手機和不在同一網路的裝置都能連。Cindy 透過「遠端」裡設定的 SSH 連線安裝，並自動申請 HTTPS 憑證、到期前自動續期。",
-          "requirements": "需要：64 位元 Linux（含 systemd）、root 或免密碼 sudo，並在雲端伺服器安全群組或防火牆裡開放 TCP 80 和 443。Cindy 會自動檢查並設定現有的 Nginx。",
+          "hint": "把中繼裝到你自己的 Linux 伺服器上，手機和外網裝置都能連。Cindy 透過「遠端」裡的 SSH 連線安裝，自動申請並續期 HTTPS 憑證。雲端主機需要在安全群組裡開放 TCP 80 和 443。",
           "noHosts": "還沒有可用的伺服器。先在「遠端」裡新增 SSH 主機，再回來部署。",
           "server": "伺服器",
+          "serverPlaceholder": "選擇伺服器",
           "address": "存取位址",
           "addressPlaceholder": "公網 IP 或網域，例如 203.0.113.10",
           "addressHint": "其他裝置連線中繼用的位址。填公網 IP 會申請 6 天有效、自動續期的 IP 憑證；填網域需要先把網域解析到這台伺服器。",
@@ -5697,22 +5722,60 @@
           "defaultName": "我的中繼",
           "submit": "開始部署",
           "cancel": "取消",
-          "detail": "詳細原因：{{detail}}",
           "retry": "重試",
-          "replace": "清除舊中繼並重新部署",
+          "submitReplace": "清除並部署",
+          "edit": "修改設定",
+          "abandon": "放棄部署",
+          "abandonTitle": "放棄這次部署？",
+          "abandonDescription": "會清理伺服器上已經裝好的部分，並刪除這台電腦上的部署記錄。",
+          "replaceTitle": "清除伺服器上的中繼？",
+          "replaceDescription": "這台伺服器上的中繼不是這台電腦部署的。繼續部署會刪除它和它的裝置檔案，已加入它的裝置需要重新加入。",
+          "incompleteHint": "上次部署沒有完成。可以重試，或修改設定後重新部署。",
+          "showDetails": "查看詳情",
+          "check": {
+            "checking": "正在檢查伺服器…",
+            "checkingHint": "正在連線伺服器，確認系統、連接埠和現有服務。",
+            "idle": "選擇伺服器後，會先檢查它能否部署。",
+            "ready": "可以部署",
+            "blocked": "無法自動部署",
+            "recheck": "重新檢查",
+            "direct": "80 和 443 連接埠沒有被使用，中繼會直接使用它們。",
+            "nginx": "會接入伺服器上現有的 Nginx，並保留原有網站。",
+            "mine": "伺服器上已有這台電腦部署的中繼，會原地更新，已加入的裝置不受影響。",
+            "other": "伺服器上已有不是這台電腦部署的中繼，繼續部署會清除它，已加入它的裝置需要重新加入。"
+          },
           "running": {
             "deploy": "正在部署到伺服器…",
             "upgrade": "正在升級伺服器上的中繼…",
-            "uninstall": "正在從伺服器解除安裝…"
+            "uninstall": "正在從伺服器移除…"
           },
           "done": {
-            "deploy": "部署完成，這台電腦已改用伺服器上的中繼。用「新增裝置」讓手機和其他電腦加入。",
+            "deploy": "部署完成。在「連線路線」裡切換到它之後，就可以新增裝置。",
             "upgrade": "伺服器上的中繼已升級到 {{version}}。",
-            "uninstall": "已從伺服器解除安裝中繼。"
+            "uninstall": "已從伺服器移除中繼"
+          },
+          "failed": {
+            "deploy": "部署未完成",
+            "upgrade": "升級未完成",
+            "uninstall": "移除未完成"
+          },
+          "elapsed": "用時 {{time}}",
+          "logs": "部署日誌",
+          "progress": {
+            "runtime-cached": "執行環境已就緒，無需重新下載。",
+            "runtime-download": "正在下載執行環境，下載速度取決於伺服器網路…",
+            "runtime-fallback": "目前的下載來源無法使用，正在嘗試備用來源…",
+            "runtime-checksum": "下載完成，正在驗證檔案…",
+            "runtime-extract": "驗證通過，正在解壓縮並安裝執行環境…",
+            "nginx-prepare": "已偵測到 Nginx，正在設定中繼接入…",
+            "certificate-wait": "正在等待憑證簽發，可能需要幾分鐘…",
+            "certificate-retry": "暫時連不上憑證機構，正在自動重試…",
+            "verify-retry": "暫時還連不上中繼，正在重新檢查…",
+            "nginx-rollback": "部署未完成，正在還原原本的 Nginx 設定…"
           },
           "steps": {
             "connect": "連線伺服器",
-            "check": "檢查系統和連接埠",
+            "check": "檢查伺服器",
             "runtime": "安裝執行環境",
             "upload": "上傳中繼程式",
             "configure": "設定並啟動服務",
@@ -5723,16 +5786,73 @@
           }
         },
         "server": {
-          "title": "我的伺服器中繼",
-          "version": "中繼版本 {{version}}",
-          "incomplete": "上次部署沒有完成，可以重試或解除安裝。",
+          "inUse": "使用中",
           "upgrade": "升級到 {{version}}",
-          "uninstall": "從伺服器解除安裝",
-          "uninstallTitle": "從伺服器解除安裝中繼？",
-          "uninstallDescription": "伺服器上的中繼程式和裝置檔案都會被刪除，正在使用它的裝置會斷線。之後重新部署，所有裝置都需要重新加入。",
+          "remove": "移除",
+          "removeTitle": "移除伺服器中繼？",
+          "removeDescription": "會停止並刪除伺服器上的中繼程式和裝置檔案，正在使用它的裝置會斷線。之後重新部署，所有裝置都需要重新加入。",
           "forget": "只在本機移除",
           "forgetTitle": "只在這台電腦上移除？",
           "forgetDescription": "伺服器上的中繼不會被刪除，但這台電腦不再管理它，也不能再為它新增裝置。確定不再使用那台伺服器時再這樣做。"
+        },
+        "route": {
+          "title": "連線路線",
+          "hint": "裝置之間的遠端控制經由這條路線轉送",
+          "kindServer": "我的伺服器",
+          "kindJoined": "已加入",
+          "hostTitle": "這台電腦當中繼",
+          "hostHint": "其他裝置需要能直接連到這台電腦；電腦休眠或結束 Cindy 時都會斷線",
+          "officialHint": "無需設定，所有功能可用",
+          "defaultTag": "預設",
+          "useNamed": "切換到「{{name}}」",
+          "deployingStep": "{{step}}…",
+          "viewProgress": "查看進度",
+          "resume": "繼續部署",
+          "rename": "改名",
+          "renameHint": "只改這台電腦上顯示的名稱，伺服器和已加入的裝置看到的名稱不變。",
+          "renameSave": "儲存",
+          "renameCancel": "取消",
+          "statusChecking": "正在檢查…",
+          "statusOnline": "線上",
+          "statusOffline": "連不上",
+          "switchTitle": "切換到「{{name}}」？",
+          "switchFromHost": "這台電腦上的中繼會停用，已加入它的裝置會斷線。",
+          "switchFromMember": "這台電腦會退出「{{name}}」，之後要再加入，需要對方重新產生加入連結。",
+          "switchConfirm": "切換",
+          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播、供應商分享和共享任務暫時無法使用。"
+        },
+        "dialog": {
+          "steps": {
+            "label": "部署步驟",
+            "form": "選擇伺服器",
+            "deploy": "部署",
+            "done": "完成"
+          },
+          "running": "正在部署到 {{server}}…",
+          "backgroundHint": "關閉視窗不會中斷部署",
+          "background": "在背景繼續",
+          "doneTitle": "「{{name}}」已部署完成",
+          "doneHint": "這台電腦還在用原來的路線。點「使用這條路線」改用它，之後再新增手機和其他電腦。",
+          "doneLater": "之後也可以在「連線路線」裡切換",
+          "use": "使用這條路線",
+          "finish": "完成"
+        },
+        "manage": {
+          "check": "檢查連線",
+          "offline": "這台電腦現在連不上這個中繼。伺服器關機、網路變動或安全群組變更都會這樣，處理後點「檢查連線」。",
+          "devices": "已加入裝置",
+          "deviceCount_one": "{{count}} 台",
+          "deviceCount_other": "{{count}} 台",
+          "onlineCount_one": "{{count}} 台在線上",
+          "onlineCount_other": "{{count}} 台在線上",
+          "certificate": "HTTPS 憑證",
+          "certificateDays_one": "{{count}} 天後到期",
+          "certificateDays_other": "{{count}} 天後到期",
+          "certificateRenew": "會自動續期",
+          "certificateSite": "沿用網站憑證",
+          "version": "中繼版本",
+          "latest": "已是最新",
+          "remove": "移除這個中繼"
         }
       },
       "title": "遠端連線",
@@ -5754,7 +5874,6 @@
         "restoreFailed": "恢復失敗"
       },
       "sections": {
-        "relay": "中繼服務",
         "myDevices": "我的裝置",
         "ssh": "SSH 遠端主機",
         "hook": "Cindy IM 機器人"
@@ -7328,6 +7447,9 @@
         "sessionContextDetail": "只在它為當前任務幹活時告知位置資訊(任務編號與專案資料夾路徑)，不包含檔案內容，也不因此獲得檔案訪問權。",
         "preview": "可在右側欄瀏覽器中開啟以下網站的預覽頁面",
         "previewDetail": "只能開啟下方列出的網站；每次開啟都會提示是哪個插件開啟的。",
+        "browserExtension": "可讓它自帶的瀏覽器擴充功能連線到 Cindy",
+        "browserExtensionDetail": "只有下方列出的擴充功能能連線；連線經本機回環位址，由 Cindy 把擴充功能發起的請求轉交給這個插件。",
+        "browserExtensionPageControlDetail": "只有下方列出的擴充功能能連線。該擴充功能還實作頁面控制：選擇「我的瀏覽器」後，Agent 可經它讀取和操作你正在使用的瀏覽器頁面。",
         "nodeChildSpawn": "Node 程式可請宿主再啟動包內申報過的子處理程序",
         "nodeChildSpawnDetail": "只能啟動它自己包裡申報過的 JS 檔案(與主程式同樣的本機權限)，不能執行任意命令；插件停用或退出時子處理程序一併關閉。",
         "skill": "為 AI 助手新增技能「{{name}}」",
@@ -9767,6 +9889,13 @@
     }
   },
   "bots": {
+    "avatarStatus": {
+      "awaiting": "待你確認",
+      "error": "需要注意",
+      "running": "正在工作",
+      "done": "已完成",
+      "unread": "未讀"
+    },
     "workbench": {
       "ownedMark": "所屬夥伴：{{names}}",
       "createdMark": "由 {{names}} 建立",
@@ -10134,6 +10263,72 @@
       "threadClosed": "本輪夥伴對話已結束 · 僅供查看"
     },
     "groupChat": {
+      "mask": {
+        "toolAccess": "工具權限",
+        "catchup": {
+          "title": "@ 我的訊息",
+          "me": "我",
+          "markAll": "全部標為已讀",
+          "empty": "沒有未讀的 @ 訊息",
+          "thread": "話題",
+          "main": "群聊",
+          "answered": "已代答"
+        },
+        "title": "AI 代答模式",
+        "settings": "AI 代答設定",
+        "companion": "我的夥伴",
+        "choose": "選擇一位夥伴",
+        "enabled": "自動代答",
+        "triggerLabel": "觸發方式",
+        "resumeAfter": "離開多久後恢復",
+        "start": "開始時間",
+        "end": "結束時間",
+        "startManual": "現在開啟",
+        "stop": "停止代答",
+        "todos": "整理與我有關的待辦",
+        "digestLabel": "彙總給我",
+        "saving": "正在儲存…",
+        "saveError": "未能儲存，仍按原設定代答。請重試。",
+        "retry": "重試",
+        "loading": "正在載入你的設定…",
+        "takeover": "我來回覆",
+        "resume": "恢復代答",
+        "status": {
+          "enabled": "已啟用",
+          "paused": "已讓位",
+          "off": "未開啟",
+          "offline": "已離線",
+          "waiting": "待觸發",
+          "unbound": "未連結"
+        },
+        "detail": {
+          "paused": "你已接回這段交流",
+          "off": "自動代答已關閉",
+          "offline": "代答已暫停 · 電腦離線",
+          "waiting": "等待手動開啟",
+          "unbound": "尚未選擇夥伴",
+          "enabled": "夥伴正在為你待答"
+        },
+        "trigger": {
+          "always": "永久觸發",
+          "manual": "手動指定觸發",
+          "scheduled": "定時觸發"
+        },
+        "digest": {
+          "daily": "每日彙總",
+          "manual": "手動彙整"
+        },
+        "minutes": "{{count}} 分鐘",
+        "presence": "你正在參與 · 離開 {{minutes}} 分鐘後恢復",
+        "scheduledWait": "等待 {{time}} 開始",
+        "attribution": "{{name}} 為 {{owner}} 回覆",
+        "digestNow": "立即整理",
+        "digestWorking": "整理中…",
+        "digestSent": "已傳送至夥伴私聊",
+        "digestFailed": "整理失敗，請重試",
+        "digestEmpty": "暫無新的待整理內容",
+        "joinSetup": "入群後設定 AI 代答模式"
+      },
       "migrationPending": "部分舊記錄尚未上傳完成，將自動重試。目前群聊可繼續使用。",
       "memberSeparator": "、",
       "ownerOf": "{{name}} 的主人",
@@ -10479,8 +10674,10 @@
         "reactorsUnavailable_one": "另有 {{count}} 位成員的資訊暫不可用",
         "reactorsUnavailable_other": "另有 {{count}} 位成員的資訊暫不可用",
         "invite": "邀請加入群聊",
+        "groupCreated": "群聊已建立",
+        "inviteFriends": "邀請朋友加入，一起使用夥伴",
+        "generatingLink": "正在產生邀請連結…",
         "join": "加入群聊",
-        "inviteDescription": "對方接受邀請後會成為群組成員，可閱讀群聊記錄。",
         "revokeLink": "撤銷此連結",
         "revokeDescription": "此連結將無法再用於加入群組。其他邀請連結和已加入的成員不受影響。",
         "revokedLink": "此邀請連結已撤銷。",

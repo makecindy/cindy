@@ -21,6 +21,7 @@ export interface OneshotPinOption {
   subscription: boolean;
   /** Provider['routing'](IPC 载荷;ProviderLogoMark 的厂牌图标判定用)。 */
   routing?: import('@cindy/model-providers').Provider['routing'];
+  logoKind?: ProviderView['logoKind'];
   /** Agent used by this exact route. Older snapshots may omit it. */
   agentSuffix?: string;
   /** False for a persisted route that is no longer offered or currently usable. */
@@ -41,6 +42,7 @@ export function oneshotPickerProviders(options: readonly OneshotPinOption[]): Pr
     if (!provider) {
       provider = {
         id: option.providerId, name: option.group, source: 'builtin',
+        logoKind: option.logoKind,
         auth: { method: 'none' }, connected: true, agents: [], routing: {}, models: {},
       };
       providers.set(option.providerId, provider);

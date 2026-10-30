@@ -93,13 +93,14 @@ import {
 } from './botGroupAttachments';
 import { chatErrorKey } from './chatError';
 import {
-  botGroupErrorKey,
   isActiveBotGroupMember,
   isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
 } from './botGroupPresentation';
 import { botGroupApi } from './botGroupStore';
 import { botGroupSendSignature, enqueueBotGroupSend, registerBotGroupComposer } from './botGroupOutbox';
+import { GroupMaskIndicator } from './GroupMaskControls';
+import { useGroupMask } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
 
 /** 话题 replies also accept the Chat Server's own 「everyone」 spellings. */
@@ -219,6 +220,7 @@ export function BotGroupComposer({
 }) {
   const { t } = useTranslation();
   const thread = mode === 'thread';
+  const groupMask = useGroupMask(groupId);
   const [text, setText] = useState(() => botGroupDraftText(getDraft(draftKey)?.text));
   const [error, setError] = useState('');
   const [stopping, setStopping] = useState(false);
@@ -317,6 +319,7 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || !sendReply) return;
+    groupMask?.participate();
     const previous = attemptRef.current;
     const attempt =
       previous?.mentions && previous.roster && previous.text === trimmed
@@ -401,6 +404,7 @@ export function BotGroupComposer({
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;
     }
+    groupMask?.participate();
     const files: readonly AttachedFile[] = attachmentState.attachments;
     const mentions = mention.resolve(text);
     const tracked = mention.tracked;
@@ -601,7 +605,7 @@ export function BotGroupComposer({
             {...mention.textareaProps}
             readOnly={sending}
             placeholder={placeholder}
-            onChange={(event) => mention.onChange(event.target.value)}
+            onChange={(event) => { mention.onChange(event.target.value); groupMask?.participate(); }}
             onPaste={handlePaste}
             onKeyDown={(event) => {
               if (isComposingKey(event)) return;
@@ -704,6 +708,7 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               </>)}
+              {conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>

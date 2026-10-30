@@ -6,7 +6,7 @@ import { messages, sessions } from '../../schema';
 import * as taskImages from '../../../cindy-media/taskImageDelivery';
 import * as currentDb from '../../client/current';
 import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
-import { MAX_HISTORY_SCAN_ROWS } from '../historyViewReader';
+import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../historyViewReader';
 import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import type { DbClient } from '../../client/DbClient';
 import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
@@ -189,11 +189,23 @@ describe('local-db:messages:list cursor', () => {
       parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model' }) : null, Number(id));
     add('0', 'user', 'Visible question');
     add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
-    for (let n = 2; n < 103; n++) add(String(n), 'thinking', { text: 'hidden '.repeat(1000), durationMs: 10 }, 'agent');
+    const unchangedByteTail = 'q'.repeat(200);
+    for (let n = 2; n < 103; n++) add(String(n), 'thinking', {
+      text: n === 2 ? `ab${unchangedByteTail}` : 'hidden '.repeat(1000), durationMs: 10,
+    }, 'agent');
     add('103', 'assistant', 'Visible answer');
     registerMessageIpc();
-    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
-    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    const shapes: HistoryPageShape[] = [];
+    const historyView = {
+      disable() {}, setExpanded() {},
+      update(_keys: readonly string[], latest?: { shape?: HistoryPageShape }) {
+        if (latest?.shape) shapes.push(latest.shape);
+      },
+    };
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'd', channel, historyView,
+    }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true, workLines: true }) as HistoryViewPage<HistoryMessageSource>;
     expect(page.hasMore).toBe(false);
     expect(JSON.stringify(page)).not.toContain('hidden ');
     expect(JSON.stringify(page)).toContain('Visible answer');
@@ -204,9 +216,14 @@ describe('local-db:messages:list cursor', () => {
     expect(detail.messages.length).toBeGreaterThan(0);
     expect(detail.messages.every((row) => (row.agentMeta as { parentUuid?: string })?.parentUuid === 'agent')).toBe(true);
     expect(JSON.stringify(detail)).toContain('hidden ');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).toEqual(page);
-    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?').run(JSON.stringify({ text: 'edited '.repeat(1000), durationMs: 10 }), '2');
-    expect(await invoke('local-db:messages:view', { lazyDetails: true })).not.toEqual(page);
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).toEqual(shapes.at(-2)?.fingerprints);
+    // Same UTF-8 byte length and unchanged last 96 bytes, but a different character
+    // count ("ab" → "é"): the production UPDATE → outline entry must invalidate.
+    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?')
+      .run(JSON.stringify({ text: `é${unchangedByteTail}`, durationMs: 10 }), '2');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).not.toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).not.toEqual(shapes.at(-2)?.fingerprints);
   });
   it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
     const sqlite = createDb();

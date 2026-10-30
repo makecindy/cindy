@@ -163,7 +163,7 @@ describe('Chat Server result delivery and refresh', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
-    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; claimed = false;
+    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; fixture.urls = []; claimed = false;
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.handle.mockImplementation(response);
@@ -181,6 +181,56 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+
+  it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
+    let downgraded = false;
+    const peer = '30000000-0000-4000-8000-000000000002';
+    fixture.handle.mockImplementation((route) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, personalMaskTools: 1 } } };
+      if (route === '/mask/executions/claim') {
+        const next = claimed ? null : { ...execution, access_mode: 'tools', mask_owner_id: selfId, mask_kind: 'reply', requester_id: peer,
+          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
+        claimed = true; return { body: { execution: next } };
+      }
+      if (route.endsWith('/mask')) return { body: { self: { id: selfId }, revision: downgraded ? 2 : 1,
+        settings: { access: downgraded ? 'chat' : 'tools', companionId: botId } } };
+      return response(route);
+    });
+    await start();
+    expect((await service.chatServer!.status()).personalMask).toBe(true);
+    expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: false }));
+    // Owner decision: the actual model input must identify AI reply mode and its represented member.
+    // The existing tool-boundary assertions below ensure this identity does not elevate the peer.
+    const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
+    expect(prompt).toContain('You are in AI reply mode');
+    const identity = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
+      .map(match => JSON.parse(match[1])).find(block => block.representedMember);
+    expect(identity).toMatchObject({ representedMember: { id: selfId, name: 'Represented member' } });
+    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'tools', revision: 1, maskOwnerId: selfId } }));
+    await expect(authorizeGroupTool('lane', 'local-bot', 'read-self')).resolves.toBeDefined();
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    downgraded = true;
+    await expect(authorizeGroupTool('lane', 'local-bot', 'read-self')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
+  });
+
+  // Regression: the paired reply is a content projection, not a full Message with author.kind.
+  it('does not call mask endpoints on a server without the capability',async()=>{
+    expect((await service.chatServer!.status()).personalMask).not.toBe(true);
+    expect(await service.chatServer!.mask!({groupId:roomId})).toMatchObject({ok:false,errorCode:'UNSUPPORTED_OPERATION'});
+    expect(await service.chatServer!.mentions!({groupId:roomId})).toMatchObject({ok:false,errorCode:'UNSUPPORTED_OPERATION'});
+    expect(fixture.urls.some(url=>url.includes('/mask') || url.includes('/mentions'))).toBe(false);
+  });
+
+  it('reads mask mentions with paired replies without consuming human read state',async()=>{
+    fixture.handle.mockImplementation(route=>route === '/me' ? {body:{actor:{id:selfId},capabilities:{personalMask:1}}}
+      : route.includes('/mentions?') ? {body:{messages:[{id:execution.source_message_id,seq:'4',author:{kind:'human',name:'Peer'},
+        content:[{type:'text',text:'@owner confirm?'}],reply:{content:[{type:'text',text:'Awaiting owner'}],maskAttribution:{companion:{id:botId,name:'Cindy',avatarUrl:null}}}}],hasMore:false}}
+      : response(route));
+    const result=await service.chatServer!.mentions!({groupId:roomId});
+    expect(result).toMatchObject({ok:true,mentions:[{text:'@owner confirm?',reply:{text:'Awaiting owner',companion:{id:botId}}}]});
+    expect(fixture.urls.some(url=>url.includes('/read'))).toBe(false);
+  });
 
   // Unit: exercise the real transport and read.changed path. The former notification-only
   // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.

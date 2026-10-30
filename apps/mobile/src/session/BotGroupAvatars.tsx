@@ -1,6 +1,7 @@
+import { TEAMMATE_AVATAR } from '@cindy/maker-shared/teammate-status';
 /**
  * 群的身份标记（对照桌面 BotGroupAvatars.tsx）：双人斜向叠放，三人以上圆形聚拢，最多前五位。
- * 列表行 44 框、任务首页头像条 56 框、聊天顶栏 32 框；第一位始终在最前层。每个头像仍是 RemoteCompanionAvatar；叠放处用与
+ * 列表行 44 框、任务首页头像条 48 框、聊天顶栏 32 框；第一位始终在最前层。每个头像仍是 RemoteCompanionAvatar；叠放处用与
  * 底色同色的 2pt 描边隔开，不引入阴影或新 token。头像与名字取伙伴列表缓存（只用于显示），
  * 缓存里没有时退回群里带来的名字与头像字段。
  */
@@ -35,8 +36,8 @@ export const BOT_GROUP_MESSAGE_AVATAR_SIZE = 28;
 export const BOT_GROUP_STEP_AVATAR_SIZE = 24;
 export const BOT_GROUP_INLINE_AVATAR_SIZE = 20;
 export const BOT_GROUP_ROW_AVATAR_SIZE = 32;
-/** List rows (44 box, two 30 avatars), the task home's avatar strip (56, two 38) and chat headers (32, two 22). */
-const DUO_SIZES = { row: { box: 44, avatar: 30 }, strip: { box: 56, avatar: 38 }, header: { box: 32, avatar: 22 } } as const;
+/** List rows (44 box, two 30 avatars), the task home's avatar strip (48, two 34) and chat headers (32, two 22). */
+const DUO_SIZES = { row: { box: TEAMMATE_AVATAR.row, avatar: 30 }, strip: { box: TEAMMATE_AVATAR.strip, avatar: 34 }, header: { box: 32, avatar: 22 } } as const;
 /** Separates overlapped avatars; the same 2pt ring as the teammate connection dot. */
 const STACK_RING = 2;
 

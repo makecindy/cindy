@@ -16,8 +16,11 @@ import { createAgentHandoffPendingRegistry } from '../agentHandoff';
 import { MAKER_INVOKE } from '../channels';
 import { remoteAgentLinkError } from '../../remote-agent/controller/runClient';
 import { IpcHarness } from './helpers/ipcHarness';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { getDeviceLinkInvokeContext, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 import { applyScheduledModelSelection, type ScheduledModelSelection } from '../scheduledModelSelection';
+import { authorizeSharedTaskOperation } from '@cindy/device-link';
+import type { SharedTaskPeerCapture } from '../../device-link/sharedTaskDispatch';
+import { createSharedTaskSettingGuard } from '../sharedTaskSetting';
 
 function makeRow(overrides: Partial<AgentSwitchSessionRow> = {}): AgentSwitchSessionRow {
   return {
@@ -419,6 +422,83 @@ describe('same-engine selection at send', () => {
     });
     return { deps, pending, apply, calls, row: () => row };
   }
+
+  // #7825, unit: exercise the production pending-apply entry with the real
+  // setting guard and permission policy. Existing cases test switching and
+  // guest denial separately; the missing input is an owner-staged choice whose
+  // first send runs inside a guest's async invoke context.
+  function sharedSelectionHarness(sessionId = 's1') {
+    const h = selectionHarness();
+    let current = true;
+    const capture: SharedTaskPeerCapture = {
+      author: { sharedTaskId: 'shared', sessionId, memberId: 'guest', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: (operation) => authorizeSharedTaskOperation({
+        sharedTaskId: 'shared', sessionId: 's1', ownerAccountId: 'owner', hostDeviceId: 'host',
+        status: 'active', revision: 1,
+        guests: current ? [{ memberId: 'guest', accountId: 'guest', version: 1, deviceIds: ['phone'] }] : [],
+      }, { accountId: 'guest', deviceId: 'phone' }, 's1', operation).allowed,
+    };
+    const context = { controllerDeviceId: 'phone', channel: 'maker:input:enqueue', sharedTask: capture,
+      sharedTaskSetting: { admitted: false } };
+    const preflight = vi.fn(async () => false);
+    const select = h.deps.selectSameAgentModel!;
+    h.deps.selectSameAgentModel = async (id, intent, applyNow, assertSelectionCurrent, beforeMutation, pendingSelectionAccess) => {
+      if (!applyNow) return select(id, intent, false);
+      const invoke = getDeviceLinkInvokeContext();
+      const guard = pendingSelectionAccess ?? createSharedTaskSettingGuard(invoke?.sharedTask, id, invoke?.sharedTaskSetting ?? { admitted: false });
+      assertSelectionCurrent?.();
+      guard();
+      await preflight();
+      await beforeMutation?.();
+      assertSelectionCurrent?.();
+      guard.admit();
+      return select(id, intent, true);
+    };
+    return { ...h, capture, context, preflight, revoke: () => { current = false; } };
+  }
+
+  it('applies the owner choice on the first guest send without granting the guest model access', async () => {
+    const h = sharedSelectionHarness();
+    await performSessionAgentSwitch(h.deps, { ...validParams, model: 'gpt-5.6-sol' });
+    await runDeviceLinkInvokeContext(h.context, async () => {
+      await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+      // The next send still carries the guest author, and a subsequent settings
+      // request in the same invoke must not inherit the host transaction's admission.
+      expect(getDeviceLinkInvokeContext()).toBe(h.context);
+      expect(h.context.sharedTaskSetting.admitted).toBe(false);
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, h.deps);
+      await expect(ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 's1', 'codex', 'guest-model', null))
+        .rejects.toThrow('PERMISSION_DENIED');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+    });
+    expect(h.apply).toHaveBeenCalledOnce();
+  });
+
+  it.each(['revoked', 'other-task', 'during-preflight'] as const)(
+    'keeps the owner choice pending when guest access fails (%s)', async (failure) => {
+      const h = sharedSelectionHarness(failure === 'other-task' ? 'other-task' : 's1');
+      await performSessionAgentSwitch(h.deps, { ...validParams, model: 'gpt-5.6-sol' });
+      if (failure === 'revoked') h.revoke();
+      if (failure === 'during-preflight') h.preflight.mockImplementationOnce(async () => {
+        h.revoke();
+        return false;
+      });
+      await expect(runDeviceLinkInvokeContext(h.context, () => applyPendingAgentSwitchIfIdle(h.deps, 's1')))
+        .rejects.toThrow('PERMISSION_DENIED');
+      expect(h.row().model).toBe('gpt-6-astra');
+      expect(h.apply).not.toHaveBeenCalled();
+      expect(h.pending.get('s1')?.model).toBe('gpt-5.6-sol');
+      // An invalid guest request must not discard the owner's pending choice.
+      await applyPendingAgentSwitchIfIdle(h.deps, 's1');
+      expect(h.row().model).toBe('gpt-5.6-sol');
+      expect(h.pending.get('s1')).toBeUndefined();
+    },
+  );
 
   it('keeps the source thread untouched while selecting away and back, and applies only the final choice on send', async () => {
     const h = selectionHarness();

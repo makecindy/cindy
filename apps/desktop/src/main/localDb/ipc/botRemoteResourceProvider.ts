@@ -1,3 +1,4 @@
+import { TEAMMATE_STATUS_ORDER, resolveTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { readForwardedRequestSource } from '../../../shared/forwardedRequest.js';
 import { createHash } from 'node:crypto';
 import { botTodoRemoteProjection } from './botTodoRemoteProjection.js';
@@ -33,9 +34,9 @@ import {
   visibleBotRemoteResourceSources,
 } from './botRemoteResourceProjection.js';
 
-/** Canonical activity wins, then the newest running delegation, like the local roster. */
-async function runningBotActivities(sources: readonly BotRemoteResourceSource[]) {
-  const running = getAgentIslandService()?.getSessionActivitySnapshots().filter(activity => activity.phase === 'running') ?? [];
+/** The canonical conversation and live delegations share the local roster priority. */
+async function rosterBotActivities(sources: readonly BotRemoteResourceSource[]) {
+  const running = getAgentIslandService()?.getSessionActivitySnapshots() ?? [];
   const bySession = new Map(running.map(activity => [activity.sessionId, activity]));
   const delegated = sources.length && running.length ? await getDbClient().drizzle
     .select({ botId: botSessionLinks.botId, sessionId: botSessionLinks.sessionId })
@@ -46,8 +47,11 @@ async function runningBotActivities(sources: readonly BotRemoteResourceSource[])
       isNull(botSessionLinks.archivedAt),
     )).orderBy(desc(botSessionLinks.createdAt)) : [];
   return new Map(sources.map(source => [source.id,
-    (source.canonicalSessionId ? bySession.get(source.canonicalSessionId) : undefined)
-      ?? bySession.get(delegated.find(link => link.botId === source.id)?.sessionId ?? ''),
+    [...(source.canonicalSessionId ? [bySession.get(source.canonicalSessionId)] : []),
+      ...delegated.filter(link => link.botId === source.id).map(link => bySession.get(link.sessionId))]
+      .filter(activity => !!activity).sort((a, b) =>
+        TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [a], unread: true }))
+        - TEAMMATE_STATUS_ORDER.indexOf(resolveTeammateStatus({ activities: [b], unread: true })))[0],
   ]));
 }
 
@@ -76,13 +80,17 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
               .some((value) => value.toLocaleLowerCase().includes(rawQuery)))
         : sources;
       const page = filtered.slice(0, request.limit ?? 200);
-      const activities = await runningBotActivities(page);
+      const activities = await rosterBotActivities(page);
       if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
       const items = page
         .map(source => {
           const item = botRemoteCollectionItemFromSource(source);
           const activity = activities.get(source.id);
-          if (activity?.phase === 'running' && activity.workingPhase) {
+          if (activity && activity.phase !== 'idle') {
+            item.display.teammateActivity = { phase: activity.phase };
+            item.revision += `:${activity.phase}`;
+          }
+          if (activity?.phase === 'running') {
             item.display.generation = { phase: activity.workingPhase ?? 'processing', startedAt: activity.startedAtMs };
             item.revision += `:${activity.startedAtMs}:${item.display.generation.phase}`;
           }
@@ -126,8 +134,8 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
         const [source] = visibleBotRemoteResourceSources([await getBotRemoteResourceSource(botId)]);
         if (!source || !isDataOwnerBroadcastScopeCurrent(scope))
           throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const activity = (await runningBotActivities([source])).get(source.id);
-        if (!activity || !isDataOwnerBroadcastScopeCurrent(scope))
+        const activity = (await rosterBotActivities([source])).get(source.id);
+        if (activity?.phase !== 'running' || !isDataOwnerBroadcastScopeCurrent(scope))
           throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate is not running');
         const result = await getWorkingStatusCopy({ sessionId: activity.sessionId, phase, locale: resolveSystemLocale(request.client.locale) });
         if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');

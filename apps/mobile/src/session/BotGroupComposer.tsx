@@ -54,6 +54,7 @@ import { nextBotGroupSendAttempt, type BotGroupSendAttempt } from './botGroupRem
 import { canBrowsePhotoLibraryDirectly } from './photoLibraryPolicy';
 import type { RemoteSerializedAttachment } from './types';
 import { useBotGroupComposerAttachments } from './useBotGroupComposerAttachments';
+import type { UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
 const CONTROL_SIZE = 34;
 const CONTROL_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
@@ -75,16 +76,19 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, quoteMessageId, focusRequest, onSend, onStop,
+  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, maskIndicator, onParticipate,
 }: {
+  maskIndicator?: import('react').ReactNode;
+  onParticipate?(): void;
   members: readonly BotGroupMemberView[];
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
   online: boolean;
   running: boolean;
   planState: BotGroupComposerPlanState | null;
-  /** The computer takes attachments on `send` (`BotGroupRemoteChatData.supportsAttachments`). */
+  /** The active server/computer path takes attachments on send. */
   attachmentsSupported: boolean;
+  uploadAttachment?: UseMobileLocalAttachmentsOptions['upload'];
   divisionSupported?: boolean;
   /** The message being replied to; part of the send intent. */
   quoteMessageId?: string;
@@ -126,6 +130,7 @@ export function BotGroupComposer({
   const focusInput = () => requestAnimationFrame(() => inputRef.current?.focus());
   const tray = useBotGroupComposerAttachments({
     deviceId,
+    upload: uploadAttachment,
     onPicked: () => { setSheetOpen(false); focusInput(); },
   });
   const pendingImagePreview = useComposerPendingImagePreview(tray);
@@ -162,7 +167,7 @@ export function BotGroupComposer({
   const showStop = running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
   // Same as the task composer: the tray shows inside the focused card, a badge otherwise.
-  const cardActive = focused && hasAttachments;
+  const cardActive = (focused && hasAttachments) || !!maskIndicator;
 
   const choose = (option: MentionOption) => {
     if (!query) return;
@@ -344,6 +349,7 @@ export function BotGroupComposer({
       selectionColor={colors.inputCaret}
       selection={forcedSelection}
       onChangeText={(value) => {
+        onParticipate?.();
         const { start: editStart, end: editEnd } = selectionRef.current;
         setText(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
@@ -378,7 +384,7 @@ export function BotGroupComposer({
         onPreview={setPreviewId} onRemove={tray.removeAttachment} onRemovePending={tray.removePendingUpload}
         onRetryPending={tray.retryPendingUpload} removeDisabled={sending} testIDPrefix="botGroup" /> : null}
       toolbar={cardActive ? <>
-        <ComposerToolbarLeftGroup>{plus}</ComposerToolbarLeftGroup>
+        <ComposerToolbarLeftGroup>{plus}{maskIndicator}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}

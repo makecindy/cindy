@@ -490,7 +490,7 @@ describe('createBrowserMcpServer', () => {
   });
 
   it('switches modes in the same MCP instance and immediately updates backend capabilities', async () => {
-    let backend: 'external' | 'rsb-webview' = 'external';
+    let backend: 'external' | 'rsb-webview' | 'user-browser' = 'external';
     const switched: string[] = [];
     const h = await makeHarness({
       setBackend: async (next) => { switched.push(next); backend = next; return backend; },
@@ -1718,5 +1718,115 @@ describe('recipe on-use maintenance', () => {
       expect((await invoke(next, { action: 'saveRecipe', site: 'example.com', recipeDraft: draft })).ok).toBe(true);
       expect(stored.validation.state).toBe('active');
     } finally { await next.cleanup(); }
+  });
+});
+
+describe('browser · backend capability gating (user browser via extension)', () => {
+  const caps = () => ({ evaluate: false, screenshot: false, network: false, upload: false, dialog: false, console: false, pdf: false, focus: false, close: false, trustedInput: false });
+
+  it.each([
+    { action: 'screenshot', targetId: 't1' },
+    { action: 'requests', targetId: 't1' },
+    { action: 'upload', targetId: 't1', paths: ['/tmp/x'] },
+    { action: 'dialog', targetId: 't1', dialogId: 'd', accept: true },
+    { action: 'focus', targetId: 't1' },
+    { action: 'act', targetId: 't1', request: { kind: 'evaluate', fn: '() => 1' } },
+    { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } },
+  ])('refuses unsupported work before dispatch and points the agent to the user: %j', async (args) => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('不要自行切换');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('points out open tabs on the same site after open, and bounds snapshots by maxChars, for any backend', async () => {
+    const h = await makeHarness({}, (request) => {
+      if (request.action === 'open') return { targetId: 'new', url: 'https://play.example.test/console' };
+      if (request.action === 'tabs') return { tabs: [
+        { targetId: 'new', url: 'https://play.example.test/console' },
+        { targetId: 'old', suggestedTargetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' },
+        { targetId: 'other', url: 'https://elsewhere.test/' },
+      ] };
+      if (request.action === 'snapshot') return { targetId: 'old', snapshot: Array.from({ length: 400 }, (_, i) => `line ${i} [ref=e${i}]`).join('\n'), refs: { e1: {}, e399: {} } };
+      return undefined;
+    });
+    try {
+      const opened = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'open', url: 'https://play.example.test/console' } } });
+      const body = JSON.parse((opened.content as Array<{ text: string }>)[0].text);
+      expect(body.sameSiteTabs).toEqual([{ targetId: 'play', url: 'https://play.example.test/console/u/1/app', title: 'Release overview' }]);
+      const snap = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'snapshot', targetId: 'play', maxChars: 500 } } });
+      const data = JSON.parse((snap.content as Array<{ text: string }>)[0].text).data;
+      expect(data.snapshot.length).toBeLessThanOrEqual(500);
+      expect(data.truncated).toBe(true);
+      expect(Object.keys(data.refs)).toEqual(['e1']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('accepts extract fields written next to extract, and urls in afterSnapshot, for any backend', async () => {
+    const h = await makeHarness();
+    try {
+      const extracted = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', fields: { title: 'h1' }, from: 'main', multiple: true } } });
+      expect(extracted.isError).toBeFalsy();
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract', extract: { fields: { title: 'h1' }, from: 'main', multiple: true } } } });
+      const clicked = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'click', ref: 'e1' }, afterSnapshot: { urls: true } } } });
+      expect(clicked.isError).toBeFalsy();
+      expect(h.calls.find((c) => (c as { action?: string }).action === 'snapshot')).toMatchObject({ action: 'snapshot', urls: true });
+    } finally { await h.cleanup(); }
+  });
+
+  it('ignores a browser name passed as target instead of failing schema validation', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'status', target: 'user-browser' } } });
+      expect(result.isError).toBeFalsy();
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).not.toHaveProperty('target');
+    } finally { await h.cleanup(); }
+  });
+
+  it('lets synthetic pointer work through when the backend declares pointer support', async () => {
+    const h = await makeHarness({ backendCapabilities: () => ({ ...caps(), pointer: true }) });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'act', targetId: 't1', request: { kind: 'drag', startRef: 'a', endRef: 'b' } } } });
+      expect(h.calls).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  it('still routes extract through the declarative DOM read and leaves other backends unaffected', async () => {
+    const h = await makeHarness({ backendCapabilities: caps });
+    try {
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'extract', targetId: 't1', extract: { fields: { title: 'h1' } } } } });
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]).toMatchObject({ action: 'act', request: { kind: 'evaluate', domRead: { kind: 'extract' } } });
+    } finally { await h.cleanup(); }
+    const open = await makeHarness({ backendCapabilities: () => ({}) });
+    try {
+      await open.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'screenshot', targetId: 't1' } } });
+      expect(open.calls).toHaveLength(1);
+    } finally { await open.cleanup(); }
+  });
+
+  it('refuses recipes that need guards, scripts or network capture on a backend without them', async () => {
+    const recipe: Recipe = {
+      id: 'guarded', match: ['example.test'], inputs: {},
+      steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        { action: 'extract', as: 'rows', guard: { url: 'https://example.test/' }, expect: { minCount: 1 }, extract: { fields: { title: 'h1' } } },
+      ],
+      output: '{{rows}}',
+    } as unknown as Recipe;
+    const h = await makeHarness({
+      backendCapabilities: caps,
+      getUserRecipes: async () => ({ recipes: new Map([[recipe.id, recipe]]), siteGuides: new Map(), version: 'v1' }),
+    });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'recipe', recipeId: 'guarded' } } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toContain('页面脚本能力');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
   });
 });

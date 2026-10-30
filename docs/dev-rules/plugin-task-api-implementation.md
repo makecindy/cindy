@@ -123,7 +123,7 @@ Session/Plan 仍独立检查。旧 Host 可能只隐藏 UI，依赖停用语义�
 
 | 入口 | 模型来源与复用 | 权限与结果 |
 | --- | --- | --- |
-| `tasks.create` | 显式 route → 插件任务设置 → 经验证的 callId 发起任务 → 当前新任务选择；保存准入后的完整 route | 可选 permissionMode；启用卡片时受其权限上限约束，隐藏时不读该上限；省略沿用设置，缺省 ask；返回普通任务及持久创建回执 |
+| `tasks.create` | 显式 route → 插件任务设置 → 经验证的 callId 发起任务 → 系统辅助模型链（同一供应商与模型先试 Pi 引擎，再试链上写明的引擎；先取 low／medium，都没有才用默认档）→ 当前新任务选择；保存准入后的完整 route | 可选 permissionMode；启用卡片时受其权限上限约束，隐藏时不读该上限；省略沿用设置，缺省 ask；返回普通任务及持久创建回执 |
 | `tasks.send` | 使用该任务当前 route，检查 revision 和当前可用性；不因新默认变化重建任务 | 复核插件归属与权限；结果使用逐输入 run 回执 |
 | `agent.errand` | 共用模型解析；无显式覆盖时优先保留已有专属任务的当前模型。配置冲突时只在新任务创建成功后替换映射，旧历史保留 | 旧权限边界、sessionKey、jobId 与结果取回协议保持兼容 |
 | `workspace.ensureSession` | 已有工作区入口照常复用；新建才使用插件设置／发起任务／当前新任务完整组合 | 目录仍经亲选或原有确认流程；只建入口、不运行 Agent |
@@ -183,7 +183,8 @@ Claude Code 适配层 `toSdkModelString` 会按目录窗口自动追加 `[1m]`�
 
 ## 已接入
 
-- `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel/setHidden`。
+- `capabilities/models/create/list/get/setModel/send/getRun/listRuns/readMessages/cancel/setHidden/archive`。
+- `archive({taskId})` 归档本插件自建的空闲本地任务（有执行中或排队输入时返回 `TASK_BUSY`），走与侧栏归档相同的 `patchSessionMetaInDb` 路径；可逆（用户可恢复），不提供删除。归档后的任务由「存储空间 → 数据库清理」按既有规则处理。
 - create 可传 `hidden:true`、`setHidden({taskId, hidden})` 切换，`get`/`list` 快照恒返回 `hidden` 布尔值；仅身份卡声明 `agent.hiddenTasks: true`（必须同时 `agent.tasks: true`）时可用，见下文「后台任务」。
 - create 可传 isolatedWorkspace:true，由宿主分配独立空作答目录；返回本任务 workingDir 与实际 permissionMode，按次选择不得超过用户授予插件的权限。
 - 默认创建用户可见的普通本地 Session（声明 hiddenTasks 后可在同一次 INSERT 中创建后台任务）；工作目录及权限来自用户配置，不接受插件传入绕过权限、任意目录或另一插件身份。普通任务创建前复用 Worker 的目录身份判据：配置路径必须仍为原规范路径，改链、缺失或非目录拒绝；异步解析后复核账号、tasks 批准及配置。缺省/isolatedWorkspace 仍由宿主分配目录，旧 errand 路径不变。旧别名配置没有原目标证据，不自动授权当前目标；这不解决校验后的目录置换窗口。
