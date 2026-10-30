@@ -1,4 +1,4 @@
-import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
+import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps, providerShareGuestPeer } from '@cindy/device-link';
 import type { RemoteAgentFastPolicy } from '@cindy/device-link';
 import { supportsSubscriptionFastPolicy } from '@cindy/model-providers';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../device-link/index.js';
@@ -8,6 +8,8 @@ import { captureProviderManagementScope } from './managementScope.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { readProviderGroup, listProviderGroups } from './store.js';
 import { groupFastPolicyStore } from './fastPolicyStore.js';
+import { checkProviderShareDelegation } from '../device-link/providerShareApi.js';
+import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 
 const eligible = (group: string) =>
   supportsSubscriptionFastPolicy(getActiveCatalog().providers.find((p) => p.id === group));
@@ -28,6 +30,28 @@ const targets = (group: string) => {
   ];
 };
 const syncing = new Map<string, Promise<void>>();
+const RETRY_INITIAL_MS = 5_000;
+const RETRY_MAX_MS = 5 * 60_000;
+interface TargetRetry {
+  delayMs: number;
+  retryAt: number;
+}
+let retryOwner: string | undefined;
+const retries = new Map<string, { revision: number; targets: Map<string, TargetRetry> }>();
+
+function retriesFor(group: string, revision: number): Map<string, TargetRetry> {
+  const owner = activeOwnerScopeKey();
+  if (retryOwner !== owner) {
+    retries.clear();
+    retryOwner = owner;
+  }
+  let state = retries.get(group);
+  if (state?.revision !== revision) {
+    state = { revision, targets: new Map() };
+    retries.set(group, state);
+  }
+  return state.targets;
+}
 
 async function send(
   device: string,
@@ -76,11 +100,28 @@ export async function receiveGroupFastPolicy(
   command: RemoteAgentFastPolicy,
 ): Promise<unknown> {
   const assertCurrent = captureProviderManagementScope();
+  const delegated = command.binding?.providerShareGuest;
+  let directTask: string | undefined;
+  if (delegated && command.binding) {
+    const guest = providerShareGuestPeer(delegated.shareId, delegated.memberId, delegated.guestDeviceId);
+    const self = getSelfDeviceId();
+    if (!self) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
+    // Prebind before M grants an executable task lease. Only the server-approved
+    // O may name this guest's task; an unrelated same-account device is not O.
+    const approved = await checkProviderShareDelegation({ ...delegated, executorDeviceId: self });
+    assertCurrent();
+    if (getSelfDeviceId() !== self || !approved.active || approved.ownerDeviceId !== origin
+      || !approved.expiresAt || approved.expiresAt <= Date.now()) {
+      throw new Error('[REMOTE_AGENT_INVALID] Provider-share Fast binding requires an active owner delegation');
+    }
+    directTask = hostSessionIdFor(guest, command.binding.sessionId);
+  }
   const result = await groupFastPolicyStore.receive(
     origin,
     command,
     getSelfDeviceId(),
     assertCurrent,
+    directTask,
   );
   await notifySubscriptionFastPolicyChanged();
   assertCurrent();
@@ -118,6 +159,7 @@ export async function bindGroupFastPolicy(input: {
   sessionId: string;
   controllerDeviceId?: string;
   relay?: string;
+  providerShareGuest?: { shareId: string; memberId: string; guestDeviceId: string };
 }): Promise<void> {
   if (!eligible(input.group)) return;
   const assertCurrent = captureProviderManagementScope();
@@ -136,6 +178,7 @@ export async function bindGroupFastPolicy(input: {
       sessionId: input.sessionId,
       ...(input.controllerDeviceId ? { controllerDeviceId: input.controllerDeviceId } : {}),
       ...(input.relay ? { relay: input.relay } : {}),
+      ...(input.providerShareGuest ? { providerShareGuest: input.providerShareGuest } : {}),
     },
   };
   if (input.deviceId) {
@@ -149,8 +192,10 @@ export async function bindGroupFastPolicy(input: {
       );
     } catch (error) {
       assertCurrent();
-      // Allowed-by-default groups retain compatibility with old executors. A prohibition requires explicit support.
-      if (!state.allowFast) throw error;
+      // A delegated direct task needs a durable per-task binding even while
+      // Fast is allowed, so a later group prohibition can reach this task.
+      // Legacy same-account relays retain allowed-by-default compatibility.
+      if (!state.allowFast || input.providerShareGuest) throw error;
     }
   } else {
     const self = getSelfDeviceId();
@@ -201,22 +246,40 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
       assertCurrent,
       true,
     );
+    assertCurrent();
     const active = new Set(destinations);
+    const retryTargets = retriesFor(group, state.revision);
+    for (const device of retryTargets.keys()) {
+      if (state.targets[device] === undefined || state.targets[device] === state.revision) {
+        retryTargets.delete(device);
+      }
+    }
     await Promise.allSettled(
       Object.entries(state.targets)
         .filter(([, ack]) => ack !== state.revision)
         .map(async ([device]) => {
+          const retry = retryTargets.get(device);
+          if (retry && performance.now() < retry.retryAt) return;
           const command = {
             group,
             revision: state.revision,
             allowFast: active.has(device) ? state.allowFast : true,
           };
-          if (device === LOCAL_TARGET) {
-            const self = getSelfDeviceId();
-            if (!self) throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
-            await receiveGroupFastPolicy(self, command);
-          } else await send(device, command, assertCurrent);
-          await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+          try {
+            if (device === LOCAL_TARGET) {
+              const self = getSelfDeviceId();
+              if (!self)
+                throw new Error('[REMOTE_AGENT_UNAVAILABLE] Computer identity is not ready');
+              await receiveGroupFastPolicy(self, command);
+            } else await send(device, command, assertCurrent);
+            await groupFastPolicyStore.acknowledge(group, device, state.revision, assertCurrent);
+            retryTargets.delete(device);
+          } catch (error) {
+            assertCurrent();
+            const delayMs = retry ? Math.min(retry.delayMs * 2, RETRY_MAX_MS) : RETRY_INITIAL_MS;
+            retryTargets.set(device, { delayMs, retryAt: performance.now() + delayMs });
+            throw error;
+          }
         }),
     );
     assertCurrent();
@@ -228,7 +291,7 @@ export function syncGroupFastPolicy(group: string): Promise<void> {
   return work;
 }
 
-/** Retry only unacknowledged policy changes; never reset a shared device-link connection. */
+/** Poll pending revisions; each failed target backs off without resetting shared links. */
 export function startGroupFastPolicySync(): () => void {
   const sync = () => {
     const outgoing = groupFastPolicyStore.outgoing();
@@ -249,5 +312,8 @@ export function startGroupFastPolicySync(): () => void {
   };
   const timer = setInterval(sync, 5_000);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    retries.clear();
+  };
 }

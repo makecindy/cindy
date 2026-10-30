@@ -34,10 +34,10 @@
  */
 
 import type { AgentKind } from '@cindy/maker-core';
-import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
-import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
+import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
@@ -219,6 +219,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     applyNow: boolean,
     assertSelectionCurrent?: () => void,
     beforeMutation?: () => Promise<void>,
+    pendingSelectionAccess?: ReturnType<typeof createSharedTaskPendingSelectionGuard>,
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -1515,7 +1516,18 @@ export function applyPendingAgentSwitchIfIdle(
     try {
       if (intent.sameAgentSelection) {
         if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
-        const result = await deps.selectSameAgentModel(sessionId, intent, true);
+        const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+        const access = sharedTask ? createSharedTaskPendingSelectionGuard(sharedTask, sessionId) : undefined;
+        access?.();
+        // #7825: the guest triggers a send, but the choice above came from the
+        // host registry. Apply only that choice under host authority; retain the
+        // captured send fence through preflight and admit before mutation. Keep
+        // this admission separate from the guest invoke's settings transaction.
+        const result = await (sharedTask
+          ? runOutsideDeviceLinkInvokeContext(() => deps.selectSameAgentModel!(
+              sessionId, intent, true, undefined, undefined, access,
+            ))
+          : deps.selectSameAgentModel(sessionId, intent, true));
         if (result.deferred || result.superseded) {
           throw new Error('model selection could not be applied before send');
         }

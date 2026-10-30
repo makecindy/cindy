@@ -3,11 +3,13 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { scanPage, buildPage } from './build.mjs';
+import { adhocPage } from './registry.mjs';
 
 const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const harness = fileURLToPath(new URL('./harness/index.tsx', import.meta.url));
@@ -51,10 +53,47 @@ async function entry(name, source) {
 }
 
 before(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-ui-selftest-'));
+  dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'cindy-ui-selftest-')));
 });
 after(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+// GIF encoding now imports a Vite worker. Guard the real worker runtime, transfer
+// semantics and source tracking; replacing it with a synchronous stub would hide
+// precisely the scheduling boundary the recording tests need. Explicit E2E tier.
+test('bundles a real worker and tracks its transitive sources for compare and changed scans', async () => {
+  const value = path.join(dir, 'worker-value.ts');
+  const worker = path.join(dir, 'sample.worker.ts');
+  await writeFile(value, 'export const value = 17;');
+  await writeFile(worker, `import { value } from './worker-value';
+self.onmessage = ({ data }) => {
+  if (typeof document !== 'undefined') throw new Error('Worker ran on the page');
+  data[0] += value;
+  self.postMessage(data, [data.buffer]);
+};`);
+  const file = await entry('worker', `import SampleWorker from './sample.worker.ts?worker';
+const worker = new SampleWorker();
+const input = new Uint8Array([3]);
+await new Promise<void>((resolve, reject) => {
+  worker.onerror = reject;
+  worker.onmessage = ({ data }) => { worker.terminate(); data[0] === 20 ? resolve() : reject(new Error('Wrong worker result')); };
+  worker.postMessage(input, [input.buffer]);
+  if (input.byteLength !== 0) reject(new Error('Input was not transferred'));
+});
+mountPage({ render: () => <div>Worker finished</div> });`);
+  const definition = adhocPage(file);
+  const scanned = await scanPage(definition);
+  assert.ok(scanned.inputs.includes(value));
+  const bundle = await buildPage(definition);
+  const alternate = await buildPage(definition, {
+    has: file => file === value,
+    get: file => file === value ? 'export const value = 18;' : undefined,
+    resolve: () => undefined,
+  });
+  assert.notEqual(bundle.fingerprints.get(value), alternate.fingerprints.get(value));
+  assert.notEqual(bundle.bundleDigest, alternate.bundleDigest);
+  assert.equal((await run(['--entry', file, '--theme', 'light', '--json'])).code, 0);
 });
 
 test('one run reports each failure kind on its own variant', async () => {
@@ -178,3 +217,18 @@ test(
     assert.equal(leftoverRunners(), '');
   },
 );
+
+// UI integration tier: Kimi's quota warning uses the existing accessible-only
+// label. The audit must distinguish it from an actually clipped visible label.
+test('clipping audit ignores accessible-only text but retains visible clipping warnings', async () => {
+  const file = await entry('accessible-clipping', `mountPage({render:()=> <main>
+    <span className="sr-only">Accessible quota warning</span>
+    <span style={{display:'block',width:20,overflow:'hidden',whiteSpace:'nowrap'}}>Visible quota warning clipped</span>
+  </main>});`);
+  const result = await run(['--entry', file, '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  const warnings = report.variants.flatMap(variant => variant.warnings);
+  assert.ok(warnings.some(warning => warning.includes('Visible quota warning clipped')));
+  assert.ok(!warnings.some(warning => warning.includes('Accessible quota warning')));
+});

@@ -65,6 +65,8 @@ afterEach(() => {
   resetSessionStartingStoreForTests();
   remoteProjectsStore.__resetPinnedOriginsForTest();
   view.mode = 'text';
+  // The section's collapse is remembered; each case starts expanded.
+  localStorage.clear();
 });
 
 describe('pinned section running indicator', () => {

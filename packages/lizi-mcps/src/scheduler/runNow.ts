@@ -24,7 +24,11 @@ export function registerScheduleRunNowTool(
       id: z.string().min(1).describe('要立即触发的 schedule id'),
       ...writeDeviceShape,
     },
-    handler: async ({ id, device }) =>
-      runOnDevice(deps, device, (scheduler) => scheduler.runNow(id), { op: 'run-now', args: [id] }),
+    handler: async ({ id, device }) => {
+      const expected = deps.getApprovedScheduleGuard?.();
+      return runOnDevice(deps, device,
+        (scheduler) => scheduler.runNow(id, expected ? { expectedSchedule: expected } : undefined),
+        { op: 'run-now', args: expected ? [id, { expectedSchedule: expected }] : [id] });
+    },
   });
 }

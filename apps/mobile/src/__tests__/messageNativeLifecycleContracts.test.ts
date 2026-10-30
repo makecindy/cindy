@@ -312,11 +312,12 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     // iOS 部分选择:RN Text 底层是 UILabel 只能整块拷贝(facebook/react-native#13938),
     // 可选中块在 iOS 换用 react-native-uitextview(真 UITextView,系统选择手柄);
     // Android 维持 AppText selectable(本身有手柄)。嵌套 span 必须同为 UITextView 家族。
-    expect(source).toContain("from 'react-native-uitextview'");
-    expect(source).toContain('function MarkdownSelectableText({');
-    expect(source).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
-    expect(source).toContain('uiTextView');
-    expect(source).toContain('function MarkdownSelectableSpan(');
+    const selectableTextSource = readFileSync(resolve(process.cwd(), 'src/session/MarkdownSelectableText.tsx'), 'utf8');
+    expect(selectableTextSource).toContain("from 'react-native-uitextview'");
+    expect(selectableTextSource).toContain('function MarkdownSelectableText({');
+    expect(selectableTextSource).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
+    expect(selectableTextSource).toContain('uiTextView');
+    expect(selectableTextSource).toContain('function MarkdownSelectableSpan(');
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 

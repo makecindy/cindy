@@ -113,6 +113,7 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     retirement: g.retirement,
     taskCapabilityApproved: g.taskCapabilityApproved,
     targetCapabilityApproved: g.targetCapabilityApproved,
+    delegationCapabilityApproved: g.delegationCapabilityApproved,
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };

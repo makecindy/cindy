@@ -53,7 +53,7 @@ function isNetworkCapableTargetType(type: unknown): boolean {
   return typeof type === 'string' && NETWORK_CAPABLE_TARGET_TYPES.has(type);
 }
 
-async function fetchBrowserWebSocketUrl(cdpHttpUrl: string): Promise<string> {
+export async function fetchBrowserWebSocketUrl(cdpHttpUrl: string): Promise<string> {
   const base = new URL(cdpHttpUrl);
   if (
     base.protocol !== 'http:'
@@ -300,6 +300,46 @@ async function confirmCdpGone(cdpHttpUrl: string): Promise<boolean> {
  */
 export async function isManagedBrowserGone(cdpHttpUrl: string): Promise<boolean> {
   return await confirmCdpGone(cdpHttpUrl);
+}
+
+/**
+ * Read the command line of the Chrome answering on a loopback CDP endpoint, without touching it.
+ * Null when the endpoint does not answer in time.
+ */
+export async function readCdpBrowserCommandLine(cdpHttpUrl: string): Promise<string | null> {
+  let wsUrl: string;
+  try {
+    wsUrl = await fetchBrowserWebSocketUrl(cdpHttpUrl);
+  } catch {
+    return null;
+  }
+  const socket = new WebSocket(wsUrl, { handshakeTimeout: COMMAND_TIMEOUT_MS });
+  const commandLine = await new Promise<string | null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), COMMAND_TIMEOUT_MS);
+    const finish = (value: string | null) => {
+      clearTimeout(timer);
+      resolve(value);
+    };
+    socket.once('open', () => {
+      socket.send(JSON.stringify({ id: 1, method: 'SystemInfo.getInfo' }), (error) => {
+        if (error) finish(null);
+      });
+    });
+    socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(Buffer.isBuffer(data) ? data.toString('utf8') : String(data)) as CdpResponse;
+        if (message.id !== 1) return;
+        const value = (message.result as { commandLine?: unknown } | undefined)?.commandLine;
+        finish(typeof value === 'string' ? value : null);
+      } catch {
+        // Ignore unrelated events.
+      }
+    });
+    socket.once('close', () => finish(null));
+    socket.once('error', () => finish(null));
+  });
+  try { socket.close(); } catch { /* best effort */ }
+  return commandLine;
 }
 
 export async function closeAdoptedManagedBrowser(

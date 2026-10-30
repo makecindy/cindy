@@ -220,6 +220,14 @@ export function getDesktopMcpToolApprovalPolicy(
     const args = progressive ? readJsonObject(params?.args) : params;
     if ((name === 'browser' && args?.action === 'recipe')
       || (progressive && (!name || !args))) return 'prompt-each-time';
+    // Switching to the user's own browser hands the agent their signed-in Chrome/Edge tabs; a page could
+    // ask the agent to do it. The switch goes through the session's approval like a recipe; the user
+    // choosing My browser in Settings needs no tool call and so no approval.
+    if (name === 'browser' && args?.action === 'setBackend' && args.backend === 'user-browser')
+      return 'prompt-each-time';
+    // Uploading hands a local file to a website. Files are not filtered by name (2026-10-30), so each
+    // upload goes through the task's approval: Ask confirms, Auto reviews, Full Access proceeds.
+    if (name === 'browser' && args?.action === 'upload') return 'prompt-each-time';
   }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with

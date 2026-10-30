@@ -6,6 +6,7 @@ import {
   type GitSnapshotCoordinatorDeps,
 } from '../git-snapshot/gitSnapshotCoordinator';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
+import { SnapshotCaptureBudgetExceededError } from '../git-snapshot/snapshotFileFilter';
 import type {
   CreateShadowSavepointInput,
   ShadowSavepointResult,
@@ -259,6 +260,9 @@ describe('GitSnapshotCoordinator', () => {
     expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
     expect(deps.createShadowSavepoint).toHaveBeenNthCalledWith(1, '/repo', {
       sessionId: 's1',
+      captureBudget: expect.objectContaining({
+        maxFiles: expect.any(Number), maxTotalBytes: expect.any(Number), timeoutMs: expect.any(Number),
+      }),
       label: '本轮开始时的工作区基线',
       meta: { kind: 'turn-start', anchor: 'msg-1' },
     });
@@ -274,6 +278,7 @@ describe('GitSnapshotCoordinator', () => {
       baselineCommit: 'hash1',
     });
     expect(afterEditInput.skipIfTreeEquals).toBe('hash1');
+    expect(afterEditInput.captureBudget).toEqual(vi.mocked(deps.createShadowSavepoint).mock.calls[0][1].captureBudget);
     expect(typeof afterEditInput.label).toBe('function');
     expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
@@ -424,6 +429,25 @@ describe('GitSnapshotCoordinator', () => {
       label: 'File rewind gap: turn-start baseline unavailable',
       meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
     });
+  });
+
+  // #6901 unit: a budget failure followed by Stop never reaches onTurnEnd.
+  // Existing baseline-failure coverage only exercised completed turns.
+  it('fences an over-budget baseline before dispatch even when the turn is later aborted', async () => {
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'pi' }),
+      createShadowSavepoint: vi.fn().mockRejectedValueOnce(new SnapshotCaptureBudgetExceededError('file-count'))
+        .mockResolvedValue(savepointResult('recovered')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+    await coordinator.onTurnStart('s1');
+    expect(deps.createShadowMarker).toHaveBeenCalledOnce();
+    expect(vi.mocked(deps.createShadowMarker).mock.calls[0][1].meta.kind).toBe('rewind-blocked');
+    coordinator.onTurnAbort('s1');
+    expect(coordinator.hasPendingTurnStart('s1')).toBe(false);
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+    expect(deps.createShadowMarker).toHaveBeenCalledOnce();
   });
 
   it('appends a rewind gap marker when the turn introduces newly filtered paths', async () => {

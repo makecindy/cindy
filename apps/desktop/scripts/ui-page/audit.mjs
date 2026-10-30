@@ -22,6 +22,11 @@ export function pageAudit() {
       continue;
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.opacity === '0') continue;
+    // Standard screen-reader-only text is intentionally clipped, not visually truncated.
+    // Keep auditing ordinary clipped labels, including elements with an sr-only class
+    // that is not actually hidden by CSS.
+    if (style.position === 'absolute' && parseFloat(style.width) <= 1
+      && parseFloat(style.height) <= 1 && style.clip === 'rect(0px, 0px, 0px, 0px)') continue;
     const overflowX = el.scrollWidth > el.clientWidth + 1 && /hidden|clip/.test(style.overflowX);
     const clamped = style.webkitLineClamp && style.webkitLineClamp !== 'none';
     const overflowY =

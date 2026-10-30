@@ -40,6 +40,8 @@ import type {
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
 import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
+import { GroupMaskMessageAvatar } from './GroupMaskControls';
+import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupMentionCard, botGroupMentionMember } from './BotGroupMentionCard';
 import { splitBotGroupMentionSegments } from './botGroupMentions';
@@ -321,8 +323,12 @@ export function botGroupTaskOwned(authorBotId: string | null, members: readonly 
 }
 
 function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
+  const mask = useGroupMask();
   const { t } = useTranslation();
-  const { message, continued, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  const { message, authorName, members, mentionLabels, locale, shareScope, sharing } = props;
+  const attribution = message.maskAttribution ? { self: maskIdentity(message.maskAttribution.self), companion: maskIdentity(message.maskAttribution.companion) }
+    : mask?.attributions[message.id];
+  const continued = props.continued && !attribution;
   const rowProps = { message, highlighted: props.highlighted, focusable: props.focusable, entering: props.entering };
 
   if (message.kind === 'round-end') {
@@ -444,6 +450,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
             {message.outbox ? <BotGroupOutboxStatus entry={message.outbox} readOnly={props.readOnly} /> : null}
             {message.pending && !message.outbox ? <span className="sr-only">{t('bots.groupChat.timeline.sending')}</span> : null}
           </div>
+          {attribution ? <div className="ml-2.5 w-8 shrink-0"><GroupMaskMessageAvatar messageId={message.id} attribution={attribution} /></div> : null}
         </article>
       </Row>
     );
@@ -499,7 +506,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               {clock}
             </time>
           ) : (
-            <BotAvatar bot={props.avatar ?? { name: authorName, avatar: null, avatarColor: null }} size="sm" />
+            attribution ? <GroupMaskMessageAvatar messageId={message.id} attribution={attribution} />
+              : <BotAvatar bot={props.avatar ?? { name: authorName, avatar: null, avatarColor: null }} size="sm" />
           )}
         </div>
         <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
@@ -587,7 +595,9 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
   return (
     <>
       {sending && slow ? (
-        <p role="status" className="select-none text-12 leading-[1.33] text-[var(--text-tertiary)]">
+        // Pending opacity already conveys sending. Keep the delayed announcement
+        // out of layout so a receipt cannot add/remove a line under the bubble.
+        <p role="status" className="sr-only">
           {t('bots.groupChat.outbox.sending')}
         </p>
       ) : null}

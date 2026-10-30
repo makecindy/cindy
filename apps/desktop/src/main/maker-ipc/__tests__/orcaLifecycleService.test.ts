@@ -1,15 +1,10 @@
 import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorization.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { isPluginTaskPermissionAllowed, PluginTaskError } from '../pluginTaskService.js';
+import { PluginTaskError } from '../pluginTaskService.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 // The lifecycle unit owns no credential/runtime I/O.
 vi.mock('../../maker-host/codex-credential-switch.js', () => ({isCredentialModeSwitchBusyError: () => false}));
@@ -167,7 +162,7 @@ describe('OrcaLifecycleService', () => {
         finally { insideSend = false; }
       } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() }, orcaRemoteWorkers: { runtime: { isRemote: () => false } } };
       const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-      deps.sendWorkerReadyPlaceholder = new Function('hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(hasAcceptedUserTaskInput, ...Object.values(bindings));
+      deps.sendWorkerReadyPlaceholder = new Function(...Object.keys(bindings), js)(...Object.values(bindings));
       deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });
       const result = action.startsWith('create')
         ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', ...(action.endsWith('task') ? { initialTask: 'Evaluate' } : {}) })
@@ -1149,137 +1144,59 @@ describe('host-scoped Worker permissions', () => {
 });
 
 
-describe('retained tasks after explicit plugin uninstall', () => {
+describe('Orca task authority is independent of task creator', () => {
   const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
-  const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='), source.indexOf('  const orcaWorkerCreationService ='));
-  const callback = source.slice(source.indexOf('    getWorkerPermissionModeOverride: async (leadSessionId) => {'), source.indexOf('    setWorkerPermissionMode: applyWorkerPermissionModePreference,'));
-  const js = ts.transpileModule(`${helper}\nreturn ({${callback}}).getWorkerPermissionModeOverride;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  // #6399: ordinary task authority was absent from the plugin capture used by
-  // lifecycle entry points. Revoke during team lookup; no creation may occur (unit).
-  it.each([
-    { action: 'startTeam', phase: 'lookup' }, { action: 'createWorker', phase: 'lookup' },
-    { action: 'startTeam', phase: 'role' }, { action: 'createWorker', phase: 'created' },
-  ])('rejects $action when owner input expires during $phase', async ({ action, phase }) => {
+  const helper = source.slice(source.indexOf('  const captureOrcaTaskAuthority ='), source.indexOf('  const captureOrcaDeliveryAuthority ='));
+  const js = ts.transpileModule(`${helper}\nreturn captureOrcaTaskAuthority;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  function capture(currentEpoch: () => object) {
+    return new Function('captureTaskActionGuard', 'getCurrentDbClientSnapshot', 'PluginTaskError', js)(
+      captureTaskActionGuard, currentEpoch, PluginTaskError,
+    ) as (sessionId: string) => Promise<{ assertCurrent: () => Promise<void> }>;
+  }
+
+  it.each(['startTeam', 'createWorker'] as const)('rechecks ordinary task action authority during %s', async action => {
     let current = true;
     const epoch = { client: {} };
-    const bindings = {
-      getCurrentDbClientSnapshot: () => epoch, PluginTaskError,
-      maker: { getSession: () => null }, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      createPluginTaskStore: () => ({ get: async () => undefined }),
-    };
-    const override = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings), js)(
-      captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
     const { deps, service } = createDeps({
-      getWorkerPermissionModeOverride: override,
-      getActiveTeamByLead: vi.fn(async () => { if (phase === 'lookup') current = false; return action === 'createWorker' ? activeTeam() : null; }),
+      getWorkerPermissionModeOverride: id => capture(() => epoch)(id),
+      getActiveTeamByLead: vi.fn(async () => { current = false; return action === 'createWorker' ? activeTeam() : null; }),
     });
-    if (phase === 'role') deps.setSessionOrcaRole = vi.fn(async () => { current = false; });
-    if (phase === 'created') deps.createWorkerInTeam = vi.fn(async () => { current = false; return createdWorker(); });
     const decision = await admitTaskAction({
       sessionId: 'lead-1', server: 'cindy_orca', tool: action === 'startTeam' ? 'start_team' : 'create_worker', args: {},
     }, { key: 'owner', ownerInput: true, delegated: false,
       assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); } });
     if (!decision.ok || !decision.run) throw new Error('missing admission');
-    const result = decision.run(async () => action === 'startTeam'
-      ? service.startTeam({ leadSessionId: 'lead-1' })
-      : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' }));
-    if (phase === 'lookup') {
-      await expect(result).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
-      expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
-      expect(deps.createActiveTeam).not.toHaveBeenCalled();
-      expect(deps.setSessionOrcaRole).not.toHaveBeenCalled();
+    if (action === 'startTeam') {
+      await expect(decision.run(() => service.startTeam({ leadSessionId: 'lead-1' })))
+        .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
     } else {
-      expect(await result).toMatchObject({ ok: false });
-      if (phase === 'role') expect(deps.markTeamEnded).toHaveBeenCalledWith('team-1', 'failed');
-      else expect(deps.rollbackCreatedWorker).toHaveBeenCalled();
+      await expect(decision.run(() => service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' })))
+        .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
     }
-    expect(deps.setLeadVendorOptions).not.toHaveBeenCalled();
-    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
-    expect(deps.sendWorkerReadyPlaceholder).not.toHaveBeenCalled();
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
+    expect(deps.createActiveTeam).not.toHaveBeenCalled();
   });
-  it.each(['direct','queued'].flatMap(delivery=>['plugin','human-after','plugin-after','none','cleared','forged','rewound','child','manual-retry','unknown'].map(history=>({delivery,history}))))(
-    'retains the source across $delivery automatic Worker replies after $history', async({delivery,history})=>{
-      const sqlite=new Database(':memory:');
-      try {
-        sqlite.exec('CREATE TABLE sessions(id TEXT, cleared_at INTEGER); CREATE TABLE messages(client_id TEXT, session_id TEXT, role TEXT, created_at INTEGER, agent_meta TEXT, rewind_at INTEGER);');
-        const sessions=sqliteTable('sessions',{id:text('id'),clearedAt:integer('cleared_at')});
-        const messages=sqliteTable('messages',{clientId:text('client_id'),sessionId:text('session_id'),role:text('role'),createdAt:integer('created_at'),agentMeta:text('agent_meta'),rewindAt:integer('rewind_at')});
-        sqlite.prepare('INSERT INTO sessions VALUES (?,?)').run('lead',history==='cleared'?300:0);
-        const insert=sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)');
-        const add=(id:string,at:number,meta:object,rewind:number|null=null)=>insert.run(id,'lead','user',at,JSON.stringify(meta),rewind);
-        if(['manual-retry','unknown'].includes(history))add('old-human',50,{delivery:'turn',autoReviewUserText:'Earlier task'});
-        if(history!=='none') add('plugin-task:run',100,{delivery:'turn'},history==='manual-retry'?250:null);
-        if(['manual-retry','unknown'].includes(history))add(history,300,{delivery:'turn'});
-        if(['human-after','plugin-after','rewound','child'].includes(history))add('human',200,{delivery:'turn',autoReviewUserText:'My new task',...(history==='child'?{parentUuid:'child'}:{})},history==='rewound'?250:null);
-        if(history==='plugin-after')add('plugin-task:run',250,{delivery:'turn'});
-        if(history==='forged')add('fake-human',200,{delivery:'turn',origin:{kind:'desktop'}});
-        add('worker-reply',400,{delivery:'turn',origin:{kind:'orca'}});
-        const epoch={client:{drizzle:drizzle(sqlite)}};
-        const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,sessions,messages,and,desc,eq,isNull,sql,
-          maker:{getSession:()=>({isTurnRunning:()=>true})},inputCoordinator:{getAcceptedInputProvenance:()=>delivery==='queued'?{clientId:'worker-reply',originKind:'orca'}:null},
-          createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:'{"ownershipRevoked":true}'}})};
-        const override=new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
-        if(history==='human-after')await expect(override('lead')).resolves.toMatchObject({permissionMode:undefined});
-        else await expect(override('lead')).rejects.toMatchObject({code:'PERMISSION_DENIED'});
-      } finally {sqlite.close();}
-    });
-  it.each(['plugin','auto-retry','human','manual-retry','idle'].flatMap(input=>['revoked','disabled','ask','plan','healthy'].map(state=>({input,state}))))(
-    'keeps $input source distinct from $state task ownership',async({input,state})=>{
-      const epoch={client:{}};
-      const active=input==='idle'?null:input==='plugin'?{clientId:'plugin-task:run'}:input==='human'?{clientId:'human',authoredText:'Continue my task'}:{clientId:'retry',retrySourceClientId:'plugin-task:run',autoResume:input==='auto-retry'};
-      const bindings={getCurrentDbClientSnapshot:()=>epoch,PluginTaskError,isPluginTaskPermissionAllowed,
-        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>active},
-        createPluginTaskStore:()=>({get:async(id:string)=>id==='run'?{operation:'send',targetId:'lead',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}:{operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:state==='revoked'})}}),
-        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:state==='ask'?'default':'auto',planModeEnabled:state==='plan'})}),
-        isPluginTaskAuthorized:()=>state!=='disabled',getPluginTaskDefaults:()=>({permissionMode:'auto'})};
-      const override=new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
-      const ordinary=state==='revoked'&&['human','idle'].includes(input);
-      if(state==='healthy'||ordinary)await expect(override('lead')).resolves.toMatchObject({permissionMode:ordinary?undefined:'auto'});
-      else await expect(override('lead')).rejects.toThrow();
-    });
-  it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('requires an active plugin task outside Plan Mode for %s', async action => {
-    for (const {status,planModeEnabled} of [{status:'active',planModeEnabled:false},{status:'archived',planModeEnabled:false},{status:'active',planModeEnabled:true}]) {
-      const epoch = { client: {} };
-      const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, isPluginTaskPermissionAllowed,
-        maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-        createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: '{}' }) }),
-        pluginTaskServiceForCurrentOwner: () => ({ get: async () => ({ status, permissionMode: 'auto', planModeEnabled }) }),
-        isPluginTaskAuthorized: () => true, getPluginTaskDefaults: () => ({ permissionMode: 'auto' }),
-      };
-      const override = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(callbacks));
-      const { deps, service } = createDeps({ getWorkerPermissionModeOverride: override,
-        getActiveTeamByLead: vi.fn(async () => action === 'createWorker' ? activeTeam() : null),
-      });
-      const result = action === 'enableTeam' ? service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'worker', label: 'sample' })
-        : action === 'startTeam' ? service.startTeam({ leadSessionId: 'lead-1' })
-        : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' });
-      if (status === 'active' && !planModeEnabled) await expect(result).resolves.toMatchObject({ ok: true });
-      else {
-        await expect(result).rejects.toMatchObject({ code: planModeEnabled ? 'PERMISSION_DENIED' : 'TASK_BUSY' });
-        expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
-        expect(deps.createActiveTeam).not.toHaveBeenCalled();
-      }
-    }
-  });
-  it.each(['enableTeam', 'startTeam', 'createWorker'] as const)('uses ordinary permissions for %s with a retained revoked receipt', async action => {
-    const epoch = { client: {} }, get = vi.fn(async () => { throw new PluginTaskError('TASK_NOT_FOUND', 'Revoked'); });
-    const callbacks = { getCurrentDbClientSnapshot: () => epoch, PluginTaskError, isPluginTaskPermissionAllowed,
-      maker: {getSession:()=>null}, inputCoordinator: { getAcceptedInputProvenance: () => null },
-      createPluginTaskStore: () => ({ get: async () => ({ operation: 'create', pluginId: 'plugin', payload: JSON.stringify({ ownershipRevoked: true }) }) }),
-      pluginTaskServiceForCurrentOwner: () => ({ get }), isPluginTaskAuthorized: () => false,
-      getPluginTaskDefaults: () => ({ permissionMode: 'auto' }),
-    };
-    const override = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(callbacks), js)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(callbacks));
+
+  it('uses task preferences for Worker creation', async () => {
+    const epoch = { client: {} };
     const { deps, service } = createDeps({
-      getWorkerPermissionModeOverride: override,
+      getWorkerPermissionModeOverride: id => capture(() => epoch)(id),
       getWorkerPermissionMode: () => 'bypassPermissions',
-      getActiveTeamByLead: vi.fn(async () => action === 'createWorker' ? activeTeam() : null),
+      getActiveTeamByLead: async () => activeTeam(),
     });
-    const result = action === 'enableTeam' ? service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', role: 'worker', label: 'sample' })
-      : action === 'startTeam' ? service.startTeam({ leadSessionId: 'lead-1' })
-      : service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' });
-    await expect(result).resolves.toMatchObject({ ok: true });
-    expect(get).not.toHaveBeenCalled();
-    if (action !== 'startTeam') expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function), expect.any(Function));
+    await expect(service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function), expect.any(Function),
+    );
+  });
+
+  it('expires on account change', async () => {
+    const epoch = { client: {} };
+    let current: object = epoch;
+    const authority = await capture(() => current)('lead-1');
+    current = { client: {} };
+    await expect(authority.assertCurrent()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 });

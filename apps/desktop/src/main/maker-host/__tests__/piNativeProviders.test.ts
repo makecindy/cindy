@@ -276,6 +276,12 @@ describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
         compat: {
           requiresReasoningContentOnAssistantMessages: true,
           sendSessionAffinityHeaders: true,
+          // The loopback Gateway URL defeats Pi's deepseek.com detection. Without the exact
+          // DeepSeek row, V4.1 Flash sent `developer`, `max_completion_tokens` and no
+          // `thinking` toggle, so "thinking off" stayed on.
+          thinkingFormat: 'deepseek',
+          supportsDeveloperRole: false,
+          maxTokensField: 'max_tokens',
         },
       });
     }
@@ -2845,7 +2851,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       compat: id === 'deepseek-v4-pro' ? {
         supportsDeveloperRole: false, supportsStore: false,
         maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
-        thinkingFormat: 'deepseek',
+        thinkingFormat: 'deepseek', supportsStrictMode: true, supportsMidConvoSystemMessages: true,
       } : { supportsDeveloperRole: false },
     });
   });

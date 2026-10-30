@@ -132,7 +132,7 @@ export interface NetworkSlotDeps {
    * instanceKey 绑定 + TTL + 单次消费;无效原因不分类统一 null,不给探测空间)。
    * 文件字节经 read() 闭包按需读盘,networkSlot 保持零 fs 依赖。
    */
-  takeDirDeposit(instanceKey: string, token: string): {
+  takeDirDeposit(instanceKey: string, token: string, callId?: string): {
     files: Array<{ relPath: string; size: number; read(): Promise<Uint8Array> }>;
     totalBytes: number;
   } | null;
@@ -775,7 +775,19 @@ export class GhostNetworkSlot {
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
    */
-  async handleFetchRequest(instanceKey: string, payload: unknown): Promise<GhostPipeFetchResult> {
+  /** Private Node bridge only: the bearer never enters the browser pipe. */
+  async handleAuthenticatedNodeFetch(instanceKey: string, payload: Record<string, unknown>,
+    authorization: string, assertCurrent: () => void, signal: AbortSignal): Promise<GhostPipeFetchResult> {
+    if (!/^Bearer [A-Za-z0-9._~+\/=-]{1,8192}$/.test(authorization))
+      return { ok: false, message: 'NODE_AUTH_INVALID' };
+    if (payload.method !== 'POST' || !payload.uploadDir || payload.upload !== undefined || payload.body !== undefined)
+      return { ok: false, message: 'NODE_AUTH_UPLOAD_REQUIRED' };
+    return this.handleFetchRequest(instanceKey, payload, { authorization, assertCurrent, signal });
+  }
+
+  async handleFetchRequest(instanceKey: string, payload: unknown, nodeAuth?: {
+    authorization: string; assertCurrent(): void; signal: AbortSignal;
+  }): Promise<GhostPipeFetchResult> {
     const p = payload as {
       url?: unknown;
       method?: unknown;
@@ -1086,6 +1098,8 @@ export class GhostNetworkSlot {
       connectionHosts.includes(hostname);
     const hostAllowed = (hostname: string): boolean =>
       hostDeclared(hostname) || hasLiveAgentAuthorization();
+    if (nodeAuth && (!net || !declaredHosts.some(pattern => ghostNetworkHostMatches(pattern, url.hostname))))
+      return { ok: false, message: 'NODE_AUTH_HOST_NOT_DECLARED' };
     if (!hostAllowed(url.hostname)) {
       const declared = [...declaredHosts, ...connectionHosts];
       return {
@@ -1110,12 +1124,16 @@ export class GhostNetworkSlot {
 
     this.inflight.set(instanceKey, inflight + 1);
     const controller = new AbortController();
+    const abortNode = () => controller.abort();
+    nodeAuth?.signal.addEventListener('abort', abortNode, { once: true });
+    if (nodeAuth?.signal.aborted) controller.abort();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
     let holdingMediaGate = false;
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
-      const assertStillValid = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
+      const hostGuard = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
+      const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); };
       assertStillValid();
       const inject0 = await this.injectSecrets(
         instanceKey, declaredSecrets, connectionDecls, url.hostname, declaredHosts, requestHeaders, authAccount,
@@ -1154,7 +1172,7 @@ export class GhostNetworkSlot {
         }
         this.mediaReadsInflight += 1;
         holdingMediaGate = true;
-        const built = await this.buildDirUploadBody(instanceKey, uploadDir);
+        const built = await this.buildDirUploadBody(instanceKey, uploadDir, nodeAuth ? requestCallId : undefined);
         if ('error' in built) return { ok: false, message: built.error };
         body = built.body;
         deleteHeaderVariants(requestHeaders, 'Content-Type');
@@ -1168,7 +1186,7 @@ export class GhostNetworkSlot {
       // 降级成 GET,仍不得在 401 后重放最初的副作用请求。
       let response: Response | null = null;
       const originalRequestMethod = method;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < (nodeAuth ? 1 : 2); attempt++) {
         assertStillValid();
         if (attempt > 0) {
           this.invalidateExchangedTokens(instanceKey, declaredSecrets);
@@ -1256,6 +1274,11 @@ export class GhostNetworkSlot {
               };
             }
           }
+          if (nodeAuth) {
+            assertStillValid();
+            deleteHeaderVariants(hopHeaders, 'Authorization');
+            hopHeaders.Authorization = nodeAuth.authorization;
+          }
           const fetchInit = {
             method: currentMethod,
             headers: hopHeaders,
@@ -1289,6 +1312,7 @@ export class GhostNetworkSlot {
           responseConnectionInjected = currentConnectionInjected;
           responseMethod = currentMethod;
           if (![301, 302, 303, 307, 308].includes(response.status)) break;
+          if (nodeAuth) { await response.body?.cancel(); return { ok: false, message: 'NODE_AUTH_REDIRECT_BLOCKED' }; }
           const location = response.headers.get('location');
           if (!location) break; // 3xx 无 Location:按普通响应回给意识
           if (hop === MAX_REDIRECTS) {
@@ -1540,7 +1564,7 @@ export class GhostNetworkSlot {
       };
     } catch (err) {
       const aborted = controller.signal.aborted;
-      const message = aborted
+      const message = nodeAuth ? (aborted ? 'NODE_AUTH_REQUEST_ABORTED' : 'NODE_AUTH_REQUEST_FAILED') : aborted
         ? `请求超时(${timeoutMs}ms)`
         : err instanceof Error ? err.message : String(err);
       // 错误消息可能带 URL(含 query),日志只记 host,消息本身回给沙箱前不动
@@ -1549,6 +1573,7 @@ export class GhostNetworkSlot {
       });
       return { ok: false, message: `请求失败:${message}` };
     } finally {
+      nodeAuth?.signal.removeEventListener('abort', abortNode);
       clearTimeout(timer);
       await Promise.allSettled(guardedFetchReleases.map((release) => release()));
       if (holdingMediaGate) this.mediaReadsInflight -= 1;
@@ -1965,8 +1990,11 @@ export class GhostNetworkSlot {
       fileFieldPrefix: string;
       fileField?: string;
     },
+    callId?: string,
   ): Promise<{ body: Uint8Array; boundary: string } | { error: string }> {
-    const deposit = this.deps.takeDirDeposit(instanceKey, uploadDir.token);
+    const deposit = callId === undefined
+      ? this.deps.takeDirDeposit(instanceKey, uploadDir.token)
+      : this.deps.takeDirDeposit(instanceKey, uploadDir.token, callId);
     if (!deposit) {
       return { error: '目录过户票据无效(不存在 / 已使用 / 已过期)——请让主 agent 重新经 ghost_call 的 dir 参数过户目录' };
     }

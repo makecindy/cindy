@@ -447,9 +447,46 @@ describe('GhostFsSlot', () => {
     }
     expect(await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'read', root: 'data', path: 'ghost.txt',
-    })).toMatchObject({ ok: false });
+    })).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
     const l = await slot.handleFsRequest(GHOST_ID, { type: 'fs-request', op: 'list', root: 'data' });
     expect(l).toMatchObject({ ok: true, entries: [] });
+  });
+
+  // Integration: the task plugin must distinguish a fresh ledger from unreadable storage.
+  it('data:missing ledger returns NOT_FOUND but permission errors never indicate an empty ledger', async () => {
+    const { slot } = makeHarness(dataRoot);
+    const request = { type: 'fs-request', op: 'read', root: 'data', path: 'ledger/r000000.json' };
+    await fs.promises.mkdir(path.join(dataRoot, GHOST_ID), { recursive: true });
+    expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const realpath = vi.spyOn(fs.promises, 'realpath').mockRejectedValueOnce(denied);
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { realpath.mockRestore(); }
+    const lstat = vi.spyOn(fs.promises, 'lstat').mockRejectedValueOnce(denied);
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { lstat.mockRestore(); }
+  });
+
+  // Unit: a file may disappear after lstat; only ENOENT permits ledger initialization.
+  it.each(['ENOENT', 'EACCES', 'EIO'])('data:readFile %s preserves the missing-versus-unreadable distinction', async code => {
+    const { slot } = makeHarness(dataRoot);
+    const request = { type: 'fs-request', op: 'read', root: 'data', path: 'ledger.json' };
+    await fs.promises.mkdir(path.join(dataRoot, GHOST_ID), {recursive:true});
+    await fs.promises.writeFile(path.join(dataRoot, GHOST_ID, 'ledger.json'), 'existing ledger');
+    const read = vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('read failed'), {code}));
+    try {
+      const result = await slot.handleFsRequest(GHOST_ID, request);
+      expect(result.ok).toBe(false);
+      if (code === 'ENOENT') expect(result).toMatchObject({errorCode:'NOT_FOUND'});
+      else expect(result).not.toHaveProperty('errorCode', 'NOT_FOUND');
+    } finally { read.mockRestore(); }
+    expect(await fs.promises.readFile(path.join(dataRoot, GHOST_ID, 'ledger.json'), 'utf8')).toBe('existing ledger');
   });
 
   it('单次写入超 GHOST_FS_WRITE_MAX_BYTES 拒', async () => {

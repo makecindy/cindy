@@ -83,24 +83,26 @@ describe('documented supplier interfaces', () => {
       });
     }
   });
-  it('keeps every preset HTTP API consistent with the actual route after import', () => {
-    for (const preset of BUNDLED_CATALOG.presets ?? []) {
-      const provider = buildUserProvider({ id: 'audit', name: preset.id, runtimes:
-        Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
-          ...runtime, catalogPresetId: preset.id,
-          models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
-        }])) }, { presets: BUNDLED_CATALOG.presets });
-      for (const agent of provider.agents) for (const model of provider.models[agent] ?? []) {
-        const api = model.api ?? model.piApi;
-        if (!api || !['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai', 'google-vertex', 'azure-openai-responses'].includes(api)) continue;
-        if (model.route?.requestPath || provider.routing[agent]?.requestPath) continue;
-        const expected = api === 'openai-completions' ? 'openai-chat'
-          : api === 'azure-openai-responses' ? 'openai-responses'
-          : api === 'google-vertex' ? 'google-generative-ai' : api;
-        const actual = model.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol
-          ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
-        expect(actual, `${preset.id}/${agent}/${model.id}`).toBe(expected);
-      }
+  // Unit: buildUserProvider must preserve each preset's API/route agreement.
+  // PR #7832's Windows CI exceeded 5s with all presets in one test; one preset is
+  // the independent input. Keep every preset, engine and model assertion, with
+  // the default timeout applying separately to each imported connection.
+  it.each(BUNDLED_CATALOG.presets ?? [])('keeps $id HTTP APIs consistent with the actual routes after import', preset => {
+    const provider = buildUserProvider({ id: 'audit', name: preset.id, runtimes:
+      Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+        ...runtime, catalogPresetId: preset.id,
+        models: runtime.models.map(({ defaultEnabled: _selection, ...model }) => model),
+      }])) }, { presets: BUNDLED_CATALOG.presets });
+    for (const agent of provider.agents) for (const model of provider.models[agent] ?? []) {
+      const api = model.api ?? model.piApi;
+      if (!api || !['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai', 'google-vertex', 'azure-openai-responses'].includes(api)) continue;
+      if (model.route?.requestPath || provider.routing[agent]?.requestPath) continue;
+      const expected = api === 'openai-completions' ? 'openai-chat'
+        : api === 'azure-openai-responses' ? 'openai-responses'
+        : api === 'google-vertex' ? 'google-generative-ai' : api;
+      const actual = model.route?.wireProtocol ?? provider.routing[agent]?.wireProtocol
+        ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'codex' ? 'openai-responses' : 'openai-chat');
+      expect(actual, `${preset.id}/${agent}/${model.id}`).toBe(expected);
     }
   });
   it.each(['claude-code', 'codex', 'pi'] as const)('repairs saved Responses/Chat disagreement for %s without resetting user choices', agent => {

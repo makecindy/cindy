@@ -1,3 +1,4 @@
+import { readKimiCodingAccountUsage } from '../maker-host/provider-account-usage.js';
 /**
  * macOS menu bar quota item: collects usage, builds the view and drives the native helper.
  *
@@ -349,6 +350,7 @@ export class MenubarService {
     const collected = await collectMenubarInputs({
       nowMs,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+      readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
       readClaude: (providerId) => readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId),
       readXai: (providerId) => readXaiSubscriptionUsageSnapshotForDeviceLink(providerId),

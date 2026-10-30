@@ -112,7 +112,8 @@
     "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
-    "./teammate-todo": "./src/teammateTodo.ts"
+    "./teammate-todo": "./src/teammateTodo.ts",
+    "./teammate-status": "./src/teammateStatus.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

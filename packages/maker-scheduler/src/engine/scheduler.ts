@@ -15,6 +15,7 @@ import type {
   ScriptCapability,
   ScriptExecutionConfig,
   PreRunHookRunResult,
+  ScheduleMutationGuard,
 } from '../types.js';
 import { SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
@@ -32,6 +33,23 @@ import { nextCronOrMonthlyFire } from './monthlyClamp.js';
 function nextIntervalFire(baseMs: number, intervalMs: number, now: number): number {
   const planned = baseMs + intervalMs;
   return planned > now ? planned : now + intervalMs;
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+}
+
+function assertScheduleMutationGuard(expected: ScheduleMutationGuard | undefined, current: Schedule): void {
+  if (!expected) return;
+  const expectedSchedule = { ...expected };
+  delete expectedSchedule.effectiveWorkingDir;
+  if (stableJson(expectedSchedule) !== stableJson(current)) {
+    throw new Error('Schedule changed; refresh before executing the approved action');
+  }
 }
 
 const SCRIPT_CAPABILITY_SET: ReadonlySet<ScriptCapability> = new Set(SCRIPT_CAPABILITIES);
@@ -1042,7 +1060,7 @@ export class Scheduler extends EventEmitter {
   //   这反而更贴合"Once"语义：用户手动跑过一次就视作用完。
   // Internal callers with their own durable queue may own the deferred retry.
   // This option is not exposed through schedule CRUD or public MCP arguments.
-  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean }): Promise<{ runId: string; deferred?: boolean }> {
+  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }): Promise<{ runId: string; deferred?: boolean }> {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
@@ -1059,10 +1077,11 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean }): Promise<{ runId: string; deferred?: boolean }> {
+  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }): Promise<{ runId: string; deferred?: boolean }> {
     const schedule = await this.storage.get(id);
     if (!schedule || (schedule.source === 'bot' && !options?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(options?.expectedSchedule, schedule);
     this.updateInflightAttempt(runId, 'persisting', schedule);
     const firedAt = this.clock.now();
     const initialRun: ScheduleRun = {
@@ -1122,6 +1141,8 @@ export class Scheduler extends EventEmitter {
         firedAt,
         deferToCaller: options?.deferToCaller,
         canDispatch: options?.canDispatch,
+        ...(options?.expectedSchedule?.effectiveWorkingDir
+          ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
         onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
@@ -1368,8 +1389,8 @@ export class Scheduler extends EventEmitter {
     return inserted;
   }
 
-  async update(id: string, patch: UpdateScheduleInput): Promise<Schedule> {
-    return this.serializeScheduleMutation(id, () => this.updateUnlocked(id, patch));
+  async update(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    return this.serializeScheduleMutation(id, () => this.updateUnlocked(id, patch, expected));
   }
 
   /**
@@ -1379,15 +1400,17 @@ export class Scheduler extends EventEmitter {
   async updateFromCurrent(
     id: string,
     buildPatch: (current: Schedule) => Promise<UpdateScheduleInput>,
+    expected?: ScheduleMutationGuard,
   ): Promise<Schedule> {
     return this.serializeScheduleMutation(id, async () => {
       const current = await this.get(id);
       if (!current) throw new Error(`Schedule not found: ${id}`);
-      return this.updateUnlocked(id, await buildPatch(current));
+      assertScheduleMutationGuard(expected, current);
+      return this.updateUnlocked(id, await buildPatch(current), expected);
     });
   }
 
-  private async updateUnlocked(id: string, patch: UpdateScheduleInput): Promise<Schedule> {
+  private async updateUnlocked(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
     if ((patch as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     patch = this.normalizeManagedWorkingDir(patch);
     // patch 显式给了真实 workingDir 而未指明 workspaceKind 时,同步翻成 project
@@ -1413,6 +1436,7 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(expected, existing);
     // Old clients can rename an automation without losing its route. A model edit,
     // however, must carry the location once one has been explicitly selected.
     if (existing.modelAgentDeviceId !== undefined && patch.modelAgentDeviceId === undefined &&
@@ -1584,13 +1608,14 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async resume(id: string): Promise<Schedule> {
-    return this.serializeScheduleMutation(id, () => this.resumeUnlocked(id));
+  async resume(id: string, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    return this.serializeScheduleMutation(id, () => this.resumeUnlocked(id, expected));
   }
 
-  private async resumeUnlocked(id: string): Promise<Schedule> {
+  private async resumeUnlocked(id: string, expected?: ScheduleMutationGuard): Promise<Schedule> {
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(expected, existing);
     const now = this.clock.now();
     // 与 create/update 对齐：恢复 interval 任务前也验证它保留的 cron 元数据，不能
     // 重新激活一条未来清 interval 后必坏的记录。

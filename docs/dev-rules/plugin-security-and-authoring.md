@@ -127,7 +127,22 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
   `tools`、`card`、`panel`、`mainView`、`taskView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
-  `preview` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
+  `preview`、`browserExtension` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
+- `browserExtension` 是宿主承接随包浏览器扩展连接的直接字段（2026-10-27 由 Cindy Chrome
+  插件自带接线进程迁入宿主）：`protocol` 必须是当前宿主实现的 `cindy-browser-extension/3`，
+  `extensionIds` 是允许连接的扩展 id（装入时逐条展示并钉死），可选 `nativeHost{name,binary}`
+  由宿主复制包内平台二进制并注册 Native Messaging：该程序在插件沙箱外运行且同一账号的所有
+  Cindy 共用一份注册，宿主只为官方 Cindy Chrome（`my-browser`、`com.makecindy.browser`、
+  声明了 Node 程序，且打包版里来自公共市场并与批准字节一致——清单 id 是自报的，不算身份；
+  未打包的开发版视为官方）安装，其它插件的声明被忽略（2026-10-29 决定，宿主代码点名具体插件的唯一
+  例外）；注册在没有任何运行中的 Cindy 仍在使用时撤销。可选 `pageControl: true` 表示扩展实现
+  页面控制契约、可作为 Browser Use 的「我的浏览器」执行端；同样只有官方 Cindy Chrome 的声明生效，其它
+  插件声明了也不会接管「我的浏览器」（2026-10-30 决定）。宿主代码里不得出现具体插件名
+  或专有协议：桥接按声明启停（`cindy-brain/browserExtensionSlot.ts`），扩展发起的请求经
+  `browser-extension-relay` 事件转交给声明插件，插件经 `browser-extension-request` 投递作业、
+  推送配对身份。不设站点名单（2026-10-30 决定：安全交给任务的权限档位与自动审核，与专用浏览器
+  一致）；旧插件仍推送的 `setPolicy` 照常应答但不生效。本机与私网地址和公网网站一样可访问
+  （2026-10-28 决定）。新增 id 或新增 `pageControl` 视为权限变多，删减视为收权。
 - 无配置的布尔能力只接受字面量 `true`：`notify`、`badge`、`confirm`、`fs`、`library`、
   `sessionContext`、`pick`、`workspace`。不用就省略，写 `false` 是无效清单。
 - `card: {}` 与 `agent: {}` 分别表示基础卡片能力和由真实用户点击触发 Agent 回合；
@@ -148,8 +163,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   只在首次任务能力调用通过既有宿主权限界面确认，原插件的启用态、其它能力、凭证和
   设置保持不变。拒绝、窗口不可用、账号或安装版本变化均不授予任务权限；同能力更新
   保留既有明确批准，移除该能力后不保留。清单或旧未知字段本身不能补写批准。
+  批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
+  创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
+  插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
 - `agent.targets` 必须与 `agent.tasks: true` 同时声明，独立列出 `agent:targets` 权限并要求 Host receipt 的 `targetCapabilityApproved` 显式批准。
-  可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；不授予其他任务的历史读取、设置修改或停止权限。
+  可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
@@ -216,14 +234,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ### 3.1 安装与自动更新
 
-插件普通任务创建的 Worker 目录由宿主校验：允许当前任务目录及解析符号链接后仍在其中的子目录、已启用默认卡的插件 AI 配置目录、用户通过目录选择器授权的确切目录。Library 绑定本身不授予 Agent 工作目录权限，协同计划也不构成目录授权。登记计划和实际创建 Worker 均复核授权；账号、配置或任务归属发生变化时拒绝继续创建。
-这些目录授权只标识任务所在电脑的资源，不授权另一台电脑的同名目录。插件自有 Lead 不支持通过 `executionDeviceId` 新建跨设备 Worker：有无团队计划均在目录探测、槽位预留和远端创建之前拒绝。普通用户任务的跨设备 Worker 及插件既有 Worker 路径不变；不新增插件批准、配置或迁移。
-同一次 Worker 创建沿用最初的账号与任务归属，在启动 Session、续租完成后、写入 Worker 前再次复核。
-复核失败沿用既有尽力清理路径（关闭、移除运行缓存、归档 Session 与释放预留），不派发初始任务；新团队沿用创建失败收尾。
-卸载后用户新发起的普通 Orca 创建仍可使用旧任务，但在途插件创建不得因卸载转成普通创建。
-此检查不构成跨持久化与派发的事务，也未新增跨账号数据库补偿；实现及回归见
+插件通过 `tasks.create` 指定任务目录、通过 `setTeamPlan` 登记批次目录时，Host 仍核验插件配置和目录选择记录；Library 绑定和批次计划本身不授予目录权限。任务中的 Agent 使用公共 Orca 工具创建 Worker 时，沿普通任务的目录、模型和运行位置规则，不因任务由插件创建而添加目录或跨设备限制。创建期间仍复核当前账号与任务操作凭证；失败沿既有 Worker 清理和团队收尾流程，不构成跨持久化与派发的事务。实现及回归见
 `apps/desktop/src/main/maker-ipc/orcaWorkerCreationService.ts`、`register.ts` 与 `__tests__/orcaWorkerCreationService.test.ts`。
-插件任务目录在文件系统查询前拒绝 UNC/device 路径，并先按上述宿主目录记录核验候选路径；不通过探测未登记别名发现授权目标。本地 Windows 盘符长路径保留支持。解析后仍复核真实目录；这不构成执行隔离，也不能阻止已授权目录内的链接置换。
+插件批次目录在文件系统查询前拒绝 UNC/device 路径，并按宿主目录记录核验候选路径；不通过探测未登记别名发现授权目标。本地 Windows 盘符长路径保留支持。解析后仍复核真实目录；这不构成执行隔离，也不能阻止已授权目录内的链接置换。
 
 - 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
   `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
@@ -254,8 +267,18 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     必须显式交出确认策略（`prompt`／`automatic`／`exempt`）或锁外求得的结论，签名上必填，
     新增路径无法漏掉。
   - 服务端 `defaultInstall` 插件（首装、组织默认接管与之后的自动更新）按下发方决定，
-    策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录仍标
-    `defaultInstall`、但用户已退订后再自行从市场安装的，扩权更新必须确认。
+    策略为 `exempt`，不向用户确认。豁免只绑当前用户对该条目的默认下发资格：目录标
+    `defaultInstall` 且该用户没有仍生效的 default-install opt-out。只有用户显式卸载写
+    opt-out；用户之后显式从市场安装或更新（插件页、Agent 安装确认卡，即确认策略 `prompt`）
+    并落位成功，即视为重新订阅，与安装记录在同一次账本写入里清除该用户对此插件的 opt-out，
+    此后扩权更新恢复免确认。落位失败、回滚或用户拒绝确认时 opt-out 保持不变；`automatic`
+    与 `exempt` 路径（后台更新、默认安装、组织接管）不清除，自定义市场不涉及。旧版本遗留的
+    「已安装 + opt-out」（旧版重装不清 opt-out；早期同步扫描、本地／Forge 换源误写的
+    opt-out 在之后重装或断开路由恢复后也落成这一状态）由维护对账修复：账本记录仍为已安装的
+    `market`／`legacy-adopted`、带清单摘要，已装包已批准且原始 manifest 与记录一致时，按
+    捕获的记录 compare-and-write 清除。未安装记录上的 opt-out 无法与真实卸载区分，一律保留；
+    缺清单摘要的旧记录不足以证明包身份，也保留；记录在对账期间被并发卸载改变则不清除。修复
+    逻辑幂等，不新增账本字段或持久标记。仍有 opt-out 的服务端插件扩权更新必须确认。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
   任一来源账本文件存在却损坏时，读写都必须拒绝，不得把其它来源的记录当成完整视图重写并覆盖损坏文件。
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
@@ -273,6 +296,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不进入自动接管；普通 `.cindy` 导入仍是 `manual`，不享受这项保护。自动接管不得复用用户手动
   换源的退订语义，不写 `markRemoved` 或 default-install opt-out。普通本地／Forge 换源只把
   旧来源记录置为 `installed=false`，不得新增或清除 opt-out；只有用户显式卸载才写 opt-out。
+  清除只来自显式市场安装／更新成功、历史断开路由的恢复与上述「已安装 + opt-out」修复；
+  换源落位前失败的回滚只恢复原有 opt-out 状态。
 - 仍匹配稳定来源的已装插件自动更新，不限 public／organization；更新保持现有启用状态，
   不弹成功 toast；插件正有调用、派活或 Cindy 工作时跳过，下一轮重试。权限没变多的更新
   静默完成；新版本权限变多时（按下载后的真实包判定，策略 `automatic`）放弃本轮、不记失败、
@@ -288,7 +313,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   真实包身份、Release 摘要、能力上限、Manifest schema 与当前 Host 是否能解析仍按各自
   安全边界校验，不能把包内容异常降级成“仍要安装”。
 - 自动对账在 owner 稳定后的启动／登录切换、应用回前台、系统唤醒和 30 分钟周期触发。
-  不新增持久化任务队列或“是否自动更新”设置；卸载写下的 opt-out 继续阻止默认安装复活。
+  不新增持久化任务队列或“是否自动更新”设置；卸载写下的 opt-out 继续阻止默认安装复活，
+  直到用户再次显式从市场安装。
 - 当前组织的历史市场安装即使已指向当前 release，也须恢复遗漏的来源证明：有效批准与
   原始 manifest 仍匹配更新路由，且已完成旧迁移但缺包 SHA，或 `legacy-adopted` 记录与
   批准包 SHA 一致时，通过同一市场更新事务重新下载、校验并原位落位。仅补来源字段不能
@@ -982,9 +1008,26 @@ Main 按真实逻辑页或专属协议分区定位物理实例，绑定当前 ow
 合法 public Broker 声明仍由服务端既有 public 规则与精确 ACL 判断，不靠声明直接拒绝。
 
 个人工具与旧企业 Forge 发布是独立能力入口。任务权限只决定是否可以执行公开写入，不决定
-public 身份归属；共享访客及插件托管/errand 任务与其 Worker 沿既有 restricted helper surface，
-不能借用 Host 个人发布能力。普通个人用户任务和正常 Worker 不因此被封禁。
+public 身份归属；共享访客不能借用 Host 个人发布能力。插件创建的任务、Worker 和收到插件消息的
+普通任务按当前账号及任务权限执行个人投稿，不因插件来源标签另加限制。
 
 详见 [客户端实现与验证边界](../plugin-community-contribution.md) 和
 [HTTP 契约](../plugin-community-contribution-contract.md)。此改动涉及打包原语和授权边界，仍须人工 review
 及本规则第 5 节的插件基座白名单确认后方可合并；本地代码检查不替代该门禁。
+
+
+## 插件伙伴委派协议与回执（未发布）
+
+agent.delegation 为可选独立能力，依赖 tasks + targets，只有 Host 确认的
+delegationCapabilityApproved 才授予；历史未知字段、旧 tasks/targets 批准不推断新授权。
+缺省不改变旧权限项、批准、配置或回执摘要；已安装的历史字段保留，不因新校验停用。
+新包严格校验声明，旧 receipt 缺少新可选字段照常读取。无需 schema migration。
+
+targets.capabilities 新增只读协议发现；delegation.version=1 与 execution 就绪状态分开。
+执行端接入现有 Auto 审核后才报告 execution=true；未就绪时显式 delegation 请求在预留/投递前返回
+UNSUPPORTED_CAPABILITY，不降级为普通消息或另建任务。旧 Host 无入口时不发送。
+委派只允许 bot + queue，scope 最多 8000 字符并参与请求摘要，持久回执保存版本、
+执行范围及原目标/批准事实。取消、撤权、换批准版本和恢复排队沿原接口复核。
+Main 从当前接受的输入、原批准和持久回执读取 scope，交给现有 Auto 审核投影；
+不伪造主人原话，不提升伙伴权限，不新增团队，Core 不包含业务插件流程。
+作者契约见 cindy-plugin-creator/references/plugin-agent-tasks.md §4.11.7。

@@ -14,9 +14,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSshMcpServer } from '../cindy_sshMcpServer.js';
 import { SshToolRegistry } from '../ssh/registry.js';
 import {
+  registerSshAddHostTool,
   registerSshExecTool,
   registerSshHostStatusTool,
   registerSshListHostsTool,
+  registerSshReloadConfigTool,
 } from '../ssh/index.js';
 import { OUTPUT_CAP_CHARS } from '../ssh/_shared.js';
 import type { SshHostSnapshotLike, SshMcpDeps, SshPoolLike } from '../types.js';
@@ -118,6 +120,8 @@ function makeDeps(
     ensureReady: async (id) => {
       ensureReadyCalls.push(id);
     },
+    addHost: async () => {},
+    reloadConfig: async () => ({ diagnostic: null, warningCount: 0 }),
     ...overrides,
   };
   return { deps, ensureReadyCalls };
@@ -128,6 +132,8 @@ function makeRegistry(deps: SshMcpDeps): SshToolRegistry {
   registerSshListHostsTool(registry, deps);
   registerSshHostStatusTool(registry, deps);
   registerSshExecTool(registry, deps);
+  registerSshAddHostTool(registry, deps);
+  registerSshReloadConfigTool(registry, deps);
   return registry;
 }
 
@@ -204,7 +210,7 @@ describe('ssh_list_hosts', () => {
     expect(isError).toBe(false);
     expect(payload.ok).toBe(true);
     expect(payload.hosts).toEqual([]);
-    expect(String(payload.hint)).toContain('远程连接');
+    expect(String(payload.hint)).toContain('ssh_add_host');
   });
 });
 
@@ -247,7 +253,7 @@ describe('host resolution', () => {
     expect(isError).toBe(true);
     expect(payload.errorCode).toBe('HOST_NOT_FOUND');
     const data = payload.data as Record<string, unknown>;
-    expect(String(data.hint)).toContain('远程连接');
+    expect(String(data.hint)).toContain('ssh_add_host');
     const configured = data.configuredHosts as Array<Record<string, unknown>>;
     expect(configured.map((h) => h.id)).toEqual(['web-1', 'web-2', 'web-2b']);
   });
@@ -515,6 +521,117 @@ describe('ssh_exec', () => {
   });
 });
 
+// ── ssh_add_host / ssh_reload_config ────────────────────────────────────────
+
+describe('ssh_add_host', () => {
+  function makeAddDeps(overrides?: Partial<SshMcpDeps>) {
+    const hosts: SshHostSnapshotLike[] = [];
+    const { pool } = makeFakePool(hosts);
+    const added: unknown[] = [];
+    const { deps, ensureReadyCalls } = makeDeps(pool, {
+      addHost: async (input) => {
+        added.push(input);
+        hosts.push(snapshot({ id: input.id, hostname: input.hostname, status: 'disconnected' }));
+      },
+      ...overrides,
+    });
+    return { deps, added, ensureReadyCalls };
+  }
+
+  it('adds through the settings flow, then connects once', async () => {
+    const { deps, added, ensureReadyCalls } = makeAddDeps();
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+      port: 2222,
+    });
+    expect(isError).toBe(false);
+    expect(added).toEqual([{ id: 'nas', hostname: '192.168.68.51', user: 'dash', port: 2222 }]);
+    expect(ensureReadyCalls).toEqual(['nas']);
+    expect(payload).toMatchObject({ added: true, connected: true, host: { id: 'nas' } });
+  });
+
+  it('keeps the host and reports auth failure with password-login guidance', async () => {
+    const { deps } = makeAddDeps({
+      ensureReady: async () => {
+        throw new Error('[SSH_AUTH_FAILED] SSH agent has no key the remote accepts.');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(false);
+    expect(payload).toMatchObject({ added: true, connected: false });
+    const connectError = payload.connectError as { errorCode: string; hint: string };
+    expect(connectError.errorCode).toBe('SSH_AUTH_FAILED');
+    expect(connectError.hint).toContain('ssh-copy-id');
+  });
+
+  it('trims the alias once, so the pool lookup and connect use the saved name', async () => {
+    const { deps, added, ensureReadyCalls } = makeAddDeps();
+    const { payload } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: ' nas ',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(added).toEqual([{ id: 'nas', hostname: '192.168.68.51', user: 'dash' }]);
+    expect(ensureReadyCalls).toEqual(['nas']);
+    expect(payload).toMatchObject({ added: true, connected: true });
+  });
+
+  it('treats a failed display-name save as an added host, not a failed add', async () => {
+    const hosts: SshHostSnapshotLike[] = [];
+    const { pool } = makeFakePool(hosts);
+    const { deps, ensureReadyCalls } = makeDeps(pool, {
+      addHost: async (input) => {
+        hosts.push(snapshot({ id: input.id, status: 'disconnected' }));
+        throw new Error('[SSH_HOST_PREFS_WRITE_FAILED] local preferences were not saved');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(false);
+    expect(payload).toMatchObject({ added: true, connected: true });
+    expect(String(payload.warning)).toContain('无需重试');
+    expect(ensureReadyCalls).toEqual(['nas']);
+  });
+
+  it('maps an existing alias to HOST_ALREADY_EXISTS without connecting', async () => {
+    const { deps, ensureReadyCalls } = makeAddDeps({
+      addHost: async () => {
+        throw new Error('[ALREADY_EXISTS] host already exists: nas');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(true);
+    expect(payload.errorCode).toBe('HOST_ALREADY_EXISTS');
+    expect(ensureReadyCalls).toEqual([]);
+  });
+});
+
+describe('ssh_reload_config', () => {
+  it('returns the refreshed hosts and surfaces a config diagnostic', async () => {
+    const { pool } = makeFakePool([snapshot({ id: 'web-1' })]);
+    const { deps } = makeDeps(pool, {
+      reloadConfig: async () => ({ diagnostic: 'syntax', warningCount: 0 }),
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_reload_config', {});
+    expect(isError).toBe(false);
+    expect((payload.hosts as Array<{ id: string }>).map((h) => h.id)).toEqual(['web-1']);
+    expect(payload.diagnostic).toBe('syntax');
+  });
+});
+
 // ── registry-level 语义 ─────────────────────────────────────────────────────
 
 describe('registry semantics', () => {
@@ -528,6 +645,8 @@ describe('registry semantics', () => {
       'ssh_list_hosts',
       'ssh_host_status',
       'ssh_exec',
+      'ssh_add_host',
+      'ssh_reload_config',
     ]);
   });
 
@@ -627,7 +746,7 @@ describe('cindy_ssh MCP server (in-process smoke)', () => {
       (listResult.content as Array<{ type: string; text: string }>)[0].text,
     ) as { ok: boolean; categories: Array<{ name: string; tool_count: number }> };
     expect(listPayload.ok).toBe(true);
-    expect(listPayload.categories).toEqual([{ name: 'ssh', tool_count: 3 }]);
+    expect(listPayload.categories).toEqual([{ name: 'ssh', tool_count: 5 }]);
 
     const callResult = await client.callTool({
       name: 'call_tool',

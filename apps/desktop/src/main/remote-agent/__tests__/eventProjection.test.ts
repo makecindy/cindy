@@ -19,13 +19,13 @@ let root: string;
 beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-event-projection-'))); });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function setup(virtual: string) {
+function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined) {
   const real = path.join(root, '真实 目录');
   fs.mkdirSync(real);
   const workspace = new ExecutorWorkspace({ workingDir: real, aliases: [{ from: virtual, to: real }] });
   workspace.setVirtualRoot(virtual);
   const controller = createRemoteAgentHandle({
-    client: { callWithId: async () => undefined } as unknown as RemoteAgentRunClient,
+    client: { callWithId } as unknown as RemoteAgentRunClient,
     started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: virtual, virtualWorkspace: true, methods: [], state: {} },
     workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: () => 'request-id', dispose: async () => {},
   });
@@ -45,6 +45,30 @@ async function eventsFrom(controller: ReturnType<typeof setup>['controller'], in
 // Unit regression: a quota terminal followed by a missing remote run must keep
 // the actionable error (and its reset time), rather than replacing it with EXPIRED.
 describe('remote terminal error ownership', () => {
+  // Unit regression: local in-flight tracking must not turn a rejected send into
+  // a restart candidate, or acknowledge an uncertain steer as delivered.
+  it('leaves a rejected send idle and does not manufacture a restart continuation', async () => {
+    const { controller } = setup('/remote/workspace', async () => { throw new Error('rejected'); });
+    await expect(controller.handle.send({ type: 'user', content: 'work' })).rejects.toThrow('rejected');
+    expect(controller.isQuiet()).toBe(true);
+    controller.onInterrupted();
+    expect(await eventsFrom(controller, [])).toEqual([]);
+  });
+
+  it('does not acknowledge an in-flight steer when the supplier disappears', async () => {
+    let interrupt = false;
+    const { controller } = setup('/remote/workspace', async () => {
+      if (!interrupt) return;
+      controller.onInterrupted();
+      throw new Error('steer delivery unknown');
+    });
+    await controller.handle.send({ type: 'user', content: 'work' });
+    interrupt = true;
+    await expect(controller.handle.steer!({ type: 'user', content: 'additional instruction' })).rejects.toThrow('delivery unknown');
+    const events = await eventsFrom(controller, []);
+    expect(events.map(event => event.type)).toEqual(['error', 'done']);
+  });
+
   it.each([true, false])('preserves a terminal error across remote close; paired done=%s', async (done) => {
     const { controller } = setup('/remote/workspace');
     const error: AgentEvent = { type: 'error', source: 'claude-code', data: {

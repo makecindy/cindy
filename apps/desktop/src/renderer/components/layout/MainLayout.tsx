@@ -1,4 +1,6 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -733,6 +735,7 @@ export function MainLayout() {
         | { type: 'provider-share-join'; link: string }
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
+        | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
     ) => {
       if (payload.type === 'chat-message') {
@@ -764,6 +767,19 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'installed-plugin') {
+        // The link carries the plugin's own id; the plugin page selects by instance key
+        // (`_root__my-browser`), so resolve it against what is installed.
+        const resolved = payload.ghostId
+          ? resolvePluginInstanceQuery(readInstalledGhostsSnapshot(), payload.ghostId)
+          : null;
+        navigate(
+          resolved?.status === 'unique'
+            ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(resolved.ghost))}`
+            : '/plugins',
+        );
         return;
       }
       if (payload.type === 'session') {
@@ -1662,6 +1678,21 @@ export function MainLayout() {
     { stopImmediate: true },
   );
 
+  // Session/tool-pane declarations update Shell state during navigation. Keep
+  // unrelated updates from invalidating the entire routed conversation again.
+  const outletContext = useMemo(() => ({
+    sidebarWidth,
+    rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
+    onToggleRightSidebar: handleOpenRightSidebar,
+    rightSidebarSide,
+    setRightSidebarAvailable,
+    setRightSidebarSessionId: declareRightSidebarSessionId,
+    setRightSidebarWorkdir,
+  }), [
+    sidebarWidth, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
+  ]);
+
   return (
     // Shell wraps its entire subtree (Sidebar + <Outlet /> inside <main>) in
     // the feature-sidebar slot provider. Any Feature Layout rendered through
@@ -1834,20 +1865,7 @@ export function MainLayout() {
                     </div>
                   )}
                   <FadeSwitcher key={location.pathname.split('/')[1] || 'root'}>
-                    <Outlet
-                      context={{
-                        sidebarWidth,
-                        // detached 时主窗口没有内嵌侧栏，始终按折叠态布局；子窗口开闭
-                        // 不改变主窗口浮动控件的占位语义。
-                        rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
-                        onToggleRightSidebar: handleOpenRightSidebar,
-                        // B2b:面板所在侧,聊天视图据此决定展开入口落左上还是右上。
-                        rightSidebarSide,
-                        setRightSidebarAvailable,
-                        setRightSidebarSessionId: declareRightSidebarSessionId,
-                        setRightSidebarWorkdir,
-                      }}
-                    />
+                    <Outlet context={outletContext} />
                   </FadeSwitcher>
                 </ContentHeaderSlot>
               </main>

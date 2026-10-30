@@ -30,6 +30,7 @@ function timeoutError(): DeviceLinkError {
 function harness(overrides?: {
   probeInvoke?: ReturnType<typeof vi.fn>;
   isProbeEligible?: () => boolean;
+  confirmRelayForTimeout?: () => boolean;
   recoverLink?: ReturnType<typeof vi.fn>;
 }) {
   let at = 1_000_000;
@@ -40,6 +41,7 @@ function harness(overrides?: {
     onUnresponsiveChanged,
     isProbeEligible: overrides?.isProbeEligible ?? (() => true),
     recoverLink: overrides?.recoverLink,
+    confirmRelayForTimeout: overrides?.confirmRelayForTimeout,
     now: () => at,
   });
   return {
@@ -69,6 +71,25 @@ async function openBreaker(
 }
 
 describe('responsivenessTracker', () => {
+  // Oct 30 multi-device outage: shared silence is not independent peer failure.
+  // Existing tests supplied only peer timeout codes, never relay health evidence.
+  it('does not open peer breakers or reopen links during an unconfirmed shared outage', async () => {
+    const confirmRelayForTimeout = vi.fn(() => false);
+    const recoverLink = vi.fn(async () => {});
+    const h = harness({ confirmRelayForTimeout, recoverLink });
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      for (const peer of [DEV, OTHER_DEV])
+        await expect(h.tracker.guardInvoke(peer, 'local-db:sessions:list', async () => { throw timeoutError(); }))
+          .rejects.toThrow('no invoke-result');
+      h.advance(1100);
+    }
+    expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([]);
+    expect(recoverLink).not.toHaveBeenCalled();
+    confirmRelayForTimeout.mockReturnValue(true);
+    await openBreaker(h);
+    expect(h.tracker.isUnresponsive(DEV)).toBe(true);
+    expect(h.tracker.isUnresponsive(OTHER_DEV)).toBe(false);
+  });
   it('local socket queue expiry neither opens the peer circuit nor starts link recovery', async () => {
     const recoverLink = vi.fn(async () => undefined);
     const h = harness({ recoverLink });

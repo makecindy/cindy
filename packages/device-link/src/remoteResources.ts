@@ -73,6 +73,8 @@ export interface RemoteResourceDisplay {
   preview?: RemoteText;
   /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
   generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;

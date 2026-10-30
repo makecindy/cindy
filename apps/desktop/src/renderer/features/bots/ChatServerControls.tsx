@@ -131,12 +131,12 @@ export function ChatMessageActions(props: ChatMessageActionProps) {
 }
 
 /** Group owners and admins create or revoke invitation links from the group header. */
-export function ChatInviteButton({ groupId }: { groupId: string }) {
+export function ChatInviteButton({ groupId, members }: { groupId: string; members?: readonly BotGroupMemberView[] }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const title = t(key('invite'));
   return <>
     <Tip text={title}><button type="button" className={iconClass} style={WINDOW_NO_DRAG_STYLE} aria-label={title} onClick={() => setOpen(true)}><UserPlus size={16} /></button></Tip>
-    {open && <ChatInviteDialog groupId={groupId} onClose={() => setOpen(false)} />}
+    {open && <ChatInviteDialog groupId={groupId} members={members} onClose={() => setOpen(false)} />}
   </>;
 }

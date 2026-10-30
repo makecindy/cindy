@@ -493,6 +493,16 @@ describe('CINDY · ⑦ WCAG 复算 + 文字墨水阶梯反向冻结', () => {
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
   });
 
+  // Unit regression #7838: running task/timer icons retain status-bar-accent even when selected.
+  // The existing text contrast assertion cannot detect orange disappearing into a selected fill.
+  it('CINDY 运行图标×选中行底色对比度 ≥3:1', () => {
+    for (const [name, theme] of THEMES) {
+      const mode = name === 'cindy-dark' ? 'dark' : 'light';
+      const running = resolveIn(theme.colors, 'status-bar-accent', mode);
+      expect(contrast(running, theme.colors['sidebar-item-active']), `${mode} 运行橙×选中底`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it('CINDY 侧栏草稿铅笔×普通/悬停行底色对比度 ≥3:1', () => {
     const draftLight = colorRegistry.resolveDefault('sidebar-draft-indicator', 'light') ?? '';
     const draftDarkAlias = colorRegistry.resolveDefault('sidebar-draft-indicator', 'dark') ?? '';

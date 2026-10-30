@@ -1,4 +1,5 @@
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
+import { ChatInviteDialog } from './ChatInviteDialog';
 import { useThreadPanelResize } from './useThreadPanelResize';
 import { cn } from '@/lib/utils';
 /**
@@ -114,6 +115,7 @@ import {
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAutoContinue, useBotGroupSummary } from './botGroupStore';
 import { botGroupReadKey, markBotRead } from './botReadState';
+import { useGroupMask, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
   beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
   getBotGroupOutboxPreviews, interleaveBotGroupOutbox, mergeBotGroupLocalAttachments,
@@ -191,9 +193,25 @@ function isAttachmentDrag(event: DragEvent): boolean {
 
 export function BotGroupChatView() {
   const { groupId } = useParams();
-  const { search } = useLocation();
-  const direct = new URLSearchParams(search).get('conversationKind') === 'direct';
-  return <BotGroupChatContent key={`${groupId}:${direct}`} groupId={groupId ?? ''} direct={direct} />;
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [createdInvite, setCreatedInvite] = useState<{ groupId: string; owner: ReturnType<typeof getDataOwnerGeneration> } | null>(null);
+  const createdGroup = useBotGroupSummary(createdInvite?.groupId ?? null);
+  const direct = new URLSearchParams(location.search).get('conversationKind') === 'direct';
+  useEffect(() => {
+    if (!groupId || direct || location.state?.createdGroupInvite !== groupId) {
+      setCreatedInvite(current => current?.groupId !== groupId || direct ? null : current);
+      return;
+    }
+    setCreatedInvite({ groupId, owner: getDataOwnerGeneration() });
+    // Consume the one-off intent so Back, Forward or a refresh cannot create another link.
+    navigate(location.pathname + location.search, { replace: true, state: { ...location.state, createdGroupInvite: null } });
+  }, [groupId, direct, location.state, location.pathname, location.search, navigate]);
+  return <>
+    <BotGroupChatContent key={`${groupId}:${direct}`} groupId={groupId ?? ''} direct={direct} />
+    {createdInvite !== null && createdInvite.groupId === groupId && !direct && isDataOwnerGenerationCurrent(createdInvite.owner)
+      ? <ChatInviteDialog key={groupId} groupId={groupId} created members={createdGroup?.members} onClose={() => setCreatedInvite(null)} /> : null}
+  </>;
 }
 
 function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boolean }) {
@@ -717,6 +735,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 
   const settingsLabel = t('bots.groupChat.settings.open');
   const headerStatus = headerGroup ? botGroupHeaderStatus(headerGroup, displayName, t) : null;
+  const personalMask = useGroupMask(groupId);
+  const readLocatedMention = useReadLocatedMention(groupId);
   const header = useMemo(() => {
     if (!headerGroup) return null;
     const shown = direct ? members.filter(member => !member.isSelf) : members;
@@ -743,7 +763,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center">
-          {headerGroup.serverBacked && headerGroup.canInvite && <ChatInviteButton groupId={headerGroup.id} />}
+          {headerGroup.serverBacked && headerGroup.canInvite && <ChatInviteButton key={headerGroup.id} groupId={headerGroup.id} members={members} />}
           {!direct && <Tip text={settingsLabel}>
             <button
               type="button"
@@ -929,7 +949,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     target.scrollIntoView?.({ block: 'center' });
     target.focus({ preventScroll: true });
     setHighlightId(jumpTarget);
-  }, [jumpTarget, rows]);
+    readLocatedMention(jumpTarget, target);
+  }, [jumpTarget, rows, readLocatedMention]);
   useEffect(() => {
     if (!highlightId) return;
     const timer = window.setTimeout(() => setHighlightId(null), QUOTE_HIGHLIGHT_MS);
@@ -1053,6 +1074,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     setThreadRootId(messageId);
     setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: Date.now() } : null);
   }, []);
+  const locateMention = useCallback((entry: GroupMaskMention) => {
+    if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
+    else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
+  }, [onOpenThread]);
   const onSending = useCallback(() => { stickToBottomRef.current = true; }, []);
   const locateNotification = useRef(locateQuoted); locateNotification.current = locateQuoted;
   useEffect(() => {
@@ -1343,11 +1368,13 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           </div>
         </div>
       )}
-      {group.threads?.length && !sharing && !group.archived ? (
+      {(group.threads?.length || personalMask) && !sharing && !group.archived ? (
         // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
         <div className="relative h-0 shrink-0 px-5">
           <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[760px] px-2">
-            <BotGroupThreadHint threads={group.threads} members={group.members} openRootId={threadRootId} onOpen={rootId => onOpenThread(rootId)} />
+            <BotGroupThreadHint key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
+              onOpen={rootId => onOpenThread(rootId)} mentions={personalMask?.unreadMentions} onLocateMention={locateMention}
+              onReadMentions={personalMask ? () => personalMask.markMentionsRead() : undefined} saving={personalMask?.saving} />
           </div>
         </div>
       ) : null}

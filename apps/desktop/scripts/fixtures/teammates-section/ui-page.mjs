@@ -16,16 +16,27 @@ export default {
   notCovered: 'Roster loading, cloud/device connections, create/delete menus and message delivery',
   stubs: {
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>({});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
     'src/renderer/features/bots/useRemoteBots': `export const useRemoteBots=()=>${data}.remoteBots;`,
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
     'src/renderer/features/device-link/useDeviceLinkDeviceList': 'export const useDeviceLinkDeviceList=()=>[];',
-    'src/renderer/state/agentIslandActivity': { partial: 'const activity=new Map(); export const useAgentIslandActivityMap=()=>activity;' },
+    'src/renderer/state/agentIslandActivity': { partial: `export const useAgentIslandActivityMap=()=>new Map(${data}.activities||[]);` },
     'src/renderer/features/bots/BotCreateMenu': 'export const BotCreateMenu=()=>null;',
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
-  cases: { ...Object.fromEntries([
+  cases: {
+    states: {
+      about: 'Shared solid-dot states in expanded rows and collapsed overflow',
+      data: { profiles: profiles.slice(0, 5).map((bot, index) => ({ ...bot,
+        lastMessageAt: Date.now() - index * 60_000,
+        avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: ['Working', 'Waiting', 'Finished', 'New message', 'Error'][index] })),
+        remoteBots: [], route: '/bots/mate-2', unread: { 'mate-3': 1, 'mate-4': 1 },
+        activities: ['running', 'needs-interaction', 'completed', 'idle', 'error'].map((phase, index) =>
+          [`chat-${index}`, { sessionId: `chat-${index}`, phase, attention: true, workingPhase: 'processing', startedAtMs: null }]),
+      },
+    },
+    ...Object.fromEntries([
     ['default', '/bots/mate-6'],
     ['session', '/bots/mate-6/session/session-6'],
     ['history', '/bots/mate-6/history/session-6'],
@@ -41,6 +52,7 @@ export default {
       id: merged ? 'cindy-default' : 'mate-6', name: merged ? 'Cindy' : 'Reviewer',
       deviceId: 'remote-device', deviceName: 'Studio', online: true, avatar: '', avatarColor: 'violet',
       preview: 'Ready', activityAt: 595, sessionId: 'remote-session',
+      ...(merged ? { lastReplyAt: Date.now(), readAt: 0 } : {}),
     }] : [];
     return [name, {
       about: `Shell-mounted sidebar on ${name} route; selected sixth row and reversible collapse`,
@@ -70,6 +82,38 @@ export default {
     },
   },
   async check(page, ui) {
+    // Read the painted selection, including the wrapper used by local/Cindy rows.
+    const selectedRow = page.locator('[data-sidebar-section="teammates"] [aria-current="page"]').first();
+    if (await selectedRow.count()) {
+      const colors = await selectedRow.evaluate(node => {
+        const surface = node.closest('.bg-sidebar-item-active');
+        const probe = document.createElement('span');
+        probe.style.backgroundColor = 'hsl(var(--surface-hover-hsl))';
+        probe.style.color = 'var(--sidebar-nav-text)';
+        node.append(probe);
+        const expected = getComputedStyle(probe);
+        const actual = getComputedStyle(surface);
+        const result = { background: actual.backgroundColor, foreground: actual.color,
+          expectedBackground: expected.backgroundColor, expectedForeground: expected.color };
+        probe.remove(); return result;
+      });
+      assert.equal(colors.background, colors.expectedBackground, 'selection uses the quiet theme surface');
+      assert.equal(colors.foreground, colors.expectedForeground, 'selection keeps normal text contrast');
+    }
+    if (ui.case === 'states') {
+      for (const state of ['running', 'awaiting', 'done', 'unread', 'error']) {
+        const dot = page.locator(`[data-teammate-status="${state}"]`);
+        assert.equal(await dot.count(), 1);
+        const size = await dot.evaluate(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height }));
+        assert.equal(size.width, 14); assert.equal(size.height, 14);
+      }
+      await ui.capture('expanded-states');
+      await page.getByRole('button', { name: await ui.t('bots.title'), exact: true }).click();
+      await page.locator('[data-teammate-status="running"]').first().waitFor();
+      assert.equal(await page.locator('[data-sidebar-section="teammates"]').first().locator('button[aria-current="page"] > [data-teammate-status="awaiting"]').count(), 1, 'selection preserves the pending point');
+      await ui.capture('collapsed-states');
+      return;
+    }
     if (ui.case.startsWith('long-speakers-')) {
       const running = page.getByTestId('bot-group-running');
       const label = running.locator('[title]');

@@ -11,6 +11,7 @@
     "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 다시 로그인하면 추가할 수 있습니다.",
     "deleteFailed": "기기를 삭제하지 못했습니다.",
     "deleteOnline": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
+    "deleteRejectedWhileOffline": "기기를 삭제하지 못했습니다. 목록에서는 오프라인이지만 서버에는 아직 온라인으로 기록되어 있습니다.",
     "currentlyOnline": "현재 온라인",
     "availableSection": "온라인 기기",
     "offlineSection": "오프라인 기기",
@@ -403,6 +404,7 @@
         "30d": "30일",
         "all": "전체"
       },
+      "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "displayHeading": "표시",
       "view": {
         "text": "텍스트",
@@ -419,7 +421,8 @@
       "summarySeparator": ", ",
       "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다.",
       "filterTeammatesHeading": "파트너",
-      "filterAnySource": "모든 출처",
+      "filterAnySource": "전체",
+      "filterHideAllTeammates": "모두 숨기기",
       "filterSelectedTeammates": "{{count}}명 선택"
     },
     "search": {
@@ -693,7 +696,14 @@
     "createMenu": "새로 만들기",
     "awaiting": "확인 필요",
     "taskResult": "작업 결과",
-    "collapseResult": "결과 접기"
+    "collapseResult": "결과 접기",
+    "avatarStatus": {
+      "awaiting": "확인 대기",
+      "error": "확인 필요",
+      "running": "작업 중",
+      "done": "완료",
+      "unread": "읽지 않음"
+    }
   },
   "companionProfile": {
     "avatar": "아바타",

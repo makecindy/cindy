@@ -1,5 +1,5 @@
 /**
- * Device Link 直连优先、中继兜底的选路契约(同账号设备之间)。
+ * Device Link 直连优先、中继兜底的选路契约。
  *
  * relay 仍是控制面：登录、在线状态、link-open / link-accept / link-close 与
  * 授权都只走 relay。直连通道(例如局域网内的 WebRTC DataChannel)只承载已建立
@@ -8,8 +8,8 @@
  * 两条路径上各到一次也只会执行一次；直连失效时未确认的帧原样改走 relay 重发。
  *
  * 平台(Desktop / Mobile)负责经已授权的信令建立通道，再交给
- * `DeviceLinkClient.attachDirectPath`。跨账号的共享任务与供应商分享不走直连：
- * 它们的逐帧授权仍由 relay 执行。
+ * `DeviceLinkClient.attachDirectPath`。跨账号供应商分享只在 relay 已建立链路、
+ * 双端声明支持且本地 30 分钟许可有效时可走直连；共享任务仍只走 relay。
  */
 
 /** 平台提供的一条直连通道。 */
@@ -71,3 +71,5 @@ export interface DeviceLinkPeerPathChanged {
 
 /** 直连发送缓冲软上限：暂留可靠队列等 `drained()`，持续无进展则回退 relay。 */
 export const DIRECT_PATH_HIGH_WATER_BYTES = 1024 * 1024;
+/** An established provider-share direct path may outlive the relay only for this long. */
+export const PROVIDER_SHARE_DIRECT_LEASE_MS = 30 * 60_000;

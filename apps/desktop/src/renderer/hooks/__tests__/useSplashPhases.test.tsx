@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   authInitializing: false,
   coverHeld: false,
   updateErrorCode: undefined as string | undefined,
+  hasPersistedSession: false,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -61,13 +62,20 @@ describe('useSplash phase 表', () => {
     mocks.authInitializing = false;
     mocks.coverHeld = false;
     mocks.updateErrorCode = undefined;
+    mocks.hasPersistedSession = false;
     mocks.checkEnvironment.mockClear();
     (
       window as unknown as {
-        electronAPI: { clientEndpoints: { websiteUrl: string } };
+        electronAPI: {
+          clientEndpoints: { websiteUrl: string };
+          authHasPersistedSessionHintSync: () => boolean;
+        };
         open: typeof window.open;
       }
-    ).electronAPI = { clientEndpoints: { websiteUrl: 'https://cindy.example/download' } };
+    ).electronAPI = {
+      clientEndpoints: { websiteUrl: 'https://cindy.example/download' },
+      authHasPersistedSessionHintSync: () => mocks.hasPersistedSession,
+    };
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
       addEventListener: () => {},
@@ -133,24 +141,66 @@ describe('useSplash phase 表', () => {
     expect(result.current.phase).toBe('splash_done');
   });
 
-  it('auth 初始化未完成时 passed 不淡出(推进锚含 authInitializing)', () => {
+  it('已有持久会话的返回启动使用 2s 地板，仍等待真实就绪条件', () => {
     mocks.envStatus = 'passed';
-    mocks.authInitializing = true;
+    mocks.hasPersistedSession = true;
     const { result } = renderHook(() => useSplash());
+
     act(() => {
-      vi.advanceTimersByTime(10_000);
+      vi.advanceTimersByTime(1_999);
     });
     expect(result.current.phase).toBe('splash_passed');
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.phase).toBe('fading_out');
+    expect(result.current.isReturningSession).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(349);
+    });
+    expect(result.current.phase).toBe('fading_out');
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.phase).toBe('splash_done');
   });
 
-  it('LocalDbGate 仍在 checking 时 passed 不淡出(启动盖必须留到主界面可画)', () => {
+  // 测试价值：生产入口 useSplash；返回启动时认证或本地数据库未就绪，用户应继续看到启动盖。
+  // #7808 的 2s 地板新增返回启动分支；原有未就绪用例只走首次启动，漏掉这一时序。
+  // 最小输入为已有持久会话 + passed + 单一未就绪门；unit 使用假时钟验证解除后才淡出。
+  // 本文件单独运行实测 0.618s。
+  it('返回启动认证未完成时，超过 2s 仍等认证完成才淡出', () => {
     mocks.envStatus = 'passed';
-    mocks.coverHeld = true;
-    const { result } = renderHook(() => useSplash());
+    mocks.hasPersistedSession = true;
+    mocks.authInitializing = true;
+    const { result, rerender } = renderHook(() => useSplash());
     act(() => {
-      vi.advanceTimersByTime(10_000);
+      vi.advanceTimersByTime(2_001);
     });
     expect(result.current.phase).toBe('splash_passed');
+    expect(result.current.isReturningSession).toBe(true);
+
+    mocks.authInitializing = false;
+    rerender();
+    expect(result.current.phase).toBe('fading_out');
+  });
+
+  it('返回启动数据库未就绪时，超过 2s 仍等主界面可画才淡出', () => {
+    mocks.envStatus = 'passed';
+    mocks.hasPersistedSession = true;
+    mocks.coverHeld = true;
+    const { result, rerender } = renderHook(() => useSplash());
+    act(() => {
+      vi.advanceTimersByTime(2_001);
+    });
+    expect(result.current.phase).toBe('splash_passed');
+    expect(result.current.isReturningSession).toBe(true);
+
+    mocks.coverHeld = false;
+    rerender();
+    expect(result.current.phase).toBe('fading_out');
   });
 
   it('三失败弹窗 booleans 与 phase 一一对应且互斥', () => {

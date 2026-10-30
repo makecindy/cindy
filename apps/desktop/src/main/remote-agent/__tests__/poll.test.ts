@@ -362,6 +362,57 @@ describe('multiplexed poll', () => {
     expect(attempts).toBeGreaterThan(5);
   });
 
+  // Unit regression: a share restart briefly rejects authorization after a link outage.
+  // The old poller ended immediately; only that existing outage may keep its original deadline.
+  it.each(['ACCESS_REVOKED', 'REMOTE_AGENT_SHARE_UNAVAILABLE'])('bounds temporary %s by the link outage window', async code => {
+    vi.useFakeTimers();
+    let failure = 'DEVICE_OFFLINE';
+    const sink = collector(randomUUID());
+    // A hung owner authorization cannot extend the existing outage deadline.
+    const recoverAuthorization = vi.fn(() => new Promise<void>(() => undefined));
+    sink.run.recoverAuthorization = recoverAuthorization;
+    // Production wiring prefixes the message with [REMOTE_AGENT_UNAVAILABLE] and keeps
+    // the transport code only on Error.code; the grace must still apply.
+    const { remoteAgentInvoker } = await import('../controller/runClient');
+    const poller = new RemoteAgentPoller(remoteAgentInvoker('d', async () => ({
+      ok: false, error: { code: failure, message: 'refused by target device' },
+    })));
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(1);
+    failure = code;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sink.lost).toBeNull();
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(sink.lost?.reason).toBe('unreachable');
+    expect(recoverAuthorization).toHaveBeenCalledOnce();
+
+    const revoked = collector(randomUUID());
+    revoked.run.recoverAuthorization = recoverAuthorization;
+    new RemoteAgentPoller(async () => { throw Object.assign(new Error(code), { code }); }).register(revoked.run);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(revoked.lost?.error.code).toBe(code);
+    expect(recoverAuthorization).toHaveBeenCalledOnce();
+  });
+
+  it('resumes polling after temporary share refusal without replaying data', async () => {
+    vi.useFakeTimers();
+    const sink = collector(randomUUID());
+    let failure: string | null = 'DEVICE_OFFLINE';
+    const poller = new RemoteAgentPoller(async () => {
+      if (failure) throw Object.assign(new Error(failure), { code: failure });
+      return { runs: [{ runId: sink.run.runId, cursor: 2, data: Buffer.from('ok').toString('base64'), done: true }] };
+    });
+    poller.register(sink.run);
+    await vi.advanceTimersByTimeAsync(1);
+    failure = 'REMOTE_AGENT_SHARE_UNAVAILABLE';
+    await vi.advanceTimersByTimeAsync(5_000);
+    failure = null;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sink.lost).toBeNull();
+    expect(sink.text()).toBe('ok');
+    expect(sink.done).toBe(true);
+  });
+
   it('slows down when the other computer keeps answering immediately with nothing new', async () => {
     vi.useFakeTimers();
     let polls = 0;

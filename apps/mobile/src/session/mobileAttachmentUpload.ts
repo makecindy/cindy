@@ -7,6 +7,7 @@ import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import {
   buildMobileUploadedAttachment,
+  effectiveUploadMimeType,
   assertMobileDocumentSize,
   assertMobileOssAttachmentSize,
   isWithinMobileOssAttachmentLimit,
@@ -54,19 +55,8 @@ interface UploadDeps {
 const PRESIGN_TIMEOUT_MS = 12_000;
 const PRESIGN_MAX_ATTEMPTS = 2;
 
-/**
- * mimeType 缺失时的统一兜底。预签名的 contentType 与 PUT 实发的 Content-Type
- * 必须**逐字节一致**且**都不能缺**:缺失时预签名把 Content-Type 位签成空串,而
- * expo-file-system 原生直传层会自动补 application/octet-stream,两边不一致直接
- * OSS SignatureDoesNotMatch 403(2026-07 粘贴图片无 mimeType 实撞)。presign 与
- * buildMobileAttachmentUploadHeaders 都必须经 effectiveUploadMimeType 取值。
- */
-const FALLBACK_UPLOAD_MIME = 'application/octet-stream';
-
-export function effectiveUploadMimeType(mimeType: string | undefined): string {
-  const trimmed = mimeType?.trim();
-  return trimmed ? trimmed : FALLBACK_UPLOAD_MIME;
-}
+// Preserve the existing helper import for upload callers.
+export { effectiveUploadMimeType } from '@/session/attachments';
 
 export async function presignMobileAttachmentUpload(
   candidate: MobileAttachmentUploadCandidate,
@@ -276,10 +266,12 @@ export async function putMobileAttachmentUploadFromFile(
   fileUri: string,
   mimeType: string | undefined,
   deps: UploadDeps = {},
-  opts: UploadRecoveryOptions = {},
+  opts: UploadRecoveryOptions & { signedHeaders?: Readonly<Record<string, string>> } = {},
 ): Promise<void> {
   const uploadFile = deps.uploadFile ?? uploadFileNative;
-  const headers = buildMobileAttachmentUploadHeaders(mimeType);
+  // Chat Server signs a different header set from device-link. Never add OSS
+  // headers to an already signed request; preserve the device-link default.
+  const headers = opts.signedHeaders ? { ...opts.signedHeaders } : buildMobileAttachmentUploadHeaders(mimeType);
   await putAttachmentWithRecovery((signal, onProgress) => uploadFile(putUrl, fileUri, headers, { signal, onProgress }), opts, true);
 }
 

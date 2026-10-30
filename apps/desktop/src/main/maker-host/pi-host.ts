@@ -1966,8 +1966,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
-    // 上游拒收可选请求字段（如 prompt_cache_retention / prompt_cache_key）后学到的 per-model
-    // compat 修正，写 models.json 时合并；只改 compat，不动路由与凭证。
+    // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
+    resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
+      ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
+      : path.join(app.getPath('userData'), 'pi-native-compat-overrides.json'),
     resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
       readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,

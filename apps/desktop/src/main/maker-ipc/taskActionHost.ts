@@ -19,7 +19,13 @@ import {
   isolateTaskActionAuthorizer,
   createTaskActionAuthorizer,
   DELEGATED_TASK_ACTIONS,
-  NEEDS_OWNER_REQUEST,
+  taskActionRisk,
+  taskActionStartsIndependentAgent,
+  taskActionCreatesFullAccessTask,
+  type TaskActionConfirmation,
+  type TaskActionTarget,
+  type TaskActionRoutineSnapshot,
+  type TaskActionScheduleDefinition,
   taskActionFingerprint,
   type TaskActionPrincipal,
   type TaskActionScope,
@@ -51,25 +57,6 @@ export function teammateTurnPrincipal(facts: {
     return 'entrusted';
   return 'autonomous';
 }
-
-/**
- * Owner-created routines run as standing grants, so changing or firing one is itself an
- * owner decision: on its own initiative a teammate must not mint the grant it then runs under.
- */
-export const TEAMMATE_STANDING_GRANT_TOOLS: ReadonlySet<string> = new Set([
-  'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
-]);
-
-/**
- * The same standing grants through the scheduler surface, which addresses any schedule
- * (including `routine-*` rows) by id and can create new automations. Reads and the
- * current run's own notify/silence stay available.
- */
-export const TEAMMATE_SCHEDULER_WRITE_TOOLS: ReadonlySet<string> = new Set([
-  'routine_save', 'routine_delete', 'routine_run_now',
-  'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
-  'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
-]);
 
 /** The live turn identifies a continuation, not consent. Only its existing
  * permission reviewer may approve the exact action against restored user intent. */
@@ -123,108 +110,23 @@ export function createDesktopTaskActionAuthorizer(deps: {
       isCurrent?: () => boolean;
     } | null;
     boundary: string;
+    /** The coordinator's in-memory /clear fence; it can be ahead of `sessions.cleared_at`. */
+    clearBoundaryMs?: number | null;
   };
   getSession(sessionId: string): TaskActionSession | undefined;
-  confirm(sessionId: string, tool: string, args: unknown): Promise<boolean>;
-  /** The task is handed to this teammate (workbench continue scope); never inferred from args. */
-  isEntrustedTask?(callerSessionId: string, taskId: string): Promise<boolean>;
+  confirm(sessionId: string, tool: string, args: unknown, context?: TaskActionConfirmation): Promise<boolean>;
+  capturePermissionRequest(sessionId: string, taskId: string): Promise<TaskActionTarget | null>;
+  captureRoutine(botId: string, id: string, forExecution?: boolean): Promise<TaskActionRoutineSnapshot | undefined>;
+  getSessionWorkDir(sessionId: string): Promise<string | undefined>;
+  getScheduleDefinition(id: string, hookInstallation?: { workingDir?: string }, device?: string): Promise<TaskActionScheduleDefinition | null>;
 }): ToolCallAuthorizer {
-  /**
-   * What a teammate may do on its own initiative: its own communication and background
-   * tasks, tasks already handed to it, and its own Orca team. Everything else on the
-   * owner's tasks needs the owner's request. Content scope stays with the permission mode.
-   */
-  const autonomousActionAllowed = async (
-    call: Parameters<ToolCallAuthorizer>[0],
-    sessionId: string,
-    botId: string,
-    orcaSenderSessionId: string | undefined,
-  ): Promise<boolean> => {
-    const db = tryGetDbClient();
-    if (!db) return false;
-    const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-      ? (call.args as Record<string, unknown>) : {};
-    const ownDelegation = async (column: 'id' | 'childSessionId', value: unknown) => {
-      if (typeof value !== 'string' || !value) return false;
-      const [row] = await db.drizzle.select({ id: botDelegations.id }).from(botDelegations)
-        .where(and(eq(botDelegations[column], value), eq(botDelegations.requestingBotId, botId))).limit(1);
-      return !!row;
-    };
-    if (call.server === 'cindy_orca') {
-      if (call.tool === 'start_team' || !orcaSenderSessionId) return false;
-      const [team] = await db.drizzle.select({ id: orcaTeams.id }).from(orcaTeams)
-        .innerJoin(orcaWorkers, eq(orcaWorkers.teamId, orcaTeams.id))
-        .where(and(eq(orcaTeams.leadSessionId, sessionId), eq(orcaTeams.status, 'active'),
-          eq(orcaWorkers.sessionId, orcaSenderSessionId)))
-        .limit(1);
-      return !!team;
-    }
-    switch (call.tool) {
-      case 'send_to_agent':
-        return true;
-      // The workbench service enforces which tasks are handed to this teammate.
-      case 'continue_workbench_task':
-        return true;
-      case 'set_workbench_task_responsibility':
-        return args.responsible === false;
-      case 'message_session_task':
-        // Permission decisions and resuming a pause stay with the owner.
-        return args.decision === undefined && args.mode !== 'resume' && ownDelegation('id', args.task_id);
-      case 'stop_session_task':
-      case 'advance_session_task_route':
-        return ownDelegation('id', args.task_id);
-      case 'send_to_session':
-        return ownDelegation('childSessionId', args.target_session_id);
-      case 'set_session_runtime': {
-        const target = args.session_id;
-        if (target === undefined || target === sessionId) return true;
-        if (await ownDelegation('childSessionId', target)) return true;
-        return typeof target === 'string' && (await deps.isEntrustedTask?.(sessionId, target)) === true;
-      }
-      default:
-        return false;
-    }
-  };
-  /** The principal of a teammate caller's current turn; undefined for non-teammate callers. */
-  const callerTeammatePrincipal = async (sessionId: string): Promise<TaskActionPrincipal | undefined> => {
-    const db = tryGetDbClient();
-    if (!db || isAppSessionBoundaryPending()) throw new Error('HOST_NOT_READY');
-    const [caller] = await db.drizzle
-      .select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
-      .from(botSessionLinks)
-      .where(eq(botSessionLinks.sessionId, sessionId))
-      .limit(1);
-    if (!caller?.botId) return undefined;
-    let groupOwner = false;
-    if (caller.role === 'group') {
-      try {
-        await authorizeGroupTool(sessionId, caller.botId, 'owner-action');
-        groupOwner = true;
-      } catch { /* Not a verified owner request: the teammate acts on its own. */ }
-    }
-    const input = deps.input(sessionId);
-    const live = deps.getSession(sessionId);
-    const origin = live?.getCurrentTurnOrigin();
-    return teammateTurnPrincipal({
-      groupOwner,
-      laneRequesterIsOwner: readChannelToolScope({ sessionId, sessionInstanceId: live?.instanceId })?.requesterIsOwner,
-      ownerInput: input.ownerInput,
-      ownerContinuation: input.ownerContinuation,
-      scheduleId: origin?.kind === 'scheduler' ? origin.scheduleId : undefined,
-    });
-  };
   return isolateTaskActionAuthorizer(async (call) => {
-    if ((call.server === 'cindy_helper' && TEAMMATE_STANDING_GRANT_TOOLS.has(call.tool))
-      || (call.server === 'cindy_scheduler' && TEAMMATE_SCHEDULER_WRITE_TOOLS.has(call.tool))) {
-      if (!call.sessionId) return { ok: true };
-      return (await callerTeammatePrincipal(call.sessionId)) === 'autonomous' ? NEEDS_OWNER_REQUEST : { ok: true };
-    }
     // Per invocation: a concurrent automatic call must never inherit owner evidence.
     let admittedScope: TaskActionScope | null = null;
     let rejectedDecision: Awaited<ReturnType<ToolCallAuthorizer>> | null = null;
     const fingerprint = taskActionFingerprint(call);
     const decision = await createTaskActionAuthorizer({
-      confirm: deps.confirm,
+      confirm: (sessionId, tool, args) => deps.confirm(sessionId, tool, args, { server: call.server }),
       capture: async (call) => {
         if (!call.sessionId) throw new Error('TASK_UNAVAILABLE');
         const sessionId = call.sessionId;
@@ -277,8 +179,11 @@ export function createDesktopTaskActionAuthorizer(deps: {
             ownerContinuation: input.ownerContinuation,
             scheduleId: origin?.kind === 'scheduler' ? origin.scheduleId : undefined,
           });
-          if (principal === 'autonomous' && !(await autonomousActionAllowed(call, sessionId, caller.botId, input.orcaSenderSessionId))) {
-            rejectedDecision = NEEDS_OWNER_REQUEST;
+          // An authenticated external speaker is an access boundary, not an operation
+          // risk. Never turn missing source authority into a claim that the owner refused.
+          if (lane && !lane.requesterIsOwner) {
+            rejectedDecision = { ok: false, errorCode: 'TASK_ACTION_SOURCE_UNAUTHORIZED',
+              message: 'This channel speaker cannot manage the owner’s tasks. Use the owner’s private conversation.' };
             return null;
           }
         }
@@ -309,6 +214,39 @@ export function createDesktopTaskActionAuthorizer(deps: {
             ? (call.args as Record<string, unknown>)
             : {};
         const taskId = typeof args.task_id === 'string' ? args.task_id : undefined;
+        const needsPermissionTarget = principal === 'autonomous' && runtimePermissionApplies &&
+          call.tool === 'message_session_task' && args.decision !== undefined;
+        const permissionTarget = needsPermissionTarget && taskId
+          ? await deps.capturePermissionRequest(sessionId, taskId) : undefined;
+        if (needsPermissionTarget && !permissionTarget) {
+          rejectedDecision = { ok: false, errorCode: 'INTERACTION_STALE',
+            message: 'The target permission request is unavailable. Read the task again before proposing a new decision.' };
+          return null;
+        }
+        const routineBotId = call.server === 'cindy_scheduler' && typeof args.botId === 'string'
+          ? args.botId : caller.botId;
+        const routineId = typeof args.id === 'string' && args.id ? args.id : undefined;
+        const routine = principal === 'autonomous' && runtimePermissionApplies &&
+          (call.tool === 'routine_save' && (args.enabled === true || args.preRunHook != null) || call.tool === 'routine_run_now') && routineBotId && routineId
+          ? await deps.captureRoutine(routineBotId, routineId, call.tool === 'routine_run_now') : undefined;
+        const routineExecution = call.tool === 'routine_run_now' && routine?.preRunCommand?.trim();
+        const routineSignature = JSON.stringify(routine?.details);
+        // Read saved commands for execution/partial updates; the card must show
+        // what a bare schedule ID will run, and a changed definition expires it.
+        const helperInstallation = principal === 'autonomous' && runtimePermissionApplies &&
+          call.server === 'cindy_helper' && call.tool === 'schedule_set_pre_run_hook';
+        const helperCreation = principal === 'autonomous' && runtimePermissionApplies && taskActionCreatesFullAccessTask(call);
+        const helperWorkDir = helperInstallation || helperCreation ? await deps.getSessionWorkDir(sessionId) : undefined;
+        const hookInstallation = call.server === 'cindy_scheduler' && call.tool === 'schedule_set_pre_run_hook'
+          ? { workingDir: typeof args.workingDir === 'string' ? args.workingDir : undefined } : undefined;
+        const scheduleIdArg = hookInstallation ? args.scheduleId : args.id;
+        const scheduleDevice = call.server === 'cindy_scheduler' && typeof args.device === 'string' ? args.device : undefined;
+        const scheduleId = principal === 'autonomous' && runtimePermissionApplies &&
+          (hookInstallation || call.server === 'cindy_scheduler' &&
+            ['schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) && typeof scheduleIdArg === 'string'
+          ? scheduleIdArg : undefined;
+        const schedule = scheduleId ? await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice) : undefined;
+        const scheduleSignature = JSON.stringify(schedule);
         const readDelegation = async (rechecking = false) => {
           if (
             !taskId ||
@@ -370,15 +308,22 @@ export function createDesktopTaskActionAuthorizer(deps: {
           return team ?? null;
         };
         const orcaTeam = useRuntimePermissions ? null : await readOrcaTeam();
+        // An admitted message outlives the turn that sent it. Delivery stops only on
+        // real revocation: account switch, sender cleared or deleted, companion paused
+        // or archived, delegation run or team changed, group grant. The sender's live
+        // Session incarnation, input generation and permission/Plan generation gate
+        // executing this call (assertCurrent), never an already queued message.
+        // The captured database client is the owner identity. A held app-session boundary alone
+        // proves nothing: a same-owner Ghost projection repair holds it too. While it is pending
+        // a delivery check cannot be answered, which is a failed check (kept for retry), not a
+        // revocation; once the client is replaced the next check proves the owner changed.
+        const assertSameOwner = (revokedAs: string) => {
+          if (db !== tryGetDbClient()) throw new Error(revokedAs);
+          if (isAppSessionBoundaryPending()) throw new Error('HOST_NOT_READY');
+        };
         const assertDeliveryCurrent = async () => {
-          runtime?.assertCurrent();
           await group?.refresh();
-          if (
-            isAppSessionBoundaryPending() ||
-            db !== tryGetDbClient() ||
-            deps.input(sessionId).boundary !== input.boundary
-          )
-            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          assertSameOwner('TASK_ACTION_AUTHORIZATION_EXPIRED');
           const [fresh] = await db.drizzle
             .select({
               status: sessions.status,
@@ -398,6 +343,12 @@ export function createDesktopTaskActionAuthorizer(deps: {
             (caller.botId && (fresh.botStatus !== 'active' || fresh.archivedAt !== null))
           )
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          // /clear moves the coordinator's fence before persisting cleared_at, and persisting may
+          // fail, so the sender's clear is also read from memory. A persisted boundary loaded late
+          // (restart) is no newer than what admission already saw in the database.
+          const clearedInMemory = deps.input(sessionId).clearBoundaryMs;
+          if (clearedInMemory != null && clearedInMemory > Math.max(input.clearBoundaryMs ?? 0, caller.clearedAt ?? 0))
+            throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           if (delegation) {
             const current = await readDelegation(true);
             if (!current || current.runSequence !== delegation.runSequence)
@@ -408,15 +359,14 @@ export function createDesktopTaskActionAuthorizer(deps: {
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
           }
           group?.assertCurrent();
-          assertPermissionCurrent();
-          if (db !== tryGetDbClient() || isAppSessionBoundaryPending())
-            throw new Error('OWNER_SCOPE_CHANGED');
-          runtime?.assertCurrent();
+          assertSameOwner('OWNER_SCOPE_CHANGED');
         };
         const assertCurrentSync = () => {
           runtime?.assertInputCurrent();
           group?.assertCurrent();
           assertPermissionCurrent();
+          permissionTarget?.assertCurrent();
+          routine?.assertCurrent();
           const current = deps.input(sessionId);
           if (
             isAppSessionBoundaryPending() || db !== tryGetDbClient() ||
@@ -427,6 +377,9 @@ export function createDesktopTaskActionAuthorizer(deps: {
           key: input.key,
           ownerInput,
           principal,
+          ...(routine && routineBotId && routineId
+            ? { routine: { botId: routineBotId, id: routineId, revision: routine.revision } } : {}),
+          ...(schedule?.mutationGuard ? { scheduleGuard: schedule.mutationGuard } : {}),
           delegated: !!delegation || !!orcaTeam,
           assertDeliveryCurrent,
           assertCurrentSync,
@@ -434,9 +387,44 @@ export function createDesktopTaskActionAuthorizer(deps: {
             if (fingerprint !== taskActionFingerprint(call))
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             await assertDeliveryCurrent();
+            if ((helperInstallation || helperCreation) && await deps.getSessionWorkDir(sessionId) !== helperWorkDir)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            if (scheduleId && JSON.stringify(await deps.getScheduleDefinition(scheduleId, hookInstallation, scheduleDevice)) !== scheduleSignature)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+            if (routineExecution && routineBotId && routineId &&
+              JSON.stringify((await deps.captureRoutine(routineBotId, routineId, true))?.details) !== routineSignature)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
             assertCurrentSync();
           },
         };
+        // Missing owner provenance no longer disables ordinary work. Only explicit
+        // risks on autonomous turns need an exact, visible owner decision. The decision
+        // keeps the caller principal and admits only this invocation. Reviewed active
+        // routine instructions can become the standing grant for later routine runs.
+        const risk = principal === 'autonomous' ? taskActionRisk(call, { routineEnabled: routine?.enabled, routinePrompt: routine?.prompt,
+          routineBuiltin: routine?.builtin, routinePreRunCommand: routine?.preRunCommand, schedule }) : undefined;
+        const scheduleForConfirmation = schedule
+          ? (({ mutationGuard: _mutationGuard, ...display }) => display)(schedule)
+          : undefined;
+        if (risk && runtimePermissionApplies) {
+          await scope.assertCurrent();
+          const confirmed = await deps.confirm(sessionId, call.tool, structuredClone(call.args),
+            { server: call.server, risk, ...(permissionTarget ? { details: permissionTarget.details }
+              : helperInstallation ? { details: { installation: { workingDir: helperWorkDir ?? null } } }
+              : helperCreation ? { details: { execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions', workingDir: helperWorkDir ?? null } } }
+              : risk === 'command' && taskActionStartsIndependentAgent(call, schedule)
+                ? { details: { ...(scheduleForConfirmation ? { schedule: scheduleForConfirmation } : {}), execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' } } }
+              : scheduleForConfirmation ? { details: { schedule: scheduleForConfirmation } }
+              : (call.tool === 'routine_run_now' || risk === 'resume') && routine?.details
+                ? { details: routine.details } : {}) });
+          if (!confirmed) {
+            rejectedDecision = { ok: false, errorCode: 'USER_CANCELLED',
+              message: 'The action was not approved. Do not execute or retry it without a new request.' };
+            return null;
+          }
+          admittedScope = scope;
+          return null;
+        }
         if (useRuntimePermissions) {
           // Owner requests and live execution modes use the normal Agent permission flow.
           // Retain delivery evidence so workbench, queues and new delegations work too.

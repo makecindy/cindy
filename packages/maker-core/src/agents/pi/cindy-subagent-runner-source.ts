@@ -22,12 +22,15 @@
  * `verifyPiSubagentRunnerIdentity` in `pi-subagent-runs.ts`.
  */
 
+import { createPiCacheInputTracker } from './cache-input.js';
+
 export const CINDY_SUBAGENT_RUNNER_FILENAME = 'cindy-subagent-runner.cjs';
 
 export const CINDY_SUBAGENT_RUNNER_SOURCE = String.raw`'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
-const { createHmac, randomUUID } = require('node:crypto');
+const { createHash, createHmac, randomUUID } = require('node:crypto');
+const createPiCacheInputTracker = ${createPiCacheInputTracker.toString()};
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -869,6 +872,7 @@ function main() {
       let settled = false;
       let agentSettled = false;
       let terminalError = '';
+      const cacheInputTracker = createPiCacheInputTracker(text => createHash('sha256').update(text).digest('hex'));
 
       function settle(code, signal, spawnError) {
         if (settled) return;
@@ -910,6 +914,14 @@ function main() {
         let event;
         try { event = JSON.parse(line); } catch (_) {
           safeAppendTranscript(state, { type: 'cindy.subagent.stdout', at: Date.now(), childId: task.childId, line: line });
+          return;
+        }
+        cacheInputTracker.observe(event);
+        if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
+          let request = {};
+          try { request = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); } catch (_) {}
+          const receipt = !task.stopRequested && !state.stopRequested ? cacheInputTracker.read(request && request.key) : undefined;
+          send(task, { type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt || {}) });
           return;
         }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });

@@ -774,6 +774,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   responsivenessTracker = createResponsivenessTracker({
+    confirmRelayForTimeout: () => client?.confirmRelayForPeerTimeout() ?? false,
     // 探测直接走 client.invoke(guardInvoke 已在 tracker 内持有探测席位,不能再套
     // remoteInvoke 的外层门禁,否则自旋)。曾协商可靠传输的 peer 必须先恢复 link，
     // 否则 sessions:list 也只会滞留发送队列，反复得到 BACKPRESSURE。
@@ -1764,8 +1765,9 @@ function assertRemoteControlTargetEnabled(deviceId: string): void {
  */
 const CONNECT_READY_TIMEOUT_MS = 1_500;
 
-async function ensureOnlineForRequest(): Promise<void> {
-  if (!client || client.getStatus() === 'online') return;
+async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
+  if (!client || client.getStatus() === 'online'
+    || (deviceId && client.hasOfflineDirectPath(deviceId))) return;
   await client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
@@ -1958,12 +1960,12 @@ export async function remoteInvoke(
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
-    await ensureOnlineForRequest();
+    await ensureOnlineForRequest(deviceId);
     // fail-closed 边界不得跨 await 失效:等待期间用户可能已关闭该设备控制(复验
     // 授权),或显式 CLOSE_LINK(复验取消代次)(review P1 ×2)。
     preSend();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    // 共享任务与供应商分享的对端是另一个账号：只走 relay，不尝试点对点直连。
+    // 同账号专用的 tryPeerInvoke 不用于 scoped peer；供应商分享直连由 DeviceLinkClient 的可靠传输层处理。
     if (!isScopedPeer(deviceId)) {
       // 直连会保存这个回调，之后在空闲关闭等定时器里调用（届时 preSend 可能已失效）。
       // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
@@ -2017,7 +2019,7 @@ export async function remoteBackgroundInvoke(
   // 分享来的供应商：任务记录里是 `share:<id>`，换成分享者那台电脑的本地 peer key。
   const deviceId = await resolveRemoteAgentTargetWhenReady(agentDeviceId);
   options?.preSend?.();
-  const shared = deviceId !== agentDeviceId;
+  const shared = deviceId !== agentDeviceId || parseProviderSharePeer(deviceId)?.role === 'host';
   if (!shared) return backgroundInvokeDevice(deviceId, channel, args, options);
   try {
     // 跨区域分享：分享者电脑在另一个区域的 relay 上，经那条连接发送。
@@ -2087,7 +2089,7 @@ export async function remoteSubscribe(
   // CLOSE_LINK 的在途调用;之后的新调用(重放重试 / 用户重开)按新代次照常。
   const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const run = async (): Promise<InvokeResultPayload> => {
-    await ensureOnlineForRequest();
+    await ensureOnlineForRequest(deviceId);
     let liveTopics = liveTopicsNow();
     if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');

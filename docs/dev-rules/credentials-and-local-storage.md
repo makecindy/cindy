@@ -101,17 +101,26 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   真实 CLI 的入口、项目设置、原生 / SDK hooks 与权限回归见
   [smoke-claude-sdk.mjs](../../scripts/smoke-claude-sdk.mjs)。
 
-## Linux Hyprland / Omarchy 凭证后端
+## Linux 凭证后端
 
-- Desktop 在 Electron `ready` 之前为 Hyprland 默认选择 `gnome-libsecret`，避免桌面
-  自动识别失败导致登录回调收到令牌后无法加密保存。桌面身份依次取非空的
-  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`；其他桌面保持
-  Electron 原有选择。实现见
-  [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
+- Desktop 在 Electron `ready` 之前为 Hyprland、labwc，以及没有桌面身份的会话默认选择
+  `gnome-libsecret`。Chromium 不认识这些会话时会落到 `basic_text`，打包版会把它当成
+  加密不可用，即使 Secret Service 已经解锁。桌面身份依次取非空的
+  `XDG_CURRENT_DESKTOP`、`XDG_SESSION_DESKTOP`、`DESKTOP_SESSION`。GNOME、KDE、XFCE
+  等 Chromium 已能识别的桌面，以及 sway、niri 等未证实的命名桌面，保持 Electron 原有选择。
+  实现见 [linuxPasswordStore.ts](../../apps/desktop/src/main/linuxPasswordStore.ts)，回归见
   [linuxPasswordStore.test.ts](../../apps/desktop/src/main/__tests__/linuxPasswordStore.test.ts)。
 - 显式 `--password-store` 优先于此默认值。系统仍需提供可用且已解锁的 Secret Service
-  （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。现有仅限开发版的
+  （例如 GNOME Keyring）；此修复不安装或解锁钥匙串，也不新增明文降级。libsecret 缺失时
+  Chromium 仍会回退，Cindy 继续拒绝明文。现有仅限开发版的
   `XDT_DEV_SAFE_STORAGE_BASIC=1` 调试行为保持不变。
+- 不把空的桌面环境变量本身当成禁止登录的条件，也不在启动时探测钥匙串。用户发起验证码
+  请求、验证码提交或浏览器登录时，才检查当前加密后端是否可用；不可用则返回既有的
+  `CREDENTIAL_STORE_UNAVAILABLE`，不发送验证码、不打开浏览器、不交换授权码。凭证读取
+  失败时记录后端名称、`password-store` 开关类别，以及是否有桌面身份、是否有会话总线
+  两个布尔值，不记录桌面名、总线地址、令牌或完整环境变量。加密不可用且 vault 或退出
+  标记文件确实不存在时，日志说明记录缺席且后端不可用，仍抛出
+  `CREDENTIAL_STORE_UNAVAILABLE`，不把已有但暂时读不出的记录当成已删除。
 - 旧版临时处理：完全退出 Cindy 后运行 `cindy --password-store=gnome-libsecret`。
   实机验收需覆盖登录、退出应用后正常启动仍保持登录，以及 `cindy://` 回调启动路径。
 

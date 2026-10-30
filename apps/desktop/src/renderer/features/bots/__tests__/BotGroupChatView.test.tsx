@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
     options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
+  locationState: null as { createdGroupInvite?: string | null } | null,
+  createInvite: vi.fn(),
   navigate: vi.fn(),
   getBotGroup: vi.fn(),
   cachedGroup: null as BotGroupDetail | null,
@@ -72,7 +74,7 @@ vi.mock('react-i18next', async (original) => ({
   }),
 }));
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({ pathname: '/bots/groups/g1', search: '' }),
+  useLocation: () => ({ pathname: `/bots/groups/${mocks.groupId}`, search: '', state: mocks.locationState }),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ groupId: mocks.groupId }),
 }));
@@ -284,6 +286,8 @@ beforeEach(() => {
   resetBotReadStateForTests();
   resetBotGroupOutboxForTests();
   mocks.groupId = 'g1';
+  mocks.locationState = null;
+  mocks.createInvite.mockReset().mockResolvedValue({ ok: true, link: 'cindy://chat-invite/preview', expiresAt: null, reusable: true });
   __resetControlledBannerForTests();
   mocks.controlledPush = null;
   mocks.getControlledState.mockReset().mockResolvedValue({ controlledBy: [] });
@@ -332,7 +336,7 @@ beforeEach(() => {
       cleanupCachedImages: vi.fn(async () => undefined),
       getFileThumbnail: vi.fn(async () => null),
       maker: {
-        chatServer: { thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
+        chatServer: { createInvite: mocks.createInvite, thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => (args[1] as { cacheOnly?: boolean } | undefined)?.cacheOnly
           ? Promise.resolve(mocks.cachedGroup ? { ok: true, group: mocks.cachedGroup } : { ok: false, errorCode: 'NOT_FOUND' })
@@ -359,6 +363,25 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  // Regression: returning to a group must not replay its consumed creation intent.
+  it('does not reopen a created invitation or regenerate its link after leaving and returning', async () => {
+    mocks.locationState = { createdGroupInvite: 'g1' };
+    const tree = () => <Tooltip.Provider><FeatureSidebarSlotProvider isCollapsed={false}>
+      <HeaderSlot /><BotGroupChatView />
+    </FeatureSidebarSlotProvider></Tooltip.Provider>;
+    const view = render(tree());
+    await screen.findByRole('button', { name: 'bots.groupChat.server.copyLink' });
+    expect(mocks.createInvite).toHaveBeenCalledTimes(1);
+    mocks.locationState = { createdGroupInvite: null };
+    mocks.groupId = 'g2';
+    view.rerender(tree());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    mocks.groupId = 'g1';
+    view.rerender(tree());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.createInvite).toHaveBeenCalledTimes(1);
+  });
+
   it('clears the selected route when an authoritative personal hide unmounts settings', async () => {
     renderView();
     await screen.findByRole('textbox');

@@ -3372,7 +3372,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       notify('wrong-instance:{"wireEffort":"low"}');
       notify(`${token}:invalid-json`);
       expect(debug.mock.calls.filter(([message]) => message === 'pi request stage')).toEqual([]);
-      notify(`${token}:${JSON.stringify({ toolCount: 2, messageCount: 3, wireEffort: 'medium', secret: 'private-content' })}`);
+      notify(`${token}:${JSON.stringify({ toolCount: 2, messageCount: 3, preparationMs: 5012.4, wireEffort: 'medium', secret: 'private-content' })}`);
       const delta = { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'private-output' } };
       knobs.onEvent?.(delta);
       knobs.onEvent?.(delta);
@@ -3382,9 +3382,9 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       knobs.onEvent?.({ type: 'agent_settled' });
       stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
       expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output', 'agent-settled']);
-      expect(stages[0]).toMatchObject({ toolCount: 2, messageCount: 3, wireEffort: 'medium', requestSequence: 1 });
+      expect(stages[0]).toMatchObject({ toolCount: 2, messageCount: 3, preparationMs: 5012, wireEffort: 'medium', requestSequence: 1 });
       expect(stages[2]).toMatchObject({ requestSequence: 1, elapsedMs: expect.any(Number), turnElapsedMs: expect.any(Number) });
-      notify(`${token}:${JSON.stringify({ toolCount: -1, messageCount: 'secret', wireEffort: 'private-effort' })}`);
+      notify(`${token}:${JSON.stringify({ toolCount: -1, messageCount: 'secret', preparationMs: 60001, wireEffort: 'private-effort' })}`);
       const last = debug.mock.calls.filter(([message]) => message === 'pi request stage').at(-1)?.[1];
       expect(last).toEqual({ startupTraceId: resolverOptions?.startupTraceId, requestSequence: 2,
         stage: 'provider-request-prepared', wireEffort: null });

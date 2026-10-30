@@ -88,7 +88,7 @@ export function BotCreateMenu({ variant, label }: {
       {dialog === 'join' ? (
         <ChatInviteDialog
           onClose={() => { setDialog(null); trigger.current?.focus(); }}
-          onJoined={id => navigate(`/bots/groups/${encodeURIComponent(id)}`)}
+          onJoined={(id, configureMask) => navigate(`/bots/groups/${encodeURIComponent(id)}${configureMask ? '?groupSettings=1&groupMask=1' : ''}`)}
         />
       ) : null}
     </>

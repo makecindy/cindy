@@ -291,6 +291,7 @@
     "failedStep": "第 {{step}} 步沒做完"
   },
   "server": {
+    "attachmentTooLarge": "群聊附件不能超過 {{size}} MB，請選擇較小的檔案。",
     "offline": "暫時無法連線群聊，請重試。",
     "loadFailed": "暫時無法讀取群聊，請重試。",
     "loadOlder": "載入更早的訊息",
@@ -318,5 +319,77 @@
     "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
     "failed": "操作未完成，請重試。",
     "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+  },
+  "mask": {
+    "toolAccess": "工具權限",
+    "catchup": {
+      "title": "@ 我的訊息",
+      "me": "我",
+      "markAll": "全部標為已讀",
+      "empty": "沒有未讀的 @ 訊息",
+      "thread": "話題",
+      "main": "群聊",
+      "answered": "已代答"
+    },
+    "title": "AI 代答模式",
+    "settings": "AI 代答設定",
+    "companion": "我的夥伴",
+    "choose": "選擇一位夥伴",
+    "enabled": "自動代答",
+    "triggerLabel": "觸發方式",
+    "resumeAfter": "離開多久後恢復",
+    "start": "開始時間",
+    "end": "結束時間",
+    "startManual": "現在開啟",
+    "stop": "停止代答",
+    "todos": "整理與我有關的待辦",
+    "digestLabel": "彙總給我",
+    "saving": "正在儲存…",
+    "saveError": "未能儲存，仍按原設定代答。請重試。",
+    "retry": "重試",
+    "loading": "正在載入你的設定…",
+    "takeover": "我來回覆",
+    "resume": "恢復代答",
+    "status": {
+      "enabled": "已啟用",
+      "paused": "已讓位",
+      "off": "未開啟",
+      "offline": "已離線",
+      "waiting": "待觸發",
+      "unbound": "未連結"
+    },
+    "detail": {
+      "paused": "你已接回這段交流",
+      "off": "自動代答已關閉",
+      "offline": "代答已暫停 · 電腦離線",
+      "waiting": "等待手動開啟",
+      "unbound": "尚未選擇夥伴",
+      "enabled": "夥伴正在為你待答"
+    },
+    "trigger": {
+      "always": "永久觸發",
+      "manual": "手動指定觸發",
+      "scheduled": "定時觸發"
+    },
+    "digest": {
+      "daily": "每日彙總",
+      "manual": "手動彙整"
+    },
+    "minutes": "{{count}} 分鐘",
+    "presence": "你正在參與 · 離開 {{minutes}} 分鐘後恢復",
+    "scheduledWait": "等待 {{time}} 開始",
+    "attribution": "{{name}} 為 {{owner}} 回覆",
+    "digestNow": "立即整理",
+    "digestWorking": "整理中…",
+    "digestSent": "已傳送至夥伴私聊",
+    "digestFailed": "整理失敗，請重試",
+    "digestEmpty": "暫無新的待整理內容",
+    "access": {
+      "chat": "僅群內交流",
+      "tools": "主人已授權工具與資料",
+      "authorizeTitle": "授權本群使用 {{name}} 的工具與資料？",
+      "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
+      "confirm": "確認"
+    }
   }
 }

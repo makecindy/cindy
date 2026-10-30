@@ -197,7 +197,11 @@ function requiredNavigation(revision = 0): GhostSetupAssessment {
 
 function harness(
   initial: GhostSetupAssessment,
-  extras?: { resolveStoreId?: (ghostId: string) => string; getTargetToken?: (ghostId: string) => string | null },
+  extras?: {
+    resolveStoreId?: (ghostId: string) => string;
+    getTargetToken?: (ghostId: string) => string | null;
+    cancelledMessage?: () => string;
+  },
 ) {
   const changeBus = new GhostSetupChangeBus();
   const broadcast = vi.fn();
@@ -231,6 +235,7 @@ function harness(
     terminalGraceMs: 0,
     ...(extras?.resolveStoreId ? { resolveStoreId: extras.resolveStoreId } : {}),
     ...(extras?.getTargetToken ? { getTargetToken: extras.getTargetToken } : {}),
+    ...(extras?.cancelledMessage ? { cancelledMessage: extras.cancelledMessage } : {}),
   });
   return {
     bridge,
@@ -341,10 +346,10 @@ describe('GhostSetupCoordinator', () => {
   });
 
   it('does not open a card after its MCP request was already cancelled', async () => {
-    const h = harness(required());
+    const h = harness(required(), { cancelledMessage: () => 'localized cancel' });
     const controller = new AbortController(); controller.abort();
     await expect(h.coordinator.ensureReady({ sessionId: 'task', ghostId: 'gmail', signal: controller.signal }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'SETUP_CANCELLED' });
+      .resolves.toEqual({ ok: false, errorCode: 'SETUP_CANCELLED', message: 'localized cancel' });
     expect(h.bridge.pendingSnapshots()).toHaveLength(0);
   });
 
@@ -424,7 +429,7 @@ describe('GhostSetupCoordinator', () => {
     await expect(waiting).resolves.toEqual({
       ok: false,
       errorCode: 'SETUP_CANCELLED',
-      message: '用户取消了插件设置，本次调用未执行。',
+      message: 'Plugin setup was cancelled; this call was not run.',
     });
     expect(h.executeAction).not.toHaveBeenCalled();
   });
@@ -921,8 +926,10 @@ describe('GhostSetupCoordinator', () => {
     await waiting;
   });
 
+  // #7581:取消文案曾在 Coordinator 里写死中文，英文界面下用户看到中文。文案由宿主按界面
+  // 语言注入(register.ts 的 t('newChat.pluginSetup.cancelled'))，卡片取消必须用注入的文案。
   it('cancel settles the waiting call without executing an action', async () => {
-    const h = harness(required());
+    const h = harness(required(), { cancelledMessage: () => 'localized cancel' });
     const waiting = h.coordinator.ensureReady({
       sessionId: 'session-1',
       ghostId: 'gmail',
@@ -937,7 +944,7 @@ describe('GhostSetupCoordinator', () => {
     await expect(waiting).resolves.toEqual({
       ok: false,
       errorCode: 'SETUP_CANCELLED',
-      message: '用户取消了插件设置，本次调用未执行。',
+      message: 'localized cancel',
     });
     expect(h.executeAction).not.toHaveBeenCalled();
   });

@@ -291,6 +291,7 @@
     "failedStep": "第 {{step}} 步没做完"
   },
   "server": {
+    "attachmentTooLarge": "群聊附件不能超过 {{size}} MB，请选择较小的文件。",
     "offline": "暂时无法连接群聊，请重试。",
     "loadFailed": "暂时无法读取群聊，请重试。",
     "loadOlder": "加载更早的消息",
@@ -318,5 +319,77 @@
     "dissolved": "群聊已解散，仍可查看有权访问的历史消息。",
     "failed": "操作未完成，请重试。",
     "lastOwner": "请先转让群主或解散群聊，再退出。"
+  },
+  "mask": {
+    "toolAccess": "工具权限",
+    "catchup": {
+      "title": "@ 我的消息",
+      "me": "我",
+      "markAll": "全部标为已读",
+      "empty": "没有未读的 @ 消息",
+      "thread": "话题",
+      "main": "群聊",
+      "answered": "已代答"
+    },
+    "title": "AI 代答模式",
+    "settings": "AI 代答设置",
+    "companion": "我的伙伴",
+    "choose": "选择一位伙伴",
+    "enabled": "自动代答",
+    "triggerLabel": "触发方式",
+    "resumeAfter": "离开多久后恢复",
+    "start": "开始时间",
+    "end": "结束时间",
+    "startManual": "现在开启",
+    "stop": "停止代答",
+    "todos": "整理与我有关的待办",
+    "digestLabel": "汇总给我",
+    "saving": "正在保存…",
+    "saveError": "未能保存，仍按原设置代答。请重试。",
+    "retry": "重试",
+    "loading": "正在加载你的设置…",
+    "takeover": "我来回复",
+    "resume": "恢复代答",
+    "status": {
+      "enabled": "已启用",
+      "paused": "已让位",
+      "off": "未开启",
+      "offline": "已离线",
+      "waiting": "待触发",
+      "unbound": "未绑定"
+    },
+    "detail": {
+      "paused": "你已接回这段交流",
+      "off": "自动代答已关闭",
+      "offline": "代答已暂停 · 电脑离线",
+      "waiting": "等待手动开启",
+      "unbound": "尚未选择伙伴",
+      "enabled": "伙伴正在为你待答"
+    },
+    "trigger": {
+      "always": "永久触发",
+      "manual": "手动指定触发",
+      "scheduled": "定时触发"
+    },
+    "digest": {
+      "daily": "每日汇总",
+      "manual": "手动汇总"
+    },
+    "minutes": "{{count}} 分钟",
+    "presence": "你正在参与 · 离开 {{minutes}} 分钟后恢复",
+    "scheduledWait": "等待 {{time}} 开始",
+    "attribution": "{{name}} 为 {{owner}} 回复",
+    "digestNow": "立即整理",
+    "digestWorking": "整理中…",
+    "digestSent": "已发到伙伴私聊",
+    "digestFailed": "整理失败，请重试",
+    "digestEmpty": "暂无新的待整理内容",
+    "access": {
+      "chat": "仅群内交流",
+      "tools": "主人已授权工具与资料",
+      "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
+      "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
+      "confirm": "确认"
+    }
   }
 }

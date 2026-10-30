@@ -291,6 +291,7 @@
     "failedStep": "ステップ {{step}} は完了できませんでした"
   },
   "server": {
+    "attachmentTooLarge": "グループの添付ファイルは {{size}} MB 以下にしてください。小さいファイルを選んでください。",
     "offline": "グループチャットに接続できません。もう一度お試しください。",
     "loadFailed": "グループチャットを読み込めません。もう一度お試しください。",
     "loadOlder": "以前のメッセージを読み込む",
@@ -318,5 +319,77 @@
     "dissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "failed": "操作を完了できませんでした。もう一度お試しください。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
+  },
+  "mask": {
+    "toolAccess": "ツールの権限",
+    "catchup": {
+      "title": "自分へのメンション",
+      "me": "自分",
+      "markAll": "すべて既読にする",
+      "empty": "未読のメンションはありません",
+      "thread": "スレッド",
+      "main": "グループチャット",
+      "answered": "代理返信済み"
+    },
+    "title": "AI代理返信モード",
+    "settings": "AI代理返信の設定",
+    "companion": "自分のパートナー",
+    "choose": "パートナーを選ぶ",
+    "enabled": "自動で代理返信",
+    "triggerLabel": "起動方法",
+    "resumeAfter": "不在時の再開まで",
+    "start": "開始時刻",
+    "end": "終了時刻",
+    "startManual": "今すぐ開始",
+    "stop": "代理返信を停止",
+    "todos": "自分のやることを整理",
+    "digestLabel": "まとめを受け取る",
+    "saving": "保存中…",
+    "saveError": "保存できませんでした。以前の設定で続行します。再試行してください。",
+    "retry": "再試行",
+    "loading": "設定を読み込み中…",
+    "takeover": "自分で返信",
+    "resume": "AI代理返信を再開",
+    "status": {
+      "enabled": "有効",
+      "paused": "一時停止",
+      "off": "オフ",
+      "offline": "オフライン",
+      "waiting": "待機中",
+      "unbound": "未設定"
+    },
+    "detail": {
+      "paused": "このやり取りはあなたが対応中",
+      "off": "自動の代理返信はオフ",
+      "offline": "代理返信を一時停止 · PCオフライン",
+      "waiting": "手動の開始待ち",
+      "unbound": "パートナー未選択",
+      "enabled": "仲間が代わりに返信できる状態です"
+    },
+    "trigger": {
+      "always": "常時有効",
+      "manual": "手動で開始",
+      "scheduled": "時刻を指定"
+    },
+    "digest": {
+      "daily": "毎日",
+      "manual": "手動"
+    },
+    "minutes": "{{count}}分",
+    "presence": "本人が対応中 · 不在{{minutes}}分で再開",
+    "scheduledWait": "{{time}}に開始",
+    "attribution": "{{name}} が {{owner}} に代わって返信",
+    "digestNow": "今すぐ整理",
+    "digestWorking": "整理中…",
+    "digestSent": "パートナーとのチャットに送信済み",
+    "digestFailed": "整理できませんでした。再試行してください。",
+    "digestEmpty": "新しく整理する内容はありません",
+    "access": {
+      "chat": "グループ内の会話のみ",
+      "tools": "ツールと情報の利用を許可済み",
+      "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
+      "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
+      "confirm": "確認"
+    }
   }
 }

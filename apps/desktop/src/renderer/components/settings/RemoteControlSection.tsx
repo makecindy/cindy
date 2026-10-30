@@ -24,7 +24,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from './MyDevicesPanel';
-import { RelayServicePanel, relaySummary, useSelfHostedRelayState } from './RelayServicePanel';
+import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
@@ -167,9 +167,6 @@ export function RemoteControlSection() {
   // 再把下方内容顶开一格。
   const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
-  const [relayOpen, setRelayOpen] = useState(
-    () => new URLSearchParams(location.search).get('section') === 'remoteControl.relay',
-  );
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -190,7 +187,6 @@ export function RemoteControlSection() {
   useLayoutEffect(() => {
     if (entry?.targetId === 'settings-search-target-remote-ssh') setSshOpen(true);
     if (entry?.targetId === 'settings-search-target-remote-devices') setDevicesOpen(true);
-    if (entry?.targetId === 'settings-search-target-remote-relay') setRelayOpen(true);
   }, [entry, activation]);
 
   const collapseRequestedRef = useRef(false);
@@ -298,17 +294,18 @@ export function RemoteControlSection() {
                 focusRequestKey={focusRequestKey}
               />
             </CollapsibleSubSection>
-            <div className="h-px w-full bg-[var(--border-default)]" />
-            <CollapsibleSubSection
-              id="settings-search-target-remote-relay"
-              title={t('settings.remoteControl.sections.relay')}
-              summary={relaySummary(relay.state, t)}
-              dotColor={null}
-              open={relayOpen}
-              onToggle={() => setRelayOpen((value) => !value)}
-            >
+            {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
+            <section id="settings-search-target-remote-relay" className="flex flex-col gap-3">
+              <div className="flex flex-col gap-0.5">
+                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                  {t('settings.remoteControl.relay.route.title')}
+                </h3>
+                <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                  {t('settings.remoteControl.relay.route.hint')}
+                </p>
+              </div>
               <RelayServicePanel controller={relay} />
-            </CollapsibleSubSection>
+            </section>
             <div className="h-px w-full bg-[var(--border-default)]" />
           </>
         ) : null}

@@ -2096,8 +2096,8 @@ const CONNECT_READY_TIMEOUT_MS = 1_500;
 
 // 发请求前确保连接就绪:online 直接放行;否则促成立即重连并有界等待上线,
 // 超时抛 NOT_CONNECTED(transient)交由上层重试 —— 把"等整个退避 gap"压成"等一次重连"。
-function ensureOnlineForRequest(client: DeviceLinkClient): Promise<void> {
-  if (client.getStatus() === 'online') return Promise.resolve();
+function ensureOnlineForRequest(client: DeviceLinkClient, deviceId?: string): Promise<void> {
+  if (client.getStatus() === 'online' || (deviceId && client.hasOfflineDirectPath(deviceId))) return Promise.resolve();
   return client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
@@ -2190,7 +2190,7 @@ async function sendInvoke<T>(
     allowProbe: opts?.allowProbe,
   });
   try {
-    await ensureOnlineForRequest(client);
+    await ensureOnlineForRequest(client, deviceId);
     // 连接就绪后先检查一次:重连等待期间调用方状态可能已失效
     // (写被同字段新写取代),抛错即中止发送。
     opts?.preSend?.();
@@ -2273,7 +2273,7 @@ async function sendSubscribe(
   // subscribe 同样走隧道请求超时等待(默认 15s),一样计入并受熔断限制(见 sendInvoke 注释)。
   const slot = acquireDeviceSendSlot(deviceId);
   try {
-    await ensureOnlineForRequest(client);
+    await ensureOnlineForRequest(client, deviceId);
   } catch (err) {
     settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
@@ -2318,7 +2318,7 @@ async function sendUnsubscribe(
 ): Promise<void> {
   const slot = acquireDeviceSendSlot(deviceId);
   try {
-    await ensureOnlineForRequest(client);
+    await ensureOnlineForRequest(client, deviceId);
   } catch (err) {
     settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;

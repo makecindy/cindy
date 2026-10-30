@@ -278,7 +278,8 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
   const companion = input.companion;
   if (isRecord(companion) && typeof companion.id === 'string' && typeof companion.role === 'string') {
     out.companion = { id: companion.id, role: companion.role,
-      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}) };
+      ...(typeof companion.channel === 'string' ? { channel: companion.channel } : {}),
+      ...(typeof companion.routineId === 'string' ? { routineId: companion.routineId } : {}) };
   }
   return out;
 }

@@ -20,6 +20,8 @@ import { CindyDevicePicker } from '../CindyDevicePicker';
 import { CindyDeviceRow } from '../CindyDeviceRow';
 import { cindyDeviceOptions, type CindyDeviceOption } from '../cindyDeviceRoster';
 import type { BotProfile } from '../botStore';
+import { remoteTeammateStatus } from '../teammateRosterStatus';
+import type { RemoteBot } from '../remoteBotRoster';
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeAll(() => {
@@ -80,6 +82,7 @@ it.each([
       <I18nextProvider i18n={i18n}>
         {surface === 'row' ? (
           <CindyDeviceRow
+            status={remoteTeammateStatus(options[1].bot as RemoteBot, options[1].unread)}
             current={options[1]}
             options={options}
             selected={false}
@@ -112,8 +115,15 @@ it.each([
       expect(screen.queryByText(en.bots.remote.unknown)).toBeNull();
       expect(screen.queryByText(en.bots.remote.online)).toBeNull();
       if (surface === 'row') {
+        // Unit regression: remote unread without an exact count used to add a second
+        // blue point on the row. Menu unread and accurate row counts must remain.
+        const row = within(screen.getByTestId('cindy-device-row'));
+        expect(row.queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
+        if (unreadCount > 1) {
+          expect(row.getByLabelText(i18n.t('bots.list.unread', { count: unreadCount }))).toBeTruthy();
+        }
         expect(
-          view.container.querySelector(`span[title="${en.bots.remote.offline} · Mac mini"]`) !==
+          view.container.querySelector('[data-teammate-status="error"]') !==
             null,
         ).toBe(offline);
       }
@@ -164,7 +174,7 @@ it.each([true, false])(
     const onSelect = vi.fn();
     render(
       <I18nextProvider i18n={i18n}>
-        <CindyDeviceRow
+        <CindyDeviceRow status="idle"
           current={options[0]}
           options={options}
           selected={selected}

@@ -55,9 +55,13 @@ describe('Review PDF utility process packaging contract', () => {
   it('staged canvas wrapper and current-platform binding load without workspace node_modules', async () => {
     const runtimePackages = reviewPdfRuntimePackages(process.platform, process.arch);
     const temp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-review-pdf-package-'));
+    let phase = 'stage runtime packages';
+    const startedAt = performance.now();
     try {
       const stagedModules = path.join(temp, 'node_modules');
       const stagePackage = async (name: string): Promise<void> => {
+        phase = 'stage ' + name;
+        console.info('[review-pdf-package] ' + phase);
         const packageJson = workspaceRequire.resolve(`${name}/package.json`, {
           paths: [desktopRoot],
         });
@@ -67,6 +71,8 @@ describe('Review PDF utility process packaging contract', () => {
       };
       for (const runtimePackage of runtimePackages) await stagePackage(runtimePackage);
 
+      phase = 'load staged native binding and encode PNG';
+      console.info('[review-pdf-package] ' + phase);
       const probeRequirePath = path.join(temp, 'probe.cjs');
       const probe = await execFileAsync(
         process.execPath,
@@ -77,10 +83,26 @@ const stagedRequire = createRequire(${JSON.stringify(probeRequirePath)});
 const canvas = stagedRequire('@napi-rs/canvas');
 process.stdout.write(canvas.createCanvas(1, 1).toBuffer('image/png').subarray(1, 4).toString('ascii'));`,
         ],
-        { cwd: temp, encoding: 'utf8' },
+        {
+          cwd: temp,
+          encoding: 'utf8',
+          // This contract probes packaging and PNG encoding, neither of which
+          // needs the host's installed fonts. Keep native loading real while
+          // excluding machine-dependent system/user font enumeration.
+          env: { ...process.env, DISABLE_SYSTEM_FONTS_LOAD: '1' },
+          timeout: 15_000,
+          killSignal: 'SIGKILL',
+        },
       );
       expect(probe.stdout).toBe('PNG');
+    } catch (cause) {
+      throw new Error(
+        'Review PDF package probe failed during ' + phase + ' after ' +
+        Math.round(performance.now() - startedAt) + 'ms',
+        { cause },
+      );
     } finally {
+      console.info('[review-pdf-package] cleanup after ' + phase);
       await fs.promises.rm(temp, { recursive: true, force: true });
     }
     // Keep real staging/loading and the existing IO budget, but yield while copying

@@ -759,6 +759,39 @@ describe('Scheduler', () => {
     expect(h.runner.fire).toHaveBeenCalledTimes(1);
   });
 
+  it('rechecks an approved resume inside the serialized schedule mutation', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    await h.scheduler.pause(sch.id);
+    const approved = await h.storage.get(sch.id);
+    if (!approved) throw new Error('missing schedule');
+    let releaseUpdate!: () => void;
+    const updateReleased = new Promise<void>((resolve) => { releaseUpdate = resolve; });
+    const originalUpdate = h.storage.update.bind(h.storage);
+    const update = vi.fn(async (id: string, patch: Partial<Schedule>) => {
+      if (patch.prompt === 'replacement') await updateReleased;
+      return originalUpdate(id, patch);
+    });
+    h.storage.update = update;
+
+    const updatePromise = h.scheduler.update(sch.id, { prompt: 'replacement' });
+    await vi.waitFor(() => expect(update).toHaveBeenCalledWith(sch.id, expect.objectContaining({ prompt: 'replacement' })));
+    const resumePromise = h.scheduler.resume(sch.id, approved);
+    releaseUpdate();
+    await updatePromise;
+    await expect(resumePromise).rejects.toThrow('Schedule changed; refresh before executing the approved action');
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
+  });
+
+  it('accepts an approval snapshot after the device-link JSON round trip', async () => {
+    const sch = await h.scheduler.create({ ...baseInput });
+    await h.scheduler.pause(sch.id);
+    const approved = await h.storage.get(sch.id);
+    if (!approved) throw new Error('missing schedule');
+    const roundTripped = JSON.parse(JSON.stringify(approved)) as Schedule;
+    const resumed = await h.scheduler.resume(sch.id, roundTripped);
+    expect(resumed.status).toBe('active');
+  });
+
   it('runner exception marks run failed but schedule stays active', async () => {
     const local = makeHarness({
       runnerImpl: async () => {

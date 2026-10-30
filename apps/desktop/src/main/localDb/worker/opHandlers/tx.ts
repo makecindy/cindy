@@ -1,4 +1,5 @@
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
@@ -2352,6 +2353,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 /** Atomically persist a terminal task status and its local-close fence. */
 function sessionsSetTerminalStatus(db: Database.Database, args: unknown): SessionsSetTerminalStatusResult {
   const payload = asRecord(args, 'sessions.setTerminalStatus args');
@@ -2363,7 +2366,8 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
       | { id: string; status: string; source: string } | undefined;
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
-    if (existing.source === 'bot') throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
+    if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = db.prepare(
@@ -2405,6 +2409,12 @@ function compactSessionToolResults(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
 
+  // Runtime-only function; no persisted schema/trigger depends on it.
+  db.function('tool_result_diagnostics', { deterministic: true }, (content: unknown) => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
+
   const selectSession = db.prepare(`
     SELECT id
       FROM sessions
@@ -2413,7 +2423,7 @@ function compactSessionToolResults(
      LIMIT 1
   `);
   // Archived/deleted tool results are intentionally treated uniformly. Ordinary
-  // rows only pay for the fixed-prefix check. JSON validation runs solely for
+  // rows only pay for the fixed-prefix check when selecting candidates. JSON validation runs solely for
   // the tiny set of rows that look like our marker, preventing an unrelated
   // tool result with the same prefix from being skipped forever.
   const uncompactedContentPredicate = `
@@ -2439,12 +2449,12 @@ function compactSessionToolResults(
   `);
   const compactMessages = db.prepare(`
     UPDATE messages
-       SET content = json_object(
+       SET content = json_patch(json_object(
          'type', 'tool_result_compacted',
          'version', 1,
          'originalBytes', octet_length(content),
          'compactedAt', ?
-       )
+       ), json_object('diagnostics', json(tool_result_diagnostics(content))))
      WHERE session_id = ?
        AND role = 'tool_result'
        AND (${uncompactedContentPredicate}) = 1
@@ -2697,6 +2707,16 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  const nativeContextReset = payload.nativeContextReset === undefined
+    ? null
+    : (() => {
+        const reset = asRecord(payload.nativeContextReset, 'nativeContextReset');
+        return {
+          markerId: expectString(reset.markerId, 'nativeContextReset.markerId'),
+          markerClientId: expectString(reset.markerClientId, 'nativeContextReset.markerClientId'),
+          markerContent: expectString(reset.markerContent, 'nativeContextReset.markerContent'),
+        };
+      })();
   const rows = db
     .prepare(
       `SELECT id, client_id, role, created_at, agent_meta, tool_use_id
@@ -2796,7 +2816,25 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       // work from the branch the user explicitly withdrew.
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
-    if (sdkSessionId) {
+    if (nativeContextReset) {
+      db.prepare(
+        `UPDATE sessions
+           SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
+               codex_plan_json = NULL, sdk_session_id = NULL,
+               list_preview = NULL, list_preview_role = NULL, list_message_count = NULL
+         WHERE id = ?`,
+      ).run(now, now, sessionId);
+      db.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+      ).run(
+        nativeContextReset.markerId,
+        nativeContextReset.markerClientId,
+        sessionId,
+        nativeContextReset.markerContent,
+        now,
+        now,
+      );
+    } else if (sdkSessionId) {
       db.prepare(
         `UPDATE sessions
            SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,

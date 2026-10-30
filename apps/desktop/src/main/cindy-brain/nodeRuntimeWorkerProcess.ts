@@ -30,6 +30,7 @@ import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
 import { NodeRequestScopes } from './nodeRequestScope.js';
 import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
+import { NodeHostServicesClient } from './nodeHostServicesClient.js';
 import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
 interface ParentPortLike {
@@ -62,6 +63,7 @@ const requestScopes = new NodeRequestScopes();
 const deviceAuthorization = new NodeDeviceAuthorizationClient(requestScopes, (message) =>
   parentPort.postMessage(message),
 );
+const hostServices = new NodeHostServicesClient(requestScopes, message => parentPort.postMessage(message));
 const authorization = new NodeAuthorizationClient(requestScopes, message => parentPort.postMessage(message));
 
 /* ── spawnEntry 窄接口(仅普通 worker 模式;子进程模式不给,树深恒为 1)── */
@@ -144,7 +146,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
     pending.resolve(handle);
     return;
   }
-  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result') return;
+  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result' || m.type === 'node-host-result') return;
   const internal = childHandles.get(m.childId);
   if (!internal) return;
   if (m.type === 'child-stdout') {
@@ -201,12 +203,14 @@ parentPort.on('message', (event) => {
     requestScopes.finish(data.rpcId);
     deviceAuthorization.finish(data.rpcId);
     authorization.finish(data.rpcId);
+    hostServices.finish(data.rpcId);
     return;
   }
   if (!childMode && data.type === 'device-authorize-result') {
     deviceAuthorization.reply(data);
     return;
   }
+  if (!childMode && data.type === 'node-host-result') { hostServices.reply(data); return; }
   if (!childMode && data.type === 'plugin-authorize-result') {
     authorization.reply(data);
     return;
@@ -253,6 +257,7 @@ if (childMode) {
     enumerable: false,
     writable: false,
     value: Object.freeze({ spawnEntry, bindDeviceAuthorization: () => deviceAuthorization.bind(),
+      bindHostServices: () => hostServices.bind(),
       bindAuthorization: () => authorization.bind() }),
   });
 }

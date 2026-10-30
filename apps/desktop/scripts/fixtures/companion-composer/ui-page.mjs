@@ -27,6 +27,15 @@ export default {
     'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
+    recommendation: {
+      about: 'Recommendation and call coexist; starting a call preserves the suggestion, accepting it restores Send',
+      data: { recommendation: '帮我整理下一步计划' },
+    },
+    'recommendation-narrow': {
+      about: 'Recommendation and call remain usable at narrow width',
+      data: { recommendation: '帮我整理下一步计划' },
+      viewport: { width: 360, height: 400 },
+    },
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
@@ -44,6 +53,34 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.data.recommendation) {
+      const editor = page.locator('[contenteditable]');
+      const call = page.getByRole('button', { name: await ui.t('bots.voiceMode.startConversation'), exact: true });
+      const send = page.getByRole('button', { name: await ui.t('newChat.sendButton.send'), exact: true });
+      const suggestion = page.getByRole('button', {
+        name: `${await ui.t('newChat.chatInput.recommendationShortcut')}: ${ui.data.recommendation}`,
+        exact: true,
+      });
+      await suggestion.waitFor();
+      await ui.capture('recommendation');
+      assert.equal(await call.count(), 1);
+      assert.equal(await send.count(), 0);
+      await call.click();
+      assert.equal(await suggestion.count(), 0);
+      assert.equal(await editor.textContent(), '');
+      assert.equal(await page.getByTestId('sent').textContent(), '');
+      await page.getByTestId('end-call').click();
+      await suggestion.waitFor();
+      assert.equal(await call.evaluate((node) => node === document.activeElement), true);
+      await suggestion.click();
+      assert.equal(await editor.textContent(), ui.data.recommendation);
+      assert.equal(await call.count(), 0);
+      await ui.capture('accepted');
+      await send.click();
+      await call.waitFor();
+      assert.equal(await page.getByTestId('sent').textContent(), ui.data.recommendation);
+      return;
+    }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
       const hint = page.getByTestId('composer-voice-hint');

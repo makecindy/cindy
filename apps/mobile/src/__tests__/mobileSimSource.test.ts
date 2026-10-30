@@ -6,9 +6,37 @@ import {
   gitSourceIdentity,
   isDedicatedMetroProcessGroup,
   isInside,
+  inspectMetroListeners,
   parseWindowsNetstatListener,
   terminateMetro,
 } from '../../scripts/sim-metro.mjs';
+
+// Regression 2026-10-29: whoami ran six slow lsof processes and treated timeout
+// as no Metro. Unit fixtures exercise the real discovery/parser without sockets.
+describe('mobile simulator listener discovery', () => {
+  it('reads all requested ports from one socket snapshot, including IPv6', () => {
+    const run = vi.fn(() => 'p101\nf12\nn127.0.0.1:8081\nf13\nn[::1]:8082\np202\nf14\nn*:8084\nn*:9090\n');
+    expect(inspectMetroListeners([8081, 8082, 8083, 8084], { platform: 'darwin', run }))
+      .toEqual({ healthy: true, code: 'ready', pids: { 8081: '101', 8082: '101', 8084: '202' } });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the same snapshot contract on Windows', () => {
+    const run = () => 'TCP 0.0.0.0:8081 0.0.0.0:0 LISTENING 42\nTCP 127.0.0.1:8082 0.0.0.0:0 ESTABLISHED 99';
+    expect(inspectMetroListeners([8081, 8082], { platform: 'win32', run }))
+      .toEqual({ healthy: true, code: 'ready', pids: { 8081: '42' } });
+  });
+
+  it.each([
+    [{ status: 1, stderr: '', stdout: '' }, true, 'ready'],
+    [{ code: 'ETIMEDOUT', stderr: 'private' }, false, 'METRO_LISTENERS_TIMEOUT'],
+    [{ code: 'ENOENT' }, false, 'METRO_LISTENERS_UNAVAILABLE'],
+    [{ status: 1, stderr: 'private failure' }, false, 'METRO_LISTENERS_UNAVAILABLE'],
+  ])('distinguishes no listeners from failed discovery: %j', (error, healthy, code) => {
+    expect(inspectMetroListeners([8081], { platform: 'darwin', run: () => { throw error; } }))
+      .toEqual({ healthy, code, pids: {} });
+  });
+});
 
 describe('mobile simulator source identity', () => {
   it('uses branch and commit for a clean worktree', () => {

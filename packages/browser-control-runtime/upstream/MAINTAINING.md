@@ -78,6 +78,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 | 11 | 开了「使用我的浏览器登录态」但窗口仍是登出 | 快照把 `last_used` 的 cookie 放进 dest `Default`,却原样拷了 `Local State`;Chrome 按 `last_used` 打开空的 `Profile N` | 写入 dest `Local State` 时必须把 `last_used` / `last_active_profiles` / `profiles_order` 改成 `Default`,`info_cache` 只留 Default(元数据从源 last_used 挪过来),并删掉 dest 里其它 `Profile N` |
 | 12 | Chrome 右上角 chip 显示 `Cindy-real` / 源 profile 名 | 磁盘 key 必须是 `Cindy-real`;vendored decorate 默认用 `profile.name`(map key)。host 只改 Local State 不够,下次 launch 会盖回去 | `profiles[Cindy-real].displayName = "Cindy"`;`launchOpenClawChrome` 用 `displayName ?? name` decorate。快照写入时也把 `info_cache.Default.name` 写成 `Cindy` |
 | 13 | 已有完全磁盘访问仍弹「需要完全磁盘访问权限」 | 第一次 enable 在 macOS 无条件跑 `guideFullDiskAccessAfterReadDenied` | 同意拷贝之后先 `probeSourceRead`(只 open 源 Local State / Cookies,不拷贝、不回路径);`readable: true` 就跳过。真正快照 `REAL_PROFILE_READ_DENIED` 仍弹。不自动打开系统设置 |
+| 14 | macOS 上用户在别的 App 点链接，打开的是 Agent 浏览器而不是自己的浏览器 | Agent 浏览器优先选用系统默认浏览器的同一个 App，只换 `--user-data-dir`；LaunchServices 按 bundle id 投递打开链接事件，会落到任意一个同 App 实例 | host 的 `ExternalLinkHandoff`（`browser-backend/external-link-handoff.ts`，仅 macOS）在浏览器级 `Fetch.enable` 只暂停 Document 请求：新标签无 opener、创建时即带 http(s) URL、首个请求无 Referer，且当时没有 Agent `open` 在途（含 1 秒余量），即判为外部链接——先 `open -n -a <App> --args <url>`（新进程经 Chrome 单例转交给用户的默认 profile 实例，未运行则启动它），成功后 `failRequest` + `closeTarget`，请求从未发出，一次性登录链接不会被用掉；转交失败则放行。⌘ 点击靠 Referer、网页弹窗靠 opener 排除。新增建标签的 action 必须同样计入 `trackTabOpen`，否则 Agent 标签会被当成外部链接转走 |
 
 ### 4.1 per-start 代理不变量
 
@@ -137,6 +138,8 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
 - Settings 的“打开 Agent 专用浏览器”必须先读 `status`:已运行时只聚焦现有标签页,不能用无 `proxyServer` 的 `start` 把调用方选择的代理路由误切成直连;仅在确认 stopped 后才启动直连浏览器。**例外是 `proxy.mode === 'unknown'`**(Cindy 重启后继承了上次启动的 Chrome):此时没有任何已知路由可保护,而 backend 的 unknown-route 闸门会拒掉 `tabs`/`focus`,跳过 `start` 只会让这个按钮"成功返回但什么都没发生"。`start` 是唯一能收养/替换该进程并重装请求守卫的路径,这种情况必须执行。判据只认 `unknown`——`direct` 与 `proxied` 都是已知路由,照旧不得被直连 `start` 顶掉。
 
 ## 5. UI 开关模型(设置 →「自动操作」)
+
+设置里的「浏览器自动化目标」三选一(专用浏览器 / 侧边栏 / 我的浏览器)写 `browser-backend-settings.json` 的 `kind`,是全局默认目标;「我的浏览器」依赖声明 `browserExtension.pageControl` 的插件(见 §9「用户浏览器执行端」)。
 
 浏览器是个 builtin plugin(id `browser`),走 `plugin-registry.ts` 的三层判定:essential → 项目级 override → 内置默认。**内置默认是开**,所以浏览器在所有项目里默认可用;设置里的开关写的是"当前项目的 override"。无项目上下文时开关变灰(`workingDir` 来自最近本地会话的内存单例,见 `renderer/state/lastWorkingDir.ts`)。
 
@@ -223,6 +226,18 @@ pnpm --filter @cindy/browser-control-runtime test    # 契约 + SSRF guard
 - 大结果超过 16 Ki 字符时给确定性结构样例，完整 JSON 保留当前会话最近四份（单份最多 200 万字符），通过 `readResult` 分段读；超上限沿用明确截断。摘要不授权猜测省略的事实或 ref。原文引用沿用来源页的代输入保护，过期必须只读补取，不能重放写操作。输出重复、空字段、HTML 只给 advisory。
 - 内置配方仍走现有随应用分发的 L1 目录，个人 L2 覆盖保留；不自动上传个人经验。`itch-search` 是公开网页人工验证后加入的通用例子。
 - 实现：L2 `experience.ts` / `result-cache.ts` / `tools.ts`，Desktop `browser-recipes/experience.ts`；回归使用真实 MCP 入口与既有 writer 测试。模型用量须与工具文本计量分开，不能把执行器没有新增模型调用说成整个任务零 token。
+
+### 用户浏览器执行端（2026-10-27）
+
+- 第三个 `BackendKind` `user-browser`:`apps/desktop/src/main/mcp-integrations/browser-backend/user-browser-backend.ts` 把 `BrowserControlRequest` 翻译成随包浏览器扩展的页面作业,经 `cindy-brain/browserExtensionSlot.ts` 持有的桥接(`main/browser-extension/bridge.ts`,从 Cindy Chrome 插件的接线进程原样迁入,线协议 `cindy-browser-extension/3` 不变,已装扩展无需更新)投递到用户正在使用的 Chrome / Edge。
+- 设置 →「自动操作」三选一:专用浏览器(默认)/ 侧边栏 / 我的浏览器;选哪一个是**默认**目标,Agent 的 `setBackend` 仍是同一个全局持久选择。没有声明 `browserExtension.pageControl` 的插件时该目标 `status.ready === false`,健康面板报 `extension-disconnected`,不提供恢复按钮。
+- 能力边界由扩展版本决定(`USER_BROWSER_PARITY_VERSION`,当前 0.4.43):
+  - 0.4.43 起与专用浏览器对齐:截图(含整页、元素、后台标签页)、evaluate、requests、上传、对话框、console、PDF、focus、关闭、坐标与拖拽、站点配方的协议会话都可用;调试接口(`chrome.debugger`)是可选权限,只在需要的动作里临时接上、用完断开,第一次用到时由扩展弹出授权页。
+  - 更旧的扩展只有基础能力(tabs / open / navigate / snapshot / extract / act),由 `deps.backendCapabilities()`(`userBrowserCapabilities`)让 MCP 层在派发前拒绝其余动作,错误文案要求模型告知用户而不是自行切换。没有任何连接时按完整能力报,具体断开由后端按作业报告。
+  - extract 与登录墙检测走 PR #7432 的声明式 `domRead`,不需要任意脚本。
+- 寻址:新版扩展(≥ 0.4.43)按 tabId 寻址,后端维护 targetId ↔ {连接, 浏览器启动标识, tabId, url};targetId 带启动标识,浏览器重启后旧句柄不再解析。旧版扩展仍按精确 URL 寻址:作业前用 `tabs` 核对,URL 变化报 `PAGE_CHANGED` 并刷新记录,不猜新页。
+- 没有站点名单(2026-10-30 取消,取代 2026-10-28 的名单口径):读与交互对本机、私网和公网网站一视同仁。线上 `policy` 字段只为旧端兼容、恒为「全部允许」,`setPolicy` 应答但不生效;宿主不缓存也不等待插件策略,配对缓存只存已配对的浏览器。作业在桥接处只校验动作与无凭证 http(s) 地址。`cindy_browser` 的免审批前提由 `setBackend user-browser` 与 `upload` 的逐次任务审批(询问档问用户、自动档审核、完全访问放行)和任务权限档位承担,不再有站点层兜底。
+- 回归:`browser-extension/__tests__/bridge.test.ts`(协议)、`cindy-brain/__tests__/browserExtensionSlot.test.ts`(槽)、`browser-backend/__tests__/user-browser-backend.test.ts`(翻译)、`lizi-mcps` 的 capability gating 用例;真实 Chrome 验收用 Google Play 发包案例与插件翻译。
 
 ## 10. 相关文档
 

@@ -121,10 +121,30 @@ Desktop 与 Mobile 的整文件 peer 下载共用 `fileTransferPolicy.ts`。数�
 的 30 秒请求超时。直接、TURN 和未知路径使用同一停滞判断，路径变化不影响它。
 每次取件旁路采样实际路径用于诊断，不阻塞握手或文件首字节；进度检查不依赖 Debug 开关。
 
+共享文件 runtime 遇到 ICE `disconnected` 保留连接最多 15 秒，恢复则取消计时；
+`failed`、`closed`、显式取消和撤权仍立即清理。重复断连事件不延长窗口，计时只作用于
+该连接。Desktop 对已完成且持续至少 15 秒、平均低于 128 KiB/s 的中继下载，在下一次
+取件前最多每 60 秒试建一个候选连接；保留旧连接，只有候选确认直连且旧连接没有在途
+RPC 时才替换。候选失败或仍走中继继续用旧连接；受现有四连接上限、账号与 peer 代次
+约束，不改变 wire 协议或旧端能力协商。升级后停止探路，除非后来再次出现慢中继样本。
+诊断记录断连原因和最多八个 ICE 检查结果，不记录地址、候选 ID、SDP 或凭证。
+
 故障仅影响该 peer 的文件通道；复用已有按设备冷却（30 秒起、最多 5 分钟）避免
 紧接着的文件重新走同一慢链路，不重连共享 WSS、不影响另一控制端的文件或请求。
 取消、退后台、切账号依然是取消，不触发 OSS；不并行竞速或预先上传用户文件。
 回归包含两台控制端一台停滞、另一台持续写入并完成，以及旧端缺能力字段的兼容。
+
+### 共享连接静默与请求隔离
+
+2026-10-30：Desktop 在业务超时时先检查共享 relay 最近是否仍有入站活动；整条连接
+静默时复用现有有界网络探测，不直接累加某台电脑的熔断失败。任一 peer 的有效回包
+都能结束探测；只有共享探测本身超时才恢复整条连接。探测期间后台刷新以未发送的
+背压结果退出，前台操作继续按原预算执行。Desktop/Mobile 的 `waitUntilOnline` 保留
+原有立即重连入口；已有握手不重复打断，relay 1013 拥塞冷却仍按原规则执行。
+
+相同的列表读取沿用独立请求和发送前取消／账号检查，一个调用方取消不能拖累另一个。
+本次恢复不新增请求合并或应用层重试。回归覆盖两台 peer，一台静默时另一台仍能完成
+前台请求且共享连接不被拆除。
 
 设备互联是 1:N 拓扑：被控端与 relay 之间只有一条连接，同账号的全部控制端共用它。
 故障域从小到大分四层——单个请求、单个 peer 的 link、整条 relay 连接、**relay 聚合
@@ -196,6 +216,40 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 
+供应商进程重启（2026-10-29）：已打开的 run 收到 `missing`、`provider-restarting` 或旧端的
+`aborted` 时只释放这条远程连接，保留本机执行器和 MCP 身份。空闲任务下次发送再接回；进行中的
+一轮通过现有供应商组恢复租约、五次有界探测和输入队列自动续跑一次，未归组的供应商也适用。
+原生会话 ID 必须接回，设置必须重放完成，才能发送续跑；不重发原消息或结果不明的方法调用。
+权限、Plan 和自动动作来源沿用原轮次；Stop、新输入、归档／删除使恢复失效。持续不可达、撤权或
+接不回原生会话保留原错误与人工恢复入口。伙伴、目标模式与共享任务沿用既有自动恢复归属检查。
+
+正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
+`host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
+首次收尾再回收。`dispose()` 返回同一份清理完成 Promise，包含正在启动的任务与巡检已开始的删除；
+服务重建后先等待前一 host 的清理，再派发新请求，等待期间再次重建的旧入口不再接单。
+这只约束本进程 Maker 重置后的 host 交接，不重连共享链路、不改变线上协议。
+新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
+既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
+区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
+
+分享在已经发生链路不可达后临时报 `ACCESS_REVOKED` / `REMOTE_AGENT_SHARE_UNAVAILABLE`，
+只保留原两分钟窗口，不重置截止时间；首次即撤权仍立即失败。恢复只作用于当前 run 的连接与
+当前电脑的拉取器，不重连共享 relay、不绕过授权。两控制端共用一个 host 的回归中，一个 run 消失并
+重新打开，另一控制端仍能发送、原生会话不变。实现及回归：`remote-agent/controller/`、
+`remote-agent/__tests__/connectionPool.test.ts`、`poll.test.ts` 与 `provider-group/service.ts`。
+
+直连分享任务持久位置仍为 `share:<id>`，该位置代表 O，不等于实际执行电脑 M。重启恢复通过
+现有直连句柄向 O 为原 M 申请新许可并探测 M，空闲 run 重开也先完成相同授权，不改选电脑。
+断链窗口内的临时拒绝可触发同一授权流程；授权请求不阻塞两分钟截止时间，也不能延长已到期的
+本机租约。授权、关停与启动代次复核在异步返回后再次执行，失效请求只释放本次授权代次。
+M 仍保存但已撤权的 run 明确收尾为 `access-revoked`，不以 `missing` 触发续跑。
+回归见 `roundtrip.test.ts`、`groupRelay.test.ts`、`poll.test.ts` 与供应商组 `service.test.ts`。
+
+离线期间 Stop 仍走 Session 既有的有界中止复核（15 秒）。远程 close 通知失败只记日志，不能把已
+清理的本机代理留在运行状态；本机资源清理失败仍须上抛。代理 dispose 同时清空 turnRunning /
+preparing，本机 Session 可正常关闭，下一条显式消息按原生会话 ID 重建；不依赖离线电脑确认才能
+解除队列占用。回归同时覆盖远程通知失败与本机清理失败，不能把两者混为一谈。
+
 协议见 [`protocol-compatibility.md`](protocol-compatibility.md)「远程 Agent」。恢复策略按故障半径三问：
 
 1. **故障层级**：只处理同一台被控端的事件拉取。`poll` 遇到 peer reset、超时、背压或链路暂断时，
@@ -253,6 +307,22 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 **托管 Codex 启动的跨机往返与执行环境恢复**(2026-10-22 远程供应商调查：启动 277 次串行文件操作、每次跨机
 0.5–3s，启动几分钟、撞 5 分钟上限；握手失败后「能聊天但没有 Shell 与文件工具」)：
+
+- **POSIX Agent → Windows 执行端的沙箱实现**（2026-10-28 真机）：固定 Codex 0.159.2
+  从 macOS 发出受限权限时携带 `windowsSandboxLevel=disabled`，Windows 原生 exec-server
+  因无法落实沙箱意图拒绝所有命令。控制端只把这种跨平台、`permissions.type=managed` 的
+  disabled 选择映射为 Windows 原生 `restricted-token`；权限条目、网络设置、Cindy 本机授权
+  闸门均保持原值，显式 Windows 选择和非受限请求不改。原生实现不能落实 deny-read 等规则时
+  仍拒绝整个请求，不删规则、不转无沙箱、不重放命令，不安装 MXC、创建系统账号或改防火墙。
+  这是 Windows 原生受限令牌的边界，不声称其网络隔离等同 macOS：网络约束沿用该原生实现。
+  故障只影响这个任务的执行请求，不重启 device-link、不撤下其它 peer。回归见
+  `remote-agent/__tests__/execServerProjection.e2e.test.ts` 的真实原生进程及
+  `executor/__tests__/virtualWorkspace.test.ts`；临时文件和权限验证均限制在测试目录。
+  Windows 的 Store/MSIX PowerShell 无法在受限令牌下启动（真机 `CreateProcessAsUserW`
+  错误 `-1073283067`）。同一跨平台适配只在原生声明此类 Shell 时，优先宣告现存的
+  非 Store PowerShell 7，否则使用现存的系统 Windows PowerShell；先解析真实路径排除
+  指回 Store 的别名。没有替代时保留原声明并明确失败，不改系统 PATH、不下载或安装 Shell，
+  不改用户显式命令及其它 Agent 的 Shell。原生回归必须按 initialize 宣告的 Shell 真正执行。
 
 - **不可能存在的路径在 Agent 所在电脑直接回答**(`host/execServerShortcut.ts`)：Codex 沿工作目录逐级向上找
   `.git`、Skill 目录与插件清单。镜像根内的虚拟垫层(真实根目录以上的 `workspace/p/…`)及镜像根本身在任务电脑没有
@@ -717,6 +787,37 @@ Git 元数据查询可以成批并发，不能仅按总查询数推断耗时；�
 写成线上已修复。现场查询格式、方法和消息长度符合短路入口，最终运行端版本及接线路径仍待核验。
 本次补齐命中统计与可重复对照；测试还修正了 mock 调用方式，并阻止测试引擎后台同步原生插件目录，
 避免 Windows 遗留 Git 子进程影响收尾。
+
+2026-10-29 补充：已有短路仍会留下插件清单的串行检查。`host/execServerStartupBatch.ts`
+在启动阶段第一次遇到未短路的插件清单 `fs/getMetadata` 时，沿该目录向上最多 64 层，
+为三种清单提前发送普通原生查询（最多 192 条，已知不存在的虚拟路径仍由旧短路排除）。
+复用既有 poll/push 批次、路径投影和原生 sandbox，不添加协议字段、方法或能力。
+只有原生 `-32004` 才能回答同连接、同参数／sandbox 的后续元数据查询；已有文件、权限错误、
+未知路径及超出预算的路径继续按原查询处理。不缓存文件内容或成功元数据。
+启动结束、出现写操作／启动进程时停止复用并释放等待中的原查询；连接关闭时清理。
+内部查询 ID 与原生 ID 隔离，迟到的内部回复不能送给 Codex。每条连接只提前查询一次。
+请求的 16 KiB 优化预算不用于回复解析，否则较大错误回复会漏消费内部 ID，并使原查询继续等待。
+对端关闭及超限分片主动关连接时显式清理批处理状态，不能依赖不会触发的 `wsClose` 回调。
+
+同日 Windows 隔离基准：真实 Codex 0.159.2、原生 exec-server、生产 Controller/Host，
+同一项目 8 个合成 Skill（`.agents` 与 `.claude` 各一份），每次 poll/push 返回增加 400ms。
+两侧实际均为 Windows，仅移除原始绝对路径缺失快照，模拟跨系统时不能复用该快照的分支；
+不读取真实项目 Skill 或分享者数据，不请求线上模型。仅开关新增批量实现，按关／开／关／开运行：
+
+| 样本 | 批量关闭 | 批量开启 | 回传批次（关闭 → 开启） |
+| --- | ---: | ---: | ---: |
+| 1 | 24,282ms | 7,469ms | 56 → 15 |
+| 2 | 24,214ms | 7,434ms | 56 → 15 |
+| 均值 | 24,248ms | 7,451.5ms | 56 → 15 |
+
+启动耗时下降 **69.3%**。真实转发查询仍为 78 条，优化的是串行往返；全部提前查询的实际
+处理和回传成本已计入（此前直接复用已知缺失结果的 6.2s 只是因果实验，不是实现后的数字）。
+启动本地回答 100 → 142；`forwarded` 包括提前查询，`answered` 包括复用结果，两者相加不再
+代表原生 Agent 发起的原始请求总数。完整基准命令：
+`pnpm --dir apps/desktop exec vitest run src/main/remote-agent/__tests__/startupProbe.e2e.test.ts -t 'batches eight-Skill' --maxWorkers=1`。
+实测测试体 67.02s、含模块加载 107.45s；默认 unit 不运行此手动 e2e。
+这证明受控慢链路的因果收益，不承诺现场 95s 变成 7.5s；真实 Windows/macOS 跨设备及原分享供应商仍未验收。
+优化需实际运行 Agent 的电脑更新，任务所在电脑和中转可保持旧版。
 
 复跑：`pnpm --dir apps/desktop exec vitest run src/main/remote-agent/__tests__/startupProbe.e2e.test.ts --maxWorkers=1`。
 该文件登记在手动 e2e tier，真实进程与延迟不进入默认 unit。单文件两组对照实测 56.11s（含加载）；

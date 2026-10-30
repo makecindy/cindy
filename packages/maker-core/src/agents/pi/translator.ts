@@ -72,6 +72,7 @@ interface PiUsage {
 }
 
 interface PiAssistantMessage {
+  cindyCacheRecoveryHandled?: boolean;
   role: 'assistant';
   content?: Array<Record<string, unknown>>;
   usage?: PiUsage;
@@ -102,6 +103,7 @@ interface PiThinkingBlock {
 export interface PiTranslateContext {
   getCacheCompatibility?: () => import('./cache-compatibility.js').PiCacheCompatibility | undefined;
   cacheRecoveryHasOutput?: boolean;
+  cacheRecoveryHandled?: boolean;
   logger: Logger;
   /** Host-owned live tariff selector fallback when the provider response has no accepted tier. */
   getPriceVariant?: () => 'standard' | 'priority';
@@ -691,6 +693,7 @@ export function translatePiEvent(
     case 'agent_start': {
       ctx.turnGeneration += 1;
       ctx.cacheRecoveryHasOutput = false;
+      ctx.cacheRecoveryHandled = false;
       ctx.pendingHostTurnStartToken = null;
       if (ctx.hostAbortRequestGeneration !== ctx.turnGeneration) {
         clearPiHostAbortRequests(ctx);
@@ -758,6 +761,7 @@ export function translatePiEvent(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
+      if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
       const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
@@ -1043,6 +1047,7 @@ export function translatePiEvent(
           data: {
             ...terminalError,
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
+            ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
             isTerminal: true,
           },
           source: 'pi',
@@ -1173,6 +1178,7 @@ export function translatePiEvent(
           ...(finalError.reason === UNSUPPORTED_REQUEST_OPTION_REASON ? {
             piCacheCompatibility: ctx.getCacheCompatibility?.(),
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
+            ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
           } : {}),
           isTerminal: true,
           ...(exhaustedReason ? { reason: exhaustedReason } : {}),

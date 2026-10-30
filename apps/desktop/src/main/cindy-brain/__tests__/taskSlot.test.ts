@@ -190,6 +190,19 @@ describe('background tasks (agent.hiddenTasks)', () => {
     expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'get', taskId: 'own', hidden: true })).toBe(false);
   });
 
+  it('validates the archive operation shape and advertises it to every tasks plugin', async () => {
+    // Rule: archive is reversible housekeeping for a plugin's own tasks; no hiddenTasks declaration needed. tier: unit.
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive', taskId: 'own' })).toBe(true);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive' })).toBe(false);
+    expect(validPluginTaskRequest({ type: 'tasks-request', kind: 'archive', taskId: 'own', hidden: true })).toBe(false);
+    const handler = vi.fn(async () => ({ taskId: 'own', status: 'archived' }));
+    const deps = { getGhost: () => undeclared, handler, isCurrent: () => true };
+    expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'archive', taskId: 'own' }, deps))
+      .toEqual({ ok: true, data: { taskId: 'own', status: 'archived' } });
+    const caps = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps);
+    expect((caps as { data: { operations: string[] } }).data.operations).toContain('archive');
+  });
+
   it('denies hidden creation and setHidden without the declaration, before reaching the handler', async () => {
     const handler = vi.fn(async () => ({ taskId: 't' }));
     const deps = { getGhost: () => undeclared, handler, isCurrent: () => true };

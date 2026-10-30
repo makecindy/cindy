@@ -121,6 +121,27 @@ describe('desktop MCP approval policy', () => {
       })).toBe('auto-approve');
     }
   });
+  // #7875 security review: a page could steer the agent into switching to the user's own browser, so
+  // that switch goes through session approval; switching to Cindy's own browsers stays quiet.
+  it('reviews switching to the user\'s own browser', () => {
+    const toUser = { action: 'setBackend', backend: 'user-browser' };
+    for (const toolName of ['call_tool', undefined]) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName,
+        toolParams: { name: 'browser', args: JSON.stringify(toUser) },
+      })).toBe('prompt-each-time');
+    }
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'browser', toolParams: toUser }))
+      .toBe('prompt-each-time');
+    // Each upload hands a local file to a website, so it is reviewed too (2026-10-30).
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
+      toolParams: { name: 'browser', args: { action: 'upload', paths: ['/tmp/a.pdf'] } },
+    })).toBe('prompt-each-time');
+    for (const backend of ['external', 'rsb-webview']) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'setBackend', backend } },
+      })).toBe('auto-approve');
+    }
+  });
   it('never lets import discovery grant reusable approval to start a migration', () => {
     for (const operation of ['sources', 'preview', 'status', 'start', undefined]) {
       for (const toolName of ['import_agent', undefined]) {

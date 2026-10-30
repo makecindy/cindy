@@ -1,6 +1,6 @@
 /**
  * 跨区域受邀者(P3)：只认两个官方区域；不把本区域 Access Token 发给对方区域，也不会因对方区域的
- * 401 登出本账号；本机加入记录或同账号组的有效引用才可恢复跨区连接；凭证只在内存里。
+ * 401 登出本账号；登录后自动核验账号的全部分享；凭证只在内存里。
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -23,7 +23,11 @@ const state = vi.hoisted(() => ({
   localReceivedReads: 0,
   localReceivedGate: null as Promise<void> | null,
   endpointsGate: null as Promise<void> | null,
+  endpointHook: null as null | (() => Promise<void>),
+  identityHook: null as null | ((purpose: string) => Promise<void>),
+  cardOwners: [] as string[],
   userId: 'user-1',
+  realm: 'cn' as 'cn' | 'global',
   identityCards: [] as string[],
   invokes: [] as Array<{ target: string; channel: string }>,
 }));
@@ -36,14 +40,14 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.userId, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({
-  getActiveAuthRealm: () => 'cn',
+  getActiveAuthRealm: () => state.realm,
   getAuthState: () => ({ isAuthenticated: true }),
   getCurrentUserId: () => state.userId,
   getDeviceId: () => 'device-1',
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
-  getClientEndpoint: () => LOCAL,
-  loadClientEndpointsForRealm: async () => { await state.endpointsGate; return {}; },
+  getClientEndpoint: () => state.realm === 'cn' ? LOCAL : PEER,
+  loadClientEndpointsForRealm: async () => { await state.endpointHook?.(); await state.endpointsGate; return {}; },
   getClientEndpointForRealm: (region: string) => (region === 'global' ? PEER : LOCAL),
 }));
 vi.mock('../../maker-host/outbound-fetch.js', () => ({ createOutboundHttpAgent: async () => undefined }));
@@ -66,13 +70,15 @@ vi.mock('../providerShareApi.js', () => ({
       await state.localReceivedGate;
       if (state.localReceivedError) throw new Error('local unavailable');
       return [
-        { ...share, shareId: 'share-local', memberId: 'member-local', owner: { ...share.owner, region: 'cn' } },
+        { ...share, shareId: 'share-local', memberId: 'member-local', owner: { ...share.owner, region: state.realm } },
         ...(state.localHasGroupShare ? [{ ...share, owner: { ...share.owner, region: 'cn' } }] : []),
       ];
     },
   },
   fetchIdentityCard: async (purpose: string, nonce: string) => {
     state.identityCards.push(purpose);
+    state.cardOwners.push(state.userId);
+    await state.identityHook?.(purpose);
     return `card:${purpose}:${nonce}`;
   },
   rethrowProviderShareError: (error: unknown) => { throw error; },
@@ -89,6 +95,7 @@ vi.mock('@cindy/device-link', async (importOriginal) => ({
     start() { this.record.started = true; }
     stop() { this.record.stopped = true; }
     async waitUntilOnline() {}
+    hasOfflineDirectPath() { return false; }
     isLinkReady() { return false; }
     async openLink() {}
     async invoke(target: string, request: { channel: string }) {
@@ -112,6 +119,7 @@ import {
   stopProviderShareCrossRegion,
 } from '../providerShareCrossRegion';
 import { providerShareHostPeer } from '@cindy/device-link';
+import { sha256Hex } from '../providerShareApi';
 import { captureProviderShareGroupRecovery, getReceivedSharesSnapshot, isReceivedSharesReady, previewProviderShare, refreshReceivedShares, resolveRemoteAgentTargetWhenReady, sendProviderShareRequest, startProviderShareGuest, stopProviderShareGuest } from '../providerShareGuest';
 import { createProviderGroupRemoteClient } from '../../provider-group/remoteClient';
 
@@ -127,6 +135,35 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+/** Link/group regressions start after an earlier empty account discovery. */
+async function startGuestAfterEmptyDiscovery(...args: Parameters<typeof startProviderShareGuest>) {
+  const response = state.responses.get('/session');
+  const endpointsGate = state.endpointsGate;
+  const endpointHook = state.endpointHook;
+  const identityHook = state.identityHook;
+  const calls = state.calls.length;
+  const cards = state.identityCards.length;
+  state.responses.set('/session', { credential: null, expiresAt: null, shares: [] });
+  state.endpointsGate = null;
+  state.endpointHook = null;
+  state.identityHook = null;
+  try {
+    startProviderShareGuest(...args);
+    await refreshProviderShareCrossRegion('global');
+    await refreshReceivedShares('test');
+  } finally {
+    if (response === undefined) state.responses.delete('/session');
+    else state.responses.set('/session', response);
+    state.endpointsGate = endpointsGate;
+    state.endpointHook = endpointHook;
+    state.identityHook = identityHook;
+    // Keep the following scenario's request assertions separate from startup.
+    state.calls.splice(calls);
+    state.identityCards.splice(cards);
+    state.cardOwners.splice(cards);
+  }
+}
+
 let dir: string;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-share-x-'));
@@ -139,7 +176,11 @@ beforeEach(() => {
   state.localReceivedReads = 0;
   state.localReceivedGate = null;
   state.endpointsGate = null;
+  state.endpointHook = null;
+  state.identityHook = null;
+  state.cardOwners = [];
   state.userId = 'user-1';
+  state.realm = 'cn';
   state.identityCards = [];
   state.invokes = [];
 });
@@ -147,11 +188,84 @@ afterEach(() => {
   vi.restoreAllMocks();
   stopProviderShareGuest();
   stopProviderShareCrossRegion();
+  vi.useRealTimers();
   __testing.setUserDataDir(null);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe('cross-region provider share', () => {
+  // Regression 2026-10-30, provider-sharing.md §8: membership belongs to the
+  // account, not the accepting computer. Unit: real guest startup must publish
+  // existing peer shares without an invitation, a group or a local region marker.
+  // Earlier cases only entered discovery through those device-local prerequisites.
+  it.each([
+    { realm: 'cn', peer: 'global', record: 'missing' },
+    { realm: 'global', peer: 'cn', record: 'empty' },
+  ] as const)('automatically discovers $realm account shares with a $record local record', async ({ realm, peer, record }) => {
+    state.realm = realm;
+    if (record === 'empty') await __testing.writeMarker(sha256Hex(`${realm}:user-1`), peer, false, true);
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      shares: [{ ...share, owner: { ...share.owner, region: peer } }],
+    });
+    const changed = vi.fn();
+    startProviderShareGuest({ changed, settled: vi.fn() }, { userDataDir: dir });
+    await vi.waitFor(() => expect(getReceivedSharesSnapshot().received.map(item => item.shareId))
+      .toEqual(['share-local', 'share-x']));
+    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([expect.objectContaining({ shareId: 'share-x' })]));
+    expect(state.calls.map(call => call.path)).toEqual(['/api/device-link/provider-shares/x/session']);
+    expect(state.calls[0].opts).toMatchObject({ token: null, baseUrl: peer === 'global' ? PEER : LOCAL, skipSessionInvalidation: true });
+    expect(state.clients).toHaveLength(1);
+    expect(Object.values(__testing.readMarkers())).toEqual([[peer]]);
+  });
+
+  it('automatically discovers a first share accepted on another computer after an empty startup', async () => {
+    vi.useFakeTimers();
+    try {
+      state.responses.set('/session', { credential: null, expiresAt: null, shares: [] });
+      const changed = vi.fn();
+      startProviderShareCrossRegion({ changed }, { userDataDir: dir });
+      await refreshProviderShareCrossRegion('global');
+      expect(changed).toHaveBeenCalledOnce();
+      expect(state.clients).toEqual([]);
+      expect(__testing.readMarkers()).toEqual({});
+      state.responses.set('/session', {
+        credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
+      });
+      const discovered = deferred();
+      changed.mockImplementation(() => discovered.resolve());
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await discovered.promise;
+      expect(getCrossRegionReceived()).toEqual([share]);
+      expect(state.calls.map(call => call.path)).toEqual(Array(2).fill('/api/device-link/provider-shares/x/session'));
+      expect(state.clients).toHaveLength(1);
+    } finally {
+      stopProviderShareCrossRegion();
+      vi.useRealTimers();
+    }
+  });
+
+  it('discards late automatic discovery after another account starts its own discovery', async () => {
+    const oldResponse = deferred<unknown>();
+    state.responses.set('/session', oldResponse.promise);
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    const oldRefresh = refreshProviderShareCrossRegion('global');
+    await vi.waitFor(() => expect(state.calls).toHaveLength(1));
+    state.userId = 'user-2';
+    const nextShare = { ...share, shareId: 'other-share', memberId: 'other-member' };
+    state.responses.set('/session', {
+      credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [nextShare],
+    });
+    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await vi.waitFor(() => expect(getCrossRegionReceived()).toEqual([nextShare]));
+    oldResponse.resolve({ credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+    await oldRefresh;
+    expect(getCrossRegionReceived()).toEqual([nextShare]);
+    expect(__testing.readMarkers()).toEqual({ [sha256Hex('cn:user-2')]: ['global'] });
+    expect(state.clients).toHaveLength(1);
+    expect(state.cardOwners).toEqual(['user-1', 'user-2']);
+  });
+
   // Regression 2026-10-29 (provider-sharing.md sections 4.2 and 8): opening an
   // invitation on a new computer reported existing membership without restoring
   // its list. Existing coverage only restored applications and group references.
@@ -167,7 +281,7 @@ describe('cross-region provider share', () => {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
     const changed = vi.fn();
-    startProviderShareGuest({ changed, settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed, settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
     const invitation = { invitation: TOKEN, server: PEER };
     await expect(action === 'preview' ? previewProviderShare(invitation) : sendProviderShareRequest(invitation))
@@ -188,7 +302,7 @@ describe('cross-region provider share', () => {
     state.responses.set('/preview', phase === 'preview' ? response.promise : memberError);
     state.responses.set('/session', phase === 'session' ? response.promise : session);
     const changed = vi.fn();
-    startProviderShareGuest({ changed, settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed, settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
     const rejected = expect(previewProviderShare({ invitation: TOKEN, server: PEER })).rejects.toBe(memberError);
     await vi.waitFor(() => expect(state.calls.some((call) => call.path.endsWith(`/${phase}`))).toBe(true));
@@ -215,12 +329,12 @@ describe('cross-region provider share', () => {
     state.responses.set('/session', {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     const invitation = { invitation: TOKEN, server: PEER };
     const result = (action === 'preview' ? previewProviderShare(invitation) : sendProviderShareRequest(invitation))
       .catch((error: unknown) => error);
     state.userId = 'user-2';
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     endpoints.resolve();
     const error = await result;
     expect(__testing.readMarkers()).toEqual({});
@@ -237,11 +351,11 @@ describe('cross-region provider share', () => {
     state.responses.set('/session', {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     const result = sendProviderShareRequest({ invitation: TOKEN, server: PEER }).catch((error: unknown) => error);
     await vi.waitFor(() => expect(state.calls.some((call) => call.path.endsWith('/preview'))).toBe(true));
     state.userId = 'user-2';
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     preview.resolve(Object.assign(new Error('already a member'), { code: 'PROVIDER_SHARE_ALREADY_MEMBER' }));
     const error = await result;
     expect(__testing.readMarkers()).toEqual({});
@@ -299,7 +413,7 @@ describe('cross-region provider share', () => {
   it('does not restore membership for a used invitation without server confirmation', async () => {
     const usedError = Object.assign(new Error('link used'), { code: 'PROVIDER_SHARE_LINK_USED' });
     state.responses.set('/preview', usedError);
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await expect(previewProviderShare({ invitation: TOKEN, server: PEER })).rejects.toBe(usedError);
     expect(__testing.readMarkers()).toEqual({});
     expect(state.calls.map((call) => call.path)).toEqual(['/api/device-link/provider-shares/x/preview']);
@@ -344,7 +458,7 @@ describe('cross-region provider share', () => {
   });
 
   it('refreshes a newly received same-region group share without contacting the peer region', async () => {
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
     state.localHasGroupShare = true;
     await remoteGroup().client.view('group-owner', 'openai');
@@ -404,7 +518,7 @@ describe('cross-region provider share', () => {
   });
 
   it.each(['group', 'session'] as const)('does not restore another account from a late %s response', async (phase) => {
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
     const response = deferred<unknown>();
     if (phase === 'session') state.responses.set('/session', response.promise);
@@ -420,7 +534,7 @@ describe('cross-region provider share', () => {
     }
     const markersBeforeSwitch = __testing.readMarkers();
     state.userId = 'user-2';
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     response.resolve(phase === 'group' ? view : {
       credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share],
     });
@@ -538,18 +652,20 @@ describe('cross-region provider share', () => {
     expect(__testing.readMarkers('emptyAccounts')).toEqual({});
   });
 
-  it('does not send identity cards for forged favorite hints or another account history', async () => {
+  it('discovers the account once without letting favorite hints or old history add requests', async () => {
+    state.responses.set('/session', { credential: null, expiresAt: null, shares: [] });
     const probe = async () => {
       startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
       await refreshReceivedShares('test');
+      await refreshProviderShareCrossRegion('global');
       for (let i = 0; i < 3; i += 1) {
         getReceivedSharesSnapshot({ ownerStamp: { dataOwnerId: state.userId, ownerGeneration: 1 }, regions: ['global'] });
       }
       await expect(resolveRemoteAgentTargetWhenReady('share:unknown')).rejects.toThrow('REMOTE_AGENT_SHARE_REMOVED');
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(state.identityCards).toEqual([]);
-      expect(state.calls).toEqual([]);
-      expect(getReceivedSharesSnapshot().confirmedRegions).toEqual(['cn']);
+      expect(state.identityCards).toEqual(['share-session']);
+      expect(state.calls.map(call => call.path)).toEqual(['/api/device-link/provider-shares/x/session']);
+      expect(getReceivedSharesSnapshot().confirmedRegions).toEqual(['cn', 'global']);
       stopProviderShareGuest();
     };
     await probe();
@@ -559,14 +675,14 @@ describe('cross-region provider share', () => {
     fs.writeFileSync(path.join(dir, 'remote-agent', 'provider-share-regions.json'), JSON.stringify({ version: 1, accounts: {}, knownAccounts: oldHistory }));
     state.calls = [];
     state.identityCards = [];
-    await probe(); // 历史往来不能作为联网资格，也不能被当作服务端空名单。
+    await probe(); // 旧历史不增加自动发现之外的请求，空名单仍取服务端结果。
     state.userId = 'user-2';
     state.calls = [];
     state.identityCards = [];
     await probe();
   });
 
-  it('restores confirmed empty membership locally after restart without granting favorite hints network access', async () => {
+  it('rechecks a saved empty list on restart without adding favorite-triggered requests', async () => {
     state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });
     await crossRegionSendRequest('global', TOKEN);
     // 兼容旧版活动标记；服务端空名单与撤销联网资格在同一次写入中保存。
@@ -586,13 +702,14 @@ describe('cross-region provider share', () => {
       stopProviderShareGuest();
       startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
       await refreshReceivedShares('test');
-      // 首次读取即可清理失败残留；之后伪造收藏、多窗口查询和再重启也不会发身份名片。
+      await refreshProviderShareCrossRegion('global');
+      // 每次启动按账号核验一次；收藏、多窗口读取不追加发现请求。
       expect(getReceivedSharesSnapshot().confirmedRegions).toEqual(['cn', 'global']);
       expect(getReceivedSharesSnapshot(recovery).confirmedRegions).toEqual(['cn', 'global']);
       getReceivedSharesSnapshot(recovery);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(state.calls).toEqual([]);
-      expect(state.identityCards).toEqual([]);
+      expect(state.calls).toHaveLength(restart + 1);
+      expect(state.identityCards).toEqual(Array.from({ length: restart + 1 }, () => 'share-session'));
       expect(state.clients).toEqual([]);
     }
     state.userId = 'user-2';
@@ -667,17 +784,8 @@ describe('cross-region provider share', () => {
     expect(getConfirmedCrossRegionReceivedRegions()).toEqual([]);
   });
 
-  it.each([true, false])('waits for a marked peer region before reporting received shares ready (empty=%s)', async (empty) => {
+  it.each([true, false])('waits for account discovery before reporting received shares ready (empty=%s)', async (empty) => {
     expect(isCrossRegionReceivedReady()).toBe(true);
-    startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
-    expect(isReceivedSharesReady()).toBe(false);
-    await refreshReceivedShares('test');
-    expect(isReceivedSharesReady()).toBe(true);
-    expect(state.calls).toEqual([]);
-    stopProviderShareGuest();
-
-    state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });
-    await crossRegionSendRequest('global', TOKEN);
     const session = deferred<unknown>();
     state.responses.set('/session', session.promise);
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
@@ -720,15 +828,7 @@ describe('cross-region provider share', () => {
     expect(fs.readFileSync(path.join(dir, 'remote-agent', 'provider-share-regions.json'), 'utf8')).not.toContain(TOKEN);
   });
 
-  it('contacts the peer region only for marked accounts, then connects with the share credential', async () => {
-    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(state.calls).toHaveLength(0);
-    stopProviderShareCrossRegion();
-
-    state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });
-    await crossRegionSendRequest('global', TOKEN);
-    state.calls = [];
+  it('automatically connects with only the account share credential', async () => {
     state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), deviceId: 'x:cn:abc', shares: [share] });
     const changed = vi.fn();
     startProviderShareCrossRegion({ changed }, { userDataDir: dir });
@@ -756,6 +856,77 @@ describe('cross-region provider share', () => {
     startProviderShareCrossRegion({ changed }, { userDataDir: dir });
     await vi.waitFor(() => expect(changed).toHaveBeenCalled());
     await vi.waitFor(() => expect(__testing.readMarkers()).toEqual({}));
+    expect(state.clients).toHaveLength(0);
+  });
+});
+
+// Unit regression for the 8c ALREADY_MEMBER recovery: public guest requests must
+// not issue/send another owner's card after an internal endpoint or identity await.
+// Existing cases switch during link resolution/HTTP, missing these inner boundaries.
+// Minimal input: one deferred boundary, owner replacement, then its late completion.
+// Only endpoint/card/server edges are fake; guest and cross-region control stay real.
+describe('cross-region identity request owner boundary', () => {
+  it.each([
+    { point: 'endpoint', switched: true },
+    { point: 'identity', switched: true },
+    { point: 'identity', switched: false },
+  ] as const)('keeps membership recovery scoped at $point (switched=$switched)', async ({ point, switched }) => {
+    const entered = deferred();
+    const resume = deferred();
+    let endpoints = 0;
+    state.endpointHook = async () => {
+      if (++endpoints === 3 && point === 'endpoint') { entered.resolve(); await resume.promise; }
+    };
+    state.identityHook = async purpose => {
+      if (purpose === 'share-session' && point === 'identity') { entered.resolve(); await resume.promise; }
+    };
+    state.responses.set('/preview', Object.assign(new Error('already a member'), { code: 'PROVIDER_SHARE_ALREADY_MEMBER' }));
+    state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    const result = previewProviderShare({ invitation: TOKEN, server: PEER }).catch(error => error);
+    await entered.promise;
+    if (switched) {
+      state.userId = 'user-2';
+      await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    }
+    resume.resolve();
+    expect(await result).toMatchObject({ code: 'PROVIDER_SHARE_ALREADY_MEMBER' });
+    expect(state.cardOwners).toEqual(point === 'endpoint' ? ['user-1'] : ['user-1', 'user-1']);
+    expect(state.calls.map(call => call.path.replace('/api/device-link/provider-shares/x', '')))
+      .toEqual(switched ? ['/preview'] : ['/preview', '/session']);
+    expect(state.clients).toHaveLength(switched ? 0 : 1);
+    expect(getCrossRegionReceived().map(item => item.shareId)).toEqual(switched ? [] : ['share-x']);
+  });
+
+  it.each([
+    { action: 'preview', point: 'endpoint' }, { action: 'preview', point: 'identity' },
+    { action: 'send', point: 'endpoint' }, { action: 'send', point: 'identity' },
+  ] as const)('rejects old-owner $action at its $point boundary', async ({ action, point }) => {
+    const entered = deferred();
+    const resume = deferred();
+    let endpoints = 0;
+    let cards = 0;
+    state.endpointHook = async () => {
+      if (++endpoints === (action === 'preview' ? 2 : 3) && point === 'endpoint') { entered.resolve(); await resume.promise; }
+    };
+    state.identityHook = async () => {
+      if (++cards === (action === 'preview' ? 1 : 2) && point === 'identity') { entered.resolve(); await resume.promise; }
+    };
+    state.responses.set('/preview', { ...share, state: 'unused', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    state.responses.set('/requests', { requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString(), requestToken: TOKEN });
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    const input = { invitation: TOKEN, server: PEER };
+    const result = (action === 'preview' ? previewProviderShare(input) : sendProviderShareRequest(input)).catch(error => error);
+    await entered.promise;
+    state.userId = 'user-2';
+    await startGuestAfterEmptyDiscovery({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
+    resume.resolve();
+    expect(await result).toMatchObject({ code: 'DEVICE_LINK_NOT_CONNECTED' });
+    const issued = (action === 'send' ? 1 : 0) + (point === 'identity' ? 1 : 0);
+    expect(state.cardOwners).toEqual(Array.from({ length: issued }, () => 'user-1'));
+    expect(state.calls.map(call => call.path.replace('/api/device-link/provider-shares/x', '')))
+      .toEqual(action === 'preview' ? [] : ['/preview']);
+    expect(__testing.readMarkers()).toEqual({});
     expect(state.clients).toHaveLength(0);
   });
 });

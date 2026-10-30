@@ -11,6 +11,7 @@
     "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
+    "deleteRejectedWhileOffline": "未能刪除裝置：伺服器仍將它記為線上，與清單中的離線狀態不一致",
     "currentlyOnline": "目前在線",
     "availableSection": "在線裝置",
     "offlineSection": "離線裝置",
@@ -403,6 +404,7 @@
         "30d": "30 天",
         "all": "全部"
       },
+      "showCollapsedTeammateAvatars": "收起時顯示頭像",
       "displayHeading": "顯示",
       "view": {
         "text": "文字",
@@ -419,7 +421,8 @@
       "summarySeparator": "、",
       "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。",
       "filterTeammatesHeading": "夥伴",
-      "filterAnySource": "不限來源",
+      "filterAnySource": "全部",
+      "filterHideAllTeammates": "都不顯示",
       "filterSelectedTeammates": "已選 {{count}} 位"
     },
     "search": {
@@ -693,7 +696,14 @@
     "createMenu": "新增",
     "awaiting": "等你確認",
     "taskResult": "任務結果",
-    "collapseResult": "收起結果"
+    "collapseResult": "收起結果",
+    "avatarStatus": {
+      "awaiting": "待你確認",
+      "error": "需要注意",
+      "running": "正在工作",
+      "done": "已完成",
+      "unread": "未讀"
+    }
   },
   "companionProfile": {
     "avatar": "頭像",

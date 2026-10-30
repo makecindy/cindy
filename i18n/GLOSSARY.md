@@ -359,6 +359,10 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。
 
+### AI reply mode
+
+A teammate replies on behalf of a group member. Chinese name approved as AI 代答模式 on 2026-10-29; internal personal-mask identifiers remain unchanged.
+
 ### Group Strategy
 
 供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重。读得到 Claude Code 或 OpenAI 订阅用量时先按配额筛（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），组策略只在差不多急的几台里挑。只决定新任务分到哪台，正常运行的任务不因均衡迁移。

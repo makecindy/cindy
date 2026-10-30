@@ -3,6 +3,7 @@
  * 握手 / 请求配对 / 超时 / relay-error / 重连退避 / 心跳僵死 / token 缺失。
  */
 import { createHash } from 'node:crypto';
+import { PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY } from '@cindy/device-link-protocol';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { describe, it, expect, vi } from 'vitest';
 import { DeviceLinkClient, computeReconnectDelayMs, type WsLike } from '../client.js';
@@ -35,6 +36,7 @@ import {
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
+import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
 import { DL_CONTACTS_SYNC_CHANNEL } from '../contactsSyncProtocol.js';
 import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
@@ -1017,6 +1019,12 @@ class RelayWs extends FakeWs {
  *（发送端的可靠层靠未 ACK 的 pending 自行保留）。
  */
 class MemoryRelay {
+  providerShareDirectSignalEnabled: boolean;
+  rejectGuestProviderShareDirectSignals = false;
+  readonly rejectedDirectSignals: Envelope[] = [];
+  constructor(private readonly providerShareEnabled = false) {
+    this.providerShareDirectSignalEnabled = providerShareEnabled;
+  }
   /** 按目的地记录实际投递给对端的帧（不含 hello-ack/pong 控制帧）。 */
   readonly deliveredTo = new Map<string, Envelope[]>();
   private readonly members = new Map<string, { ws: RelayWs | null }>();
@@ -1059,7 +1067,9 @@ class MemoryRelay {
         env: {
           v: PROTOCOL_VERSION,
           kind: 'hello-ack',
-          payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: senderId, userId: 'u1' },
+          payload: { serverProtocolVersion: PROTOCOL_VERSION, deviceId: senderId, userId: 'u1',
+            ...(this.providerShareEnabled ? { capabilities: ['provider-share-v1',
+              ...(this.providerShareDirectSignalEnabled ? [PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY] : [])] } : {}) },
         },
       });
       return;
@@ -1069,6 +1079,19 @@ class MemoryRelay {
       return;
     }
     if (!env.dst) return;
+    // A mixed cluster can acknowledge on a new node, then route through an old
+    // provider-share node that rejects the guest's best-effort SDP answer.
+    if (this.rejectGuestProviderShareDirectSignals && senderId === 'viewer'
+      && env.providerShare !== undefined && env.kind === 'push'
+      && (env.payload as { channel?: string } | undefined)?.channel === DIRECT_LINK_SIGNAL) {
+      this.rejectedDirectSignals.push(env);
+      this.queue.push({ kind: 'direct', ws, env: {
+        v: PROTOCOL_VERSION, kind: 'relay-error', id: env.id,
+        providerShare: env.providerShare,
+        payload: { code: 'DEVICE_OFFLINE', message: 'providerShare peer unavailable', dst: env.dst },
+      } });
+      return;
+    }
     const dropIndex = this.dropNextPredicates.findIndex((predicate) => predicate(senderId, env));
     if (dropIndex >= 0) {
       this.dropNextPredicates.splice(dropIndex, 1);
@@ -1076,7 +1099,12 @@ class MemoryRelay {
     }
     // 入口即判定在线与否：离线目的地直接丢帧，不缓存、不重排
     if (!this.members.get(env.dst)?.ws) return;
-    this.queue.push({ kind: 'routed', dstId: env.dst, env: { ...env, src: senderId } });
+    const share = env.providerShare;
+    this.queue.push({ kind: 'routed', dstId: env.dst, env: {
+      ...env, src: senderId,
+      ...(share ? { providerShare: { ...share, source: share.target.role === 'host'
+        ? { role: 'guest', memberId: 'member' } : { role: 'host' } } } : {}),
+    } });
   }
 
   /** 按顺序逐帧投递直到静默；每帧之间让微任务（drain/ACK）跑完。 */
@@ -7731,6 +7759,64 @@ describe('DeviceLinkClient', () => {
   });
 });
 
+// Unit regression for PR #7975: invoke must isolate cancellation between identical
+// queued listings. Prior coverage cancelled only a joining consumer, not the first.
+// Minimal input: fill admission, enqueue two identical reads, cancel either one.
+describe('remote recovery regression', () => {
+  it.each([0, 1])('keeps identical queued listings independent when consumer %i cancels', async (cancelIndex) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const pending: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const sent = () => h.current().sent.filter(e => e.kind === 'invoke');
+      const reply = (e: Envelope) => h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result',
+        id: e.id, src: e.dst, payload: { ok: true, result: 'ok' } });
+      for (let i = 0; i < 12; i++) pending.push(h.client.invoke('a', {
+        channel: 'local-db:sessions:list', args: [{ request: i }],
+      }).catch(error => error));
+      expect(sent()).toHaveLength(12);
+      const cancelled = [false, false];
+      const reads = cancelled.map((_, i) => h.client.invoke('a', {
+        channel: 'local-db:sessions:list', args: [],
+      }, undefined, { preSend: () => {
+        if (cancelled[i]) throw new Error('cancelled consumer');
+      } }).catch(error => error));
+      pending.push(...reads);
+      expect(sent()).toHaveLength(12);
+      cancelled[cancelIndex] = true;
+      sent().forEach(reply);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent()).toHaveLength(13); // Only the valid caller reaches the wire.
+      reply(sent().at(-1)!);
+      expect(await reads[cancelIndex]).toMatchObject({ message: 'cancelled consumer' });
+      expect(await reads[1 - cancelIndex]).toEqual({ ok: true, result: 'ok' });
+      await Promise.all(pending);
+    } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
+  });
+
+  it('probes the shared relay once, pauses background work, and keeps healthy peers connected', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 1000, pongMissLimit: 100 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      await vi.advanceTimersByTimeAsync(1001);
+      expect(h.client.confirmRelayForPeerTimeout()).toBe(false);
+      expect(h.client.confirmRelayForPeerTimeout()).toBe(false);
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(h.client.invoke('a', { channel: 'git-context:pr-status', args: [] }))
+        .rejects.toMatchObject({ code: 'BACKPRESSURE' });
+      const healthy = h.client.invoke('b', { channel: 'maker:send', args: [] });
+      const sent = h.current().sent.at(-1)!;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: 'b', payload: { ok: true, result: 'ok' } });
+      expect(await healthy).toEqual({ ok: true, result: 'ok' });
+      expect(h.client.confirmRelayForPeerTimeout()).toBe(true);
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(h.sockets).toHaveLength(1); // Healthy B cancels shared recovery for silent A.
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+});
+
 describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
   const timing = {
     reconnectBaseMs: 1_000,
@@ -10887,6 +10973,201 @@ class MemoryDirectRuntime {
 }
 
 describe('automatic LAN connection through platform bridges', () => {
+  // Unit, provider-sharing-direct-execution.md authorization contract: a renewed
+  // scoped link must survive the former deadline on the same RTC session. The
+  // relay-restart cases below do not advance through a successful lease renewal.
+  it.each(['success', 'retry-after-lost-accept'] as const)(
+    'extends a provider-share lease without replacing its established WebRTC session: %s', async mode => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const host = makeRelayClient(relay, 'desktop', undefined, { directRuntime: rtc.createRuntime() });
+    const guest = makeRelayClient(relay, 'viewer', undefined, { directRuntime: rtc.createRuntime() });
+    const hostPeer = providerShareHostPeer('share', 'desktop');
+    const guestPeer = providerShareGuestPeer('share', 'member', 'viewer');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const advance = async (ms: number) => {
+      for (let remaining = ms; remaining > 0; remaining -= 30_000) {
+        await vi.advanceTimersByTimeAsync(Math.min(remaining, 30_000));
+        await pump();
+      }
+    };
+    let executions = 0;
+    const changes: string[] = [];
+    guest.onPeerPathChanged(change => changes.push(change.path));
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions++;
+        host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'renewed direct result' });
+      }
+    });
+    try {
+      host.start(); guest.start(); await pump();
+      const opening = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      expect(guest.getPeerPath(hostPeer)).toBe('direct');
+      const originalSessions = [...rtc.sessions.entries()];
+      expect(originalSessions).toHaveLength(1);
+      await advance(20 * 60_000);
+      if (mode === 'retry-after-lost-accept') {
+        relay.dropNext((sender, env) => sender === 'desktop' && env.kind === 'link-accept');
+        const rejected = expect(guest.openLink(hostPeer, {
+          controllerName: 'Guest', protocolVersion: 1, appVersion: '1',
+        })).rejects.toThrow();
+        await pump();
+        await advance(2_100);
+        await rejected;
+        expect(guest.getPeerPath(hostPeer)).toBe('direct');
+        expect(host.getPeerPath(guestPeer)).toBe('direct');
+        expect(originalSessions[0]![1].every(session => !session.closed)).toBe(true);
+      }
+      const renewal = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await renewal;
+      await advance(11 * 60_000);
+      expect(guest.getPeerPath(hostPeer)).toBe('direct');
+      expect(host.getPeerPath(guestPeer)).toBe('direct');
+      expect([...rtc.sessions.entries()]).toEqual(originalSessions);
+      expect(originalSessions[0]![1].every(session => !session.closed)).toBe(true);
+      expect(changes).toEqual(['direct']);
+      expect(sockets).toHaveBeenCalledTimes(2);
+      const relayed = reliableKinds(relay.deliveredTo.get('desktop'), 'invoke');
+      const result = guest.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runId: 'task' }] });
+      await pump();
+      expect(await result).toEqual({ ok: true, result: 'renewed direct result' });
+      expect(executions).toBe(1);
+      expect(reliableKinds(relay.deliveredTo.get('desktop'), 'invoke')).toBe(relayed);
+      // Business traffic and heartbeats cannot prolong the renewed authority.
+      await advance(20 * 60_000);
+      expect(guest.getPeerPath(hostPeer)).toBe('relay');
+      expect(host.getPeerPath(guestPeer)).toBe('relay');
+      expect(sockets).toHaveBeenCalledTimes(2);
+    } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
+  });
+
+  // Production entry points: relay-authenticated scoped link, WebRTC negotiation,
+  // and remote Agent invoke. Previously any scoped peer was excluded from direct.
+  it('keeps an authorized provider share working over WebRTC during a relay restart', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const host = makeRelayClient(relay, 'desktop', { requestTimeoutMs: 5_000 }, { directRuntime: rtc.createRuntime() });
+    const guest = makeRelayClient(relay, 'viewer', { requestTimeoutMs: 5_000 }, { directRuntime: rtc.createRuntime() });
+    const hostPeer = providerShareHostPeer('share', 'desktop');
+    const guestPeer = providerShareGuestPeer('share', 'member', 'viewer');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    let executions = 0;
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions++;
+        host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'direct result' });
+      }
+    });
+    try {
+      host.start(); guest.start(); await pump();
+      const opening = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      expect(guest.getPeerPath(hostPeer)).toBe('direct');
+      expect(host.getPeerPath(guestPeer)).toBe('direct');
+      const relayedInvokes = reliableKinds(relay.deliveredTo.get('desktop'), 'invoke');
+      relay.disconnect('desktop'); relay.disconnect('viewer');
+      expect(guest.getStatus()).not.toBe('online');
+      expect(host.getStatus()).not.toBe('online');
+      const result = guest.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runId: 'task' }] });
+      await pump();
+      expect(await result).toEqual({ ok: true, result: 'direct result' });
+      expect(executions).toBe(1);
+      expect(reliableKinds(relay.deliveredTo.get('desktop'), 'invoke')).toBe(relayedInvokes);
+      host.closeLink(guestPeer, 'revoked', 'inbound');
+      expect(host.getPeerPath(guestPeer)).toBe('relay');
+    } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
+  });
+  it.each(['old-relay', 'mixed-relay'] as const)(
+    'keeps provider-share invokes on the reliable relay when signaling meets a %s', async mode => {
+      vi.useFakeTimers();
+      const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+      relay.providerShareDirectSignalEnabled = mode === 'mixed-relay';
+      relay.rejectGuestProviderShareDirectSignals = true;
+      const host = makeRelayClient(relay, 'desktop', undefined, { directRuntime: rtc.createRuntime() });
+      const guest = makeRelayClient(relay, 'viewer', undefined, { directRuntime: rtc.createRuntime() });
+      const hostPeer = providerShareHostPeer('share', 'desktop');
+      const guestPeer = providerShareGuestPeer('share', 'member', 'viewer');
+      const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+      let executions = 0;
+      const guestRouteChanges: string[] = [];
+      guest.onPeerRouteStateChanged(change => guestRouteChanges.push(change.state));
+      host.onFrame(env => {
+        if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+        if (env.kind === 'invoke') {
+          executions++;
+          host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'relay result' });
+        }
+      });
+      try {
+        host.start(); guest.start(); await pump();
+        const opening = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+        await pump(); await opening;
+        expect(guest.getPeerPath(hostPeer)).toBe('relay');
+        expect(host.getPeerPath(guestPeer)).toBe('relay');
+        expect(guest.isLinkReady(hostPeer)).toBe(true);
+        expect(host.isLinkReady(guestPeer)).toBe(true);
+        expect(guestRouteChanges).not.toContain('offline');
+        expect(relay.rejectedDirectSignals.length).toBe(mode === 'mixed-relay' ? 1 : 0);
+        if (mode === 'mixed-relay') {
+          expect(relay.rejectedDirectSignals[0]?.id).toEqual(expect.any(String));
+          expect(guest.getStatus()).toBe('online');
+        } else {
+          expect([...relay.deliveredTo.values()].flat().some(env => env.kind === 'push'
+            && (env.payload as { channel?: string } | undefined)?.channel === DIRECT_LINK_SIGNAL)).toBe(false);
+        }
+        const result = guest.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runId: 'task' }] });
+        await pump();
+        expect(await result).toEqual({ ok: true, result: 'relay result' });
+        expect(executions).toBe(1);
+        expect(reliableKinds(relay.deliveredTo.get('desktop'), 'invoke')).toBe(1);
+      } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
+    },
+  );
+
+  it('keeps an established provider-share WebRTC path after reconnecting to an old relay', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const host = makeRelayClient(relay, 'desktop', undefined, { directRuntime: rtc.createRuntime() });
+    const guest = makeRelayClient(relay, 'viewer', undefined, { directRuntime: rtc.createRuntime() });
+    const hostPeer = providerShareHostPeer('share', 'desktop');
+    const guestPeer = providerShareGuestPeer('share', 'member', 'viewer');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    let executions = 0;
+    host.onFrame(env => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions++;
+        host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'still direct' });
+      }
+    });
+    try {
+      host.start(); guest.start(); await pump();
+      const opening = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      expect(guest.getPeerPath(hostPeer)).toBe('direct');
+      relay.providerShareDirectSignalEnabled = false;
+      relay.disconnect('desktop'); relay.disconnect('viewer');
+      for (let n = 0; n < 10 && (host.getStatus() !== 'online' || guest.getStatus() !== 'online'); n++) {
+        await vi.advanceTimersByTimeAsync(20); await pump();
+      }
+      expect(host.getStatus()).toBe('online');
+      expect(guest.getStatus()).toBe('online');
+      expect(guest.hasServerCapability(PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY)).toBe(false);
+      expect(guest.getPeerPath(hostPeer)).toBe('direct');
+      expect(host.getPeerPath(guestPeer)).toBe('direct');
+      const relayedInvokes = reliableKinds(relay.deliveredTo.get('desktop'), 'invoke');
+      const result = guest.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'poll', runId: 'task' }] });
+      await pump();
+      expect(await result).toEqual({ ok: true, result: 'still direct' });
+      expect(executions).toBe(1);
+      expect(reliableKinds(relay.deliveredTo.get('desktop'), 'invoke')).toBe(relayedInvokes);
+    } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
+  });
   it.each(['both', 'old-host', 'old-viewer', 'unavailable'] as const)('negotiates automatically and keeps %s compatible', async mode => {
     vi.useFakeTimers();
     const relay = new MemoryRelay(), rtc = new MemoryDirectRuntime();

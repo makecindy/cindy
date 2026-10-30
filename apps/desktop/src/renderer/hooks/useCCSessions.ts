@@ -35,6 +35,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { getDraft } from '@/state/newMakerDraft';
 
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
@@ -183,7 +184,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     }): Promise<Session | null> => {
       try {
         const newSession = await sessionService.create({
-          permissionMode: 'auto',
+          permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
