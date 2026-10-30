@@ -184,9 +184,16 @@
     "allDone": "모두 완료"
   },
   "speaking": {
+    "queued": "대기 중",
     "stopping": "중지 중…",
     "planning": "역할을 나누는 중…",
     "step": "작업 중…"
+  },
+  "work": {
+    "queued": "대기 중 {{count}}",
+    "active": "진행 중 {{count}}",
+    "expand": "팀원 활동 펼치기",
+    "collapse": "팀원 활동 접기"
   },
   "task": {
     "state": {

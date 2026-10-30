@@ -32,7 +32,7 @@ import { CompanionPresenceRing } from './CompanionPresenceRing';
 import { ThinkingDots } from './ThinkingDots';
 import { WorkingStatusText } from './WorkingStatusText';
 
-export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, onError }: {
+export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, collapsed = false, revealWaiting = true, onError }: {
   deviceId: string;
   identity: BotGroupIdentity;
   sessionId: string | null;
@@ -40,6 +40,8 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   online: boolean;
   executionStatus?: BotGroupSpeaker['executionStatus'];
   stopping?: boolean;
+  collapsed?: boolean;
+  revealWaiting?: boolean;
   onError(message: string | null): void;
 }) {
   const { t } = useTranslation();
@@ -60,21 +62,23 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   const pending = useSessionPendingInteractions(lane);
   const live = useSyncExternalStore(remoteSessionStore.subscribe, () => lane ? remoteSessionStore.getSessionLiveActivity(lane, deviceId) : null);
   const waiting = pending.length > 0 || live?.phase === 'needs-interaction' || executionStatus === 'needs_input';
+  const visible = !collapsed || (waiting && revealWaiting);
   const livePhase = readWorkingPhase(live?.workingPhase);
   // The organizer's decision runs outside any Session: there is no live phase to show.
   const copy = useCompanionGenerationCopy({
     deviceId,
     botId: identity.botId,
     phase: activity === 'reply' ? livePhase ?? 'processing' : livePhase,
-    active: !waiting && activity !== 'planning' && (activity === 'reply' || livePhase !== null),
+    active: visible && !waiting && activity !== 'planning' && (activity === 'reply' || livePhase !== null),
     turnId: lane,
   });
   const label = stopping || executionStatus === 'stopping' ? t('groupChat.speaking.stopping')
-    : executionStatus === 'queued' ? t('devices.companions.status.queued')
+    : executionStatus === 'queued' ? t('groupChat.speaking.queued')
     : activity === 'planning'
     ? t('groupChat.speaking.planning')
     : copy ?? (activity === 'step' ? t('groupChat.speaking.step') : t('devices.companions.working.processing'));
   // G4: the same working vocabulary as the 1:1 chat — breathing portrait, three dots, paced copy.
+  if (!visible) return null;
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t('groupChat.waitingConfirm', { name: identity.name }) : label}`}>
     <View style={styles.avatar}>
       <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
@@ -100,7 +104,7 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // The group message row: 28 portrait 2pt down, 10 to the text, name row as tall as the portrait.
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: spacing.sm },
   avatar: { marginTop: 2, width: BOT_GROUP_MESSAGE_AVATAR_SIZE, height: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   column: { flex: 1, minWidth: 0, gap: spacing.xs },
   nameRow: { minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE, justifyContent: 'center' },

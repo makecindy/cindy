@@ -184,9 +184,16 @@
     "allDone": "All done"
   },
   "speaking": {
+    "queued": "Queued",
     "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
+  },
+  "work": {
+    "queued": "Queued {{count}}",
+    "active": "In progress {{count}}",
+    "expand": "Expand teammate activity",
+    "collapse": "Collapse teammate activity"
   },
   "task": {
     "state": {

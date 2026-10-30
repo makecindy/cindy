@@ -184,9 +184,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排隊中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排隊 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "展開夥伴動態",
+    "collapse": "收起夥伴動態"
   },
   "task": {
     "state": {

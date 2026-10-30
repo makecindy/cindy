@@ -184,9 +184,16 @@
     "allDone": "すべて完了"
   },
   "speaking": {
+    "queued": "待機中",
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
+  },
+  "work": {
+    "queued": "待機中 {{count}}",
+    "active": "進行中 {{count}}",
+    "expand": "チームメイトの状況を展開",
+    "collapse": "チームメイトの状況を折りたたむ"
   },
   "task": {
     "state": {

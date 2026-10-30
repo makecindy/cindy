@@ -184,9 +184,16 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "queued": "排队中",
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
+  },
+  "work": {
+    "queued": "排队 {{count}}",
+    "active": "进行中 {{count}}",
+    "expand": "展开伙伴动态",
+    "collapse": "收起伙伴动态"
   },
   "task": {
     "state": {
