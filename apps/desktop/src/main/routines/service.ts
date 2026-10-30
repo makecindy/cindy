@@ -55,6 +55,11 @@ export interface RoutineHostDeps {
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
   ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
   closeRoutineSession?(sessionId: string): Promise<void>;
+  /**
+   * Fresh 模式跑完：删掉这次触发的独立任务。它和普通任务一样出现在任务列表里，
+   * 留着就等于每次触发都在列表里堆一条历史任务。
+   */
+  deleteRoutineSession?(sessionId: string): Promise<void>;
   getScheduler(): Pick<Scheduler, 'runNow' | 'pause' | 'delete'> | null;
   getScheduleStorage(): Pick<ScheduleStorage, 'get' | 'insert' | 'update' | 'listRuns'>;
 }
@@ -197,7 +202,8 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   }
   const persistent = routine.sessionMode !== 'fresh';
   // Fresh mode still creates a host-owned lane so it inherits the same bot
-  // permissions and model route; the lane is closed after this trigger.
+  // permissions and model route; the lane is closed and deleted after this
+  // trigger, so fresh runs leave no task behind in the ordinary task list.
   const lane = await getRoutineHost().ensureRoutineSession({
     botId: routine.botId,
     routineId: persistent ? routine.id : `${routine.id}:${randomUUID()}`,
@@ -206,8 +212,23 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   });
   assertScope(scope);
   if (!lane.ok) throw new Error(lane.message);
-  if (signal.aborted) throw new Error('Routine cancelled');
-  if (!canDispatch()) return { deferred: true };
+  /**
+   * Fresh 模式这条任务用完即弃：关掉运行时并删掉任务，不留在普通任务列表里。
+   * lane 建好之后的任何出口（含下方 try）最终都必须经过它。
+   */
+  const discardFreshLane = async (): Promise<void> => {
+    if (persistent) return;
+    const closeRoutineSession = getRoutineHost().closeRoutineSession;
+    if (closeRoutineSession) {
+      await closeRoutineSession(lane.sessionId).catch((error) =>
+        log.warn('fresh routine session close failed', { sessionId: lane.sessionId, error: String(error) }));
+    }
+    const deleteRoutineSession = getRoutineHost().deleteRoutineSession;
+    if (deleteRoutineSession) {
+      await deleteRoutineSession(lane.sessionId).catch((error) =>
+        log.warn('fresh routine session delete failed', { sessionId: lane.sessionId, error: String(error) }));
+    }
+  };
   const storage = getRoutineHost().getScheduleStorage();
   const id = `routine-${routine.id}`;
   const now = Date.now();
@@ -234,12 +255,6 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     createdAt: now,
     updatedAt: now,
   };
-  const existing = await storage.get(id);
-  assertScope(scope);
-  if (existing) await storage.update(id, { ...schedule, createdAt: existing.createdAt });
-  else await storage.insert(schedule);
-  assertScope(scope);
-  if (signal.aborted) throw new Error('Routine cancelled');
   let cancellation: Promise<unknown> | undefined;
   const abort = () => {
     cancellation = scheduler
@@ -248,6 +263,13 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   };
   signal.addEventListener('abort', abort, { once: true });
   try {
+    const existing = await storage.get(id);
+    assertScope(scope);
+    if (existing) await storage.update(id, { ...schedule, createdAt: existing.createdAt });
+    else await storage.insert(schedule);
+    assertScope(scope);
+    if (signal.aborted) throw new Error('Routine cancelled');
+    if (!canDispatch()) return { deferred: true };
     const result = await scheduler.runNow(id, { deferToCaller: true, internalRoutine: true, canDispatch });
     assertScope(scope);
     // The routine queue owns this batch and its retry delay, not the backing schedule.
@@ -260,7 +282,8 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     return {
       ...(exhausted ? { disableRoutine: true } : {}),
       scheduleRunId: result.runId,
-      sessionId: lane.sessionId,
+      // Fresh 的这条任务跑完就删（见 finally），历史里不再挂一条已经不在的任务。
+      ...(persistent ? { sessionId: lane.sessionId } : {}),
       skipped: completed.status === 'skipped',
       resultText: completed.resultText,
       ...(completed?.status === 'success' || completed?.status === 'skipped'
@@ -270,13 +293,7 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   } finally {
     signal.removeEventListener('abort', abort);
     await cancellation;
-    if (!persistent) {
-      const closeRoutineSession = getRoutineHost().closeRoutineSession;
-      if (closeRoutineSession) {
-        await closeRoutineSession(lane.sessionId).catch((error) =>
-          log.warn('fresh routine session close failed', { sessionId: lane.sessionId, error: String(error) }));
-      }
-    }
+    await discardFreshLane();
   }
 }
 

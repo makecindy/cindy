@@ -13,6 +13,7 @@ const mock = vi.hoisted(() => ({
   save: vi.fn<(state: RoutineState) => Promise<void>>(async () => {}),
   ensureRoutineSession: vi.fn(async ({ routineId }: { routineId: string }) => ({ ok: true as const, sessionId: `lane-${routineId}`, created: false })),
   closeRoutineSession: vi.fn(async () => {}),
+  deleteRoutineSession: vi.fn(async () => {}),
   getBot: vi.fn(async () => ({ status: 'active', canonicalSessionId: 'canonical-task' })),
   storage: {
     get: vi.fn<(id: string) => Promise<Schedule | null>>(async () => null),
@@ -71,6 +72,7 @@ beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profile
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
   closeRoutineSession: mock.closeRoutineSession,
+  deleteRoutineSession: mock.deleteRoutineSession,
   getScheduler: () => mock.schedulerReady ? mock.scheduler : null,
   getScheduleStorage: () => mock.storage,
 }));
@@ -142,9 +144,76 @@ it('creates and closes an isolated lane for each fresh routine trigger', async (
     routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)),
   }));
   expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  // fresh 的独立任务跑完就删：否则每次触发都在普通任务列表里留一条历史任务。
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  // 任务已经删掉，历史里就不再挂这条死链。
+  expect((await routineTools.history('bot', routine.id))[0].sessionId).toBeUndefined();
   // The per-trigger lane must still send with the routine's own model, not the companion's.
   const laneRoutineId = mock.ensureRoutineSession.mock.calls[0][0].routineId;
   expect(await readRoutineLaneModel('bot', `routine:${laneRoutineId}`)).toMatchObject({ agentKind: 'codex', model: 'budget' });
+});
+
+it('keeps the persistent lane and never deletes it', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Review', prompt: 'Check the PR', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('success'));
+  // 持久任务承载例行任务的上下文：只能归档，不能自动删。
+  expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
+  expect((await routineTools.history('bot', routine.id))[0].sessionId).toBe(`lane-${routine.id}`);
+});
+
+it('deletes the fresh lane even when the trigger never reaches the model', async () => {
+  const input = {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh' as const, triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }],
+  };
+  const routine = await routineTools.save('bot', input);
+  // 触发途中改了这条例行任务：这轮不会真跑，fresh 的空壳任务同样不能留下。
+  mock.ensureRoutineSession.mockImplementationOnce(async ({ routineId }: { routineId: string }) => {
+    await routineTools.save('bot', { ...input, prompt: 'Edited mid-flight' }, routine.id);
+    return { ok: true as const, sessionId: `lane-${routineId}`, created: false };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect(mock.deleteRoutineSession).toHaveBeenCalled());
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+});
+
+it('deletes the fresh lane when the backing storage write fails', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh', triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  // storage 写入失败：任务未入队就崩，fresh 的空壳任务仍必须被关掉并删掉。
+  // 引擎会把 execute 抱出的错记成 failed run，不向外抛，所以这里只断言清理发生过。
+  mock.storage.get.mockRejectedValueOnce(new Error('storage unavailable'));
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect(mock.deleteRoutineSession).toHaveBeenCalled());
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('failed'));
+});
+
+it('deletes the fresh lane when the trigger is cancelled mid-run', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh', triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  // 跑到一半取消（典型：切账号 / 停止服务）：空壳任务同样不能留下。
+  // stopRoutines() 中止执行并等当前轮收尾；discardFreshLane 在收尾里被调用，
+  // 所以等 getRoutineEngine() 重新可用后就能断言删除发生过。
+  mock.ensureRoutineSession.mockImplementationOnce(async ({ routineId }: { routineId: string }) => {
+    void stopRoutines();
+    return { ok: true as const, sessionId: `lane-${routineId}`, created: false };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => {
+    await getRoutineEngine();
+    expect(mock.deleteRoutineSession).toHaveBeenCalled();
+  });
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
 });
 
 it('turns the teammate\'s weekday todo check on and off as one built-in routine', async () => {

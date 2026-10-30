@@ -1253,6 +1253,10 @@ configureRoutineHost({
   closeRoutineSession: async (sessionId) => {
     await getMakerIfReady()?.closeSession(sessionId);
   },
+  // fresh 例行任务跑完即删：走普通任务同一条删除写入（不另起并行写链）。
+  deleteRoutineSession: async (sessionId) => {
+    await patchSessionMetaInDb(sessionId, { status: 'deleted' });
+  },
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
 });
