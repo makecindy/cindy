@@ -40,3 +40,10 @@ it('keeps managed llama.cpp separate from the existing-service preset', () => {
     { kind: 'preset', presetId: 'llamacpp' }, { kind: 'llamacpp' },
   ]);
 });
+
+it('describes managed llama.cpp as install/download/run, separately from the editable server preset', () => {
+  const choices = providerSearchChoices([], [{ id: 'llamacpp', name: 'llama.cpp', runtimes: {} }], 'en', 'Ollama');
+  const managed = choices.find(choice => choice.target.kind === 'llamacpp')!;
+  expect(managed.metaKey).toBe('llamacpp.subtitle');
+  expect(choices.find(choice => choice.key === 'preset:llamacpp')!.metaKey).not.toBe(managed.metaKey);
+});

@@ -1,8 +1,8 @@
 import { useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight } from 'lucide-react';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
-import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { cardIcon, ProviderRow } from './ProviderRow';
+import { isLocalRuntimeBetaProviderId } from '../../../shared/localModelRuntime';
 import { SettingsTextInput } from './SettingsTextInput';
 import type { InputProps } from '@/components/ui/input';
 import { matchProviderChoices, type ProviderSearchResult, type ProviderSearchTarget } from './providerSearch';
@@ -43,27 +43,26 @@ export function ProviderNameSearch({ choices, open, onOpenChange, onSelect, ...i
             }} />
         </div>
       </PopoverAnchor>
+      {/* Keep wheel events inside the modal dialog’s scroll boundary. */}
       <PopoverContent align="start" sideOffset={6} collisionPadding={8}
+        portalContainer={inputRef.current?.closest<HTMLElement>('[role="dialog"]')}
+        onEscapeKeyDown={event => { if (event.isComposing || event.keyCode === 229) event.preventDefault(); }}
         onOpenAutoFocus={event => event.preventDefault()}
         onCloseAutoFocus={event => event.preventDefault()}
         onInteractOutside={event => { if (inputRef.current?.contains(event.target as Node)) event.preventDefault(); }}
-        className="z-[10001] max-h-[280px] w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1 shadow-[var(--shadow-menu)]">
-        <div role="listbox" id={id} aria-label={input['aria-label'] ?? input.ariaLabel ?? input.placeholder}>
+        className="z-[10001] flex max-h-[min(280px,var(--radix-popover-content-available-height))] flex-col w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--confirm-bg)] p-2 shadow-[var(--shadow-menu)]">
+        <div className="min-h-0 overflow-y-auto" role="listbox" id={id} aria-label={input['aria-label'] ?? input.ariaLabel ?? input.placeholder}>
           {hits.map((result, index) => (
-            <button key={result.key} id={`${id}-${index}`} type="button" role="option" tabIndex={-1}
+            <ProviderRow key={result.key} id={`${id}-${index}`} role="option" tabIndex={-1}
+              icon={cardIcon({ providerId: result.id, name: result.name })}
+              name={result.name} meta={t(`settings.providers.${result.metaKey}`)}
+              beta={isLocalRuntimeBetaProviderId(result.id)}
               aria-selected={active === index} onPointerMove={() => setActiveKey(result.key)}
               onMouseDown={event => event.preventDefault()} onClick={() => select(result)}
-              className={`flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-[var(--cmd-palette-item-hover)] ${active === index ? 'bg-[var(--cmd-palette-item-hover)]' : ''}`}>
-              <span className="flex size-8 shrink-0 items-center justify-center text-13 text-[var(--text-primary)]">
-                {hasProviderLogo(result.id) ? <ProviderLogoMark providerId={result.id} size={24} /> : result.name.slice(0, 1)}
-              </span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-13 font-medium text-[var(--text-primary)]">{result.name}</span>
-                <span className="block text-12 text-[var(--text-tertiary)]">{t(`settings.providers.wizard.${result.metaKey}`)}</span></span>
-              <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" />
-            </button>
+              className="aria-selected:bg-[var(--settings-menu-bg-hover)]" />
           ))}
         </div>
-        <p className="px-3 py-2 text-12 text-[var(--text-tertiary)]">{t('settings.providers.custom.nameSearchHint')}</p>
+        <p className="shrink-0 whitespace-normal break-words px-2 pb-1 pt-2 text-11 text-[var(--text-tertiary)]">{t('settings.providers.custom.nameSearchHint')}</p>
       </PopoverContent>
     </Popover>
   );

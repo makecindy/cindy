@@ -44,10 +44,9 @@ import {
 import { extractIpcError } from '@/utils/ipcError';
 import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
-import { providerMonogram } from '@/lib/providerModels';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
-import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -270,72 +269,6 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
     },
   },
 };
-
-/** 供应商卡片图标。 */
-function cardIcon(sel: { providerId?: string; name: string }): React.ReactNode {
-  if (sel.providerId && hasProviderLogo(sel.providerId)) {
-    return <ProviderLogoMark providerId={sel.providerId} size={15} />;
-  }
-  return <span className="text-12 font-medium leading-none">{providerMonogram(sel.name)}</span>;
-}
-
-/**
- * 目录单行(2026-07 定稿:第 1 步由三列卡片宫格改为单列列表)——名称在左、
- * 鉴权方式靠右;行宽给足后不再需要截断测量 + Tip 组合。
- */
-function ProviderRow({
-  icon,
-  name,
-  meta,
-  beta,
-  busy,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  meta: string;
-  beta?: boolean;
-  busy?: boolean;
-  onClick: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={name}
-      disabled={busy}
-      aria-busy={busy}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
-    >
-      <span
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-        style={{
-          backgroundColor: 'var(--settings-integration-avatar-bg)',
-          border: '1px solid var(--settings-integration-avatar-border)',
-          color: 'var(--settings-integration-avatar-icon)',
-        }}
-      >
-        {busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : icon}
-      </span>
-      <span
-        className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{ color: 'var(--settings-section-title)' }}
-      >
-        {name}
-      </span>
-      {beta && (
-        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-          {t('settings.providers.local.beta')}
-        </span>
-      )}
-      {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
-      <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-        {meta}
-      </span>
-    </button>
-  );
-}
 
 function InfoLine({ text }: { text: string }) {
   return (
@@ -635,6 +568,7 @@ export function AddProviderWizard({
   }, []);
 
   const pickOauth = useCallback((provider: ProviderView) => {
+    if (savingRef.current) return;
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -645,6 +579,7 @@ export function AddProviderWizard({
     setStep(2);
   }, []);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
+    if (savingRef.current) return;
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -676,6 +611,7 @@ export function AddProviderWizard({
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
+      if (savingRef.current) return;
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -707,6 +643,8 @@ export function AddProviderWizard({
   );
 
   const connectOllama = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       let status = await window.electronAPI.maker.localModelStatus();
@@ -732,7 +670,7 @@ export function AddProviderWizard({
         return;
       }
       await window.electronAPI.maker.localModelEnsure();
-      onDone(MANAGED_OLLAMA_PROVIDER_ID);
+      await onDone(MANAGED_OLLAMA_PROVIDER_ID);
     } catch (error) {
       const code = extractIpcError(error)?.code;
       toast.error(
@@ -742,6 +680,7 @@ export function AddProviderWizard({
       );
       if (entry?.kind === 'ollama') onEntryUnavailable?.();
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [onDone, t, entry, onEntryUnavailable]);
@@ -1843,7 +1782,8 @@ export function AddProviderWizard({
               <div className="flex flex-col gap-2 px-4 pb-1 pt-3">
                 <button
                   type="button"
-                  onClick={onOpenCustomForm}
+                  disabled={saving}
+                  onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
                   className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
                   style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
                 >

@@ -36,6 +36,27 @@ import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
 import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
+// Keep the real implementation; record each instance so its scheduled publishing
+// cannot outlive a test and run against reset Electron mocks in the next test.
+const serviceInstances = vi.hoisted(() => new Set<AgentIslandService>());
+vi.mock('../service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../service.js')>();
+  return {
+    ...actual,
+    AgentIslandService: class extends actual.AgentIslandService {
+      constructor(...args: ConstructorParameters<typeof actual.AgentIslandService>) {
+        super(...args);
+        serviceInstances.add(this);
+      }
+    },
+  };
+});
+
+afterEach(() => {
+  for (const service of serviceInstances) service.resetRuntimeState();
+  serviceInstances.clear();
+});
+
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
 vi.mock('../../appSessionState', () => ({

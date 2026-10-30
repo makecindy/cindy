@@ -35,19 +35,19 @@ export function providerSearchChoices(providers: ProviderView[], presets: Provid
   for (const p of providers) {
     if (!isWizardOAuthChoice(p) && !isWizardApiKeyChoice(p)) continue;
     results.push({ key: `builtin:${p.id}`, id: p.id, name: p.name, names: [p.name],
-      metaKey: isWizardApiKeyChoice(p) ? 'metaApiKey' : 'metaLoginOrApi', target: { kind: 'builtin', providerId: p.id } });
+      metaKey: isWizardApiKeyChoice(p) ? 'wizard.metaApiKey' : 'wizard.metaLoginOrApi', target: { kind: 'builtin', providerId: p.id } });
   }
   for (const p of presets) {
     results.push({ key: `preset:${p.id}`, id: p.id, name: presetDisplayName(p, locale),
       names: [p.name, p.nameEn, p.nameZhTW].filter((n): n is string => !!n),
-      metaKey: providerPresetOAuth(p.id) ? 'metaLoginOrApi' : p.authMethod === 'none' ? 'metaNoAuth' : 'metaApiKey',
+      metaKey: providerPresetOAuth(p.id) ? 'wizard.metaLoginOrApi' : p.authMethod === 'none' ? 'wizard.metaNoAuth' : 'wizard.metaApiKey',
       target: { kind: 'preset', presetId: p.id } });
   }
   if (!providers.some(p => p.id === MANAGED_OLLAMA_PROVIDER_ID)) {
-    results.push({ key: 'ollama', id: 'ollama', name: ollamaName, names: [ollamaName, 'Ollama'], metaKey: 'metaLocalConnect', target: { kind: 'ollama' } });
+    results.push({ key: 'ollama', id: 'ollama', name: ollamaName, names: [ollamaName, 'Ollama'], metaKey: 'wizard.metaLocalConnect', target: { kind: 'ollama' } });
   }
   if (!providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
-    results.push({ key: 'llamacpp', id: 'llamacpp', name: llamaCppName, names: [llamaCppName, 'llama.cpp'], metaKey: 'metaLocalConnect', target: { kind: 'llamacpp' } });
+    results.push({ key: 'llamacpp', id: 'llamacpp', name: llamaCppName, names: [llamaCppName, 'llama.cpp'], metaKey: 'llamacpp.subtitle', target: { kind: 'llamacpp' } });
   }
   return [...new Map(results.map(p => [p.key, p])).values()];
 }

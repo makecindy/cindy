@@ -2031,3 +2031,41 @@ it('uses the existing Ollama connector once and returns to the search draft on f
   await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
   expect(status).toHaveBeenCalledTimes(1);
 });
+
+
+it('keeps the Ollama search handoff open while connecting so Escape cannot restore a soon-to-be-discarded draft', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const localModelStatus = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  const localModelEnsure = vi.fn(async () => ({ ok: true }));
+  Object.assign(window.electronAPI.maker, { localModelStatus, localModelEnsure });
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'ollama' }} onOpenCustomForm={vi.fn()} onClose={onClose} onDone={onDone} />);
+  await waitFor(() => expect(localModelStatus).toHaveBeenCalledOnce());
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+  expect(localModelEnsure).toHaveBeenCalledOnce();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('blocks supplier switches and custom-form navigation until the Ollama search connection settles', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const status = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  Object.assign(window.electronAPI.maker, { localModelStatus: status, localModelEnsure: vi.fn(async () => ({ ok: true })) });
+  const onOpenCustomForm = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[anthropicProvider]} entry={{ kind: 'ollama' }} onOpenCustomForm={onOpenCustomForm} onClose={vi.fn()} onDone={onDone} />);
+  await screen.findByRole('button', { name: /DeepSeek/ });
+  fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }));
+  expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+  expect(screen.getByRole('button', { name: /settings.providers.wizard.customTitle/ })).toBeTruthy();
+  expect(screen.queryByText('settings.providers.localAccount.useClaude')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /settings.providers.wizard.customTitle/ }));
+  expect(onOpenCustomForm).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+});
