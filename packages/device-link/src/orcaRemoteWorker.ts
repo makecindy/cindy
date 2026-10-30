@@ -17,6 +17,8 @@ export const ORCA_REMOTE_WORKER_OPEN_CHANNEL = 'maker:orca:remote-worker:open';
 export const ORCA_REMOTE_WORKER_RELEASE_CHANNEL = 'maker:orca:remote-worker:release';
 /** Execution device → owning Lead. Never exposed to shared-task guests. */
 export const ORCA_REMOTE_WORKER_BRIDGE_CHANNEL = 'maker:orca:remote-worker:bridge';
+/** Read-only, exact in-flight input proof; older peers may not implement it. */
+export const ORCA_REMOTE_WORKER_VERIFY_INPUT_CHANNEL = 'maker:orca:remote-worker:verify-input';
 export const ORCA_REMOTE_WORKER_VERSION = 1;
 
 /**

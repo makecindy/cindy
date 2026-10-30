@@ -24,6 +24,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   mobile?: boolean;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
+  admitRemoteOrcaInput?: ReturnType<typeof import('../orcaRemoteInputProvenance.js').createRemoteOrcaInputAdmission>;
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;
   const noop = () => undefined;
@@ -63,6 +64,7 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
     hydrateQueuedAgentReferences: sameItem,
     stampTurnUiLanguage: sameItem,
+    admitRemoteOrcaInput: options.admitRemoteOrcaInput ?? ((_sid: string, _raw: unknown, queued: AgentInputQueuedMessage) => queued),
     stampTrustedDesktopQueuedOrigin,
     stampTrustedDeviceLinkQueuedOrigin,
     stampMobileClientOrigin,

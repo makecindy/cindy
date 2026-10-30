@@ -1085,6 +1085,8 @@ import {
   registerOrcaRemoteWorkerHandlers,
 } from './orcaRemoteWorkerHost.js';
 import { createOrcaRemoteWorkers, invokeDeviceValue, type OrcaRemoteWorkers } from './orcaRemoteWorkers.js';
+import { createRemoteOrcaInputAdmission } from './orcaRemoteInputProvenance.js';
+import { ORCA_REMOTE_WORKER_VERIFY_INPUT_CHANNEL } from '@cindy/device-link';
 import { listWorkerAgentLocations, readWorkerAgentLocations } from './workerAgentLocations.js';
 import {
   ORCA_EXECUTION_DEVICES_CHANNEL,
@@ -21575,6 +21577,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   });
 
+  const admitRemoteOrcaInput = createRemoteOrcaInputAdmission({
+    owner: getCurrentDbClientSnapshot,
+    caller: getDeviceLinkInvokeContext,
+    readSession: async (id) => {
+      const [row] = await getDbClient().drizzle
+        .select({ status: sessions.status, orcaRemoteLead: sessions.orcaRemoteLead })
+        .from(sessions).where(eq(sessions.id, id)).limit(1);
+      return row ? { status: row.status, orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead) } : null;
+    },
+    invoke: invokeBotPeer,
+  });
+  makerSessionRegistry.handle(ORCA_REMOTE_WORKER_VERIFY_INPUT_CHANNEL,
+    async (_event, sessionId: unknown, clientId: unknown, digest: unknown, leadSessionId: unknown) => {
+      const caller = getDeviceLinkInvokeContext();
+      if (!caller || caller.sharedTask || typeof leadSessionId !== 'string') return false;
+      const owner = getCurrentDbClientSnapshot();
+      const team = await getActiveTeamByLead(leadSessionId);
+      if (!owner || owner !== getCurrentDbClientSnapshot() || !team) return false;
+      return orcaRemoteWorkersForHost?.runtime.verifyInput(
+        caller.controllerDeviceId, sessionId, clientId, digest, leadSessionId, team.id,
+      ) ?? false;
+    });
+
   // device-link 出方向:远程入队消息的 OSS 引用(files[] + persistedContent)在入队前一次性物化成本地
   // 临时文件(共用下载、用后删 OSS),保证喂 agent 的 files[] 与落库的 persistedContent 都是本地路径。
   // 本机会话无 OSS 引用 → materializeQueuedOssAttachmentsDeferred 原样返回,零开销。
@@ -21710,6 +21735,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             return inputCoordinator.getProjection(sid);
           }
           sendTrace?.stage('dedupe');
+        }
+
+        // Ordinary wire provenance is already stripped. Restore only the exact
+        // input attested by the owning Lead's in-flight runtime, just before enqueue.
+        const admitted = await admitRemoteOrcaInput(sid, item, queued);
+        assertCurrentInputGeneration();
+        if (admitted.origin?.kind === 'orca') {
+          queued.origin = admitted.origin;
+          delete queued.sourceDevice;
         }
 
         // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：

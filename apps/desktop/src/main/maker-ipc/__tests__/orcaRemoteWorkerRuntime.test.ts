@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { remoteOrcaInputDigest, createRemoteOrcaInputAdmission } from '../orcaRemoteInputProvenance.js';
+import { stampTrustedDesktopQueuedOrigin } from '../makerSendTransaction.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import type { AgentInputProjection } from '../../../shared/agentInputQueue.js';
 
 import {
@@ -153,6 +156,55 @@ function setup(device: Partial<FakeDevice> = {}) {
 }
 
 describe('orca remote worker runtime', () => {
+  it('admits only its exact in-flight input and expires proof after the RPC', async () => {
+    const h = setup();
+    const original = h.invoke.getMockImplementation()!;
+    let digest = '';
+    h.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'maker:input:enqueue') {
+        const raw = args[1] as AgentInputQueuedMessage;
+        digest = remoteOrcaInputDigest(raw);
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-1', digest, 'lead-1', 'team-1')).toBe(true);
+        expect(h.runtime.verifyInput('other-device', 'remote-1', 'proof-1', digest, 'lead-1', 'team-1')).toBe(false);
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-1', digest, 'other-lead', 'team-1')).toBe(false);
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-1', digest, 'lead-1', 'other-team')).toBe(false);
+        expect(h.runtime.verifyInput(device, 'other-task', 'proof-1', digest, 'lead-1', 'team-1')).toBe(false);
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-1', remoteOrcaInputDigest({ ...raw, text: 'forged' }), 'lead-1', 'team-1')).toBe(false);
+        const admit = createRemoteOrcaInputAdmission({
+          owner: () => 1, caller: () => ({ controllerDeviceId: 'lead-pc' }),
+          readSession: async () => ({ status: 'active', orcaRemoteLead: {
+            leadDeviceId: 'lead-pc', leadDeviceName: 'PC', leadSessionId: 'lead-1', leadTitle: 'Lead', workerLabel: 'worker',
+          } }),
+          invoke: async (_device, _channel, proof) => ({ ok: true,
+            result: h.runtime.verifyInput(device, proof[0], proof[1], proof[2], proof[3], 'team-1') }),
+        });
+        const clean = stampTrustedDesktopQueuedOrigin(raw, true);
+        expect(clean.origin).toBeUndefined();
+        expect((await admit('remote-1', raw, clean)).origin?.kind).toBe('orca');
+      }
+      return original(device, channel, args);
+    });
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'proof-1' });
+    expect(h.runtime.verifyInput('mac-mini', 'remote-1', 'proof-1', digest, 'lead-1', 'team-1')).toBe(false);
+  });
+
+  it('revokes input proof on untracking and failed delivery', async () => {
+    const h = setup();const original = h.invoke.getMockImplementation()!;
+    let digest = '';
+    h.invoke.mockImplementation(async (device, channel, args) => {
+      if (channel === 'maker:input:enqueue') {
+        digest = remoteOrcaInputDigest(args[1]);
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-fail', digest, 'lead-1', 'team-1')).toBe(true);
+        h.runtime.untrack('proxy-1');
+        expect(h.runtime.verifyInput(device, 'remote-1', 'proof-fail', digest, 'lead-1', 'team-1')).toBe(false);
+        throw new Error('transport failed');
+      }
+      return original(device, channel, args);
+    });
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'task', clientId: 'proof-fail' });
+    expect(h.runtime.verifyInput('mac-mini', 'remote-1', 'proof-fail', digest, 'lead-1', 'team-1')).toBe(false);
+  });
+
   it('enqueues a Lead message on the execution device with the device task’s own settings', async () => {
     const { runtime, state } = setup();
     await expect(

@@ -4169,3 +4169,13 @@ targets.get 按本插件 requestKey 查询原收据；settled 自然终态由原
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。
 
 字段位于现有 Remote Resource 的业务 payload 内，不改握手、签名、顶层帧、relay 路由或重连逻辑；官方与自建中转都沿用通用加密转发，无需中转升级。群直连复用现有 executions/plans 只读接口，不修改服务端；旧服务器缺少接口时保留普通列表。
+
+## Orca 远程派单的来源证明（2026-10-30）
+
+新增同账号只读 `maker:orca:remote-worker:verify-input` channel，参数依次为运行设备任务 ID、
+clientId、完整输入 SHA-256 摘要、Lead 任务 ID，响应为布尔值。调用设备来自受信 device-link
+上下文；共享访客、本机 renderer 和任意不匹配的在途派单均返回 false，不返回正文或凭据。
+不增加必填输入字段或数据库迁移，不改变 relay/tunnel 重试和生命周期。旧发送端没有证明
+时，新接收端保留普通来源清理；旧接收端忽略此能力并保持旧行为。双端升级才恢复直报，
+混合版本继续用原自动回报，不盲重发任务。自建 relay 不解析或持久化本 channel 的应用负载，
+无需服务端/移动端改动；真实跨设备与自建 relay 互通仍需发布前验证。
