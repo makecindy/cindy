@@ -334,6 +334,12 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 }
 ```
 
+OAuth 直连模式（未声明 `tokenBroker`）中，若服务商要求 RFC 8707 资源绑定，
+可用 `extraAuthorizeParams.resource` 指定资源的完整 HTTPS 地址。宿主在授权码换令牌时
+携带实际授权 URL 中相同的 `resource`；URL 自带的重复 `resource` 也会保留，
+`extraAuthorizeParams.resource` 则覆盖 URL 中的原值。其他授权参数不会因此转发到令牌端点。
+此行为不扩展 broker 协议；刷新请求仍省略 `resource`，需要服务商沿用原令牌绑定的资源。
+
 **setup 就绪声明**(可选,顶层字段):回答"这个插件**用之前必须配好什么**"。用户在
 插件页点「使用」或 Agent 调用你的工具时,主机按它做前置检查；没配齐就用统一设置卡
 引导用户完成配置：普通 user Secret 直接在卡内填写，OAuth 在卡内发起授权，KV 与连接等
