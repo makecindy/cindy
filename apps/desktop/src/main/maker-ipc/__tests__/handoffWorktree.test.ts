@@ -299,7 +299,7 @@ describe('prepareTaskWorktree', () => {
 
   it('reports a directory that is not a git repository as WORKTREE_UNAVAILABLE', async () => {
     const deps = makeDeps({
-      detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true, repoRoot: null })),
+      detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true })),
     });
     const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
     expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
