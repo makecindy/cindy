@@ -457,6 +457,10 @@ describe("cindy_helper MCP server", () => {
       expect(sessionTask).not.toHaveProperty("delegationId");
       // The card is posted in the background: the teammate must not say it is already there.
       expect((sessionTask as { guidance?: string }).guidance).not.toContain("already posted");
+      // PR #8026: the actual MCP payload must match the no-private-fallback rule, including
+      // old local-only groups, which now return the same group destination.
+      expect((sessionTask as { guidance?: string }).guidance).toContain("kept in the task with a delivery-failed notice");
+      expect((sessionTask as { guidance?: string }).guidance).toContain("never redirected to private chat");
       expect(startSessionTask).toHaveBeenLastCalledWith(
         expect.objectContaining({
           callerSessionId: "bot-parent-session",
@@ -478,18 +482,6 @@ describe("cindy_helper MCP server", () => {
       expect(startSessionTask).toHaveBeenLastCalledWith(
         expect.objectContaining({ contextRefs: ["note-1", "note-2"] }),
       );
-
-      // An old local-only group cannot carry the task's messages: the teammate must not promise them there.
-      startSessionTask.mockResolvedValueOnce({ ok: true as const, delegationId: "session-task-2", childSessionId: "desktop-child-2",
-        status: "running", completionDestination: 'private', deadlineAt: 1_788_000_000_000 });
-      const privateTask = parsePayload(
-        await client.callTool({ name: "call_tool", arguments: { name: "start_session_task", args: {
-            instruction: "Build and verify a standalone HTML demo.",
-          } } }),
-      ) as { completion_destination?: string; guidance?: string };
-      expect(privateTask.completion_destination).toBe('private');
-      expect(privateTask.guidance).toContain("private chat");
-      expect(privateTask.guidance).not.toContain("will arrive here");
 
       const replied = parsePayload(
         await client.callTool({ name: "call_tool", arguments: { name: "message_session_task", args: {

@@ -433,10 +433,8 @@ function registerStartSessionTaskEntry(
             ...(result.completionDestination ? { completion_destination: result.completionDestination } : {}),
             guidance:
               (result.completionDestination === 'group'
-                ? 'This task lives in this group: its card is being posted here, and anything it needs confirmed plus its final result are sent here as your own messages (only if the group can no longer take them do they go to your owner privately). Tell the group briefly what you started; do not claim the card or result is already here. '
-                : result.completionDestination === 'private'
-                  ? 'This older group cannot carry task messages: anything the task needs confirmed and its final result go to your owner\'s private chat with you, not here. Tell the group briefly what you started and that the result will reach your owner privately. '
-                  : '') + "The task card tracks progress and the result will return automatically. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
+                ? 'This task lives in the group or thread where it started: its card is being posted there, and anything it needs confirmed plus its final result are sent there as your own messages. If the original group or thread cannot receive the result, the full result is kept in the task with a delivery-failed notice; it is never redirected to private chat. Tell the group briefly what you started; do not claim the card or result is already here. '
+                : '') + "The task card tracks progress and the host handles result delivery to the original conversation. Do not start it again. Treat model_route and task/session ids as internal bookkeeping; do not echo them or the delegated instruction in ordinary replies unless the user asks for these details.",
           })
         : errorPayload(result.errorCode, result.message);
     },

@@ -2656,11 +2656,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   ): Promise<BotDelegationResult<{
     modelRoute: BotModelRoute;
     /**
-     * `group`: the card, confirmations and result stay in the group this was started from.
-     * `private`: started from an old local-only group, which cannot carry them; they go to the
-     * owner's private chat with the teammate instead (bot-group-chat.md §10).
+     * `group`: the card, confirmations and result stay in the original group or thread.
+     * An unavailable group retains the result and a delivery failure in the task; it never
+     * redirects to private chat, including old local-only groups (bot-group-chat.md §10).
      */
-    completionDestination?: 'group' | 'private';
+    completionDestination?: 'group';
     delegationId: string;
     childSessionId: string;
     /**
