@@ -5,10 +5,31 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
-import type { DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
+import type { DeviceHostedLinkActivity, DeviceHostedSession, PiExtraSpawnConfig } from '../base-agent.js';
 
 /** 交给 Pi 内 cindy-bridge 的托管配置(隧道地址、令牌、Agent 主机上的工作目录)。 */
 export const DEVICE_HOSTED_PI_ENV = 'CINDY_PI_HOSTED';
+
+/**
+ * 链路往来写成一句诊断，附在托管会话关键 RPC 的超时错误里：分得清「请求一直在走、只是链路慢」
+ * (回复数在涨、往返耗时长)、「某个请求卡住」(最早未回复的请求等了很久)与「链路上根本没有往来」。
+ */
+export function describeDeviceHostedLinkActivity(activity: DeviceHostedLinkActivity, now = Date.now()): string {
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const parts = [`execution environment answered ${activity.execResponses}/${activity.execRequests} requests`];
+  if (activity.execOldestPending) {
+    parts.push(`oldest unanswered ${activity.execOldestPending.method} waiting ${seconds(activity.execOldestPending.waitedMs)}`);
+  }
+  if (activity.execRoundTripAvgMs !== undefined && activity.execRoundTripMaxMs !== undefined) {
+    parts.push(`round trip avg ${seconds(activity.execRoundTripAvgMs)} max ${seconds(activity.execRoundTripMaxMs)}`);
+  }
+  parts.push(`peak in flight ${activity.execMaxInFlight}`);
+  if (activity.httpInFlight > 0) parts.push(`${activity.httpInFlight} tool requests in flight`);
+  parts.push(activity.lastActivityAt === null
+    ? 'no link activity yet'
+    : `last link activity ${seconds(Math.max(0, now - activity.lastActivityAt))} ago`);
+  return parts.join(', ');
+}
 
 /**
  * 去掉结尾的斜杠。不用正则：`x+$` 这类模式在不可控输入上是多项式回溯(CodeQL
@@ -102,11 +123,48 @@ export function deviceHostedPiMcpBridge(hosted: DeviceHostedSession): NonNullabl
 export const DEVICE_HOSTED_EXEC_MCP_SERVER = 'cindy_exec';
 /** 顶替的工具名(与自带工具同名)。 */
 export const DEVICE_HOSTED_EXEC_TOOL_NAMES = ['Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'NotebookEdit'] as const;
+/**
+ * 只在受邀者会话里由任务所在电脑提供的顶替工具：自带的 WebFetch 对受邀者关闭，改在受邀者电脑上
+ * 抓取。受邀者电脑上的 Cindy 较旧时不提供，所以不写进给模型的说明，只用于权限按自带工具判定。
+ */
+export const DEVICE_HOSTED_GUEST_EXEC_TOOL_NAMES = ['WebFetch'] as const;
 /** 设备托管时关掉的 Claude Code 自带工具：它们只能操作本机，项目不在这里。 */
 export const DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS = [
   'Bash', 'BashOutput', 'KillShell', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit',
   'Glob', 'Grep', 'LS', 'PowerShell', 'EnterWorktree', 'ExitWorktree',
 ] as const;
+
+/**
+ * 受邀者(供应商分享的另一个账号)会话可用的 Claude Code 自带工具，经 SDK `tools` 交给
+ * Claude Code：名单之外的自带工具在会话里根本不存在，Claude Code 升级新增的工具也不会自动
+ * 开放给受邀者。Agent 程序以本机用户的身份在本机运行，其余自带工具都直接作用于本机或本机
+ * 用户：其他会话(ListAgents / SendMessage)、本机用户的 claude.ai 账号(Artifact、
+ * RemoteTrigger、DesignSync 等)、本机文件与命令(Monitor、SendUserFile 等)、本机网络(WebFetch)。
+ * 文件、命令与 WebFetch 由 cindy_exec 回到受邀者电脑执行(MCP 工具不受 `tools` 限制)。
+ */
+export const DEVICE_HOSTED_GUEST_CLAUDE_TOOLS = [
+  // 子代理。隔离选项另由 deviceHostedGuestAgentDenial 拦下。
+  'Agent',
+  // 只作用于会话自身：提问、计划模式、待办与后台任务、延迟加载的工具、技能、结果卡片、定时唤醒。
+  'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode',
+  'TodoWrite', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'TaskStop', 'TaskOutput',
+  'ToolSearch', 'Skill', 'ReportFindings', 'ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList',
+  // 只连本会话配置的 MCP 服务，设备托管时都经隧道回到受邀者电脑。
+  'ListMcpResourcesTool', 'ReadMcpResourceTool',
+  // 由模型服务方执行，不经本机网络。
+  'WebSearch',
+] as const;
+
+/**
+ * 受邀者会话里子代理的隔离选项：worktree 在本机建 git worktree，remote 用本机用户的 claude.ai
+ * 账号开云端任务，都不允许。返回拒绝原因；其他调用返回 null。
+ */
+export function deviceHostedGuestAgentDenial(toolName: string, input: unknown): string | null {
+  if (toolName !== 'Agent' && toolName !== 'Task') return null;
+  const isolation = input && typeof input === 'object' ? (input as { isolation?: unknown }).isolation : undefined;
+  if (isolation === undefined || isolation === null) return null;
+  return 'Subagent isolation is not available in this task. Start the subagent without the isolation option.';
+}
 
 const EXEC_PREFIX = `mcp__${DEVICE_HOSTED_EXEC_MCP_SERVER}__`;
 
@@ -114,7 +172,10 @@ const EXEC_PREFIX = `mcp__${DEVICE_HOSTED_EXEC_MCP_SERVER}__`;
 export function deviceHostedBuiltinToolName(toolName: string): string | null {
   if (!toolName.startsWith(EXEC_PREFIX)) return null;
   const name = toolName.slice(EXEC_PREFIX.length);
-  return (DEVICE_HOSTED_EXEC_TOOL_NAMES as readonly string[]).includes(name) ? name : null;
+  return (DEVICE_HOSTED_EXEC_TOOL_NAMES as readonly string[]).includes(name)
+    || (DEVICE_HOSTED_GUEST_EXEC_TOOL_NAMES as readonly string[]).includes(name)
+    ? name
+    : null;
 }
 
 /** `Bash` → `mcp__cindy_exec__Bash`。 */

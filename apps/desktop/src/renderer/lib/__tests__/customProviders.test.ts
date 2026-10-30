@@ -527,6 +527,7 @@ describe('providerViewToCustomProviderConfig', () => {
           authStrategy: 'api-key-header',
           wireProtocol: 'openai-responses',
           supportsImageGeneration: true,
+          imageApi: 'openai-images',
         },
       },
       models: {
@@ -546,6 +547,7 @@ describe('providerViewToCustomProviderConfig', () => {
 
     expect(providerViewToCustomProviderConfig(provider).runtimes.codex).toMatchObject({
       supportsImageGeneration: true,
+      imageApi: 'openai-images',
       models: [{ id: 'image-model', name: 'Image Model' }],
     });
   });

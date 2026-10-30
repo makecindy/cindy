@@ -37,9 +37,9 @@ export function assertLibraryEditImageSource(relOrAbs: string): void {
   }
 }
 
-/** 通道适配层的出参(decodeImageResponse 的入参:字节 base64;声明格式仅作参考)。 */
+/** 通道适配层返回图片 base64 或下载 URL；Core 负责校验并保存受管媒体。 */
 export interface ImageChannelResult {
-  data: Array<{ b64_json?: string }>;
+  data: Array<{ b64_json?: string; url?: string | null }>;
   output_format?: string;
 }
 
@@ -65,8 +65,12 @@ export function decodeImageResponse(res: ImageChannelResult): { buffer: Buffer; 
  */
 export interface ImageChannel {
   imageProtocol?: ImageProtocol;
+  /** False for Core-only channels whose URL results the legacy decoder cannot consume. */
+  legacyCompatible?: boolean;
   /** 执行凭证是否就绪。false ⇒ 该来源整段不进 cindy 白名单。 */
   ready(): boolean;
+  /** A multi-runtime connection can be executable for only some of its image models. */
+  isModelReady?(modelId: string): boolean;
   /**
    * 单次图像编辑可接收的源图上限。省略 = 沿用 cindy slot 的通用上限；
    * provider 上限更低时在这里声明，让 slot 在读文件、取凭证、出网前按
@@ -106,27 +110,39 @@ export class ImageChannelRegistry {
     this.channels.delete(providerId);
   }
 
+  hasProvider(providerId: string): boolean {
+    return this.channels.has(providerId);
+  }
+
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */
-  isProviderReady(providerId: string): boolean {
-    return this.channels.get(providerId)?.ready() === true;
+  isProviderReady(providerId: string, modelId?: string): boolean {
+    const channel = this.channels.get(providerId);
+    return channel?.ready() === true &&
+      (modelId === undefined || channel.isModelReady?.(modelId) !== false);
+  }
+
+  /** The frozen synchronous plugin API only accepts channels with legacy results. */
+  isProviderLegacyReady(providerId: string, modelId?: string): boolean {
+    return this.channels.get(providerId)?.legacyCompatible !== false &&
+      this.isProviderReady(providerId, modelId);
   }
 
   /** 编辑操作清单派生用:就绪且 supportsEdit !== false。 */
-  isProviderEditReady(providerId: string): boolean {
+  isProviderEditReady(providerId: string, modelId?: string): boolean {
     const ch = this.channels.get(providerId);
-    return ch?.ready() === true && ch.supportsEdit !== false;
+    return this.isProviderReady(providerId, modelId) && ch?.supportsEdit !== false;
   }
 
   /**
    * 派发用:取该来源的通道。未注册/未就绪时抛人话错——正常流程走不到这里
    * (白名单派生已过滤),走到即说明白名单与派发窗口之间凭证被移除。
    */
-  resolve(providerId: string): ImageChannel {
+  resolve(providerId: string, modelId?: string): ImageChannel {
     const channel = this.channels.get(providerId);
     if (!channel) {
       throw new Error(`图像来源 ${providerId} 没有可用的执行通道`);
     }
-    if (!channel.ready()) {
+    if (!this.isProviderReady(providerId, modelId)) {
       throw new Error(`图像来源 ${providerId} 的凭证未就绪,请先在设置中完成配置`);
     }
     return channel;

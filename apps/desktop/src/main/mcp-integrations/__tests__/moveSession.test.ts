@@ -60,6 +60,7 @@ vi.mock('../../im/binding.js', () => ({
 vi.mock('../../localDb/ipc/sessions.js', () => ({ updateSessionInDb: h.update }));
 
 import { createMoveSession, moveSessionProjectFromHost } from '../moveSession.js';
+import { admitTaskAction } from '../../maker-ipc/taskActionAuthorization.js';
 
 describe('moveSession host', () => {
   let directory: string;
@@ -99,6 +100,22 @@ describe('moveSession host', () => {
       sessionId: 'target',
       workingDir,
     });
+
+  // #6399, unit: host account tests do not cover replacement of the requesting
+  // input. Exercise the real MCP adapter at both existing mutation checkpoints.
+  it.each(['lock', 'commit'])('does not move after input revocation at %s', async (phase) => {
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', tool: 'move_session', sessionId: 'caller', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('Expected admission');
+    (phase === 'lock' ? h.enterLock : h.beforeCommit).mockImplementationOnce(() => { current = false; });
+    expect(await decision.run(() => run(directory))).toMatchObject({ ok: false });
+    expect(h.saved).not.toHaveBeenCalled();
+  });
 
   it('keeps agent self-moves forbidden while the trusted UI uses the same guarded update', async () => {
     const agent = createMoveSession((id) => h.running.has(id));
@@ -193,6 +210,17 @@ describe('moveSession host', () => {
       expect(h.update).toHaveBeenCalled();
     },
   );
+
+  it('moves a task whose agent runs on another computer', async () => {
+    h.query.mockResolvedValue([
+      { id: 'target', status: 'active', remoteHostId: null, agentDeviceId: 'device-b', source: null },
+    ]);
+    expect(await run(directory)).toMatchObject({ ok: true, workspaceKind: 'project' });
+    expect(h.saved).toHaveBeenLastCalledWith({
+      workingDir: directory.replaceAll('\\', '/'),
+      workspaceKind: 'project',
+    });
+  });
 
   it('does not report a committed move as rejected when IM attaches after the write', async () => {
     h.saved.mockImplementationOnce(() => {

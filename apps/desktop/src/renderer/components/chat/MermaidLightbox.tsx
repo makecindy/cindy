@@ -68,6 +68,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
   const { copiedImage, copyAsImage } = useCopyAsImage(async () => ({
     blob: await svgToPngBlob(svg, {
       background: resolveExportBackground(cardRef.current),
+      fontFamily: window.getComputedStyle(cardRef.current ?? document.body).fontFamily,
     }),
     plainText: source,
   }));
@@ -238,6 +239,7 @@ export function MermaidLightbox({ svg, source, onAnnotate, onClose }: MermaidLig
 
   const overlay = (
     <div
+      data-mermaid-lightbox-overlay
       style={{
         position: 'fixed',
         inset: 0,

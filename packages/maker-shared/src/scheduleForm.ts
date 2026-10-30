@@ -57,12 +57,13 @@ export interface MobileScheduleDraft {
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
   modelAgentKind?: RemoteScheduleAgentKind;
+  modelAgentDeviceId?: string;
   /** Form-only baseline; changing the selected model must not overwrite this binding. */
   boundAgent?: { sessionId: string; agentKind: RemoteScheduleAgentKind };
   model: string;
   providerId: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   workspaceKind: RemoteScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -132,8 +133,6 @@ export function localizeTemplateParamValidation(
 
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
-const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
-const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
@@ -150,7 +149,8 @@ export function createMobileScheduleDraft(
       timezone: DEFAULT_TIMEZONE,
       intervalMinutes: '',
       agentKind: 'claude-code',
-      model: DEFAULT_CLAUDE_MODEL,
+      // 留空 = 用运行电脑的新建任务默认模型(序列化时省略,由 host 实时解析),不写死型号。
+      model: '',
       providerId: '',
       effort: '',
       fastMode: false,
@@ -177,12 +177,13 @@ export function createMobileScheduleDraft(
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
     modelAgentKind: schedule.modelAgentKind,
+    modelAgentDeviceId: schedule.modelAgentDeviceId,
     boundAgent: schedule.targetSessionId
       ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
-    model: schedule.model ?? (schedule.targetSessionId ? '' : defaultModelFor(schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code')),
+    model: schedule.model ?? '',
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
-    fastMode: !!schedule.fastMode,
+    fastMode: (schedule.fastMode ?? false),
     workspaceKind,
     workingDir: schedule.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
@@ -212,7 +213,11 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
-  const model = template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind));
+  const selectsLocalRoute = agentKind !== draft.agentKind || !!template.model?.trim() || template.providerId !== undefined;
+  // Keep location with an inherited route; local template overrides must not
+  // borrow the missing model/provider from a remote catalog.
+  const keepRoute = agentKind === draft.agentKind && !(draft.modelAgentDeviceId && selectsLocalRoute);
+  const model = template.model ?? (keepRoute ? draft.model : '');
   return {
     ...draft,
     name: template.name || draft.name,
@@ -226,12 +231,14 @@ export function applyTemplateToMobileScheduleDraft(
     agentKind,
     // A template producing a model is an explicit choice, including a legacy bound draft.
     ...(model.trim() || draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    modelAgentDeviceId: selectsLocalRoute
+      ? (draft.modelAgentDeviceId === undefined ? undefined : '') : draft.modelAgentDeviceId,
     model,
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
-    providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
+    providerId: template.providerId ?? (keepRoute ? draft.providerId : ''),
     effort: template.effort ?? '',
-    fastMode: template.fastMode === true,
+    fastMode: (template.fastMode === 'ultrafast' ? 'ultrafast' : template.fastMode === true),
     useWorktree: template.useWorktree ?? draft.useWorktree,
     // useWorktree 只在 project workspace 且无会话绑定时会被 buildMobileScheduleInput
     // 保留；模板要求 worktree 时把 draft 一并切到 project 模式并清掉绑定会话
@@ -431,6 +438,15 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   if (draft.executionMode === 'script') {
     // Script schedules retain their lifecycle owner when edited from mobile.
     // They still run in their own project cwd without starting an agent turn.
+    // Keep an unsupported remote route whole for host validation.
+    if (draft.modelAgentDeviceId !== undefined) {
+      input.modelAgentDeviceId = draft.modelAgentDeviceId;
+      input.modelAgentKind = draft.modelAgentKind;
+      input.model = draft.model.trim();
+      input.providerId = draft.providerId.trim();
+      input.effort = draft.effort.trim();
+      input.fastMode = draft.fastMode;
+    }
     return {
       ...input,
       workspaceKind: 'project',
@@ -444,6 +460,9 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
 
   // An empty model follows the bound task. Omit the marker so the full-form
   // device-link normalization can clear an existing explicit selection.
+  if (draft.modelAgentDeviceId !== undefined) {
+    input.modelAgentDeviceId = draft.model.trim() ? draft.modelAgentDeviceId : '';
+  }
   if (draft.modelAgentKind && draft.model.trim()) {
     input.modelAgentKind = draft.agentKind;
     input.model = draft.model.trim();
@@ -493,8 +512,11 @@ export class SchedulePreRunHookUnsupportedError extends Error {}
  */
 export function applyScheduleWireCompat(
   input: RemoteScheduleWriteInput,
-  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean; supportsPreRunHook?: boolean },
+  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean; supportsPreRunHook?: boolean; supportsAgentDeviceSelection?: boolean },
 ): RemoteScheduleWriteInput {
+  if (input.modelAgentDeviceId !== undefined && !opts.supportsAgentDeviceSelection) {
+    throw new ScheduleModelSelectionUnsupportedError('Scheduled Agent location selection requires a newer desktop');
+  }
   if (!opts.supportsPreRunHook && input.preRunHook !== undefined) {
     // An old host can acknowledge the save while silently dropping this field.
     // Reject both installation and removal instead of claiming either succeeded.
@@ -525,7 +547,8 @@ export function updateDraftAgentKind(
     agentKind,
     // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
     ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
-    model: defaultModelFor(agentKind),
+    modelAgentDeviceId: draft.modelAgentDeviceId === undefined ? undefined : '',
+    model: '',
     providerId: '',
     effort: '',
     fastMode: false,
@@ -691,14 +714,6 @@ function hasTemplateParam(params: Record<string, string>, key: string): boolean 
   return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== '';
 }
 
-function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
-  if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
-  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
-  // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
-  if (agentKind === 'pi') return '';
-  return DEFAULT_CLAUDE_MODEL;
-}
-
 function validateIntervalMinutes(
   value: string,
   localizer?: PresentationLocalizer,
@@ -743,7 +758,7 @@ function intervalMinutesToCronExpr(minutes: number): string | null {
 }
 
 function intervalMsToSupportedMinutes(intervalMs: number | undefined): string {
-  if (!Number.isFinite(intervalMs) || !intervalMs) return '';
-  const minutes = Math.round(intervalMs / 60_000);
+  if (typeof intervalMs !== 'number' || !Number.isFinite(intervalMs) || intervalMs % 60_000 !== 0) return '';
+  const minutes = intervalMs / 60_000;
   return intervalMinutesToCronExpr(minutes) ? String(minutes) : '';
 }

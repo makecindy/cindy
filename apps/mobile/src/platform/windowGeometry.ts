@@ -1,3 +1,5 @@
+import { navigationChrome, spacing } from '@/theme/tokens';
+
 /** Geometry is local to the observed window container, in points, never pixels. */
 export interface LayoutRect { x: number; y: number; width: number; height: number }
 export interface ReservedRegion extends LayoutRect { kind: 'division' | 'occlusion' }
@@ -22,12 +24,16 @@ export function safeWindowRect(g: WindowGeometry): LayoutRect {
 export function windowDivision(g: WindowGeometry): { axis: 'vertical' | 'horizontal'; first: LayoutRect; second: LayoutRect } | null {
   const safe = safeWindowRect(g);
   for (const r of g.regions) {
-    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite)) continue;
-    if (r.height >= safe.height * 0.8 && r.width > 0 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
+    if (r.kind !== 'division' || ![r.x, r.y, r.width, r.height].every(Number.isFinite) || r.width < 0 || r.height < 0) continue;
+    // Android flexible displays report a line, not an occluding rectangle.
+    // Check the actual overlap as a feature may lie outside a resized window.
+    const spanY = Math.min(r.y + r.height, safe.y + safe.height) - Math.max(r.y, safe.y);
+    const spanX = Math.min(r.x + r.width, safe.x + safe.width) - Math.max(r.x, safe.x);
+    if (r.height > 0 && spanY >= safe.height * 0.8 && r.x > safe.x && r.x + r.width < safe.x + safe.width) {
       return { axis: 'vertical', first: { ...safe, width: r.x - safe.x },
         second: { ...safe, x: r.x + r.width, width: safe.x + safe.width - r.x - r.width } };
     }
-    if (r.width >= safe.width * 0.8 && r.height > 0 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
+    if (r.width > 0 && spanX >= safe.width * 0.8 && r.y > safe.y && r.y + r.height < safe.y + safe.height) {
       return { axis: 'horizontal', first: { ...safe, height: r.y - safe.y },
         second: { ...safe, y: r.y + r.height, height: safe.y + safe.height - r.y - r.height } };
     }
@@ -71,4 +77,38 @@ export function keyboardControlRegion(g: WindowGeometry, keyboardBottom: number)
     regions: g.regions.filter(r => r.kind !== 'division') });
   const alternative = clip(upper);
   return alternative.height > controls.height ? alternative : controls;
+}
+
+/**
+ * Edges of a page's own floating top row (close, title, menu) where no native bar hosts it.
+ * Duo portrait reports its status area as a trailing-corner reservation; like the native bar,
+ * the row then shares that status row, its controls `spacing.md` above the row's bottom and
+ * ending before the reservation. A vertical system bar (Duo landscape) leaves no top inset,
+ * so the row keeps its own margin from the screen edge.
+ */
+export function floatingTopRow(g: WindowGeometry, rowHeight: number): {
+  top: number; left: number; right: number; sharedStatusRow: boolean;
+} {
+  const left = g.insets.left + spacing.md, right = g.insets.right + spacing.md;
+  if (g.barEdge !== 'none') return { top: Math.max(g.insets.top, spacing.md), left, right, sharedStatusRow: false };
+  const ordinary = { top: g.insets.top, left, right, sharedStatusRow: false };
+  const status = g.regions.filter(r => r.kind === 'occlusion' && r.y === 0 && r.x + r.width >= g.width);
+  const top = g.insets.top - rowHeight - spacing.md;
+  if (!g.reservedRegionsSupported || !g.regularWidth || !status.length || top < spacing.md) return ordinary;
+  const sharedRight = Math.max(right, g.width - Math.min(...status.map(r => r.x)) + spacing.sm);
+  const row = { x: left, y: top, width: g.width - left - sharedRight, height: rowHeight };
+  // Close, title and menu must all fit beside the status area, clear of any other reservation.
+  if (row.width < rowHeight * 5 || avoidReservedRegions(row, g.regions.filter(r => !status.includes(r))) !== row) return ordinary;
+  return { top, left, right: sharedRight, sharedStatusRow: true };
+}
+
+/**
+ * Top padding for the temporary task-list drawer when the native top bar shares the status row
+ * (Duo portrait), so the drawer header lands where the hidden bar's buttons were. Duo (iOS 27.1)
+ * centers toolbar items `spacing.md` above the row's bottom; the drawer header adds `spacing.lg`
+ * itself. Undefined keeps the safe-area top for ordinary bars below the status area.
+ */
+export function sharedStatusRowDrawerTop(nativeHeaderHeight: number, safeAreaTop: number): number | undefined {
+  if (!(nativeHeaderHeight > 0) || nativeHeaderHeight >= safeAreaTop + navigationChrome.target) return undefined;
+  return Math.max(0, nativeHeaderHeight - navigationChrome.target - spacing.md - spacing.lg);
 }

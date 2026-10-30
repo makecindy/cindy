@@ -9,8 +9,8 @@
  * iOS 原生面板与 Android 面板共用本文件。团队真身在被控端,这里只渲染镜像并回调页面。
  */
 import { useTranslation } from 'react-i18next';
-import { View } from 'react-native';
-import { Bot, CircleStop, UserPlus } from 'lucide-react-native';
+import { Platform, View } from 'react-native';
+import { CircleStop, UserPlus } from 'lucide-react-native';
 import {
   ORCA_PREDEFINED_WORKER_ROLES,
   ORCA_WORKER_ROLE_MAX_LENGTH,
@@ -24,19 +24,26 @@ import { Text } from '@/components/AppText';
 import {
   ContextSheetChoiceRow,
   ContextSheetGroup,
+  ContextSheetError,
   ContextSheetNote,
   ContextSheetRow,
+  ContextSheetSelectRow,
   ContextSheetTextField,
 } from '@/session/ContextSheet';
 import {
   orcaAgentLabel,
   orcaWorkerDisplayName,
   orcaWorkerStatusLabel,
+  isAbsoluteOrcaWorkerDir,
   type OrcaWorkerFormValue,
 } from '@/session/orcaTeam';
 import { iconSize, iconStroke, lineHeight, radius, typeScale, useTheme } from '@/theme';
+import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 
 const CUSTOM_ROLE = '__custom__';
+
+/** iOS 的下拉行(Picker menu)自带行名、分段控件选项自明;Android 的药丸 / 选择行没有行名,要靠分组标题。 */
+const ROW_NAMES_ITSELF = Platform.OS === 'ios';
 
 export function isPredefinedOrcaRole(role: string): boolean {
   return (ORCA_PREDEFINED_WORKER_ROLES as readonly string[]).includes(role);
@@ -51,7 +58,8 @@ export function orcaWorkerFormErrorKey(form: OrcaWorkerFormValue, customRoleMode
 }
 
 export function canSubmitOrcaWorkerForm(form: OrcaWorkerFormValue, customRoleMode: boolean): boolean {
-  return form.role.trim().length > 0 && orcaWorkerFormErrorKey(form, customRoleMode) === null;
+  return form.role.trim().length > 0 && orcaWorkerFormErrorKey(form, customRoleMode) === null
+    && (!form.executionDeviceId || form.remoteDirMode !== 'path' || isAbsoluteOrcaWorkerDir(form.remoteDir ?? ''));
 }
 
 export interface OrcaWorkerFormViewProps {
@@ -66,9 +74,13 @@ export interface OrcaWorkerFormViewProps {
   onPermissionChange(mode: OrcaWorkerPermissionMode): void;
   agents: readonly OrcaWorkerAgentKind[];
   onPickModel(): void;
+  onPickDirectory(): void;
   busy: boolean;
   notice?: string | null;
   error?: string | null;
+  executionDevices?: readonly OrcaExecutionDeviceView[];
+  executionDevicesLoading?: boolean;
+  executionDevicesError?: string | null;
 }
 
 export function OrcaWorkerFormView({
@@ -80,21 +92,31 @@ export function OrcaWorkerFormView({
   onPermissionChange,
   agents,
   onPickModel,
+  onPickDirectory,
   busy,
   notice,
   error,
+  executionDevices = [],
+  executionDevicesLoading = false,
+  executionDevicesError,
 }: OrcaWorkerFormViewProps) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
   const roleOptions = [
     ...ORCA_PREDEFINED_WORKER_ROLES.map((role) => ({ id: role as string, label: role as string })),
     { id: CUSTOM_ROLE, label: t('session.collab.customRole') },
   ];
   const validation = orcaWorkerFormErrorKey(form, customRoleMode);
   const modelLabel = form.model?.id ?? t('session.collab.modelDefault');
+  const remoteDirInvalid = form.remoteDirMode === 'path' && !!form.remoteDir && !isAbsoluteOrcaWorkerDir(form.remoteDir);
+  // 设置类分组:卡片里只放「名称 + 取值」,说明与校验提示写在卡片下方(一组一段)。
+  const title = (label: string) => (ROW_NAMES_ITSELF ? '' : label);
   return (
     <>
-      <ContextSheetGroup label={t('session.collab.roleLabel')}>
+      <ContextSheetGroup
+        footer={validation ? t(validation) : t('session.collab.roleHint')}
+        footerTone={validation ? 'error' : 'secondary'}
+        label={title(t('session.collab.roleLabel'))}
+      >
         <ContextSheetChoiceRow
           disabled={busy}
           label={t('session.collab.roleLabel')}
@@ -122,9 +144,73 @@ export function OrcaWorkerFormView({
             value={form.role}
           />
         ) : null}
-        <ContextSheetNote text={validation ? t(validation) : t('session.collab.roleHint')} tone={validation ? 'error' : 'secondary'} />
       </ContextSheetGroup>
-      <ContextSheetGroup label={t('session.collab.agentLabel')}>
+      {/* 工作电脑与模型电脑独立选择。 */}
+      {(executionDevices.length > 0 || form.executionDeviceId) ? (
+        <ContextSheetGroup
+          footer={t('session.collab.executionDeviceHint')}
+          label={title(t('session.collab.executionDeviceLabel'))}
+        >
+          <ContextSheetSelectRow
+            disabled={busy || executionDevicesLoading}
+            label={t('session.collab.executionDeviceLabel')}
+            options={[
+              { id: '__lead__', label: t('session.collab.leadComputer') },
+              ...(form.executionDeviceId && !executionDevices.some((device) => device.deviceId === form.executionDeviceId)
+                ? [{ id: form.executionDeviceId, label: t('session.collab.deviceUnavailable'), disabled: true }]
+                : []),
+              ...executionDevices.map((device) => ({
+                id: device.deviceId,
+                label: device.name,
+                detail: t(device.supported ? 'session.collab.deviceOnline' : 'session.collab.deviceNeedsUpdate'),
+                disabled: !device.supported,
+              })),
+            ]}
+            value={form.executionDeviceId ?? '__lead__'}
+            onChange={(id) => onChange({ executionDeviceId: id === '__lead__' ? undefined : id })}
+            testID="collab.executionDevice"
+          />
+        </ContextSheetGroup>
+      ) : null}
+      {form.executionDeviceId ? (
+        <ContextSheetGroup
+          footer={t(form.remoteDirMode === 'path'
+            ? remoteDirInvalid ? 'session.collab.remoteDirInvalid' : 'session.collab.remoteDirPathHint'
+            : 'session.collab.remoteDirChatHint')}
+          footerTone={remoteDirInvalid ? 'error' : 'secondary'}
+          label={title(t('session.collab.remoteDirLabel'))}
+        >
+          <ContextSheetChoiceRow
+            disabled={busy}
+            label={t('session.collab.remoteDirLabel')}
+            options={[
+              { id: 'dialogue', label: t('session.collab.remoteDirChat') },
+              { id: 'path', label: t('session.collab.remoteDirPath') },
+            ]}
+            value={form.remoteDirMode ?? 'dialogue'}
+            onChange={(remoteDirMode) => onChange({ remoteDirMode })}
+            testID="collab.remoteDirMode"
+          />
+          {form.remoteDirMode === 'path' ? (
+            <ContextSheetRow
+              label={t('session.new.selectWorkspace')}
+              value={form.remoteDir || t('session.new.chooseOtherFolder')}
+              dismissBeforePress
+              disabled={busy}
+              onPress={onPickDirectory}
+              trailing="chevron"
+              testID="collab.remoteDirPicker"
+            />
+          ) : null}
+        </ContextSheetGroup>
+      ) : null}
+      {executionDevicesError ? <ContextSheetGroup label={t('session.collab.executionDeviceLabel')}>
+        <ContextSheetError text={executionDevicesError} />
+      </ContextSheetGroup> : null}
+      <ContextSheetGroup
+        footer={form.model ? null : t('session.collab.modelDefaultHint')}
+        label={title(t('session.collab.agentLabel'))}
+      >
         <ContextSheetChoiceRow
           disabled={busy || agents.length < 2}
           label={t('session.collab.agentLabel')}
@@ -134,22 +220,22 @@ export function OrcaWorkerFormView({
           value={form.agent}
         />
         <ContextSheetRow
-          detail={form.model ? undefined : t('session.collab.modelDefaultHint')}
           // iOS 原生 sheet 不能叠开:先收起 + 面板再打开模型选择器。
           dismissBeforePress
           disabled={busy}
-          icon={<Bot color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('session.collab.modelLabel')}
           onPress={onPickModel}
           testID="collab.modelRow"
-          trailing={(
-            <Text numberOfLines={1} style={{ color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, maxWidth: 180 }}>
-              {modelLabel}
-            </Text>
-          )}
+          trailing="chevron"
+          value={modelLabel}
         />
       </ContextSheetGroup>
-      <ContextSheetGroup label={t('session.collab.permissionLabel')}>
+      <ContextSheetGroup
+        footer={t(form.permissionMode === 'auto'
+          ? 'session.collab.permissionAutoHint'
+          : 'session.collab.permissionFullHint')}
+        label={title(t('session.collab.permissionLabel'))}
+      >
         <ContextSheetChoiceRow
           disabled={busy}
           label={t('session.collab.permissionLabel')}
@@ -161,12 +247,8 @@ export function OrcaWorkerFormView({
           testID="collab.permissionOptions"
           value={form.permissionMode}
         />
-        <ContextSheetNote text={t(form.permissionMode === 'auto'
-          ? 'session.collab.permissionAutoHint'
-          : 'session.collab.permissionFullHint')}
-        />
       </ContextSheetGroup>
-      <ContextSheetGroup label={t('session.collab.initialTaskLabel')}>
+      <ContextSheetGroup footer={notice} label={t('session.collab.initialTaskLabel')}>
         <ContextSheetTextField
           accessibilityLabel={t('session.collab.initialTaskLabel')}
           disabled={busy}
@@ -177,10 +259,9 @@ export function OrcaWorkerFormView({
           value={form.initialTask}
         />
       </ContextSheetGroup>
-      {notice || error ? (
+      {error ? (
         <ContextSheetGroup label="">
-          {notice ? <ContextSheetNote text={notice} /> : null}
-          {error ? <ContextSheetNote text={error} tone="error" testID="collab.formError" /> : null}
+          <ContextSheetError text={error} testID="collab.formError" />
         </ContextSheetGroup>
       ) : null}
     </>
@@ -243,10 +324,15 @@ export function OrcaTeamPanelView({
       <ContextSheetGroup label={t('session.collab.workerCountSummary', { count: workers.length, running })}>
         {workers.map((worker) => (
           <ContextSheetRow
-            detail={[
-              orcaAgentLabel(worker.agentKind),
-              worker.model,
-            ].filter(Boolean).join(' · ')}
+            detail={(worker.executionDevice
+              ? [
+                  worker.executionDevice.deviceName ?? t('session.collab.otherComputer'),
+                  ...(worker.executionDevice.reachable === false
+                    ? [t('session.collab.deviceUnreachable')]
+                    : [orcaAgentLabel(worker.agentKind), worker.model]),
+                ]
+              : [orcaAgentLabel(worker.agentKind), worker.model]
+            ).filter(Boolean).join(' · ')}
             disabled={busy}
             icon={<WorkerStatusDot status={worker.status} />}
             key={worker.workerId}
@@ -254,7 +340,7 @@ export function OrcaTeamPanelView({
             onLongPress={() => onWorkerLongPress(worker)}
             onPress={() => onWorkerPress(worker)}
             testID={`collab.worker.${worker.workerId}`}
-            trailing={(
+            trailing={worker.executionDevice?.reachable === false ? undefined : (
               <Text style={{ color: worker.status === 'error' ? colors.statusError : colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>
                 {orcaWorkerStatusLabel(worker.status)}
               </Text>
@@ -265,7 +351,12 @@ export function OrcaTeamPanelView({
           <ContextSheetNote text={loading ? t('session.collab.loading') : t('session.collab.noWorkers')} />
         ) : null}
       </ContextSheetGroup>
-      <ContextSheetGroup label={t('session.collab.manageGroup')}>
+      <ContextSheetGroup
+        footer={[createHint, settings
+          ? t('session.collab.limitSummary', { soft: settings.workerSoftLimit, hard: settings.workerHardLimit })
+          : null].filter(Boolean).join('\n') || null}
+        label={t('session.collab.manageGroup')}
+      >
         <ContextSheetRow
           accessibilityHint={createHint ?? undefined}
           disabled={busy || slot === 'hard'}
@@ -284,17 +375,11 @@ export function OrcaTeamPanelView({
           testID="collab.stopRow"
         />
       </ContextSheetGroup>
-      <ContextSheetGroup label="">
-        {createHint ? <ContextSheetNote text={createHint} /> : null}
-        {settings ? (
-          <ContextSheetNote text={t('session.collab.limitSummary', {
-            soft: settings.workerSoftLimit,
-            hard: settings.workerHardLimit,
-          })}
-          />
-        ) : null}
-        {error ? <ContextSheetNote text={error} tone="error" testID="collab.teamError" /> : null}
-      </ContextSheetGroup>
+      {error ? (
+        <ContextSheetGroup label="">
+          <ContextSheetError text={error} testID="collab.teamError" />
+        </ContextSheetGroup>
+      ) : null}
     </>
   );
 }

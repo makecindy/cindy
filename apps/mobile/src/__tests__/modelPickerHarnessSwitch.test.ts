@@ -8,15 +8,17 @@ vi.mock('react-native', () => ({ Alert: { alert: vi.fn() } }));
 import { confirmAgentLocationForPick } from '@/session/sessionAgentSwitchConfirmation';
 
 const source = ts.createSourceFile('screen.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let callback: ts.Expression | undefined;
+const callbacks = new Map<string, string>();
+const callbackNames = ['loadComposerAgentCapabilities', 'canStageOrcaModelSelection', 'selectUnifiedComposerModel'];
 function visit(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'selectUnifiedComposerModel') {
-    callback = (node.initializer as ts.CallExpression).arguments[0];
+  if (ts.isVariableDeclaration(node) && callbackNames.includes(node.name.getText(source))) {
+    callbacks.set(node.name.getText(source), (node.initializer as ts.CallExpression).arguments[0].getText(source));
   }
   ts.forEachChild(node, visit);
 }
 visit(source);
-const js = ts.transpileModule(`const select = ${callback!.getText(source)};`, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const js = ts.transpileModule(callbackNames.map(name => `const ${name} = ${callbacks.get(name)};`).join('\n'),
+  {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 const studioProviders = [{ id: 'studio-account' }];
 function harness(
   confirmed = true,
@@ -34,7 +36,13 @@ function harness(
     buttons?.[confirmed ? 1 : 0]?.onPress?.();
   });
   const resolveAgentCapability = vi.fn(() => ({ supportsFastMode: true }));
+  const getCapabilities = vi.fn(async () => ({ hasFastMode: true }));
+  const getRemoteCapabilities = vi.fn(async () => ({ hasFastMode: true }));
+  const executionMakerForDevice = vi.fn((_deviceId: string) => ({ getCapabilities: getRemoteCapabilities }));
   const env = {
+    // These fixtures exercise ordinary tasks; Orca admission has its own suite.
+    orcaModelSelectionUsesIntent:false,orcaRemoteAgentDeviceId:null,executionMakerForDevice,
+    isProviderShareAgentDeviceId:(id:unknown)=>typeof id === 'string' && id.startsWith('share:'),
     agentLocationMovable:true,
     remoteAgentCatalogs:[{ deviceId:'device-studio-mac', name:'工作室 Mac', status:'ready', providers:studioProviders }],
     remoteAgentDeviceName:(id:string)=>id === 'device-studio-mac' ? '工作室 Mac' : id,
@@ -44,7 +52,7 @@ function harness(
     canUseRemoteSessionControls:true,
     currentSession:{effort:'low',fastMode:false,agentKind:'codex',model:'current-model',providerId:null,agentDeviceId:null,...session},controlBusy:false,
     composerDeviceProviders:{providers:[]}, resolveAgentCapability,
-    normalizeMobileAgentCapabilities:(x:unknown)=>x, maker:{getCapabilities:async()=>({hasFastMode:true}),setEffort:vi.fn(),setFastMode:vi.fn()},
+    normalizeMobileAgentCapabilities:(x:unknown)=>x, maker:{getCapabilities,setEffort:vi.fn(),setFastMode:vi.fn()},
     deviceId:'device',deviceIdRef:{current:'device'},sessionAgentKind:'codex',sessionAgentSwitchSupported:true,
     confirmMobileSessionAgentSwitch,
     writeSessionAgentSwitchIntent,
@@ -52,10 +60,11 @@ function harness(
     runControlAction:async(action:()=>Promise<boolean>,patch:any)=>{const ok=await action();if(ok)state.intent=patch.agentSwitchIntent;return ok;},
     ...overrides,
   };
-  const render = () => new Function(...Object.keys(env), 'agentSwitchIntent', `${js}; return select;`)(...Object.values(env),state.intent);
+  const render = () => new Function(...Object.keys(env), 'agentSwitchIntent', `${js}; return selectUnifiedComposerModel;`)(...Object.values(env),state.intent);
   return {
     state, render, setModelSheetAgentKind, writeSessionAgentSwitchIntent, setComposerModel,
     confirmMobileSessionAgentSwitch, relocationAlert, resolveAgentCapability,
+    getCapabilities, getRemoteCapabilities, executionMakerForDevice,
   };
 }
 const config = {agent:'pi',providerId:'account',modelId:'model',effort:'high',fast:false};
@@ -88,6 +97,9 @@ it('switches directly between models of the same computer', async () => {
   expect(h.setComposerModel).toHaveBeenCalledWith(expect.objectContaining({ model: 'model', providerId: 'studio-account' }));
   // 能力按这一行所属电脑的目录核对。
   expect(h.resolveAgentCapability).toHaveBeenCalledWith(studioProviders, 'studio-account', 'model', 'codex');
+  expect(h.executionMakerForDevice).toHaveBeenCalledWith(studio.deviceId);
+  expect(h.getRemoteCapabilities).toHaveBeenCalledWith('codex');
+  expect(h.getCapabilities).not.toHaveBeenCalled();
 });
 it('asks before moving the Agent to another computer and registers the move', async () => {
   const h = harness();
@@ -119,6 +131,8 @@ it('asks before moving a remote Agent back to the controlled computer', async ()
   expect(h.writeSessionAgentSwitchIntent).toHaveBeenCalledWith(expect.objectContaining({
     targetAgentKind: 'codex', model: 'model', providerId: 'account', agentDeviceId: null,
   }));
+  expect(h.getCapabilities).toHaveBeenCalledWith('codex');
+  expect(h.getRemoteCapabilities).not.toHaveBeenCalled();
 });
 it('confirms a cross-engine move to another computer only once', async () => {
   const h = harness();

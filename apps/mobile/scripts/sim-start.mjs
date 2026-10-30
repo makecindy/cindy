@@ -22,12 +22,13 @@
 //   pnpm mobile:sim:start:cn              # 中国大陆版；Windows 同时启动 cindy-api36
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
+//   pnpm mobile:sim:start -- --mock        # 免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readSimEnvironment } from './lib/sim-environment.mjs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -67,7 +68,7 @@ import {
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const DEFAULT_PORT = 8081;
-const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const { takeover, passthrough: takeoverPassthrough } = extractSimTakeoverArgs(regionPassthrough);
 const androidArgs = extractAndroidSimulatorArgs(takeoverPassthrough);
 const portArgs = extractSimMetroPortArgs(androidArgs.passthrough, DEFAULT_PORT);
@@ -85,7 +86,8 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
-const { loginScenario, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+const { loginScenario, uiMock, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+if (uiMock) console.log('› --mock:免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)');
 
 function git(args) {
   try {

@@ -6,14 +6,14 @@
  *  - 签发路由令牌。托管会话不在 Maker 的活跃会话表里，Claude Code 的请求经自定义请求头
  *    带上令牌，Claude proxy 据此认出这条会话；Codex / Pi 的请求按会话 id 找到登记。
  * proxy 对受邀者请求只放行这个供应商、且是它提供的模型；其余一律本地拒绝，不改道。
- * 只对受邀者生效，本机用户自己的任务不经过这里。
+ * 同账号远程任务复用下方的目录模型匹配，通过独立的 owner 登记校验实时授权；本机任务不受限制。
  */
 import { randomBytes } from 'node:crypto';
 
-import type { AgentKind } from '@cindy/model-providers';
+import { findCatalogModel, type AgentKind } from '@cindy/model-providers';
 
 import { getActiveCatalog } from './active-catalog.js';
-import { clearSessionProvider, getSessionProvider, setSessionProvider } from './session-provider-store.js';
+import { clearSessionProvider, getSessionProvider, hasHostedSessionModelAccess, hostedSessionModelAllowed, setSessionProvider } from './session-provider-store.js';
 
 /**
  * Claude Code 请求带上的路由令牌请求头。与 maker-core 的 DEVICE_HOSTED_GUEST_ROUTE_HEADER 同值
@@ -28,8 +28,15 @@ export interface GuestProviderRoute {
   providerId: string;
 }
 
+export interface GuestRequestUsage {
+  model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number;
+}
 interface Binding extends GuestProviderRoute {
   token: string;
+  recordUsage?: (sample: GuestRequestUsage) => void;
+  allowsModel?: (model: string) => boolean | Promise<boolean>;
+  modelAccessRestricted?: () => boolean;
+  modelDenial?: (model: string) => { code: string; message: string } | null;
 }
 
 const byToken = new Map<string, Binding>();
@@ -41,9 +48,13 @@ const bySession = new Map<string, Binding>();
 export function registerGuestProviderRoute(
   sessionId: string,
   providerId: string,
+  allowsModel?: (model: string) => boolean | Promise<boolean>,
+  modelAccessRestricted?: () => boolean,
+  modelDenial?: (model: string) => { code: string; message: string } | null,
+  recordUsage?: (sample: GuestRequestUsage) => void,
 ): { token: string; release(): void } {
   const token = randomBytes(32).toString('base64url');
-  const binding: Binding = { sessionId, providerId, token };
+  const binding: Binding = { sessionId, providerId, token, allowsModel, modelAccessRestricted, modelDenial, recordUsage };
   const previous = bySession.get(sessionId);
   if (previous) byToken.delete(previous.token);
   byToken.set(token, binding);
@@ -81,17 +92,58 @@ export function guestProviderRouteForSession(sessionId: string): GuestProviderRo
   return binding ? { sessionId: binding.sessionId, providerId: binding.providerId } : null;
 }
 
-/** 1M 通道后缀只是窗口标记，不是另一个模型。 */
+/** Legacy SDK aliases may differ by the 1M suffix when the catalog has only one profile. */
 function bareModelId(model: string): string {
   return model.trim().replace(/\[1m\]$/i, '');
 }
 
-/** 分享的供应商是否为这个 Agent 提供这个模型(请求里的模型串，忽略 1M 通道后缀)。 */
-export function guestProviderOffersModel(providerId: string, agent: AgentKind, wireModel: string): boolean {
+/** 核对目录与授权时优先匹配请求的窗口档位；单条目的旧 SDK 后缀别名仍兼容。 */
+export async function guestProviderOffersModel(providerId: string, agent: AgentKind, wireModel: string, sessionId?: string): Promise<boolean> {
+  const models: string[] = [];
+  providerOffersModel(providerId, agent, wireModel, model => { models.push(model); return false; });
+  for (const model of models) {
+    if (!sessionId || await guestProviderModelAllowed(providerId, model, sessionId)) return true;
+  }
+  return false;
+}
+
+/** Same-account remote tasks authorize each root/child request without pinning children to the parent provider. */
+export function hostedProviderOffersModel(sessionId: string | null | undefined, providerId: string | null | undefined, agent: AgentKind, wireModel: string): boolean {
+  if (!sessionId || !hasHostedSessionModelAccess(sessionId)) return true;
+  return !!providerId && providerOffersModel(providerId, agent, wireModel,
+    model => hostedSessionModelAllowed(sessionId, providerId, model));
+}
+
+function providerOffersModel(providerId: string, agent: AgentKind, wireModel: string, allowsModel?: (model: string) => boolean): boolean {
   const requested = bareModelId(wireModel);
   if (!requested) return false;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
-  return (provider?.models[agent] ?? []).some((model) => bareModelId(model.id) === requested);
+  if (agent === 'pi') {
+    // Pi native subscriptions send bare wire ids; grants use the catalog's namespaced ids.
+    // Keep distinct context profiles exact so one profile cannot borrow another's grant.
+    const model = findCatalogModel(provider, wireModel, agent, { exact: true });
+    return Boolean(model && !model.disabled && (!allowsModel || allowsModel(model.id)));
+  }
+  const profiles = (provider?.models[agent] ?? []).filter(model => bareModelId(model.id) === requested);
+  const longContext = /\[1m\]$/i.test(wireModel.trim());
+  const exactProfiles = profiles.filter(model => /\[1m\]$/i.test(model.id.trim()) === longContext);
+  // Select the catalog profile before checking grants or disabled state; neither
+  // a denied nor a disabled profile may borrow access from its sibling.
+  return (exactProfiles.length ? exactProfiles : profiles).some((model) => !model.disabled
+    && (!allowsModel || allowsModel(model.id)));
+}
+
+/** A shared proxy without a task identity cannot bypass an active member's model restrictions. */
+export async function guestProviderModelAllowed(providerId: string, model: string, sessionId: string | null | undefined): Promise<boolean> {
+  if (sessionId) {
+    const binding = bySession.get(sessionId);
+    if (binding?.providerId !== providerId) return false;
+    try {
+      const allowed = !binding.allowsModel || await binding.allowsModel(model);
+      return allowed && bySession.get(sessionId) === binding && getSessionProvider(sessionId) === providerId;
+    } catch { return false; }
+  }
+  return ![...bySession.values()].some((binding) => binding.providerId === providerId && binding.modelAccessRestricted?.());
 }
 
 /**
@@ -110,4 +162,40 @@ export function resetGuestProviderRoutesForTest(): void {
   for (const binding of bySession.values()) clearSessionProvider(binding.sessionId);
   byToken.clear();
   bySession.clear();
+}
+
+/** Only the authenticated, still-current binding may explain a member refusal. */
+export function guestProviderModelDenial(sessionId: string | null | undefined, model: string, kind?: AgentKind) {
+  if (!sessionId) return null;
+  const binding = bySession.get(sessionId);
+  if (!binding || getSessionProvider(sessionId) !== binding.providerId) return null;
+  try {
+    const provider = getActiveCatalog().providers.find(item => item.id === binding.providerId);
+    const catalogModel = kind ? findCatalogModel(provider, model, kind)?.id ?? model : model;
+    return binding.modelDenial?.(catalogModel) ?? null;
+  } catch { return null; }
+}
+
+/** Request-scoped native usage, including child requests. No response content is retained. */
+export function captureGuestRequestUsage(sessionId: string | null | undefined, model: string) {
+  const binding = sessionId ? bySession.get(sessionId) : undefined;
+  if (!binding?.recordUsage || !model) return undefined;
+  let settled = false;
+  return (value: unknown) => {
+    if (settled || bySession.get(binding.sessionId) !== binding || getSessionProvider(binding.sessionId) !== binding.providerId) return;
+    const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+    const frame = record(value);
+    if (!frame || (typeof frame.type === 'string' && frame.type.startsWith('response.')
+      && frame.type !== 'response.completed' && frame.type !== 'response.incomplete')) return;
+    const response = record(frame.response) ?? frame;
+    const usage = record(response.usage);
+    if (!usage) return;
+    const input = usage.input_tokens ?? usage.prompt_tokens;
+    const output = usage.output_tokens ?? usage.completion_tokens;
+    const cache = record(usage.input_tokens_details)?.cached_tokens ?? record(usage.prompt_tokens_details)?.cached_tokens ?? 0;
+    const valid = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+    if (!valid(input) || !valid(output) || !valid(cache) || cache > input) return;
+    settled = true;
+    binding.recordUsage!({ model, inputTokens: input - cache, outputTokens: output, cacheReadTokens: cache, cacheCreateTokens: 0 });
+  };
 }

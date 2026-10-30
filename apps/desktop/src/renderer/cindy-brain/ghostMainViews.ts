@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/contexts/AuthContext';
 
 import type { GhostMainViewIcon, GhostManifest, InstalledGhost } from '../../shared/ghost';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import { useInstalledGhosts } from './useInstalledGhosts';
 import {
   readMainViewSidebarVisible,
@@ -12,6 +13,8 @@ import {
 
 export interface GhostMainViewItem {
   ghostId: string;
+  /** Physical instance id used in /apps/:id. Root stays ghostId; new org installs use storage part. */
+  instanceId: string;
   title: string;
   icon: GhostMainViewIcon;
   manifest: GhostManifest;
@@ -35,7 +38,7 @@ export function projectGhostMainViews(
     isSidebarVisible,
   }: {
     locale: string | undefined;
-    isSidebarVisible: (ghostId: string) => boolean;
+    isSidebarVisible: (instanceId: string) => boolean;
   },
 ): GhostMainViewProjection {
   const declared = ghosts
@@ -44,6 +47,7 @@ export function projectGhostMainViews(
       const { manifest } = installedGhost;
       return {
         ghostId: manifest.id,
+        instanceId: installedGhostStoragePart(installedGhost),
         title: manifest.mainView?.title ?? manifest.name,
         icon: manifest.mainView?.icon ?? 'puzzle',
         manifest,
@@ -53,12 +57,12 @@ export function projectGhostMainViews(
     .sort(
       (left, right) =>
         left.title.localeCompare(right.title, locale, { sensitivity: 'base' }) ||
-        left.ghostId.localeCompare(right.ghostId),
+        left.instanceId.localeCompare(right.instanceId),
     );
   const routeCapable = declared.filter(
     ({ installedGhost }) => installedGhost.enabled && installedGhost.approval.state === 'approved',
   );
-  const sidebarVisible = routeCapable.filter(({ ghostId }) => isSidebarVisible(ghostId));
+  const sidebarVisible = routeCapable.filter(({ instanceId }) => isSidebarVisible(instanceId));
   return { declared, routeCapable, sidebarVisible };
 }
 
@@ -74,7 +78,7 @@ export function useGhostMainViews(): GhostMainViewProjection {
     () =>
       projectGhostMainViews(ghosts, {
         locale,
-        isSidebarVisible: (ghostId) => readMainViewSidebarVisible(dataOwnerId, ghostId),
+        isSidebarVisible: (instanceId) => readMainViewSidebarVisible(dataOwnerId, instanceId),
       }),
     [dataOwnerId, ghosts, locale, visibilityRevision],
   );

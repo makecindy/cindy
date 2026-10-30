@@ -522,7 +522,7 @@ export function WorkLouderCodexKeycapPicker({
                 onChange={(event) => onQueryChange(event.currentTarget.value)}
                 placeholder={copy.searchPlaceholder}
                 autoFocus
-                className="min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none placeholder:text-[var(--text-tertiary)]"
+                className="min-w-0 flex-1 bg-transparent text-13 text-[var(--settings-input-text)] outline-none placeholder:text-[var(--text-placeholder)]"
               />
             </label>
           </div>

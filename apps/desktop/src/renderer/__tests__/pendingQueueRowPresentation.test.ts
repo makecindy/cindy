@@ -7,6 +7,7 @@ import {
 import {
   getPendingQueueRowPresentation,
   resolvePendingQueueEditSubmission,
+  resolveSoleSteerableQueuedMessage,
 } from '@/components/new-chat/pendingQueueRowPresentation';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 
@@ -291,4 +292,53 @@ describe('getPendingQueueRowPresentation', () => {
       });
     }
   });
+});
+
+describe('resolveSoleSteerableQueuedMessage', () => {
+  const idle = { editingClientId: null, steeringClientIds: [] as string[] };
+
+  it('targets the only queued row so the composer shortcut can steer it', () => {
+    expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
+  });
+
+  it('declines when the target is ambiguous or the row cannot steer right now', () => {
+    expect(
+      resolveSoleSteerableQueuedMessage(
+        [queuedMessage(), queuedMessage({ clientId: 'client-2' })],
+        idle,
+      ),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ isPendingEnqueue: true })], idle),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage(
+        [queuedMessage({ sourcePlugin: { pluginId: 'ghost-github' } })],
+        idle,
+      ),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage()], {
+        editingClientId: 'client-1',
+        steeringClientIds: [],
+      }),
+    ).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage()], {
+        editingClientId: null,
+        steeringClientIds: ['client-1'],
+      }),
+    ).toBeNull();
+  });
+});
+
+
+// Unit regression: pending task input must show the same paragraphs as delivered
+// history, while its send payload and an ordinary user's draft stay literal.
+it('decodes forwarded queue display without mutating the queued body', () => {
+  const content = '[来源] 用户原话由宿主从已接收的输入原样保留。\n用户原话："只检查"\nagent补充："第一段\\n第二段"';
+  const entry = queuedMessage({ text: content, persistedContent: content, origin: { kind: 'session', senderSessionId: 'sender', displayText: content } });
+  expect(getPendingQueueRowPresentation(entry).displayText).toContain('第一段\n第二段');
+  expect(entry.persistedContent).toBe(content);
+  expect(getPendingQueueRowPresentation(queuedMessage({ text: content })).displayText).toBe(content);
 });

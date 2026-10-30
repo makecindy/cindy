@@ -123,6 +123,23 @@ describe('scanPiCustomizations', () => {
     expect(items.every((item) => item.workingDir === path.resolve(cwd))).toBe(true);
   });
 
+  it('prefers a top-level skill over a nested namespace skill with the same name', async () => {
+    // `.agents/skills/foo` 与 `.agents/skills/bar/foo` 同名很常见。按目录名排序时
+    // `bar` 在前，嵌套项会被下游 mergeCommands（保留靠前者）选中，面板显示嵌套项的
+    // 描述与详情路径，共享投影 / 远程扫描 / `/learn` 却选直接项。
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    const direct = writeSkill(repo, path.join('.agents', 'skills'), 'foo');
+    writeSkill(repo, path.join('.agents', 'skills', 'bar'), 'foo');
+
+    const result = await scanPiCustomizations({ workingDirs: [repo] });
+    const foos = projectItems(result).filter((item) => item.name === 'foo');
+
+    expect(foos.length).toBeGreaterThanOrEqual(2);
+    expect(canonical(foos[0]!.absolutePath)).toBe(canonical(direct));
+  });
+
   it('stops ancestor discovery at a nested repository root', async () => {
     const root = tempRoot();
     const outer = path.join(root, 'outer');

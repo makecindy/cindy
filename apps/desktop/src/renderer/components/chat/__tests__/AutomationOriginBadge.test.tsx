@@ -74,6 +74,19 @@ describe('AutomationOriginBadge', () => {
     expect(screen.getByText('chat.userMessage.sessionSent')).toBeTruthy();
   });
 
+  it('shows a task on another computer as a source without offering a broken jump', () => {
+    const { container } = render(
+      <AutomationOriginBadge
+        automationOrigin={{ kind: 'session', senderSessionId: 'dev-A::source-task', senderSessionTitle: 'Source' }}
+      />,
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByText('chat.userMessage.sessionSentNamed:Source')).toBeTruthy();
+    expect(container.querySelector('[title]')?.getAttribute('title')).toBe(
+      'chat.userMessage.sourceIds.session:dev-A::source-task',
+    );
+  });
+
   it('lists the source session id under the existing tooltip line', () => {
     render(
       <AutomationOriginBadge

@@ -27,7 +27,7 @@
 | 管子协议类型（`library-request`） | `apps/desktop/src/shared/ghost.ts`（`GhostPipeLibraryRequest/Result`） |
 | 面板 `/library/` 投影 | `cindy-brain/runtime/electronSandboxAdapter.ts`（`serveGhostLibraryFile`） |
 | 装配 / 生命周期挂点 / 设置面 IPC | `cindy-brain/index.ts`（`getGhostLibrarySlot`、`relocateGhostLibraryTo`、`getGhostLibraryOverview`） |
-| 作者手册章节 | `cindy-brain/forge.ts` 的 `FORGE_GUIDE` §4.10.1 |
+| 作者手册章节 | 内置 `cindy-plugin-creator/references/plugin-files-and-library.md` §4.10.1（兼容导出为 `FORGE_GUIDE`） |
 
 ## 落盘布局（owner-scoped，全部经 `ownerScopedUserDataPath`）
 
@@ -36,8 +36,12 @@ owners/<ownerKey>/
 ├── libraries/<ghostId>/          # 系统管理默认根
 ├── libraries-binding.json        # 自定义位置持久 binding（原子写）
 ├── libraries-trash/<ghostId>-<ts>/  # 删除通道的 30 天回收站
+├── library-reattach.json         # 设置页「接回以前的作品数据」未完成时的日志
 └── library-staging/<ghostId>/    # H1 上传 staging（不可随 Library 根迁移）
 ```
+
+这里的 `<ghostId>` 是实例键（`installedGhostStoragePart`）：升级前的旧安装是裸 id，
+namespace 之后的新安装是 `_ns__<org>__<id>` / `_root__<id>`。
 
 自定义根 = `<用户所选父目录>/<ghostId>`（binding 记录 realpath 快照 + 文件
 identity + generation）。库内宿主命名空间 `.cindy-library/`（meta/usage/tmp/
@@ -55,14 +59,38 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
    实际撤 grant。自动 open 失败要把 drift 记进 session，同盘归位后仅 `status` 也须恢复。合法 default
    首次创建仍可 mkdir。被 rename 走的原件仍在旧目录，不称已删除。同一磁盘对象归位后既有 `open`/`status`
    恢复，删后重建的同路径是 `binding-moved` 不是原盘回归。Windows st_ino=0 检不出同路径重建，已知限制。
+   既有 Library meta 的插件身份与当前物理实例不一致时不得打开；namespace 物理搬迁
+   必须随数据同步更新 meta 身份，恢复重试可重复执行但不得认领其它插件的库。
    插件侧同样语义写进了 FORGE_GUIDE。
 2. **卸载不删**：uninstall 只标 orphaned + 作废会话；binding 保留（用户亲选
    事实不因重装消失）。删除 = 设置页独立破坏性确认 + `trashGhostLibrary`
    （rename 进回收站，漂移时 NOT_FOUND 不误删）。内置插件退役清理
    （`cleanupRetiredGhostData`）**不得**触及 Library。
+   **重装接回**：企业市场首次安装若找不到可复用的实例记录，市场账本又证明裸 id 下的
+   旧库属于同一插件编号、同一组织（升级前已卸载、未打 namespace 标记），安装直接收回
+   裸 id 键，旧库与 binding 原样接上；证明不了但裸 id 下有旧库时，由 Main 在安装确认
+   之后询问用户（后台 / 默认安装不询问，按新键）。已经拿到新键空库的实例，可在设置页
+   「接回以前的作品数据」：当前库与 staging 进回收站，旧库改名到当前实例键，meta 改身份
+   并清掉 orphaned；没有 `.cindy-library` 的旧目录按「来源不明」提示，接回时补写 meta。
+   动手前写 `library-reattach.json`（写完刷盘所在目录），每步可重跑，下次作品库请求或打开
+   设置页时续完；续完失败只拦日志里的两个库，其他插件照常读写。所有改名与 meta 改写
+   刷盘后才删日志。自定义位置的旧库在写日志前先确认能按目录身份搬（不提供 inode 的卷
+   直接拒绝）、目标没有 binding 且自定义父目录下没有同名目录；
+   换库前停插件运行时并卸下面板；面板与后台页走同源 BroadcastChannel，Main 不在中间，
+   所以 Main 还会关掉该实例分区里仍开着的页面并等它们销毁。换完再关一次旧页、清掉
+   该实例的 Electron 分区存储（内存分区，面板与后台共用，不清会把旧库的缓存写进新库），
+   再重启运行时、让面板从磁盘重新挂上。清分区重试后仍失败，插件保持停止、作品库保持
+   拦截，提示用户重启 Cindy；Main 记下该实例，面板挂载、插件运行时与 Node 运行时启动
+   （含 /wake、重载、常驻拉起）都拒绝，直到应用重启。未完成的接回只在真正打开作品库的请求里续完（能力查询与
+   资格不符的请求不触发）；报给界面的失败只用通用文案，原始错误留在 Main 日志。
+   属于其他组织或仍在启用的记录不让出裸 id；裸 id 被启用中的安装（如本地版）占用时，
+   设置页只提示占用、不给接回；接回只动作品库与 staging，不碰密钥、账号、KV 与私有目录。
 3. **owner 隔离**：会话绑定 `activeOwnerScopeKey` 每请求比对；切换在途由
    `interruptGhostCallsForAccountBoundary` 的 `disposeAll` 收口（在途写入随串行
    链归属原 owner）。根解析每次经 binding store 现解。
+   Host 的 bind/unbind/relocate/revert-default 与换源归档共用安装变更队列，复制及 binding
+   提交必须在同一队列操作内完成；排队前捕获安装目标，出队后复核，目标变化时拒绝旧操作。
+   owner mutation 租约只稳定账号归属，不能替代此互斥队列。
 4. **路径纪律**：相对路径四层校验（`isSafeGhostRelativePath` →
    `validateLibraryRelPath` → `isInsideDir` → realpath 祖先收敛），目标 lstat
    不穿透 symlink。写入 = staging + fsync + rename + dev/ino identity 复验

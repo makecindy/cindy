@@ -11,6 +11,16 @@ import {
   withBotHomeAccess,
 } from '../botProfileRuntime';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults';
+import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog';
+
+// Unit regression: default inheritance must retain engine connectors while an
+// explicit allowlist can exclude them. Previously Apps was absent from the catalog.
+it('resolves native Apps through the same Bot inheritance and selection rules', () => {
+  const catalog = buildBotMcpCatalog({ agentKind: 'codex', providers: [], builtinNames: [], customServers: [] });
+  expect(resolveBotMcpReferences({ configured: [], mode: 'inherit', catalog })).toEqual({ resolved: ['codex_apps'], unavailable: [] });
+  expect(resolveBotMcpReferences({ configured: [], mode: 'allowlist', catalog })).toEqual({ resolved: [], unavailable: [] });
+  expect(resolveBotMcpReferences({ configured: ['codex_apps'], mode: 'allowlist', catalog })).toEqual({ resolved: ['codex_apps'], unavailable: [] });
+});
 
 describe('Bot Profile runtime prompt', () => {
   it('uses the SOUL source verbatim as the complete identity slot', () => {
@@ -70,7 +80,9 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('installed-plugin gateway (`ghost_list`, `ghost_info`, `ghost_call`)');
     expect(prompt).toContain('New mounts take effect next turn in this same task');
     expect(prompt).toContain('`start_session_task`');
-    expect(prompt).toContain('proactively start independent tasks for coding and medium or large work');
+    expect(prompt).toContain('Prefer completing work in the current chat');
+    expect(prompt).toContain('the user explicitly requests an independent task');
+    expect(prompt).not.toContain('proactively start independent tasks');
     expect(prompt).toContain('`check_session_task`');
     expect(prompt).toContain('`message_session_task`');
     expect(prompt).toContain('`stop_session_task`');
@@ -111,8 +123,11 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('Use a `learned-` name only for a stable reusable working habit');
     expect(prompt).toContain('Respect the user’s memory switch');
     expect(prompt).toContain('without waiting for a request to remember');
-    expect(prompt).toContain('One verified reusable success is enough');
-    expect(prompt).toContain('the host also reviews the completed reply for missed learning');
+    expect(prompt).toContain('only when the user explicitly asks you to keep a method as a Skill');
+    expect(prompt).not.toContain('One verified reusable success is enough');
+    // 回复后复盘已于 2026-10-23 停用，提示词不得再承诺宿主会事后补漏。
+    expect(prompt).not.toContain('the host also reviews the completed reply for missed learning');
+    expect(prompt).toContain('nightly learning may later merge or tidy saved memories');
     expect(prompt).toContain('Do not launch a separate review task yourself');
     expect(prompt).toContain('never for a one-off conclusion');
   });

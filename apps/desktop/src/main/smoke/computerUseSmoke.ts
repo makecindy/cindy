@@ -10,6 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from '@cindy/mcps/computer';
 import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
 import { createLogger } from '../logger.js';
+import { windowStateElements } from './windowStateElements.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
@@ -152,9 +153,8 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     for (
       let attempt = 0;
       attempt < 10 &&
-      !state.data?.elements?.some(
-        (item: { role?: string; label?: string }) =>
-          item.role === 'AXTextArea' && item.label === 'Smoke message',
+      !windowStateElements(state.data).some(
+        (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
       );
       attempt += 1
     ) {
@@ -168,25 +168,21 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
         !state.data?.screenshot_out_file,
       'text observation excludes screenshot',
     );
-    const elements = state.data?.elements as Array<{
-      element_token?: string;
-      role?: string;
-      label?: string;
-    }>;
+    const elements = windowStateElements(state.data);
     report.observationSummary = {
       keys: Object.keys(state.data ?? {}),
       element_count: state.data?.element_count,
       degraded_reason: state.data?.degraded_reason,
-      roles: elements?.slice(0, 12).map((item) => item.role),
+      roles: elements.slice(0, 12).map((item) => item.role),
       window_id: target.window_id,
     };
-    report.fixtureElements = elements?.filter(
+    report.fixtureElements = elements.filter(
       (item) => item.label === 'Smoke message' || item.label === 'Increment smoke count',
     );
-    const input = elements?.find(
+    const input = elements.find(
       (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
     );
-    let button = elements?.find(
+    let button = elements.find(
       (item) => item.role === 'AXButton' && item.label === 'Increment smoke count',
     );
     check(input?.element_token && button?.element_token, 'opaque element tokens available');
@@ -212,9 +208,8 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     // An unknown input now triggers a bounded observation and invalidates the
     // previous credentials. Obtain an explicit fresh snapshot before clicking.
     state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
-    button = state.data?.elements?.find(
-      (item: { role?: string; label?: string }) =>
-        item.role === 'AXButton' && item.label === 'Increment smoke count',
+    button = windowStateElements(state.data).find(
+      (item) => item.role === 'AXButton' && item.label === 'Increment smoke count',
     );
     check(state.ok && button?.element_token, 'fresh button token obtained after input');
     const click = await call('click', {
@@ -290,15 +285,14 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
     );
     await window.webContents.executeJavaScript('document.getElementById("message").value = ""');
     state = await call('get_window_state', { ...targetArgs, include_screenshot: false });
-    const freshInput = state.data?.elements?.find(
-      (item: { role?: string; label?: string }) =>
-        item.role === 'AXTextArea' && item.label === 'Smoke message',
+    const freshInput = windowStateElements(state.data).find(
+      (item) => item.role === 'AXTextArea' && item.label === 'Smoke message',
     );
     check(freshInput?.element_token, 'fresh input token available for native typing');
     const typedValue = '原生输入测试🙂\n第二行内容';
     const typed = await call('type_text', {
       ...targetArgs,
-      element_token: freshInput.element_token,
+      element_token: freshInput!.element_token,
       text: typedValue,
       delivery_mode: 'foreground',
       postcondition: [

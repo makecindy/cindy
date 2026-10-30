@@ -11,22 +11,56 @@ type SpendPayload = {
 };
 type OwnerStamp = { dataOwnerId: string | null; ownerGeneration: number };
 
+const stickyOrigin = vi.hoisted(() => ({
+  deviceBySession: new Map<string, string>(),
+}));
+
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (sessionId: string | null | undefined): string | undefined =>
+    sessionId ? stickyOrigin.deviceBySession.get(sessionId) : undefined,
+}));
+
 const mocks = vi.hoisted(() => {
   let spendListener: ((payload: SpendPayload, ownerStamp?: OwnerStamp) => void) | undefined;
+  let sessionPatchListener:
+    | ((payload: { sessionId: string; patch: Partial<Session> }, ownerStamp?: OwnerStamp) => void)
+    | undefined;
   const onUsageSessionSpendChanged = vi.fn(
     (listener: (payload: SpendPayload, ownerStamp?: OwnerStamp) => void) => {
       spendListener = listener;
       return vi.fn();
     },
   );
+  const onSessionPatched = vi.fn(
+    (
+      listener: (payload: { sessionId: string; patch: Partial<Session> }, ownerStamp?: OwnerStamp) => void,
+    ) => {
+      sessionPatchListener = listener;
+      return vi.fn();
+    },
+  );
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { onUsageSessionSpendChanged },
+    value: {
+      onUsageSessionSpendChanged,
+      localDb: {
+        sessionsPush: {
+          onPatched: onSessionPatched,
+          onCreated: vi.fn(() => vi.fn()),
+        },
+      },
+    },
   });
   return {
     list: vi.fn(),
     emitSessionSpend(payload: SpendPayload, ownerStamp?: OwnerStamp): void {
       spendListener?.(payload, ownerStamp);
+    },
+    emitSessionPatch(
+      payload: { sessionId: string; patch: Partial<Session> },
+      ownerStamp?: OwnerStamp,
+    ): void {
+      sessionPatchListener?.(payload, ownerStamp);
     },
   };
 });
@@ -61,6 +95,7 @@ function session(id: string, partial: Partial<Session> = {}): Session {
 describe('sessionsStore account boundaries', () => {
   beforeEach(() => {
     mocks.list.mockReset();
+    stickyOrigin.deviceBySession.clear();
     sessionsStore.reset();
   });
 
@@ -68,6 +103,101 @@ describe('sessionsStore account boundaries', () => {
     cleanup();
     sessionsStore.reset();
     dataOwnerTesting.reset();
+  });
+
+  it('rejects an old hook patch callback after the data owner changes', async () => {
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValueOnce([
+      session('same-id', { pinnedAt, summary: 'owner-a summary' }),
+    ]);
+    const view = renderHook(() => useCCSessions());
+    await waitFor(() => expect(view.result.current.sessions).toHaveLength(1));
+    const oldPatchLocal = view.result.current.patchLocal;
+
+    const newRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => newRequest.promise);
+    setDataOwnerGeneration('owner-b', 2);
+    act(() => sessionsStore.reset());
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      oldPatchLocal('same-id', { pinnedAt: null, summary: null });
+    });
+    newRequest.resolve([
+      session('same-id', { pinnedAt, summary: 'owner-b summary' }),
+    ]);
+    await waitFor(() => {
+      expect(view.result.current.sessions).toEqual([
+        expect.objectContaining({
+          id: 'same-id',
+          pinnedAt,
+          summary: 'owner-b summary',
+        }),
+      ]);
+    });
+  });
+
+  it('ignores a stale owner-stamped local sessions push', async () => {
+    setDataOwnerGeneration('owner-b', 2);
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    mocks.list.mockResolvedValueOnce([
+      session('same-id', { pinnedAt, summary: 'owner-b summary' }),
+    ]);
+    await sessionsStore.ensureByFilter('active');
+
+    act(() => {
+      mocks.emitSessionPatch(
+        { sessionId: 'same-id', patch: { pinnedAt: null, summary: null } },
+        { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+      );
+    });
+    expect(sessionsStore.findById('same-id')).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'owner-b summary' }),
+    );
+
+    act(() => {
+      mocks.emitSessionPatch(
+        { sessionId: 'same-id', patch: { pinnedAt: null, summary: null } },
+        { dataOwnerId: 'owner-b', ownerGeneration: 2 },
+      );
+    });
+    expect(sessionsStore.findById('same-id')).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
+  });
+
+  it('rejects a remote device-link patchLocal while a same-id local refresh is in flight', async () => {
+    const sessionId = 'same-id';
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    stickyOrigin.deviceBySession.set(sessionId, 'device-a');
+    setDataOwnerGeneration('owner-b', 2);
+    const pinned = session(sessionId, { pinnedAt, summary: 'local summary' });
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+    const view = renderHook(() => useCCSessions());
+
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleLoad = sessionsStore.forceRefresh('active');
+    act(() => {
+      view.result.current.patchLocal(sessionId, { pinnedAt: null, summary: null });
+    });
+    await act(async () => {
+      staleRequest.resolve([pinned]);
+      await staleLoad;
+    });
+    expect(sessionsStore.findById(sessionId)).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'local summary' }),
+    );
+
+    stickyOrigin.deviceBySession.delete(sessionId);
+    act(() => {
+      view.result.current.patchLocal(sessionId, { pinnedAt: null, summary: null });
+    });
+    expect(sessionsStore.findById(sessionId)).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
   });
 
   it('does not let a request started before reset repopulate the cache', async () => {
@@ -164,6 +294,25 @@ describe('sessionsStore account boundaries', () => {
     await staleLoad;
 
     expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual(['keep']);
+  });
+
+  it('clears pin metadata overrides when a removed session id is reused', async () => {
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    const pinned = session('reused-id', { pinnedAt, summary: 'old summary' });
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleLoad = sessionsStore.forceRefresh('active');
+    sessionsStore.patchLocal('reused-id', { pinnedAt: null, summary: null });
+    sessionsStore.removeLocal('reused-id');
+
+    staleRequest.resolve([pinned]);
+    await staleLoad;
+    expect(sessionsStore.findById('reused-id')).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'old summary' }),
+    );
   });
 
   it('patches only the matching cached session when persisted spend changes', async () => {

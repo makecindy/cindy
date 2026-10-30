@@ -10,6 +10,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHATGPT_MODEL_PREFIX,
+  CHAT_VENDOR_CATEGORY_ORDER,
+  CATEGORY_ORDER,
   SUBSCRIPTION_DIRECT_MODEL_PREFIXES,
   XAI_MODEL_PREFIX,
   categorize,
@@ -287,6 +289,7 @@ describe('categorize', () => {
     // 折扣路由不能被"认尾段"的 gpt 规则抢走:codex/gpt-5.4 的尾段就是 gpt-5.4。
     expect(categorize('codex/gpt-5.4')).toBe('gpt-budget');
     expect(categorize('codex/gpt-5.6-sol')).toBe('gpt-budget');
+    expect(categorize('openai-codex/gpt-6.1-sol')).toBe('gpt-budget');
     // xd/codex-gpt-* 的尾段是 codex-gpt-*,不以 gpt- 开头,同样不落 gpt 组。
     expect(categorize('xd/codex-gpt-5.5')).not.toBe('gpt');
     expect(groupOf({ id: 'xd/codex-gpt-5.5', group: 'gpt-budget' })).toBe('gpt-budget');
@@ -316,6 +319,10 @@ describe('groupOf — 数据优先,前缀兜底', () => {
 
 describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', () => {
   const NON_CHAT_MODE_CASES: Array<{ id: string; mode: string; category: ModelCategory }> = [
+    { id: 'typesafe/jev', mode: 'evaluation', category: 'decision' },
+    { id: 'edit-model', mode: 'image_edit', category: 'image' },
+    { id: 'ocr-model', mode: 'ocr', category: 'other' },
+    { id: 'rerank-model', mode: 'rerank', category: 'other' },
     { id: 'gemini-3.1-flash-image', mode: 'image_generation', category: 'image' },
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
@@ -525,6 +532,7 @@ describe('isBudgetModel — 目录 group 优先,codex/ 前缀兜底', () => {
   });
   it('无 group 时按前缀(网关旧数据)', () => {
     expect(isBudgetModel({ id: 'codex/gpt-5.5' })).toBe(true);
+    expect(isBudgetModel({ id: 'openai-codex/gpt-6.1-sol' })).toBe(true);
     expect(isBudgetModel({ id: 'gpt-5.5' })).toBe(false);
   });
   // 与 groupOf 同一「数据优先」契约(2026-07 Greptile review):目录显式给出合法的
@@ -592,4 +600,16 @@ describe('formatContextWindow(下沉自 ModelSelector,输出逐字一致)', () =
   it('<1000 原样', () => {
     expect(formatContextWindow(512)).toBe('512');
   });
+});
+
+// Unit contract: evaluation is a Decisions endpoint, never an Agent chat model.
+// Existing cases did not cover evaluation or the newly recognized decision group without mode.
+it('keeps decision after embedding and outside all chat selection paths', () => {
+  expect(CATEGORY_ORDER.slice(CATEGORY_ORDER.indexOf('embedding'), CATEGORY_ORDER.indexOf('compression') + 1)).toEqual(['embedding', 'decision', 'compression']);
+  expect(CHAT_VENDOR_CATEGORY_ORDER).not.toContain('decision');
+  for (const value of [{ id: 'typesafe/jev', mode: 'evaluation' }, { id: 'typesafe/jev', group: 'decision' }]) {
+    expect(isChatEligible(value)).toBe(false);
+    expect(isAgentSelectableModel(value, { userProvider: true })).toBe(false);
+    expect(isModelSelectableForNewRoute(value)).toBe(false);
+  }
 });

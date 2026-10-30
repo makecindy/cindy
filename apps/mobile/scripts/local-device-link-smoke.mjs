@@ -75,6 +75,7 @@ const flows = resolveFlows({
   flow: options.flow ?? process.env.XDT_MOBILE_E2E_FLOW,
   appId,
   flowSuite,
+  platform,
 });
 const configuredMockHostScenario = options.mockHostScenario
   ?? process.env.XDT_MOBILE_E2E_MOCK_SCENARIO;
@@ -980,7 +981,7 @@ function parseArgs(args) {
   return parsed;
 }
 
-function resolveFlows({ appId, flow, flowSuite }) {
+function resolveFlows({ appId, flow, flowSuite, platform }) {
   if (flow) return [flow];
   if (!flowSuite) return [defaultFlow];
   if (flowSuite === 'default') return [defaultFlow];
@@ -1024,6 +1025,7 @@ function resolveFlows({ appId, flow, flowSuite }) {
       'file_browser.yaml',
       'fork_rewind.yaml',
       'message_selection.yaml',
+      ...(platform === 'ios' ? ['session_back_gesture.yaml'] : []),
       'settings.yaml',
     ];
   }

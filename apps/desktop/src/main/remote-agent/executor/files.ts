@@ -73,6 +73,36 @@ export async function rawReadFile(absPath: string): Promise<Buffer> {
   return fsp.readFile(absPath);
 }
 
+function textOrNull(data: Buffer): string | null {
+  const text = data.toString('utf8');
+  return data.includes(0) || !Buffer.from(text, 'utf8').equals(data) ? null : text;
+}
+
+/**
+ * 写入前的文件文本，用来沿用文件里路径的原写法(见 ExecutorWorkspace.mapContentFromAgent)。
+ * 不存在、不是普通文件、二进制或超过原始读取上限时为 null，写入照常进行。
+ */
+export async function readExistingText(absPath: string): Promise<string | null> {
+  try {
+    const stat = await fsp.stat(absPath);
+    if (!stat.isFile() || stat.size > EXECUTOR_RAW_READ_MAX_BYTES) return null;
+    return textOrNull(await fsp.readFile(absPath));
+  } catch {
+    return null;
+  }
+}
+
+/** readExistingText 的同步版本(exec-server 消息按序同步改写)。 */
+export function readExistingTextSync(absPath: string): string | null {
+  try {
+    const stat = fs.statSync(absPath);
+    if (!stat.isFile() || stat.size > EXECUTOR_RAW_READ_MAX_BYTES) return null;
+    return textOrNull(fs.readFileSync(absPath));
+  } catch {
+    return null;
+  }
+}
+
 export async function rawAccess(absPath: string, mode: 'read' | 'write'): Promise<void> {
   await fsp.access(absPath, mode === 'write' ? fs.constants.R_OK | fs.constants.W_OK : fs.constants.R_OK);
 }
@@ -470,6 +500,14 @@ export interface CcEditInput {
   replace_all?: boolean;
 }
 
+/** 匹配 Agent 实际读到的文本；写入时再恢复本机文件的路径写法。 */
+export interface CcEditView {
+  oldString: string;
+  newString: string;
+  text?: string;
+  restore?: (updated: string) => string;
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
   let index = haystack.indexOf(needle);
@@ -486,6 +524,7 @@ export async function ccEdit(
   readState: ReadStateTracker,
   hooks: FileWriteHooks,
   displayPath = absPath,
+  mapEdit?: (oldString: string, newString: string, original: string | null) => CcEditView,
 ): Promise<ToolResult> {
   const { old_string: oldString, new_string: newString } = input;
   if (oldString === newString) {
@@ -497,25 +536,28 @@ export async function ccEdit(
     if (oldString !== '') return textResult(`File does not exist: ${displayPath}`, true);
     await hooks.beforeWrite(absPath);
     await fsp.mkdir(path.dirname(absPath), { recursive: true });
-    await fsp.writeFile(absPath, newString, 'utf8');
+    await fsp.writeFile(absPath, mapEdit?.(oldString, newString, null).newString ?? newString, 'utf8');
     readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
     return textResult(`File created successfully at: ${displayPath}`);
   }
   const problem = await readState.check(absPath);
   if (problem) return textResult(problem, true);
   const original = await fsp.readFile(absPath, 'utf8');
+  // 映射也只在先读后改检查通过后执行。匹配数以 Agent 的读视图为准，避免同一虚拟路径的多种原写法漏改。
+  const crlf = original.includes('\r\n');
+  const originalText = crlf ? original.replace(/\r\n/g, '\n') : original;
+  const edit = mapEdit?.(oldString, newString, originalText) ?? { oldString, newString };
   if (oldString === '') {
     if (original.trim() !== '') return textResult('Cannot create new file - file already exists.', true);
     await hooks.beforeWrite(absPath);
-    await fsp.writeFile(absPath, newString, 'utf8');
+    await fsp.writeFile(absPath, edit.restore?.(edit.newString) ?? edit.newString, 'utf8');
     readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
     return textResult(`The file ${displayPath} has been updated successfully.`);
   }
   // 文件用 CRLF 时按 LF 匹配，写回时恢复原换行风格。
-  const crlf = original.includes('\r\n');
-  const text = crlf ? original.replace(/\r\n/g, '\n') : original;
-  const needle = crlf ? oldString.replace(/\r\n/g, '\n') : oldString;
-  const replacement = crlf ? newString.replace(/\r\n/g, '\n') : newString;
+  const text = edit.text ?? originalText;
+  const needle = crlf ? edit.oldString.replace(/\r\n/g, '\n') : edit.oldString;
+  const replacement = crlf ? edit.newString.replace(/\r\n/g, '\n') : edit.newString;
   const matches = countOccurrences(text, needle);
   if (matches === 0) {
     return textResult(`String to replace not found in file.\nString: ${oldString}`, true);
@@ -527,8 +569,9 @@ export async function ccEdit(
     );
   }
   const updated = input.replace_all ? text.split(needle).join(replacement) : text.replace(needle, () => replacement);
+  const restored = edit.restore?.(updated) ?? updated;
   await hooks.beforeWrite(absPath);
-  await fsp.writeFile(absPath, crlf ? updated.replace(/\n/g, '\r\n') : updated, 'utf8');
+  await fsp.writeFile(absPath, crlf ? restored.replace(/\n/g, '\r\n') : restored, 'utf8');
   readState.record(absPath, (await fsp.stat(absPath)).mtimeMs);
   return textResult(`The file ${displayPath} has been updated successfully.`);
 }
@@ -565,6 +608,7 @@ export async function ccNotebookEdit(
   input: CcNotebookEditInput,
   readState: ReadStateTracker,
   hooks: FileWriteHooks,
+  mapSource: (source: string, original?: string) => string = (source) => source,
 ): Promise<ToolResult> {
   if (path.extname(absPath).toLowerCase() !== '.ipynb') {
     return textResult('File must be a Jupyter notebook (.ipynb file). For editing other file types, use the Edit tool.', true);
@@ -599,9 +643,10 @@ export async function ccNotebookEdit(
     cells.splice(index, 1);
   } else if (mode === 'insert') {
     const cellType = input.cell_type ?? 'code';
+    const source = mapSource(input.new_source);
     const cell: NotebookCell = cellType === 'markdown'
-      ? { cell_type: 'markdown', metadata: {}, source: input.new_source }
-      : { cell_type: 'code', metadata: {}, source: input.new_source, outputs: [], execution_count: null };
+      ? { cell_type: 'markdown', metadata: {}, source }
+      : { cell_type: 'code', metadata: {}, source, outputs: [], execution_count: null };
     if (supportsIds) {
       cell.id = newCellId();
       resultId = cell.id;
@@ -609,7 +654,8 @@ export async function ccNotebookEdit(
     cells.splice(index + 1, 0, cell);
   } else {
     const cell = cells[index];
-    cell.source = input.new_source;
+    const original = Array.isArray(cell.source) ? cell.source.join('') : cell.source;
+    cell.source = mapSource(input.new_source, original);
     if (input.cell_type && input.cell_type !== cell.cell_type) {
       cell.cell_type = input.cell_type;
       if (input.cell_type === 'markdown') {

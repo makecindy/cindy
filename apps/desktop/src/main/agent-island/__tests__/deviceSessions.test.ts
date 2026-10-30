@@ -37,6 +37,28 @@ function remote(
 }
 
 describe('Agent Island device sessions', () => {
+  it.each(['teammate', undefined] as const)('resolves pending remote completion once without changing task state (%s)', completionNotification => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(state, [remote('running')], 1_000);
+    const pending = syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification: 'pending', detail: 'Result' })], 2_000);
+    expect(pending.events).toEqual([]);
+    expect(state.sessions.get('remote-1')).toMatchObject({ phase: 'completed', unread: true });
+    const result = syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification, detail: 'Result' })], 3_000);
+    expect(result.events.map(event => event.kind)).toEqual(completionNotification ? [] : ['done']);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification })], 4_000).events).toEqual([]);
+    syncAgentIslandDeviceSessions(state, [remote('running')], 5_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed')], 6_000).events.map(event => event.kind)).toEqual(['done']);
+  });
+
+  it('does not notify a first-seen pending completion and preserves action/error events', () => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(state, [remote('completed', { completionNotification: 'pending' })], 1_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('completed')], 2_000).events).toEqual([]);
+    syncAgentIslandDeviceSessions(state, [remote('running')], 3_000);
+    expect(syncAgentIslandDeviceSessions(state, [remote('needs-interaction', { completionNotification: 'teammate', interactionKind: 'permission' })], 4_000).events.map(event => event.kind)).toEqual(['needs-reply']);
+    expect(syncAgentIslandDeviceSessions(state, [remote('error', { completionNotification: 'teammate' })], 5_000).events.map(event => event.kind)).toEqual(['error']);
+  });
+
   it('shows a first-seen remote task without revealing it or emitting an event', () => {
     const state = createAgentIslandState();
     const result = syncAgentIslandDeviceSessions(state, [remote('completed')], 1_000);
@@ -82,7 +104,7 @@ describe('Agent Island device sessions', () => {
       2_000,
     );
     expect(waiting.events).toEqual([
-      { sessionId: 'remote-1', title: 'Fix login', deviceName: 'Studio Mac', kind: 'needs-reply' },
+      { sessionId: 'remote-1', deviceId: 'device-a', title: 'Fix login', deviceName: 'Studio Mac', kind: 'needs-reply' },
     ]);
     const waitingDisplay = buildAgentIslandDisplayState(state, 2_000);
     expect(waitingDisplay.mode).toBe('expanded');
@@ -147,6 +169,28 @@ describe('Agent Island device sessions', () => {
     expect(session?.activityLines.map((line) => [line.kind, line.text])).toEqual([
       ['status', 'Done'],
     ]);
+  });
+
+  // Screenshot regression: a remote host had already flattened and shortened
+  // the rich fence. Exercise IPC parsing and native display projection together.
+  it('hides flattened remote component operations during output and completion', () => {
+    const state = createAgentIslandState();
+    const detail = '```cindy-ui {"version":1,"seq":1,"op":"create","id":"device-preview-link","kind":"markdown","props":...';
+    const sync = (phase: 'running' | 'completed', text: string, now: number) =>
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions([remote(phase, { detail: text })])!, now);
+    sync('running', detail, 1_000);
+    const running = buildAgentIslandDisplayState(state, 1_000).sessions[0];
+    expect(running?.detail).toBe('');
+    expect(running?.compactDetail).not.toContain('cindy-ui');
+    sync('completed', detail, 2_000);
+    expect(buildAgentIslandDisplayState(state, 2_000).sessions[0]?.activityLines)
+      .toEqual([expect.objectContaining({ kind: 'status', text: 'Done' })]);
+    sync('completed', '**预览已完成**', 3_000);
+    expect(buildAgentIslandDisplayState(state, 3_000).sessions[0]?.compactDetail).toBe('预览已完成');
+    sync('completed', detail, 4_000);
+    expect(buildAgentIslandDisplayState(state, 4_000).sessions[0]?.compactDetail).toBe('Done');
+    sync('completed', '更新完成 ' + detail, 5_000);
+    expect(buildAgentIslandDisplayState(state, 5_000).sessions[0]?.compactDetail).toBe('更新完成');
   });
 
   it('does not repeat events for an unchanged phase', () => {

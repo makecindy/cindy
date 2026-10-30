@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 /**
  * AppCrashScreen — 渲染崩溃兜底页的纯展示层。
@@ -15,7 +16,7 @@ import { Button } from '@/components/ui/button';
  */
 
 import { useTranslation } from 'react-i18next';
-import { TriangleAlert, RotateCcw, House } from 'lucide-react';
+import { RotateCcw, House } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { clearLastView } from '@/features/cc-agent/lib/lastViewStore';
@@ -54,45 +55,24 @@ export function AppCrashScreen({
           : 'h-full w-full',
       )}
     >
-      <div className="mx-6 flex w-full max-w-md flex-col items-center gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface)] px-8 py-10">
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-          <TriangleAlert size={20} />
-        </span>
-        <div className="flex flex-col items-center gap-1.5 text-center">
-          <h2 className="text-15 font-medium text-[var(--text-primary)]">
-            {t('appError.title')}
-          </h2>
-          <p className="text-13 leading-relaxed text-[var(--text-secondary)]">
-            {t('appError.description')}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="cta" size="md" compact
-            type="button"
-            onClick={handleReload}
-          >
-            <RotateCcw size={13} />
-            {t('appError.reload')}
-          </Button>
-          <Button variant="secondary" size="md" compact
-            type="button"
-            onClick={handleBackHome}
-          >
-            <House size={13} />
-            {t('appError.backHome')}
-          </Button>
-        </div>
-        {(stack ?? message) && (
-          <details className="w-full">
-            <summary className="cursor-pointer text-12 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]">
-              {t('appError.details')}
-            </summary>
-            <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-[var(--surface-chip)] p-3 font-mono text-11 leading-relaxed whitespace-pre-wrap break-all text-[var(--text-secondary)]">
-              {stack ?? message}
-            </pre>
-          </details>
-        )}
-      </div>
+      <ErrorNotice
+        className="mx-6 w-full max-w-md"
+        message={t('appError.title')}
+        description={t('appError.description')}
+        details={stack ?? message}
+        actions={
+          <>
+            <Button size="sm" compact onClick={handleReload}>
+              <RotateCcw size={13} />
+              {t('appError.reload')}
+            </Button>
+            <Button variant="secondary" size="sm" compact onClick={handleBackHome}>
+              <House size={13} />
+              {t('appError.backHome')}
+            </Button>
+          </>
+        }
+      />
     </div>
   );
 }

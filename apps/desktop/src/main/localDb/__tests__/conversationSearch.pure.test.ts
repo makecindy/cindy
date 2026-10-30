@@ -6,6 +6,7 @@ import {
   mergeConversationSearchResults,
   normalizeConversationContentPreview,
   textPreview,
+  visibleMessageText,
   visibleMessageTextForConversationSearch,
 } from '../conversationSearch.pure';
 import type { ConversationSearchSessionSummary } from '../../../shared/conversationSearch';
@@ -33,6 +34,19 @@ function session(
 }
 
 describe('conversationSearch.pure', () => {
+  it('preserves findings and code indentation for result cards while search stays one line', () => {
+    const findings = '## Findings\n\n- P1: Discount\n- P2: Shipping\n\n```ts\nif (ready) {\n  ship();\n}\n```';
+    for (const content of [findings, JSON.stringify([
+      { type: 'thinking', thinking: 'private reasoning' },
+      { type: 'text', text: findings },
+    ])]) {
+      expect(visibleMessageText('assistant', content)).toBe(findings);
+      expect(visibleMessageTextForConversationSearch('assistant', content)).toBe(
+        findings.replace(/\s+/g, ' '),
+      );
+    }
+  });
+
   it('scores and highlights fuzzy title matches', () => {
     const match = fuzzyTitleMatch('Chat History', 'ch');
     expect(match).not.toBeNull();

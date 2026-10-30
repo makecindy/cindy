@@ -13,5 +13,5 @@ export interface AppDefaultModelSelection {
 export function sameModelRoute(a: BotModelRoute | null | undefined, b: BotModelRoute | null | undefined): boolean {
   if (!a || !b) return !a && !b;
   return a.harness === b.harness && a.providerId === b.providerId && a.model === b.model
-    && a.effort === b.effort && a.fastMode === b.fastMode;
+    && a.effort === b.effort && a.fastMode === b.fastMode && (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null);
 }

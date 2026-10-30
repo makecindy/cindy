@@ -198,9 +198,7 @@ describe('resolveProviderModelEfforts', () => {
       'resolveModelEfforts(\n          newModelId,\n          providerId,\n          targetAgentKind,\n        )',
     );
     expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain('resolveRequestedEffort({');
-    expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain(
-      'overrides.fastMode && fastCapable',
-    );
+    // 速度 override 的目标能力门由 resolveFastSupported.test.ts 执行生产分支验证。
     expect(source.slice(modelChangeStart, modelChangeEnd)).toContain(
       'intent.effort ? { effort: intent.effort as Effort }',
     );

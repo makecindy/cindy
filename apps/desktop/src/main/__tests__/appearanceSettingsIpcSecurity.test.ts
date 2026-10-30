@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  appOn: vi.fn(),
   ipcOn: vi.fn(),
   ipcHandle: vi.fn(),
   allWindows: [] as Array<unknown>,
@@ -28,9 +29,13 @@ vi.mock('../custom-wallpaper.js', () => ({
   importCustomWallpaper: mocks.importWallpaper,
   removeCustomWallpaper: mocks.removeWallpaper,
 }));
-vi.mock('../wallpaper-video.js', () => ({ ensureWallpaperVideo: mocks.ensureVideo }));
+vi.mock('../wallpaper-video.js', () => ({
+  ensureWallpaperVideo: mocks.ensureVideo,
+  ensureWallpaperImage: mocks.ensureVideo,
+}));
 
 vi.mock('electron', () => ({
+  app: { on: mocks.appOn },
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
 }));
@@ -53,7 +58,10 @@ vi.mock('../appearance-settings-store.js', () => ({
 }));
 
 import { registerAppearanceSettingsIpc, __testing } from '../appearance-settings-ipc.js';
-import { normalizeAppearanceSettings } from '../../shared/appearanceSettings.js';
+import {
+  normalizeAppearanceSettings,
+  WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
+} from '../../shared/appearanceSettings.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
 
 const persisted = {
@@ -61,6 +69,8 @@ const persisted = {
   codeFamily: 'JetBrains Mono',
   uiSize: 15,
   codeSize: 14,
+  terminalFamily: 'Menlo',
+  terminalSize: 17,
   windowZoom: 1.1,
 };
 
@@ -84,29 +94,54 @@ describe('appearance settings IPC authorization', () => {
       expect(() => __testing.parsePatch({ wallpaperVisibility })).toThrow('INVALID_PARAMS');
     }
   });
-  it('authorizes the CDN request and keeps it valid across account switches', async () => {
-    const handler = mocks.ipcHandle.mock.calls.find(
-      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
-    )?.[1];
-    mocks.ensureVideo.mockResolvedValueOnce(null);
-    expect(await handler({}, 'cindy-window')).toBeNull();
-    expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
-    mocks.ensureVideo.mockImplementationOnce(async () => {
-      mocks.owner = 'owner-b:2';
-      return 'client-video-url';
-    });
-    expect(await handler({}, 'cindy-window')).toBe('client-video-url');
-  });
-  it('rejects an untrusted CDN request before starting a download', async () => {
-    mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
-      throw new Error('untrusted');
-    });
-    const handler = mocks.ipcHandle.mock.calls.find(
-      ([name]) => name === 'appearance-settings:ensure-wallpaper-video',
-    )?.[1];
-    await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
-    expect(mocks.ensureVideo).not.toHaveBeenCalled();
-  });
+  it.each(['video', 'image'])(
+    'authorizes the CDN %s request and keeps it valid across account switches',
+    async (kind) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      mocks.ensureVideo.mockResolvedValueOnce(null);
+      expect(await handler({}, 'cindy-window')).toBeNull();
+      expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
+      mocks.ensureVideo.mockImplementationOnce(async () => {
+        mocks.owner = 'owner-b:2';
+        return 'client-video-url';
+      });
+      expect(await handler({}, 'cindy-window')).toBe('client-video-url');
+    },
+  );
+  it.each(['video', 'image'])(
+    'rejects an untrusted CDN %s request before starting a download',
+    async (kind) => {
+      mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+        throw new Error('untrusted');
+      });
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      await expect(handler({}, 'cindy-window')).rejects.toThrow('untrusted');
+      expect(mocks.ensureVideo).not.toHaveBeenCalled();
+    },
+  );
+  it.each(['video', 'image'])(
+    'sends %s progress only to the authorized requesting frame',
+    async (kind) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([name]) => name === `appearance-settings:ensure-wallpaper-${kind}`,
+      )?.[1];
+      const send = vi.fn();
+      const progress = { wallpaperId: 'cindy-window', kind, loaded: 2, total: 3 };
+      mocks.ensureVideo.mockImplementationOnce(async (_id, onProgress) => {
+        onProgress(progress);
+        return 'cached-media-url';
+      });
+      await expect(handler({ senderFrame: { send } }, 'cindy-window')).resolves.toBe(
+        'cached-media-url',
+      );
+      expect(send).toHaveBeenCalledExactlyOnceWith(WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL, progress);
+      expect(mocks.trustedReadWindow).not.toHaveBeenCalled();
+    },
+  );
   it.each(['appearance-settings:import-wallpaper', 'appearance-settings:remove-wallpaper'])(
     'allows %s when the account changes during module loading',
     async (channel) => {
@@ -180,6 +215,48 @@ describe('appearance settings IPC authorization', () => {
     mocks.assertTrustedAppRendererEvent.mockReset();
     mocks.readAppearanceSettings.mockReset().mockReturnValue(persisted);
     mocks.fromWebContents.mockReset().mockReturnValue({ isDestroyed: () => false });
+    mocks.writeAppearanceSettingsPatch.mockReset().mockResolvedValue(persisted);
+    mocks.updateAppearanceSettingsAtomic.mockReset();
+  });
+
+  // #7486: the file can retain 90% while an activated window displays 100%.
+  // Existing IPC tests only covered preference writes, not native focus recovery.
+  // Exercise the registered Electron event with a stateful window; unit tier.
+  it('restores a drifted app window on focus without rewriting preferences or stable zoom', () => {
+    const settings = { ...persisted, windowZoom: 0.9 };
+    mocks.readAppearanceSettings.mockReturnValue(settings);
+    let zoom = 1;
+    const setZoomFactor = vi.fn((value: number) => { zoom = value; });
+    const win = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, getZoomFactor: () => zoom, setZoomFactor },
+    };
+    markAppContentWindow(win as never);
+    const focus = mocks.appOn.mock.calls.find(([name]) => name === 'browser-window-focus')?.[1];
+    expect(focus).toBeTypeOf('function');
+    focus({}, win);
+    expect(zoom).toBe(0.9);
+    focus({}, win);
+    expect(setZoomFactor).toHaveBeenCalledOnce();
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.updateAppearanceSettingsAtomic).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the app zoom to unregistered or destroyed focus targets', () => {
+    const focus = mocks.appOn.mock.calls.find(([name]) => name === 'browser-window-focus')?.[1];
+    expect(focus).toBeTypeOf('function');
+    const setZoomFactor = vi.fn();
+    const win = {
+      isDestroyed: vi.fn(() => false),
+      webContents: { isDestroyed: vi.fn(() => false), getZoomFactor: () => 1, setZoomFactor },
+    };
+    focus({}, win);
+    markAppContentWindow(win as never);
+    win.webContents.isDestroyed.mockReturnValue(true);
+    focus({}, win);
+    win.isDestroyed.mockReturnValue(true);
+    focus({}, win);
+    expect(setZoomFactor).not.toHaveBeenCalled();
   });
 
   it('同步启动读取只向已授权的外观 reader 返回持久快照', () => {
@@ -315,4 +392,34 @@ describe('appearance settings IPC authorization', () => {
       await expect(setHandler({}, { wallpaperId })).rejects.toThrow('wallpaperId is not supported');
     },
   );
+  const getSetHandler = () => mocks.ipcHandle.mock.calls.find(
+    ([channel]) => channel === 'appearance-settings:set-patch',
+  )?.[1] as (event: unknown, patch: unknown) => Promise<unknown>;
+
+  it('accepts only terminal font fields while preserving the existing write authorization', async () => {
+    const event = {};
+    await getSetHandler()(event, { terminalFamily: '  Menlo  ', terminalSize: 30 });
+    expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
+      terminalFamily: 'Menlo', terminalSize: 24,
+    });
+  });
+
+  it.each([
+    { terminalFamily: 1 }, { terminalFamily: 'x'.repeat(257) },
+    { terminalSize: '13' }, { terminalSize: NaN }, { terminalSize: Infinity },
+    { terminalTheme: 'dark' }, null, [],
+  ])('rejects malformed or unapproved terminal appearance patch %j before writing', async (patch) => {
+    await expect(getSetHandler()({}, patch)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+
+  it('does not grant read-only windows or untrusted senders terminal settings write access', async () => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => {
+      throw new Error('untrusted app renderer');
+    });
+    await expect(getSetHandler()({}, { terminalFamily: 'Menlo', terminalSize: 16 }))
+      .rejects.toThrow('untrusted app renderer');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
 });

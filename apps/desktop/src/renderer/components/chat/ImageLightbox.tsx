@@ -19,9 +19,9 @@
  * - 媒体动作(对齐手机版 lightbox 的功能集,底部胶囊操作栏 + 右键菜单双入口):
  *   复制图片 / 打开所在目录(右键) / 用默认应用打开 / 另存为 / 发送到对话。
  *   可用性按 src scheme 分层,见 `mediaActionCapabilities`:本地源
- *   (xdt-image:// / xdt-file://)全量;http(s):// 与 data:image 只有
- *   另存为 + 发送到对话(main 侧取字节);cindy-remote-media://(远程会话)与
- *   其它 scheme 一律只读预览。
+ *   (xdt-image:// / cindy-media:// / xdt-file://)全量;http(s)、data:image 与
+ *   cindy-remote-media 的字节动作共用安全取件和原生剪贴板入口;目录定位仅
+ *   用于真实本机文件或可定位的远端工作目录。其它 scheme 只读预览。
  * - 发送到对话:经 `media:cache-for-session` 为当前会话复制一份新缓存,再合入
  *   composerDraftStore(与手机版语义一致——加入输入框附件托盘,不直接发消息)。
  *   当前会话 id 来自 ChatSessionFileContext(portal 不断 context 链);聊天流外
@@ -41,6 +41,7 @@
  *   `data-gallery-active` 定位，细节见 `collectGallery` / `resolveStartIndexInFull`。
  */
 
+import { useImageClipboard } from './useImageClipboard';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
@@ -1173,6 +1174,8 @@ export function ImageLightbox({
     setTimeout(() => onClose(), 200);
   }
 
+  const { copyImage } = useImageClipboard(currentSrc);
+
   // 有笔迹时动作不隐藏,而是按对象分层:位图级动作(复制/另存为)作用于
   // "当前所见"——烧录合成图;文件级动作(默认应用打开/定位目录)指向原图
   // 文件(合成图没有磁盘实体)。
@@ -1236,29 +1239,7 @@ export function ImageLightbox({
 
   async function handleCopyImage(): Promise<void> {
     setMenuPos(null);
-    // 有笔迹时复制"所见"(烧录合成图);data:/http/remote 源本机没有文件实体,
-    // 同样走位图复制(字节层统一取字节)。canvas 输出统一 PNG——ClipboardItem
-    // 仅接受 image/png。本地源无笔迹保持文件引用复制(可粘进 Finder)。
-    const isLocalFileSource =
-      currentSrc.startsWith('xdt-image://') ||
-      currentSrc.startsWith('cindy-media://') ||
-      xdtFileUrlToPath(currentSrc) !== null;
-    if (strokesRef.current.length > 0 || !isLocalFileSource) {
-      try {
-        const { blob } = await materializeAnnotatedImage('image/png');
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        toast.success(t('chat.media.imageCopied'));
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : t('chat.media.copyFailed'));
-      }
-      return;
-    }
-    const res = await window.electronAPI.copyMediaToClipboard(legacyMediaIpcParams(currentSrc));
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
+    await copyImage(strokesRef.current);
   }
 
   async function handleOpenWithApp(): Promise<void> {

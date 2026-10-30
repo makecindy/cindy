@@ -12,6 +12,7 @@ function applyStatus(
     generationDurationMs?: number;
     generationActive?: boolean;
     generationReliable?: boolean;
+    tokenSpeed?: unknown;
   },
 ): void {
   makerChatStore.__applyStatusUpdateForTest(sessionId, {
@@ -30,6 +31,9 @@ function applyStatus(
       : {}),
     ...(partial.generationReliable !== undefined
       ? { generationReliable: partial.generationReliable }
+      : {}),
+    ...(partial.tokenSpeed !== undefined
+      ? { tokenSpeed: partial.tokenSpeed as never }
       : {}),
   });
 }
@@ -76,6 +80,26 @@ describe('makerChatStore live generation at turn start', () => {
         generationActive: false,
         generationReliable: true,
       });
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+
+  it('keeps the host speed across statuses without it and drops it on the next turn', () => {
+    const sessionId = `live-gen-speed-${Math.random().toString(36).slice(2, 8)}`;
+    const tokenSpeed = { rate: 42, average: 40, tokens: 120, elapsedMs: 3_000, streaming: true };
+    try {
+      applyStatus(sessionId, { isRunning: true, status: 'Generating...', tokenSpeed });
+      applyStatus(sessionId, { isRunning: true, status: 'Running tool' });
+      expect(makerChatStore.getSnapshot(sessionId).agentStatus.tokenSpeed).toEqual(tokenSpeed);
+      applyStatus(sessionId, { isRunning: true, tokenSpeed: { rate: 'fast' } });
+      expect(makerChatStore.getSnapshot(sessionId).agentStatus.tokenSpeed).toEqual(tokenSpeed);
+      // The host withdrew the speed (suspended mid-generation): the stale reading goes too.
+      applyStatus(sessionId, { isRunning: true, generationReliable: false });
+      expect(makerChatStore.getSnapshot(sessionId).agentStatus.tokenSpeed).toBeUndefined();
+      applyStatus(sessionId, { isRunning: false, status: 'Done' });
+      applyStatus(sessionId, { isRunning: true, status: 'Working' });
+      expect(makerChatStore.getSnapshot(sessionId).agentStatus.tokenSpeed).toBeUndefined();
     } finally {
       makerChatStore.purgeSession(sessionId);
     }

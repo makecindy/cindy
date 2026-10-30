@@ -185,9 +185,8 @@ export function ProviderShareApplyDialog({
             <ShareAvatar displayName={owner} avatarUrl={view.preview.owner.avatarUrl} size="lg" />
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="truncate text-14 font-medium text-[var(--text-primary)]">{owner}</span>
-              <span className="truncate text-12 text-[var(--text-secondary)]">
-                {t('providerShare.apply.providerOnDevice', { provider, device: view.preview.deviceName })}
-              </span>
+              {/* 只写分享的是哪个供应商，不写分享者的电脑名(provider-sharing.md §4.1、§6)。 */}
+              <span className="truncate text-12 text-[var(--text-secondary)]">{provider}</span>
             </div>
           </div>
           <ul className="mt-3.5 flex flex-col gap-2.5">
@@ -245,7 +244,7 @@ export function ProviderShareApplyDialog({
       const label = preview
         ? t('newChat.modelSelector.unified.railRemoteProvider', {
             provider,
-            device: t('providerShare.picker.deviceName', { device: preview.deviceName, owner: preview.owner.displayName }),
+            device: t('providerShare.received.fromOwner', { name: preview.owner.displayName }),
           })
         : null;
       body = (

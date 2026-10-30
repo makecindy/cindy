@@ -14,6 +14,7 @@ export function stampSharedTaskInput(
   delete stamped.sourceDevice;
   delete stamped.sourcePlugin;
   delete stamped.agentOmitsTriggerPrefix;
+  delete stamped.botTaskCoordination;
   if (!task || !capture.isCurrent() || !capture.authorize('input.send')) {
     throw new Error('[PERMISSION_DENIED] SharedTask task access denied');
   }

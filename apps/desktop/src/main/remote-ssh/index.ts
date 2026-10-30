@@ -17,7 +17,8 @@
  * The pool itself is in-memory; on app restart, hydrate() rebuilds it from disk.
  */
 
-import { app, ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, dialog } from 'electron';
+import { t } from '../i18n.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -75,6 +76,7 @@ import { ensurePiManagerDaemon } from '@cindy/maker-remote-ssh';
 import { PROTOCOL_VERSION as PI_MANAGER_PROTOCOL_VERSION } from '@cindy/maker-pi-manager';
 import { invalidateRemotePiPathCaches, redactCredentialText } from '../maker-host/pi-remote-transport.js';
 import { serializeEnvBlock } from './env-block.js';
+import { confirmHostKeyChange } from './host-key-recovery.js';
 import { classifyConnectFailure } from './connect-failure.js';
 import {
   addKeyToAgent,
@@ -1117,6 +1119,117 @@ function patchSshHostPrefOrThrow(
   }
 }
 
+/**
+ * Add a Cindy-managed SSH host. Shared by Settings → 远程连接 and the Agent's
+ * `cindy_ssh` `ssh_add_host` tool so both write the same managed config and
+ * refresh the same pool.
+ */
+export async function addRemoteSshHost(rawHost: unknown): Promise<{ host: HostSnapshotWithPrefs }> {
+  const input = normalizeAddInput(rawHost);
+  await ensureHydrated();
+  return remoteHostHydrationQueue.run(async () => {
+    if (getPool().get(input.id)) {
+      throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
+    }
+    const latest = await readLatestSshConfigOrThrow();
+    if (latest.hosts.some((host) => host.id === input.id)) {
+      throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
+    }
+    const cfg: HostConfig = {
+      id: input.id,
+      hostname: input.hostname,
+      port: input.port ?? 22,
+      user: input.user,
+      authMethod: input.authMethod ?? 'agent',
+      identityFile: input.identityFile,
+      source: 'ssh-config',
+      managedByCindy: true,
+    };
+    let addReceipt: ManagedHostAddReceipt;
+    try {
+      addReceipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
+    } catch (err) {
+      log.warn('failed to write SSH config while adding host', { error: String(err) });
+      if ((err as { code?: string }).code === MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE) {
+        throwIpcError(
+          'SSH_CONFIG_OWNERSHIP_REQUIRED',
+          'The existing Cindy SSH config is not owned by Cindy; add the ownership marker or choose another file.',
+        );
+      }
+      throwIpcError('SSH_CONFIG_IO_FAILED', SSH_CONFIG_WRITE_FAILED_MESSAGE);
+    }
+    let refreshError: unknown;
+    try {
+      // ADD must not disconnect or repoint any existing alias. If an external
+      // editor changed one concurrently, keep the old pool and ask for an
+      // explicit reload. A collision on the newly-added alias is handled
+      // separately and conditionally rolls back Cindy's staged block.
+      await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));
+    } catch (err) {
+      if (err instanceof SshHostOwnershipConflictError) {
+        let rolledBack = false;
+        let rollbackError: unknown;
+        try {
+          rolledBack = await addReceipt.rollback();
+        } catch (error) {
+          rollbackError = error;
+        }
+        log.warn('SSH host ownership changed while adding', {
+          hostId: cfg.id,
+          rolledBack,
+          ...(rollbackError !== undefined
+            ? {
+                rollbackError: rollbackError instanceof Error
+                  ? rollbackError.message
+                  : String(rollbackError),
+              }
+            : {}),
+        });
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'SSH configuration changed while adding the host; reload it and try again.',
+        );
+      }
+      refreshError = err;
+    }
+    // The managed host is already committed. Persist alias-local fields even
+    // when the in-memory refresh failed so the subsequent reload does not
+    // silently lose the form's display name or Agent Proxy choice.
+    patchSshHostPrefOrThrow(cfg.id, {
+      displayName: input.displayName,
+      ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
+    });
+    if (refreshError !== undefined) {
+      // ADD never disconnects existing aliases. The new host remains on disk
+      // and becomes visible after a successful explicit reload.
+      throwReloadRequired('新主机', refreshError);
+    }
+    const host = getPool().get(cfg.id);
+    if (!host) throwReloadRequired('新主机', new Error('host missing after refresh'));
+    log.info('audit: remote ssh host added', {
+      operation: 'remote_ssh_host_add',
+      hostId: cfg.id,
+      hostname: cfg.hostname,
+      user: cfg.user,
+      port: cfg.port,
+      authMethod: cfg.authMethod,
+    });
+    // Settings 与 Agent 添加共用这条推送：已打开的主机列表会就地插入新主机。
+    broadcastStatus(host.snapshot());
+    return { host: withPrefs(host.snapshot()) };
+  });
+}
+
+/** Re-read ~/.ssh/config into the pool, as Settings' reload button does. */
+export async function reloadRemoteSshConfig(): Promise<ReturnType<typeof currentRemoteSshListResult>> {
+  try {
+    await hydrateRemoteHosts();
+  } catch (err) {
+    log.warn('failed to reload SSH config', { error: String(err) });
+  }
+  return currentRemoteSshListResult();
+}
+
 export function registerRemoteSshIpc(): void {
   if (registered) return;
   registered = true;
@@ -1160,107 +1273,12 @@ export function registerRemoteSshIpc(): void {
 
   ipcMain.handle(REMOTE_SSH_INVOKE.RELOAD_CONFIG, async (event) => {
     assertTrustedAppRendererEvent(event);
-    try {
-      await hydrateRemoteHosts();
-    } catch (err) {
-      log.warn('failed to reload SSH config', { error: String(err) });
-    }
-    return currentRemoteSshListResult();
+    return reloadRemoteSshConfig();
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.ADD, async (event, rawHost: unknown) => {
     assertTrustedAppRendererEvent(event);
-    const input = normalizeAddInput(rawHost);
-    await ensureHydrated();
-    return remoteHostHydrationQueue.run(async () => {
-      if (getPool().get(input.id)) {
-        throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
-      }
-      const latest = await readLatestSshConfigOrThrow();
-      if (latest.hosts.some((host) => host.id === input.id)) {
-        throwIpcError('ALREADY_EXISTS', `host already exists: ${input.id}`);
-      }
-      const cfg: HostConfig = {
-        id: input.id,
-        hostname: input.hostname,
-        port: input.port ?? 22,
-        user: input.user,
-        authMethod: input.authMethod ?? 'agent',
-        identityFile: input.identityFile,
-        source: 'ssh-config',
-        managedByCindy: true,
-      };
-      let addReceipt: ManagedHostAddReceipt;
-      try {
-        addReceipt = await addManagedHostWithInclude(cfg, sshConfigPath, managedSshConfigPath);
-      } catch (err) {
-        log.warn('failed to write SSH config while adding host', { error: String(err) });
-        if ((err as { code?: string }).code === MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE) {
-          throwIpcError(
-            'SSH_CONFIG_OWNERSHIP_REQUIRED',
-            'The existing Cindy SSH config is not owned by Cindy; add the ownership marker or choose another file.',
-          );
-        }
-        throwIpcError('SSH_CONFIG_IO_FAILED', SSH_CONFIG_WRITE_FAILED_MESSAGE);
-      }
-      let refreshError: unknown;
-      try {
-        // ADD must not disconnect or repoint any existing alias. If an external
-        // editor changed one concurrently, keep the old pool and ask for an
-        // explicit reload. A collision on the newly-added alias is handled
-        // separately and conditionally rolls back Cindy's staged block.
-        await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));
-      } catch (err) {
-        if (err instanceof SshHostOwnershipConflictError) {
-          let rolledBack = false;
-          let rollbackError: unknown;
-          try {
-            rolledBack = await addReceipt.rollback();
-          } catch (error) {
-            rollbackError = error;
-          }
-          log.warn('SSH host ownership changed while adding', {
-            hostId: cfg.id,
-            rolledBack,
-            ...(rollbackError !== undefined
-              ? {
-                  rollbackError: rollbackError instanceof Error
-                    ? rollbackError.message
-                    : String(rollbackError),
-                }
-              : {}),
-          });
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'SSH configuration changed while adding the host; reload it and try again.',
-          );
-        }
-        refreshError = err;
-      }
-      // The managed host is already committed. Persist alias-local fields even
-      // when the in-memory refresh failed so the subsequent reload does not
-      // silently lose the form's display name or Agent Proxy choice.
-      patchSshHostPrefOrThrow(cfg.id, {
-        displayName: input.displayName,
-        ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
-      });
-      if (refreshError !== undefined) {
-        // ADD never disconnects existing aliases. The new host remains on disk
-        // and becomes visible after a successful explicit reload.
-        throwReloadRequired('新主机', refreshError);
-      }
-      const host = getPool().get(cfg.id);
-      if (!host) throwReloadRequired('新主机', new Error('host missing after refresh'));
-      log.info('audit: remote ssh host added', {
-        operation: 'remote_ssh_host_add',
-        hostId: cfg.id,
-        hostname: cfg.hostname,
-        user: cfg.user,
-        port: cfg.port,
-        authMethod: cfg.authMethod,
-      });
-      return { host: withPrefs(host.snapshot()) };
-    });
+    return addRemoteSshHost(rawHost);
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.UPDATE, async (event, rawHost: unknown) => {
@@ -1412,6 +1430,43 @@ export function registerRemoteSshIpc(): void {
       });
       return { ok: true as const };
     });
+  });
+
+  // Local UI only: trust changes require a native confirmation with main-owned details.
+  ipcMain.handle('maker:remote-ssh:review-host-key', async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = requireString(requireObject(args).id, 'id');
+    const host = getPool().get(id);
+    if (!host) throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    const store = getSharedHostKeyStore();
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent) throwIpcError('SSH_CONNECT_FAILED', 'The requesting window is no longer available.');
+    try {
+      const updated = await confirmHostKeyChange({
+        getHost: () => getPool().get(id),
+        store,
+        isWindowAlive: () => !parent.isDestroyed(),
+        confirm: async (mismatch) => {
+          const result = await dialog.showMessageBox(parent, {
+            type: 'warning',
+            title: t('settings.remote.hostKey.title'),
+            message: t('settings.remote.hostKey.explanation').replace('{{host}}', () => mismatch.host),
+            detail: t('settings.remote.hostKey.details')
+              .replace('{{trusted}}', () => mismatch.trusted)
+              .replace('{{presented}}', () => mismatch.presented)
+              .replace('{{file}}', () => store.filePath),
+            buttons: [t('settings.remote.hostKey.cancel'), t('settings.remote.hostKey.trust')],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          });
+          return result.response === 1;
+        },
+      });
+      return { updated };
+    } catch {
+      throwIpcError('SSH_CONNECT_FAILED', t('settings.remote.hostKey.updateFailed'));
+    }
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.CONNECT, async (_event, args: unknown) => {

@@ -115,3 +115,17 @@ export function resolveSettingsSearchEntry(
 export function resolveSettingsSearchTarget(tab: SettingsTab, section: string | null): string | null {
   return resolveSettingsSearchEntry(tab, section)?.targetId ?? null;
 }
+
+/**
+ * 外观设置原在「通用」、回复动效原在「个性化」。拆出「外观」分区后,旧 section 深链
+ * (如 ?section=appearance、?tab=personalization&section=streamFade)在原分区已解析
+ * 不到、但能在外观分区解析到时,应落到外观分区。
+ */
+export function isLegacyAppearanceDeepLink(rawTab: string | null, section: string | null): boolean {
+  const legacyTab = rawTab ?? 'general';
+  return (
+    (legacyTab === 'general' || legacyTab === 'personalization') &&
+    resolveSettingsSearchEntry(legacyTab, section) === null &&
+    resolveSettingsSearchEntry('appearance', section) !== null
+  );
+}

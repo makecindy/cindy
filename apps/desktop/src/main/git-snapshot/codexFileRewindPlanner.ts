@@ -7,6 +7,7 @@
  */
 
 import type { SnapshotKind } from './snapshotTrailers';
+import type { SnapshotAttempt } from './snapshotAttemptStore';
 
 /** A visible user message in ascending conversation order. */
 export interface CodexRewindUserMessage {
@@ -31,6 +32,7 @@ export interface CodexRewindSavepoint {
   label?: string;
   /** Shadow after-edit only: turn-start savepoint the delta is based on. */
   baselineCommit?: string;
+  attemptId?: string;
 }
 
 /** Repository context known before planning file rewind. */
@@ -67,6 +69,8 @@ export interface BuildCodexFileRewindPlanInput {
   targetMessageClientId: string;
   repo: CodexFileRewindRepoContext;
   userMessages: readonly CodexRewindUserMessage[];
+  /** Host always supplies the durable journal; null is an unreadable journal. */
+  snapshotAttempts?: readonly SnapshotAttempt[] | null;
 }
 
 export interface CodexFileRewindPlanCommit {
@@ -197,6 +201,26 @@ export function buildCodexFileRewindPlan(
     input.userMessages.map((message, index) => [message.clientId, index]),
   );
 
+  // No Git marker exists if the baseline itself timed out. A previous completion
+  // on the SAME message must never cover that new dispatch, even after restart.
+  if (input.snapshotAttempts === null) {
+    return { ...base, mode: 'conversation-only', fallbackReason: 'savepoint-gap' };
+  }
+  if (input.snapshotAttempts) {
+    const completed = new Map(repo.savepointsNewestFirst.filter((point) =>
+      point.sessionId === input.sessionId && point.source === 'shadow' &&
+      point.kind === 'after-edit' && point.baselineCommit && point.attemptId,
+    ).map((point) => [point.attemptId!, point.anchor]));
+    const recorded = new Set(input.snapshotAttempts.map((attempt) => attempt.id));
+    const missing = input.snapshotAttempts.some((attempt) =>
+      (!attempt.anchor || anchorsToRevert.has(attempt.anchor)) &&
+      (!completed.has(attempt.id) || completed.get(attempt.id) !== attempt.anchor));
+    const lostJournal = repo.savepointsNewestFirst.some((point) =>
+      point.sessionId === input.sessionId && point.attemptId && point.anchor &&
+      anchorsToRevert.has(point.anchor) && !recorded.has(point.attemptId));
+    if (missing || lostJournal) return { ...base, mode: 'conversation-only', fallbackReason: 'savepoint-gap' };
+  }
+
   // The two savepoint generations are scanned independently: each bucket is
   // newest-first on its own timeline (branch history vs hidden ref chain),
   // and blocking-marker position math must not mix the two.
@@ -234,11 +258,32 @@ export function buildCodexFileRewindPlan(
   }
 
   if (shadow.selected.length > 0) {
+    // A best-effort Git gap marker can itself fail. Require positive evidence
+    // for EVERY visible turn, not just the after-edits that happened to survive.
+    // New automatic captures also publish unchanged trees as completion records.
+    // Older no-op turns without completion evidence conservatively degrade.
+    const covered = new Set(shadow.selected.map((savepoint) => savepoint.anchor));
+    const completedBaselines = new Set(shadow.selected.map((savepoint) => savepoint.baselineCommit));
+    const incompleteStart = repo.savepointsNewestFirst.some((savepoint) =>
+      savepoint.source === 'shadow' && savepoint.sessionId === input.sessionId &&
+      savepoint.kind === 'turn-start' &&
+      (!savepoint.anchor || anchorsToRevert.has(savepoint.anchor)) &&
+      !completedBaselines.has(savepoint.commit));
+    if (incompleteStart || [...anchorsToRevert].some((anchor) => !covered.has(anchor))) {
+      return { ...base, mode: 'conversation-only', fallbackReason: 'savepoint-gap' };
+    }
     return buildRestorePlan(base, repo, shadow.selected);
   }
 
   if (legacy.selected.length === 0) {
     return { ...base, mode: 'conversation-only', fallbackReason: 'no-savepoints' };
+  }
+
+  // A failed new baseline may leave only legacy history. Missing messages must
+  // not disappear from the file-rewind range merely because no marker was saved.
+  const coveredLegacy = new Set(legacy.selected.map((savepoint) => savepoint.anchor));
+  if ([...anchorsToRevert].some((anchor) => !coveredLegacy.has(anchor))) {
+    return { ...base, mode: 'conversation-only', fallbackReason: 'savepoint-gap' };
   }
 
   const revertSet = new Set(legacy.selected.map((savepoint) => savepoint.commit));

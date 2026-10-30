@@ -36,6 +36,7 @@ const COLOR_EXEMPT = [/Html\.ts$/i, /src\/session\/ImageLightbox\.tsx$/, /src\/s
 /** 组件几何 / 特殊语义的登记豁免:file 后缀匹配 + 行内容包含 snippet 即放行。 */
 const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
   { file: 'src/session/MobileComposerInputRow.tsx', snippet: 'borderRadius: 0', reason: 'Unframed child delegates its contour to native glass' },
+  { file: 'src/session/CompanionGlanceSheet.tsx', snippet: 'borderRadius: 26', reason: '近况 inset grouped 卡片对齐系统 sheet Section 的 26pt 圆角(原型 r1.1)' },
   {
     file: 'src/session/MobileComposerInputRow.tsx',
     snippet: 'borderRadius: 30',

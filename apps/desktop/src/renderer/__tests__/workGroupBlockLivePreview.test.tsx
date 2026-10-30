@@ -24,6 +24,8 @@ vi.mock('@/components/chat/AgentActionRow', () => ({
     status?: 'running' | 'done';
     toolResult?: string;
     intentOverride?: { action: string; target?: string };
+    descriptorOverride?: { kind: string };
+    onActivateOverride?: () => void;
   }) => {
     const toolInput = props.message.toolInput as { command?: unknown } | undefined;
     const command = typeof toolInput?.command === 'string'
@@ -37,7 +39,9 @@ vi.mock('@/components/chat/AgentActionRow', () => ({
         'data-result': props.toolResult,
         'data-intent': props.intentOverride?.action,
         'data-target': props.intentOverride?.target,
+        'data-descriptor': props.descriptorOverride?.kind,
         'aria-label': `chat.agentActionRow.status.${props.status ?? 'done'}`,
+        onClick: props.onActivateOverride,
       },
       command,
     );
@@ -65,10 +69,12 @@ import {
 } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { groupWorkRuns, type RenderItem, type WorkGroupChildItem } from '@/components/chat/messageWorkGroups';
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 beforeEach(() => expandMemory.reset());
 
@@ -127,6 +133,119 @@ function clickGroup(label: string) {
   if (!button) throw new Error(`Missing work-group button: ${label}`);
   fireEvent.click(button);
 }
+
+// #6351: production grouping feeds the real disclosure/Collapse/state store.
+// Body callbacks are plain text here; Markdown formatting is not this contract.
+// Unlike a boolean projection assertion, an old grouper leaves failed welcomes
+// mounted in the DOM, and a broken disclosure makes the original text unreadable.
+function samplingTimeline(input: RenderItem[], streaming: boolean) {
+  const blockChild = (item: WorkGroupChildItem): WorkGroupChild => {
+    if (item.type === 'work_group') return { kind: 'group', key: item.key,
+      blockId: `work:${item.key.slice('work-'.length)}`, durationMs: item.durationMs, isStreaming: item.isStreaming,
+      childItems: item.children.map(blockChild) };
+    if (item.type === 'tool_segment') return tools(item.key, item.toolCalls, item.resultMap, item.settledIds);
+    if (item.type === 'message') return item.message.role === 'thinking'
+      ? thinking(item.message) : rendered(item.key, item.message.content);
+    throw new Error('Unexpected sampling fixture child');
+  };
+  return createElement('div', null, ...groupWorkRuns(input, streaming).map(item => {
+    if (item.type === 'work_group') return createElement('section', { key: item.key, 'data-testid': item.key },
+      createElement(WorkGroupBlock, { blockId: `work:${item.key.slice('work-'.length)}`, isStreaming: item.isStreaming,
+        durationMs: item.durationMs, childItems: item.children.map(blockChild) }));
+    if (item.type === 'message') return createElement('p', { key: item.key, 'data-testid': item.key }, item.message.content);
+    throw new Error('Unexpected sampling fixture item');
+  }));
+}
+
+describe('failed sampling work-group disclosure (#6351)', () => {
+  const message = (id: string, role: ChatMessage['role'], content: string,
+    extra: Partial<ChatMessage> = {}): RenderItem => ({ type: 'message', key: id,
+    message: { clientId: id, role, content, ...extra } });
+  it.each(['same-turn success', 'stopped then manual recovery'] as const)(
+    'keeps failed welcomes auditable without stacking replies through %s', (ending) => {
+      // Exercise the real reduced-motion Collapse path without real timer waits.
+      vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+      const failed = [message('u1', 'user', 'Start'),
+        message('f1', 'assistant', 'First failed welcome', { failedSamplingAttempt: true }),
+        message('f2', 'assistant', 'Second failed welcome', { failedSamplingAttempt: true })];
+      const view = render(samplingTimeline(failed, true));
+      expect(screen.queryByText('First failed welcome')).toBeNull();
+      expect(screen.queryByText('Second failed welcome')).toBeNull();
+      const header = screen.getByTestId('work-f1').querySelector('button')!;
+      expect(header.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(header);
+      expect(screen.getByText('First failed welcome')).toBeTruthy();
+      expect(screen.getByText('Second failed welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        fireEvent.click(header);
+        view.rerender(samplingTimeline([...failed, message('failure', 'error', 'Reply stopped')], false));
+        expect(screen.queryByText('First failed welcome')).toBeNull();
+        expect(screen.queryByText('Second failed welcome')).toBeNull();
+        expect(screen.getByText('Reply stopped')).toBeTruthy();
+        fireEvent.click(screen.getByTestId('work-f1').querySelector('button')!);
+      }
+      const completed = [...failed,
+        ...(ending === 'same-turn success' ? [] : [message('failure', 'error', 'Reply stopped'),
+          message('u2', 'user', 'Continue')]),
+        message('commentary', 'assistant', 'Accepted commentary', { assistantPhase: 'commentary' }),
+        message('intro', 'assistant', 'Accepted introduction'),
+        message('final', 'assistant', 'Successful welcome', { turnCompleted: true })];
+      view.rerender(samplingTimeline(completed, false));
+      // Explicit commentary joins the completed summary; the inner failed group
+      // retains its audit expansion when that new outer summary is opened.
+      const completedWork = screen.getByTestId(ending === 'same-turn success' ? 'work-summary-f1' : 'work-f1');
+      if (ending === 'same-turn success') fireEvent.click(completedWork.querySelector('button')!);
+      expect(completedWork.textContent).toContain('First failed welcome');
+      expect(completedWork.textContent).not.toContain('Successful welcome');
+      fireEvent.click(completedWork.querySelector('button')!);
+      expect(screen.queryByText('First failed welcome')).toBeNull();
+      expect(screen.queryByText('Second failed welcome')).toBeNull();
+      expect(screen.queryByText('Accepted commentary')).toBeNull();
+      expect(screen.getByText('Accepted introduction')).toBeTruthy();
+      expect(screen.getByText('Successful welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        expect(screen.getByText('Reply stopped')).toBeTruthy();
+        expect(screen.getByText('Continue')).toBeTruthy();
+      }
+      fireEvent.click(completedWork.querySelector('button')!);
+      expect(screen.getByText('First failed welcome')).toBeTruthy();
+      expect(screen.getByText('Second failed welcome')).toBeTruthy();
+      expect(screen.getByText('Successful welcome')).toBeTruthy();
+      if (ending === 'stopped then manual recovery') {
+        fireEvent.click(screen.getByTestId('work-summary-commentary').querySelector('button')!);
+      }
+      expect(screen.getByText('Accepted commentary')).toBeTruthy();
+    });
+
+  it('keeps equal failed prose on each side of steering independently auditable', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    render(samplingTimeline([message('u1', 'user', 'Start'),
+      message('f1', 'assistant', 'Repeated failed welcome', { failedSamplingAttempt: true }),
+      message('steer', 'user', 'Include the new direction', { delivery: 'steer' }),
+      message('f2', 'assistant', 'Repeated failed welcome', { failedSamplingAttempt: true }),
+      message('commentary', 'assistant', 'Accepted commentary', { assistantPhase: 'commentary' }),
+      message('final', 'assistant', 'Successful steered welcome', { turnCompleted: true }),
+    ], false));
+    expect(screen.queryAllByText('Repeated failed welcome')).toHaveLength(0);
+    expect(screen.getByText('Include the new direction')).toBeTruthy();
+    expect(screen.queryByText('Accepted commentary')).toBeNull();
+    expect(screen.getByText('Successful steered welcome')).toBeTruthy();
+    const first = screen.getByTestId('work-f1');
+    const second = screen.getByTestId('work-summary-f2');
+    fireEvent.click(second.querySelector('button')!);
+    expect(screen.getByText('Accepted commentary')).toBeTruthy();
+    fireEvent.click(first.querySelector('button')!);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
+    expect(first.textContent).toContain('Repeated failed welcome');
+    expect(second.textContent).not.toContain('Repeated failed welcome');
+    // The summary's second disclosure is the independently retained failed sample.
+    fireEvent.click(second.querySelectorAll('button')[1]);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(2);
+    fireEvent.click(first.querySelector('button')!);
+    expect(screen.getAllByText('Repeated failed welcome')).toHaveLength(1);
+    expect(screen.getByText('Successful steered welcome')).toBeTruthy();
+  });
+});
 
 describe('WorkGroupBlock — running latest-five preview', () => {
   it('keeps teammate execution collapsed while streaming and preserves explicit expansion at completion', async () => {
@@ -641,5 +760,63 @@ describe('WorkGroupBlock — running latest-five preview', () => {
 
     expect(screen.getAllByLabelText('chat.agentActionRow.status.done')).toHaveLength(2);
     expect(screen.getAllByLabelText('chat.agentActionRow.status.running')).toHaveLength(1);
+  });
+});
+
+describe('WorkGroupBlock — Host-projected running lines', () => {
+  const deferred = (lines?: import('@cindy/maker-shared/message-window').HistoryWorkLine[]) => ({
+    owner: {}, key: 'work-remote', expanded: false, loading: false, failed: false,
+    toggle: vi.fn(), retry: vi.fn(), setVisible: vi.fn(), ...(lines ? { lines } : {}),
+  });
+  const placeholder = thinking({ ...mkThinking('placeholder', ''), thinkingRedacted: true });
+
+  it('renders Host lines without asking for the detail preview, and a line opens the group', () => {
+    const remote = deferred([
+      { kind: 'tool', key: 'c1', toolName: 'exec', status: 'done',
+        descriptor: { kind: 'command', toolName: 'exec', command: 'pnpm test', intent: { action: 'test' } } },
+      { kind: 'thinking', key: 'c2', text: 'Checking the failing case' },
+    ]);
+    const { container } = render(createElement(WorkGroupBlock, {
+      blockId: 'work:remote', isStreaming: true, childItems: [placeholder], deferred: remote,
+    }));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
+    expect(screen.getByTestId('direct-tool').getAttribute('data-descriptor')).toBe('command');
+    expect(screen.getByText('Checking the failing case')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('direct-tool'));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(true, false);
+  });
+
+  it('keeps the Host lines on screen after expanding until detail rows arrive', () => {
+    const lines = [{ kind: 'thinking' as const, key: 'c2', text: 'Checking the failing case' }];
+    const props = {
+      blockId: 'work:remote-hold', isStreaming: true,
+      childItems: [rendered('detail', 'Every detail row')],
+    };
+    const { container, rerender } = render(createElement(WorkGroupBlock, {
+      ...props, deferred: { ...deferred(lines), awaitingDetails: true },
+    }));
+    clickGroup('chat.workGroup.working');
+    expect(container.querySelector('[data-live-work-preview]')).not.toBeNull();
+    expect(screen.getByText('Checking the failing case')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-progress')).toBeNull();
+    // The detail body is already open, so the handoff below swaps rows without replaying its expansion.
+    const body = container.querySelector('.grid');
+    expect(body).not.toBeNull();
+
+    rerender(createElement(WorkGroupBlock, {
+      ...props, deferred: { ...deferred(lines), awaitingDetails: false },
+    }));
+    expect(container.querySelector('[data-live-work-preview]')).toBeNull();
+    expect(container.querySelector('.grid')).toBe(body);
+    expect(screen.getByTestId('assistant-progress').textContent).toBe('Every detail row');
+  });
+
+  it('keeps the detail preview for a Host that sends no lines', () => {
+    const remote = deferred();
+    render(createElement(WorkGroupBlock, {
+      blockId: 'work:remote-old', isStreaming: true, childItems: [placeholder], deferred: remote,
+    }));
+    expect(remote.setVisible).toHaveBeenLastCalledWith(false, true);
   });
 });

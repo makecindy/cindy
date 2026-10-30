@@ -1,5 +1,5 @@
 import type { VoiceInputErrorCode } from '@cindy/voice-input-core';
-import { VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../shared/voiceInputErrors';
+import { VOICE_CONVERSATION_ACTIVE_MESSAGE, VOICE_INPUT_RATE_LIMITED_MESSAGE } from '../../shared/voiceInputErrors';
 
 /**
  * i18n keys for the failures the voice controller classifies itself. Their
@@ -22,6 +22,7 @@ export function isVoiceInputServiceConnectionError(message: string): boolean {
 
 /** Resolve known messages at display time using this renderer's current locale. */
 export function getVoiceInputErrorMessageKey(message: string): string | undefined {
+  if (message === VOICE_CONVERSATION_ACTIVE_MESSAGE) return 'bots.voiceMode.finishBeforeDictation';
   if (message === VOICE_INPUT_RATE_LIMITED_MESSAGE) return 'voiceInputOverlay.rateLimited';
   if (isVoiceInputServiceConnectionError(message)) return 'voiceInputOverlay.asrServiceUnavailable';
   return undefined;

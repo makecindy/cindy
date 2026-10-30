@@ -1,4 +1,5 @@
-import * as SelectPrimitive from '@radix-ui/react-select';
+import { SelectParts as SelectPrimitive } from './select-parts';
+export { SelectParts } from './select-parts';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AriaAttributes, ReactNode } from 'react';
@@ -23,6 +24,8 @@ export interface SelectProps {
   onOpenChange?(open: boolean): void;
   disabled?: boolean;
   className?: string;
+  /** Size a compact trigger's menu independently; ordinary fields keep equal width. */
+  contentClassName?: string;
   'aria-describedby'?: string;
   'aria-invalid'?: AriaAttributes['aria-invalid'];
   'aria-required'?: AriaAttributes['aria-required'];
@@ -44,6 +47,7 @@ export function Select({
   onOpenChange,
   disabled,
   className,
+  contentClassName,
   'aria-describedby': describedBy,
   'aria-invalid': invalid,
   'aria-required': required,
@@ -91,7 +95,10 @@ export function Select({
           align="end"
           sideOffset={4}
           collisionPadding={8}
-          className="z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]"
+          className={cn(
+            'z-[10010] w-[var(--radix-select-trigger-width)] max-h-[var(--radix-select-content-available-height)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-13 text-[var(--text-primary)] [-webkit-app-region:no-drag]',
+            contentClassName,
+          )}
         >
           <SelectPrimitive.ScrollUpButton className="flex h-6 items-center justify-center">
             <ChevronUp size={14} aria-hidden="true" />
@@ -103,7 +110,7 @@ export function Select({
                 value={option.value}
                 disabled={option.disabled}
                 title={option.title ?? (truncateOptions ? option.label : undefined)}
-                className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[state=checked]:bg-[var(--surface-chip)] data-[highlighted]:bg-[var(--surface-hover)] data-[disabled]:opacity-60"
+                className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[disabled]:opacity-60"
               >
                 {truncateOptions ? (
                   <span className="min-w-0 flex-1 truncate">

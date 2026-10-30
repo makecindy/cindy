@@ -15,6 +15,11 @@
  * 与「会话内切来源」同一口径,不在本函数重复一套。
  */
 
+import {
+  effectiveSourceIdForModel,
+  getModel,
+  type ProviderView,
+} from '@cindy/model-providers';
 import type { AgentCapabilities, AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
@@ -23,8 +28,8 @@ export interface RemoteDraftDefaults {
   model?: string;
   /** false = 被控端明确未在 New Maker picker 选过模型；undefined = 旧端未知。 */
   modelChosenByUser?: boolean;
-  effort?: string;
-  fastMode?: boolean;
+  effort?: string | null;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   providerId?: string | null;
   /**
@@ -32,7 +37,7 @@ export interface RemoteDraftDefaults {
    * 按目标 model id 查这两张表还原被控端记的值;旧版被控端不回 → undefined → 回落该模型 capabilities 默认。
    */
   effortByModel?: Record<string, string>;
-  fastModeByModel?: Record<string, boolean>;
+  fastModeByModel?: Record<string, boolean | 'ultrafast'>;
   /**
    * 被控端 providerModelMemory 全量快照;`${agent}:*` 是模型级全局预设,
    * `${agent}:${providerId}` 是旧 v2 兼容副本。device-link 草稿列表行据此镜像被控端预设;
@@ -40,7 +45,7 @@ export interface RemoteDraftDefaults {
    */
   providerModelMemory?: Record<
     string,
-    { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
+    { effortByModel: Record<string, string>; fastByModel: Record<string, boolean | 'ultrafast'> }
   >;
   /**
    * 被控端「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段)。控制端远程草稿
@@ -53,8 +58,8 @@ export interface RemoteDraftDefaults {
 /** 校准后可直接 seed 控制端草稿 holder 的一组值。 */
 export interface DeviceLinkDraftSelection {
   model: string;
-  effort: Effort;
-  fastMode: boolean;
+  effort: Effort | null;
+  fastMode: boolean | 'ultrafast';
   /** 仍是被控端支持的权限档则带上;否则 undefined(由 ChatInput 回落自身默认)。 */
   permissionMode?: PermissionMode;
   /** 来源透传,合法性交 ChatInput 校准;null = 跟随被控端默认路由。 */
@@ -62,21 +67,59 @@ export interface DeviceLinkDraftSelection {
 }
 
 /**
- * 判断同一远程草稿是否应在 capabilities 刷新后重新校准。
- * 新设备或 Agent 始终需要 seed；同一目标只有在被控端明确从未选过模型、且控制端也尚未
- * 编辑运行配置时才允许重校准。旧端的未知状态与任一侧的显式选择都必须保守保留。
+ * 新设备或 Agent 始终需要 seed；同一目标的新默认可更新未编辑的草稿。
+ * 仅能力刷新时，仍须被控端明确从未选过模型才重新选区域默认。
  */
 export function shouldReseedDeviceLinkDraftDefaults(input: {
   currentSeedKey: string | null;
   nextSeedKey: string;
   capabilitiesChanged: boolean;
+  defaultsChanged?: boolean;
   controllerTouched: boolean;
   remoteModelChosenByUser: boolean | undefined;
 }): boolean {
   if (input.currentSeedKey !== input.nextSeedKey) return true;
   return (
-    input.capabilitiesChanged && !input.controllerTouched && input.remoteModelChosenByUser === false
+    !input.controllerTouched && (input.defaultsChanged === true
+      || (input.capabilitiesChanged && input.remoteModelChosenByUser === false))
   );
+}
+
+/** worktree 勾选镜像的一帧输入:当前草稿目标设备 + 当时的远端草稿快照(按引用比较)。 */
+export interface DeviceLinkWorktreeEnabledFrame {
+  deviceId: string | null;
+  remoteDraftState: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    value: Pick<RemoteDraftDefaults, 'worktreeEnabled'> | null;
+  };
+}
+
+/**
+ * device-link 草稿的 worktree 勾选 = 被控端勾选记忆的镜像。返回要写入的勾选值,
+ * null = 保持当前显示不变。
+ *
+ *   - 切设备:先回到默认未勾选;若这一帧的快照对象仍是上一帧那份(属于上一台设备),
+ *     不得用它播种新设备,等新设备自己的快照到达。
+ *   - 切设备时同一批更新里就带来了新设备快照(设备域浏览器 inline 拉取后直接 seed,
+ *     且会跳过 hook 的再次拉取):必须立刻采用,否则此后再无快照变化能把勾选恢复,
+ *     被控端已勾选 worktree 却静默按普通会话建在默认分支上。
+ *   - 同设备:快照 ready 且带明确 boolean 才采用;缺字段 / 拉取中保留最后镜像。
+ */
+export function resolveDeviceLinkWorktreeEnabled(
+  previous: DeviceLinkWorktreeEnabledFrame | null,
+  current: DeviceLinkWorktreeEnabledFrame,
+): boolean | null {
+  const deviceChanged = !previous || previous.deviceId !== current.deviceId;
+  const snapshotFromPreviousDevice =
+    deviceChanged && previous?.remoteDraftState === current.remoteDraftState;
+  const remotePreference =
+    current.remoteDraftState.status === 'ready'
+      ? current.remoteDraftState.value?.worktreeEnabled
+      : undefined;
+  if (!snapshotFromPreviousDevice && typeof remotePreference === 'boolean') {
+    return remotePreference;
+  }
+  return deviceChanged ? false : null;
 }
 
 /**
@@ -97,6 +140,7 @@ export function resolveDeviceLinkDraftDefaults(
   remoteDraft: RemoteDraftDefaults | null,
   targetModel?: string,
   agentKind?: AgentKind,
+  providers?: ProviderView[],
 ): DeviceLinkDraftSelection {
   const models = capabilities.availableModels;
   const providerId = remoteDraft?.providerId ?? null;
@@ -128,7 +172,7 @@ export function resolveDeviceLinkDraftDefaults(
   if (models.length === 0) {
     return {
       model: wantedModelId ?? '',
-      effort: (remoteDraft?.effort as Effort) ?? 'high',
+      effort: (remoteDraft?.effort as Effort | null | undefined) ?? 'high',
       fastMode: false,
       permissionMode,
       providerId,
@@ -136,6 +180,21 @@ export function resolveDeviceLinkDraftDefaults(
   }
 
   const chosen = models.find((m) => m.id === wantedModelId) ?? models[0];
+  const selectedProviderId =
+    agentKind && providers?.length
+      ? remoteDraft?.providerId ??
+        effectiveSourceIdForModel(providers, null, chosen.id, agentKind)
+      : null;
+  const selectedProvider = selectedProviderId
+    ? providers?.find((provider) => provider.id === selectedProviderId)
+    : undefined;
+  const providerModel = selectedProvider && agentKind
+    ? getModel(selectedProvider, chosen.id, agentKind)
+    : undefined;
+  // capabilities.availableModels is a cross-provider union. If the selected source has
+  // its own entry, its effort table is authoritative; otherwise keep the flat snapshot
+  // for old hosts that do not expose provider catalogs.
+  const effortModel = providerModel ?? chosen;
   const globalPreset = agentKind ? remoteDraft?.providerModelMemory?.[`${agentKind}:*`] : undefined;
   const providerPreset =
     agentKind && providerId
@@ -145,24 +204,30 @@ export function resolveDeviceLinkDraftDefaults(
   const isActiveModel = chosen.id === remoteDraft?.model;
   // 新建草稿没有 live 会话需要保护:全局模型预设存在时,即使是首页当前显示模型也优先采用。
   // agentKind 缺失时保留旧调用方语义,方便旧测试 / 兼容入口逐步迁移。
-  // 新快照写 `${agent}:${providerId}`，旧快照仍可能只有 `${agent}:*`。
-  const wantedEffort = (providerPreset?.effortByModel[chosen.id] ??
-    globalPreset?.effortByModel[chosen.id] ??
+  // 新快照写 `${agent}:*` 权威槽;旧快照仍可能只有 `${agent}:${providerId}` 来源副本 —— 全局优先,
+  // 来源兜底(两处 doc 都这么承诺,实现必须同序,否则同模型换来源就换回旧档位)。
+  const wantedEffort = (globalPreset?.effortByModel[chosen.id] ??
+    providerPreset?.effortByModel[chosen.id] ??
     (isActiveModel ? remoteDraft?.effort : remoteDraft?.effortByModel?.[chosen.id])) as
     Effort | undefined;
   const presetFast =
-    providerPreset?.fastByModel[chosen.id] ?? globalPreset?.fastByModel[chosen.id];
+    globalPreset?.fastByModel[chosen.id] ?? providerPreset?.fastByModel[chosen.id];
   const wantedFast =
     presetFast ??
     (isActiveModel
-      ? remoteDraft?.fastMode === true
-      : remoteDraft?.fastModeByModel?.[chosen.id] === true);
+      ? (remoteDraft?.fastMode ?? false)
+      : (remoteDraft?.fastModeByModel?.[chosen.id] ?? false));
+  const supportedEfforts = effortModel.efforts as readonly string[];
 
-  const effort: Effort =
-    wantedEffort && chosen.efforts.includes(wantedEffort)
-      ? wantedEffort
-      : (chosen.defaultEffort ?? chosen.efforts[0] ?? wantedEffort ?? 'high');
-  const fastMode = Boolean(capabilities.hasFastMode && chosen.supportsFastMode && wantedFast);
+  const effort: Effort | null =
+    supportedEfforts.length === 0
+      ? effortModel.effortsUnknown === false
+        ? null
+        : wantedEffort ?? effortModel.defaultEffort ?? 'high'
+      : wantedEffort && supportedEfforts.includes(wantedEffort)
+        ? wantedEffort
+        : (effortModel.defaultEffort ?? supportedEfforts[0] ?? wantedEffort ?? 'high');
+  const fastMode = capabilities.hasFastMode && chosen.supportsFastMode && (wantedFast !== 'ultrafast' || chosen.supportsUltrafastMode === true) ? wantedFast : false;
 
   return { model: chosen.id, effort, fastMode, permissionMode, providerId };
 }

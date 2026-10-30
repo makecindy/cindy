@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { annotatePermissionRequestForUnavailableReview, resolveAutoReviewDecision, type AutoReviewDecision, type InteractionDecision, type InteractionRequest } from '@cindy/maker-core';
+import { annotatePermissionRequestForAutoReview, resolveAutoReviewDecision, type AutoReviewDecision, type InteractionDecision, type InteractionRequest } from '@cindy/maker-core';
 import { getMakerIfReady, reviewAutoPermissionAction } from '../maker-host/index.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
@@ -87,8 +87,7 @@ export async function withAuthorizedImportProbe<T>(
         kind: 'permission', requestId: randomUUID(), toolName: `mcp__companion_connections__${action.tool}`, input: { ...input },
         suggestions: [],
       };
-      const answer = await confirmProbe(sessionId, decision.unavailable
-        ? annotatePermissionRequestForUnavailableReview(request) : request,
+      const answer = await confirmProbe(sessionId, annotatePermissionRequestForAutoReview(request, decision),
       AbortSignal.any([controller.signal, AbortSignal.timeout(HOST_CONFIRM_TIMEOUT_MS)]));
       await assertCurrent();
       // Ignore updatedInput and remembered grants: this decision belongs only

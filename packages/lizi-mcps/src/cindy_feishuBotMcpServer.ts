@@ -23,7 +23,8 @@ import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { FeishuBotToolRegistry, type FeishuBotToolResult } from './cindy_feishuBotToolRegistry';
-import type { FeishuBotMcpHostDeps } from './types.js';
+import { registerFeishuLaneTools } from './cindy_feishuBotLaneTools.js';
+import type { FeishuBotLaneScope, FeishuBotMcpHostDeps } from './types.js';
 
 import descListTools from './prompts/cindy_feishu_bot/tools/list_tools.md?raw';
 import descCallTool from './prompts/cindy_feishu_bot/tools/call_tool.md?raw';
@@ -47,16 +48,16 @@ type FeishuBotToolDescriptions = { [K in keyof typeof D]: string };
  * (organic SlackIM 渠道及其 lizi_slack_bot 已于 2026-07-17 随老 relay 退役。)
  */
 export const SLACK_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 Slack 会话:文字回复直接输出即可(会自动回贴到当前 Slack thread,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Slack 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
+  '\n\n⚠️ 当前是 Slack 会话:文字回复直接输出即可(会自动回贴到当前 Slack thread,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`,系统自动作为 Slack 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
 
 export const TELEGRAM_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 Telegram 会话:文字回复直接输出即可(会自动回贴到当前 Telegram 对话或回复链,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为 Telegram 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
+  '\n\n⚠️ 当前是 Telegram 会话:文字回复直接输出即可(会自动回贴到当前 Telegram 对话或回复链,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`,系统自动作为 Telegram 附件发回,不要用本工具;仅当用户明确说「发飞书或 Lark / 通过飞书或 Lark 通知我」时才走该 IM 通道。';
 
 export const X_HOOK_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是 X 会话:当前账号为付费账号,不受 280 个字符限制,无需针对当前渠道调整回答篇幅;文字回复直接输出即可(系统会自动发回当前 X 会话,无需工具);正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制。在 X 中除附件引用外,尽量避免输出其他 URL 链接,也不要解释或复述这些格式要求;把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
+  '\n\n⚠️ 当前是 X 会话:当前账号为付费账号,不受 280 个字符限制,无需针对当前渠道调整回答篇幅;文字回复直接输出即可(系统会自动发回当前 X 会话,无需工具);正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制。在 X 中除附件引用外,尽量避免输出其他 URL 链接,也不要解释或复述这些格式要求;把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
 export const WECOM_SESSION_CHANNEL_NOTE =
-  '\n\n⚠️ 当前是企业微信会话:文字回复直接输出即可(会自动回复到当前企业微信会话,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为企业微信附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
+  '\n\n⚠️ 当前是企业微信会话:文字回复直接输出即可(会自动回复到当前企业微信会话,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](本机图片绝对路径或 cindy-media://…)`,系统自动作为企业微信附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
 const NOTE_BY_SOURCE: Record<string, string> = {
   'slack-hook': SLACK_HOOK_SESSION_CHANNEL_NOTE,
@@ -101,7 +102,13 @@ const RULES: Record<string, string> = {};
  * chatId or bot owner fallback" into a single `getChatId` result. So this
  * interface omits the host-only accessor and adds the resolved closure.
  */
-export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId'> & {
+export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId' | 'readLaneScope'> & {
+  /**
+   * 当前 tool-call 的飞书逐轮作用域(provider 闭包从 session ctx 解出);null 表示本轮
+   * 不是由飞书消息触发或轮次已结束,轮次内工具一律 fail closed。缺省(未注入)时不注册
+   * 轮次内工具,server 形态与 2026-10 之前字节级一致。
+   */
+  getLaneScope?: () => FeishuBotLaneScope | null;
   /**
    * Resolved receiver chatId for the current tool invocation. The provider
    * closure returns feishu-session chatId when present and falls back to
@@ -109,7 +116,7 @@ export type FeishuBotMcpDeps = Omit<FeishuBotMcpHostDeps, 'getOwnerOpenId'> & {
    * (typically: user has never DM'd the bot). Tools translate null into
    * NO_CHAT_CONTEXT with guidance.
    */
-  getChatId: () => string | null | undefined;
+  getChatId: () => string | null | undefined | Promise<string | null | undefined>;
   /**
    * 会话来源(ctx.vendorOptions.source,session 构建期确定)。Cindy hook 来源给
    * 本 server 全部工具描述追加渠道路由提示——若通道选择交给模型自由判断会
@@ -156,7 +163,7 @@ function registerSendFileToUser(
         .describe('发送给用户看到的文件名,默认用 basename(absPath)'),
     },
     handler: async ({ absPath, displayName }) => {
-      const chatId = deps.getChatId();
+      const chatId = await deps.getChatId();
       if (!chatId) {
         return buildJsonResult(
           {
@@ -223,7 +230,7 @@ function registerSendMessageToUser(
         ),
     },
     handler: async ({ text }) => {
-      const chatId = deps.getChatId();
+      const chatId = await deps.getChatId();
       if (!chatId) {
         return buildJsonResult(
           {
@@ -376,6 +383,8 @@ export function createFeishuBotMcpServer(deps: FeishuBotMcpDeps): McpServer {
 
   registerListToolsEntry(server, registry, d);
   registerCallToolEntry(server, registry, d);
+  // 飞书轮次内的直通工具(顶层具名注册,审批策略能按工具名分档;只在宿主注入作用域读取器时出现)。
+  if (deps.getLaneScope) registerFeishuLaneTools(server, deps.getLaneScope);
 
   return server;
 }

@@ -14,6 +14,9 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -38,8 +41,8 @@ vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar: vi.fn() }));
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   evictDeviceCapabilities: vi.fn(),
   prefetchDeviceCapabilities: vi.fn(async () => {}),
-  useAgentCapabilities: () => ({
-    capabilities: { hasFastMode: false, effortLevels: [], availableModels: [] },
+  useAgentCapabilities: (agent: string) => ({
+    capabilities: { hasFastMode: agent === 'codex', effortLevels: [], availableModels: [] },
     loading: false,
     error: null,
   }),
@@ -98,6 +101,19 @@ const catalogs = vi.hoisted(() => {
           remoteInvocationEnabled: false,
         }),
       ],
+      // 分享来的供应商:控制端经自己的分享通道读到的目录(分享者已收窄到被分享的供应商)。
+      'share:abc': [
+        provider('s-shared', 'S Shared', [['s-model', 'S Model']], { remoteInvocationEnabled: true }),
+      ],
+      'memory-device': [provider('memory-provider', 'Remembered', [], {
+        remoteInvocationEnabled: true,
+        agents: ['codex'],
+        routing: { codex: {} },
+        models: { codex: [{
+          id: 'memory-model', name: 'Remembered Model', contextWindow: 200000,
+          efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: true,
+        }] },
+      })],
     } as Record<string, unknown[]>,
   };
 });
@@ -143,10 +159,22 @@ vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
 vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
   useRemoteClaudeSubscriptionUsage: () => null,
 }));
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: ({ leadAgentDeviceId }: { leadAgentDeviceId?: string | null }) => ({
+    leadAgentDeviceId: leadAgentDeviceId ?? null,
+    devices: [{ deviceId: 'memory-device', name: 'Remote' }],
+  }),
+}));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import {
+  agentDeviceModelMemoryAccessors,
+  __resetForTest as resetDeviceMemory,
+} from '@/state/agentDeviceModelMemory';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
+import { __resetForTest as resetRecentModels, listRecentModels } from '@/state/recentModels';
 
 const devices = [{ deviceId: 'device-c', name: 'Studio' }];
 
@@ -186,10 +214,54 @@ const list = () => screen.getByRole('listbox');
 beforeEach(() => {
   resetEnginePrefs();
   resetFavorites();
+  resetDeviceMemory();
+  resetRecentModels();
 });
 
 afterEach(() => {
   cleanup();
+});
+
+// PR #6830 / Greptile r4359506145: existing panel cases inject remoteAgent directly,
+// so they missed the route wrapper dropping remembered effort/Fast. Exercise the
+// real wrapper and model selection callback (unit/jsdom), with an override that
+// differs from the catalog, both while browsing and when reopening that source.
+describe('统一入口保留远程模型偏好', () => {
+  it.each([null, 'memory-device'])('当前来源为 %s 时选择远程模型沿用其偏好', async (agentDeviceId) => {
+    const memory = agentDeviceModelMemoryAccessors('memory-device');
+    memory.setEffort('codex', 'memory-provider', 'memory-model', 'low');
+    memory.setFast('codex', 'memory-provider', 'memory-model', true);
+    // A matching local provider/model must not borrow this device's memory.
+    memory.setEffort('claude-code', 'a-local', 'a-model', 'low');
+    const onUnifiedSelect = vi.fn(async () => true);
+    render(<ModelRouteSelectorContent
+      agentDeviceId={agentDeviceId}
+      vendorKey="codex" modelId="" effort="high" fastMode={false}
+      onModelChange={vi.fn()} onEffortChange={vi.fn()}
+      onUnifiedSelect={onUnifiedSelect}
+    />);
+    if (!agentDeviceId) {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Remembered · Remote' }));
+      });
+    }
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('Remembered Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelId: 'memory-model', providerId: 'memory-provider', engine: 'codex',
+      effort: 'low', fast: true, agentDevice: { deviceId: 'memory-device', name: 'Remote' },
+    }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'A Local' }));
+    });
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('A Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelId: 'a-model', providerId: 'a-local', effort: 'high', fast: false,
+    }));
+  });
 });
 
 describe('被控电脑上的任务:模型面板列出第三台电脑的远程供应商', () => {
@@ -208,6 +280,23 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
     const remote = screen.getByRole('button', { name: 'C Open · Studio' });
     expect(remote.querySelector('[data-remote-source-mark]')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'C Closed · Studio' })).toBeNull();
+  });
+
+  it('任务仍用 B 本机模型、没有第三台电脑时，也能选择尚未用过的分享供应商', async () => {
+    const shareDevice = { deviceId: 'share:abc', name: '来自 Magi 的分享' };
+    const { onRelocate, onProviderChange } = renderControlledTaskPanel({ devices: [shareDevice] });
+    expect(within(list()).getByText('B Model')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'S Shared · 来自 Magi 的分享' }));
+    });
+    expect(within(list()).queryByText('B Model')).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('S Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onRelocate).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 's-shared', modelId: 's-model', agent: 'claude-code', agentDevice: shareDevice,
+    }));
+    expect(onProviderChange).not.toHaveBeenCalled();
   });
 
   it('浏览第三台电脑的目录,选中那里的模型 = 带着那台电脑换 Agent 位置', async () => {
@@ -246,6 +335,34 @@ describe('被控电脑上的任务:模型面板列出第三台电脑的远程供
     );
     expect(screen.getByRole('button', { name: 'B Main' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'A Local' })).toBeNull();
+  });
+
+  // 2026-10-10 用户反馈:A 远控 B 上 Agent 在分享上的任务,模型显示「模型信息暂不可用」。
+  // 会话视图把本机也收到的那条分享并进候选、目录指向 `share:abc`(判定见 controlledTaskAgentLocation)。
+  it('Agent 在本机也收到了的分享上:打开时停在分享的目录,不显示被控电脑的模型', async () => {
+    const shareDevice = { deviceId: 'share:abc', name: 'Mac Mini · 来自 Magi 的分享' };
+    const { onRelocate } = renderControlledTaskPanel(
+      { devices: [...devices, shareDevice], selectedDeviceId: 'share:abc' },
+      { deviceId: 'share:abc', modelId: 's-model', currentProviderId: 's-shared' },
+    );
+    expect(within(list()).getByText('S Model')).toBeTruthy();
+    expect(within(list()).queryByText('B Model')).toBeNull();
+    expect(
+      screen
+        .getByRole('button', { name: 'S Shared · Mac Mini · 来自 Magi 的分享' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    // 被控电脑那一格还在,选它的模型 = 改回被控电脑运行。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'B Main' }));
+    });
+    const row = within(list()).getByText('B Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(onRelocate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'b-main', modelId: 'b-model', agentDevice: null }),
+    );
   });
 
   it('Agent 所在的第三台电脑离线:仍能回到被控电脑的目录,选中即改回被控电脑运行', async () => {
@@ -335,6 +452,21 @@ describe('远程控制下新建任务:草稿的模型面板同样列出第三台
     expect(onProviderChange).not.toHaveBeenCalled();
   });
 
+  it('新建到 B 的任务可直接选分享模型，提交分享身份供 B 创建远程 Agent', async () => {
+    const shareDevice = { deviceId: 'share:abc', name: '来自 Magi 的分享' };
+    const { onUnifiedSelect, onProviderChange } = renderControlledDraftPanel({ devices: [shareDevice] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'S Shared · 来自 Magi 的分享' }));
+    });
+    await act(async () => {
+      fireEvent.click(within(list()).getByText('S Model').closest('[data-unified-anchor]')!);
+    });
+    expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 's-shared', modelId: 's-model', engine: 'cc', agentDevice: shareDevice,
+    }));
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
   it('Agent 已选在第三台电脑:选回被控电脑的模型带 agentDevice: null', async () => {
     const { onUnifiedSelect } = renderControlledDraftPanel(
       { selectedDeviceId: 'device-c' },
@@ -363,5 +495,66 @@ describe('本机任务不受影响', () => {
     expect(screen.queryByRole('button', { name: 'B Main' })).toBeNull();
     expect(within(list()).getByText('A Model')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'C Open · Studio' })).toBeTruthy();
+  });
+});
+
+// 「最近使用」记录没有设备字段:浏览其他电脑的目录时选中不得写进本机流水(2026-10-08 review P1)。
+// 任务归属判不出草稿 —— 本机草稿的 deviceLinkDeviceId 是 null,所以按**当前浏览的目录**再禁一次。
+describe('本机草稿:浏览其他电脑的目录后选中不写本机「最近」', () => {
+  function renderLocalDraftPanel(
+    remoteAgent: Partial<React.ComponentProps<typeof ModelSelectorContent>['remoteAgent']> = {},
+    props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},
+  ) {
+    const onUnifiedSelect = vi.fn(async () => true);
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'a-model',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'a-local',
+        onProviderChange: vi.fn(),
+        onUnifiedSelect,
+        // 对话入口开的记录开关(草稿 / 已建任务 / 任务内切换都开;定时任务 / IM 等不开)。
+        recordRecentUsage: true,
+        remoteAgent: { devices, selectedDeviceId: null, ...remoteAgent },
+        ...props,
+      }),
+    );
+    return { onUnifiedSelect };
+  }
+
+  it('Agent 落在第三台电脑:浏览那台的目录并选中不记本机历史', async () => {
+    // Agent 在那台电脑 = 目录也跟着那台(deviceId 指向被浏览的电脑)。
+    const { onUnifiedSelect } = renderLocalDraftPanel({ selectedDeviceId: 'device-c' }, {
+      deviceId: 'device-c',
+      modelId: 'c-model',
+      currentProviderId: 'c-open',
+    });
+    expect(within(list()).getByText('C Model')).toBeTruthy();
+    const row = within(list()).getByText('C Model').closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    // 选择本身照常生效(那条模型就在那台电脑跑),只是不落本机「最近」:两台电脑若有同来源
+    // 同模型 id,回到本机会把这条远程记录解析成本机模型,点击就用错运行位置。
+    expect(onUnifiedSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'c-open',
+        modelId: 'c-model',
+        agentDevice: { deviceId: 'device-c', name: 'Studio' },
+      }),
+    );
+    expect(listRecentModels()).toEqual([]);
+  });
+
+  it('对照:Agent 在本机,选本机目录里的模型照常记(禁记只针对浏览的远程目录)', async () => {
+    renderLocalDraftPanel({ selectedDeviceId: null });
+    const row = within(list()).getByText('A Model').closest('[data-unified-anchor]') as HTMLElement;    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(listRecentModels().map((item) => `${item.providerId}:${item.modelId}`)).toEqual([
+      'a-local:a-model',
+    ]);
   });
 });

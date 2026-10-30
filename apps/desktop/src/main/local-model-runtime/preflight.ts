@@ -10,6 +10,9 @@ import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
 import { assertManagedLlamaCppProvider } from './managedLlamaCppProvider.js';
 import { getManagedLlamaCppService } from './llamaCppService.js';
 
+/** A cold Ollama start can take well over 15s; a send waits instead of failing early. */
+export const OLLAMA_SESSION_START_TIMEOUT_MS = 120_000;
+
 function cindyUserDataDir(explicit?: string): string | undefined {
   if (explicit) return explicit;
   try {
@@ -56,6 +59,7 @@ export async function ensureManagedOllamaReadyForSession(opts: {
     platform: process.platform,
     fetchImpl: (url, init) => fetch(url, init),
     userDataDir: cindyUserDataDir(opts.userDataDir),
+    startTimeoutMs: OLLAMA_SESSION_START_TIMEOUT_MS,
   });
   if (ready.kind !== 'ready') {
     throw new Error(

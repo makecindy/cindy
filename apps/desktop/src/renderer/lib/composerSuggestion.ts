@@ -24,8 +24,7 @@ export type ComposerSuggestionActionId =
   | 'new-goal'
   | 'plan-mode'
   | 'collaboration'
-  | 'add-extra-dir'
-  | 'add-writable-dir';
+  | 'add-extra-dir';
 
 export interface ComposerSuggestionAction {
   id: ComposerSuggestionActionId;
@@ -172,7 +171,6 @@ export function buildComposerSuggestionEntries(
       if (
         action.id === 'attach-files'
         || action.id === 'add-extra-dir'
-        || action.id === 'add-writable-dir'
       ) continue;
       entries.push({ kind: 'action', action });
     }
@@ -195,8 +193,6 @@ export function buildComposerSuggestionEntries(
     }
     const addDir = input.actions.find((a) => a.id === 'add-extra-dir');
     if (addDir) entries.push({ kind: 'action', action: addDir });
-    const addWritableDir = input.actions.find((a) => a.id === 'add-writable-dir');
-    if (addWritableDir) entries.push({ kind: 'action', action: addWritableDir });
     return entries;
   }
 

@@ -95,6 +95,16 @@ const SAMPLE = {
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+    { additional_speed_tiers: ['fast', 'ultrafast'] },
+  ])('reads both native cache speed declarations: %j', fields => {
+    const [model] = mapCodexModelsToCatalog({ models: [{ slug: 'gpt-6.1-sol',
+      visibility: 'list', supported_in_api: true, ...fields }] });
+    expect(model).toMatchObject({ supportsFastMode: true, supportsUltrafastMode: true });
+    expect(model.discoveredMetadata?.supportsFastMode).toBe(true);
+  });
+
   it('retains native maximum and explicit image capability separately from defaults', () => {
     const [model] = mapCodexModelsToCatalog({
       models: [
@@ -315,6 +325,22 @@ describe('mapCodexModelsToCatalog', () => {
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  // Account access must survive discovery without inferring it from a GPT model ID.
+  it('only exposes Ultrafast when the account advertises that tier', () => {
+    const base = {
+      id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra',
+      description: '', hidden: false, supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'high', additionalSpeedTiers: [], isDefault: false,
+    };
+    const available = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [{ id: 'ultrafast', name: 'Ultrafast', description: '' }],
+    } as CodexModelListItem]);
+    const unavailable = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [],
+    } as CodexModelListItem]);
+    expect(available[0]?.supportsUltrafastMode).toBe(true);
+    expect(unavailable[0]?.supportsUltrafastMode).toBe(false);
+  });
   it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {

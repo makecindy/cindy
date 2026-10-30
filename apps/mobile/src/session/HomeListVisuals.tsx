@@ -226,6 +226,13 @@ export const homeListStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: lineHeight.subtitle,
     paddingTop: 3,
   },
+  /** 文字形态(单行)下并到标题行尾的定时 / 置顶标记。 */
+  sessionInlineIcons: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 0,
+    gap: spacing.xs,
+  },
   sessionTime: {
     color: colors.textTertiary,
     flexShrink: 0,

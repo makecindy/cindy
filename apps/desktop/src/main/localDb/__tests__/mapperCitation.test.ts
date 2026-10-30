@@ -89,3 +89,24 @@ describe('message mapper internal citation compatibility', () => {
     expect(extractMessagePreview(bounded, 'user')).toBeNull();
   });
 });
+
+describe('message mapper imported cloud replies', () => {
+  const row = (clientId: string, content: unknown, role = 'assistant') => ({
+    id: 'message-1', clientId, sessionId: 'session-1', role, content: JSON.stringify(content),
+    toolUseId: null, agentMeta: null, agentKind: null, createdAt: 1, rewindAt: null,
+  }) as Parameters<typeof messageToCamel>[0];
+
+  it('reads a reply imported as text blocks (stored by earlier versions) as plain text', () => {
+    const blocks = [{ type: 'text', text: '你好，' }, { type: 'text', text: '这是回复' }];
+    expect(messageToCamel(row('cloud-history:m1', blocks)).content).toBe('你好，这是回复');
+    expect(messageToCamel(row('cloud-history:m1', 'plain')).content).toBe('plain');
+  });
+
+  it('leaves other block content and other rows untouched', () => {
+    const blocks = [{ type: 'text', text: 'a' }];
+    expect(messageToCamel(row('client-1', blocks)).content).toEqual(blocks);
+    const mixed = [{ type: 'text', text: 'a' }, { type: 'image', url: 'x' }];
+    expect(messageToCamel(row('cloud-history:m2', mixed)).content).toEqual(mixed);
+    expect(messageToCamel(row('cloud-history:m3', blocks, 'user')).content).toEqual(blocks);
+  });
+});

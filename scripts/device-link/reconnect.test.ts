@@ -17,6 +17,8 @@ import {
   PROTOCOL_VERSION,
 } from "../../packages/device-link/src/protocol";
 import { createSubscriptionReplayScheduler } from "../../apps/desktop/src/main/device-link/subscriptionReplayScheduler";
+import { encodeMessageBodies, versionMessageBody } from '../../apps/desktop/src/main/device-link/sessionMessageReuse';
+import { CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1, type InvokePayload } from '../../packages/device-link/src/index';
 
 const until = (check: () => void) =>
   vi.waitFor(check, { timeout: 8_000, interval: 10 });
@@ -57,6 +59,58 @@ async function setup() {
 }
 
 describe("Device Link over real loopback WebSockets (contract fixture)", () => {
+  it('reuses a full long list message over real sockets on both desktop and mobile', async () => {
+    const relay = await createRelayFixture();
+    cleanups.push(() => relay.close());
+    const host = createClient(relay.url, 'host', true);
+    const phone = createClient(relay.url, 'phone');
+    const desktop = createClient(relay.url, 'desktop', false, { desktop: true });
+    cleanups.push(() => host.close(), () => phone.close(), () => desktop.close());
+    const text = '提前传输的完整聊天内容，打开时直接复用。'.repeat(2000);
+    const row = { id: 'm1', clientId: 'm1', sessionId: SESSION_ID, role: 'assistant', content: text,
+      createdAt: '2026-10-10T00:00:00.000Z' };
+    const page = { version: 1, items: [{ type: 'messages', key: 'm1', messages: [row] }], hasMore: false, nextCursor: null };
+    const wireResults: unknown[] = [];
+    const received = new Set<string>();
+    const subscribed = new Map<string, string[]>();
+    host.client.onFrame(env => {
+      if (!env.src || !env.id) return;
+      if (env.kind === 'link-open') {
+        host.client.sendLinkAccept(env.src, env.id, { appVersion: 'test', allowlistHash: 'fixture' });
+      } else if (env.kind === 'invoke') {
+        const request = env.payload as InvokePayload;
+        if (request.channel === 'device-link:subscribe') {
+          subscribed.set(env.src, (request.args[0] as { topics: string[] }).topics);
+          host.client.sendInvokeResult(env.src, env.id, { ok: true, result: {} });
+        } else {
+          const result = encodeMessageBodies(request.channel, request.args, page);
+          wireResults.push(result);
+          host.client.sendInvokeResult(env.src, env.id, { ok: true, result });
+        }
+      }
+    });
+    host.client.start(); phone.client.start(); desktop.client.start();
+    await until(() => [host, phone, desktop].forEach(peer => expect(peer.client.getStatus()).toBe('online')));
+    for (const [id, controller] of [['phone', phone], ['desktop', desktop]] as const) {
+      controller.client.onFrame(env => { if (env.kind === 'push') received.add(id); });
+      await controller.client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION,
+        appVersion: 'test', capabilities: [CONTROLLER_CAPABILITY_SESSION_LIST_MESSAGES_V1] });
+      await invoke(controller.client, 'host', 'device-link:subscribe', [{ topics: ['sessions'] }]);
+      host.client.sendPush(id, 'local-db:messages:created', { sessionId: SESSION_ID, listMessage: true, message: versionMessageBody(row) });
+    }
+    await until(() => expect(received.size).toBe(2));
+    for (const controller of [phone, desktop]) {
+      const result = await invoke(controller.client, 'host', 'local-db:messages:view', [SESSION_ID, { lazyDetails: true }]);
+      expect(result).toMatchObject(page);
+    }
+    expect([...subscribed.values()]).toEqual([['sessions'], ['sessions']]);
+    for (const result of wireResults) {
+      expect(JSON.stringify(result)).not.toContain(text);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(600);
+    }
+    process.stdout.write(`Message reuse wire evidence: full=${Buffer.byteLength(JSON.stringify(page))} bytes, phone=${Buffer.byteLength(JSON.stringify(wireResults[0]))} bytes, desktop=${Buffer.byteLength(JSON.stringify(wireResults[1]))} bytes; decoded text exact\n`);
+  });
+
   it("runs the explicit external-relay entry against a provisioned fixture without silently falling back", async () => {
     const relay = await createRelayFixture();
     cleanups.push(() => relay.close());

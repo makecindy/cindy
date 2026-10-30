@@ -24,6 +24,8 @@ import { createMakeRemoteProvider } from './remoteProvider.js';
 import { broadcastMakeRemoteChanged } from './remoteBroadcast.js';
 import { projectMakeRemoteCard, type MakeRemoteSnapshot } from './remoteProjection.js';
 import type { CindyMakeCompletionMeta } from '../../shared/cindyMakeSession.js';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
+import { readPersonalRemoteProjection } from './personalRemoteRuntime.js';
 
 const unavailable = () =>
   new RemoteResourceRegistryError('NOT_FOUND', 'Cindy Make task is unavailable');
@@ -38,6 +40,7 @@ const parse = (raw: string | null): Record<string, unknown> => {
 
 /** Account-bound adapter. Only the explicit portable projection leaves this module. */
 export function registerMakeRemoteResources(isRunning: (id: string) => boolean): void {
+  if (!CINDY_MAKE_ENABLED) return;
   let restored:
     { client: ReturnType<typeof getDbClient>; stamp: string; ready: Promise<void> } | undefined;
   const load = async (sessionId: string) => {
@@ -122,6 +125,8 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
     );
     const sharedBuild = readCindyMakeBuildState();
     const merge = cindyMakeManager.getState().upstreamMerge;
+    const personal = await readPersonalRemoteProjection().catch(() => undefined);
+    if (!isCurrent()) throw unavailable();
     const snapshot: MakeRemoteSnapshot = {
       sessionId,
       revision: '',
@@ -137,6 +142,7 @@ export function registerMakeRemoteResources(isRunning: (id: string) => boolean):
       recoverable,
       sourceMergePending:
         !!merge && merge.status !== 'merged' && (merge.hasWorkspace || merge.cancellationRequested),
+      ...(personal ? { personal } : {}),
     };
     snapshot.revision = createHash('sha256')
       .update(JSON.stringify([snapshot, rows[0]?.clientId, session.clearedAt]))

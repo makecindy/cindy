@@ -221,8 +221,12 @@ describe('complete personal Skills with bounded startup projection', () => {
     await seedBotSkillIfMissing(userDataDir, botId, input);
     const collect = () => collectBotOwnSkillMounts(botId, deps());
     expect((await collect()).skills[0].description).toBe('Original');
-    await saveBotSkill(userDataDir, botId, { ...input, description: 'Saved update' });
-    expect((await collect()).skills[0].description).toBe('Saved update');
+    const saved = await saveBotSkill(userDataDir, botId, { ...input, description: 'Saved update' });
+    expect((await collect()).skills[0]).toMatchObject({ description: 'Saved update', updatedAt: saved.record.updatedAt });
+    // Runtime epochs need the persisted revision even for body-only edits at
+    // the same path; the old projection discarded it and sibling chats stayed stale.
+    const bodyEdit = await saveBotSkill(userDataDir, botId, { ...input, description: 'Saved update', body: 'Revised steps' });
+    expect((await collect()).skills[0].updatedAt).toBe(bodyEdit.record.updatedAt);
     await importBotSkillFiles(userDataDir, botId, 'imported', [{ name: 'SKILL.md',
       bytes: Buffer.from('---\nname: imported\ndescription: Imported\n---\nSteps'), executable: false }], () => {});
     expect((await collect()).skills.map(item => item.name)).toEqual(['imported', 'report']);

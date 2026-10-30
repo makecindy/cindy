@@ -55,6 +55,10 @@ function wrap<T>(p: Promise<T>): Promise<T> {
 const getInFlight = new Map<string, Promise<Session>>();
 
 export type SessionListOptions = {
+  /** Local list continuation; does not change the default capped query. */
+  before?: { updatedAt: number; id: string };
+  /** Local renderer-only exact subset, filtered before sorting and pagination. */
+  ids?: string[];
   includePinned?: boolean;
   /** forceRefresh / status 重拉：绕开 main 侧 in-flight 合并。 */
   fresh?: boolean;
@@ -100,7 +104,7 @@ export async function create(body?: {
   model?: string;
   effort?: string;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
   agentKind?: 'cc' | 'codex' | 'pi';
@@ -127,6 +131,11 @@ export async function create(body?: {
    * checkout; the persisted source later drives the `cindy_make` tool injection.
    */
   source?: 'cindy-make';
+  /**
+   * 新建页开始输入时先建出来的未发送任务：只在本机列表可见，清空输入就删掉，
+   * 第一次发送前转为普通任务(见 main/localDb/provisionalSessions.ts)。
+   */
+  provisional?: boolean;
 }): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.create(body));
 }
@@ -181,7 +190,7 @@ export async function update(
     model?: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     /** 计划模式一级开关(与 permissionMode 正交), 与 maker.setPlanMode 双 IPC 协调。 */
     planModeEnabled?: boolean;
     sdkSessionId?: string | null;
@@ -189,6 +198,11 @@ export async function update(
     totalCostUsd?: number;
     contextTokens?: number;
     contextWindow?: number;
+    /**
+     * 任务级工作上下文预算（tokens）；null = 清除显式选择、跟随模型路由默认。
+     * 落库后 main 会把新窗口应用到活实例（空闲冷重建 / 回合中登记 pending）。
+     */
+    contextWindowBudget?: number | null;
     clearedAt?: string | null;
     pinnedAt?: string | null;
     status?: SessionStatus;
@@ -202,21 +216,35 @@ export async function update(
      * 此处仅落盘,使跨重启可恢复(host 加载时回填 session-provider-store)。
      */
     providerId?: string | null;
+    notificationsMuted?: boolean;
   },
 ): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.update(id, patch));
 }
 
 /**
- * 窄口径会话元数据编辑(status / title / pinnedAt = 删/归档/恢复/重命名/置顶)。按来源路由:
+ * 窄口径会话元数据编辑(status / title / pinnedAt / notificationsMuted = 删/归档/恢复/重命名/置顶/静音通知)。按来源路由:
  *   - device-link 远程会话 → 隧道到被控端的 local-db:sessions:patch-meta(allowlist 内的窄口径写)
  *   - 本机会话 → 保持原 update 路径(零行为变更)
  * 通用 update 写任意字段、故意不进 allowlist,所以远程改这些元数据必须走这个专用通道。
+ * notificationsMuted 当前只在本机写:被控端 patch-meta 的 allowlist 不收它(提醒归任务所在的
+ * 那台设备发,入口也对 device-link 任务隐藏),所以这个字段不会经隧道下发。
  */
 export async function patchMeta(
   sessionId: string,
-  patch: { status?: SessionStatus; title?: string; pinnedAt?: string | null },
+  patch: {
+    status?: SessionStatus;
+    title?: string;
+    pinnedAt?: string | null;
+    notificationsMuted?: boolean;
+  },
 ): Promise<Session> {
+  // 「消息免打扰」是**本机**属性（提醒由任务所在的那台设备发出，菜单也对 device-link
+  // 任务隐藏），不随 sticky origin 隧道：被控端 patch-meta 的 allowlist 不收这个字段，
+  // 隧道过去只会抛 INVALID_PARAMS，让开关白回滚一次。
+  if (patch.notificationsMuted !== undefined) {
+    return update(sessionId, { notificationsMuted: patch.notificationsMuted });
+  }
   // Metadata writes must stay pinned to the last known device while the
   // relay's session mirror is being rebuilt. Otherwise an archived remote
   // task's auto-unarchive can fall through to the controller's local DB.

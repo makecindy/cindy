@@ -37,6 +37,7 @@ function fixture() {
   const deps: BotRemoteEditorDeps = {
     owner: () => owner, assertOwner: captured => { if (captured !== owner) throw Error('OWNER_CHANGED'); },
     read: vi.fn(async () => settings), update: vi.fn(async () => { source.currentVersion++; }),
+    modelDefaults: vi.fn(async () => []),
     create: vi.fn(async () => {}), avatar: vi.fn(async () => {}),
     skills: vi.fn(async () => [skill]), skill: vi.fn(async () => skill), saveSkill: vi.fn(async (_bot, value) => { skill = value; }),
     removeSkill: vi.fn(async () => {}), capabilities: vi.fn(async () => catalog), memory,
@@ -52,6 +53,17 @@ function fixture() {
   return { resource, get, context, send, entries, deps, settings, catalog, memories, teammateWrites, changeSkill: () => { skill = { ...skill, body: '在电脑上修改后的正文。' }; }, owner: (next: string) => { owner = next; } };
 }
 describe('portable teammate editors', () => {
+  it('accepts one explicit creation model without changing the default or losing intent identity', async () => {
+    const f = fixture();
+    const route = { harness: 'pi', model: 'available', providerId: 'provider', effort: '', fastMode: false };
+    const input = { name: 'Nova', avatarImageBase64: 'aGVsbG8=', requestId: 'model-intent-12345678', modelChain: JSON.stringify([route]) };
+    await f.send(await f.resource('create'), input);
+    expect(f.deps.create).toHaveBeenCalledWith(expect.objectContaining({ capabilities: { modelChainOverride: [route] } }));
+    expect(f.deps.update).not.toHaveBeenCalled();
+    await expect(f.send(await f.resource('create'), { ...input, modelChain: '[]' })).rejects.toThrow();
+    await expect(f.send(await f.resource('create'), { ...input, modelChain: JSON.stringify([route, route]) })).rejects.toThrow();
+  });
+
   it('keeps the same durable create identity across a lost ACK, but separates paired controllers and owners', async () => {
     const f = fixture(); const input = { name: '小助手', avatarImageBase64: 'aGVsbG8=', requestId: 'same-intent-12345678' };
     await f.send(await f.resource('create'), input); await f.send(await f.resource('create'), input);
@@ -204,4 +216,79 @@ describe('portable teammate memory pages', () => {
     vi.mocked(f.deps.memory.read).mockImplementationOnce(async () => { f.owner('b'); return { ...f.memories.get('user_coffee.md')! }; });
     await expect(f.resource('settings:bot-a/memory/user_coffee')).rejects.toThrow('OWNER_CHANGED');
   });
+});
+
+// Existing opaque grants must bind follow-up consent to this owner, computer and current choice.
+it('keeps follow-up off until chosen and rejects an invitation made stale by another explicit choice', async () => {
+  const f = fixture();
+  let choice = { schedulerBotId: null as string | null, isCustomized: false, defaults: { schedulerBotId: null } };
+  f.deps.followUp = { get: vi.fn(async () => choice), set: vi.fn(async id => {
+    choice = { ...choice, isCustomized: true, schedulerBotId: id }; return choice;
+  }) };
+  const read = () => f.resource('settings:bot-a/follow-up');
+  const invitation = await read();
+  expect((invitation.blocks![0].data as any).invitationAvailable).toBe(true);
+  expect(f.deps.followUp.set).not.toHaveBeenCalled();
+  await f.send(invitation, {}, 1);
+  expect(choice).toMatchObject({ schedulerBotId: null, isCustomized: true });
+  expect((await read()).blocks![0].data).toMatchObject({ invitationAvailable: false });
+  await expect(f.send(invitation, { enabled: true })).rejects.toThrow();
+  await f.send(await read(), { enabled: true });
+  expect(choice.schedulerBotId).toBe('bot-a');
+  const enabled = await read();
+  expect(enabled.actions![0].confirmation).toBeUndefined();
+  await f.send(enabled, { enabled: false });
+  expect(choice.schedulerBotId).toBeNull();
+  const stale = await read(); f.owner('b');
+  await expect(f.send(stale, { enabled: true })).rejects.toThrow();
+});
+
+// Restored project links use existing opaque settings actions. Minimal input: two projects and a stale save.
+// Covers list/detail/save, device paths withheld and owner-bound rejection; unit, no network.
+it('links multiple projects through settings while keeping paths private and rejecting stale or foreign saves', async () => {
+  const f = fixture();
+  const projects = [
+    { id: 'a'.repeat(64), name: 'First', path: '/PRIVATE/first', linked: true, available: true },
+    { id: 'b'.repeat(64), name: 'Second', path: '/PRIVATE/second', linked: false, available: true },
+    { id: 'c'.repeat(64), name: 'Remote', path: '/PRIVATE/remote', deviceId: 'other', linked: true, available: false },
+  ];
+  f.deps.projects = { list: vi.fn(async () => projects.map(project => ({ ...project }))), set: vi.fn(async (_bot, id, linked) => { projects.find(p => p.id === id)!.linked = linked; }) };
+  const list = await f.resource('settings:bot-a/projects');
+  expect(f.entries(list)).toHaveLength(3);
+  expect(JSON.stringify(list)).not.toContain('/PRIVATE');
+  const id = 'settings:bot-a/projects/' + projects[1].id;
+  const detail = await f.resource(id);
+  expect(JSON.stringify(detail)).not.toContain('/PRIVATE');
+  expect(f.deps.projects.set).not.toHaveBeenCalled();
+  await f.send(detail, { linked: true });
+  expect(projects.map(p => p.linked)).toEqual([true, true, true]);
+  await expect(f.send(detail, { linked: false })).rejects.toThrow();
+  const foreign = await f.resource(id); f.owner('other');
+  await expect(f.send(foreign, { linked: false })).rejects.toThrow();
+  expect(projects[1].linked).toBe(true);
+  f.owner('a');
+  await f.send(await f.resource(id), { linked: false });
+  expect(projects.map(p => p.linked)).toEqual([true, false, true]);
+});
+
+// PR #6813: equal carried paths on different devices previously had identical phone labels.
+// Unit: real resource/action projection, two device-specific links; existing path privacy retained.
+it('distinguishes equal project paths on different devices in the list and toggle detail', async () => {
+  const f = fixture();
+  const projects = ['desk-a', 'desk-b'].map((deviceId, index) => ({
+    id: String(index).repeat(64), name: 'app', path: '/PRIVATE/app', deviceId, linked: true, available: false,
+  }));
+  f.deps.projects = {
+    list: async () => projects.map(project => ({ ...project })),
+    set: async (_bot, id, linked) => { projects.find(project => project.id === id)!.linked = linked; },
+  };
+  const list = await f.resource('settings:bot-a/projects');
+  expect(f.entries(list)).toMatchObject([
+    { title: expect.stringContaining('desk-a') }, { title: expect.stringContaining('desk-b') },
+  ]);
+  const detail = await f.resource(f.entries(list)[0].resourceId);
+  expect(detail.display.title).toContain('desk-a');
+  expect(JSON.stringify([list, detail])).not.toContain('/PRIVATE');
+  await f.send(detail, { linked: false });
+  expect(projects.map(project => project.linked)).toEqual([false, true]);
 });

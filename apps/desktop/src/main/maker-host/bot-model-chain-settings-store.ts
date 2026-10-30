@@ -1,6 +1,11 @@
 import { app } from 'electron';
 import path from 'node:path';
-import { isModelVisible, type ProviderView } from '@cindy/model-providers';
+import {
+  isCindyAutoModelId,
+  isModelVisible,
+  movedCindyAutoSourceId,
+  type ProviderView,
+} from '@cindy/model-providers';
 import { defaultBotModelChain } from '../../shared/botDefaultModelChain.js';
 
 import {
@@ -17,7 +22,6 @@ import {
 } from './override-settings-file.js';
 
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from './model-visibility-mirror.js';
-import { getSelectedNewMakerRoute } from './newMakerDefaultsCache.js';
 
 const log = desktopMakerLogger.child('bot-model-chain-settings-store');
 
@@ -103,7 +107,6 @@ export async function readBotModelChainSettingsState(
   );
   const value = { modelChain: defaultBotModelChain({ providers, providersLoading: false,
     availableAgents, availableAgentsLoaded: true,
-    preferredRoute: getSelectedNewMakerRoute(owner),
     isModelEnabled: (agent, providerId, model) => isModelVisible(
       getModelVisibilityOverride(agent, providerId, model.id), model.defaultEnabled),
   }) };
@@ -148,15 +151,61 @@ export function readExplicitBotModelChain(config: Record<string, unknown>): BotM
   return null;
 }
 
+/**
+ * 保存下来的 Auto 路由在使用时跟随服务端：Auto 被挪到另一家 Cindy 来源后改用新来源，
+ * 不改写伙伴资料或设置里存的值。目录读不到时原样返回，交给既有的路由校验。
+ */
+async function followMovedCindyAuto(
+  chain: BotModelRoute[],
+  providers: readonly ProviderView[] | undefined,
+): Promise<BotModelRoute[]> {
+  // 预设 auto 只在 Cindy AI 上、不会被挪动；只有模型组 Auto 才值得为此读一次目录。
+  if (!chain.some((route) => !route.agentDeviceId && route.model !== 'auto' && isCindyAutoModelId(route.model)))
+    return chain;
+  let views = providers;
+  if (!views) {
+    const owner = activeOwnerScopeKey();
+    try {
+      views = await readConnectedProviders(owner);
+    } catch (error) {
+      if (activeOwnerScopeKey() !== owner) throw new Error('Bot model chain owner changed');
+      log.warn('Bot model chain Auto follow skipped: providers unavailable', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return chain;
+    }
+    if (activeOwnerScopeKey() !== owner) throw new Error('Bot model chain owner changed');
+  }
+  const catalog = views;
+  return chain.map((route) => {
+    if (route.agentDeviceId) return route;
+    const providerId = movedCindyAutoSourceId(catalog, {
+      agent: route.harness === 'claude' ? 'claude-code' : route.harness,
+      model: route.model,
+      providerId: route.providerId,
+    });
+    return providerId ? { ...route, providerId } : route;
+  });
+}
+
 /** A null override follows owner settings; explicit per-Bot routes stay in its Profile. */
 export async function readEffectiveBotModelSelection(
   config: Record<string, unknown>,
   options?: Parameters<typeof readBotModelChainSettingsState>[0],
 ): Promise<{ chain: BotModelRoute[]; followsCindyDefault: boolean }> {
   const explicit = readExplicitBotModelChain(config);
-  if (explicit !== null) return { chain: explicit, followsCindyDefault: false };
+  if (explicit !== null) {
+    return {
+      chain: await followMovedCindyAuto(explicit, options?.providers),
+      followsCindyDefault: false,
+    };
+  }
   const state = await readBotModelChainSettingsState(options);
-  return { chain: state.value.modelChain, followsCindyDefault: !state.isCustomized };
+  // 未自定义的伙伴默认由实时目录推导，已经是当前位置；只有用户自定义的设置是存下来的。
+  const chain = state.isCustomized
+    ? await followMovedCindyAuto(state.value.modelChain, options?.providers)
+    : state.value.modelChain;
+  return { chain, followsCindyDefault: !state.isCustomized };
 }
 
 export async function readEffectiveBotModelChain(

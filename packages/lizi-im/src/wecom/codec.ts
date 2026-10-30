@@ -38,7 +38,7 @@ export function decodeWecomLane(userId: string): WecomLane {
 
 export function chunkWecomMarkdown(source: string): string[] {
   const normalized = source.replace(/\r\n?/g, "\n").trim();
-  if (!normalized) return ["✅ (本轮无文本输出)"];
+  if (!normalized) return [];
 
   if (Buffer.byteLength(normalized, "utf8") <= MAX_MESSAGE_BYTES) return [normalized];
   // UTF-8 uses at most three bytes per UTF-16 code unit. Include the reopened

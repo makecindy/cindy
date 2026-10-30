@@ -6,8 +6,7 @@ import '../themes/colors';
  * Regression tests for: markdown ```diff fenced code blocks now render via
  * MarkdownDiffBlock (GitHub-standard red/green) instead of highlight.js.
  *
- * Static-source scan, matching project convention (see
- * imageLightboxCloseAnywhere.test.ts and userInfoSectionHover.test.ts) —
+ * Static-source scan for the small structural/token contract —
  * keeps tests in the node vitest env and avoids dragging in jsdom +
  * react-dom for what are essentially structural / token contracts.
  *

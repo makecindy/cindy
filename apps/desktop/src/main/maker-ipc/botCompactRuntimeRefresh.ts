@@ -61,10 +61,10 @@ export async function replaceBotRuntimeAfterPreflight<T>(deps: {
 }
 
 /**
- * A provider can emit compact_boundary in the middle of one product turn.  The
- * Bot Profile runtime must therefore be rebuilt only after the final product
- * boundary, never directly from the compact event.  This coordinator owns the
- * small instance-scoped state machine; the host callback owns close/bootstrap.
+ * Explicit Bot resource changes may arrive during a product turn. Defer their
+ * runtime refresh until the turn settles. Native compact_boundary alone does
+ * not register a refresh. This coordinator owns the instance-scoped pending
+ * state; the host callback owns close/bootstrap.
  */
 export function createBotCompactRuntimeRefreshCoordinator(
   deps: BotCompactRuntimeRefreshDeps,
@@ -179,7 +179,7 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
   coordinator: BotCompactRuntimeRefreshCoordinator;
 }): Promise<BotCompactRuntimeRefreshOutcome> {
   const row = await deps.readSession();
-  if (!row || (row.role !== 'canonical' && row.role !== 'group')
+  if (!row || (row.role !== 'canonical' && row.role !== 'group' && row.role !== 'channel' && row.role !== 'thread' && row.role !== 'routine')
     || row.source !== 'bot' || row.status !== 'active' || !row.workingDir) {
     return 'not-bot';
   }

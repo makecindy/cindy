@@ -9,6 +9,7 @@
  *  5. binding(identity+scopeKey)命中 → attached 路由到 desktop session
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
 import type { AgentEvent, Session, SessionSendResult } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     removeMessageReaction: vi.fn(),
     sendText: vi.fn(),
     sendMarkdownText: vi.fn(),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'file' })),
     startStreamingText: vi.fn(),
     patchMarkdownCard: vi.fn(),
     sendInteractiveCard: vi.fn(),
@@ -46,7 +48,7 @@ const mocks = vi.hoisted(() => ({
       .getSession(sessionId)
       ?.abort();
   }),
-  onSilentStopSettled: vi.fn(() => vi.fn()),
+  onSilentStopSettled: vi.fn((_sessionId: string, _cb: () => void) => vi.fn()),
   rejectAllPending: vi.fn<(reason: string, owner?: symbol) => Array<{ requestId: string; messageId: string }>>(() => []),
   registerPending: vi.fn(),
   registerPendingExternal: vi.fn(),
@@ -54,7 +56,13 @@ const mocks = vi.hoisted(() => ({
   resolveXdtImageUrl: vi.fn(),
   generateAndPersistFbotTitle: vi.fn(),
   dbSelect: vi.fn(),
+  readRemoteRoute: vi.fn(),
+  materializeLocalMarkdownImages: vi.fn(),
 }));
+vi.mock('../localMarkdownImages', () => ({
+  materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
+}));
+vi.mock('../../remoteProviderRoute', () => ({ readImRemoteProviderRoute: mocks.readRemoteRoute }));
 
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
@@ -108,6 +116,7 @@ vi.mock('../fbotTitle', () => ({
 
 import { ImAccountScopeClosedError } from '../../accountBoundary';
 import { createTurnRunner, type ImTurnRunner } from '../turnRunner';
+import { setSilencedRunProbe } from '../../../scheduler-host/silent-output';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
 import type { ImChannelAdapter } from '../types';
@@ -134,6 +143,7 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   );
   const session = {
     id: sessionId,
+    workDir: '/tmp/slack-wd',
     agentKind: 'claude-code',
     abort: vi.fn(async () => undefined),
     send,
@@ -242,7 +252,8 @@ function streamingHandleStub() {
     messageId: 'C1|9.9',
     append: vi.fn(),
     replace: vi.fn(),
-    finalize: vi.fn(async () => undefined),
+    finalize: vi.fn<(text: string) => Promise<void>>(async () => undefined),
+    addExtraImageAbsPath: vi.fn(),
     close: vi.fn(),
   };
 }
@@ -279,6 +290,9 @@ beforeEach(() => {
   mocks.bindingGetAttachCardMessageId.mockReturnValue(null);
   mocks.generateAndPersistFbotTitle.mockResolvedValue(null);
   mocks.takePendingInteractionsForSession.mockReturnValue([]);
+  mocks.materializeLocalMarkdownImages.mockImplementation(async ({ text }: { text: string }) => ({
+    text, absPaths: [],
+  }));
   // maker.createSession: 按 id 返回独立 harness(多 session 并行的关键)
   mocks.getMaker.mockReturnValue({
     getSession: vi.fn((id: string) => harnesses.get(id)?.session),
@@ -553,6 +567,515 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
   });
 });
 
+describe('turnRunner 渠道任务后台结果回传', () => {
+  it.each(['next-background', 'dispose'] as const)('keeps delivery busy until the last result settles across %s', async (action) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    let release!: () => void;
+    stub.finalize.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    h.emit({ type: 'text', data: { text: 'first background' } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    if (action === 'next-background') {
+      runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+      h.emit({ type: 'text', data: { text: 'second background' } });
+      h.emit({ type: 'done', data: {} });
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(2));
+    }
+    await runTurn('100.1', 'arrives during delivery');
+    expect(h.send).not.toHaveBeenCalled();
+    if (action === 'dispose') await runner.disposeAllSessions();
+    release();
+    if (action === 'next-background') {
+      await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+      h.emit({ type: 'done', data: {} });
+    } else {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(h.send).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['done', 'error', 'settled'].flatMap((ending) => [false, true].map((fail) => ({ ending, fail }))))(
+    'holds queued input through background final delivery (ending=$ending, fail=$fail)', async ({ ending, fail }) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    let release!: () => void;
+    stub.finalize.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      release = () => fail ? reject(new Error('delivery failed')) : resolve();
+    }));
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    let settled!: () => void;
+    if (ending === 'settled') {
+      mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return vi.fn(); });
+    }
+    h.emit({ type: 'text', data: { text: 'background' } });
+    await runTurn('100.1', 'queued before completion');
+    if (ending === 'settled') {
+      h.emit({ type: 'done', data: { silentStop: true } });
+      settled();
+    } else if (ending === 'error') {
+      h.emit({ type: 'error', data: { message: 'failed', isTerminal: true } });
+    } else h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    await runTurn('100.1', 'queued during delivery');
+    expect(h.send).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    expect(h.send.mock.calls[0]![0]).toEqual(expect.objectContaining({
+      content: expect.stringContaining('queued before completion'),
+    }));
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'done', data: {} });
+  });
+
+  it.each(['done', 'settled'] as const)('silent stop keeps queued input out of the resumed turn until %s', async (ending) => {
+    const h = await channelAndIdle();
+    h.send.mockClear();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    let settled!: () => void;
+    mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return vi.fn(); });
+    h.emit({ type: 'text', data: { text: 'background' } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    await runTurn('100.1', 'queued input');
+    expect(h.send).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: ' resumed' } });
+    if (ending === 'done') h.emit({ type: 'done', data: {} });
+    else settled();
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('background resumed'));
+    h.emit({ type: 'done', data: {} });
+  });
+
+  it.each(['done', 'settled', 'error', 'dispose'] as const)('silent stop waits for %s and ignores late settlement', async (ending) => {
+    const h = await channelAndIdle();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const unsubscribe = vi.fn();
+    let settled!: () => void;
+    mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settled = cb; return unsubscribe; });
+    h.emit({ type: 'text', data: { text: 'first' } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    h.emit({ type: 'done', data: { silentStop: true } });
+    await Promise.resolve();
+    expect(stub.finalize).not.toHaveBeenCalled();
+    expect(mocks.onSilentStopSettled).toHaveBeenCalledTimes(1);
+    h.emit({ type: 'text', data: { text: ' resumed' } });
+    if (ending === 'done') h.emit({ type: 'done', data: {} });
+    else if (ending === 'error') h.emit({ type: 'error', data: { message: 'failed', isTerminal: true } });
+    else if (ending === 'dispose') await runner.disposeAllSessions();
+    else settled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    settled();
+    if (ending === 'dispose') {
+      expect(stub.finalize).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+      expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('first resumed'));
+    }
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+  });
+
+  it('换执行实例只换绑监听，保留同话题已经排队的消息', async () => {
+    const old = await channelAndIdle();
+    vi.mocked(old.session.isTurnRunning).mockReturnValue(true);
+    await runTurn('100.1', 'queued after background');
+    const next = makeSessionHarness(old.session.id);
+    harnesses.set(old.session.id, next);
+    runner.attachSessionOutput(next.session, 'U1');
+    expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    old.emit({ type: 'text', data: { text: 'stale result' } });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    next.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(next.send).toHaveBeenCalledTimes(1));
+    expect(next.send.mock.calls[0]![0]).toEqual(expect.objectContaining({
+      content: expect.stringContaining('queued after background'),
+    }));
+    next.emit({ type: 'done', data: {} });
+  });
+
+  it.each(['rich-card', 'chunked-text'] as const)('%s 回传纯工具图片并去重，不依赖最终正文', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('image-background');
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    const absPath = path.resolve('generated.png');
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath });
+    const event: AgentEvent = { type: 'tool_result_full', data: {
+      fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated' }),
+    } };
+    h.emit(event);
+    h.emit(event);
+    h.emit({ type: 'done', data: {} });
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith(''));
+      expect(stub.addExtraImageAbsPath).toHaveBeenCalledExactlyOnceWith(absPath);
+      expect(stub.addExtraImageAbsPath.mock.invocationCallOrder[0]).toBeLessThan(stub.finalize.mock.invocationCallOrder[0]!);
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendFile).toHaveBeenCalledExactlyOnceWith('U1', absPath, undefined, { threadTs: undefined }));
+      expect(mocks.slackIm.sendMarkdownText).not.toHaveBeenCalled();
+    }
+  });
+
+  it('远端后台轮次不把媒体路径作为本地文件发送', async () => {
+    const h = makeSessionHarness('remote-background');
+    Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://remote"}' } });
+    h.emit({ type: 'done', data: {} });
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+  });
+
+  it.each(['rich-card', 'chunked-text'] as const)('%s 远端正文引用只回传标签，不交给渠道解析本机附件', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('remote-markdown');
+    Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'text', data: {
+      text: '结果 ![图](xdt-image://remote.png) ![媒体](cindy-media://blobs/remote.png) [文件](xdt-file:///repo/report.txt)',
+      isFinal: true,
+    } });
+    h.emit({ type: 'done', data: {} });
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('结果 图 媒体 文件'));
+      for (const [text] of stub.replace.mock.calls) {
+        expect(text).not.toMatch(/(?:xdt-image|xdt-file|cindy-media):/);
+      }
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith(
+        'U1', '结果 图 媒体 文件', { threadTs: undefined },
+      ));
+    }
+    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
+    expect(mocks.slackIm.sendFile).not.toHaveBeenCalled();
+  });
+
+  it.each((['rich-card', 'chunked-text'] as const).flatMap((kind) =>
+    [false, true].flatMap((remote) => ['done', 'error'].map((ending) => ({ kind, remote, ending }))),
+  ))('strips background citations across split deltas and final snapshots ($kind, remote=$remote, $ending)', async ({ kind, remote, ending }) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    if (kind === 'chunked-text') {
+      runner = createTurnRunner({ ...fakeAdapter, output: {
+        kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+      } }, fakeRepo, fakeCards);
+    }
+    const h = makeSessionHarness('citation-background');
+    if (remote) Object.assign(h.session, { remoteHostId: 'ssh-host' });
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    const turnOrigin = remote
+      ? { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily' }
+      : undefined;
+    for (const text of ['结果\uE200ci', 'te\uE202turn0search0', '\uE201。']) {
+      const previousCalls = stub.replace.mock.calls.length;
+      h.emit({ type: 'text', data: { text }, turnOrigin });
+      if (kind === 'rich-card') {
+        await vi.waitFor(() => expect(stub.replace.mock.calls.length).toBeGreaterThan(previousCalls));
+        expect(stub.replace.mock.calls.at(-1)![0]).not.toMatch(/[\uE200-\uE202]|turn0search0/);
+      }
+    }
+    h.emit({ type: 'text', data: {
+      text: '结果\uE200cite\uE202turn0search0\uE201。[来源](https://example.com)\uE200cite\uE202unfinished',
+      isFinal: true,
+    }, turnOrigin });
+    h.emit(ending === 'done'
+      ? { type: 'done', data: {}, turnOrigin }
+      : { type: 'error', data: { message: 'failed', isTerminal: true }, turnOrigin });
+    const body = `${remote ? '🤖 自动任务「daily」\n\n' : ''}结果。[来源](https://example.com)`;
+    const expected = ending === 'error' ? `${body}\n\n${slackUi.agent.runtimeError('failed')}` : body;
+    if (kind === 'rich-card') {
+      await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith(expected));
+    } else {
+      await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledExactlyOnceWith(
+        'U1', expected, { threadTs: undefined },
+      ));
+    }
+    await runner.disposeAllSessions();
+  });
+
+  it.each(['rich-card', 'chunked-text'] as const)('%s 静默的自动任务轮次不回传；请求提醒后只发终稿，失败照发', async (kind) => {
+    const silencedRuns = new Set<string>();
+    setSilencedRunProbe((runId) => silencedRuns.has(runId));
+    try {
+      const stub = streamingHandleStub();
+      mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+      if (kind === 'chunked-text') {
+        runner = createTurnRunner({ ...fakeAdapter, output: {
+          kind, im: fakeAdapter.im, commitFinal: vi.fn(async () => undefined),
+        } }, fakeRepo, fakeCards);
+      }
+      const h = makeSessionHarness('silent-background');
+      runner.attachSessionOutput(h.session, 'U1');
+      const origin = (runId: string) =>
+        ({ kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily', runId });
+      const delivered = () => kind === 'rich-card'
+        ? stub.finalize.mock.calls.map((call) => (call as unknown[])[0])
+        : mocks.slackIm.sendMarkdownText.mock.calls.map((call) => (call as unknown[])[1]);
+      const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+      silencedRuns.add('quiet');
+      h.emit({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } }, turnOrigin: origin('quiet') });
+      h.emit({ type: 'text', data: { text: '无新变化', isFinal: true }, turnOrigin: origin('quiet') });
+      h.emit({ type: 'done', data: {}, turnOrigin: origin('quiet') });
+      // The run is released after its terminal event; the decision taken at done stands.
+      silencedRuns.delete('quiet');
+      await tick();
+      expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+      expect(delivered()).toEqual([]);
+
+      silencedRuns.add('notified');
+      h.emit({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/b.ts' } }, turnOrigin: origin('notified') });
+      h.emit({ type: 'text', data: { text: '发现新评论', isFinal: true }, turnOrigin: origin('notified') });
+      await tick();
+      expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+      silencedRuns.delete('notified'); // schedule_notify_current_run
+      h.emit({ type: 'done', data: {}, turnOrigin: origin('notified') });
+      await vi.waitFor(() => expect(delivered()).toEqual(['🤖 自动任务「daily」\n\n发现新评论']));
+      expect(stub.replace).not.toHaveBeenCalled();
+
+      silencedRuns.add('failed');
+      h.emit({ type: 'error', data: { message: 'failed', isTerminal: true }, turnOrigin: origin('failed') });
+      await vi.waitFor(() => expect(delivered()).toHaveLength(2));
+      expect(delivered()[1]).toContain(slackUi.agent.runtimeError('failed'));
+
+      // Exhausted silent-stop auto-resume is a failure too, even though it settles without an error event.
+      let settle!: (sessionId: string, reason: string) => void;
+      mocks.onSilentStopSettled.mockImplementationOnce((_id, cb) => { settle = cb as typeof settle; return vi.fn(); });
+      silencedRuns.add('exhausted');
+      h.emit({ type: 'text', data: { text: '半截', isFinal: true }, turnOrigin: origin('exhausted') });
+      h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin('exhausted') });
+      settle(h.session.id, 'exhausted');
+      await vi.waitFor(() => expect(delivered()).toHaveLength(3));
+      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+    } finally {
+      setSilencedRunProbe(null);
+      await runner.disposeAllSessions();
+    }
+  });
+
+  it('重启后仅恢复输出监听，不新建会话；重复恢复不会重复回复', async () => {
+    const h = makeSessionHarness('cold-session');
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'text', data: { text: '冷启动结果', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('冷启动结果'));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(mocks.getMaker().createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('cold takeover restores scheduler-only topic output (replace runtime: %s)', async (replace) => {
+    const old = makeSessionHarness('cold-takeover');
+    const route = { attached: true, scopeKey: '300.3' };
+    runner.attachSessionOutput(old.session, 'U1', route);
+    const h = replace ? makeSessionHarness(old.session.id) : old;
+    runner.attachSessionOutput(h.session, 'U1', route);
+    if (replace) expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    old.emit({ type: 'text', data: { text: 'desktop input' } });
+    old.emit({ type: 'done', data: {} });
+    h.emit({ type: 'text', data: { text: 'cross-session input' } });
+    h.emit({ type: 'done', data: {} });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    const turnOrigin = { kind: 'scheduler' as const, scheduleId: 's', scheduleName: 'daily' };
+    h.emit({ type: 'text', turnOrigin, data: { text: 'scheduled result', isFinal: true } });
+    h.emit({ type: 'done', turnOrigin, data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    expect(stub.finalize).toHaveBeenCalledWith(expect.stringContaining('scheduled result'));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '300.3' });
+    expect(mocks.getMaker().createSession).not.toHaveBeenCalled();
+    expect(h.session.setInteractionListener).not.toHaveBeenCalled();
+    runner.detachFromSession(h.session.id);
+    mocks.slackIm.startStreamingText.mockClear();
+    h.emit({ type: 'text', turnOrigin, data: { text: 'after detach' } });
+    h.emit({ type: 'done', turnOrigin, data: {} });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    expect(h.unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  /** IM-owned task gone idle; the next non-IM turn starts with `source` (default: another task's mail). */
+  async function channelAndIdle(source: 'other-task' | 'desktop' = 'other-task'): Promise<SessionHarness> {
+    await runTurn('100.1');
+    const h = harnesses.get(sessionIdFor('T1', 'U1', '100.1'))!;
+    const initial = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(initial);
+    h.emit({ type: 'text', data: { text: '首次回复' } });
+    h.emit({ type: 'done' } as AgentEvent);
+    await vi.waitFor(() => expect(initial.finalize).toHaveBeenCalledTimes(1));
+    mocks.slackIm.startStreamingText.mockClear();
+    mocks.slackIm.sendMarkdownText.mockClear();
+    runner.attachSessionOutput(h.session, 'U1', undefined, source === 'desktop' ? undefined : source);
+    return h;
+  }
+
+  it('桌面输入发起的轮次不回传，下一次其它任务来信仍回传', async () => {
+    const h = await channelAndIdle('desktop');
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    h.emit({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } } });
+    h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'text', data: { text: '来信结果', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('来信结果'));
+
+    // The mark belongs to that turn only; a following desktop turn stays local again.
+    h.emit({ type: 'text', data: { text: '又一条桌面回复', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['自动任务', { kind: 'scheduler', scheduleId: 's1', scheduleName: '检查进度' }],
+    ['其它任务消息触发的轮次', undefined],
+  ] as const)('%s 的结果回到原聊天，不要求先接管', async (_name, turnOrigin) => {
+    const h = await channelAndIdle();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    h.emit({ type: 'text', data: { text: '处理结果', isFinal: true }, turnOrigin });
+    h.emit({ type: 'done', data: {}, turnOrigin });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledTimes(1));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledWith('U1', undefined, { threadTs: '100.1' });
+    expect(stub.finalize).toHaveBeenCalledWith(turnOrigin ? '🤖 自动任务「检查进度」\n\n处理结果' : '处理结果');
+  });
+
+  it('Agent 自己唤醒的轮次(后台任务完成)回到原聊天，子代理与桌面轮次仍不回传', async () => {
+    const h = await channelAndIdle('desktop');
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    // Background subagent output while the task is idle is filtered, before and after the mark.
+    h.emit({ type: 'text', data: { text: '子代理内部' }, agentMeta: { parentUuid: 'toolu_1' } });
+    runner.noteChannelTurnSource(h.session, 'provider-wake');
+    h.emit({ type: 'text', data: { text: '子代理内部' }, agentMeta: { parentUuid: 'toolu_1' } });
+    h.emit({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } } });
+    h.emit({ type: 'text', data: { text: '最终报告', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('最终报告'));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
+
+    // The mark ends with that turn: a desktop-origin wake stays in the app too.
+    runner.noteChannelTurnSource(h.session, 'provider-wake-local');
+    h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+  });
+
+  it('IM 轮次仍在进行时不另开后台回传，也不把标记留给下一轮', async () => {
+    await runTurn('100.1');
+    const h = harnesses.get(sessionIdFor('T1', 'U1', '100.1'))!;
+    const initial = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(initial);
+    runner.noteChannelTurnSource(h.session, 'provider-wake');
+    h.emit({ type: 'text', data: { text: 'IM 回复', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(initial.finalize).toHaveBeenCalledExactlyOnceWith('IM 回复'));
+    mocks.slackIm.startStreamingText.mockClear();
+    h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+  });
+
+  it('接管(/ctr)的桌面任务仍只转播自动任务，不回传 Agent 自己唤醒的轮次', async () => {
+    const h = await channelAndIdle('desktop');
+    runner.attachSessionOutput(h.session, 'U1', { attached: true, scopeKey: '100.1' });
+    runner.noteChannelTurnSource(h.session, 'provider-wake');
+    h.emit({ type: 'text', data: { text: '后台结果', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+  });
+
+  it('子代理及旧轮次的后台事件不回传，也不提前结束当前回复', async () => {
+    const h = await channelAndIdle();
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    for (const scope of [{ agentMeta: { parentUuid: 'child' } }, { turnScope: 'background' as const }]) {
+      h.emit({ type: 'text', data: { text: '内部内容' }, ...scope });
+      h.emit({ type: 'done', data: {}, ...scope });
+    }
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    h.emit({ type: 'text', data: { text: '公开结果' } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledWith('公开结果'));
+  });
+
+  it('纯文本渠道仅在收口时通过适配器回传结果', async () => {
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter,
+      channel: 'wechat',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal },
+    }, fakeRepo, fakeCards);
+    await runTurn('100.1');
+    const h = harnesses.get(sessionIdFor('T1', 'U1', '100.1'))!;
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledTimes(1));
+    mocks.slackIm.sendMarkdownText.mockClear();
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'text', data: { text: '后台结果', isFinal: true } });
+    expect(mocks.slackIm.sendMarkdownText).not.toHaveBeenCalled();
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith('U1', '后台结果', { threadTs: '100.1' }));
+    expect(commitFinal).toHaveBeenCalledTimes(1);
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+  });
+
+  it('断开渠道后丢弃迟到的消息句柄，避免继续回传', async () => {
+    const h = await channelAndIdle();
+    const stub = streamingHandleStub();
+    let resolveHandle!: (handle: ReturnType<typeof streamingHandleStub>) => void;
+    mocks.slackIm.startStreamingText.mockReturnValue(new Promise((resolve) => { resolveHandle = resolve; }));
+    h.emit({ type: 'text', data: { text: '结果' } });
+    h.emit({ type: 'done', data: {} });
+    await runner.disposeAllSessions();
+    resolveHandle(stub);
+    await vi.waitFor(() => expect(stub.close).toHaveBeenCalled());
+    expect(stub.finalize).not.toHaveBeenCalled();
+    expect(stub.replace).not.toHaveBeenCalled();
+  });
+
+  it('空输出不发送，发送失败不会留下未处理的 rejection', async () => {
+    const h = await channelAndIdle();
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'session_id', data: { sessionId: 'sdk' } });
+    h.emit({ type: 'done', data: {} });
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+    mocks.slackIm.startStreamingText.mockRejectedValue(new Error('offline'));
+    runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
+    h.emit({ type: 'text', data: { text: '结果' } });
+    h.emit({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('transpond finalize failed')));
+  });
+});
+
 describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)', () => {
   /** 接管 desktop-sess-1 到 thread 300.3,并清掉用户首轮,使后续 scheduler 事件走 stray。 */
   async function attachAndIdle(): Promise<SessionHarness> {
@@ -588,6 +1111,88 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
   const schedulerOrigin = { kind: 'scheduler', scheduleId: 's1', scheduleName: 'PR #118 跟进' };
   const withOrigin = (e: Partial<AgentEvent>): AgentEvent =>
     ({ ...e, turnOrigin: schedulerOrigin }) as AgentEvent;
+
+  // #7125 review, unit: a lone image component used to miss attachment collection.
+  // Exercise background delivery through the runner; only file import is stubbed.
+  it('delivers background image components as chunked-text attachments', async () => {
+    const previousOutput = fakeAdapter.output;
+    fakeAdapter.output = {
+      kind: 'chunked-text', im: mocks.slackIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined),
+    };
+    await runner.disposeAllSessions();
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    try {
+      const h = await attachAndIdle();
+      const imagePath = path.join('/tmp', 'desktop-wd', 'chart.png');
+      const managedPath = path.join('/tmp', 'test-media', 'chart.png');
+      mocks.materializeLocalMarkdownImages.mockResolvedValue({ text: 'Chart', absPaths: [managedPath] });
+      const source = '```cindy-ui\n' + JSON.stringify({
+        version: 1, seq: 1, op: 'create', id: 'image', kind: 'image', props: { src: imagePath, alt: 'Chart' },
+      }) + '\n```';
+      h.emit(withOrigin({ type: 'text', data: { text: source, isFinal: true } }));
+      h.emit(withOrigin({ type: 'done', data: {} }));
+      await vi.waitFor(() => expect(mocks.slackIm.sendFile).toHaveBeenCalledWith(
+        'U1', managedPath, undefined, { threadTs: '300.3' },
+      ));
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith(expect.objectContaining({
+        text: `![Chart](<${imagePath}>)`,
+      }));
+      expect(mocks.slackIm.sendMarkdownText).toHaveBeenCalledWith(
+        'U1', expect.stringContaining('Chart'), { threadTs: '300.3' },
+      );
+    } finally {
+      await runner.disposeAllSessions();
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  // #6884, unit: the same component fence must be projected for background
+  // streaming/final delivery. Existing relay tests only covered plain Markdown.
+  it.each(['rich-card', 'chunked-text'] as const)('projects background rich answers for %s', async (kind) => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const previousOutput = fakeAdapter.output;
+    if (kind === 'chunked-text') fakeAdapter.output = {
+      kind: 'chunked-text', im: mocks.slackIm as unknown as ChannelIM, commitFinal: vi.fn(async () => undefined),
+    };
+    await runner.disposeAllSessions();
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards);
+    try {
+      const h = await attachAndIdle();
+      const source = '```cindy-ui\n' + JSON.stringify({
+        version: 1, seq: 1, op: 'create', id: 'result', kind: 'text', props: { text: 'Readable background result' },
+      }) + '\n```';
+      h.emit(withOrigin({ type: 'text', data: { text: '```cindy-ui\n{"version":', isFinal: false } }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(JSON.stringify(stub.replace.mock.calls)).not.toContain('cindy-ui');
+      h.emit(withOrigin({ type: 'text', data: { text: source, isFinal: true } }));
+      if (kind === 'rich-card') {
+        await vi.waitFor(() => expect(stub.replace).toHaveBeenCalledWith(expect.stringContaining('Readable background result')));
+      }
+      h.emit(withOrigin({ type: 'done', data: {} }));
+      await vi.waitFor(() => {
+        const text = kind === 'chunked-text' ? mocks.slackIm.sendMarkdownText.mock.calls.at(-1)?.[1]
+          : stub.finalize.mock.calls.at(-1)?.[0];
+        expect(text).toContain('Readable background result');
+        expect(text).not.toContain('cindy-ui');
+        expect(text).not.toContain('"op"');
+      });
+    } finally {
+      await runner.disposeAllSessions();
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  it('successful background work without a reply removes the progress card and its title', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    h.emit(withOrigin({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } } }));
+    await vi.waitFor(() => expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1));
+    h.emit(withOrigin({ type: 'done', data: {} }));
+    await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith(''));
+    expect(mocks.slackIm.startStreamingText).toHaveBeenCalledTimes(1);
+  });
 
   it('does not forward child output or settle on a child terminal during scheduled turns', async () => {
     const stub = streamingHandleStub();
@@ -644,6 +1249,63 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
     });
   });
 
+  it('scheduler 转播卡的头部同样带出 tok/s, status 本身不开卡', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    const status = (rate: number, isRunning = true): AgentEvent =>
+      withOrigin({
+        type: 'status',
+        data: {
+          status: isRunning ? 'Running' : 'Done',
+          isRunning,
+          tokenSpeed: { rate, average: rate, tokens: 300, elapsedMs: 3_000, streaming: isRunning },
+        },
+      });
+    const lastReplace = (): string => String(stub.replace.mock.calls.at(-1)?.[0] ?? '');
+
+    // 先调工具的自动任务: 生成工具参数时就有读数, 此时转播卡还没开 —— status 不建卡,
+    // 但读数要留到开卡那一刻。
+    h.emit(status(80));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.slackIm.startStreamingText).not.toHaveBeenCalled();
+
+    h.emit(withOrigin({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } } }));
+    h.emit(withOrigin({ type: 'text', data: { text: '检查中', isFinal: false } }));
+    await vi.waitFor(() => {
+      expect(lastReplace()).toContain('· 80 tok/s');
+      expect(lastReplace()).toContain('读取 a.ts');
+    });
+
+    h.emit(status(97.6));
+    h.emit(withOrigin({ type: 'text', data: { text: '…', isFinal: false } }));
+    await vi.waitFor(() => expect(lastReplace()).toContain('· 98 tok/s'));
+
+    h.emit(withOrigin({ type: 'done', data: {} }));
+    await vi.waitFor(() => {
+      const finalBody = (stub.finalize.mock.calls.at(-1) as unknown[] | undefined)?.[0] as string;
+      expect(finalBody).toContain('检查中');
+      expect(finalBody).not.toContain('tok/s');
+    });
+  });
+
+  it('开卡前的读数遇到 isRunning=false 即作废, 不带进转播卡', async () => {
+    const stub = streamingHandleStub();
+    mocks.slackIm.startStreamingText.mockResolvedValue(stub);
+    const h = await attachAndIdle();
+    const speed = { rate: 120, average: 120, tokens: 300, elapsedMs: 3_000, streaming: true };
+    h.emit(withOrigin({ type: 'status', data: { status: 'Running', isRunning: true, tokenSpeed: speed } }));
+    h.emit(withOrigin({ type: 'status', data: { status: 'Done', isRunning: false, tokenSpeed: speed } }));
+
+    h.emit(withOrigin({ type: 'tool_use', data: { toolName: 'Read', input: { file_path: '/x/a.ts' } } }));
+    h.emit(withOrigin({ type: 'text', data: { text: '检查中', isFinal: false } }));
+    await vi.waitFor(() => {
+      const lastReplace = String(stub.replace.mock.calls.at(-1)?.[0] ?? '');
+      expect(lastReplace).toContain('读取 a.ts');
+      expect(lastReplace).not.toContain('tok/s');
+    });
+  });
+
   it('非 scheduler 的 stray(desktop 自发 turn,无 turnOrigin)→ 不转播', async () => {
     const stub = streamingHandleStub();
     mocks.slackIm.startStreamingText.mockResolvedValue(stub);
@@ -686,6 +1348,17 @@ describe('turnRunner 自动任务转播(scheduler turn → 远程控制 thread)'
 });
 
 describe('notification replies reuse the originating session without takeover', () => {
+  it('cold-opens a shared session on its saved execution computer', async () => {
+    mocks.dbSelect.mockReturnValue({ from: () => ({ where: () => ({ limit: async () => [{
+      ...rowFor('original-session'), status: 'active', agentDeviceId: 'share:owner', providerId: 'remote-provider', sdkSessionId: 'remote-sdk',
+    }] }) }) });
+    mocks.readRemoteRoute.mockResolvedValue({ provider: { name: 'Shared provider' } });
+    await reply('shared-thread');
+    expect(mocks.getMaker().createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentDeviceId: 'share:owner', providerId: 'remote-provider', resumeSessionId: 'remote-sdk',
+    }));
+    expect(mocks.readRemoteRoute).toHaveBeenCalledWith(expect.objectContaining({ agentDeviceId: 'share:owner', providerId: 'remote-provider' }));
+  });
   function origin(status = 'active') {
     mocks.dbSelect.mockReturnValue({ from: () => ({ where: () => ({ limit: async () => [{
       ...rowFor('original-session'), sdkSessionId: 'original-sdk-session', status,

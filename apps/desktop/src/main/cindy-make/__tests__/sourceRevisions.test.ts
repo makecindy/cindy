@@ -80,10 +80,23 @@ describe('source revision snapshot', () => {
     await expect(read()).resolves.toMatchObject({ baseCommit: undefined, mainBehind: 4 });
   });
 
-  it('reports the explicitly adopted upstream even when personal HEAD has not moved', async () => {
+  it('reports the explicitly adopted upstream when it is the personal tip’s base', async () => {
     outputs['rev-parse --verify refs/cindy-make/personal-upstream^{commit}'] = remoteMain;
+    outputs['merge-base ' + remoteMain + ' ' + personal] = remoteMain;
     await expect(read()).resolves.toMatchObject({ baseCommit: remoteMain });
-    expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'merge-base')).toBe(false);
+    // Verified against the tip; the fallback derivation is not consulted.
+    expect(
+      vi
+        .mocked(runSourceGit)
+        .mock.calls.some(([, args]) => args.join(' ') === 'merge-base ' + personal + ' ' + remoteMain),
+    ).toBe(false);
+  });
+
+  it('ignores a recorded upstream that is not the personal tip’s base', async () => {
+    // An interrupted move left "old tip + new base": the wrong base is never used.
+    outputs['rev-parse --verify refs/cindy-make/personal-upstream^{commit}'] = remoteMain;
+    outputs['merge-base ' + remoteMain + ' ' + personal] = baseline;
+    await expect(read()).resolves.toMatchObject({ baseCommit: baseline });
   });
 
   it.each(['', '-1 2', '0 1.5', '0 9007199254740992', 'failed', new Error('count failed')])(

@@ -24,8 +24,12 @@ import {
   createBotGroupChatService,
   resolveGroupMentions,
   rotateResponders,
+  settleBotGroupLaneTerminal,
   type BotGroupChatServiceDeps,
+  type BotGroupLaneTerminal,
 } from '../botGroupChatService.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
+import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import {
   buildPlanDecisionPrompt,
   buildPlanStepBrief,
@@ -34,6 +38,9 @@ import {
   type PlanDecisionInput,
 } from '../botGroupDivision.js';
 import type { BotGroupAttachment, BotGroupDetail } from '../../../shared/botGroupChat.js';
+import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { installDesktopInteractionHandler, installInteractionLifecycleObserver, requestHostInteraction } from '../interactionRouter.js';
+import { GhostSetupInteractionBridge, type GhostSetupInteractionSnapshot } from '../../cindy-brain/ghostSetupInteractionBridge.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -233,6 +240,64 @@ describe('botGroupChatService', () => {
     ]);
   });
 
+  // #6671 / bot-group-chat §4.3–4.4 (unit): a held done-only turn can have
+  // streamed text still queued for persistence. Existing tests covered the
+  // ordinary event path, not release/handback through the real recovery stores.
+  // Read the actual group result so an early empty DB read cannot silently eat it.
+  it.each(['group', 'generic'] as const)('keeps a streamed reply pending until persistence when %s recovery releases it', async recovery => {
+    let written = false;
+    let finishWrite!: () => void;
+    const writing = new Promise<void>(resolve => { finishWrite = () => { written = true; resolve(); }; });
+    const drain = vi.fn(() => writing);
+    const readReplyText = vi.fn(async () => written ? '落库后的实际回复' : null);
+    const harness = createHarness((_bot, _prompt, index) => index === 0 ? null : 'NO_REPLY', { readReplyText });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '继续讨论', mentions: { all: true, botIds: [] }, clientId: 'source-input' });
+    await vi.waitFor(() => expect(harness.dispatches).toHaveLength(3));
+    const call = harness.dispatches[0]!;
+    let settlement: Promise<boolean> | undefined;
+    const deliver = (terminal: BotGroupLaneTerminal) => {
+      settlement = settleBotGroupLaneTerminal(harness.service, terminal, drain);
+    };
+    const held = createProviderGroupHeldWorkerTerminals<BotGroupLaneTerminal>({
+      ownerKey: () => 'account', deliver: (_sessionId, terminal) => deliver(terminal),
+    });
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+      rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+      finalizeBotGroupSuppressedTerminal: deliver,
+    });
+    held.stash(call.sessionId, 3, {
+      sessionId: call.sessionId, activeInputClientId: call.clientId,
+      outcome: 'done', resultText: '', resultMessageClientId: 'queued-reply',
+    });
+    try {
+      if (recovery === 'generic') {
+        book.stashSuppressedError(call.sessionId, { reason: 'upstream-overload' });
+        book.stashBotGroupSuppressedTerminal(call.sessionId, held.takeForRecovery(call.sessionId, 3)!);
+        book.surfaceSuppressedError(call.sessionId);
+        book.surfaceSuppressedError(call.sessionId);
+      }
+      held.release(call.sessionId, 3);
+      held.release(call.sessionId, 3);
+      await Promise.resolve();
+      expect(readReplyText.mock.calls.length).toBe(0);
+      const waiting = await harness.service.getGroup(groupId);
+      expect(waiting.ok && waiting.group.speakingBotIds).toContain(call.botId);
+      finishWrite();
+      await settlement;
+      const group = await waitForIdle(harness, groupId);
+      expect(drain).toHaveBeenCalledOnce();
+      expect(readReplyText).toHaveBeenCalledExactlyOnceWith(call.sessionId, 'queued-reply');
+      expect(group.messages.filter(message => message.authorKind === 'bot').map(message => message.content))
+        .toEqual(['落库后的实际回复']);
+    } finally {
+      finishWrite();
+      await settlement;
+      await waitForIdle(harness, groupId);
+    }
+  });
+
   it('in sequential mode lets every member answer in turn, rotates the next circle, and ends when a circle is silent', async () => {
     const replies: Record<string, string[]> = {
       mimi: ['先定个大框架', 'NO_REPLY'],
@@ -290,7 +355,14 @@ describe('botGroupChatService', () => {
       });
     }
     const group = await waitForIdle(harness, groupId);
-    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && m.kind === 'message').map(m => m.createdAt)));
+    expect(group.lastReplyAt).toBe(Math.max(...group.messages.filter(m => m.authorKind === 'bot' && (m.kind === 'message' || m.kind === 'plan')).map(m => m.createdAt)));
+    // Incoming times are the Bots' messages, oldest first, without the owner's own or notices.
+    const incoming = group.messages.filter(m => m.authorKind === 'bot' && (m.kind === 'message' || m.kind === 'plan'))
+      .sort((a, b) => a.sequence - b.sequence).map(m => new Date(m.createdAt).toISOString());
+    expect(incoming.length).toBeGreaterThan(0);
+    expect(group.incomingMessageTimes).toEqual(incoming);
+    const listed = await harness.service.listGroups();
+    expect(listed.ok && listed.groups.find(g => g.id === groupId)?.incomingMessageTimes).toEqual(incoming);
     // Second circle takes turns and sees the whole first circle.
     expect(harness.dispatches.slice(3).map((call) => call.botId)).toEqual(['xiaoman', 'abu', 'mimi']);
     expect(harness.dispatches[3]!.prompt).toContain('咪咪的看法');
@@ -395,6 +467,41 @@ describe('botGroupChatService', () => {
       .toEqual([['member-failed', '咪咪']]);
   });
 
+  it('preserves a safe dispatch failure category for a local-only group', async () => {
+    const harness = createHarness(() => null, {
+      dispatch: async () => ({ ok: false, errorCode: 'INTERNAL', message: 'authentication_failed private credential' }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'rejected-input' });
+    const group = await waitForIdle(harness, groupId);
+    expect(group.messages.filter(message => message.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-failed', runtimeFailureCode: 'AUTH_REQUIRED' }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private credential');
+  });
+
+  it.each([
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local group without dispatching', async (errorCode, failureCode, message) => {
+    const harness = createHarness(() => null, {
+      ensureLane: async () => ({ ok: false, errorCode, message }),
+    });
+    const groupId = await createGroup(harness, ['mimi', 'abu']);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'no-lane' });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(group.round.speakers).toEqual([]);
+    expect(group.messages.filter(message => message.kind === 'notice')).toEqual([
+      expect.objectContaining({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode }),
+    ]);
+    expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
+  });
+
   it('a round superseded while a member prepares never dispatches and never steals the new waiter', async () => {
     let releaseSync!: () => void;
     const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
@@ -444,12 +551,15 @@ describe('botGroupChatService', () => {
     await vi.advanceTimersByTimeAsync(2_500);
     const waiting = await harness.service.getGroup(groupId);
     expect(waiting.ok && waiting.group.round.speakers.map((speaker) => speaker.botId)).toEqual(['mimi']);
+    expect(waiting.ok && waiting.group.teammateActivity).toEqual({ phase: 'needs-interaction' });
     pending = false;
+    harness.service.refreshPendingInteraction('lane-mimi');
     await vi.advanceTimersByTimeAsync(1_100);
     const group = await waitForIdle(harness, groupId);
     expect(harness.abortLane).toHaveBeenCalledWith('lane-mimi');
     expect(group.messages.filter((m) => m.kind === 'notice').map((m) => [m.noticeCode, m.authorName]))
       .toEqual([['member-timeout', '咪咪']]);
+    expect(group.messages.find((m) => m.kind === 'notice')?.runtimeFailureCode).toBe('RUNTIME_TIMEOUT');
     expect(harness.dispatches.map((call) => call.botId)).toEqual(['mimi', 'xiaoman', 'abu']);
   });
 
@@ -527,6 +637,8 @@ describe('group mention and prompt helpers', () => {
     const twins = [{ botId: 'x1', name: '小满' }, { botId: 'x2', name: '小满' }];
     expect(resolveGroupMentions('@小满 在吗', { all: false, botIds: ['x2'] }, twins))
       .toEqual({ all: false, botIds: ['x2'] });
+    // Typed text alone cannot tell same-named members apart: all of them are addressed, never just the first.
+    expect(resolveGroupMentions('@小满 在吗', null, twins)).toEqual({ all: false, botIds: ['x1', 'x2'] });
     expect(resolveGroupMentions('@小满帮我查一下', null, members)).toEqual({ all: false, botIds: ['xiaoman'] });
     expect(resolveGroupMentions('@所有人看这里', null, members).all).toBe(true);
     expect(resolveGroupMentions('@Everyone look', null, members).all).toBe(true);
@@ -598,6 +710,230 @@ async function proposePlan(harness: Harness, groupId: string, text = '帮我给�
   return openPlan(group);
 }
 
+describe('botGroupChatService active running budget', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.sqlite = createDatabase();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    h.sqlite?.close();
+  });
+
+  async function start(kind: 'member' | 'step', timeoutMs?: number, initiallyPending = false, overrides: Partial<BotGroupChatServiceDeps> = {}) {
+    const pending = new Set(initiallyPending ? ['initial'] : []);
+    const harness = createHarness(() => null, {
+      hasPendingInteraction: () => pending.size > 0,
+      ...(timeoutMs === undefined ? {} : { memberTurnTimeoutMs: timeoutMs, stepTurnTimeoutMs: timeoutMs }),
+      ...(kind === 'step' ? { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir() } : {}),
+      ...overrides,
+    });
+    const groupId = await createGroup(harness);
+    if (kind === 'step') {
+      await harness.service.sendMessage({ groupId, text: '做一个介绍页', mentions: NONE, clientId: 'budget-plan' });
+      await vi.advanceTimersByTimeAsync(0);
+      const plan = openPlan(await detailOf(harness, groupId));
+      await harness.service.startPlan({ groupId, planId: plan.id });
+    } else {
+      await harness.service.sendMessage({ groupId, text: '在吗', mentions: { all: false, botIds: ['mimi'] }, clientId: 'budget-member' });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.dispatches).toHaveLength(1);
+    const sessionId = harness.dispatches[0].sessionId;
+    const change = async (requestId: string, waiting: boolean) => {
+      if (waiting) pending.add(requestId); else pending.delete(requestId);
+      harness.service.refreshPendingInteraction(sessionId);
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { ...harness, groupId, sessionId, change };
+  }
+
+  it('pauses only the waiting member in a parallel round', async () => {
+    const pending = new Set<string>();
+    const harness = createHarness(() => null, {
+      memberTurnTimeoutMs: 1_000,
+      hasPendingInteraction: sessionId => pending.has(sessionId),
+    });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '在吗', mentions: NONE, clientId: 'parallel-budget' });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(harness.dispatches).toHaveLength(3);
+    pending.add('lane-mimi');
+    harness.service.refreshPendingInteraction('lane-mimi');
+    await vi.advanceTimersByTimeAsync(800);
+    expect(harness.abortLane.mock.calls.map(([id]) => id).sort()).toEqual(['lane-abu', 'lane-xiaoman']);
+    pending.clear();
+    harness.service.refreshPendingInteraction('lane-mimi');
+    await vi.advanceTimersByTimeAsync(599);
+    expect(harness.abortLane).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.abortLane).toHaveBeenCalledTimes(3);
+    expect(harness.abortLane).toHaveBeenLastCalledWith('lane-mimi');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe.each(['member', 'step'] as const)('%s', (kind) => {
+    it.each([[400, 800, 600], [900, 800, 100], [400, 200, 600]])(
+      'runs %ims, waits %ims, then has exactly %ims left', async (run, wait, remaining) => {
+        const harness = await start(kind, 1_000);
+        await vi.advanceTimersByTimeAsync(run);
+        await harness.change('approval', true);
+        await vi.advanceTimersByTimeAsync(wait);
+        expect(harness.abortLane).not.toHaveBeenCalled();
+        await harness.change('approval', false);
+        await vi.advanceTimersByTimeAsync(remaining - 1);
+        expect(harness.abortLane).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+        const group = await detailOf(harness, harness.groupId);
+        expect(group.messages.find(message => message.kind === 'notice'))
+          .toMatchObject({ noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT' });
+        expect(vi.getTimerCount()).toBe(0);
+      },
+    );
+
+    it('keeps the existing default limit without an interaction', async () => {
+      const harness = await start(kind);
+      const limit = 2 * 60 * 60_000;
+      await vi.advanceTimersByTimeAsync(limit - 1);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('waits for all overlapping interactions without replenishing the budget', async () => {
+      const harness = await start(kind, 1_000);
+      await vi.advanceTimersByTimeAsync(400);
+      await harness.change('permission', true);
+      await vi.advanceTimersByTimeAsync(300);
+      await harness.change('question', true);
+      await harness.change('permission', false);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await harness.change('question', false);
+      await vi.advanceTimersByTimeAsync(200);
+      await harness.change('plan-review', true);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await harness.change('plan-review', false);
+      await vi.advanceTimersByTimeAsync(399);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('starts paused when dispatch returns with an interaction already pending', async () => {
+      const harness = await start(kind, 1_000, true);
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await harness.change('initial', false);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('observes router permission, question and plan waits after Desktop pending registration', async () => {
+      const pending = new Map<string, () => void>();
+      const harness = await start(kind, 1_000, false, { hasPendingInteraction: () => pending.size > 0 });
+      const session = { id: harness.sessionId, setInteractionListener: vi.fn() };
+      const existingStart = vi.fn();
+      const existingEnd = vi.fn();
+      installDesktopInteractionHandler(session, request => new Promise<InteractionDecision>(resolve => {
+        pending.set(request.requestId, () => {
+          pending.delete(request.requestId);
+          resolve(request.kind === 'ask_user_question'
+            ? { kind: 'ask_user_question', answers: {} }
+            : { kind: request.kind, behavior: 'allow' });
+        });
+      }));
+      installInteractionLifecycleObserver(session, {
+        onStart: (request, route) => {
+          // Matches register: the router calls this before the Desktop handler adds pending.
+          harness.service.refreshPendingInteraction(session.id);
+          existingStart(request, route);
+        },
+        onEnd: (request, route) => {
+          harness.service.refreshPendingInteraction(session.id);
+          existingEnd(request, route);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(400);
+      const requests: InteractionRequest[] = [
+        { kind: 'permission', requestId: 'permission', toolName: 'Bash', input: { command: 'pwd' } },
+        { kind: 'ask_user_question', requestId: 'question', questions: [] },
+        { kind: 'plan_review', requestId: 'plan', plan: 'plan' },
+      ];
+      const results = requests.map(request => requestHostInteraction(session, request, new AbortController().signal));
+      await vi.advanceTimersByTimeAsync(800);
+      pending.get('permission')!();
+      pending.get('question')!();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      pending.get('plan')!();
+      await Promise.all(results);
+      expect(existingStart).toHaveBeenCalledTimes(3);
+      expect(existingEnd).toHaveBeenCalledTimes(3);
+      expect(session.setInteractionListener).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(599);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(session.id);
+    });
+
+    it('counts plugin setup waits, but resumes before the terminal card is dismissed', async () => {
+      let harness: Awaited<ReturnType<typeof start>>;
+      const bridge = new GhostSetupInteractionBridge({
+        broadcast: (_channel, payload) => harness.service.refreshPendingInteraction((payload as { sessionId: string }).sessionId),
+      });
+      harness = await start(kind, 1_000, false, {
+        hasPendingInteraction: sessionId => bridge.pendingSnapshots(sessionId).length > 0,
+      });
+      const snapshot: GhostSetupInteractionSnapshot = {
+        kind: 'plugin_setup', requestId: 'setup', revision: 1,
+        ghost: { id: 'test-plugin', name: 'Test' }, steps: [],
+      };
+      await vi.advanceTimersByTimeAsync(400);
+      bridge.open(harness.sessionId, snapshot, () => undefined);
+      await vi.advanceTimersByTimeAsync(800);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      // The coordinator broadcasts terminal before complete; its delayed close is only UI grace.
+      bridge.update({ ...snapshot, revision: 2, terminal: true });
+      bridge.complete(snapshot.requestId);
+      await vi.advanceTimersByTimeAsync(599);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+      bridge.close(snapshot.requestId, 'done');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(['done', 'error', 'stop', 'dispose'] as const)('cleans up a paused budget on %s', async (ending) => {
+      const harness = await start(kind, 1_000);
+      await vi.advanceTimersByTimeAsync(400);
+      await harness.change('approval', true);
+      if (ending === 'stop') await harness.service.stopRound(harness.groupId);
+      else if (ending === 'dispose') harness.service.dispose();
+      else await harness.service.settleLaneTurn({
+        sessionId: harness.sessionId,
+        activeInputClientId: harness.dispatches[0].clientId,
+        outcome: ending,
+        resultText: ending === 'done' ? '完成' : '',
+        // Session watchdogs still terminate a turn while its group budget is paused.
+        ...(ending === 'error' ? { failureCode: 'RUNTIME_TIMEOUT' as const } : {}),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      const aborted = harness.abortLane.mock.calls.length;
+      await harness.change('approval', false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.abortLane).toHaveBeenCalledTimes(aborted);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+});
+
 describe('botGroupChatService 分工', () => {
   beforeEach(() => {
     h.sqlite = createDatabase();
@@ -614,6 +950,13 @@ describe('botGroupChatService 分工', () => {
     const groupId = await createGroup(harness);
     const plan = await proposePlan(harness, groupId);
     const group = await detailOf(harness, groupId);
+
+    // The plan card is the newest incoming item: the read position seeded from lastReplyAt
+    // covers it, and the unread list counts it (bot-group-chat.md §5 未读).
+    const planMessage = group.messages.filter(m => m.authorKind === 'bot').sort((a, b) => b.sequence - a.sequence)[0]!;
+    expect(planMessage.kind).toBe('plan');
+    expect(group.lastReplyAt).toBe(planMessage.createdAt);
+    expect(group.incomingMessageTimes?.at(-1)).toBe(new Date(planMessage.createdAt).toISOString());
 
     expect(decidePlan).toHaveBeenCalledTimes(1);
     expect(decidePlan.mock.calls[0]![0]).toMatchObject({
@@ -703,6 +1046,44 @@ describe('botGroupChatService 分工', () => {
     expect(second.steps.map((step) => step.botName)).toEqual(['小满', '阿布']);
     expect(h.sqlite!.prepare('SELECT request_text AS text FROM bot_group_plans WHERE id = ?').get(second.id))
       .toEqual({ text: '帮我给官网做一个介绍页' });
+  });
+
+  it('preserves the timeout category when a local plan step times out', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(), stepTurnTimeoutMs: 1_000 });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    await vi.waitFor(() => expect(harness.dispatches.at(-1)?.sessionId).toBe('plan-mimi'));
+    await vi.advanceTimersByTimeAsync(1_100);
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.abortLane).toHaveBeenCalledWith('plan-mimi');
+    expect(openPlan(group).steps[0].status).toBe('failed');
+    expect(group.messages.find((message) => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT', content: '' });
+  });
+
+  it.each([
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', undefined, 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', undefined, '[REMOTE_AGENT_BUSY] private preparation details'],
+  ] as const)('preserves the preparation reason %s for a local plan without dispatching', async (errorCode, failureCode, message) => {
+    const harness = createHarness(() => null, { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir(),
+      ensureLane: async () => ({ ok: false, errorCode, message }),
+    });
+    const groupId = await createGroup(harness);
+    const plan = await proposePlan(harness, groupId);
+    await harness.service.startPlan({ groupId, planId: plan.id });
+    const group = await waitForIdle(harness, groupId);
+    expect(harness.dispatches).toEqual([]);
+    expect(openPlan(group).status).toBe('waiting');
+    expect(openPlan(group).steps[0].status).toBe('failed');
+    expect(group.messages.find(message => message.kind === 'notice' && message.planId === plan.id))
+      .toMatchObject({ noticeCode: 'member-unavailable', runtimeFailureCode: failureCode, content: '' });
+    expect(JSON.stringify(group.messages)).not.toContain('private preparation details');
   });
 
   it('runs the steps one at a time in the plan work directory and stops after each', async () => {
@@ -836,7 +1217,7 @@ describe('botGroupChatService 分工', () => {
       .toEqual(['加上英文版了']);
   });
 
-  it('checks 「@所有人」 and mention-only groups too; only naming a Bot skips the check', async () => {
+  it('checks 「@所有人」 but leaves unaddressed messages idle in mention-only groups', async () => {
     const decidePlan = vi.fn(async (_input: PlanDecisionInput) => ({ needsPlan: false }) as PlanDecision);
     const harness = createHarness(() => 'NO_REPLY', { decidePlan });
     const groupId = await createGroup(harness);
@@ -847,8 +1228,11 @@ describe('botGroupChatService 分工', () => {
     await harness.service.updateGroup({ groupId, replyMode: 'mentioned' });
     await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'quiet' });
     await waitForIdle(harness, groupId);
-    expect(decidePlan).toHaveBeenCalledTimes(2);
+    expect(decidePlan).toHaveBeenCalledTimes(1);
     expect(harness.dispatches).toHaveLength(3);
+    await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'explicit', division: true });
+    await waitForIdle(harness, groupId);
+    expect(decidePlan).toHaveBeenCalledTimes(2);
   });
 
   it('an explicit request whose chosen members all became unavailable says so', async () => {

@@ -19,7 +19,7 @@ import {
 
 /** minimal 档 —— 与个人 bot 逐个对齐, 两个 bot 的表情语义不该各说各话。 */
 const ACK_EMOJI = '👀';
-const PROCESSING_EMOJI = '👨‍💻';
+const PROCESSING_EMOJI = '🤔';
 const FAIL_EMOJI = '👎';
 
 export interface AckReactionTask {

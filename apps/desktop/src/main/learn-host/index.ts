@@ -25,13 +25,15 @@ import { getDbClient } from '../localDb/client/current';
 import { and, desc, eq, isNull, inArray } from 'drizzle-orm';
 import { messages as messagesTable, sessions as sessionsTable } from '../localDb/schema';
 import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
-import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
+import {
+  resolveLenientSessionRoute,
+  resolveNewTaskDefaultModelRoute,
+} from '../maker-host/model-route-guard-live.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { readMemorySettings } from '../maker-host/memory-settings-store.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch';
 import { backfillSessionMeta } from '../scheduler-host/runners/_shared';
-import { defaultModelFor } from '../scheduler-host/model-defaults';
 import { computeTwoDirDiff } from '../skillhub/snapshot';
 import type { LearnEventPayload } from '../../shared/learnTypes';
 import { LearnController, type LearnSessionLike } from './controller';
@@ -64,7 +66,7 @@ export interface StartLearnHostDeps {
   maker: Maker;
   /** learn:event 广播到 renderer(bootstrap 注入 broadcastToAllWindows 包装)。 */
   broadcast: (payload: LearnEventPayload) => void;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   /** hub 源:拉市场 skill 详情 + 可用已发布文件(bootstrap 注入,/learn hub:<slug>
    *  与 skill hub「学习此技能」共用)。未注入时 hub 源请求报 INVALID_PARAMS(兜底)。 */
@@ -91,7 +93,7 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
     createSession: async (opts): Promise<LearnSessionLike> => {
       // 蒸馏用什么模型由用户决定:继承触发会话的 agentKind/model/effort
       // (用户在输入框发 /learn 前可随意切模型)。无触发会话(理论上仅
-      // 编程调用)才落到保守兜底。
+      // 编程调用)才按新建任务口径取默认模型。
       const originMeta = opts.originSessionId
         ? await deps.maker.getSessionMeta(opts.originSessionId).catch(() => null)
         : null;
@@ -121,18 +123,19 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
       // 退回默认路由),不让 /learn 因停用整体失败。
       const agentKind = originMeta?.agentKind ?? 'claude-code';
-      const desiredModel = originMeta?.model ?? defaultModelFor(agentKind);
+      const newTaskDefault = await resolveNewTaskDefaultModelRoute(agentKind).catch(() => null);
+      const desiredModel = originMeta?.model ?? newTaskDefault?.model;
       const route = await resolveLenientSessionRoute(
         agentKind,
         desiredModel,
-        inheritedProviderId,
-        // 保守默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
+        originMeta?.model ? inheritedProviderId : (newTaskDefault?.providerId ?? null),
+        // 新建任务默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
         // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
         // 模型条目 reconcile(第十一轮)。
         {
-          fallbackModel: defaultModelFor(agentKind),
+          fallbackModel: newTaskDefault?.model,
           desiredEffort: originMeta?.effort,
-          desiredFastMode: originMeta?.fastMode === true,
+          desiredFastMode: originMeta?.fastMode ?? false,
         },
       );
       if (route.degraded) {

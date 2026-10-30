@@ -18,6 +18,7 @@ export function BotBasicProfileFields({
   onChooseAvatar,
   avatarBusy = false,
   autoFocusName = false,
+  readOnly = false,
   avatarPreview,
   centeredAvatar = false,
   avatarControl,
@@ -36,6 +37,7 @@ export function BotBasicProfileFields({
   onChooseAvatar?: () => void;
   avatarBusy?: boolean;
   autoFocusName?: boolean;
+  readOnly?: boolean;
   /** Unsaved local selection; never persisted as an avatar address. */
   avatarPreview?: string;
 }) {
@@ -76,6 +78,7 @@ export function BotBasicProfileFields({
         <label className="flex w-full min-w-0 flex-1 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
           {t('bots.nameLabel')}
           <Input
+            readOnly={readOnly}
             autoFocus={autoFocusName}
             ariaLabel={t('bots.nameLabel')}
             value={value.name}
@@ -93,6 +96,7 @@ export function BotBasicProfileFields({
         {t('bots.profile.summary')}
         <Textarea
           aria-label={t('bots.profile.summary')}
+          readOnly={readOnly}
           value={value.description}
           onChange={(next) => update('description', next, 'text')}
           onBlur={onDescriptionBlur}

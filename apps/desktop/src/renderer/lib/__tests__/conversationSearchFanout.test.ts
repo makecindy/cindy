@@ -283,6 +283,16 @@ describe('shouldReleaseConversationSearchLock', () => {
 });
 
 describe('merge and stamp', () => {
+  it('excludes hidden Make tasks from indexed and reused remote results before limiting', () => {
+    const page = response([
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ]);
+    expect(mergeConversationSearchFanout([page], 1).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map(item => item.session.id)).toEqual(['ordinary']);
+    expect(filterResultsByRequestFilters(page, {}).results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('keeps same-id hits from different devices and stamps origin', () => {
     const remote = stampRemoteSearchResponse(response([result('same', 10)]), {
       deviceId: 'dev-a',
@@ -301,6 +311,15 @@ describe('merge and stamp', () => {
 });
 
 describe('searchCachedSessionsByTitle', () => {
+  it('excludes both Make sources from cached titles even if explicitly requested', () => {
+    const rows = [
+      session({ id: 'make', title: 'needle', source: 'cindy-make' }),
+      session({ id: 'merge', title: 'needle', source: 'cindy-make-merge' }),
+      session({ id: 'ordinary', title: 'Needle notes', source: 'desktop' }),
+    ];
+    expect(searchCachedSessionsByTitle(rows, { query: 'needle', limit: 1 }).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(searchCachedSessionsByTitle(rows, { query: 'needle', filters: { sessionIds: ['make', 'merge'] } }).results).toEqual([]);
+  });
   it('excludes active and archived companions before ranking and limiting title matches', () => {
     const rows = [
       session({ id: 'bot-active', title: 'needle', source: 'bot' }),
@@ -418,6 +437,38 @@ describe('searchConversationsAcrossOrigins', () => {
     sortBy: 'relevance',
     semanticMode: 'hybrid',
   };
+
+  it.each([1, 3, 24, 40])('finds ordinary hits behind %i Make hits on a bounded legacy host', async (hiddenCount) => {
+    const candidates = [
+      ...Array.from({ length: hiddenCount }, (_entry, index) => result('make-' + index, 100 - index, {
+        source: index % 2 === 0 ? 'cindy-make' : 'cindy-make-merge',
+      })),
+      ...Array.from({ length: 4 }, (_entry, index) => result('ordinary-' + index, 4 - index, { source: 'desktop' })),
+    ];
+    const invokeRemote = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => {
+      const remoteRequest = args[0] as ConversationSearchRequest;
+      return response(candidates.slice(0, Math.min(remoteRequest.limit ?? 20, 50)));
+    });
+    const searchLocal = vi.fn(async () => response([]));
+    const page = await searchConversationsAcrossOrigins({ ...request, limit: 3 }, {
+      origins: [
+        { kind: 'local', sessionIds: null },
+        { kind: 'remote', deviceId: 'dev-a', deviceName: 'Studio', connected: true, sessionIds: null },
+      ],
+      searchLocal,
+      invokeRemote,
+      listCachedRemoteSessions: () => [],
+    });
+
+    expect(page.results.map((item) => item.session.id)).toEqual(['ordinary-0', 'ordinary-1', 'ordinary-2']);
+    expect(page.remoteResults?.map((item) => item.session.id)).toEqual([
+      'ordinary-0', 'ordinary-1', 'ordinary-2', 'ordinary-3',
+    ]);
+    expect(invokeRemote).toHaveBeenCalledExactlyOnceWith('dev-a', 'local-db:conversations:search', [
+      expect.objectContaining({ limit: 50, semanticMode: 'keyword' }),
+    ]);
+    expect(searchLocal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ limit: 3, semanticMode: 'hybrid' }));
+  });
 
   it('fans out, forces keyword on remotes, and survives a failed device', async () => {
     const invokeRemote = vi.fn(async (deviceId: string) => {
@@ -688,6 +739,40 @@ describe('filterResultsByRequestFilters', () => {
       },
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('matches Windows drive and UNC case variants without folding POSIX paths', () => {
+    const windowsPage = response([
+      result('drive', 1, { workingDir: 'C:/work/repo' }),
+      result('unc', 1, { workingDir: '//SERVER/Share/Work/Repo' }),
+      result('other', 1, { workingDir: 'C:/work/other' }),
+    ]);
+    const windowsRequest = {
+      filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
+    };
+    expect(
+      filterResultsByRequestFilters(windowsPage, windowsRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['drive', 'unc']);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response(windowsPage.results.slice(0, 2)),
+        windowsRequest.filters.workingDirs,
+      ),
+    ).toBe(false);
+
+    const posixPage = response([
+      result('posix-lower', 1, { workingDir: '/work/repo' }),
+      result('posix-upper', 1, { workingDir: '/Work/Repo' }),
+    ]);
+    const posixRequest = { filters: { workingDirs: ['/work/repo'] } };
+    expect(
+      filterResultsByRequestFilters(posixPage, posixRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['posix-lower']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(posixPage, ['/work/repo'])).toBe(true);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {

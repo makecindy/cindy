@@ -1,23 +1,16 @@
-/**
- * 新建群聊（对照桌面 BotGroupCreateDialog.tsx）：填群名称，选 2–6 位伙伴。群建在一台电脑上，
- * 只能选这台电脑上的伙伴；多台电脑时先在「+」的菜单里选电脑。成员顺序即发言顺序，跟随
- * 列表顺序而不是点选先后（与桌面一致）。群名长度与人数由电脑最终校验，这里先挡住明显不
- * 成立的提交。建好后电脑回一个跳转，页面打开新群。
- */
+/** 在所选电脑创建群聊，可选最多 6 位该电脑上的伙伴。 */
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
 import { Check } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
   BOT_GROUP_MAX_MEMBERS,
-  BOT_GROUP_MIN_MEMBERS,
   BOT_GROUP_NAME_MAX_CHARS,
   BOT_GROUP_REMOTE_COLLECTION_ID,
 } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { Text, TextInput } from '@/components/AppText';
-import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { invokeRemoteResourceAction, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
@@ -26,7 +19,7 @@ import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScal
 import { BOT_GROUP_ROW_AVATAR_SIZE, BotGroupAvatar } from './BotGroupAvatars';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { createdBotGroupId } from './botGroupRemote';
-import { CompanionSheet } from './CompanionSheet';
+import { FormSheet } from './FormSheet';
 import { orderedTeammates } from './teammateNavigation';
 import { useHostTeammates } from './useHostTeammates';
 
@@ -53,15 +46,15 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [nameError, setNameError] = useState(false);
-  const [membersError, setMembersError] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const nameInput = useRef<NativeTextInput>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (!visible) return;
-    setName(''); setSelected([]); setNameError(false); setMembersError(false); setSubmitError(null);
+    setName(''); setSelected([]); setNameError(false); setSubmitError(null);
   }, [visible]);
 
   const candidates = orderedTeammates(teammates.rows, '', i18n.language);
@@ -72,7 +65,6 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
 
   const toggle = (botId: string) => {
     setSubmitError(null);
-    setMembersError(false);
     setSelected((current) => current.includes(botId)
       ? current.filter((id) => id !== botId)
       : current.length >= BOT_GROUP_MAX_MEMBERS ? current : [...current, botId]);
@@ -91,10 +83,8 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
     if (busyRef.current || !host) return;
     const trimmed = name.trim();
     const nameInvalid = trimmed.length === 0;
-    const membersInvalid = ordered.length < BOT_GROUP_MIN_MEMBERS || ordered.length > BOT_GROUP_MAX_MEMBERS;
     setNameError(nameInvalid);
-    setMembersError(membersInvalid);
-    if (nameInvalid || membersInvalid) return;
+    if (nameInvalid || ordered.length > BOT_GROUP_MAX_MEMBERS) return;
     busyRef.current = true;
     setBusy(true);
     setSubmitError(null);
@@ -118,20 +108,21 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
     }
   };
 
-  const notEnough = !teammates.loading && candidates.length < BOT_GROUP_MIN_MEMBERS;
-  return <CompanionSheet visible={visible} title={t('groupChat.create.title')} onClose={close} onClosed={onClosed}
+  return <FormSheet visible={visible} title={t('groupChat.create.title')} onClose={close} onClosed={onClosed}
+    onShow={() => nameInput.current?.focus()}
+    leadingAction={{ label: t('groupChat.create.close'), disabled: busy, onPress: close, testID: 'botGroup.create.cancel' }}
+    trailingAction={{ label: t('groupChat.create.submitShort'), accessibilityLabel: t('groupChat.create.submit'), busy, disabled: !online || !host,
+      onPress: () => void submit(), testID: 'botGroup.create.submit' }}
     preventDismiss={dirty || busy} testID="botGroup.create">
     <View style={styles.content}>
-      <Text style={styles.description}>{t('groupChat.create.description')}</Text>
-      {host ? <Text style={styles.note}>{t('groupChat.create.computerNote', { deviceName: host.deviceName })}</Text> : null}
       {!online ? <Text accessibilityRole="alert" style={styles.note}>{t('devices.resources.hostOffline')}</Text> : null}
       <View style={styles.field}>
         <Text style={styles.label}>{t('groupChat.create.nameLabel')}</Text>
-        <TextInput accessibilityLabel={t('groupChat.create.nameLabel')} value={name} maxLength={BOT_GROUP_NAME_MAX_CHARS}
+        <TextInput ref={nameInput} accessibilityLabel={t('groupChat.create.nameLabel')} value={name} maxLength={BOT_GROUP_NAME_MAX_CHARS}
           editable={!busy} placeholder={t('groupChat.create.namePlaceholder')} placeholderTextColor={colors.textPlaceholder}
           onChangeText={(value) => { setName(value); if (value.trim()) setNameError(false); setSubmitError(null); }}
           style={styles.input} testID="botGroup.create.name" />
-        {nameError ? <Text accessibilityRole="alert" style={styles.error}>{t('groupChat.create.nameRequired')}</Text> : null}
+        {nameError ? <Text accessibilityRole="alert" style={styles.nameError}>{t('groupChat.create.nameRequired')}</Text> : null}
       </View>
       <View style={styles.field}>
         <View style={styles.labelRow}>
@@ -157,22 +148,16 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
           })}
         </View> : null}
         {teammates.loading && candidates.length === 0 ? <ActivityIndicator color={colors.textSecondary} style={styles.spinner} /> : null}
-        {notEnough ? <Text style={styles.note}>{t(teammates.failed ? 'devices.resources.loadFailed' : 'groupChat.create.notEnoughBots', { min: BOT_GROUP_MIN_MEMBERS })}</Text> : null}
-        {membersError ? <Text accessibilityRole="alert" style={styles.error}>{t('groupChat.create.minMembers', { min: BOT_GROUP_MIN_MEMBERS })}</Text> : null}
+        {teammates.failed ? <Text style={styles.note}>{t('devices.resources.loadFailed')}</Text> : null}
       </View>
       {submitError ? <Text accessibilityRole="alert" style={styles.error} testID="botGroup.create.error">{submitError}</Text> : null}
-      <View style={styles.actions}>
-        <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: close, testID: 'botGroup.create.cancel' }} />
-        <MainWindowActionButton action={{ label: t('groupChat.create.submit'), tone: 'primary', busy, disabled: !online || !host,
-          onPress: () => void submit(), testID: 'botGroup.create.submit' }} />
-      </View>
     </View>
-  </CompanionSheet>;
+  </FormSheet>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { gap: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xl },
-  description: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  nameError: { color: colors.statusError, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   note: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   error: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   field: { gap: spacing.sm },
@@ -193,5 +178,4 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignItems: 'center', justifyContent: 'center' },
   checked: { backgroundColor: colors.cta, borderColor: colors.cta },
   spinner: { paddingVertical: spacing.md },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
 });

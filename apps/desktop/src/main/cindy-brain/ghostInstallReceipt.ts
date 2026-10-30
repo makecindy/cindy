@@ -1,8 +1,21 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { readBoundedFileNoFollow, readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
+import { isValidPluginNamespace, isValidPluginResourceId } from '@cindy/plugin-protocol';
+import { validSimulatorMigration } from '../../shared/simulatorIdentityMigration.js';
 
+import {
+  createPluginLogicalIdentity,
+  hasDeliveryNamespace,
+  isValidPluginInstallRelId,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+  PLUGIN_NS_INSTALL_ROOT,
+  pluginInstallRelId,
+  pluginInstallStoragePart,
+  pluginStoragePart,
+} from '../../shared/pluginIdentity.js';
 import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
@@ -38,11 +51,67 @@ const MAX_RECEIPT_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING_MUTATION_BYTES = 64 * 1024;
 const MAX_ICON_DATA_URL_BYTES = 768 * 1024;
 const MAX_MIGRATION_LEDGER_BYTES = 64 * 1024;
+
+export function assertManagedPluginParentSync(
+  root: string,
+  relPath: string,
+  createMissing = false,
+): boolean {
+  const segments = relPath.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..' ||
+      segment.includes('\\') || segment.includes(path.sep))) {
+    throw new Error('invalid managed plugin path');
+  }
+  let parent = root;
+  for (const segment of segments.slice(0, -1)) {
+    parent = path.join(parent, segment);
+    try {
+      const kind = classifyGhostDirEntrySync(parent);
+      if (kind !== 'directory') throw new Error('managed plugin parent is not a real directory');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (!createMissing) return false;
+      try {
+        fs.mkdirSync(parent);
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST' ||
+            classifyGhostDirEntrySync(parent) !== 'directory') throw mkdirError;
+      }
+    }
+  }
+  return true;
+}
 /**
  * 受管 icon 快照的完整形态:声明的图片 mime + 严格 base64 载荷。载荷字符集也要
  * 校验 —— 只认前缀会让被改写的 receipt 把任意字符串塞进 renderer 的 img src。
  */
 const ICON_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+const MAX_CACHED_ICON_DATA_URLS = 64;
+const MAX_CACHED_ICON_DATA_URL_BYTES = 4 * 1024 * 1024;
+const validatedIconDataUrls = new Set<string>();
+let cachedIconDataUrlBytes = 0;
+
+/** Only immutable, fully validated icon strings are reused, never receipt approval. */
+function isValidIconDataUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (validatedIconDataUrls.has(value)) {
+    validatedIconDataUrls.delete(value);
+    validatedIconDataUrls.add(value);
+    return true;
+  }
+  const bytes = Buffer.byteLength(value, 'utf8');
+  if (bytes > MAX_ICON_DATA_URL_BYTES || !ICON_DATA_URL_RE.test(value)) return false;
+  while (validatedIconDataUrls.size >= MAX_CACHED_ICON_DATA_URLS ||
+      cachedIconDataUrlBytes + bytes > MAX_CACHED_ICON_DATA_URL_BYTES) {
+    const oldest = validatedIconDataUrls.values().next().value;
+    if (oldest === undefined) break;
+    validatedIconDataUrls.delete(oldest);
+    cachedIconDataUrlBytes -= Buffer.byteLength(oldest, 'utf8');
+  }
+  validatedIconDataUrls.add(value);
+  cachedIconDataUrlBytes += bytes;
+  return true;
+}
 
 /**
  * 一次明确批准的插件安装事实；只允许 Host 写入安装目录之外的状态根。
@@ -52,10 +121,18 @@ const ICON_DATA_URL_RE = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/
  * 目录加载，只有技能目录因为越出沙箱而被拷成快照。
  */
 export interface GhostInstallReceipt {
+  /** Host-written origin preserves the existing storage key across the official simulator rename. */
+  simulatorPreviousRelId?: string;
+  /** Verified market delivery committed with the rename; repairs a crash before ledger completion. */
+  simulatorMarketRelease?: { pluginId: string; releaseId: string; previousPackageSha256: string };
   /** Explicit Host confirmation; absent on older receipts, never inferred from manifest. */
   taskCapabilityApproved?: true;
+  targetCapabilityApproved?: true;
+  delegationCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
+  /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
+  namespace?: string | null;
   revision: string;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
@@ -72,6 +149,7 @@ export interface GhostInstallReceipt {
    * receipt 中的同名值继续有效，避免升级后丢失既有企业作者自测资格。
    */
   installOrigin?: string;
+  legacyFirstPartyEligible?: boolean;
   /**
    * 按 skill item 目录钉住的固化字节指纹(`item.dir` → sha256)。声明了 skill 能力
    * 时逐项必填，没声明时是空对象。
@@ -169,6 +247,8 @@ export type GhostPendingMutation =
       phase?: 'prepared' | 'backed-up' | 'published';
       /** Hash of the previously approved bytes, when an approval existed. */
       oldPackageSha256?: string;
+      sourceStateArchiveId?: string;
+      simulatorPreviousRelId?: string;
     }
   // uninstall 不带 packageSha256:它的提交信号不是"receipt 写到某版本",而是"receipt +
   // 内容目录都已移除"。恢复见到它就把两者删干净(顺序无关,幂等)。
@@ -179,6 +259,15 @@ export type GhostPendingMutationReadResult =
   | { state: 'missing' }
   | { state: 'invalid'; reason: string }
   | { state: 'unreadable'; reason: string };
+
+export function isValidGhostSourceStateArchiveId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (/^arch_[a-f0-9]{32}$/.test(value)) return true;
+  const identity = parsePluginStoragePart(value);
+  return identity !== null && pluginStoragePart(identity) === value &&
+    identity.namespace !== null && identity.namespace.startsWith('cindy-archive-') &&
+    isRevision(identity.namespace.slice('cindy-archive-'.length));
+}
 
 export type GhostPendingMutationListResult =
   { state: 'ok'; ids: string[]; blocked: boolean } | { state: 'unreadable'; reason: string };
@@ -196,6 +285,23 @@ export class GhostInstallReceiptStore {
     return path.resolve(this.getRootDir());
   }
 
+  private assertPathParentSync(absPath: string, createMissing = false, root = this.rootDir()): boolean {
+    return assertManagedPluginParentSync(
+      root,
+      path.relative(root, absPath).split(path.sep).join('/'),
+      createMissing,
+    );
+  }
+
+  private receiptRelId(receipt: { id: string; namespace?: string | null }): string {
+    return pluginInstallRelId(
+      createPluginLogicalIdentity(
+        hasDeliveryNamespace(receipt) ? receipt.namespace : null,
+        receipt.id,
+      ),
+    );
+  }
+
   private realRootDirSync(): string {
     return fs.realpathSync(this.rootDir());
   }
@@ -207,13 +313,71 @@ export class GhostInstallReceiptStore {
     return { state: 'invalid', reason: result.reason };
   }
 
-  /** Recovery must not confuse transient state-root IO with missing/corrupt approval state. */
-  readForRecovery(id: string): GhostInstallReceiptRecoveryReadResult {
-    const receiptPath = this.receiptPath(id);
+  /** Bind the owner root before yielding; use the same validation as the sync reader. */
+  async readAsync(id: string): Promise<GhostInstallReceiptReadResult> {
+    const root = this.rootDir();
+    const receiptPath = this.receiptPath(id, root);
     let bytes: Buffer | null;
     try {
+      let parent = root;
+      for (const segment of id.split('/').slice(0, -1)) {
+        parent = path.join(parent, segment);
+        if (await classifyGhostDirEntry(parent) !== 'directory') {
+          throw new Error('managed plugin parent is not a real directory');
+        }
+      }
+      bytes = await readBoundedFileNoFollow(receiptPath, MAX_RECEIPT_BYTES, {
+        nonBlocking: true,
+        containWithin: await fs.promises.realpath(root),
+      });
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+        ? { state: 'legacy-unapproved' }
+        : { state: 'invalid', reason: error instanceof Error ? error.message : String(error) };
+    }
+    return this.parseReceiptBytes(id, bytes);
+  }
+
+  captureLegacyFirstPartyEligibilitySync(id: string, expectedRevision: string): void {
+    const identity = parsePluginInstallRelId(id);
+    const read = this.readForRecovery(id);
+    if (!identity || identity.namespace !== null || read.state !== 'approved' ||
+        read.receipt.revision !== expectedRevision || hasDeliveryNamespace(read.receipt)) {
+      throw new Error('legacy qualification requires the exact censused root approval');
+    }
+    const target = this.receiptPath(id);
+    this.assertPathParentSync(target);
+    const root = this.realRootDirSync();
+    const temp = path.join(root, '.legacy-qualification-' + crypto.randomBytes(12).toString('hex') + '.tmp');
+    const receipt = {
+      ...read.receipt, legacyFirstPartyEligible: true,
+      manifest: ghostManifestToAuthorFormat(read.receipt.manifest),
+    };
+    try {
+      fs.writeFileSync(temp, JSON.stringify(receipt, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      fs.renameSync(temp, target);
+    } finally {
+      try {
+        fs.rmSync(temp, { force: true });
+      } catch (error) {
+        void error;
+      }
+    }
+  }
+
+  /** Recovery must not confuse transient state-root IO with missing/corrupt approval state. */
+  readForRecovery(id: string): GhostInstallReceiptRecoveryReadResult {
+    // Bind path construction and all containment checks to one resolved owner
+    // root for this read. Each call still opens and validates the actual bytes.
+    const root = this.rootDir();
+    const receiptPath = this.receiptPath(id, root);
+    let bytes: Buffer | null;
+    try {
+      if (!this.assertPathParentSync(receiptPath, false, root)) {
+        return { state: 'missing' };
+      }
       bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
-        containWithin: this.realRootDirSync(),
+        containWithin: fs.realpathSync(root),
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -224,6 +388,10 @@ export class GhostInstallReceiptStore {
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+    return this.parseReceiptBytes(id, bytes);
+  }
+
+  private parseReceiptBytes(id: string, bytes: Buffer | null): Extract<GhostInstallReceiptReadResult, { state: 'approved' | 'invalid' }> {
     if (!bytes) {
       return { state: 'invalid', reason: 'receipt 不是普通文件或超过大小上限' };
     }
@@ -234,7 +402,8 @@ export class GhostInstallReceiptStore {
     } catch (error) {
       return { state: 'invalid', reason: error instanceof Error ? error.message : String(error) };
     }
-    const validated = validateReceipt(parsed, id);
+    const expectedGhostId = parsePluginInstallRelId(id)?.ghostId ?? id;
+    const validated = validateReceipt(parsed, expectedGhostId);
     return validated.ok
       ? { state: 'approved', receipt: validated.receipt }
       : { state: 'invalid', reason: validated.reason };
@@ -250,16 +419,22 @@ export class GhostInstallReceiptStore {
    */
   async write(
     receipt: GhostInstallReceipt,
-    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean; assertCurrent?: () => void } = {},
+    options: { skillSourceDir?: string; requireSkillSnapshot?: boolean; relId?: string; assertCurrent?: () => void } = {},
   ): Promise<void> {
     const validated = validateReceipt(receipt, receipt.id);
     if (!validated.ok)
       throw new Error(`refusing to write invalid ghost receipt: ${validated.reason}`);
 
     const root = this.rootDir();
-    await fs.promises.mkdir(root, { recursive: true });
+    const relId = options.relId ?? this.receiptRelId(receipt);
+    if (parsePluginInstallRelId(relId)?.ghostId !== receipt.id) {
+      throw new Error('ghost receipt relId does not match receipt id');
+    }
+    const receiptFile = this.receiptPath(relId);
+    fs.mkdirSync(root, { recursive: true });
+    this.assertPathParentSync(receiptFile, true);
     try {
-      await this.ensureSkillSnapshot(receipt, options.skillSourceDir);
+      await this.ensureSkillSnapshot(receipt, relId, options.skillSourceDir);
     } catch (error) {
       if (options.requireSkillSnapshot !== false) throw error;
     }
@@ -279,12 +454,12 @@ export class GhostInstallReceiptStore {
     // writer may have observed it and committed the receipt; pathname-based
     // rollback could remove that install's only durable migration guard.
     if (!this.hasMigrationLedger()) {
-      await this.ensureMigrationMarker(receipt.id);
+      await this.ensureMigrationMarker(relId);
     }
-    const target = this.receiptPath(receipt.id);
+    const target = receiptFile;
     const temp = path.join(
       root,
-      `.${receipt.id}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+      `.${this.receiptRelId(receipt).replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
     );
     const persistedReceipt = {
       ...validated.receipt,
@@ -313,6 +488,7 @@ export class GhostInstallReceiptStore {
 
   async remove(id: string): Promise<void> {
     const receiptPath = this.receiptPath(id);
+    if (!this.assertPathParentSync(receiptPath)) return;
     const receiptKind = await classifyCleanupEntry(receiptPath);
     if (receiptKind === 'missing') {
       // ENOENT is already-clean and must remain idempotent.
@@ -326,7 +502,7 @@ export class GhostInstallReceiptStore {
     // and transient IO failures remain observable so the caller keeps its journal.
     const snapshotPath = await this.assertManagedSnapshotParent(id, { createMissing: false });
     if (!snapshotPath) return;
-    const parentDir = path.join(this.rootDir(), 'skill-snapshots');
+    const parentDir = path.dirname(snapshotPath);
     const parentStats = await fs.promises.lstat(parentDir, { bigint: true });
     await this.mutateSnapshot({
       parentDir,
@@ -336,13 +512,14 @@ export class GhostInstallReceiptStore {
         ino: parentStats.ino,
       },
       operation: 'remove',
-      targetName: id,
+      targetName: id.split('/').at(-1)!,
     });
   }
 
   /** `remove` 的同步版:启动恢复(构造期同步)收尾未完成卸载用,判据同 `remove`。 */
   removeSync(id: string): void {
     const receiptPath = this.receiptPath(id);
+    if (!this.assertPathParentSync(receiptPath)) return;
     const receiptKind = classifyCleanupEntrySync(receiptPath);
     if (receiptKind === 'missing') {
       // ENOENT is already-clean and must remain idempotent.
@@ -360,10 +537,10 @@ export class GhostInstallReceiptStore {
   }
 
   skillSnapshotRoot(id: string, revision: string): string {
-    if (!isValidGhostId(id) || !isRevision(revision)) {
+    if (!isValidPluginInstallRelId(id) || !isRevision(revision)) {
       throw new Error('invalid ghost skill snapshot identity');
     }
-    return path.join(this.rootDir(), 'skill-snapshots', id, revision);
+    return path.join(this.rootDir(), 'skill-snapshots', ...id.split('/'), revision);
   }
 
   /**
@@ -384,10 +561,10 @@ export class GhostInstallReceiptStore {
     id: string,
     opts: { createMissing: boolean },
   ): Promise<string | null> {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for snapshot path');
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for snapshot path');
     const root = this.rootDir();
     let current = root;
-    for (const segment of ['skill-snapshots', id]) {
+    for (const segment of ['skill-snapshots', ...id.split('/')]) {
       current = path.join(current, segment);
       let kind: Awaited<ReturnType<typeof classifyGhostDirEntry>> | null;
       try {
@@ -422,10 +599,10 @@ export class GhostInstallReceiptStore {
     id: string,
     opts: { createMissing: boolean },
   ): string | null {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for snapshot path');
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for snapshot path');
     const root = this.rootDir();
     let current = root;
-    for (const segment of ['skill-snapshots', id]) {
+    for (const segment of ['skill-snapshots', ...id.split('/')]) {
       current = path.join(current, segment);
       let kind: ReturnType<typeof classifyGhostDirEntrySync> | null;
       try {
@@ -543,8 +720,8 @@ export class GhostInstallReceiptStore {
    * 时用它区分"安装了 receipt 之前就是 legacy"与"新模型安装后 receipt 被删"。
    */
   private migrationMarkerPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for migration marker path');
-    return path.join(this.rootDir(), `.migrated-${id}`);
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for migration marker path');
+    return path.join(this.rootDir(), `.migrated-${id.replaceAll('/', '.')}`);
   }
 
   /**
@@ -565,7 +742,7 @@ export class GhostInstallReceiptStore {
     const root = this.rootDir();
     await fs.promises.mkdir(root, { recursive: true });
     const target = this.migrationMarkerPath(id);
-    const temp = path.join(root, `.migrated-${id}-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
+    const temp = path.join(root, `.migrated-${id.replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`);
     try {
       await fs.promises.writeFile(temp, '', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
       // Publish via hard-link first so the operation is no-clobber:
@@ -656,18 +833,29 @@ export class GhostInstallReceiptStore {
 
   /** 事务标记路径。点开头,不与 `<id>.json` receipt 或 `.legacy-migration.json` 撞名。 */
   private pendingMutationPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for pending mutation path');
-    return path.join(this.rootDir(), `.pending-${id}.json`);
+    const identity = parsePluginInstallRelId(id);
+    if (!identity) throw new Error('invalid ghost id for pending mutation path');
+    return path.join(
+      this.rootDir(),
+      ...id.split('/').slice(0, -1),
+      `.pending-${identity.ghostId}.json`,
+    );
   }
 
   /** 事务开始:装入/更新 rename 动盘**之前**落标记(原子 temp+rename;re-begin 覆盖)。 */
   async writePendingMutation(id: string, entry: GhostPendingMutation): Promise<void> {
+    if (entry.kind === 'update' && entry.sourceStateArchiveId !== undefined &&
+        (!isValidGhostSourceStateArchiveId(entry.sourceStateArchiveId) ||
+          entry.receiptRevision === undefined)) {
+      throw new Error('journal source state archive identity is invalid');
+    }
     const root = this.rootDir();
-    await fs.promises.mkdir(root, { recursive: true });
     const target = this.pendingMutationPath(id);
+    fs.mkdirSync(root, { recursive: true });
+    this.assertPathParentSync(target, true);
     const temp = path.join(
       root,
-      `.pending-${id}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
+      `.pending-${id.replaceAll('/', '.')}-${process.pid}-${crypto.randomBytes(6).toString('hex')}.tmp`,
     );
     try {
       await fs.promises.writeFile(temp, `${JSON.stringify({ version: 1, id, ...entry })}\n`, {
@@ -683,12 +871,18 @@ export class GhostInstallReceiptStore {
 
   /** 事务提交:receipt 写成功后清标记。删不动只多留一份标记,下轮恢复幂等重判。 */
   async clearPendingMutation(id: string): Promise<void> {
-    await fs.promises.rm(this.pendingMutationPath(id), { force: true });
+    const target = this.pendingMutationPath(id);
+    if (this.assertPathParentSync(target)) {
+      await fs.promises.rm(target, { force: true });
+    }
   }
 
   /** 同步清标记(启动恢复在构造期同步跑,不能留 fire-and-forget 的异步删除)。 */
   clearPendingMutationSync(id: string): void {
-    fs.rmSync(this.pendingMutationPath(id), { force: true });
+    const target = this.pendingMutationPath(id);
+    if (this.assertPathParentSync(target)) {
+      fs.rmSync(target, { force: true });
+    }
   }
 
   readPendingMutationSync(id: string): GhostPendingMutationReadResult {
@@ -696,6 +890,9 @@ export class GhostInstallReceiptStore {
     const markerPath = this.pendingMutationPath(id);
     let bytes: Buffer | null;
     try {
+      if (!this.assertPathParentSync(markerPath)) {
+        return { state: 'missing' };
+      }
       // Single-handle bounded read: the earlier lstat+readFileSync pair had a
       // TOCTOU window where a FIFO/symlink/huge file could replace the journal
       // between the two calls.  readBoundedFileNoFollowSync opens, stats, and
@@ -784,6 +981,17 @@ export class GhostInstallReceiptStore {
       }
       const oldPackageSha256 = raw.oldPackageSha256;
       const receiptRevision = raw.receiptRevision;
+      const sourceStateArchiveId = raw.sourceStateArchiveId;
+      const simulatorPreviousRelId = raw.simulatorPreviousRelId;
+      if (simulatorPreviousRelId !== undefined &&
+          (!validSimulatorMigration(simulatorPreviousRelId, parsePluginInstallRelId(id)?.ghostId ?? '',
+            parsePluginInstallRelId(id)?.namespace) || sourceStateArchiveId !== undefined || receiptRevision === undefined)) {
+        return { state: 'invalid', reason: 'journal simulator migration identity is invalid' };
+      }
+      if (sourceStateArchiveId !== undefined &&
+          (!isValidGhostSourceStateArchiveId(sourceStateArchiveId) || receiptRevision === undefined)) {
+        return { state: 'invalid', reason: 'journal source state archive identity is invalid' };
+      }
       if (
         receiptRevision !== undefined &&
         (typeof receiptRevision !== 'string' || !isRevision(receiptRevision))
@@ -805,6 +1013,8 @@ export class GhostInstallReceiptStore {
           ...(receiptRevision !== undefined ? { receiptRevision } : {}),
           ...(phase !== undefined ? { phase } : {}),
           ...(oldPackageSha256 !== undefined ? { oldPackageSha256 } : {}),
+          ...(sourceStateArchiveId !== undefined ? { sourceStateArchiveId } : {}),
+          ...(typeof simulatorPreviousRelId === 'string' ? { simulatorPreviousRelId } : {}),
         },
       };
     }
@@ -833,16 +1043,39 @@ export class GhostInstallReceiptStore {
       if (isValidGhostId(match[1])) ids.push(match[1]);
       else blocked = true;
     }
+    try {
+      const nsRoot = path.join(this.rootDir(), PLUGIN_NS_INSTALL_ROOT);
+      if (this.assertPathParentSync(path.join(nsRoot, '.pending-scan'))) {
+        for (const nsEntry of fs.readdirSync(nsRoot, { withFileTypes: true })) {
+          if (!nsEntry.isDirectory() && !nsEntry.isSymbolicLink()) continue;
+          const parent = path.join(nsRoot, nsEntry.name);
+          if (!this.assertPathParentSync(path.join(parent, '.pending-scan'))) continue;
+          for (const name of fs.readdirSync(parent)) {
+            if (!name.startsWith('.pending-') || !name.endsWith('.json')) continue;
+            const ghostId = name.slice('.pending-'.length, -'.json'.length);
+            const relId = PLUGIN_NS_INSTALL_ROOT + '/' + nsEntry.name + '/' + ghostId;
+            if (isValidPluginInstallRelId(relId)) ids.push(relId);
+            else blocked = true;
+          }
+        }
+      }
+    } catch (error) {
+      return {
+        state: 'unreadable',
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
     return { state: 'ok', ids, blocked };
   }
 
-  private receiptPath(id: string): string {
-    if (!isValidGhostId(id)) throw new Error('invalid ghost id for receipt path');
-    return path.join(this.rootDir(), `${id}.json`);
+  private receiptPath(id: string, root = this.rootDir()): string {
+    if (!isValidPluginInstallRelId(id)) throw new Error('invalid ghost id for receipt path');
+    return path.join(root, ...id.split('/').slice(0, -1), `${id.split('/').at(-1)}.json`);
   }
 
   private async ensureSkillSnapshot(
     receipt: GhostInstallReceipt,
+    relId: string,
     skillSourceDir: string | undefined,
   ): Promise<void> {
     const items = receipt.manifest.skill?.items ?? [];
@@ -851,17 +1084,20 @@ export class GhostInstallReceiptStore {
     try { await fs.promises.mkdir(snapshotsRoot, { recursive: false }); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-    const rootStats = await fs.promises.lstat(snapshotsRoot, { bigint: true });
+    const snapshotParent = await this.assertManagedSnapshotParent(relId, { createMissing: true });
+    if (!snapshotParent) throw new Error('skill snapshot parent unavailable');
+    const parentDir = path.dirname(snapshotParent);
+    const rootStats = await fs.promises.lstat(parentDir, { bigint: true });
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error('skill snapshot root unavailable');
     await this.mutateSnapshot({
-      parentDir: snapshotsRoot,
+      parentDir,
       expectedParent: {
-        realPath: await fs.promises.realpath(snapshotsRoot),
+        realPath: await fs.promises.realpath(parentDir),
         dev: rootStats.dev,
         ino: rootStats.ino,
       },
       operation: 'ensure',
-      targetName: `${receipt.id}/${receipt.revision}`,
+      targetName: `${relId.split('/').at(-1)}/${receipt.revision}`,
       receipt,
       ...(skillSourceDir ? { sourceDir: skillSourceDir } : {}),
     });
@@ -969,7 +1205,8 @@ function isValidUniqueGhostIdArray(value: unknown): value is string[] {
 }
 
 function isManagedBackupDirName(id: string, name: string): boolean {
-  return new RegExp(`^\\.cindy-updating-${escapeRegExp(id)}-[0-9a-f]{8}$`).test(name);
+  if (!isValidPluginInstallRelId(id)) return false;
+  return new RegExp(`^\\.cindy-updating-${escapeRegExp(pluginInstallStoragePart(id))}-[0-9a-f]{8}$`).test(name);
 }
 
 function escapeRegExp(value: string): string {
@@ -1028,7 +1265,11 @@ export function readLegacyInstallTrust(dir: string): GhostTrustInfo | null {
 }
 
 export function createGhostInstallReceipt(input: {
+  simulatorPreviousRelId?: string;
+  simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
   taskCapabilityApproved?: true;
+  targetCapabilityApproved?: true;
+  delegationCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1039,6 +1280,8 @@ export function createGhostInstallReceipt(input: {
   revision?: string;
   iconDataUrl?: string;
   installOrigin?: string;
+  namespace?: string | null;
+  legacyFirstPartyEligible?: boolean;
 }): GhostInstallReceipt {
   if (input.installOrigin !== undefined && !isPersistableInstallOrigin(input.installOrigin)) {
     throw new Error('receipt installOrigin 不合法');
@@ -1046,6 +1289,11 @@ export function createGhostInstallReceipt(input: {
   return {
     schemaVersion: RECEIPT_SCHEMA_VERSION,
     id: input.manifest.id,
+    ...(input.simulatorPreviousRelId ? { simulatorPreviousRelId: input.simulatorPreviousRelId } : {}),
+    ...(input.simulatorMarketRelease ? { simulatorMarketRelease: input.simulatorMarketRelease } : {}),
+    ...(hasDeliveryNamespace(input)
+      ? { namespace: input.namespace ?? null }
+      : {}),
     revision: input.revision ?? crypto.randomUUID(),
     manifest: input.manifest,
     localeResources: input.localeResources,
@@ -1053,9 +1301,12 @@ export function createGhostInstallReceipt(input: {
     trust: input.trust,
     skillContentSha256: input.skillContentSha256,
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
+    ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
+    ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
+    ...(input.legacyFirstPartyEligible === true ? { legacyFirstPartyEligible: true } : {}),
   };
 }
 
@@ -1075,6 +1326,13 @@ export function effectiveInstallOrigin(
   receipt: Pick<GhostInstallReceipt, 'installOrigin'>,
 ): 'manual' | 'agent-forge' {
   return receipt.installOrigin === 'agent-forge' ? 'agent-forge' : 'manual';
+}
+
+export function legacyFirstPartyEligibilityAfterUpdate(
+  receipt: Pick<GhostInstallReceipt, 'legacyFirstPartyEligible'>,
+  sourceChanged: boolean,
+): boolean {
+  return !sourceChanged && receipt.legacyFirstPartyEligible === true;
 }
 
 /**
@@ -1174,9 +1432,7 @@ function validateReceipt(
   }
   if (
     value.iconDataUrl !== undefined &&
-    (typeof value.iconDataUrl !== 'string' ||
-      Buffer.byteLength(value.iconDataUrl, 'utf8') > MAX_ICON_DATA_URL_BYTES ||
-      !ICON_DATA_URL_RE.test(value.iconDataUrl))
+    !isValidIconDataUrl(value.iconDataUrl)
   ) {
     return { ok: false, reason: 'receipt iconDataUrl 不合法' };
   }
@@ -1208,6 +1464,33 @@ function validateReceipt(
     if (!validated.ok) return { ok: false, reason: `receipt locale 不合法:${localePath}` };
     localeResources[localePath] = validated.resource;
   }
+  let namespace: string | null | undefined;
+  if (hasDeliveryNamespace(value)) {
+    if (value.namespace !== null && !isValidPluginNamespace(value.namespace)) {
+      return { ok: false, reason: 'receipt namespace 不合法' };
+    }
+    namespace = value.namespace === null ? null : value.namespace;
+  }
+  if (value.legacyFirstPartyEligible !== undefined &&
+      typeof value.legacyFirstPartyEligible !== 'boolean') {
+    return { ok: false, reason: 'receipt legacyFirstPartyEligible 不合法' };
+  }
+  if (value.simulatorPreviousRelId !== undefined &&
+      !validSimulatorMigration(value.simulatorPreviousRelId, expectedId, namespace)) {
+    return { ok: false, reason: 'receipt simulator migration identity is invalid' };
+  }
+  let simulatorMarketRelease: GhostInstallReceipt['simulatorMarketRelease'];
+  if (value.simulatorMarketRelease !== undefined) {
+    const release = value.simulatorMarketRelease as Record<string, unknown> | null;
+    if (!value.simulatorPreviousRelId || !release || typeof release !== 'object' ||
+        !isValidPluginResourceId(release.pluginId) || !isValidPluginResourceId(release.releaseId) ||
+        typeof release.previousPackageSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(release.previousPackageSha256) ||
+        typeof value.packageSha256 !== 'string') {
+      return { ok: false, reason: 'receipt simulator market release is invalid' };
+    }
+    simulatorMarketRelease = { pluginId: release.pluginId, releaseId: release.releaseId,
+      previousPackageSha256: release.previousPackageSha256 };
+  }
   let installOrigin: string | undefined;
   if (value.installOrigin !== undefined) {
     if (
@@ -1223,6 +1506,8 @@ function validateReceipt(
     receipt: {
       schemaVersion: RECEIPT_SCHEMA_VERSION,
       id: expectedId,
+      ...(typeof value.simulatorPreviousRelId === 'string' ? { simulatorPreviousRelId: value.simulatorPreviousRelId } : {}),
+      ...(simulatorMarketRelease ? { simulatorMarketRelease } : {}),
       revision: value.revision,
       manifest: manifestResult.manifest,
       localeResources,
@@ -1230,9 +1515,13 @@ function validateReceipt(
       trust,
       skillContentSha256,
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
+      ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
+      ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),
+      ...(value.legacyFirstPartyEligible === true ? { legacyFirstPartyEligible: true } : {}),
+      ...(namespace !== undefined ? { namespace } : {}),
     },
   };
 }

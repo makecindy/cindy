@@ -61,6 +61,7 @@ describe("mobile plugin page transport", () => {
             TextDecoder,
             Request,
             Response,
+            Blob,
             fetch,
           });
         },
@@ -134,6 +135,15 @@ describe("mobile plugin page transport", () => {
       await expect(window.fetch("https://evil.invalid/steal")).rejects.toThrow(
         "PLUGIN_ORIGIN_DENIED",
       );
+      const gallery = window.fetch("cindy-ghost://practice/gallery");
+      const galleryRequest = JSON.parse(messages.at(-1)!);
+      expect(galleryRequest).toMatchObject({ type: "fetch", path: "/gallery", pageId: "page" });
+      window.dispatchEvent(new window.MessageEvent("message", { data: JSON.stringify({
+        type: "reply", id: galleryRequest.id,
+        result: { status: 200, mime: "application/json", base64: "W10=" },
+      }) }));
+      expect(await (await gallery).json()).toEqual([]);
+      await expect(window.fetch("cindy-ghost://_root__practice/gallery")).rejects.toThrow("PLUGIN_ORIGIN_DENIED");
       window.document.getElementById("saved")!.textContent = "Unsaved draft";
       window.dispatchEvent(
         new window.MessageEvent("message", {

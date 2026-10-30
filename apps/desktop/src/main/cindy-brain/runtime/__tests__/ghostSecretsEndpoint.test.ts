@@ -39,6 +39,46 @@ function memVault(saved: Record<string, string> = {}): GhostSecretsVault & {
   };
 }
 
+describe('credential install target guard', () => {
+  it.each(['PUT', 'POST'])('rejects a late %s body without writing or notifying', async (method) => {
+    const vault = memVault({ api_key: 'fake-new-source' });
+    const onStored = vi.fn();
+    let current = true;
+    let finishBody!: (body: string) => void;
+    const body = new Promise<string>((resolve) => { finishBody = resolve; });
+    const pending = handleGhostSecretsRequest({
+      method, pathname: '/secrets/api_key', ghostId: 'demo', userSecretKeys: ['api_key'],
+      vault, onStored, readBodyText: () => body, isCurrent: () => current,
+    });
+    current = false;
+    finishBody('{"value":"fake-old-source"}');
+    expect(await pending).toEqual({ status: 403 });
+    expect(vault.data.api_key).toBe('fake-new-source');
+    expect(vault.store).not.toHaveBeenCalled();
+    expect(onStored).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid install before a secret deletion', async () => {
+    const vault = memVault({ api_key: 'fake-new-source' });
+    expect(await handleGhostSecretsRequest({
+      method: 'DELETE', pathname: '/secrets/api_key', ghostId: 'demo', userSecretKeys: ['api_key'],
+      vault, readBodyText: vi.fn(), isCurrent: () => false,
+    })).toEqual({ status: 403 });
+    expect(vault.remove).not.toHaveBeenCalled();
+  });
+
+  it('still writes and notifies for the unchanged current install', async () => {
+    const vault = memVault();
+    const onStored = vi.fn();
+    expect(await handleGhostSecretsRequest({
+      method: 'PUT', pathname: '/secrets/api_key', ghostId: 'demo', userSecretKeys: ['api_key'],
+      vault, onStored, readBodyText: async () => '{"value":"fake-current"}', isCurrent: () => true,
+    })).toEqual({ status: 204 });
+    expect(vault.store).toHaveBeenCalledExactlyOnceWith('demo', 'api_key', 'fake-current');
+    expect(onStored).toHaveBeenCalledExactlyOnceWith('api_key');
+  });
+});
+
 function call(args: {
   method: string;
   pathname: string;

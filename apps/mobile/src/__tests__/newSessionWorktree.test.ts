@@ -33,7 +33,9 @@ import {
   worktreeEligibilityFromError,
   worktreeSourceBranchFromPreference,
   worktreeSourceBranchForTarget,
+  settleWorktreeEligibilityForDisplay,
   type NewSessionWorktreeEligibility,
+  type NewSessionWorktreeSettledEligibility,
 } from '@/session/newSessionWorktree';
 
 const DETECT_OK: MobileWorktreeDetectCwdResult = {
@@ -284,6 +286,14 @@ describe('isExactRemoteSessionClaimed', () => {
       }),
     )).rejects.toThrow('proxy context: Error: [NOT_FOUND] incidental');
   });
+
+  it.each([
+    new Error("[NOT_FOUND] no local IPC handler for channel 'local-db:sessions:patch-meta'"),
+    new Error('Error invoking remote method: Error: [NOT_FOUND] handler not registered yet'),
+  ])('does not treat a missing IPC handler as an absent session', async (error) => {
+    await expect(isExactRemoteSessionClaimed('s1', async () => { throw error; }))
+      .rejects.toBe(error);
+  });
 });
 
 describe('shouldAcceptWorktreeBranchListResult', () => {
@@ -502,37 +512,71 @@ describe('shouldShowWorktreeToggle / caption key', () => {
     status: 'eligible', baseRepo: '/repo', sourceBranch: 'main',
   };
 
-  it('project + 已选目录才显示；unsupported 仅在旧 ON 镜像需要退出入口时显示', () => {
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '/repo', eligibility: eligible, enabled: false })).toBe(true);
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'dialogue', workingDir: '/repo', eligibility: eligible, enabled: true })).toBe(false);
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '  ', eligibility: eligible, enabled: true })).toBe(false);
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '/repo', eligibility: { status: 'unsupported' }, enabled: false })).toBe(false);
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '/repo', eligibility: { status: 'unsupported' }, enabled: true })).toBe(true);
-    expect(shouldShowWorktreeToggle({ workspaceKind: 'project', workingDir: '/repo', eligibility: { status: 'probing' }, enabled: false })).toBe(true);
+  const show = (
+    eligibility: NewSessionWorktreeEligibility,
+    enabled: boolean,
+    settled: NewSessionWorktreeSettledEligibility | null = eligibility.status === 'eligible'
+      || eligibility.status === 'ineligible'
+      || eligibility.status === 'unsupported'
+      ? eligibility
+      : null,
+    workspace: { workspaceKind: 'project' | 'dialogue'; workingDir: string } = {
+      workspaceKind: 'project',
+      workingDir: '/repo',
+    },
+  ) => shouldShowWorktreeToggle({ ...workspace, eligibility, settled, enabled });
+
+  it('project + 已选目录且确认可用才显示；unsupported 仅在旧 ON 镜像需要退出入口时显示', () => {
+    expect(show(eligible, false)).toBe(true);
+    expect(show(eligible, true, eligible, { workspaceKind: 'dialogue', workingDir: '/repo' })).toBe(false);
+    expect(show(eligible, true, eligible, { workspaceKind: 'project', workingDir: '  ' })).toBe(false);
+    expect(show({ status: 'unsupported' }, false)).toBe(false);
+    expect(show({ status: 'unsupported' }, true)).toBe(true);
+  });
+
+  it('首次探测中不显示开关行，勾选记忆为 ON 也一样(2026-10-11 裁决)', () => {
+    expect(show({ status: 'probing' }, false)).toBe(false);
+    expect(show({ status: 'probing' }, true)).toBe(false);
+  });
+
+  it('同目标重探沿用上次定论：已显示的开关行不因重连闪掉', () => {
+    expect(show({ status: 'probing' }, false, eligible)).toBe(true);
+    expect(show({ status: 'recovering' }, false, eligible)).toBe(true);
+    expect(show({ status: 'probing' }, true, { status: 'ineligible', reason: 'notGitRepo' })).toBe(false);
+  });
+
+  it('已勾选时实时恢复中 / 探测失败优先于沿用的旧 ineligible：创建被拦就必须露出关闭入口', () => {
+    const notGit: NewSessionWorktreeSettledEligibility = { status: 'ineligible', reason: 'notGitRepo' };
+    for (const live of [{ status: 'recovering' }, { status: 'detect-failed' }] as const) {
+      expect(shouldBlockNewSessionCreateForWorktree({
+        applicable: true, enabled: true, eligibility: live, preferenceSaving: false,
+      })).toBe(true);
+      expect(show(live, true, notGit)).toBe(true);
+      expect(show(live, false, notGit)).toBe(false);
+    }
   });
 
   it('确认不合格(ineligible)时开关行隐藏,即使记忆为 ON(2026-08-07 裁决)', () => {
     for (const reason of ['gitMissing', 'notGitRepo', 'alreadyInWorktree'] as const) {
-      expect(shouldShowWorktreeToggle({
-        workspaceKind: 'project',
-        workingDir: '/repo',
-        eligibility: { status: 'ineligible', reason },
-        enabled: true,
-      })).toBe(false);
-      expect(shouldShowWorktreeToggle({
-        workspaceKind: 'project',
-        workingDir: '/repo',
-        eligibility: { status: 'ineligible', reason },
-        enabled: false,
-      })).toBe(false);
+      expect(show({ status: 'ineligible', reason }, true)).toBe(false);
+      expect(show({ status: 'ineligible', reason }, false)).toBe(false);
     }
-    // 探测失败 ≠ 确认不合格:已 ON 时保持显示(fail closed 需要可见入口)。
-    expect(shouldShowWorktreeToggle({
-      workspaceKind: 'project',
-      workingDir: '/repo',
-      eligibility: { status: 'detect-failed' },
-      enabled: true,
-    })).toBe(true);
+    // 探测失败 / 恢复中 ≠ 确认不合格:已 ON 时显示(fail closed 需要可见原因与关闭入口)。
+    expect(show({ status: 'detect-failed' }, true)).toBe(true);
+    expect(show({ status: 'recovering' }, true)).toBe(true);
+    // 未勾选时不拦创建，无需提前露出开关。
+    expect(show({ status: 'detect-failed' }, false)).toBe(false);
+    expect(show({ status: 'recovering' }, false)).toBe(false);
+  });
+
+  it('settleWorktreeEligibilityForDisplay:有定论即更新，探测中只沿用同设备 + 目录的旧定论', () => {
+    const target = { deviceId: 'd1', workingDir: '/repo' };
+    const settled = settleWorktreeEligibilityForDisplay(eligible, target, null);
+    expect(settled).toEqual({ target, eligibility: eligible });
+    expect(settleWorktreeEligibilityForDisplay({ status: 'probing' }, target, settled)).toBe(settled);
+    expect(settleWorktreeEligibilityForDisplay({ status: 'detect-failed' }, target, settled)).toBe(settled);
+    expect(settleWorktreeEligibilityForDisplay({ status: 'probing' }, { deviceId: 'd1', workingDir: '/other' }, settled)).toBeNull();
+    expect(settleWorktreeEligibilityForDisplay({ status: 'probing' }, { deviceId: 'd2', workingDir: '/repo' }, settled)).toBeNull();
   });
 
   it('caption key 覆盖探测中 / 三种不合格原因 / 探测失败;eligible 无 caption', () => {

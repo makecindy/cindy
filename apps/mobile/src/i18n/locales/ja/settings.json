@@ -1,7 +1,6 @@
 {
   "localLogs": {
     "upload": "ログを送信",
-    "uploadHint": "選別した実行記録とアプリ・OSのバージョンのみ送信します。詳細ログは書き出してください。",
     "uploadResult": {
       "unavailable": "このビルドではログ送信が設定されていません。",
       "consentRequired": "ログ送信前にプライバシーポリシーに同意してください。",
@@ -9,18 +8,16 @@
       "failed": "送信に失敗しました。ログは端末に保存されています。"
     },
     "title": "デバッグログ",
-    "record": "デバッグログを記録",
-    "hint": "スマートフォンの接続、復旧、ファイルのプレビューと再生、スクロール、キーボード、性能の詳細を記録します。初期設定はオフ。最大7日間・8 MB保存し、自動送信しません。",
-    "export": "デバッグログを書き出す",
+    "record": "ログを記録",
+    "export": "ログを書き出す",
     "clear": "ログを消去",
     "busy": "処理中…",
     "failed": "ログの保存または共有ができません。再試行してください。",
     "clearHint": "保存済みの診断ログを削除しますか？",
     "cancel": "キャンセル",
-    "exportHint": "詳細なローカルログを共有して問題を調査します。会話の本文や認証情報は含みません。",
-    "options": "ログのオプション",
     "uploadCopied": "ログを送信しました。番号 {{code}} をコピーしました",
-    "uploadSucceeded": "ログを送信しました。番号 {{code}}"
+    "uploadSucceeded": "ログを送信しました。番号 {{code}}",
+    "footer": "ログはスマホに最大 7 日間・8 MB まで保存され、自動ではアップロードされません。書き出したログに会話本文や認証情報は含まれず、アップロードではフィルタ済みの実行記録とバージョン情報のみを送信します。"
   },
   "title": "設定",
   "appearance": {
@@ -31,11 +28,35 @@
       "light": "ライト",
       "dark": "ダーク"
     },
-    "saveFailed": "表示モードを保存できませんでした。再起動すると以前の設定に戻ります。"
+    "saveFailed": "表示モードを保存できませんでした。再起動すると以前の設定に戻ります。",
+    "userBubble": {
+      "title": "自分のメッセージの吹き出しの色",
+      "presets": "カラー",
+      "default": "デフォルト",
+      "peach": "したがき",
+      "yellow": "あさひ",
+      "sage": "ひらめき",
+      "blue": "ゆめ",
+      "lavender": "よるねこ",
+      "red": "くびわ",
+      "custom": "カスタムカラー",
+      "hue": "色相",
+      "preview": "メッセージのプレビュー",
+      "sampleUser": "今日のアイデアを整理して。",
+      "sampleAssistant": "一緒にアイデアを整理しましょう。",
+      "hint": "ライト／ダークモードに合わせて明るさを自動調整します。この端末にのみ保存されます。",
+      "customHint": "カラーバーを左右にドラッグして色を選びます。明るさは自動調整され、この端末にのみ保存されます。",
+      "saveFailed": "色は適用されましたが、保存できませんでした。",
+      "retry": "再試行",
+      "cancel": "キャンセル",
+      "reset": "デフォルトに戻す",
+      "apply": "適用",
+      "hex": "カラーコード"
+    }
   },
   "language": {
     "title": "言語",
-    "hint": "アプリの UI のみに影響します。Agent の応答言語は Agent 側の設定に従います。",
+    "hint": "画面と AI のエラー説明に使う言語です。通常の返信はメッセージや指定した言語に従います。",
     "options": {
       "system": "自動 (システムに従う)",
       "zh-CN": "简体中文",
@@ -47,51 +68,55 @@
   },
   "version": {
     "sectionTitle": "バージョン",
-    "appVersion": "バージョン {{version}}",
-    "updateMethodInApp": "更新方法：アプリ内で更新（再起動後に反映）",
-    "updateMethodPackage": "更新方法：新しいバージョンをダウンロードしてインストール",
-    "updateMethodUnavailable": "開発ビルドのため、アプリ内更新は利用できません",
-    "pairedDesktopVersion": "対応デスクトップ版 {{version}}",
+    "updateMethodInApp": "アプリ内で更新でき、再起動後に反映されます。",
+    "updateMethodPackage": "新しいバージョンをダウンロードしてインストールしてください。",
+    "updateMethodUnavailable": "開発版はアプリ内で更新できません。",
     "checkAction": "更新を確認",
     "testFlightCheckAction": "コンテンツ更新を確認",
     "checking": "確認中",
     "checkingAccessibility": "更新を確認しています",
     "testFlightCheckingAccessibility": "コンテンツ更新を確認しています",
-    "testFlightUpdateManaged": "テスト版アプリの更新は TestFlight で管理されます",
-    "testFlightNoContentUpdate": "利用可能なコンテンツ更新はありません。新しいテスト版は TestFlight で確認してください。",
-    "testFlightContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。新しいテスト版は TestFlight で確認してください。",
-    "googlePlayUpdateManaged": "アプリ本体の更新は Google Play で管理されます",
-    "googlePlayNoContentUpdate": "利用可能なコンテンツ更新はありません。新しいアプリ版は Google Play で確認してください。",
-    "googlePlayContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。新しいアプリ版は Google Play で確認してください。",
+    "testFlightUpdateManaged": "新しいテスト版は TestFlight からインストールしてください。",
+    "testFlightNoContentUpdate": "利用できるコンテンツ更新はありません。",
+    "testFlightContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。",
+    "googlePlayUpdateManaged": "新しいバージョンは Google Play から更新してください。",
+    "googlePlayNoContentUpdate": "利用できるコンテンツ更新はありません。",
+    "googlePlayContentUpdateUnavailable": "このビルドではコンテンツ更新を確認できません。",
     "bundleUpdateFound": "アプリ本体の更新があります",
     "upToDate": "すでに最新の状態です",
-    "bundleUpToDateNoOta": "アプリ本体は最新です。このバージョンは OTA 更新に対応していません",
+    "bundleUpToDateNoOta": "最新です。このバージョンはホットアップデートに対応していません。",
     "downloadedRestarting": "更新をダウンロードしました。再起動しています",
-    "downloadedRestartRequired": "更新をダウンロードしました。アプリを完全に終了して再度開くと適用されます。",
+    "downloadedRestartRequired": "更新をダウンロードしました。アプリを完全に終了して開き直すと反映されます。",
     "bundleCheckFailed": "アプリ本体の更新を確認できませんでした。しばらくしてからもう一度お試しください。",
     "checkFailedDetail": "更新の確認に失敗しました：{{detail}}",
-    "checkFailed": "更新の確認に失敗しました。しばらくしてからもう一度お試しください。"
+    "checkFailed": "更新の確認に失敗しました。しばらくしてからもう一度お試しください。",
+    "currentLabel": "現在のバージョン",
+    "pairedDesktopLabel": "対応デスクトップ版"
   },
   "betaChannel": {
     "title": "Beta チャンネル",
     "badge": "Beta",
-    "description": "Beta チャンネルに参加すると、今後のクライアント更新を先行して受け取れます。",
-    "restartHint": "Beta チャンネルは再起動後に反映されます。アプリを再起動してください。",
-    "ok": "わかりました",
+    "description": "リリース前のクライアント更新を先行して受け取ります。コンテンツ更新は次の更新確認時にダウンロードされ、アプリの再起動後に反映されます。",
     "saveFailed": "Beta チャンネル設定の保存に失敗しました",
     "unavailable": "Beta チャンネルは利用できません。Beta 更新サーバーに接続できませんでした。"
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "タスク完了通知",
-    "taskDoneHint": "パソコン側のタスクが完了・失敗・返信待ちになったとき、このスマートフォンに通知します。完了時と返信待ち時は最新の返信内容も含まれます。",
-    "permissionDenied": "システムの通知が許可されていません。iOS の「設定 → 通知 → {{appName}}」で通知を許可してから、もう一度お試しください。",
-    "unregisterQueued": "オフにしました。現在のネットワークでは登録解除が完了していません。次回オンライン時に自動で完了します。"
+    "taskDone": "メッセージとタスクの通知",
+    "taskDoneHint": "チャットの新着や、タスクの完了・エラー・返信待ちを通知します。",
+    "permissionDenied": "システム設定で Cindy の通知を許可してください。",
+    "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。",
+    "preview": "チャット内容をプレビュー",
+    "background": "バックグラウンドで接続を維持",
+    "backgroundActive": "バックグラウンドでメッセージを受信中",
+    "backgroundStop": "受信を停止",
+    "backgroundHint": "Google を使わずに接続し、常駐通知を表示します。通知からいつでも停止できます。",
+    "googleUnavailable": "Google プッシュ通知を利用できません。バックグラウンド接続で受信できます。"
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",
     "deviceName": "デバイス名",
-    "deviceNameDetail": "パソコン側の承認リストにこの名前が表示されます。",
+    "deviceNameDetail": "パソコンの承認一覧に表示する名前です。",
     "platform": "プラットフォーム",
     "editAccessibility": "{{label}}を変更"
   },
@@ -158,7 +183,7 @@
     "openUserAgreement": "利用規約を開く",
     "appFilingNumber": "アプリ届出番号",
     "analytics": "利用統計",
-    "analyticsHint": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。",
+    "analyticsHint": "起動状況や継続利用の把握に使います。機種名、OS とアプリのバージョン、デバイス識別子などの情報と、ログイン後はアカウント ID を送信します。会話・ファイル・プロンプトは含みません。",
     "analyticsSaveFailed": "設定を保存できませんでした。再起動すると元に戻る場合があります。",
     "analyticsReset": "デフォルトに戻す",
     "analyticsResetAction": "戻す"
@@ -166,7 +191,7 @@
   "account": {
     "logoutConfirmTitle": "ログアウトしますか？",
     "logoutConfirmRunning": "実行中のセッションがあります。セッションはパソコンで実行を続けますが、このスマートフォンでは受信・操作できなくなり、保存されたアカウントとローカルのリモートミラーも削除されます。",
-    "logoutHint": "ログアウトすると、このスマートフォンに保存されたすべてのアカウントとローカルのリモートミラーが削除されます。パソコン側のセッションには影響しません。",
+    "logoutHint": "このスマホのすべてのアカウントとリモートミラーを削除します。パソコン側のセッションには影響しません。",
     "logout": "ログアウト",
     "loggingOut": "ログアウト中",
     "loggingOutAccessibility": "ログアウトしています"
@@ -179,7 +204,7 @@
   "voiceDictionary": {
     "sectionTitle": "音声辞書",
     "label": "辞書を見る",
-    "hint": "辞書はパソコンに保存され、お使いのパソコン間で自動的に同期されます。スマホでは閲覧のみで、追加や削除はパソコンで行ってください。",
+    "hint": "辞書はパソコンで編集し、自動で同期されます。スマホでは閲覧のみです。",
     "openAccessibility": "音声辞書を見る",
     "screenTitle": "音声辞書",
     "entryCount": "{{count}} 語",
@@ -188,9 +213,97 @@
     "refresh": "更新",
     "refreshing": "更新中…",
     "refreshAccessibility": "辞書を更新",
-    "readOnlyHint": "スマホでは閲覧のみです。追加や削除はパソコンで行ってください。",
-    "offlineHint": "現在オンラインのパソコンがありません。前回スマホに同期された内容を表示しています。",
-    "noDesktops": "同期できるパソコンがまだありません。同じアカウントでパソコンにログインすると、辞書がここに表示されます。"
+    "readOnlyHint": "スマートフォンでは閲覧のみです。追加や削除はパソコンで行ってください。",
+    "offlineHint": "パソコンがオフラインのため、最後に同期した辞書を表示しています。",
+    "noDesktops": "パソコンで同じアカウントにログインすると辞書を同期できます。"
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "変更を保存できませんでした。もう一度お試しください。",
+    "title": "自分の声を認識",
+    "sectionTitle": "声紋フィルター",
+    "label": "自分の声を認識",
+    "entryHint": "音声入力中は周りの人の声をミュートします。声紋はこのスマートフォンにだけ保存されます。",
+    "openAccessibility": "「自分の声を認識」の設定を開く",
+    "on": "オン",
+    "off": "オフ",
+    "hint": "音声入力中は周りの声をミュートし、あなたの声だけを認識します。同時に話された声は完全には取り除けません。声紋はこのスマホに暗号化して保存され、アップロードや同期はされません。",
+    "unsupported": "現在のバージョンは声紋に対応していません。最新バージョンに更新してください。",
+    "model": {
+      "title": "認識モデル",
+      "needed": "初回は約 {{size}} の認識モデルをダウンロードします。Wi-Fi 接続をおすすめします。",
+      "download": "認識モデルをダウンロード",
+      "downloading": "ダウンロード中（{{done}} / {{total}}）",
+      "cancel": "ダウンロードをキャンセル",
+      "retry": "もう一度ダウンロード",
+      "failed": {
+        "network": "認識モデルのダウンロードに失敗しました。ネットワークを確認してもう一度お試しください。",
+        "disk": "認識モデルを保存できませんでした。スマートフォンの空き容量を確認してもう一度お試しください。",
+        "checksum": "ダウンロードした認識モデルの検証に失敗しました。もう一度お試しください。",
+        "unavailable": "現在、認識モデルを取得できません。しばらくしてからもう一度お試しください。"
+      }
+    },
+    "profile": {
+      "title": "声紋",
+      "missing": "声紋が未登録です",
+      "missingHint": "声紋を登録すると有効になります。",
+      "enrolled": "声紋を登録済み",
+      "enrolledAt": "{{date}} に登録",
+      "enroll": "声紋を登録",
+      "reenroll": "登録し直す",
+      "delete": "声紋を削除",
+      "deleteConfirm": {
+        "title": "声紋を削除しますか？",
+        "description": "削除すると、もう一度登録するまで音声入力で周りの人の声を除外しなくなります。",
+        "confirm": "削除",
+        "cancel": "キャンセル"
+      }
+    },
+    "strictness": {
+      "label": "厳しさ",
+      "hint": "厳しくするほど周りの声を防げますが、騒がしい場所では自分の声も削られやすくなります。",
+      "restoreDefault": "デフォルトに戻す",
+      "options": {
+        "relaxed": "ゆるめ",
+        "standard": "標準",
+        "strict": "厳しめ"
+      }
+    },
+    "enroll": {
+      "description": "以下の {{clips}} つの文章を普段の声で読み上げてください。各録音は最大 {{seconds}} 秒です。読み終えたら録音を終了してください。普段音声入力を使う場所で、ほかの人が同時に話さないように録音してください。",
+      "step": "{{current}} / {{total}} つ目",
+      "record": "読み上げを開始",
+      "stop": "録音を終了",
+      "rerecord": "この文章を録り直す",
+      "recording": "録音中…残り {{seconds}} 秒",
+      "saving": "声紋を作成中…",
+      "submit": "登録を完了",
+      "cancel": "キャンセル",
+      "passages": {
+        "p1": "今日の午前中は今週の作業予定を整理して、午後には話し合いたい課題をまとめて、みんなに先に送っておきます。",
+        "p2": "明日天気が良ければ少し早めに出発して、途中で果物やお菓子を買い、お昼は公園で食べましょう。",
+        "p3": "この文章をもう少し簡潔にして、重要な数字と結論は残したうえで、要点を三つから五つの文でまとめてください。"
+      },
+      "errors": {
+        "too_short": "{{index}} つ目の録音で検出された音声が短すぎます。録り直してください。",
+        "no_embedding": "{{index}} つ目の録音から声紋を読み取れませんでした。録り直してください。",
+        "inconsistent": "{{index}} つ目の録音が他と同じ人の声に聞こえません。他の人の声や雑音が入った可能性があります。録り直してください。",
+        "models_missing": "認識モデルのダウンロードがまだ完了していません。しばらくしてからお試しください。",
+        "storage_unavailable": "システムのキーチェーンを利用できないため、声紋を暗号化して保存できません。しばらくしてからお試しください。",
+        "failed": "声紋を作成できませんでした。もう一度お試しください。",
+        "microphone": "マイクを使用できません。マイクの許可を確認してもう一度お試しください。",
+        "noAudio": "マイクから音が届いていません。確認してもう一度お試しください。"
+      },
+      "stepChoice": "{{index}} つ目、{{status}}",
+      "stepStatus": {
+        "pending": "未録音",
+        "recorded": "録音済み",
+        "retry": "再録音",
+        "recording": "録音中"
+      },
+      "rerecordStep": "{{index}} つ目を録り直す",
+      "readHint": "準備ができたら読み上げを開始し、読み終えたら録音を終了してください。",
+      "otherClipsKept": "ほかの録音は保持されています。"
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "デバイス名",
@@ -205,5 +318,10 @@
     "discardBody": "デバイス名の変更はまだ保存されていません。",
     "discardConfirm": "変更を破棄",
     "keepEditing": "編集を続ける"
+  },
+  "developer": {
+    "title": "開発者",
+    "identity": "識別情報",
+    "updateInfo": "更新情報"
   }
 }

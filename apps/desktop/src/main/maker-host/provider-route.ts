@@ -1,3 +1,4 @@
+import { resolveCopilotAccountUrl } from './copilot-account-url.js';
 /**
  * provider-route —— 把 catalog 的 `RoutingDescriptor` 翻译成 loopback proxy 的 `RoutingDecision`,
  * 并据 per-session 选定的供应商解析本会话的路由。
@@ -21,11 +22,14 @@
 
 import {
   actualSourceIdForModel,
+  modelWithInterface,
   chatEligibleSourcesForModel,
   isExclusiveXaiModelId,
+  isCodexGatewayWireModel,
   resolvePiModelRoute,
   runtimeCustomProviderId,
   storedCustomProviderId,
+  stripCodexGatewayWirePrefix,
   XAI_MODEL_PREFIX,
   type AgentKind,
   type Provider,
@@ -38,6 +42,7 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import { getActiveCatalog, isXdCodexAnthropicBridgeModel } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { sessionModelInterface, assertModelInterfaceAvailable } from './session-model-interface.js';
 import { getSessionProvider } from './session-provider-store.js';
 
 /**
@@ -334,7 +339,23 @@ function hasHeader(headers: Record<string, string> | undefined, expectedName: st
  * （cc=`x-api-key`，codex=`authorization: Bearer`）。内置三家不传 / 忽略。
  * `oauthToken` 仅 `oauth-token` 策略（描述符驱动的通用 OAuth 供应商）使用。
  */
-export function buildRouteDecision(
+export function buildRouteDecision(...args: Parameters<typeof buildRouteDecisionBase>): RoutingDecision | null {
+  const decision = buildRouteDecisionBase(...args);
+  const selected = args[0].modelInterface;
+  if (!decision || !selected || decision.localHandler) return decision;
+  return { ...decision, compatibilityProfiles: selected.compatibility,
+    transformRequestBody: (body) => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(body.toString('utf8')); } catch { return { body }; }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { body };
+      const object = parsed as Record<string, unknown>;
+      if (typeof object.model === 'string') object.model = selected.wireModelId;
+      return { body: Buffer.from(JSON.stringify(parsed)) };
+    },
+  };
+}
+
+function buildRouteDecisionBase(
   routing: RoutingDescriptor,
   gatewayKey: string | null,
   agent: AgentKind,
@@ -373,14 +394,8 @@ export function buildRouteDecision(
       };
       const decision: RoutingDecision = { headerOverride };
       if (routing.upstream) decision.upstreamOverride = routing.upstream;
-      // Copilot assigns personal/business/enterprise API hosts in its inference token.
-      // Follow that assignment only for the official preset and official Copilot hosts.
       if (routing.upstream && oauthToken) {
-        const upstream = new URL(routing.upstream);
-        if (upstream.protocol === 'https:' && upstream.hostname === 'api.individual.githubcopilot.com') {
-          const host = oauthToken.match(/(?:^|;)proxy-ep=(proxy\.(?:individual|business|enterprise)\.githubcopilot\.com)(?:;|$)/)?.[1];
-          if (host) { upstream.hostname = host.replace(/^proxy\./, 'api.'); decision.upstreamOverride = upstream.toString().replace(/\/$/, ''); }
-        }
+        decision.upstreamOverride = resolveCopilotAccountUrl(routing.upstream, oauthToken);
       }
       // cc 子进程可能带 x-api-key（gateway-spawn 的网关 key）——发往 OAuth 上游必须抹掉，
       // 防泄漏 + 防按 x-api-key 优先鉴权的端点拿错钥匙。合并描述符自带的 headerDelete。
@@ -532,6 +547,7 @@ export function providerRoutingForModel(
   const model = wireModel
     ? provider.models[agent]?.find((candidate) => candidate.id === wireModel)
     : undefined;
+  if (model?.interfaceUnavailable) throw new Error('MODEL_INTERFACE_UNAVAILABLE');
   const modelRoute = model?.route;
   const piRoute =
     agent === 'pi'
@@ -554,6 +570,7 @@ export function providerRoutingForModel(
   delete inherited.requestPath;
   return {
     ...inherited,
+    ...(model?.selectedInterface ? { modelInterface: model.selectedInterface } : {}),
     upstream: agent === 'pi' ? piRoute!.baseUrl : modelRoute!.baseUrl,
     wireProtocol: agent === 'pi' ? piRoute!.wireProtocol : modelRoute!.wireProtocol,
     ...(agent === 'pi'
@@ -564,6 +581,17 @@ export function providerRoutingForModel(
         ? { requestPath: modelRoute.requestPath }
         : {}),
   };
+}
+
+/** Pin only the model transport. Live credentials, provider disable and namespace
+ * restrictions still come from the current connection. */
+export function sessionProviderRoutingForModel(sessionId: string, provider: Provider, agent: AgentKind, wireModel?: string): RoutingDescriptor | null {
+  const model = provider.models[agent]?.find(m => m.id === wireModel);
+  const selected = model && sessionModelInterface(sessionId, provider.id, agent, model, getActiveCatalog().modelRegistry);
+  const pinned = selected ? { ...provider, models: { ...provider.models,
+    [agent]: provider.models[agent]?.map(m => m.id === wireModel ? modelWithInterface(m, selected) : m),
+  } } : provider;
+  return providerRoutingForModel(pinned, agent, wireModel);
 }
 
 /**
@@ -611,7 +639,7 @@ export function getSessionRoutingDescriptor(
   if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
-  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
 }
@@ -721,7 +749,12 @@ export async function resolveSessionRoute(
 ): Promise<ResolvedSessionRoute | null> {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
-  return resolveProviderRouteById(providerId, agent, wireModel);
+  if (isProviderRouteMutationInProgress(providerId)) return null;
+  const provider = getActiveCatalog().providers.find(p => p.id === providerId);
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  return { providerId, providerSource: provider.source, routing,
+    ...await readProviderRouteCredentials(provider, routing, agent) };
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
@@ -815,13 +848,14 @@ export async function resolveProviderRouteDecision(
   agent: AgentKind,
   gatewayKey: string | null,
   wireModel?: string,
+  sessionId?: string,
 ): Promise<ResolvedProviderRouteDecision | null> {
   const id = providerId?.trim() || null;
   if (!id) return null;
   if (isProviderRouteMutationInProgress(id)) return null;
   if (id === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === id);
-  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  const routing = provider ? (sessionId ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : providerRoutingForModel(provider, agent, wireModel)) : null;
   if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
   const decision = buildRouteDecision(routing, gatewayKey, agent, apiKey, oauthToken);
@@ -853,6 +887,7 @@ export async function resolveFrozenProviderRouteDecision(
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === id);
   if (!provider || !isCustomRoutedProvider(provider) || !provider.agents.includes(agent)) return null;
   if (!routingServesWireModel(routing, wireModel)) return null;
+  if (routing.modelInterface && wireModel) assertModelInterfaceAvailable(routing.modelInterface, wireModel, getActiveCatalog().modelRegistry);
   const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
   // Header overrides are user-owned configuration. Organization routes use only the trusted
   // directory descriptor and managed credential, even if stale local data shares an id.
@@ -900,7 +935,7 @@ export function resolveSessionRouteDecision(
   }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  const routing = provider ? sessionProviderRoutingForModel(sessionId, provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (pendingDecision) return pendingDecision;
@@ -1216,12 +1251,12 @@ export function isHostInjectedAuthSession(sessionId: string, agent: AgentKind): 
 /** 按模型选视觉后端的 agent 面：模型前缀显式指面，否则按 provider.models 归属，最后回退。 */
 function pickVisionAgent(provider: Provider, modelId: string): AgentKind | null {
   // XD 投影给 Codex 的模型本质是 Claude-wire（仅 claude-code 面、无 codex 原生），
-  // `codex/` 只是路由前缀：即使带 `codex/` 前缀也必须走 claude-code 面 / Messages，
+  // `openai-codex/` / `codex/` 只是路由前缀：即使带这些前缀也必须走 claude-code 面 / Messages，
   // 否则误走 Responses 被上游拒（rebase 后 pickVisionAgent 先按前缀选 codex 面）。
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
     if (provider.routing['claude-code']) return 'claude-code';
   }
-  if (modelId.startsWith('codex/') && provider.routing.codex) return 'codex';
+  if (isCodexGatewayWireModel(modelId) && provider.routing.codex) return 'codex';
   if (
     (modelId.startsWith('claude-') || modelId.startsWith('anthropic/')) &&
     provider.routing['claude-code']
@@ -1270,7 +1305,7 @@ export function resolveVisionBackendRoute(
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   if (!provider) return null;
-  // 按模型选 agent 面：模型前缀显式指面（codex/ → codex；claude- / anthropic/ → claude-code），
+  // 按模型选 agent 面：模型前缀显式指面（openai-codex/、codex/ → codex；claude- / anthropic/ → claude-code），
   // 否则按 provider.models 归属，最后回退第一个声明 routing 的 agent。对齐视觉桥旧 pickAgent。
   const agent = pickVisionAgent(provider, modelId);
   if (!agent) return null;
@@ -1279,11 +1314,11 @@ export function resolveVisionBackendRoute(
   const catalogPresetId = providerRuntimeCatalogPresetId(provider, agent);
 
   // 转发上游前还原 model id（对齐 rewriteModelIdForProvider）。
-  // XD 投影给 Codex 的模型走 Claude Messages 面时，`codex/` 是路由前缀不是后端真实模型名，
+  // XD 投影给 Codex 的模型走 Claude Messages 面时，折扣前缀不是后端真实模型名，
   // 必须剥掉（否则上游 /v1/messages 收到 model:'codex/...' 404）。剥到目录裸 id。
-  let model = modelId;
+  let model = routing.modelInterface?.wireModelId ?? modelId;
   if (provider.id === 'xd' && isXdCodexAnthropicBridgeModel(modelId)) {
-    model = modelId.replace(/^codex\//, '').replace(/\[1m\]$/, '');
+    model = stripCodexGatewayWirePrefix(modelId).replace(/\[1m\]$/, '');
   }
   const stripPrefix = routing.modelIdRewrite?.stripPrefix;
   if (stripPrefix && model.startsWith(stripPrefix)) {

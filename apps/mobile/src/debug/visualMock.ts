@@ -1,6 +1,9 @@
+import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
+import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
+import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
@@ -19,6 +22,8 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -47,6 +52,9 @@ interface VisualRealDataSnapshot {
 
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
+// Built on first use: this module is imported by production code, and only the dev mock reads it.
+let uiMockRows: ReturnType<typeof buildUiMockRows> | null = null;
+const getUiMockRows = () => uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' });
 const IMAGE_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAABaAgMAAABCqLXBAAAADFBMVEX9/f2BgoIgISTY2NXfCK5xAAAACXBIWXMAAAsTAAALEwEAmpwYAAACCklEQVR42uWXsU7DMBBAk1rqgKyy9xM6nVSJoQv9BJaKlbVh4QcQfEIXWMsQiSZFav8Ao0hMGVhY+IRMmTogVebslsah1Hd0QYKrYrXOq+98Pp99QcAW+bUDPrtF9U5gt8q7kGfmgRwlAwGmxW7zLjdvu931v5lqxYCSU2VY6KWkPNgBIxpMFI7ZSknVg3SOIzZjei7tETa9OQ22jJGdPg2GE2wKjh+n+Aw54PAPguFmUWM/6MSP8oKdCrz2gk6gjbygE3l3vwzWN8doJxjWN0y8E2zUwcmeYFIueKrR5IIzmQS/HXHcE2O+CjngSAaZUUmCNmoKBtjPJECbAdqfBzSYyACEbNLgNMiEyYAM0ORpBmjWM8gaDFBIUEGDqVpybASQ1WRe3fx9UXcPHmKgntdgLdGf1B0uXIf7wD5OZrOEHtXmIJEmtdBhBqvI5gSueuIELnsrmC0UscCbarv6wUtmkkp0wQPv9bvhbklwrJfWABLUWkfGgLOtJcS7hxtmCL6l6Uy/bAUFigPOEET3POrSC0ZIoFgDvKo7htC6mK7B3Ufc1IKLMTbKe2jOLLi8wqb0HsPHuhIvqJmgcEHlAQ9dsPSAronf616Dej9QccHyn1y5aDn/ydWVfRlmX6/ZF3ZWCYDHuWQVFXZcVpmCKV7Rhc/AFj6C48esqtrIoktIQYuE1XhAfgL4ANer/BnN/IZTAAAAAElFTkSuQmCC';
 
@@ -55,8 +63,6 @@ export const visualMockUser: MobileUser = {
   name: 'Visual Mock User',
   avatar: null,
   email: 'visual-mock@cindy.local',
-  defaultModel: 'claude-sonnet-4-6',
-  defaultEffort: 'medium',
   membershipKind: 'personal',
   membershipRole: 'owner',
   orgId: null,
@@ -213,7 +219,42 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  const mask = groupMaskVisualFixture(channel, args[0]);
+  if (mask !== undefined) return mask as T;
+  // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
+  // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
+  if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'
+    && channel === 'maker:remote-resources:get'
+    && (args[0] as { ref?: { collectionId?: string; id?: string } })?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && (args[0] as { ref?: { id?: string } })?.ref?.id === 'table-qa') {
+    const content = [
+      '窄屏表格：短表铺满正文，宽表横向滑动。',
+      '', '| A | B |', '| --- | --- |', '| 1 | 2 |', '| 3 | [链接](https://example.com) |',
+      '', '| ![x](https://example.com/a.png) | ![](https://example.com/b.png) |', '| --- | --- |',
+      '| ![](https://example.com/b.png) | ![y](https://example.com/a.png) |',
+      '', '| 项目 | 说明 | 状态 | 最后一列 |', '| --- | --- | --- | --- |',
+      '| A | **长说明在单元格内换行，行高应随内容增加，下一行仍按相同列宽对齐。** | 完成 | 末列可见 |',
+      '| B | | 进行中 | 末列第二行 |',
+      '', '~~~text', 'code | unchanged', '~~~',
+      '', '表格后正文：上下滚动仍可阅读。',
+    ].join('\n');
+    return {
+      ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: 'table-qa' }, revision: '1',
+      display: { title: 'Table QA · Synthetic data' }, actions: [], links: [],
+      blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: content, data: {
+        id: 'table-qa', name: 'Table QA · Synthetic data',
+        members: [{ botId: 'table-bot', name: 'QA Partner', status: 'active' }],
+        messages: [{ id: 'table-message', sequence: 1, kind: 'message', authorKind: 'bot',
+          authorBotId: 'table-bot', authorName: 'QA Partner', content, createdAt: NOW }],
+        plans: [], createdAt: NOW, updatedAt: NOW,
+      } }],
+    } as T;
+  }
   const realData = await loadVisualRealDataSnapshot();
+  const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
+  if (pluginResult !== undefined) return pluginResult as T;
+  const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
+  if (teammateResult !== undefined) return teammateResult as T;
   if (channel === 'local-db:task-tags:execute') {
     const request = args[0] as TaskTagRequest;
     if (request.action !== 'list' && request.action !== 'get') {
@@ -253,11 +294,17 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case 'maker:regenerate-title':
+      return { title: 'Visual rename draft' } as T;
     case 'maker:predict-prompt':
       return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
         ? '继续跟进 PR #4670' : null } as T;
     case 'local-db:sessions:list':
-      return visualMockSessions(args[0] as string | undefined) as T;
+      return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
+    case 'local-db:history:query':
+      return { ok: true, sessions: visualMockSessions('all').filter(row => row.source === 'bot'), hasMore: false } as T;
+    case 'local-db:sessions:get-many':
+      return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:list':
@@ -450,31 +497,12 @@ function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string)
 }
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
+  const catalog = getUiMockRows().sessions.map(catalogSession);
+  if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
-    visualSession('visual-prompt-recommendation', '浮动提示预览', -60_000, {
-      lastTurnEndedAt: NOW - 45_000,
-    }),
+    ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
       preview: '请检查手机版远程控制的 shared core 迁移。',
-      pinnedAt: '2026-07-18T07:59:00.000Z',
-    }),
-    visualSession('visual-running', 'Visual Running Session', -70_000, {
-      userSendAt: new Date(NOW - 8_000).toISOString(),
-      preview: '正在从被控电脑持续回传输出。',
-    }),
-    visualSession('visual-pending', 'Visual Pending Session', -80_000, {
-      preview: '等待手机端确认权限后继续。',
-    }),
-    visualSession('visual-queue', 'Visual Queue Session', -90_000, {
-      preview: '队列里还有一条待发送消息。',
-    }),
-    visualSession('visual-automation-running', '[Schedule] Visual Running Automation', -100_000, {
-      source: 'scheduler',
-      preview: '自动化任务正在执行。',
-    }),
-    visualSession('visual-automation-unread', '[Schedule] Visual Unread Automation', -110_000, {
-      source: 'scheduler',
-      preview: '自动化运行已完成但还没有在手机端标记已读。',
     }),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.orcaLead, {
       preview: 'Lead 正在分配移动端 UI 检查任务。',
@@ -484,11 +512,43 @@ function visualMockSessions(statusFilter?: string): RemoteSession[] {
     }),
   ];
   if (statusFilter === 'automation') return sessions.filter((session) => session.source === 'scheduler');
-  if (statusFilter === 'archived') return [];
   return sessions;
 }
 
+/** Shared UI mock catalog (`@cindy/maker-shared/ui-mock`), shown as tasks on the mock Mac. */
+function catalogSession(row: UiMockSessionRow): RemoteSession {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  return {
+    id: row.id,
+    userId: visualMockUser.id,
+    title: row.title,
+    workingDir: row.workingDir ?? `/Users/demo/Library/Application Support/Cindy/dialogues/${row.id}`,
+    workspaceKind: row.workspaceKind,
+    model: row.model,
+    effort: row.effort,
+    permissionMode: row.permissionMode,
+    fastMode: row.fastMode,
+    status: row.status,
+    agentKind: row.agentKind,
+    source: row.source,
+    // Overlay existing catalog tasks with exact ownership, just as the mock host's
+    // runtime overlays running/queued state. No extra task titles or private data.
+    ...(row.id === 'visual-automation-running' ? { source: 'bot', companion: { id: 'cindy-default', role: 'routine' } } : {}),
+    ...(row.id === 'ui-mock-long-title' ? { source: 'bot', companion: { id: 'visual-bot-lizi', role: 'channel', channel: 'telegram' } } : {}),
+    pinnedAt: row.pinnedAt === null ? null : iso(row.pinnedAt),
+    userSendAt: iso(row.userSendAt),
+    createdAt: iso(row.createdAt),
+    updatedAt: iso(row.updatedAt),
+    preview: row.preview,
+    _count: { messages: row.messageCount },
+    ...(row.id === 'visual-prompt-recommendation' ? { lastTurnEndedAt: row.updatedAt } : {}),
+  };
+}
+
 function visualMockSession(id: string): RemoteSession {
+  if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) return {
+    ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
+  };
   return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
 }
 
@@ -509,30 +569,14 @@ function sessionFromShared(
   };
 }
 
-function visualSession(id: string, title: string, offsetMs: number, patch: Partial<RemoteSession> = {}): RemoteSession {
-  const updatedAt = new Date(NOW + offsetMs).toISOString();
-  return {
-    id,
-    userId: visualMockUser.id,
-    title,
-    workingDir: '/repo/xdt-maker',
-    workspaceKind: 'project',
-    model: 'claude-sonnet-4-6',
-    effort: 'medium',
-    permissionMode: 'ask',
-    fastMode: false,
-    status: 'active',
-    agentKind: 'cc',
-    pinnedAt: null,
-    userSendAt: updatedAt,
-    createdAt: new Date(NOW - 360_000).toISOString(),
-    updatedAt,
-    _count: { messages: 2 },
-    ...patch,
-  };
-}
-
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === VISUAL_TEAMMATE_SESSION_ID || sessionId.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)) {
+    const rows = visualMockMessages('ui-mock-rich-answer');
+    return rows.map((row, index) => ({
+      ...row, id: `${sessionId}-${row.id}`, clientId: `${sessionId}-${row.clientId}`, sessionId,
+      createdAt: new Date(teammateVisualReplyAt(sessionId) - (rows.length - 1 - index) * 1_000).toISOString(),
+    }));
+  }
   if (sessionId === VISUAL_MOCK_SESSION_ID) {
     return SHARED_REMOTE_CONTROL_FIXTURE.rawMessages.map((message) => ({
       ...message,
@@ -540,20 +584,28 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
       role: message.role === 'tool_use' ? 'tool_use' : message.role,
     } as RemoteMessage));
   }
-  const title = visualMockSession(sessionId).title;
   const running = sessionId.includes('running');
+  const catalog = getUiMockRows().messages.filter((row) => row.sessionId === sessionId);
+  if (catalog.length > 0) {
+    const lastAssistant = catalog.map((row) => row.role).lastIndexOf('assistant');
+    return catalog.map((row, index) => {
+      const streaming = running && index === lastAssistant;
+      return {
+        id: row.id,
+        clientId: row.clientId,
+        sessionId: row.sessionId,
+        role: row.role,
+        content: streaming ? { text: row.content, isStreaming: true } : row.content,
+        toolUseId: row.toolUseId,
+        agentMeta: streaming ? { isStreaming: true } : null,
+        createdAt: new Date(row.createdAt).toISOString(),
+      } as RemoteMessage;
+    });
+  }
+  const title = visualMockSession(sessionId).title;
   return [
     message(sessionId, `${sessionId}-user`, 'user', `Open ${title} on iOS.`, -50_000),
-    message(
-      sessionId,
-      `${sessionId}-assistant`,
-      'assistant',
-      running
-        ? { text: '正在从被控电脑持续回传输出,用于锁定手机 running 状态。', isStreaming: true }
-        : `Mock desktop fixture for ${title}.`,
-      -30_000,
-      running ? { agentMeta: { isStreaming: true } } : {},
-    ),
+    message(sessionId, `${sessionId}-assistant`, 'assistant', `Mock desktop fixture for ${title}.`, -30_000),
   ];
 }
 
@@ -742,6 +794,8 @@ function visualMockScheduleTemplates(): ReturnType<MobileMakerTransport['schedul
 
 function handleVisualMockFileBrowser(input: unknown): unknown {
   const op = input && typeof input === 'object' && 'op' in input ? String(input.op) : '';
+  const shared = sharedUiMockFiles(input);
+  if (shared !== undefined) return shared;
   if (op === 'caps') return { ok: true, gzip: true } satisfies FileBrowserCapsResult;
   if (op === 'listDir') return visualMockFileBrowserEntries();
   if (op === 'listAllFiles') {
@@ -775,6 +829,51 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
     } satisfies FileBrowserThumbnailResult;
   }
   return visualMockFileBrowserEntries();
+}
+
+/** Serve only the showcase project files Desktop seeds, without touching a real filesystem. */
+function sharedUiMockFiles(input: unknown): unknown {
+  if (!input || typeof input !== 'object') return undefined;
+  const request = input as Record<string, unknown>;
+  const workdir = String(request.workdir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
+  const project = UI_MOCK_SHOWCASE_PROJECTS.find(item => workdir === `/Users/demo/Projects/${item.name}`);
+  if (!project) return undefined; // Keep the existing media/Markdown regression fixtures.
+  const relPath = String(request.relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const paths = Object.keys(project.files).sort();
+  if (request.op === 'caps') return { ok: true, completeDirectoryListing: true } satisfies FileBrowserCapsResult;
+  if (request.op === 'listAllFiles') {
+    const cap = typeof request.cap === 'number' && request.cap > 0 ? request.cap : paths.length;
+    return { files: paths.slice(0, cap), truncated: paths.length > cap, elapsedMs: 0 } satisfies FileBrowserListAllFilesResult;
+  }
+  if (request.op === 'listDir') {
+    const prefix = relPath ? `${relPath}/` : '';
+    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number }>();
+    for (const path of paths) {
+      if (!path.startsWith(prefix)) continue;
+      const remainder = path.slice(prefix.length);
+      const name = remainder.split('/')[0];
+      const directory = remainder.includes('/');
+      entries.set(name, { type: directory ? 'directory' : 'file', name, relPath: `${prefix}${name}`, size: directory ? 0 : new TextEncoder().encode(project.files[path]).byteLength, mtimeMs: NOW });
+    }
+    return [...entries.values()].sort((a, b) => Number(b.type === 'directory') - Number(a.type === 'directory') || a.name.localeCompare(b.name));
+  }
+  if (request.op === 'readFile') {
+    if (!Object.hasOwn(project.files, relPath)) return { ok: false, code: 'READ_FAILED', message: 'File not found in the demo project.' } satisfies FileBrowserReadFileResult;
+    const content = project.files[relPath];
+    return { ok: true, data: { relPath, content, size: new TextEncoder().encode(content).byteLength, mtimeMs: NOW } } satisfies FileBrowserReadFileResult;
+  }
+  if (request.op === 'searchCollect') {
+    const normalize = (value: string) => request.caseSensitive === true ? value : value.toLowerCase();
+    const query = normalize(String(request.query ?? ''));
+    const found = query ? paths.flatMap(path => project.files[path].split('\n').flatMap((line, index) =>
+      normalize(line).includes(query) ? [{ relPath: path, lineNumber: index + 1, lineText: line }] : [],
+    )) : [];
+    const cap = typeof request.maxMatches === 'number' && request.maxMatches > 0 ? Math.min(500, request.maxMatches) : 500;
+    const matches = found.slice(0, cap);
+    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map(item => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
+  }
+  if (request.op === 'thumbnail') return { ok: false, code: 'THUMB_UNSUPPORTED' } satisfies FileBrowserThumbnailResult;
+  return { ok: false, message: 'Unsupported demo file operation.' };
 }
 
 function visualMockDirectory(): RemoteDirectoryListResult {

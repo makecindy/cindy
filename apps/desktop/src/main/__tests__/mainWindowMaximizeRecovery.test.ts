@@ -424,11 +424,18 @@ describe('installMainWindowNativeRestoreIntent', () => {
     const windowListeners = new Map<string, Listener>();
     const webContentsListeners = new Map<string, Listener>();
     const windowMessageListeners = new Map<number, (wParam: Buffer, lParam: Buffer) => void>();
+    const native = { destroyed: false };
+    const assertAlive = () => {
+      if (native.destroyed) throw new TypeError('Object has been destroyed');
+    };
     const removeListener = vi.fn((event: string) => windowListeners.delete(event));
     const removeWebContentsListener = vi.fn((event: string) => webContentsListeners.delete(event));
-    const unhookWindowMessage = vi.fn((message: number) => windowMessageListeners.delete(message));
+    const unhookWindowMessage = vi.fn((message: number) => {
+      assertAlive();
+      return windowMessageListeners.delete(message);
+    });
     const win = {
-      isDestroyed: () => false,
+      isDestroyed: () => native.destroyed,
       isVisible: () => true,
       isMaximized: () => true,
       isMinimized: () => false,
@@ -448,6 +455,7 @@ describe('installMainWindowNativeRestoreIntent', () => {
     } as unknown as MaximizeRecoveryNativeWindow;
     return {
       win,
+      native,
       windowListeners,
       webContentsListeners,
       windowMessageListeners,
@@ -456,6 +464,19 @@ describe('installMainWindowNativeRestoreIntent', () => {
       unhookWindowMessage,
     };
   }
+
+  // The main window disposes this from its 'closed' event, after the native window is gone.
+  // Touching it then threw "Object has been destroyed" as an uncaughtException during the
+  // Windows update relaunch (forceQuit destroys every window).
+  it('disposes without touching a window that is already destroyed', () => {
+    const h = createNativeHarness();
+    const dispose = installMainWindowNativeRestoreIntent(h.win, vi.fn(), 'win32');
+
+    h.native.destroyed = true;
+
+    expect(() => dispose()).not.toThrow();
+    expect(h.unhookWindowMessage).not.toHaveBeenCalled();
+  });
 
   it('marks Windows native restore gestures before unmaximize', () => {
     const h = createNativeHarness();

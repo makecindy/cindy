@@ -22,6 +22,7 @@ import type {
   PluginDirectoryRequest,
   PluginNativeIntent as NativeIntent,
   PluginPageFetchResult,
+  PluginModelPickerRequest,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
@@ -42,6 +43,7 @@ import {
 import { invokePlugin, loadPluginPageAssets } from "./pluginClient";
 import { PluginNativeIntent } from "./PluginNativeIntent";
 import { PluginDirectoryPicker } from "./PluginDirectoryPicker";
+import { PluginModelPicker } from './PluginModelPicker';
 import { pluginPageHtml } from "./pluginPageHtml";
 
 function pageColors(colors: ThemeColors) {
@@ -69,6 +71,7 @@ export function PluginPage({
   visible = true,
   registerBack,
   onTitle,
+  onLoaded,
 }: {
   deviceId: string;
   pluginId: string;
@@ -76,6 +79,7 @@ export function PluginPage({
   visible?: boolean;
   registerBack?(handler: (() => void) | null): void;
   onTitle?(title: string): void;
+  onLoaded?(): void;
   onTask(id: string): void;
 }) {
   const { t } = useTranslation();
@@ -85,6 +89,8 @@ export function PluginPage({
   const routeFocused = useIsFocused(),
     focused = routeFocused && visible;
   const webview = useRef<WebView>(null);
+  const loadedCallback = useRef(onLoaded);
+  loadedCallback.current = onLoaded;
   const draftOwner = useRef(getMobileAuthOwner()).current;
   const draftQueue = useRef(Promise.resolve());
   const [attempt, setAttempt] = useState(0);
@@ -98,6 +104,8 @@ export function PluginPage({
   const [directoryRequest, setDirectoryRequest] =
     useState<PluginDirectoryRequest>();
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
+  const [modelPicker, setModelPicker] = useState<PluginModelPickerRequest>();
+  const completedModelPickers = useRef(new Set<string>());
   const [answering, setAnswering] = useState(false);
   const [notice, setNotice] = useState("");
   const focusedRef = useRef(focused);
@@ -142,6 +150,7 @@ export function PluginPage({
                   "media:open",
                   "answer",
                   "answer-directory",
+                  "answer-model-picker",
                   "intent:ack",
                   "preview:fetch",
                   "seen",
@@ -164,6 +173,8 @@ export function PluginPage({
     setError(false);
     setConfirm(undefined);
     setDirectoryRequest(undefined);
+    setModelPicker(undefined);
+    completedModelPickers.current.clear();
     setNativeIntent(undefined);
     const poll = async () => {
       if (!visible() || !page || !rendered.current || polling) return;
@@ -186,6 +197,7 @@ export function PluginPage({
         });
         setConfirm(result.confirms[0]);
         setDirectoryRequest(result.directories?.[0]);
+        setModelPicker(result.modelPickers?.find(value => !completedModelPickers.current.has(value.requestId)));
         setNativeIntent(result.intents?.[0]);
         if (result.notifications?.length)
           setNotice(result.notifications.at(-1)!.text);
@@ -209,6 +221,7 @@ export function PluginPage({
         if (!current()) return;
         documentRef.current = page;
         setContent({ document: page, assets });
+        loadedCallback.current?.();
         // Polling starts only after ready, so startup events cannot disappear before the WebView mounts.
       } catch {
         if (current()) setError(true);
@@ -234,6 +247,7 @@ export function PluginPage({
       else {
         setConfirm(undefined);
         setDirectoryRequest(undefined);
+        setModelPicker(undefined);
         setNativeIntent(undefined);
         if (page) void call("suspend").catch(() => {});
       }
@@ -492,14 +506,14 @@ export function PluginPage({
         try {
           url = new URL(
             message.url,
-            `cindy-ghost://${pluginId}/${documentRef.current?.entry ?? ""}`,
+            `cindy-ghost://${documentRef.current?.pluginId}/${documentRef.current?.entry ?? ""}`,
           );
         } catch {
           return;
         }
         if (
           url.protocol === "cindy-ghost:" &&
-          url.hostname === pluginId &&
+          url.hostname === documentRef.current?.pluginId &&
           url.pathname.startsWith("/preview/")
         ) {
           await call("media:open", { url: url.href });
@@ -657,10 +671,28 @@ export function PluginPage({
           }}
         />
       ) : null}
+      {modelPicker && focused && !unavailable ? (
+        <PluginModelPicker key={modelPicker.requestId} request={modelPicker} deviceId={deviceId}
+          onAnswer={async route => {
+            const call = request.current;
+            if (!call || !focusedRef.current || AppState.currentState !== 'active')
+              return { handled: false, accepted: false };
+            const result = await call<{ handled: boolean; accepted: boolean }>('answer-model-picker', {
+              requestId: modelPicker.requestId, route,
+            });
+            if (request.current === call && (result.accepted || !result.handled)) {
+              completedModelPickers.current.add(modelPicker.requestId);
+              if (completedModelPickers.current.size > 64) completedModelPickers.current.delete(completedModelPickers.current.values().next().value!);
+              setModelPicker(undefined);
+            }
+            return result;
+          }} />
+      ) : null}
       <Modal
         visible={Boolean(
           confirm &&
           !directoryRequest &&
+          !modelPicker &&
           !nativeIntent &&
           focused &&
           !unavailable,

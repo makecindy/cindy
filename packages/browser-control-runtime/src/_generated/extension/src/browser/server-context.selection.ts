@@ -32,7 +32,7 @@ type SelectionDeps = {
   getCdpControlPolicy: () => SsrFPolicy | undefined;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, opts?: { background?: boolean }) => Promise<BrowserTab>;
 };
 
 type SelectionOps = {
@@ -109,7 +109,7 @@ export function createProfileSelectionOps({
 
     const openWhenConfirmedEmpty = async (tabs: BrowserTab[]): Promise<void> => {
       if (!openedTab && sawSuccessfulList && lastNonEmptyTabs.length === 0 && tabs.length === 0) {
-        openedTab = await openTab("about:blank");
+        openedTab = await openTab("about:blank", { background: true });
       }
     };
 

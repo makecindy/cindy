@@ -75,7 +75,16 @@ interface SlashCommandPaletteProps {
 function metaLabel(cmd: UnifiedCommand): string | null {
   if (cmd.kind === 'agent-skill') return cmd.source; // 'user' | 'skill'
   if (cmd.kind === 'agent-builtin') return 'agent-cmd';
-  return null; // 'desktop' 不显示标签 (内置默认)
+  return cmd.meta ?? null; // 'desktop' 默认不显示标签,插件同名时显示来源
+}
+
+function displayName(cmd: UnifiedCommand): string {
+  return cmd.kind === 'desktop' && cmd.label ? cmd.label : cmd.name;
+}
+
+/** 同名插件的两行显示名相同,读屏要连同「团队共享」标签一起报出才能区分。 */
+function accessibleName(cmd: UnifiedCommand): string {
+  return cmd.kind === 'desktop' && cmd.meta ? `${displayName(cmd)} ${cmd.meta}` : displayName(cmd);
 }
 
 export function SlashCommandPalette({
@@ -277,7 +286,7 @@ export function SlashCommandPalette({
                 ref={focused ? focusedRef : undefined}
                 type="button"
                 aria-disabled={unavailable}
-                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectSkillNotLoaded')}` : cmd.name}
+                aria-label={unavailable ? `${accessibleName(cmd)}: ${t('commandPalette.projectSkillNotLoaded')}` : accessibleName(cmd)}
                 title={unavailable ? t('commandPalette.projectSkillNotLoaded') : undefined}
                 // `onMouseDown` instead of `onClick` so the textarea
                 // keeps focus — click would fire after blur.
@@ -297,7 +306,7 @@ export function SlashCommandPalette({
                   unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
-                {withMenuLabels(<span className="truncate">{cmd.name}</span>)}
+                {withMenuLabels(<span className="truncate">{displayName(cmd)}</span>)}
                 {official ? (
                   <OfficialSkillBadge />
                 ) : metaLabel(cmd) && (
@@ -333,7 +342,7 @@ export function SlashCommandPalette({
           }}
         >
           <div className="flex items-center gap-1 text-14 font-medium text-[var(--cmd-palette-item-text)]">
-            <span className="min-w-0 truncate">{focusedCmd.name}</span>
+            <span className="min-w-0 truncate">{displayName(focusedCmd)}</span>
             {onOpenSkillDetails && focusedCmd.kind === 'agent-skill'
               && focusedCmd.source === 'skill' && focusedCmd.path && focusedCmd.origin !== 'package'
               && (allowProjectSkillDetails || focusedCmd.scope === 'global' || focusedCmd.scope === 'user') && (

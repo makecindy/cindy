@@ -8,9 +8,10 @@
     "notFound": "このデバイスはアカウントに登録されていません。",
     "deleteDevice": "デバイスを削除",
     "deleteTitle": "「{{name}}」を削除しますか？",
-    "deleteMessage": "デバイスを一覧から削除します。コンピューター上のファイルは削除されません。",
+    "deleteMessage": "アカウントからこのデバイスを削除し、リモート接続を切断します。デバイス上のセッションとファイルは保持されます。再度ログインすると追加できます。",
     "deleteFailed": "デバイスを削除できませんでした。",
-    "deleteOnline": "デバイスがオンラインです。オフラインにしてから削除してください。",
+    "deleteOnline": "現在のサーバーはオンラインのデバイス削除に未対応です。サービス更新後に再試行してください。",
+    "deleteRejectedWhileOffline": "デバイスを削除できませんでした。一覧ではオフラインですが、サーバーではまだオンラインとして記録されています。",
     "currentlyOnline": "現在オンライン",
     "availableSection": "オンラインのデバイス",
     "offlineSection": "オフラインのデバイス",
@@ -62,7 +63,7 @@
       "filterMeta": "{{available}} 台を開けます",
       "filterMetaWithUnavailable": "{{available}} 台を開けます · {{unavailable}} 台は対応が必要です",
       "showUnavailableReason": "デバイスを展開すると利用できない理由を確認できます",
-      "emptyCopy": "コンピューターで同じアカウントにログインし、設定のリモートコントロールで「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
+      "emptyCopy": "コンピューターで同じアカウントにログインし、「設定 → リモート接続」で「同じアカウントのデバイスによるこのコンピューターの操作を許可」をオンにしてください。",
       "emptyTitle": "表示できるコンピューターはまだありません",
       "hideUnavailableA11y": "利用できないコンピューターを非表示",
       "showUnavailableA11y": "利用できないコンピューターを表示",
@@ -241,6 +242,11 @@
     }
   },
   "list": {
+    "projectActions": {
+      "newTask": "新しいタスク",
+      "allTasks": "すべてのタスク",
+      "search": "検索"
+    },
     "taskSuggestions": {
       "connected": "コンピューターに接続済み",
       "title": "コンピューターから離れていても、\n始められます。",
@@ -312,6 +318,7 @@
       "openMenu": "メニューを開く",
       "closeMenu": "メニューを閉じる",
       "openDisplaySettings": "表示設定を開く",
+      "openDisplaySettingsWithStatus": "表示設定を開く（表示中：{{status}}）",
       "openSearch": "検索",
       "openSettings": "設定を開く",
       "syncing": "再同期中",
@@ -324,6 +331,7 @@
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
+      "followedBy": "、担当: {{names}}",
       "collapse": "{{title}} を折りたたむ",
       "expand": "{{title}} を展開",
       "taskError": "タスクでエラー",
@@ -331,7 +339,9 @@
       "doneUnread": "完了・未読",
       "running": "実行中",
       "close": "閉じる",
-      "cancelRename": "名前の変更をキャンセル"
+      "cancelRename": "名前の変更をキャンセル",
+      "createdBy": "{{name}} が作成",
+      "ownedBy": "{{name}} に所属"
     },
     "accounts": {
       "title": "アカウントを切り替え",
@@ -342,28 +352,78 @@
       "switchConfirm": "切り替える"
     },
     "menu": {
-      "groupByProject": "プロジェクトごとにグループ化",
-      "groupDialogue": "チャットをまとめる",
-      "sortByTime": "時間順",
-      "sortByPriority": "優先度",
-      "statusActive": "アクティブ",
-      "statusArchived": "アーカイブ済み",
-      "statusAll": "すべて",
+      "groupDialogue": "チャット",
       "dialogueFolder": "チャット",
       "search": "検索",
       "settings": "設定",
       "remoteSettings": "リモート接続設定",
       "displaySettings": "表示設定",
       "groupHeading": "グループ",
-      "sortHeading": "タスクの並び替え",
-      "projectOrderHeading": "プロジェクト順",
-      "projectOrderActivity": "最近のアクティビティ順",
-      "projectOrderManual": "手動",
+      "sortHeading": "タスク順",
+      "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
-      "statusHeading": "ステータス",
+      "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
-      "renameDevice": "名前を変更"
+      "renameDevice": "名前を変更",
+      "groupProject": "プロジェクト",
+      "sortBy": {
+        "priority": "優先度",
+        "recency": "最近のアクティビティ",
+        "created": "作成日時"
+      },
+      "sortByPriorityTip": "要対応を最上位に、次に未読、実行中、残りは時間順",
+      "projectOrder": {
+        "activity": "タスクに従う",
+        "custom": "手動"
+      },
+      "status": {
+        "active": "アクティブ",
+        "archived": "アーカイブ済み",
+        "all": "すべて"
+      },
+      "filterHeading": "フィルター",
+      "filterSummaryActive": "{{count}} 件適用中",
+      "filterReset": "フィルターをリセット",
+      "filterAll": "すべて",
+      "filterProjectsHeading": "プロジェクト",
+      "filterAllProjects": "すべてのプロジェクト",
+      "filterSelectedProjects": "{{count}} 件選択",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "すべて",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "最終アクティビティ",
+      "filterLastActivity": {
+        "1d": "1日",
+        "3d": "3日",
+        "7d": "7日",
+        "30d": "30日",
+        "all": "すべて"
+      },
+      "showCollapsedTeammateAvatars": "折りたたみ時にアバターを表示",
+      "displayHeading": "表示",
+      "view": {
+        "text": "テキスト",
+        "list": "リスト"
+      },
+      "taskInfoHeading": "タスク情報",
+      "taskInfo": {
+        "time": "時間",
+        "pr": "PR ステータス",
+        "tokens": "トークン",
+        "cost": "コスト"
+      },
+      "summaryNone": "なし",
+      "summarySeparator": "、",
+      "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。",
+      "filterTeammatesHeading": "パートナー",
+      "filterAnySource": "すべて",
+      "filterHideAllTeammates": "すべて非表示",
+      "filterSelectedTeammates": "{{count}} 人を選択"
     },
     "search": {
       "placeholder": "タイトルまたは内容を検索…",
@@ -537,9 +597,12 @@
     "viewAllRuns": "すべての実行 {{count}} 回を表示"
   },
   "companions": {
+    "section": {
+      "showAll": "すべて表示",
+      "showAllA11y": "すべて表示（{{count}}）",
+      "showLess": "閉じる"
+    },
     "noCreateHosts": "対応するコンピュータを利用できません。パソコンで Cindy を開き、同じアカウントでログインするとチームメイトを新規作成できます。",
-    "taskAttentionCount": "確認が必要なタスク：{{count}}",
-    "unreadChatCount": "未読のチャット：{{count}}",
     "messageSent": "バックグラウンドタスクにメッセージを送信しました",
     "sentTo": "{{name}} にメッセージを送信",
     "receivedFrom": "{{name}} からのメッセージ",
@@ -578,19 +641,13 @@
       "unknown": "状態不明"
     },
     "title": "チームメイト",
-    "tasks": "セッション",
     "search": "チームメイトを検索",
-    "emptyTitle": "チームメイトはまだいません",
-    "emptyCopy": "パソコンの Cindy でチームメイトを作成してください。",
-    "noResults": "一致するチームメイトがいません",
     "startChat": "会話を始める",
-    "preferenceSaveFailed": "表示設定を保存できませんでした。もう一度表示を切り替えてください。",
     "automation": {
       "unsavedTitle": "変更を破棄しますか？",
       "unsavedBody": "変更はまだ保存されていません。",
       "discard": "変更を破棄"
     },
-    "openNavigation": "ナビゲーションを開く",
     "openProfile": "{{name}}のプロフィールを表示",
     "switchCompanion": "チームメイトを切り替える",
     "activity": {
@@ -637,11 +694,16 @@
     "errorDetails": "エラー詳細",
     "createTeammate": "新しい仲間",
     "createMenu": "新規作成",
-    "searchWithGroups": "仲間とグループを検索",
     "awaiting": "確認待ち",
-    "emptyCopyCreate": "仲間は話した内容を覚えていて、パソコンで作業も手伝えます。",
     "taskResult": "タスクの結果",
-    "collapseResult": "結果を閉じる"
+    "collapseResult": "結果を閉じる",
+    "avatarStatus": {
+      "awaiting": "確認待ち",
+      "error": "要確認",
+      "running": "作業中",
+      "done": "完了",
+      "unread": "未読"
+    }
   },
   "companionProfile": {
     "avatar": "アバター",
@@ -709,7 +771,22 @@
     "portraitNumber": "アバター {{number}}",
     "uploadAvatar": "アバターをアップロード",
     "avatarFailed": "この画像を開けません。別の画像を選んでください。",
-    "nameTaken": "この名前は使用されています。別の名前を選んでください。"
+    "nameTaken": "この名前は使用されています。別の名前を選んでください。",
+    "home": "メインのパソコン",
+    "chat": "チャット",
+    "showReplyTarget": "返信の対象メッセージを表示",
+    "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。すべてのチームメイトに適用されます。以前の返信には表示されません。",
+    "channels": "メッセージサービス",
+    "channelsEmpty": "接続されたサービスはありません",
+    "channelTasksEmpty": "タスクはまだありません",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "仲間をインポート",
@@ -768,6 +845,91 @@
     "setupDeferred": "パートナーとのチャットでログインと確認を続けられます。",
     "automationInvalid": "自動化の定義を変換できず、作成されていません。",
     "itemFailed": "この項目は未完了です。再試行するか詳細を確認してください。",
-    "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。"
+    "chatPartial": "パートナーは作成されましたが、一部の情報は完全に保存されていません。以下の項目は対応が必要です。他の情報とチャットは利用できます。",
+    "imBotOwnerMissing": "オーナーのユーザー ID が見つかりませんでした。仲間の「メッセージプラットフォーム」ページでこのボットを接続してください。",
+    "imBotGatewayRunning": "元のゲートウェイがまだこのボットを使っています。停止してから「メッセージプラットフォーム」で接続してください。",
+    "imBotInUse": "このボットはすでにこのコンピューターで使われています（設定 → IM ボット、または別の仲間）。",
+    "imBotConnectFailed": "このボットに接続できませんでした。仲間の「メッセージプラットフォーム」ページでやり直してください。",
+    "imBotSourceStopUnconfirmed": "元のボットがまだ停止していないため、仲間に引き継いでいません。あとで仲間の「メッセージプラットフォーム」ページで接続できます。",
+    "imBotSourceChanged": "プレビュー後に元のボットが変更されたため、停止していません。再読み込みしてからインポートしてください。",
+    "bots": "メッセージボット",
+    "botsNote": "インポート後、{{source}} のこれらのボットは停止し、仲間が引き継ぎます。",
+    "sourceDisabled": "元から停止中",
+    "botOwner": "オーナー ID {{id}}"
+  },
+  "glance": {
+    "open": "{{name}}の近況",
+    "dueUnseen": "期限が来た Todo があります",
+    "computers": "コンピュータ",
+    "runningHere": "このコンピュータで実行中",
+    "online": "オンライン",
+    "offline": "オフライン",
+    "current": "現在",
+    "offlineCount_one": "オフライン {{count}} 台",
+    "offlineCount_other": "オフライン {{count}} 台",
+    "todos": "Todo",
+    "showMore": "さらに表示",
+    "showLess": "閉じる",
+    "doneCount_one": "完了 {{count}}",
+    "doneCount_other": "完了 {{count}}",
+    "delete": "削除",
+    "deleted": "削除しました。同じ件は今後記録しません",
+    "undo": "元に戻す",
+    "undoFailed": "元に戻せませんでした。もう一度お試しください",
+    "deleteFailed": "削除できませんでした。もう一度お試しください",
+    "check": "確認して",
+    "checkMeta": "接続済みのメールやメッセージから新しい Todo を探します",
+    "checkPrompt": "接続済みのメールやメッセージなどに、私が対応すべき新しい用件がないか確認して、あれば Todo に追加して。",
+    "dailyCheck": "毎日確認する",
+    "dailyCheckMeta": "平日 9:00、新しい Todo がなければ通知しません",
+    "recentTasks": "最近のセッション",
+    "unread": "未読の結果",
+    "stopDailyCheck": "毎日の確認を停止",
+    "openFailed": "リンクを開けませんでした",
+    "dailyCheckFailed": "保存できませんでした。もう一度お試しください",
+    "loadFailed": "Todo を読み込めませんでした",
+    "outputs": "成果物",
+    "outputMeta": "{{time}} · {{task}}",
+    "source": {
+      "conversation": "あなたの依頼",
+      "mail": "メールから",
+      "feishu": "Feishu から",
+      "github": "GitHub から",
+      "community": "コミュニティから",
+      "task": "タスクから"
+    }
+  },
+  "cloudCompanion": {
+    "homeOffline": "メインのパソコン「{{device}}」がオフラインです",
+    "switchAction": "別のパソコンで続ける",
+    "composerHint": "メインのパソコンがオフラインです。別のパソコンに切り替えると続けられます。",
+    "readOnlyNote": "クラウドに保存された会話です。閲覧のみできます。",
+    "empty": "クラウドの会話はまだありません。",
+    "loadFailed": "クラウドの会話を読み込めません。",
+    "loadOlder": "以前のメッセージを読み込む",
+    "noTargets": "ほかに使えるパソコンがありません。別のパソコンで Cindy を開いて同じアカウントでログインし、「同じアカウントのデバイスにこのパソコンの操作を許可」をオンにしてから、もう一度お試しください。",
+    "devicesFailed": "パソコンの一覧を読み込めません。しばらくしてからもう一度お試しください。",
+    "preparing": "「{{device}}」で準備しています…",
+    "preparingHint": "そのパソコンがクラウドのプロフィールからチームメイトを引き継ぎ、準備ができたら自動で開きます。",
+    "timeout": "「{{device}}」の準備がまだ終わっていません。そのパソコンで Cindy が開いていてオンラインか確認して、もう一度お試しください。",
+    "conflict": "{{name}} はすでに「{{device}}」に移っています。",
+    "switchFailed": "メインのパソコンを変更できません。しばらくしてからもう一度お試しください。",
+    "unknownDevice": "別のパソコン",
+    "runsOn": "「{{device}}」で実行中",
+    "homeTitle": "メインのパソコン",
+    "moveTo": "「{{device}}」に移す",
+    "moveTitle": "{{name}} を「{{device}}」で実行しますか？",
+    "moveDescription": "今後 {{name}} は「{{device}}」で実行され、チャット履歴も一緒に移ります。作業ディレクトリ、接続、ローカルのファイルは元のパソコンに残ります。",
+    "moveAction": "「{{device}}」に移す",
+    "moving": "{{name}} を「{{device}}」に移しています…",
+    "busyTitle": "{{name}} はまだ返信中です",
+    "busyDescription": "この返信が終わってから「{{device}}」に移すか、返信を止めてすぐに移せます。",
+    "busyWait": "終わってから移す",
+    "busyStop": "止めて移す",
+    "transferBusy": "{{name}} はまだ返信中です。返信が終わってから移してください",
+    "switchConflict": "{{name}} のメインのパソコンはすでに変更されているため、移しませんでした",
+    "homeOutdated": "メインのパソコン「{{device}}」の Cindy が古いバージョンです。更新するか、そのパソコンで変更してください",
+    "homeUnreachable": "「{{device}}」に接続できません。オンラインで「同じアカウントのデバイスからの操作を許可」をオンにする必要があります",
+    "sendUnreachable": "メッセージがメインのパソコン「{{device}}」に届いていません。オフラインの可能性があります。別のパソコンで続けられます。"
   }
 }

@@ -1,7 +1,7 @@
 /**
- * 群的身份标记：侧栏行用两位成员的叠放头像，顶栏与群设置用一排叠放头像。
+ * 群的身份标记：侧栏按人数显示组合头像，顶栏与群设置用一排叠放头像。
  * 每个头像仍是 BotAvatar（同一套 `--bot-avatar-*` 色板），叠放处用和底色同色的
- * 2px 描边隔开——与在线状态点 `border-sidebar` 的做法一致，不引入阴影或新 token。
+ * 描边隔开——与离线状态点 `border-sidebar` 的做法一致，不引入阴影或新 token。
  */
 import { Users } from 'lucide-react';
 
@@ -11,36 +11,90 @@ import { BotAvatar } from './BotAvatar';
 
 type AvatarMember = Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarColor'>;
 
-/** 40px sidebar mark: the first two members, offset diagonally. */
-export function BotGroupDuoAvatar({
+/** 固定头像区域：双人斜向叠放，多人沿圆周聚拢，描边区分前后层次。 */
+export function BotGroupSidebarAvatar({
   members,
   selected = false,
+  compact = false,
 }: {
   members: readonly AvatarMember[];
   selected?: boolean;
+  compact?: boolean;
 }) {
+  const frameClass = compact ? 'h-12 w-12' : 'h-11 w-11';
   const [first, second] = members;
   if (!first) {
     return (
       <span
         aria-hidden
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-tertiary)]"
+        className={cn(
+          'flex shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-tertiary)]',
+          frameClass,
+        )}
       >
         <Users size={16} />
       </span>
     );
   }
-  if (!second) return <BotAvatar bot={first} size="md" />;
+  if (!second) return <BotAvatar bot={first} size={compact ? 'strip' : 'row'} />;
+  if (members.length >= 3) {
+    // 先取群里的前五位，再从后向前绘制：第一位最后绘制，完整露在最前层。
+    const visible = members.slice(0, 5).reverse();
+    // 与手机共用比例：3/4/5 人分别占头像框的 60%/55%/50%。
+    const diameter = visible.length === 3 ? 60 : visible.length === 4 ? 55 : 50;
+    const radius = (100 - diameter) / 2;
+    return (
+      <span aria-hidden className={cn('relative flex shrink-0', frameClass)}>
+        {visible.map((member, index) => {
+          const angle = (-3 * Math.PI) / 4 + (index * 2 * Math.PI) / visible.length;
+          return (
+            <span
+              key={member.botId}
+              className={cn(
+                'absolute flex rounded-full',
+                'border-2',
+                selected
+                  ? 'border-sidebar'
+                  : 'border-sidebar group-hover:border-sidebar-item-hover',
+              )}
+              style={{
+                width: `${diameter}%`,
+                height: `${diameter}%`,
+                left: `${radius * (1 + Math.cos(angle))}%`,
+                top: `${radius * (1 + Math.sin(angle))}%`,
+              }}
+            >
+              <BotAvatar bot={member} size="xs" className="h-full w-full text-11" />
+            </span>
+          );
+        })}
+      </span>
+    );
+  }
   return (
-    <span aria-hidden className="relative h-10 w-10 shrink-0">
-      <BotAvatar bot={first} size="xs" className="absolute left-0.5 top-0.5 h-6 w-6 text-12" />
+    <span aria-hidden className={cn('relative flex shrink-0', frameClass)}>
+      <BotAvatar
+        bot={second}
+        size="xs"
+        className={cn(
+          'absolute',
+          compact ? 'left-0 top-0 size-[34px] text-14' : 'left-0 top-0 size-[30px] text-14',
+        )}
+      />
       <span
         className={cn(
-          'absolute bottom-0 right-0 flex rounded-full border-2',
-          selected ? 'border-sidebar-item-active' : 'border-sidebar group-hover:border-sidebar-item-hover',
+          'absolute bottom-0 right-0 flex rounded-full',
+          'border-2',
+          selected
+            ? 'border-sidebar'
+            : 'border-sidebar group-hover:border-sidebar-item-hover',
         )}
       >
-        <BotAvatar bot={second} size="xs" className="h-6 w-6 text-12" />
+        <BotAvatar
+          bot={first}
+          size="xs"
+          className={compact ? 'size-[34px] text-14' : 'size-[30px] text-14'}
+        />
       </span>
     </span>
   );

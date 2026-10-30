@@ -229,6 +229,23 @@ describe('local history view keeps command cards', () => {
 });
 
 describe('local history view keeps user rows through the DB echo', () => {
+  it('keeps a harness boundary before a local pending send and its durable echo', async () => {
+    const s = sid();
+    await openSession(s);
+    await makerChatStore.sendMessage(s, 'new question', 'claude', '', 'default', WD);
+    const item = enqueue.mock.calls[0][1];
+    persist(dbMessage(s, 'switch', JSON.stringify({ fromAgentKind: 'cc', toAgentKind: 'codex' }),
+      new Date(Date.now() + 1000).toISOString(), 'agent_switch'));
+    await getRemoteHistoryView(s)!.refresh();
+    const expected = ['old-user', 'old-answer', 'switch', item.clientId];
+    expect(renderedClientIds(s)).toEqual(expected);
+    persistQueued(s, item, new Date(Date.now() + 2000).toISOString());
+    expect(renderedClientIds(s)).toEqual(expected);
+    await getRemoteHistoryView(s)!.refresh();
+    expect(renderedClientIds(s)).toEqual(expected);
+    makerChatStore.purgeSession(s);
+  });
+
   it('keeps an ordinary send visible between the echo and the history refresh', async () => {
     const s = sid();
     await openSession(s);

@@ -21,7 +21,7 @@ vi.mock('@/session/ContextSheetCollabView', () => ({
 vi.mock('@/session/fullAccessConfirmation', () => ({ confirmFullAccessChange: async () => true }));
 
 const { useOrcaWorkerForm } = await import('@/session/useSessionOrcaCollab');
-const { resetOrcaWorkerCreationPrefsMemory, saveOrcaWorkerCreationPrefs, defaultOrcaWorkerCreationPrefs } =
+const { resetOrcaWorkerCreationPrefsMemory, saveOrcaWorkerCreationPrefs, defaultOrcaWorkerCreationPrefs, readOrcaWorkerCreationPrefs } =
   await import('@/session/orcaWorkerPrefs');
 
 let root: Root;
@@ -46,6 +46,260 @@ function fakeMaker(): MobileMakerTransport {
   } as unknown as MobileMakerTransport;
 }
 
+function ExecutionProbe({ maker, target, enabled = true }: { maker: MobileMakerTransport; target: (id: string) => MobileMakerTransport; enabled?: boolean }) {
+  latest = useOrcaWorkerForm({ maker, executionMakerForDevice: target, executionDevicesEnabled: enabled, prefsScope: 'user-1', active: true, setSheetOpen: () => undefined });
+  return null;
+}
+
+// Unit regression: a Worker on B may use C's provider, with model/effort kept
+// as one explicit route. Old execution hosts must retain the local-only form.
+it.each([false, true])('permits remote providers on the selected work computer only with support %s', async supported => {
+  const lead = { ...fakeMaker(), orca: { listExecutionDevices: vi.fn(async () => ({ devices: [
+    { deviceId: 'b', name: 'B', supported: true, ...(supported ? { supportsAgentDevice: true } : {}) },
+  ] })) } } as unknown as MobileMakerTransport;
+  const remote = fakeMaker();
+  function Host() { latest = useOrcaWorkerForm({ maker: lead, executionMakerForDevice: () => remote,
+    executionDevicesEnabled: true, agentLocationSelectable: true, leadAgentDeviceId: 'lead-model-pc',
+    prefsScope: 'user-1', active: true, setSheetOpen: () => undefined }); return null; }
+  await act(async () => { root.render(<Host />); await flush(); });
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  expect(latest!.agentLocationSelectable).toBe(supported);
+  await act(async () => { await latest!.modelPicker.select({ agent: 'codex', modelId: 'remote-only', providerId: 'remote-openai', effort: 'high', fast: false }, { deviceId: 'c' }); });
+  expect(latest!.form.executionDeviceId).toBe('b');
+  if (supported) expect(latest!.form).toMatchObject({ agentDeviceId: 'c', model: { id: 'remote-only', providerId: 'remote-openai', effort: 'high' } });
+  else expect(latest!.form.agentDeviceId).toBeUndefined();
+});
+
+it('reads selectable devices from the Lead and reads Agent/model capabilities from the chosen device', async () => {
+  const lead = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['codex']), orca: { listExecutionDevices: vi.fn(async () => ({ devices: [
+    { deviceId: 'b', name: 'B', supported: true }, { deviceId: 'old', supported: false },
+  ] })) } } as unknown as MobileMakerTransport;
+  const remote = { ...fakeMaker(), listAvailableAgents: vi.fn(async () => ['pi']), getCapabilities: vi.fn(async () => ({ availableModels: [model('b-model')] })) } as unknown as MobileMakerTransport;
+  const target = vi.fn(() => remote);
+  await act(async () => { root.render(<ExecutionProbe maker={lead} target={target} />); await flush(); });
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  expect(latest!.maker).toBe(remote);
+  expect(latest!.form.agent).toBe('pi');
+  expect(remote.getCapabilities).toHaveBeenCalledWith('pi');
+  expect(latest!.modelPicker.flatModelOptions.map((option) => option.id)).toEqual(['b-model']);
+  expect(latest!.valid).toBe(true);
+  expect(lead.orca.listExecutionDevices).toHaveBeenCalledTimes(1);
+  await act(async () => { latest!.patch({ remoteDirMode: 'path', remoteDir: '/b' }); latest!.patch({ executionDeviceId: undefined }); await flush(); });
+  expect(latest!.maker).toBe(lead);
+  expect(latest!.form.remoteDirMode).toBe('dialogue');
+  expect(latest!.form.remoteDir).toBe('');
+  await act(async () => { latest!.patch({ executionDeviceId: 'old' }); await flush(); });
+  expect(latest!.valid).toBe(false);
+  // 同一标记的自动默认分支：撤掉运行设备后需按 Lead 的目录重新收敛，不能残留远端显式选行标记。
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  await act(async () => { await latest!.modelPicker.select({ agent: 'pi', modelId: 'b-model', providerId: 'b-provider', effort: '', fast: false }); });
+  await act(async () => { root.render(<ExecutionProbe maker={lead} target={target} enabled={false} />); await flush(); });
+  expect(latest!.form.executionDeviceId).toBeUndefined();
+  expect(latest!.form.agent).toBe('codex');
+});
+
+it('does not let a late capability response from A overwrite a model chosen on B', async () => {
+  let resolveLead!: (value: unknown) => void;
+  const lead = { ...fakeMaker(), getCapabilities: vi.fn(() => new Promise((resolve) => { resolveLead = resolve; })), orca: {
+    listExecutionDevices: vi.fn(async () => ({ devices: [{ deviceId: 'b', supported: true }] })),
+  } } as unknown as MobileMakerTransport;
+  const remote = { ...fakeMaker(), getCapabilities: vi.fn(async () => ({ availableModels: [model('b-model')] })) } as unknown as MobileMakerTransport;
+  const target = () => remote;
+  await act(async () => { root.render(<ExecutionProbe maker={lead} target={target} />); await flush(); });
+  await act(async () => { latest!.patch({ executionDeviceId: 'b' }); await flush(); });
+  await act(async () => { await latest!.modelPicker.select({ agent: 'codex', modelId: 'b-model', providerId: '', effort: 'high', fast: false }); });
+  await act(async () => { resolveLead({ availableModels: [model('a-model')] }); await flush(); });
+  expect(latest!.form.model?.id).toBe('b-model');
+  expect(latest!.modelPicker.flatModelOptions.map((option) => option.id)).toEqual(['b-model']);
+});
+
+function LocationProbe({ maker, lead, selectable, host = 'host-a', scope = 'user-1', sshRemote = false }: { maker: MobileMakerTransport; lead: string | null; selectable: boolean; host?: string; scope?: string; sshRemote?: boolean }) {
+  latest = useOrcaWorkerForm({
+    maker, prefsScope: scope, taskHostDeviceId: host, sshRemote, active: true, setSheetOpen: () => undefined,
+    leadAgentDeviceId: lead, agentLocationSelectable: selectable,
+  });
+  return null;
+}
+
+// 远程供应商与本机供应商一视同仁(2026-10-10)：Worker 的 Agent 可以放到另一台电脑或分享上。
+it("defaults the Worker to the Lead's Agent computer and follows remote picks without converging them on the controlled computer", async () => {
+  const maker = fakeMaker();
+  await act(async () => { root.render(<LocationProbe maker={maker} lead="agent-pc" selectable />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  // Lead 在另一台电脑：位置跟它，本机记忆的模型属于别的目录，回到「默认」。
+  expect(latest!.form.agentDeviceId).toBe('agent-pc');
+  expect(latest!.form.model).toBeNull();
+  expect(latest!.agentLocationSelectable).toBe(true);
+
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'remote-only-model', providerId: 'spark', effort: 'high', fast: false },
+      { deviceId: 'share:s1' },
+    );
+    await flush();
+  });
+  // 被控电脑的能力里没有这个模型，换 Agent 列表 / 收敛时也不清掉。
+  await act(async () => { root.render(<LocationProbe maker={maker} lead="agent-pc" selectable />); await flush(); });
+  expect(latest!.form).toMatchObject({ agentDeviceId: 'share:s1', model: { id: 'remote-only-model', providerId: 'spark' } });
+
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'codex/gpt-5.5', providerId: 'xd', effort: 'high', fast: false },
+      { deviceId: null },
+    );
+    await flush();
+  });
+  expect(latest!.form.agentDeviceId).toBeNull();
+});
+
+// 7af90460e2 后 reset 跟 Lead 丢失远程选择；旧用例只验证本次选行。
+// unit：经过表单 select → remember → 重新挂载，验证持久恢复及账号/任务电脑隔离。
+it.each(['agent-pc', 'share:s1', null])('remembers the submitted model route independently of the Lead (%s)', async (location) => {
+  const maker = fakeMaker();
+  const renderForm = async (lead: string | null, props = {}) => {
+    await act(async () => { root.render(<LocationProbe maker={maker} lead={lead} selectable {...props} />); await flush(); });
+    await act(async () => { latest!.reset(); await flush(); });
+  };
+  await renderForm('original-lead');
+  await act(async () => { await latest!.modelPicker.select(
+    { agent: 'pi', modelId: 'chosen-model', providerId: 'chosen-provider', effort: 'high', fast: true },
+    { deviceId: location },
+  ); });
+  await act(async () => { latest!.remember(latest!.form); await flush(); });
+  if (location) expect((await readOrcaWorkerCreationPrefs('user-1')).agents.pi.model)
+    .toBe(defaultOrcaWorkerCreationPrefs().agents.pi.model);
+  await act(async () => root.render(null));
+  resetOrcaWorkerCreationPrefsMemory();
+  await renderForm('new-lead');
+  expect(latest!.form).toMatchObject({ agent: 'pi', agentDeviceId: location,
+    model: { id: 'chosen-model', providerId: 'chosen-provider', effort: 'high', fast: true } });
+  // PR #6453：Android 已选 Agent pill 也触发 onChange；原用例漏了同值重复选择。
+  // unit 最小输入：恢复完整路线后重复选当前 Agent，不能清模型/来源/位置/档位/Fast/显式标记。
+  const restored = latest!.form;
+  await act(async () => { latest!.changeAgent(restored.agent); await flush(); });
+  expect(latest!.form).toEqual(restored);
+  await act(async () => { latest!.remember(latest!.form); await flush(); });
+  await act(async () => root.render(null));
+  resetOrcaWorkerCreationPrefsMemory();
+  await renderForm('new-lead');
+  expect(latest!.form).toEqual(restored);
+  // 旧端不能兑现记住的位置时阻止提交，不跟着 Lead 静默换位置。
+  await renderForm('new-lead', { selectable: false });
+  expect(latest!.valid).toBe(false);
+  for (const props of [{ host: 'host-b' }, { scope: 'user-2' }, { sshRemote: true }]) {
+    await renderForm('new-lead', props);
+    expect(latest!.form.agentDeviceId).toBe('new-lead');
+    expect(latest!.form.model).toBeNull();
+  }
+});
+
+// PR #6453：完整路线恢复优先于 lastAgent；切 Agent 后成功提交不能再次恢复旧 Agent。
+// unit：已有用例未覆盖 select → remember → changeAgent → remember → reset 的连续操作；
+// 分别覆盖有效旧模型、收敛成默认模型，以及不能写进本机逐 Agent 槽的远程目录。
+it.each([
+  { location: null, remembered: 'pi-model', expected: 'pi-model' },
+  { location: null, remembered: 'retired', expected: null },
+  { location: 'agent-pc', remembered: 'pi-model', expected: null },
+])('replaces the saved Agent only after submitting an Agent switch ($location, $remembered)', async ({ location, remembered, expected }) => {
+  const maker = fakeMaker();
+  const defaults = defaultOrcaWorkerCreationPrefs();
+  const otherHostSelection = { agent: 'codex' as const, agentDeviceId: 'other-pc', model: { id: 'other-model', providerId: 'other-provider', effort: 'high', fast: false } };
+  saveOrcaWorkerCreationPrefs('user-1', {
+    ...defaults,
+    modelSelectionByHost: { 'host-b': otherHostSelection },
+    agents: { ...defaults.agents, pi: { model: remembered, effort: 'high', fast: false } },
+  });
+  await act(async () => { root.render(<LocationProbe maker={maker} lead={location} selectable />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  await act(async () => { await latest!.modelPicker.select(
+    { agent: 'codex', modelId: 'codex/gpt-5.5', providerId: 'chosen-provider', effort: 'high', fast: true },
+    { deviceId: location },
+  ); });
+  await act(async () => { latest!.remember(latest!.form); await flush(); });
+  const original = (await readOrcaWorkerCreationPrefs('user-1')).modelSelectionByHost?.['host-a'];
+
+  await act(async () => { latest!.changeAgent('pi'); await flush(); });
+  expect(latest!.form.model?.id ?? null).toBe(expected);
+  // 没有成功提交时，仅关闭重开不能删除旧完整路线。
+  await act(async () => { latest!.reset(); await flush(); });
+  expect(latest!.form).toMatchObject({ agent: 'codex', agentDeviceId: location });
+  expect((await readOrcaWorkerCreationPrefs('user-1')).modelSelectionByHost?.['host-a']).toEqual(original);
+
+  await act(async () => { latest!.changeAgent('pi'); await flush(); });
+  expect(latest!.form.model?.id ?? null).toBe(expected);
+  await act(async () => { latest!.remember(latest!.form); await flush(); });
+  await act(async () => root.render(null));
+  resetOrcaWorkerCreationPrefsMemory();
+  await act(async () => { root.render(<LocationProbe maker={maker} lead={location} selectable />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  expect(latest!.form.agent).toBe('pi');
+  expect(latest!.form.model?.id ?? null).toBe(expected);
+  const saved = await readOrcaWorkerCreationPrefs('user-1');
+  expect(saved.agents.pi.model).toBe(remembered);
+  expect(saved.modelSelectionByHost?.['host-b']).toEqual(otherHostSelection);
+});
+
+it('does not save cancelled picks or let a late saved route replace a new pick', async () => {
+  const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+  const maker = fakeMaker();
+  let release!: (value: string | null) => void;
+  vi.mocked(AsyncStorage.getItem).mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+  try {
+    await act(async () => root.render(<LocationProbe maker={maker} lead="lead-pc" selectable />));
+    act(() => latest!.reset());
+    await act(async () => { await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'new-pick', providerId: 'new-source', effort: 'high', fast: false },
+      { deviceId: 'share:new' },
+    ); });
+    await act(async () => { release(JSON.stringify({
+      ...defaultOrcaWorkerCreationPrefs(), modelSelectionByHost: { 'host-a': {
+        agent: 'pi', agentDeviceId: 'share:old', model: { id: 'old', providerId: 'old', effort: 'low', fast: false },
+      } },
+    })); await flush(); });
+    expect(latest!.form).toMatchObject({ agentDeviceId: 'share:new', model: { id: 'new-pick' } });
+    await act(async () => { latest!.reset(); await flush(); });
+    expect(latest!.form).toMatchObject({ agentDeviceId: 'share:old', model: { id: 'old' } });
+    expect(storage.size).toBe(0);
+  } finally {
+    vi.mocked(AsyncStorage.getItem).mockImplementation(async (key) => storage.get(key) ?? null);
+  }
+});
+
+it('leaves the Worker location unset when the controlled computer cannot honor it', async () => {
+  await act(async () => { root.render(<LocationProbe maker={fakeMaker()} lead="agent-pc" selectable={false} />); await flush(); });
+  await act(async () => { latest!.reset(); await flush(); });
+  expect(latest!.form.agentDeviceId).toBeUndefined();
+  // 旧被控端让 Worker 跟 Lead 去那台：模型交给那台按自己的目录解析。
+  expect(latest!.form.model).toBeNull();
+  await act(async () => {
+    await latest!.modelPicker.select(
+      { agent: 'codex', modelId: 'remote-only-model', providerId: 'xd', effort: 'high', fast: false },
+      { deviceId: 'agent-pc' },
+    );
+  });
+  expect(latest!.form.agentDeviceId).toBeUndefined();
+  // PR #6453：旧端未指定位置表示跟随 Lead，选行不能把合法提交误禁用。
+  expect(latest!.valid).toBe(true);
+  await act(async () => { latest!.remember(latest!.form); await flush(); });
+  // 跟随远程 Lead 的模型不能写入本机旧槽，完整记忆仍需记录实际位置。
+  const prefs = await readOrcaWorkerCreationPrefs('user-1');
+  expect(prefs.agents.codex.model).toBe(defaultOrcaWorkerCreationPrefs().agents.codex.model);
+  expect(prefs.modelSelectionByHost?.['host-a']).toMatchObject({ agentDeviceId: 'agent-pc', model: { id: 'remote-only-model' } });
+  // 同一个远程 Lead 下，显式 null 是要求放在任务电脑，旧端不能兑现。
+  act(() => latest!.restore({ ...latest!.form, agentDeviceId: null }));
+  expect(latest!.valid).toBe(false);
+  act(() => latest!.restore({ ...latest!.form, agentDeviceId: 'agent-pc' }));
+  expect(latest!.valid).toBe(true);
+});
+
+it('keeps local Worker creation available on older Leads without the device-list channel', async () => {
+  const lead = { ...fakeMaker(), orca: { listExecutionDevices: vi.fn(async () => { throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] old'); }) } } as unknown as MobileMakerTransport;
+  await act(async () => { root.render(<ExecutionProbe maker={lead} target={() => fakeMaker()} />); await flush(); });
+  expect(latest!.executionDevices).toEqual([]);
+  expect(latest!.executionDevicesError).toBeNull();
+  expect(latest!.valid).toBe(true);
+});
+
 const flush = async () => { for (let i = 0; i < 4; i += 1) await Promise.resolve(); };
 
 /** store 里的 Worker 任务行(只填乐观归档 / 回滚用得到的字段)。 */
@@ -61,6 +315,97 @@ beforeEach(() => {
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
+
+const remoteLead = {
+  leadDeviceId: 'lead-device', leadDeviceName: 'Lead computer', leadSessionId: 'lead-1',
+  leadTitle: 'Lead task', workerLabel: 'tester',
+};
+
+it.each([
+  { workspaceKind: 'project', orcaRole: null },
+  { workspaceKind: 'dialogue', orcaRole: null },
+  { workspaceKind: 'project', orcaRole: 'lead' },
+] as const)('keeps a real remote Worker out of collaboration ($workspaceKind, role=$orcaRole)', async (identity) => {
+  const { useSessionOrcaCollab } = await import('@/session/useSessionOrcaCollab');
+  const ref: { current: ReturnType<typeof useSessionOrcaCollab> | null } = { current: null };
+  const maker = {
+    ...fakeMaker(),
+    orca: {
+      listWorkers: vi.fn(async () => []),
+      getTeamByWorkerSession: vi.fn(async () => null),
+      getCollabPolicy: vi.fn(async () => ({ effectiveEnabled: true })),
+      enable: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+      createWorker: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+    },
+  } as unknown as MobileMakerTransport;
+  const setSheetView = vi.fn();
+  function Host() {
+    ref.current = useSessionOrcaCollab({
+      maker, deviceId: 'run-device', sessionId: 'real-worker', prefsScope: 'user-1', enabled: true,
+      session: { id: 'real-worker', ...identity, workingDir: '/repo', agentKind: 'codex', orcaRemoteLead: remoteLead } as RemoteSession,
+      sheetView: 'collab', sheetOpen: true, setSheetView, setSheetOpen: vi.fn(), openSession: vi.fn(),
+    });
+    return null;
+  }
+  await act(async () => { root.render(<Host />); await flush(); });
+  expect(ref.current!.eligible).toBe(false);
+  expect(ref.current!.entryBlocked).toBe(true);
+  expect(ref.current!.canSubmit).toBe(false);
+  expect(ref.current!.isLead).toBe(false);
+  expect(ref.current!.workerLeadSessionId).toBeNull();
+  expect(setSheetView).toHaveBeenCalledWith('main');
+  setSheetView.mockClear();
+  await act(async () => {
+    ref.current!.openFromMain(); ref.current!.openCreateWorker();
+    await ref.current!.submitEnable(); await ref.current!.submitCreate();
+  });
+  expect(setSheetView).not.toHaveBeenCalled();
+  expect(maker.orca.enable).not.toHaveBeenCalled();
+  expect(maker.orca.createWorker).not.toHaveBeenCalled();
+  expect(maker.orca.listWorkers).not.toHaveBeenCalled();
+  expect(maker.orca.getTeamByWorkerSession).not.toHaveBeenCalled();
+  expect(maker.getCapabilities).not.toHaveBeenCalled();
+});
+
+it('rejects callbacks captured before fresh metadata identifies a remote Worker', async () => {
+  const { useSessionOrcaCollab } = await import('@/session/useSessionOrcaCollab');
+  const ref: { current: ReturnType<typeof useSessionOrcaCollab> | null } = { current: null };
+  const maker = {
+    ...fakeMaker(),
+    getCapabilities: vi.fn(async () => ({ supportsOrcaWorkerPermissionMode: true })),
+    orca: {
+      listExecutionDevices: vi.fn(async () => ({ devices: [] })),
+      getCollabPolicy: vi.fn(async () => ({ effectiveEnabled: true })),
+      enable: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+      createWorker: vi.fn(async () => ({ workerSessionId: 'nested-worker' })),
+    },
+  } as unknown as MobileMakerTransport;
+  const setSheetView = vi.fn();
+  function Host({ marked }: { marked: boolean }) {
+    ref.current = useSessionOrcaCollab({
+      maker, deviceId: 'run-device', sessionId: 'real-worker', prefsScope: 'user-1', enabled: true,
+      session: { id: 'real-worker', orcaRole: null, workspaceKind: 'project', workingDir: '/repo',
+        agentKind: 'codex', orcaRemoteLead: marked ? remoteLead : null } as RemoteSession,
+      sheetView: 'collab', sheetOpen: true, setSheetView, setSheetOpen: vi.fn(), openSession: vi.fn(),
+    });
+    return null;
+  }
+  await act(async () => { root.render(<Host marked={false} />); await flush(); });
+  expect(ref.current!.eligible).toBe(true);
+  expect(ref.current!.entryBlocked).toBe(false);
+  expect(ref.current!.canSubmit).toBe(true);
+  const stale = ref.current!;
+  await act(async () => { root.render(<Host marked />); await flush(); });
+  expect(setSheetView).toHaveBeenCalledWith('main');
+  setSheetView.mockClear();
+  await act(async () => {
+    stale.openFromMain(); stale.openCreateWorker();
+    await stale.submitEnable(); await stale.submitCreate();
+  });
+  expect(setSheetView).not.toHaveBeenCalled();
+  expect(maker.orca.enable).not.toHaveBeenCalled();
+  expect(maker.orca.createWorker).not.toHaveBeenCalled();
+});
 
 it('restores the last Agent and its remembered model, and drops models the computer cannot run', async () => {
   saveOrcaWorkerCreationPrefs('user-1', {
@@ -79,6 +424,11 @@ it('restores the last Agent and its remembered model, and drops models the compu
 
   await act(async () => { latest!.changeAgent('codex'); await flush(); });
   expect(latest!.form.model).toEqual({ id: 'codex/gpt-5.5', providerId: null, effort: 'high', fast: false });
+  // 本次完整记忆标记引入的回归：原用例只测 reset；unit 最小输入为切回旧模型已下架的 Pi。
+  // 切 Agent 自动带出的模型仍须按当前目录收敛，不能冒充显式选行而提交 retired。
+  await act(async () => { latest!.changeAgent('pi'); await flush(); });
+  expect(latest!.form.agent).toBe('pi');
+  expect(latest!.form.model).toBeNull();
 });
 
 it('remembers the submitted choice for next time', async () => {

@@ -3,8 +3,10 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { type ToastItem, getToastSnapshot, subscribeToastStore } from '@/lib/toast';
+import { getFileTransferToasts, subscribeFileTransferToasts } from '@/lib/fileTransferToasts';
 
 import { Toast } from './Toast';
+import { DownloadToast } from './DownloadToast';
 
 // ────────────────────────────────────────────────────────────
 // ToastFadeWrapper — 纯 opacity 淡入淡出（整块，无裁切）
@@ -49,6 +51,7 @@ function ToastFadeWrapper({
 export function ToastContainer() {
   const { t } = useTranslation();
   const items = useSyncExternalStore(subscribeToastStore, getToastSnapshot, getToastSnapshot);
+  const transfers = useSyncExternalStore(subscribeFileTransferToasts, getFileTransferToasts, getFileTransferToasts);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const prevRectsRef = useRef<Map<string, number>>(new Map());
@@ -108,6 +111,7 @@ export function ToastContainer() {
       // z-[10100]: 高于所有 Radix Dialog (z-[10000]),避免 toast 被打开的对话框遮挡
       className="pointer-events-none fixed inset-x-0 top-5 z-[10100] flex flex-col items-center gap-[10px]"
     >
+      <DownloadToast items={transfers} />
       {items.map((item) => (
         <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
           <Toast item={item} />

@@ -52,7 +52,7 @@ export function parseProviderShareScope(value: unknown, withSource?: boolean): P
 | 方法 | 请求体 | 响应 |
 |---|---|---|
 | `GET /` | — | `{ shares: OwnerShare[] }`（本账号、本设备的 active 分享） |
-| `POST /links` | `{ providerId, providerLabel, deviceName, identityCard }` | `{ shareId, invitation, expiresAt }` |
+| `POST /links` | `{ providerId, providerLabel, deviceName, identityCard }` | `{ shareId, invitation, linkId, expiresAt }` |
 | `POST /requests/:requestId/approve` | `{}` | `{ shareId, memberId }` |
 | `POST /requests/:requestId/reject` | `{}` | `{ requestId, status: 'rejected' }` |
 | `POST /members/:memberId/pause` | `{}` | `{ memberId, status: 'paused' }` |
@@ -64,9 +64,17 @@ interface Person { displayName: string; avatarUrl: string | null; region: 'cn' |
 interface OwnerShare {
   shareId: string; providerId: string; providerLabel: string; hostDeviceId: string; createdAt: string;
   members: Array<Person & { memberId: string; status: 'active' | 'paused'; joinedAt: string }>;
-  requests: Array<Person & { requestId: string; pairingCode: string; createdAt: string; expiresAt: string }>;
+  requests: Array<Person & { requestId: string; linkId: string; pairingCode: string; createdAt: string; expiresAt: string }>;
 }
 ```
+
+`linkId` 是一次性随机邀请口令的 SHA-256 小写十六进制摘要，只标识具体链接，不暴露口令，不能用于加入分享。
+服务端从 `POST /links` 返回它，并附在 owner 列表的每条待处理申请上。同一供应商的多个链接复用 shareId，
+审批弹窗归属必须按 linkId 区分，不能仅按 shareId、host 或 provider 匹配。
+
+这是 additive 字段：旧客户端忽略；新客户端读取及本机生成链接接受缺字段的旧服务器。跨电脑生成需要合法 linkId，
+缺失时提示更新、不向用户返回或登记可复制链接，不降级成按供应商监听。先将服务端更新到该区域所有副本，再发布
+客户端；完整去重需要生成端和供应商所在电脑同时支持。只返回已有 linkDigest，无 migration、鉴权或环境变量变化。
 
 - `POST /links`：同一（分享者、设备、`providerId`）已有 active 分享则复用，否则新建；同时用名片刷新分享者快照与 `providerLabel`、`deviceName`。`identityCard.purpose = 'share-link'`，`nonce = sha256hex(hostDeviceId + ':' + providerId)`。
 - 批准：申请必须 `pending` 且未过期；成员按（分享、guestKey）幂等：已有 `removed / left` 行时恢复为 `active`（新 memberId 不必变），链接置 `consumed`。
@@ -197,8 +205,10 @@ WebSocket 拒绝 `ProviderShareGuest` 认证；同区域分享不受影响。
 - 链接的服务地址属于另一个官方区域（按内置的对方区域清单判定）时走跨区流程；其他地址一律拒绝。
 - 名片向自己区域的 auth-server 换取（同 §4）；对方区域的 REST 地址与 relay 地址取自内置的对方区域清单。
 - 对方区域的请求一律不带本区域 Access Token，对方区域的 401 也不会刷新或登出本区域账号。
-- 凭证只在内存里：启动、过期前与申请被同意后，用新名片调用 `/x/session` 重新换取；本机只记一个不含凭证的标记
-  （`userData/remote-agent/provider-share-regions.json`：账号摘要 → 区域），表示「这个账号在对方区域发过申请或加入过
-  分享」。没有标记的账号从不联系对方区域；`/x/session` 返回没有分享时清除标记。
+- 分享成员关系属于账号：每台已登录电脑启动后自动用新名片调用对方官方区域的 `/x/session`，查询本账号已获授权的
+  全部分享；不依赖接受分享的电脑在线、本机标记、分享链接或供应商组引用。本区与跨区独立加载，未成功返回的区域
+  不能视为权威空名单。没有分享时每 5 分钟重新发现，不建立空 relay；已有分享沿原有 ≤12 小时周期与凭证失效路径刷新。
+- 凭证只在内存里。本机不含凭证的兼容记录（`userData/remote-agent/provider-share-regions.json`：账号摘要 → 区域）
+  仍按原格式保存；返回空名单时清除活动标记并保留空名单记录，但这些记录不再决定是否执行账号发现。
 - 远程 Agent 经第二条 relay 连接（对方区域，`ProviderShareGuest` 认证，hello 声明 `remoteControlEnabled: false`）访问
   分享者电脑，任务绑定与同区域相同（`share:<shareId>`）。

@@ -310,6 +310,10 @@ module.exports = (context = {}) => {
     android: {
       ...baseConfig.android,
       package: regional.androidPackage,
+      // Public Firebase application configuration, supplied by the selected build profile.
+      // No file is bundled from another app identity or copied from a user's installation.
+      ...(process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE?.trim()
+        ? { googleServicesFile: process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE.trim() } : {}),
     },
     // 非自建线的 EAS Update 入口:由下发的 projectId 推导;自建分支下方会把它覆写成
     // selfhost 占位(真实地址运行时由 mobileUpdateBaseUrl 注入)。projectId 缺省则不配 OTA。

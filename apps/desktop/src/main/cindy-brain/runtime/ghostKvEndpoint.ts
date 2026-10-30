@@ -10,7 +10,7 @@
  * - 坏 JSON / 非 object → 400;超限 → 413;其它 method → 405;
  * - 存储层意外错误 → 500(**不外泄 message**,细节走日志)。
  *
- * 身份与隔离不在这层:ghostId 来自协议 handler 的分区绑定(主机派生,
+ * 身份与隔离不在这层:instanceKey 来自协议 handler 的分区绑定(主机派生,
  * 不信自报),跨意识请求早在分区断网闸 + host 断言就被掐了。
  */
 
@@ -72,8 +72,8 @@ export async function readBoundedBodyText(request: BoundedBodySource): Promise<s
 }
 
 interface GhostKvEndpointStore {
-  read(ghostId: string): Record<string, unknown>;
-  write(ghostId: string, value: Record<string, unknown>): void;
+  read(instanceKey: string): Record<string, unknown>;
+  write(instanceKey: string, value: Record<string, unknown>): void;
 }
 
 export async function handleGhostKvRequest(args: {
@@ -82,15 +82,18 @@ export async function handleGhostKvRequest(args: {
   readBodyText: () => Promise<string>;
   store: GhostKvEndpointStore;
   ghostId: string;
+  isCurrent?: () => boolean;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }): Promise<GhostKvRequestOutcome> {
-  const { method, readBodyText, store, ghostId, log } = args;
+  const { method, readBodyText, store, ghostId: instanceKey, log } = args;
+  const isCurrent = args.isCurrent ?? (() => true);
+  if (!isCurrent()) return { status: 403 };
 
   if (method === 'GET') {
     try {
-      return { status: 200, body: JSON.stringify(store.read(ghostId)) };
+      return { status: 200, body: JSON.stringify(store.read(instanceKey)) };
     } catch (err) {
-      log?.warn('ghost KV 读取意外失败', { ghostId, err: String(err) });
+      log?.warn('ghost KV 读取意外失败', { instanceKey, err: String(err) });
       return { status: 500 };
     }
   }
@@ -100,12 +103,14 @@ export async function handleGhostKvRequest(args: {
     try {
       text = await readBodyText();
     } catch (err) {
+      if (!isCurrent()) return { status: 403 };
       // 有界读取器的超限断流 → 413;其它读流失败(中断等)→ 400。
       if (err instanceof GhostKvError && err.code === 'TOO_LARGE') {
         return { status: 413 };
       }
       return { status: 400 };
     }
+    if (!isCurrent()) return { status: 403 };
     // 体积双保险(readBodyText 已流式限额;这里兜非有界注入的调用方)
     // 且先量再 parse:不给超限 payload 任何 JSON.parse 面。
     if (Buffer.byteLength(text, 'utf8') > GHOST_KV_MAX_BYTES) {
@@ -121,14 +126,15 @@ export async function handleGhostKvRequest(args: {
       return { status: 400 };
     }
     try {
-      store.write(ghostId, value as Record<string, unknown>);
+      if (!isCurrent()) return { status: 403 };
+      store.write(instanceKey, value as Record<string, unknown>);
       return { status: 204 };
     } catch (err) {
       if (err instanceof GhostKvError) {
         // 存储层双保险的校验错(理论上上面已拦):按语义映射,不当 500。
         return { status: err.code === 'TOO_LARGE' ? 413 : 400 };
       }
-      log?.warn('ghost KV 写入意外失败', { ghostId, err: String(err) });
+      log?.warn('ghost KV 写入意外失败', { instanceKey, err: String(err) });
       return { status: 500 };
     }
   }

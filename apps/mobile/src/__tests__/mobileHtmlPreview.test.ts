@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   contents: new Map<string, Uint8Array>(),
@@ -9,14 +9,17 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   download: vi.fn(),
   pause: vi.fn(),
+  cache: vi.fn(),
+  sequence: 0,
   demand: false,
   startOnDemand: vi.fn(),
   resolveRequest: vi.fn(),
   listeners: new Map<string, (event: { token: string; id: string; path?: string }) => void>(),
 }));
 vi.mock("expo-crypto", () => ({
-  getRandomBytes: () => new Uint8Array(24).fill(1),
+  getRandomBytes: () => new Uint8Array(24).fill(++mocks.sequence),
 }));
+vi.mock("@/session/mobileHtmlPreviewCache", () => ({ createMobileHtmlPreviewCache: mocks.cache }));
 vi.mock("../../modules/cindy-html-preview/src/CindyHtmlPreviewModule", () => ({
   default: {
     start: mocks.start, stop: mocks.stop,
@@ -24,7 +27,7 @@ vi.mock("../../modules/cindy-html-preview/src/CindyHtmlPreviewModule", () => ({
     get resolveRequest() { return mocks.demand ? mocks.resolveRequest : undefined; },
     addListener: (event: string, listener: (event: { token: string; id: string; path?: string }) => void) => {
       mocks.listeners.set(event, listener);
-      return { remove: () => mocks.listeners.delete(event) };
+      return { remove: () => { if (mocks.listeners.get(event) === listener) mocks.listeners.delete(event); } };
     },
   },
 }));
@@ -80,14 +83,16 @@ vi.mock("expo-file-system", () => {
   return { Directory, File, Paths: { cache: "file:///cache", availableDiskSpace: 8 * 1024 * 1024 * 1024 } };
 });
 vi.mock("expo-file-system/legacy", () => ({
-  createDownloadResumable: (url: string, destination: string) => ({
-    downloadAsync: () => mocks.download(url, destination),
+  createDownloadResumable: (url: string, destination: string, _options: unknown, progress: unknown) => ({
+    downloadAsync: () => mocks.download(url, destination, progress),
     pauseAsync: mocks.pause,
   }),
 }));
 
 import { prepareMobileHtmlPreview } from "@/session/mobileHtmlPreview";
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
+afterEach(() => { vi.useRealTimers(); });
 
 const html = "<h1>中文</h1>";
 const bytes = new TextEncoder().encode(html);
@@ -123,6 +128,7 @@ async function stagedDirectTransfer(_deps: unknown, path: string) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.sequence = 0;
   mocks.demand = false;
   mocks.listeners.clear();
   mocks.startOnDemand.mockResolvedValue("http://127.0.0.1:43123/__cindy/token");
@@ -140,6 +146,200 @@ beforeEach(() => {
   mocks.download.mockImplementation(async (_url, destination) => {
     mocks.contents.set(destination, bytes);
     return { status: 200 };
+  });
+});
+
+function previewCache() {
+  const saved = new Map<string, Uint8Array>();
+  let manifest: ReturnType<typeof entry>[] | null = null;
+  const cache = {
+    current: () => true,
+    copy: vi.fn(async (relative: string, destination: { uri: string }) => {
+      const bytes = saved.get(relative);
+      if (!bytes) return null;
+      mocks.contents.set(destination.uri, bytes.slice());
+      return bytes.length;
+    }),
+    store: vi.fn(async (relative: string, source: { uri: string }) => {
+      saved.set(relative, mocks.contents.get(source.uri)!.slice());
+    }),
+    manifest: vi.fn(async () => manifest),
+    storeManifest: vi.fn(async (_entry: string, files: ReturnType<typeof entry>[]) => { manifest = files; }),
+  };
+  mocks.cache.mockReturnValue(cache);
+  return { cache, saved };
+}
+
+describe('persistent HTML preview cache', () => {
+  // Unit regression: explicit reload previously restored stale bytes again. Both
+  // native APIs must display fresh bytes on this attempt and preserve them for offline reopening.
+  it.each([false, true])('bypasses cached bytes on explicit reload (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, listDir, caps } = setup();
+    listDir.mockResolvedValue([entry('index.html')]);
+    const { saved } = previewCache();
+    const stale = new TextEncoder().encode('<p>old</p>');
+    saved.set('index.html', stale);
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal, undefined, false);
+    expect(new TextDecoder().decode(mocks.contents.get('file:///cache/html-previews/' + '01'.repeat(24) + '/0'))).toContain(html);
+    expect(saved.get('index.html')).toEqual(bytes);
+    await preview.close();
+    mocks.remote.mockRejectedValue(new Error('offline'));
+    caps.mockRejectedValue(new Error('offline'));
+    const reopened = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(new TextDecoder().decode(mocks.contents.get('file:///cache/html-previews/' + '02'.repeat(24) + '/0'))).toContain(html);
+    await reopened.close();
+  });
+
+  // Unit regression: old transfer-cache HTML can be invalid UTF-8 even after the
+  // remote document is repaired. Exercise both native preparation entry points.
+  it.each([false, true])('replaces undecodable cached entries and reopens offline (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, caps, listDir } = setup();
+    listDir.mockResolvedValue([entry('index.html')]);
+    const { saved } = previewCache();
+    saved.set('index.html', new Uint8Array([0xff]));
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(saved.get('index.html')).toEqual(bytes);
+    expect([...mocks.contents.values()].some((value) => new TextDecoder().decode(value).endsWith(html))).toBe(true);
+    await preview.close();
+    mocks.remote.mockRejectedValue(new Error('offline'));
+    caps.mockRejectedValue(new Error('offline'));
+    const reopened = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect([...mocks.contents.values()].some((value) => new TextDecoder().decode(value).endsWith(html))).toBe(true);
+    await reopened.close();
+  });
+
+  it.each([false, true])('recovers an undecodable cached subpage without blocking the valid entry (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps } = setup();
+    const { cache, saved } = previewCache();
+    saved.set('index.html', bytes);
+    saved.set('second.html', new Uint8Array([0xff]));
+    cache.manifest.mockResolvedValue([entry('index.html'), entry('second.html')]);
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    if (demand) {
+      mocks.listeners.get('resourceRequest')!({ token: '01'.repeat(24), id: 'second', path: 'second.html' });
+      await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith('01'.repeat(24), 'second', expect.any(String), 'text/html', 200));
+    } else {
+      // Legacy servers publish only valid restored files; refresh repairs the next open.
+      expect(mocks.start.mock.calls[0][4].map((item: string[]) => item[0])).toEqual(['index.html']);
+    }
+    await vi.waitFor(() => expect(saved.get('second.html')).toEqual(bytes));
+    await preview.close();
+  });
+
+  it.each([false, true])('does not fetch after cancellation during an invalid cache copy (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, caps } = setup();
+    const { cache } = previewCache();
+    const controller = new AbortController();
+    cache.copy.mockImplementation(async (_relative, destination) => {
+      mocks.contents.set(destination.uri, new Uint8Array([0xff]));
+      controller.abort();
+      return 1;
+    });
+    await expect(prepareMobileHtmlPreview('/site/index.html', deps, controller.signal)).rejects.toThrow('PREVIEW_CANCELLED');
+    expect(mocks.remote).not.toHaveBeenCalled();
+    expect(caps).not.toHaveBeenCalled();
+    expect(mocks.contents.size).toBe(0);
+  });
+
+  // Behavioral timing contract: a cache hit must resolve before an unresolved remote operation.
+  it.each([false, true])('opens cached content before network checks, including old native mode (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, caps } = setup();
+    const { cache } = previewCache();
+    const first = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    await first.close();
+    mocks.start.mockClear(); mocks.startOnDemand.mockClear();
+    let fail!: () => void;
+    const waiting = new Promise<never>((_resolve, reject) => { fail = () => reject(new Error('offline')); });
+    if (demand) mocks.remote.mockImplementation(() => waiting);
+    else caps.mockImplementation(() => waiting);
+    const second = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(demand ? mocks.startOnDemand : mocks.start).toHaveBeenCalledOnce();
+    expect(cache.copy).toHaveBeenCalled();
+    expect([...mocks.contents.values()].some((value) => new TextDecoder().decode(value).includes('<h1>中文</h1>'))).toBe(true);
+    fail();
+    await second.close();
+  });
+
+  it.each([false, true])('reports changed entry bytes after background refresh without mutating the visible copy (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, listDir } = setup();
+    const { cache, saved } = previewCache();
+    saved.set('index.html', bytes);
+    const updated = new TextEncoder().encode('<p>Updated page</p>');
+    listDir.mockResolvedValue([{ ...entry('index.html'), size: updated.length }]);
+    mocks.remote.mockResolvedValue({ url: '', inlineBase64: btoa('<p>Updated page</p>'), size: updated.length });
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    const replacement = await preview.updated;
+    expect(replacement).toBeTruthy();
+    expect(replacement?.updated).toBeUndefined();
+    expect(mocks.remote).toHaveBeenCalledOnce();
+    expect(cache.store).toHaveBeenCalledOnce();
+    expect(saved.get('index.html')).toEqual(updated);
+    expect(new TextDecoder().decode(mocks.contents.get('file:///cache/html-previews/' + '01'.repeat(24) + '/0'))).toContain(html);
+    expect(new TextDecoder().decode(mocks.contents.get('file:///cache/html-previews/' + '02'.repeat(24) + '/0'))).toContain('Updated page');
+    // The visible replacement owns the whole visit, including its old server.
+    await replacement!.close();
+    expect(mocks.contents.size).toBe(0);
+    expect(mocks.stop).toHaveBeenCalledTimes(2);
+    expect(mocks.listeners.size).toBe(0);
+    mocks.remote.mockRejectedValue(new Error('offline'));
+    const reopened = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(new TextDecoder().decode(mocks.contents.get('file:///cache/html-previews/' + '03'.repeat(24) + '/0'))).toContain('Updated page');
+    await reopened.close();
+  });
+
+  it.each([false, true])('does not request a reload for identical HTML (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, listDir } = setup();
+    listDir.mockResolvedValue([entry('index.html')]);
+    previewCache().saved.set('index.html', bytes);
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(await preview.updated).toBeNull();
+    await preview.close();
+  });
+
+  it.each([false, true])('discards a changed HTML refresh that finishes after leaving (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, listDir } = setup();
+    previewCache().saved.set('index.html', bytes);
+    const fresh = '<p>late</p>';
+    listDir.mockResolvedValue([{ ...entry('index.html'), size: fresh.length }]);
+    let finish!: () => void;
+    mocks.remote.mockReturnValue(new Promise(resolve => {
+      finish = () => resolve({ url: '', inlineBase64: btoa(fresh), size: fresh.length });
+    }));
+    const controller = new AbortController();
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, controller.signal);
+    controller.abort();
+    finish();
+    expect(await preview.updated).toBeNull();
+    await preview.close();
+    expect(mocks.contents.size).toBe(0);
+    expect(mocks.listeners.size).toBe(0);
+  });
+
+  it.each([false, true])('closes cached previews on account switch without waiting for a refresh (onDemand=%s)', async (demand) => {
+    mocks.demand = demand;
+    const { deps, caps } = setup();
+    const { cache, saved } = previewCache();
+    // No directory manifest: a missing companion cache must not hide the cached entry.
+    saved.set('index.html', bytes);
+    mocks.remote.mockRejectedValue(new Error('offline'));
+    caps.mockRejectedValue(new Error('offline'));
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal);
+    expect(demand ? mocks.startOnDemand : mocks.start).toHaveBeenCalledOnce();
+    vi.spyOn(cache, 'current').mockReturnValue(false);
+    setMobileAuthOwner('switched-owner-' + demand);
+    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledOnce());
+    await preview.close();
+    expect(mocks.contents.size).toBe(0);
+    expect(mocks.listeners.size).toBe(0);
+    setMobileAuthOwner(null);
   });
 });
 
@@ -187,6 +387,7 @@ describe("mobile HTML preview preparation", () => {
       expect.any(Function),
       { baseDir: "/site", maxBytes: bytes.length },
       expect.any(AbortSignal),
+      expect.any(Function),
     );
     expect(mocks.start).toHaveBeenCalledTimes(1);
     for (const content of mocks.contents.values()) {
@@ -314,17 +515,84 @@ describe("on-demand mobile HTML previews", () => {
   const request = (id: string, path: string) => mocks.listeners.get("resourceRequest")!({ token, id, path });
   beforeEach(() => { mocks.demand = true; });
 
-  it("opens without listing or downloading, then fetches only requested resources", async () => {
+  // Unit regression: a slow entry must finish before WebView can request it. Previously
+  // preparation returned immediately, leaving WebKit's request waiting on the network.
+  it("keeps a slow entry in preparation, reports bytes, then serves it without another download", async () => {
+    vi.useFakeTimers();
+    const { deps } = setup();
+    let finish!: () => void;
+    const progress = vi.fn();
+    mocks.remote.mockImplementation(async (...args) => {
+      args[6]?.(4, bytes.length);
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { url: "data:text/html;base64,", size: bytes.length, inlineBase64: Buffer.from(bytes).toString("base64") };
+    });
+    const preparing = prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal, progress);
+    await vi.waitFor(() => expect(mocks.remote).toHaveBeenCalledOnce());
+    expect(mocks.startOnDemand).not.toHaveBeenCalled();
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ name: "index.html", loaded: 4, total: bytes.length }));
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(mocks.startOnDemand).not.toHaveBeenCalled();
+    finish();
+    const preview = await preparing;
+    request("entry", "index.html");
+    await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "entry", "0", "text/html", 200));
+    expect(mocks.remote).toHaveBeenCalledOnce();
+    await preview.close();
+  });
+
+  it.each([false, true])('reports actual download speed on old and on-demand binaries: %s', async (demand) => {
+    vi.useFakeTimers();
+    mocks.demand = demand;
+    const { deps, listDir } = setup();
+    listDir.mockResolvedValue([entry('index.html')]);
+    const progress = vi.fn();
+    mocks.download.mockImplementation(async (_url, destination, report) => {
+      vi.setSystemTime(Date.now() + 1000);
+      report({ totalBytesWritten: 4, totalBytesExpectedToWrite: -1 });
+      expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ loaded: 4, total: bytes.length, bytesPerSecond: 4 }));
+      mocks.contents.set(destination, bytes);
+      return { status: 200 };
+    });
+    const preview = await prepareMobileHtmlPreview('/site/index.html', deps, new AbortController().signal, progress);
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ loaded: bytes.length, total: bytes.length }));
+    await preview.close();
+  });
+
+  it('cancels entry preparation before opening a server and releases a late direct file', async () => {
+    const { deps } = setup();
+    const controller = new AbortController();
+    const progress = vi.fn();
+    let finish!: () => void;
+    mocks.remote.mockImplementation(async () => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return stagedDirectTransfer(null, '/site/index.html');
+    });
+    const preparing = prepareMobileHtmlPreview('/site/index.html', deps, controller.signal, progress);
+    const rejected = expect(preparing).rejects.toThrow('PREVIEW_CANCELLED');
+    await vi.waitFor(() => expect(mocks.remote).toHaveBeenCalledOnce());
+    controller.abort();
+    progress.mockClear();
+    finish();
+    await rejected;
+    expect(mocks.startOnDemand).not.toHaveBeenCalled();
+    expect(mocks.released).toEqual(['file:///peer/index.html']);
+    expect(mocks.contents.size).toBe(0);
+    expect(mocks.listeners.size).toBe(0);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
+  it("prepares only the entry without listing, then fetches requested resources", async () => {
     const { deps, listDir, caps } = setup();
     const preview = await prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal);
     expect(preview.onDemand).toBe(true);
     expect(listDir).not.toHaveBeenCalled();
     expect(caps).not.toHaveBeenCalled();
-    expect(mocks.remote).not.toHaveBeenCalled();
+    expect(mocks.remote).toHaveBeenCalledOnce();
     request("a", "index.html");
     await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "a", "0", "text/html", 200));
     expect(mocks.remote).toHaveBeenCalledWith(deps, "/site/index.html", undefined, expect.any(Function),
-      { baseDir: "/site", maxBytes: 2 * 1024 * 1024 * 1024 }, expect.any(AbortSignal));
+      { baseDir: "/site", maxBytes: 2 * 1024 * 1024 * 1024 }, expect.any(AbortSignal), expect.any(Function));
     expect(new TextDecoder().decode([...mocks.contents.values()][0])).toContain("Content-Security-Policy");
     expect(deps.deleteOssObject).toHaveBeenCalledOnce();
     await preview.close();
@@ -363,23 +631,26 @@ describe("on-demand mobile HTML previews", () => {
     await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "missing", "", "", 404));
     request("escape", "../secret.html");
     await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "escape", "", "", 404));
-    expect(mocks.remote).toHaveBeenCalledOnce();
+    expect(mocks.remote).toHaveBeenCalledTimes(2);
     request("page", "second.html");
-    await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "page", "1", "text/html", 200));
+    await vi.waitFor(() => expect(mocks.resolveRequest).toHaveBeenCalledWith(token, "page", "2", "text/html", 200));
     await preview.close();
   });
 
   it("cancels closed requests before publishing and drains cleanup before removing its directory", async () => {
     const { deps } = setup();
+    const preview = await prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal);
+    mocks.download.mockClear();
+    mocks.remote.mockClear();
+    deps.deleteOssObject.mockClear();
     let finish!: (value: { status: number }) => void;
     mocks.download.mockImplementation((_url, destination) => {
       mocks.contents.set(destination, bytes);
       return new Promise((resolve) => { finish = resolve; });
     });
-    const preview = await prepareMobileHtmlPreview("/site/index.html", deps, new AbortController().signal);
-    request("active", "index.html");
+    request("active", "second.html");
     await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledOnce());
-    request("queued", "second.html");
+    request("queued", "third.html");
     const closing = preview.close();
     expect(mocks.pause).toHaveBeenCalledOnce();
     expect(mocks.removed).toHaveLength(0);

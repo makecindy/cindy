@@ -11,6 +11,9 @@ vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
   create: vi.fn(async () => ({}) as unknown),
   updateContent: vi.fn(async () => ({}) as unknown),
+  aroundClientId: vi.fn(async (_sessionId: string, clientId: string) => [{
+    clientId, role: 'ask_user', content: { requestId: 'async-1', status: 'cancelled' },
+  }]),
 }));
 
 vi.mock('@/lib/sessionService', () => ({
@@ -22,6 +25,7 @@ vi.mock('@/lib/sessionService', () => ({
     contextTokens: 0,
     contextWindow: 0,
     totalCostUsd: 0,
+    model: 'test', effort: 'medium', permissionMode: 'ask', workingDir: '/repo',
   })),
   update: vi.fn(async () => ({})),
   touchUserSend: vi.fn(async () => ({})),
@@ -64,7 +68,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
   }),
 }));
 
-import { updateContent as updateMessageContent } from '@/lib/messageService';
+import { aroundClientId, updateContent as updateMessageContent } from '@/lib/messageService';
 import { makerChatStore, type AskUserQuestionItem } from '@/lib/makerChatStore';
 
 const SESSION_ID = 'ask-user-done-race';
@@ -101,6 +105,9 @@ function installElectronBridge(): void {
         input: {
           getProjection: vi.fn(async (sessionId: string) => emptyProjection(sessionId)),
           enqueue: vi.fn(async (sessionId: string) => emptyProjection(sessionId)),
+          steer: vi.fn(async () => false),
+          stop: vi.fn(async (sessionId: string) => ({ ...emptyProjection(sessionId), queuePaused: true })),
+          resume: vi.fn(async (sessionId: string) => emptyProjection(sessionId)),
         },
         onInputProjection: vi.fn(() => vi.fn()),
         onEvent: (cb: (data: unknown) => void) => {
@@ -137,6 +144,7 @@ function installElectronBridge(): void {
 function emitAskUserRequest(
   requestId: string,
   questions: AskUserQuestionItem[] = [{ question: '桌面版这次要采用哪种范围？', header: '词典编辑' }],
+  delivery?: 'async',
 ): void {
   onInteractionRequest?.({
     sessionId: SESSION_ID,
@@ -144,6 +152,7 @@ function emitAskUserRequest(
       kind: 'ask_user_question',
       requestId,
       questions,
+      delivery,
     },
     persistId: `persist-${requestId}`,
   });
@@ -181,6 +190,148 @@ describe('ask_user 与 done 的时序', () => {
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
     vi.restoreAllMocks();
+  });
+
+  it.each(['codex', 'claude-code', 'pi'] as const)('%s keeps an edited async draft after expiry and replacement, then sends the original question', async (agentKind) => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind });
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    const draft = { requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Typing' };
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'turn_completed' });
+    emitAskUserRequest('async-2', [{ question: 'New?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-1');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserDraft).toBe(draft);
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockResolvedValueOnce({ accepted: false });
+    makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+    await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce());
+    const queued = vi.mocked(window.electronAPI.maker.input.enqueue).mock.calls[0][1];
+    expect(queued.text).toBe('> Original?\n\nFinished');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-2');
+  });
+
+  it.each(['resolve', 'lookup', 'enqueue'] as const)(
+    'finishes a protected submission when the turn ends during %s',
+    async (stage) => {
+      emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+      makerChatStore.setAskUserDraft(SESSION_ID, {
+        requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Finished',
+      });
+      const endTurn = () => {
+        onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'turn_completed' });
+        onEvent?.({ sessionId: SESSION_ID, event: {
+          type: 'status', source: 'codex', data: { isRunning: false, status: 'Done' },
+        } });
+        emitDone('codex');
+      };
+      vi.mocked(window.electronAPI.maker.resolveInteraction).mockImplementationOnce(async () => {
+        if (stage === 'resolve') endTurn();
+        return { accepted: false };
+      });
+      vi.mocked(aroundClientId).mockImplementationOnce(async () => {
+        if (stage === 'lookup') endTurn();
+        return [{ clientId: 'persist-async-1', role: 'ask_user',
+          content: { requestId: 'async-1', status: 'cancelled' } }] as never;
+      });
+      vi.mocked(window.electronAPI.maker.input.enqueue).mockImplementationOnce(async () => {
+        if (stage === 'enqueue') endTurn();
+        // A pre-terminal queue snapshot must not overwrite the newer state.
+        return { ...emptyProjection(SESSION_ID), queuePaused: stage === 'enqueue' } as never;
+      });
+      makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+      await vi.waitFor(() => expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull());
+      expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce();
+      expect(makerChatStore.getSnapshot(SESSION_ID).queuePaused).toBe(false);
+    },
+  );
+
+  it('does not send a protected supplement after its task is purged', async () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'async-1', currentIndex: 0, answers: {}, started: true,
+    });
+    let resolve!: (receipt: { accepted: boolean }) => void;
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockImplementationOnce(
+      () => new Promise((done) => { resolve = done; }),
+    );
+    makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+    makerChatStore.purgeSession(SESSION_ID);
+    emitAskUserRequest('new');
+    resolve({ accepted: false });
+    await new Promise((done) => setTimeout(done, 0));
+    expect(window.electronAPI.maker.input.enqueue).not.toHaveBeenCalled();
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('new');
+  });
+
+  it('keeps an edited question when more than 20 other tasks enter the cache', () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    const draft = { requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Still typing' };
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'turn_completed' });
+    const others = Array.from({ length: 25 }, (_, i) => `draft-lru-${i}`);
+    try {
+      for (const id of others) makerChatStore.insertSystemCard(id, 'status', { label: id });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserDraft).toBe(draft);
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-1');
+      // Ordinary inactive tasks still get evicted.
+      expect(makerChatStore.getSnapshot(others[0]).messages).toHaveLength(0);
+    } finally {
+      for (const id of others) makerChatStore.purgeSession(id);
+    }
+  });
+
+  it('does not protect untouched cards or synchronous drafts', () => {
+    emitAskUserRequest('untouched', [{ question: 'Q?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'untouched', currentIndex: 0, answers: {} });
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'untouched', reason: 'turn_completed' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull();
+    emitAskUserRequest('sync');
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'sync', currentIndex: 0, answers: {}, started: true });
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'sync', reason: 'session_closed' });
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull();
+  });
+
+  it.each(['close', 'stop', 'accepted-elsewhere', 'unknown'] as const)('handles protected reply boundaries: %s', async (action) => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'async-1', currentIndex: 0, answers: {}, started: true });
+    if (action === 'stop') {
+      makerChatStore.stopSession(SESSION_ID);
+      await vi.waitFor(() => expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.resumeOnSubmit).toBe(true));
+      vi.mocked(window.electronAPI.maker.input.enqueue).mockResolvedValueOnce({ ...emptyProjection(SESSION_ID), queuePaused: true } as never);
+    } else {
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'turn_completed' });
+    }
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockResolvedValueOnce({ accepted: false });
+    if (action === 'accepted-elsewhere' || action === 'unknown') {
+      vi.mocked(aroundClientId).mockResolvedValueOnce([{
+        clientId: 'persist-async-1', role: 'ask_user', content: {
+          requestId: 'async-1', status: action === 'unknown' ? 'pending' : 'answered',
+        },
+      }] as never);
+    }
+    makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', action === 'close' ? {} : { 'Original?': 'Finished' });
+    if (action === 'unknown') {
+      await vi.waitFor(() => expect(aroundClientId).toHaveBeenCalled());
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-1');
+    } else {
+      await vi.waitFor(() => expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser).toBeNull());
+    }
+    expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledTimes(action === 'stop' ? 1 : 0);
+    expect(window.electronAPI.maker.input.resume).toHaveBeenCalledTimes(action === 'stop' ? 1 : 0);
+  });
+
+  it('keeps the same delivery ID when a supplemental receipt is lost and retried', async () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, { requestId: 'async-1', currentIndex: 0, answers: {}, started: true });
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'turn_completed' });
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockResolvedValue({ accepted: false });
+    vi.mocked(window.electronAPI.maker.input.enqueue).mockRejectedValueOnce(new Error('lost receipt'));
+    makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+    await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledOnce());
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('async-1');
+    makerChatStore.answerUserQuestion(SESSION_ID, 'async-1', { 'Original?': 'Finished' });
+    await vi.waitFor(() => expect(window.electronAPI.maker.input.enqueue).toHaveBeenCalledTimes(2));
+    const calls = vi.mocked(window.electronAPI.maker.input.enqueue).mock.calls;
+    expect(calls[0][1].clientId).toBe(calls[1][1].clientId);
   });
 
   it('codex:done 不吞掉未答提问卡', () => {
@@ -304,6 +455,53 @@ describe('ask_user 与 done 的时序', () => {
     expect(snap.pendingAskUser).toBeNull();
     expect(pendingAskStatuses()).toEqual(['expired']);
   });
+
+  // #7144: the live IPC path must retain submitted answers after a stale close.
+  // Existing tests cover pending expiry, but not answered -> empty dismissal.
+  // Unit: two questions, one skipped, turn done before submitting the answer.
+  it.each(['resolved-push', 'accepted-receipt'] as const)(
+    'keeps an answered cross-turn card after an empty dismissal (%s)',
+    async (completion) => {
+      makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+      emitAskUserRequest('answered-card', [{ question: 'First?' }, { question: 'Second?' }]);
+      emitDone('codex');
+      const answers = { 'First?': 'Custom answer', 'Second?': '' };
+      makerChatStore.answerUserQuestion(SESSION_ID, 'answered-card', answers);
+      if (completion === 'resolved-push') {
+        onInteractionDismissed?.({
+          sessionId: SESSION_ID, requestId: 'answered-card', reason: 'resolved',
+          decision: { kind: 'ask_user_question', answers },
+        });
+      }
+      await vi.waitFor(() => expect(pendingAskStatuses()).toEqual(['answered']));
+      const answered = makerChatStore.getSnapshot(SESSION_ID).messages.find(
+        (m) => m.askUserRequestId === 'answered-card',
+      );
+
+      onInteractionDismissed?.({
+        sessionId: SESSION_ID, requestId: 'answered-card',
+        reason: 'server_request_resolved', resolvedAs: 'deny',
+      });
+
+      const after = makerChatStore.getSnapshot(SESSION_ID);
+      expect(after.pendingAskUser).toBeNull();
+      expect(after.messages.find((m) => m.askUserRequestId === 'answered-card')).toBe(answered);
+      expect(pendingAskStatuses()).toEqual(['answered']);
+      expect(answered?.askUserAnswers).toEqual(answers);
+      expect(answered?.askUserReply).toBe('First?: Custom answer\nSecond?: (skipped)');
+      expect(updateMessageContent).not.toHaveBeenCalled();
+
+      // A real winning decision remains authoritative even for answered rows.
+      const winningAnswers = { 'First?': 'Winning answer', 'Second?': '' };
+      onInteractionDismissed?.({
+        sessionId: SESSION_ID, requestId: 'answered-card', reason: 'resolved',
+        decision: { kind: 'ask_user_question', answers: winningAnswers },
+      });
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages.find(
+        (m) => m.askUserRequestId === 'answered-card',
+      )).toMatchObject({ askUserStatus: 'answered', askUserAnswers: winningAnswers });
+    },
+  );
 
   it('codex:答题只走 resolveInteraction，不本地落库', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });

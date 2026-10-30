@@ -1,26 +1,18 @@
 {
   "id": "tieba-hot-topics",
-  "match": ["tieba.baidu.com"],
-  "description": "读取百度贴吧热议话题榜(标题/讨论量/简介/链接)。贴吧热榜页是服务端渲染的列表,navigate 后直接用 extract 按选择器抓 li.topic-top-item,无需登录、无需调接口。",
-  "inputs": {},
-  "steps": [
-    { "action": "navigate", "url": "https://tieba.baidu.com/hottopic/browse/topicList?res_type=1" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "extract",
-      "as": "topics",
-      "extract": {
-        "from": "li.topic-top-item",
-        "multiple": true,
-        "limit": 30,
-        "fields": {
-          "title": "a.topic-text",
-          "discussions": "span.topic-num",
-          "description": "p.topic-top-item-desc",
-          "url": { "selector": "a.topic-text", "type": "href" }
-        }
-      }
-    }
+  "match": [
+    "tieba.baidu.com"
   ],
-  "output": "{{topics}}"
+  "description": "Tieba hot topics",
+  "access": "read",
+  "adapter": "tieba/hot",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of items to return"
+    }
+  },
+  "steps": []
 }

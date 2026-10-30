@@ -46,6 +46,7 @@ describe('hook binding store', () => {
     makeStore().set('conn-1', 'k', 'sess-1');
 
     expect(makeStore().get('conn-1', 'k')).toBe('sess-1');
+    expect(makeStore().findBySession?.('sess-1')).toEqual([{ connectionId: 'conn-1', externalKey: 'k' }]);
   });
 
   it('行里只写 sessionId + updatedAt, 不写任何授权状态', () => {

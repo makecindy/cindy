@@ -85,6 +85,7 @@ import { type SkillUsageVersionComparison, selectSkillUsageVersionComparison } f
 import { PublishDialog } from './PublishDialog';
 import { ScanResultDialog } from './ScanResultDialog';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
+import { useSkillhubTarget, useSkillhubBrowseApi } from './SkillhubTargetContext';
 import { usePublicationFeedback, useRejectionFeedback } from './hooks/useRejectionFeedback';
 import { shouldHandlePublishProgressEvent } from './lib/publishProgressFilter';
 import { SkillhubDiffPanel } from './SkillhubDiffPanel';
@@ -872,6 +873,7 @@ interface FileTreeRowProps {
 }
 function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: FileTreeRowProps) {
   const { t } = useTranslation();
+  const api = useSkillhubBrowseApi();
   const fullPath = joinPath(parentDir, entry.name);
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<SkillhubFileEntry[] | null>(null);
@@ -883,7 +885,7 @@ function FileTreeRow({ entry, parentDir, depth, currentPath, onSelectFile }: Fil
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await window.electronAPI.skillhub.listChildren({ dirPath: fullPath });
+      const res = await api.listChildren({ dirPath: fullPath });
       if (res.success) setChildren(res.entries ?? []);
       else setLoadError(res.error ?? t('skillhub.detail.fileTreeReadError'));
     } catch (err) {
@@ -985,6 +987,8 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   onUninstalled?: () => void;
 } = {}) {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
+  const api = useSkillhubBrowseApi();
   const { user } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
   const params = useParams();
@@ -995,8 +999,8 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   const commandPath = searchParams.get('path');
   useEffect(() => {
     // The palette can discover a newly added Skill before the SkillHub cache does.
-    if (commandPath) void refreshSkillhub();
-  }, [commandPath]);
+    if (commandPath && !target) void refreshSkillhub();
+  }, [commandPath, target === null]);
   const { createSession } = useCCSessions();
   // 入口来源：market 卡片会带 state.from。详情页返回不走浏览器式历史，
   // 而是退出到 SkillHub 一级页：market 来源回 market，其它入口回 local 欢迎页。
@@ -1021,7 +1025,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // 记录最近访问项供下次打开 SkillHub 时恢复；返回按钮会清掉它，避免用户
   // 主动退出详情页后又被 welcome 自动带回同一条记录。
   useEffect(() => {
-    if (!entry) return;
+    if (!entry || target) return;
     if (shouldResetHistoryRef.current) clearHistory();
     setLastEntryId(entry.id);
     // shouldResetHistory 故意不进 deps —— 它是入口时刻的一次性信号,后续 entry
@@ -1048,6 +1052,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       setSaveError(null);
       return;
     }
+    if (target) return target.back();
     clearLastEntryId();
     clearHistory();
     navigate(backTargetRoute, { state: { skillhubHome: navState?.skillhubHome } });
@@ -1071,15 +1076,15 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     ? { ...entry, name: entryMarketName } : entry, [entry, entryMarketName]);
   const entryCatalogScope = entry?.registryEntry?.catalogScope;
   const [infoResult, setInfoResult] = useState<SkillhubInfoResult | null>(
-    () => (entryMarketName ? getCachedInfo(entryMarketName, entryCatalogScope) : null),
+    () => (!target && entryMarketName ? getCachedInfo(entryMarketName, entryCatalogScope) : null),
   );
   const [infoLoading, setInfoLoading] = useState(false);
   const [publishTargetInfo, setPublishTargetInfo] = useState<SkillhubInfoResult | null>(
-    () => (entryMarketName && entryCatalogScope === 'team' ? getCachedInfo(entryMarketName) : null),
+    () => (!target && entryMarketName && entryCatalogScope === 'team' ? getCachedInfo(entryMarketName) : null),
   );
   const [publishTargetLoading, setPublishTargetLoading] = useState(false);
   const [infoFetchTrigger, setInfoFetchTrigger] = useState(0);
-  const { comparison: publishComparison, refresh: comparisonRefresh } = useSkillPublishComparison(infoResult?.isCreator === true ? entry : null);
+  const { comparison: publishComparison, refresh: comparisonRefresh } = useSkillPublishComparison(!target && infoResult?.isCreator === true ? entry : null);
 
   // 同步重置:entry.name 变化时立刻把 infoResult 切到新 name 的缓存值。
   // FadeSwitcher 按 feature 段(/skillhub)聚合 key,同 feature 内切 skill 不重挂,
@@ -1093,10 +1098,10 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   const [trackedEntryInfoKey, setTrackedEntryInfoKey] = useState<string | null>(entryInfoKey);
   if (entryInfoKey !== trackedEntryInfoKey) {
     setTrackedEntryInfoKey(entryInfoKey);
-    const cached = entryMarketName ? getCachedInfo(entryMarketName, entryCatalogScope) : null;
+    const cached = !target && entryMarketName ? getCachedInfo(entryMarketName, entryCatalogScope) : null;
     setInfoResult(cached);
     setPublishTargetInfo(
-      entryMarketName && entryCatalogScope === 'team' ? getCachedInfo(entryMarketName) : null,
+      !target && entryMarketName && entryCatalogScope === 'team' ? getCachedInfo(entryMarketName) : null,
     );
     setLiveScanStatus(null);
     // 有缓存就不显示 loading(SWR 后台静默刷),没缓存才进 loading 态
@@ -1107,6 +1112,10 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     info: SkillhubInfoResult | null;
     liveScanStatus: { status: string; version: string } | null;
   }> => {
+    if (target) {
+      const result = await api.info(name, catalogScope);
+      return { info: result.success && result.info ? result.info : null, liveScanStatus: null };
+    }
     const info = await refreshInfo(name, catalogScope);
     if (!info) {
       return { info: null, liveScanStatus: null };
@@ -1141,7 +1150,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       }
     }
     return { info, liveScanStatus: null };
-  }, []);
+  }, [target === null, api]);
 
   const remoteInfoName = isSkill ? (entryMarketName ?? null) : null;
   const remoteInfoRequest = useMemo(() => {
@@ -1158,7 +1167,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     let cancelled = false;
     // SWR:不再清空 infoResult。render 阶段已经 seed 过(缓存命中 → 旧值/缓存值;
     // miss → null),这里只决定要不要显示 loading 态。后台 fetch 拿到新值再 setState。
-    const cached = getCachedInfo(remoteInfoRequest.name, remoteInfoRequest.catalogScope);
+    const cached = target ? null : getCachedInfo(remoteInfoRequest.name, remoteInfoRequest.catalogScope);
     if (cached === null) setInfoLoading(true);
     refreshRemoteInfo(remoteInfoRequest.name, remoteInfoRequest.catalogScope)
       .then((result) => {
@@ -1178,7 +1187,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // 组织目录条目可能来自只读代理，而发布始终写入原生 Hub。用无 scope
   // 详情独立读取写入目标，避免拿组织目录的同名 Skill 判断首发/升级。
   useEffect(() => {
-    if (!remoteInfoRequest || remoteInfoRequest.catalogScope !== 'team') {
+    if (target || !remoteInfoRequest || remoteInfoRequest.catalogScope !== 'team') {
       setPublishTargetLoading(false);
       return;
     }
@@ -1201,7 +1210,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // force=true:每次切换 entry 都强制重算,bypass 30s cache,
   // 与下方 getInfo 一起组成"切换 entry 时的原子刷新"。
   const { folderHash: localFolderHash, loading: hashLoading } = useSkillFolderHash(
-    isSkill ? (entry?.absolutePath ?? null) : null,
+    !target && isSkill ? (entry?.absolutePath ?? null) : null,
     { force: true },
   );
 
@@ -1214,7 +1223,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   const previousPublishOpenRef = useRef(publishOpen);
   const deferredDoneRef = useRef(false);
   publishOpenRef.current = publishOpen;
-  const publishProgressName = isSkill ? (entryMarketName ?? null) : null;
+  const publishProgressName = !target && isSkill ? (entryMarketName ?? null) : null;
   const publishProgressAbsolutePath = isSkill ? (entry?.absolutePath ?? null) : null;
   const publishProgressTarget = useMemo(() => {
     if (!publishProgressName || !publishProgressAbsolutePath) return null;
@@ -1299,18 +1308,18 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
 
   // 按钮区/banner 数据就绪:info 落定 + hash 算完即可,不再依赖批量 sync。
   // 仅 isSkill 场景需要 hash;command/agent 直接视为 ready。
-  const hashReady = !isSkill || (!hashLoading && localFolderHash !== null)
+  const hashReady = !!target || !isSkill || (!hashLoading && localFolderHash !== null)
     || publishComparison.status === 'same' || publishComparison.status === 'different'
     || publishComparison.status === 'unavailable';
   const detailReady = !isSkill || (!infoLoading && !effectivePublishLoading && hashReady);
 
   // 三维度 detail state
-  const marketDeleted = !infoLoading && checkMarketDeleted(entryMarketName ?? '', entryCatalogScope);
+  const marketDeleted = !target && !infoLoading && checkMarketDeleted(entryMarketName ?? '', entryCatalogScope);
   const detailState = useMemo<DetailState | null>(() => {
     const state = deriveDetailState(isSkill ? entry : null, infoResult, marketDeleted);
     return state;
   }, [isSkill, entry, infoResult, marketDeleted]);
-  const publishTargetDeleted = !effectivePublishLoading
+  const publishTargetDeleted = !target && !effectivePublishLoading
     && checkMarketDeleted(entryMarketName ?? '', entryCatalogScope === 'team' ? undefined : entryCatalogScope);
   const publishDetailState = useMemo<DetailState | null>(() => (
     deriveDetailState(isSkill ? entry : null, effectivePublishInfo, publishTargetDeleted)
@@ -1324,11 +1333,11 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       registryEntry,
       localFolderHash,
       publishedStatus,
-      identityPolicy.canWrite && entry?.builtIn !== true,
+      !target && identityPolicy.canWrite && entry?.builtIn !== true,
       publishDetailState,
       publishComparison,
     ),
-    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite, entry?.builtIn, publishDetailState, publishComparison],
+    [detailState, registryEntry, localFolderHash, publishedStatus, identityPolicy.canWrite, entry?.builtIn, publishDetailState, publishComparison, target === null],
   );
   const detailAction = detailActionState?.status ?? null;
   const isOutdated = detailActionState?.isOutdated ?? false;
@@ -1339,7 +1348,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     entryKey: entryInfoKey,
     name: entryMarketName ?? null,
     version: publishedStatus === 'rejected' ? effectivePublishedStatusVersion(publishedStatusSource) : null,
-    canManage: publishDetailState?.canManage === true,
+    canManage: !target && publishDetailState?.canManage === true,
   });
 
   // Diff panel state — 点 mine-dirty banner 时打开,看本地跟上次发布版的逐文件 diff
@@ -1371,7 +1380,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   const { confirm } = useConfirmDialog();
 
   const openPublish = useCallback(async () => {
-    if (entry?.kind !== 'skill' || entry.builtIn || !identityPolicy.canWrite) return;
+    if (target || entry?.kind !== 'skill' || entry.builtIn || !identityPolicy.canWrite) return;
 
     if (isPublishedReviewing) {
       const shouldProceed = await confirm({
@@ -1384,7 +1393,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     }
 
     setPublishOpen(true);
-  }, [entry, identityPolicy.canWrite, isPublishedReviewing, confirm, t]);
+  }, [entry, identityPolicy.canWrite, isPublishedReviewing, confirm, t, target === null]);
 
   useEffect(() => {
     if (searchParams.get('action') !== 'publish' || !detailReady
@@ -1414,6 +1423,16 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     }
     setMarketActionRunning(true);
     try {
+      if (target) {
+        const result = await target.mutate('update', entry, { name: entry.registrySkillName ?? entry.name,
+          catalogScope: entry.registryEntry?.catalogScope, latestVersion });
+        if (!target.current()) return;
+        if (result.phase === 'succeeded') {
+          toast.success(t('skillhub.detail.updatedToast', { name: entry.name, version: latestVersion }));
+          setInfoFetchTrigger((n) => n + 1);
+        } else if (result.phase !== 'cancelled') toast.error(t('skillhub.marketCard.updateFailed'));
+        return;
+      }
       const res = await window.electronAPI.skillhub.install({
         name: entry.registrySkillName ?? entry.name,
         installPath: entry.absolutePath,
@@ -1439,7 +1458,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     } finally {
       setMarketActionRunning(false);
     }
-  }, [entry, confirm, t]);
+  }, [entry, confirm, t, target]);
 
   // viewingPath: which file's content is shown in the right pane.
   //   - default = entry.mdPath (the SKILL.md / command / agent file)
@@ -1467,12 +1486,12 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     }
     let cancelled = false;
     const dir = liveFilesRequest.dir;
-    void window.electronAPI.skillhub.listChildren({ dirPath: dir }).then((res) => {
+    void api.listChildren({ dirPath: dir }).then((res) => {
       if (cancelled) return;
       if (res.success) setLiveFiles(res.entries ?? []);
-    });
+    }).catch(() => { if (!cancelled) setLiveFiles([]); });
     return () => { cancelled = true; };
-  }, [liveFilesRequest]);
+  }, [liveFilesRequest, api]);
 
   const [usageRefreshNonce, setUsageRefreshNonce] = useState(0);
   const [diagnosisStarting, setDiagnosisStarting] = useState(false);
@@ -1483,7 +1502,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     error: null,
     summary: null,
   });
-  const usageEntryId = entry?.kind === 'skill' ? entry.id : null;
+  const usageEntryId = !target && entry?.kind === 'skill' ? entry.id : null;
   const usageSkillName = entry?.kind === 'skill' ? entry.name : null;
   const usageSkillMdPath = entry?.kind === 'skill' ? entry.mdPath : null;
   const usageTodayKey = useLocalTodayKey();
@@ -1535,12 +1554,12 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   }, [usageEntryId]);
 
   const openDiagnosisAgentPicker = useCallback(() => {
-    if (entry?.kind !== 'skill' || diagnosisStarting) return;
+    if (target || entry?.kind !== 'skill' || diagnosisStarting) return;
     setDiagnosisAgentPickerOpen(true);
-  }, [diagnosisStarting, entry?.kind]);
+  }, [diagnosisStarting, entry?.kind, target === null]);
 
   const handleCreateDiagnosisSession = useCallback(async (agentKind: DiagnosisAgentKind) => {
-    if (entry?.kind !== 'skill' || diagnosisStarting) return;
+    if (target || entry?.kind !== 'skill' || diagnosisStarting) return;
     setDiagnosisStarting(true);
     try {
       const res = await window.electronAPI.skillhub.getUsageDiagnosisContext({
@@ -1579,7 +1598,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     } finally {
       setDiagnosisStarting(false);
     }
-  }, [createSession, diagnosisStarting, entry, navigate, t]);
+  }, [createSession, diagnosisStarting, entry, navigate, t, target === null]);
 
   // Leave-guard wrapper for switching the viewing file. Used by the FILES
   // tree row clicks. If editing with unsaved changes, prompt; otherwise
@@ -1609,7 +1628,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // by `editButtonState` so the click handler can assume viewingPath is a
   // valid .md.
   const enterEditMode = useCallback(async () => {
-    if (!viewingPath) return;
+    if (target || !viewingPath) return;
     setSaveError(null);
     try {
       const res = await window.electronAPI.skillhub.readRaw({ filePath: viewingPath });
@@ -1623,7 +1642,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [viewingPath, t]);
+  }, [viewingPath, t, target === null]);
 
   // Save the editor's current value back to disk. Re-validates frontmatter
   // (warn-only — doesn't block save), invalidates folderHash to drive the
@@ -1633,7 +1652,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // isMd flag still gates frontmatter cache-strip + validation below
   // (those rules are tied to the FILE TYPE, not the editor used).
   const saveEdit = useCallback(async () => {
-    if (!viewingPath || !entry || !plaintextEditorRef.current) return;
+    if (target || !viewingPath || !entry || !plaintextEditorRef.current) return;
     const isMd = MD_EXTENSION_RE.test(viewingPath);
     const next = plaintextEditorRef.current.getValue();
     setSaving(true);
@@ -1706,7 +1725,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     } finally {
       setSaving(false);
     }
-  }, [viewingPath, entry, t]);
+  }, [viewingPath, entry, t, target === null]);
 
   // Cancel — leave guard prompts on dirty, then drops back to view mode.
   const cancelEdit = useCallback(async () => {
@@ -1721,7 +1740,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
   // truth so the JSX below can read `state.disabled` / `state.tip` without
   // re-doing the branching.
   const editButtonState = useMemo(() => {
-    if (!entry || !viewingPath) {
+    if (target || !entry || !viewingPath) {
       return { hidden: true, disabled: true, tip: '' };
     }
     // v0.2.2 only ships skill + command edit. agent stays read-only — the
@@ -1750,7 +1769,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       disabled: false,
       tip: isMd ? t('skillhub.detail.editTipMarkdown') : t('skillhub.detail.editTipPlaintext'),
     };
-  }, [entry, viewingPath, detailState, isOutdated, t]);
+  }, [entry, viewingPath, detailState, isOutdated, t, target === null]);
 
   // Body content — fetched lazily per viewingPath. State initializes
   // synchronously from contentCache so re-visiting a previously-loaded
@@ -1786,8 +1805,8 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     // a code fence below.
     const isMarkdown = viewingPath.toLowerCase().endsWith('.md');
     const promise = isMarkdown
-      ? window.electronAPI.skillhub.readSkill({ mdPath: viewingPath })
-      : window.electronAPI.skillhub.readSiblingFile({ filePath: viewingPath });
+      ? api.readSkill({ mdPath: viewingPath })
+      : api.readSiblingFile({ filePath: viewingPath });
 
     void promise
       .then((res) => {
@@ -1806,7 +1825,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
       })
       .catch((err) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = target ? t('skillhub.detail.readFailed') : err instanceof Error ? err.message : String(err);
         setContentErrorCache(viewingPath, msg);
         setContent('');
         setContentError(msg);
@@ -1818,7 +1837,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
     return () => {
       cancelled = true;
     };
-  }, [viewingPath, t]);
+  }, [viewingPath, t, api, target === null]);
 
   if (!entry) {
     return (
@@ -1880,7 +1899,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                         : null;
               return (
                 <span
-                  key={le.engine}
+                  key={`${le.engine}:${le.label}`}
                   className={cn(
                     'inline-flex h-5 shrink-0 items-center rounded-full px-2 whitespace-nowrap',
                     'bg-[var(--settings-btn-secondary-bg)] text-[var(--msg-assistant-text)]',
@@ -1910,6 +1929,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
         subtitle={
           <button
             type="button"
+            disabled={!!target}
             onClick={() => {
               // Skill entries are folders → open the folder itself so the
               // user lands inside it. Commands / agents are single .md files
@@ -1930,7 +1950,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
             title=""
             aria-label={entry.kind === 'skill' ? t('skillhub.detail.openDirAria') : t('skillhub.detail.showInFolderAria')}
           >
-            {entry.absolutePath}
+            {target?.displayPath(entry.absolutePath) ?? entry.absolutePath}
           </button>
         }
         backLabel={backLabel}
@@ -1993,8 +2013,10 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
                   {entry && (
                     <LocalSkillControls skill={entry} disabled={marketActionRunning || editMode}
               onUninstalled={() => {
-                clearLastEntryId();
-                clearHistory();
+                if (!target) {
+                  clearLastEntryId();
+                  clearHistory();
+                }
                 if (onUninstalled) onUninstalled();
                 else navigate(backTargetRoute, { state: { skillhubHome: navState?.skillhubHome } });
               }} />
@@ -2306,7 +2328,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
               );
               })()}
             </section>
-            <SkillUsagePanel
+            {!target && <SkillUsagePanel
               summary={usageState.entryId === entry.id ? usageState.summary : null}
               loading={usageState.entryId === entry.id && usageState.loading}
               error={usageState.entryId === entry.id ? usageState.error : null}
@@ -2314,7 +2336,7 @@ export function SkillhubDetailView({ entryOverride, renderNavigation, onUninstal
               diagnoseDisabled={usageState.entryId !== entry.id || usageState.loading}
               todayKey={usageTodayKey}
               onDiagnose={openDiagnosisAgentPicker}
-            />
+            />}
 
             {/* Resize handle — same pattern as the main sidebar: 4px transparent
                 hit area, 1px highlight line on hover, double-click to reset. */}

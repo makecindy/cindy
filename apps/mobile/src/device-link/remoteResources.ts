@@ -1,9 +1,11 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   REMOTE_RESOURCE_GET_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_LIST_CHANNEL,
   REMOTE_RESOURCE_MANIFEST_CHANNEL,
   REMOTE_RESOURCE_PROTOCOL_VERSION,
+  parseRemoteResourceRef,
   resolveRemoteText,
   type RemoteActionInvokeResponse,
   type RemoteCollectionDescriptor,
@@ -21,7 +23,7 @@ import {
   type RemoteActionDescriptor,
   type RemoteResourceBlock,
 } from '@cindy/device-link';
-import { BOT_GROUP_CHAT_PRIMITIVE } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_CHAT_PRIMITIVE, type BotGroupMemberView } from '@cindy/maker-shared/botGroupChat';
 
 import { normalizeRemoteActions, normalizeRemoteBlocks } from './remoteResourceContent';
 import type { RemoteInvoke } from './mobileMakerTransport';
@@ -44,6 +46,9 @@ const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
+  'plugin-card-forms',
+  'mail-message',
+  'teammate-todos',
 ];
 
 /** Routines remain a desktop feature; other portable collections stay available. */
@@ -84,7 +89,7 @@ export function remoteResourceDiscoveryTargets(
   const known = new Set(previous.flatMap((collection) => collection.targets.map((host) => host.deviceId)));
   return devices
     .filter((device) => device.canOpen || (device.state === 'offline' && known.has(device.deviceId)))
-    .map((device) => ({ deviceId: device.deviceId, deviceName: device.name,
+    .map((device) => ({ deviceId: device.deviceId, deviceName: deviceDisplayName(device.deviceId, device.name, devices),
       ...(!device.canOpen ? { offline: true } : {}),
     }));
 }
@@ -134,11 +139,7 @@ function normalizeRemoteText(value: unknown, max = MAX_REMOTE_TEXT_CHARS): Remot
 }
 
 function normalizeRemoteRef(value: unknown): RemoteResourceRef | null {
-  const record = recordOf(value);
-  const collectionId = boundedString(record?.collectionId, MAX_REMOTE_ID_CHARS);
-  const kind = boundedString(record?.kind, MAX_REMOTE_ID_CHARS);
-  const id = boundedString(record?.id, MAX_REMOTE_ID_CHARS);
-  return collectionId && kind && id ? { collectionId, kind, id } : null;
+  return parseRemoteResourceRef(value);
 }
 
 function normalizeRemoteStatus(value: unknown): RemoteResourceStatus | null {
@@ -185,6 +186,8 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(boundedString(recordOf(record.teammateActivity)?.phase, 80)
+      ? { teammateActivity: { phase: boundedString(recordOf(record.teammateActivity)?.phase, 80)! } } : {}),
     ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
@@ -231,6 +234,7 @@ function validDescriptor(value: unknown): RemoteCollectionDescriptor | null {
     id,
     resourceKind,
     title,
+    ...(record.actions !== undefined ? { actions: normalizeRemoteActions(record.actions) } : {}),
     ...(placement ? { placement } : {}),
     ...(iconName && iconFallbackText !== null
       ? { icon: { name: iconName, fallbackText: iconFallbackText } }
@@ -290,6 +294,7 @@ export async function discoverRemoteHomeCollections(
   targets: readonly RemoteResourceDiscoveryTarget[],
   locale?: string,
   previous: readonly RemoteHomeCollection[] = [],
+  onProgress?: (collections: RemoteHomeCollection[]) => void,
 ): Promise<RemoteHomeCollection[]> {
   const cachedManifest = (target: RemoteResourceHostTarget): RemoteResourceManifestResponse => ({
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
@@ -303,45 +308,43 @@ export async function discoverRemoteHomeCollections(
       ...(collection.iconName ? { icon: { name: collection.iconName, fallbackText: '' } } : {}),
     })),
   });
-  const settled = await Promise.allSettled(targets.map(async ({ offline, ...target }) => ({
-    target,
-    manifest: offline ? cachedManifest(target) : await loadRemoteResourceManifest(invoke, target, locale),
-  })));
-  const discovered = settled.flatMap((result, index) => {
-    if (result.status === 'fulfilled') {
-      return result.value.manifest ? [result.value] : [];
+  const merge = (discovered: { target: RemoteResourceHostTarget; manifest: RemoteResourceManifestResponse | null }[]) => {
+    const byId = new Map<string, RemoteHomeCollection>();
+    for (const { target, manifest } of discovered) {
+      for (const collection of manifest?.collections ?? []) {
+        if (collection.placement !== 'home-scope' || !isMobileRemoteCollectionSupported(collection.id)) continue;
+        const existing = byId.get(collection.id);
+        if (existing && existing.resourceKind === collection.resourceKind) {
+          existing.targets.push(target);
+          continue;
+        }
+        if (existing) continue;
+        byId.set(collection.id, {
+          id: collection.id,
+          title: resolveRemoteText(collection.title, locale),
+          resourceKind: collection.resourceKind,
+          placement: collection.placement,
+          iconName: collection.icon?.name,
+          targets: [target],
+        });
+      }
     }
-    const selected = targets[index];
-    if (!selected) return [];
-    const target = { deviceId: selected.deviceId, deviceName: selected.deviceName };
-    const manifest = cachedManifest(target);
-    return manifest.collections.length ? [{ target, manifest }] : [];
-  });
-  if (targets.length > 0 && discovered.length === 0) {
+    return [...byId.values()];
+  };
+  const discovered = targets.map(({ offline: _offline, ...target }) => ({ target, manifest: cachedManifest(target) as RemoteResourceManifestResponse | null }));
+  const settled = await Promise.allSettled(targets.map(async ({ offline, ...target }, index) => {
+    const manifest = offline ? cachedManifest(target) : await loadRemoteResourceManifest(invoke, target, locale);
+    discovered[index] = { target, manifest };
+    onProgress?.(merge(discovered));
+    return { target, manifest };
+  }));
+  const hasManifestReply = settled.some((result, index) => result.status === 'fulfilled'
+    && result.value.manifest !== null && !targets[index].offline);
+  if (targets.length > 0 && !hasManifestReply && !discovered.some(entry => entry.manifest?.collections.length)) {
     const failure = settled.find((result) => result.status === 'rejected');
     if (failure && failure.status === 'rejected') throw failure.reason;
   }
-  const byId = new Map<string, RemoteHomeCollection>();
-  for (const { target, manifest } of discovered) {
-    for (const collection of manifest?.collections ?? []) {
-      if (collection.placement !== 'home-scope' || !isMobileRemoteCollectionSupported(collection.id)) continue;
-      const existing = byId.get(collection.id);
-      if (existing && existing.resourceKind === collection.resourceKind) {
-        existing.targets.push(target);
-        continue;
-      }
-      if (existing) continue;
-      byId.set(collection.id, {
-        id: collection.id,
-        title: resolveRemoteText(collection.title, locale),
-        resourceKind: collection.resourceKind,
-        placement: collection.placement,
-        iconName: collection.icon?.name,
-        targets: [target],
-      });
-    }
-  }
-  return [...byId.values()];
+  return merge(discovered);
 }
 
 export async function invokeRemoteResourceAction(
@@ -369,11 +372,13 @@ export async function getRemoteResource(
   ref: RemoteResourceRef,
   locale?: string,
   supportedPrimitives: readonly string[] = [],
+  query?: string,
 ): Promise<RemoteResource> {
   assertMobileRemoteCollectionSupported(ref.collectionId);
   const raw = await invoke<unknown>(target.deviceId, REMOTE_RESOURCE_GET_CHANNEL, [{
     client: { ...clientDescriptor(locale), primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, ...supportedPrimitives] },
     ref,
+    ...(query ? {query} : {}),
   }]);
   const normalized = normalizeRemoteCollectionItem(raw, ref.collectionId);
   if (!normalized || normalized.ref.kind !== ref.kind || normalized.ref.id !== ref.id) {
@@ -434,13 +439,22 @@ function normalizeRemoteCollectionItem(
   const display = normalizeRemoteDisplay(item?.display);
   const revision = boundedString(item?.revision, 1_024);
   if (!item || !ref || ref.collectionId !== collectionId || !display || !revision) return null;
+  // A teammate row carries a link per open task it follows (the desktop sends at most 200).
   const links = Array.isArray(item.links)
-    ? item.links.slice(0, 64).flatMap((link) => {
+    ? item.links.slice(0, 256).flatMap((link) => {
         const normalized = normalizeRemoteLink(link);
         return normalized ? [normalized] : [];
       })
     : [];
+  const rawOrder = collectionId === 'plugins' ? recordOf(item.pluginOrder) : null;
+  const addedAt = rawOrder?.addedAt;
+  const recentIndex = rawOrder?.recentIndex;
+  const pluginOrder = rawOrder ? {
+    ...(typeof addedAt === 'number' && Number.isSafeInteger(addedAt) && addedAt > 0 ? { addedAt } : {}),
+    ...(typeof recentIndex === 'number' && Number.isSafeInteger(recentIndex) && recentIndex >= 0 && recentIndex < 100 ? { recentIndex } : {}),
+  } : undefined;
   return { ref, display, links, revision,
+    ...(pluginOrder && Object.keys(pluginOrder).length ? { pluginOrder } : {}),
     ...(collectionId === 'plugins' ? { actions: normalizeRemoteActions(item.actions) } : {}),
   };
 }
@@ -462,6 +476,11 @@ export interface HostedRemoteCollectionItem {
   key: string;
   host: RemoteResourceHostTarget;
   item: RemoteCollectionItem;
+  /** Local direct Chat Server projection; never changes the device-link wire display. */
+  lastReplySequence?: string;
+  chatUnread?: { count: number; mentioned: boolean; threadCount: number; threadMentioned: boolean };
+  /** Authorized server identities for direct group rows; display only, never cached as permissions. */
+  groupMembers?: readonly Pick<BotGroupMemberView, 'botId' | 'name' | 'avatar' | 'avatarUrl' | 'avatarColor'>[];
 }
 
 /** Replace successful host shards while retaining stale rows for transiently failed hosts. */
@@ -481,12 +500,14 @@ export async function listRemoteCollection(
   target: RemoteResourceHostTarget,
   collectionId: string,
   locale?: string,
+  query?: string,
 ): Promise<RemoteCollectionListResponse> {
   assertMobileRemoteCollectionSupported(collectionId);
   return invoke<RemoteCollectionListResponse>(target.deviceId, REMOTE_RESOURCE_LIST_CHANNEL, [{
     client: clientDescriptor(locale),
     collectionId,
     limit: 200,
+    ...(query ? { query } : {}),
   }]);
 }
 
@@ -520,7 +541,7 @@ export function parseRemoteResourceTargets(value: unknown): RemoteResourceHostTa
       ) {
         return [];
       }
-      return [{ deviceId, deviceName: deviceName || deviceId }];
+      return [{ deviceId, deviceName: deviceDisplayName(deviceId, deviceName) }];
     });
   } catch {
     return [];

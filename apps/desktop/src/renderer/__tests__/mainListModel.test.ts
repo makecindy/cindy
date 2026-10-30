@@ -4,7 +4,14 @@
  * flat 平铺、自定义项目顺序只管项目行的收窄语义。
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const feature = vi.hoisted(() => ({ enabled: true }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/cindy-make-feature')>(),
+  get CINDY_MAKE_ENABLED() { return feature.enabled; },
+}));
+beforeEach(() => { feature.enabled = true; });
 
 import { LIVE_TASK_PRIORITY } from '../../shared/liveTaskPriority';
 import type { Session } from '@/lib/ccAgent.types';
@@ -86,6 +93,34 @@ const NO_PRIORITY = {
 };
 
 describe('Cindy Make sidebar group', () => {
+  it('preserves empty saved projects and ordinary tasks in mixed projects while disabled', () => {
+    feature.enabled = false;
+    const updatedAt = '2026-10-12T00:00:00Z';
+    const hidden = session({ id: 'make', source: 'cindy-make', updatedAt });
+    const ordinary = session({ id: 'ordinary', source: 'desktop', updatedAt });
+    const saved = project('saved', []);
+    const mixed = project('mixed', [hidden, ordinary]);
+    const entries = buildMainListEntries({
+      projects: [saved, mixed], dialogues: [], unclassified: [], groupBy: 'project',
+      groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(entries.map(entry => entry.kind === 'project' ? entry.project.projectKey : entry.kind).sort()).toEqual(['local:mixed', 'local:saved']);
+    expect(entries.flatMap(getMainListEntrySessions)).toEqual([ordinary]);
+    expect(mixed.sessions).toEqual([hidden, ordinary]);
+  });
+  it.each(['project', 'flat'] as const)('hides all Make sources and their projects in %s mode when disabled', (groupBy) => {
+    feature.enabled = false;
+    const updatedAt = '2026-10-12T00:00:00Z';
+    const make = session({ id: 'make', source: 'cindy-make', updatedAt });
+    const merge = session({ id: 'merge', source: 'cindy-make-merge', updatedAt });
+    const ordinary = session({ id: 'ordinary', title: 'Ordinary', source: 'desktop', updatedAt });
+    const entries = buildMainListEntries({
+      projects: [project('make', [make])], dialogues: [ordinary], unclassified: [merge],
+      groupBy, groupDialogue: false, sortBy: 'recency', manualProjectOrder: [],
+    });
+    expect(labels(entries)).toEqual(['s:Ordinary']);
+    expect(getMainListEntrySessions(entries[0])).toEqual([ordinary]);
+  });
   it('groups a distinct upstream-merge source alongside personal-feature tasks', () => {
     const merge = session({ source: 'cindy-make-merge', workingDir: '/managed/merge-worktrees/abcd', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });
     const normal = session({ source: 'cindy-make', workingDir: '/managed/worktrees/efgh', workspaceKind: 'project', updatedAt: '2026-09-17T00:00:00Z' });

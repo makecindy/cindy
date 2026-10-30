@@ -73,7 +73,10 @@ describe("peer file staging ownership", () => {
     const peer = vi.fn(async () => null);
     const remove = installPeerFileDownload(peer);
     await tryMobilePeerFile("device", "url", undefined, 42);
-    expect(peer).toHaveBeenCalledWith("device", "url", undefined, 42);
+    expect(peer).toHaveBeenCalledWith("device", "url", undefined, 42, undefined, undefined);
+    const metadata = { version: 'a'.repeat(64), size: 12, mimeType: 'text/html' };
+    await tryMobilePeerFile('device', 'url', undefined, 43, metadata);
+    expect(peer).toHaveBeenLastCalledWith('device', 'url', undefined, 43, metadata, undefined);
     remove();
   });
 });

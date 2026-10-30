@@ -25,6 +25,12 @@
     "fastTag": "高速"
   },
   "options": {
+    "speed": {
+      "label": "速度",
+      "standard": "標準",
+      "fast": "高速",
+      "ultrafast": "超高速"
+    },
     "fastMode": "高速モード",
     "fastModeAccessibility": "高速モード {{model}}",
     "reasoningEffort": "推論強度",
@@ -92,6 +98,10 @@
     "recommended": "おすすめ",
     "source": "接続元",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "プロバイダーグループ · {{count}} 台のパソコン",
+    "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
     "harness": "Harness",
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",

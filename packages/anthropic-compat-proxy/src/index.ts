@@ -14,7 +14,7 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
-export { recoverInlineAttachments } from './oversized-attachments.js';
+export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-attachments.js';
 export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
 export type { OversizedRequestRecovery } from './types.js';
 export {
@@ -42,7 +42,9 @@ export {
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createResponsesReasoningContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createResponsesItemIdPrefixRecoveryRule,
   createResponsesItemIdLengthRecoveryRule,
@@ -59,6 +61,7 @@ export {
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
+  stripResponsesReasoningContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
   stripNonAnthropicFields,
   stripNonCanonicalResponsesItemIdsFromBody,

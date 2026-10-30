@@ -23,6 +23,7 @@ export function PiMark({ size = 14, className }: PiMarkProps) {
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden
+      data-ink-icon=""
     >
       <g
         fill="none"

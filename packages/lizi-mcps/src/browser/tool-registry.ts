@@ -28,6 +28,11 @@ export interface BrowserToolDef {
    */
   rules?: string[];
   inputShape: z.ZodRawShape;
+  /**
+   * Moves arguments the agent put in an unambiguous wrong place before strict validation (for example
+   * extraction fields written next to `extract` instead of inside it). Anything else still fails.
+   */
+  normalizeArgs?: (raw: Record<string, unknown>) => Record<string, unknown>;
   handler: BrowserToolHandler;
 }
 
@@ -47,6 +52,7 @@ export class BrowserToolRegistry {
     description: string;
     rules?: string[];
     inputShape: T;
+    normalizeArgs?: (raw: Record<string, unknown>) => Record<string, unknown>;
     handler: BrowserToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
   }): void {
     if (this.tools.has(def.name)) {
@@ -115,7 +121,8 @@ export class BrowserToolRegistry {
     // "返回成功、实际忽略",误导其以为生效(典型:camelCase 写成 sessionIds 而非 session_ids)。
     // 失败分支已带 schema + hint,agent 可据此自纠重试。
     const objSchema = z.strictObject(def.inputShape);
-    const parsed = objSchema.safeParse(rawArgs ?? {});
+    const input = rawArgs && typeof rawArgs === 'object' && def.normalizeArgs ? def.normalizeArgs(rawArgs as Record<string, unknown>) : rawArgs;
+    const parsed = objSchema.safeParse(input ?? {});
     if (!parsed.success) {
       let jsonSchema: unknown;
       try {

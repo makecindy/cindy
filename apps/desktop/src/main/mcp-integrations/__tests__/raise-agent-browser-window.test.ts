@@ -5,8 +5,9 @@ import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser
 
 function tabsResult(
   tabs: Array<{ targetId?: string; suggestedTargetId?: string }> | undefined,
+  running = true,
 ): BrowserControlResult {
-  return { ok: true, action: 'tabs', data: tabs === undefined ? {} : { tabs } };
+  return { ok: true, action: 'tabs', data: tabs === undefined ? { running } : { running, tabs } };
 }
 
 describe('raiseAgentBrowserWindow', () => {
@@ -32,7 +33,7 @@ describe('raiseAgentBrowserWindow', () => {
     const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
       if (request.action === 'tabs') {
         const tabPolls = call.mock.calls.filter(([req]) => req.action === 'tabs').length;
-        if (tabPolls < 3) return tabsResult([]);
+        if (tabPolls < 3) return tabsResult([], false);
         return tabsResult([{ targetId: 'ignored', suggestedTargetId: 'preferred' }]);
       }
       return { ok: true, action: request.action };
@@ -50,9 +51,66 @@ describe('raiseAgentBrowserWindow', () => {
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
-  it('does not open about:blank when the tab list stays empty', async () => {
+  it('opens one foreground blank tab once a windowless browser is ready', async () => {
     const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
       if (request.action === 'tabs') return tabsResult([]);
+      if (request.action === 'open') {
+        return {
+          ok: true,
+          action: 'open',
+          data: { targetId: 'opened', suggestedTargetId: 'preferred-opened' },
+        };
+      }
+      return { ok: true, action: request.action };
+    });
+    const sleep = vi.fn(async () => {});
+
+    await raiseAgentBrowserWindow({ call }, { sleep });
+
+    expect(call.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'tabs' },
+      { action: 'open', url: 'about:blank', background: false },
+      { action: 'focus', targetId: 'preferred-opened' },
+    ]);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('reports a foreground tab open failure to the login caller', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') return tabsResult([]);
+      if (request.action === 'open') {
+        return {
+          ok: false,
+          action: 'open',
+          errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+          message: 'CDP create target failed',
+        };
+      }
+      return { ok: true, action: request.action };
+    });
+
+    await expect(raiseAgentBrowserWindow({ call })).rejects.toThrow('CDP create target failed');
+    expect(call.mock.calls.map(([request]) => request)).toEqual([
+      { action: 'tabs' },
+      { action: 'open', url: 'about:blank', background: false },
+    ]);
+  });
+
+  it('reports a malformed foreground tab response without claiming success', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') return tabsResult([]);
+      return { ok: true, action: request.action, data: {} };
+    });
+
+    await expect(raiseAgentBrowserWindow({ call })).rejects.toThrow(
+      'Agent browser login tab opened without a target ID',
+    );
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not open a tab before CDP reports the browser ready', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest): Promise<BrowserControlResult> => {
+      if (request.action === 'tabs') return tabsResult([], false);
       return { ok: true, action: request.action };
     });
     const sleep = vi.fn(async () => {});
@@ -62,7 +120,5 @@ describe('raiseAgentBrowserWindow', () => {
     expect(call.mock.calls.every(([request]) => request.action === 'tabs')).toBe(true);
     expect(call).toHaveBeenCalledTimes(10);
     expect(sleep).toHaveBeenCalledTimes(9);
-    expect(call.mock.calls.some(([request]) => request.action === 'open')).toBe(false);
-    expect(call.mock.calls.some(([request]) => request.action === 'focus')).toBe(false);
   });
 });

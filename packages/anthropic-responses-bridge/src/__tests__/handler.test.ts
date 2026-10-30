@@ -421,6 +421,38 @@ describe('createResponsesHandler', () => {
     });
   });
 
+  it.each([false, undefined])('缺少 Content-Type 的 SSE 在非流式 fallback 中仍收集完整 Message (stream=%s)', async stream => {
+    const fetchMock = vi.fn(async () => new Response(sse(OK_SSE), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+
+    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], ...(stream === undefined ? {} : { stream }) });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.text)).toMatchObject({
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hi' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+  });
+
+  it('缺少 Content-Type 的 Responses JSON 不被误认作 SSE', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(rawStream(JSON.stringify({
+      id: 'resp_1',
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'json' }] }],
+      usage: { input_tokens: 2, output_tokens: 1 },
+    })), { status: 200 })));
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+
+    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: false });
+
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.text)).toMatchObject({ content: [{ type: 'text', text: 'json' }] });
+  });
+
   it('stream:false 上游 SSE 事件跨多行 data: → 按空行合并后解析,不误判成坏帧(review 反馈)', async () => {
     // SSE 规范允许同一事件由多条 data: 行组成(以 \n 拼接)。逐行独立 JSON.parse 会在
     // 第一段就抛错,把一个合法响应变成 502。

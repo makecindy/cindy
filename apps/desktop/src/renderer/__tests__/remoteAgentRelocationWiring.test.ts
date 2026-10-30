@@ -47,7 +47,13 @@ describe('ModelSelector:浏览别的电脑的目录时改道换位置', () => {
   });
 
   it('改道的行带上所属电脑', () => {
-    expect(selectorSource).toContain('relocate!({ ...row, agentDevice: remoteBrowseDevice })');
+    const start = selectorSource.indexOf('relocate!(');
+    expect(start).toBeGreaterThan(0);
+    const call = selectorSource.slice(start, selectorSource.indexOf('.then(', start));
+    // 默认:带上正在浏览的那台电脑。
+    expect(call).toContain('{ ...row, agentDevice: remoteBrowseDevice }');
+    // 任务归组、在组那一项里选同一供应商:留在此刻运行的那台,只换模型(provider-groups.md §10)。
+    expect(call).toContain('{ ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }');
   });
 });
 
@@ -57,7 +63,14 @@ describe('ChatInput:换位置进切换事务', () => {
       'overrides?.agentDeviceId !== undefined ? overrides.agentDeviceId : pendingAgentDeviceId;',
     );
     expect(chatInputSource).toContain('requestedAgentDeviceId !== agentDeviceId');
-    expect(chatInputSource).toContain('{ agentDeviceId: relocateTo },');
+    const start = chatInputSource.indexOf('const switchOptions = {');
+    expect(start).toBeGreaterThan(0);
+    const options = chatInputSource.slice(start, chatInputSource.indexOf('};', start));
+    expect(options).toContain('...(relocateTo !== undefined ? { agentDeviceId: relocateTo } : {})');
+    expect(options).toContain('!deviceLinkDeviceId && confirmedContextWindow !== undefined');
+    const invoke = chatInputSource.indexOf('await switchApi.switchSessionAgent(', start);
+    expect(invoke).toBeGreaterThan(start);
+    expect(chatInputSource.slice(invoke, chatInputSource.indexOf(')', invoke))).toContain('switchOptions,');
   });
 
   it('回声匹配把位置算进意图;登记时写入位置;换电脑不写本机新建任务记忆', () => {
@@ -78,7 +91,9 @@ describe('ChatInput:换位置进切换事务', () => {
 
   it('只对本机任务、或支持远程 Agent 的被控端任务开放,且要能走切换事务', () => {
     expect(chatInputSource).toContain(
-      'if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter) return undefined;',
+      'if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||\n' +
+        '        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||\n' +
+        '        sessionOrcaRemoteWorker) return undefined;',
     );
     expect(chatInputSource).toContain('agentDeviceId: selection.agentDevice?.deviceId ?? null,');
   });
@@ -110,9 +125,10 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
   });
 
   it('换位置带给被控端的前提与面板入口同一个判定', () => {
-    const start = chatInputSource.indexOf('const relocateTo =');
+    const start = chatInputSource.indexOf('const resolveRelocateTo = () => {');
     expect(start).toBeGreaterThan(0);
-    expect(chatInputSource.slice(start, start + 200)).toContain('agentLocationAware &&');
+    expect(chatInputSource.slice(start, start + 400)).toContain('return agentLocationAware &&');
+    expect(chatInputSource).toContain('const relocateTo = resolveRelocateTo();');
   });
 
   it('面板不浏览其他电脑时列被控电脑的目录与它的镜像记忆', () => {
@@ -132,10 +148,10 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
   });
 
   it('改回被控电脑的确认标题写那台电脑的名字', () => {
-    expect(chatInputSource).toContain('device: deviceLinkDeviceName || deviceLinkDeviceId,');
+    expect(chatInputSource).toContain('device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),');
   });
 
-  it('会话视图:候选电脑去掉被控电脑本身,不并入本机收到的分享;目录跟随 Agent 所在电脑', () => {
+  it('会话视图:候选电脑去掉被控电脑本身,并入全部可用分享;目录跟随 Agent 所在电脑', () => {
     expect(sessionViewSource).toContain('controlledTaskSupportsAgentLocation(session) &&');
     expect(sessionViewSource).toContain('!isSharedTaskPeer(remoteDeviceId) &&');
     const branch = sessionViewSource.indexOf(
@@ -147,10 +163,37 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
       sessionViewSource.indexOf(': undefined;', branch),
     );
     expect(remoteBranch).toContain('selectControlledTaskAgentDevices({');
-    expect(remoteBranch).not.toContain('providerShareDevices');
+    expect(remoteBranch).toContain('shareDevices: providerShareDevices,');
     expect(sessionViewSource).toContain(
       'const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;',
     );
     expect(sessionViewSource).toContain('deviceLinkDeviceName={controlledDeviceName}');
+  });
+
+  it('Agent 在分享上:按分享目录显示,暂停的当前位置仍保留,其他可用分享也能选', () => {
+    // 2026-10-10 用户反馈:A 远控 B 上用分享供应商的任务,模型按钮显示「模型信息暂不可用」。
+    const start = sessionViewSource.indexOf('const controlledShareIds = useMemo(');
+    expect(start).toBeGreaterThan(0);
+    const block = sessionViewSource.slice(start, sessionViewSource.indexOf('[remoteDeviceId,', start));
+    expect(block).toContain('controlledTaskReadableShareIds({');
+    expect(block).toContain('agentDeviceId: session?.agentDeviceId,');
+    expect(block).toContain('isReceived: isReceivedProviderShare,');
+    expect(sessionViewSource).toContain(
+      '...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),',
+    );
+    const branch = sessionViewSource.indexOf(
+      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+    );
+    const remoteBranch = sessionViewSource.slice(
+      branch,
+      sessionViewSource.indexOf(': undefined;', branch),
+    );
+    expect(remoteBranch).toContain('shareDevices: providerShareDevices,');
+    expect(sessionViewSource).toContain('useProviderShareAgentDevices([session?.agentDeviceId, pendingAgentDeviceId], remoteDeviceId)');
+    // ChatInput 只认调用方放进候选的分享。
+    const inputStart = chatInputSource.indexOf('const deviceLinkAgentLocation =');
+    expect(chatInputSource.slice(inputStart, inputStart + 800)).toContain(
+      'readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),',
+    );
   });
 });

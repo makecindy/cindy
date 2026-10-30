@@ -39,6 +39,36 @@ function toolUse(id: string, toolName: string, input: unknown, seconds: number):
 }
 
 describe('messageRenderModel', () => {
+  // #6351: remote JSON must reach the actual work fold, not only normalization.
+  // Two completed items from failed samples must not look like accepted replies.
+  it('folds remote failed samples before success and retains their original records', () => {
+    const messages = [
+      message({ id: 'u', role: 'user', content: 'Start', createdAt: at(1) }),
+      ...[1, 2].map((attempt) => message({
+        id: `failed${attempt}`, role: 'assistant', content: '# Opening', createdAt: at(attempt + 1),
+        agentMeta: { turnCompleted: true, turnCostUsd: 0.1, failedSamplingAttempt: {
+          threadId: 'thread', turnId: 'turn', attempt, itemId: `item${attempt}`,
+        } },
+      })),
+    ];
+    for (const isSessionStreaming of [true, false]) {
+      const items = buildMobileMessageRenderItems(messages, { isSessionStreaming });
+      expect(items.map((item) => item.key)).toEqual(['message-u', 'work-failed1']);
+      expect(items[1]).toMatchObject({ type: 'work_group', children: [
+        { type: 'message', message: { source: messages[1], failedSamplingAttempt: true } },
+        { type: 'message', message: { source: messages[2], failedSamplingAttempt: true } },
+      ] });
+    }
+    const completed = buildMobileMessageRenderItems([...messages,
+      message({ id: 'intro', role: 'assistant', content: 'Accepted intro', createdAt: at(4) }),
+      message({ id: 'final', role: 'assistant', content: 'Accepted answer', createdAt: at(5),
+        agentMeta: { turnCompleted: true } }),
+    ], { isSessionStreaming: false });
+    expect(completed.map((item) => item.key)).toEqual([
+      'message-u', 'work-failed1', 'message-intro', 'message-final',
+    ]);
+  });
+
   it('keeps completed work folded when the next remote run starts before its user row arrives', () => {
     const messages = [
       message({ id: 'u1', role: 'user', content: 'start', createdAt: at(1) }),
@@ -91,7 +121,10 @@ describe('messageRenderModel', () => {
       isSessionStreaming: true,
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
-    expect(expectType(items[0], 'message').message.isTurnFinalAssistant).toBe(true);
+    const interrupted = expectType(items[0], 'work_group');
+    expect(interrupted.isStreaming).toBe(false);
+    expect(interrupted.children).toHaveLength(1);
+    expect(interrupted.children[0]).toMatchObject({ type: 'message', message: { body: 'partial' } });
     expect(expectType(items[1], 'message').message).toMatchObject({
       systemCardType: 'auto-resume',
       systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, live: true },

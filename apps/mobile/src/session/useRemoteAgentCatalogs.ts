@@ -54,7 +54,11 @@ function cachedShareState(controlledDeviceId: string): ShareState {
   return { controlledDeviceId, shares: cached ?? [], loaded: !!cached };
 }
 
-export function useRemoteAgentCatalogs(input: {
+export function useRemoteAgentCatalogs(input: RemoteAgentCatalogsInput): RemoteAgentCatalog[] {
+  return useRemoteAgentCatalogsWithStatus(input).catalogs;
+}
+
+export interface RemoteAgentCatalogsInput {
   /** 只在需要时读(选择器打开,或任务的 Agent 在另一台电脑)。 */
   enabled: boolean;
   controlledDeviceId: string;
@@ -62,13 +66,21 @@ export function useRemoteAgentCatalogs(input: {
   keepDeviceIds: readonly string[];
   /** 只读 keepDeviceIds 里的电脑(选择器没打开、只为模型药丸取 Agent 所在那台的目录时)。 */
   keepOnly?: boolean;
-}): RemoteAgentCatalog[] {
-  const { readDeviceList, invoke, openLink, connectionEpoch, status } = useDeviceLink();
+}
+
+/** settled = 电脑清单(和分享清单)已读到过一次:此后清单里没有的电脑 / 分享才算真的不在了。 */
+export function useRemoteAgentCatalogsWithStatus(input: RemoteAgentCatalogsInput): {
+  catalogs: RemoteAgentCatalog[];
+  settled: boolean;
+} {
+  const { readDeviceList, invoke, openLink, connectionEpoch, status, presenceVersion, getPresenceAvailability } =
+    useDeviceLink();
   const { accountGeneration } = useAuth();
   const { t } = useTranslation();
   const revoked = useRevokedDevices();
   const [devices, setDevices] = useState<{ deviceId: string; name: string; canOpen: boolean }[]>([]);
   const [catalogs, setCatalogs] = useState<ReadonlyMap<string, CatalogState>>(new Map());
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
   const [shareState, setShareState] = useState<ShareState>(() => cachedShareState(input.controlledDeviceId));
   const ownerRef = useRef({ accountGeneration, controlledDeviceId: input.controlledDeviceId });
   const keepKey = input.keepDeviceIds.join('\n');
@@ -83,6 +95,7 @@ export function useRemoteAgentCatalogs(input: {
       && owner.controlledDeviceId === input.controlledDeviceId) return;
     ownerRef.current = { accountGeneration, controlledDeviceId: input.controlledDeviceId };
     setDevices([]);
+    setDevicesLoaded(false);
     setCatalogs(new Map());
     setShareState(cachedShareState(input.controlledDeviceId));
   }, [accountGeneration, input.controlledDeviceId]);
@@ -134,6 +147,7 @@ export function useRemoteAgentCatalogs(input: {
           revokedDeviceIds: revoked,
         }).filter((device) => !keepOnly || keepDeviceIds.includes(device.deviceId));
         setDevices(selected);
+        setDevicesLoaded(true);
         for (const device of selected) {
           const cached = getCachedDeviceProviders(device.deviceId);
           patch(device.deviceId, cached
@@ -187,28 +201,41 @@ export function useRemoteAgentCatalogs(input: {
     if (!input.enabled || !readShares || shareState.controlledDeviceId !== input.controlledDeviceId) {
       return NO_CATALOGS;
     }
+    // 只写来自谁，不写分享者的电脑名(provider-sharing.md §5.1、§6)；同一位分享者的同一个供应商
+    // 分享了不止一份时，按列表顺序给后面的加序号(与桌面一致)。
+    const names = new Map<string, string>();
+    const seen = new Map<string, number>();
+    for (const share of shareState.shares) {
+      const base = t('providerShare.picker.shareName', { owner: share.ownerName });
+      const key = `${share.ownerName}\n${share.providerLabel}`;
+      const index = (seen.get(key) ?? 0) + 1;
+      seen.set(key, index);
+      names.set(share.agentDeviceId, index > 1 ? t('providerShare.picker.numbered', { name: base, index }) : base);
+    }
     return providerShareRemoteCatalogs({
       shares: shareState.shares,
       loaded: shareState.loaded,
       keepDeviceIds: keepKey ? keepKey.split('\n') : [],
       keepOnly,
-      deviceName: (share) => t('providerShare.picker.deviceName', {
-        device: share.deviceName,
-        owner: share.ownerName,
-      }),
+      deviceName: (share) => names.get(share.agentDeviceId) ?? t('providerShare.picker.shareName', { owner: share.ownerName }),
       unavailableName: t('providerShare.picker.unavailable'),
     });
   }, [input.controlledDeviceId, input.enabled, keepKey, keepOnly, readShares, shareState, t]);
 
-  return useMemo(() => {
+  const result = useMemo(() => {
     if (devices.length === 0 && shareCatalogs.length === 0) return NO_CATALOGS;
+    void presenceVersion;
     const deviceCatalogs = devices.map((device): RemoteAgentCatalog => {
       const state = catalogs.get(device.deviceId);
       const payload = state?.payload;
+      // 设备清单是打开时的快照;面板开着期间上下线以实时 presence 为准(未知时沿用清单)。
+      const presence = getPresenceAvailability(device.deviceId);
+      const offline = presence === false || (presence !== true && !device.canOpen);
       return {
         deviceId: device.deviceId,
         name: device.name,
         status: state?.status ?? (device.canOpen ? 'loading' : 'error'),
+        ...(offline ? { offline: true as const } : {}),
         providers: payload ? remoteAgentProviders(payload.providers) : [],
         ...(payload?.modelVisibilityOverrides !== undefined
           ? { modelVisibilityOverrides: payload.modelVisibilityOverrides }
@@ -216,5 +243,8 @@ export function useRemoteAgentCatalogs(input: {
       };
     });
     return shareCatalogs.length === 0 ? deviceCatalogs : [...deviceCatalogs, ...shareCatalogs];
-  }, [catalogs, devices, shareCatalogs]);
+  }, [catalogs, devices, shareCatalogs, presenceVersion, getPresenceAvailability]);
+  const settled = input.enabled && devicesLoaded
+    && (!readShares || shareState.controlledDeviceId !== input.controlledDeviceId || shareState.loaded);
+  return { catalogs: result, settled };
 }

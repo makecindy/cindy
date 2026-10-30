@@ -72,7 +72,7 @@ export function UserPromptSection() {
             'bg-[var(--settings-input-bg)]',
             'border border-[var(--settings-input-border)]',
             'text-13 leading-[1.6] text-[var(--settings-input-text)]',
-            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)] placeholder:opacity-45',
+            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
             'outline-none focus:border-[var(--settings-input-border-focus)]',
             'transition-colors',
           )}

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, Linking, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 
@@ -12,13 +12,14 @@ import {
 
 /**
  * 根级 Share Extension 桥：未登录时先保留 App Group payload；登录、路由都就绪后
- * 再进入新建任务。真正清除原生 payload 的时机由新建页领取成功后触发。
+ * 再选择任务或伙伴。目标编辑器领取成功后才清除原生 payload。
  */
 export function IncomingShareBridge() {
   const auth = useAuth();
   const router = useRouter();
   const segments = useSegments();
   const batch = useIncomingShareBatch();
+  const [shareLinkAttempt, setShareLinkAttempt] = useState(0);
   const presentedBatchId = useRef<string | null>(null);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -29,7 +30,7 @@ export function IncomingShareBridge() {
     void import('@/session/incomingShareNative').then((sharing) => {
       if (!active) return;
       stopWatchingAccount = watchIncomingShareAccount(sharing, initialOwner);
-      const refresh = () => {
+      const refresh = (explicitShare = false) => {
         void import('@/session/incomingShareCleanup')
           .then(({ cleanupExpiredIncomingShares }) => cleanupExpiredIncomingShares())
           .catch(() => undefined)
@@ -40,6 +41,10 @@ export function IncomingShareBridge() {
             // copies before they can trigger navigation.
             try {
               receiveIncomingShare(sharing);
+              if (explicitShare) {
+                presentedBatchId.current = null;
+                setShareLinkAttempt(value => value + 1);
+              }
             } catch {
               // Inbound sharing is unavailable in older native binaries.
             }
@@ -47,7 +52,7 @@ export function IncomingShareBridge() {
       };
       subscriptions = [
         AppState.addEventListener('change', (state) => { if (state === 'active') refresh(); }),
-        Linking.addEventListener('url', refresh),
+        Linking.addEventListener('url', ({ url }) => refresh(/^[a-z][a-z0-9+.-]*:\/\/expo-sharing(?:[/?#]|$)/i.test(url))),
         { remove: subscribeMobileAuthOwner(() => {
           if (!getMobileAuthOwner().switching && AppState.currentState === 'active') refresh();
         }) },
@@ -74,15 +79,15 @@ export function IncomingShareBridge() {
     ) {
       return;
     }
-    if (segments.join('/') === 'sessions/new') {
+    if (segments.join('/') === 'incoming-share') {
       presentedBatchId.current = batch.id;
       return;
     }
     // A storage error leaves the batch pending. Let the user leave the error
     // screen and return to retry instead of repeatedly forcing it back open.
     presentedBatchId.current = batch.id;
-    router.navigate('/sessions/new');
-  }, [auth.initialized, auth.isAuthenticated, batch, router, segments]);
+    router.navigate('/incoming-share');
+  }, [auth.initialized, auth.isAuthenticated, batch, router, segments, shareLinkAttempt]);
 
   return null;
 }

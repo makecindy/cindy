@@ -24,3 +24,22 @@ export function isBotGroupLaneSession(session: BotSessionRoleLike | null | undef
 export function withoutBotGroupLanes<T extends BotSessionRoleLike>(sessions: readonly T[]): T[] {
   return sessions.filter((session) => !isBotGroupLaneSession(session));
 }
+
+/**
+ * 伙伴接管的个人 IM 群 / 话题专线（`bot_session_links.role = 'channel'`）。与群专线
+ * 一样隐藏：不进任务列表、伙伴主时间线、历史、未读、运行中标记和系统通知；它的
+ * 记录在 IM 里。刻意与 isBotGroupLaneSession 分开 —— 那个判据驱动伙伴群聊行。
+ */
+export function isBotChannelLaneSession(session: BotSessionRoleLike | null | undefined): boolean {
+  return !!session && (session.role === 'channel' || session.kind === 'channel');
+}
+
+/** 群专线或 IM 专线：都不是这位伙伴自己的任务。 */
+export function isBotHiddenLaneSession(session: BotSessionRoleLike | null | undefined): boolean {
+  return isBotGroupLaneSession(session) || isBotChannelLaneSession(session);
+}
+
+/** The Bot's own task projections, without hidden group or IM channel lanes. */
+export function withoutBotHiddenLanes<T extends BotSessionRoleLike>(sessions: readonly T[]): T[] {
+  return sessions.filter((session) => !isBotHiddenLaneSession(session));
+}

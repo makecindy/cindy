@@ -9,13 +9,33 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
 
+import type { DeviceHostedLinkActivity } from '@cindy/maker-core';
 import { WebSocketServer, type WebSocket } from 'ws';
+
+import { TunnelLinkActivity } from './linkActivity';
 
 /** 单个请求体上限(与反向请求载荷上限一致)。 */
 export const TUNNEL_MAX_BODY_BYTES = 48 * 1024 * 1024;
 const MAX_WS_CONNECTIONS = 16;
 /** 单条 WebSocket 消息上限(Codex exec-server 读写大文件时整段 base64 在一条消息里)。 */
 const MAX_WS_FRAME_BYTES = 48 * 1024 * 1024;
+const MCP_KEEPALIVE_MS = 15_000;
+
+/** 只识别本机执行器的单次工具调用及标准取消通知，不接管其他 MCP 服务。 */
+function execMcpMessage(req: IncomingMessage, requestPath: string, body: Buffer): { kind: 'call' | 'cancel'; id: string | number } | undefined {
+  if (req.method !== 'POST' || requestPath.split('?')[0] !== '/mcp/cindy_exec') return undefined;
+  try {
+    const message = JSON.parse(body.toString('utf8'));
+    if (message?.jsonrpc !== '2.0') return undefined;
+    if (message.method === 'tools/call' && (typeof message.id === 'string' || typeof message.id === 'number')) {
+      return { kind: 'call', id: message.id };
+    }
+    const cancelledId = message.params?.requestId;
+    if (message.id === undefined && message.method === 'notifications/cancelled'
+      && (typeof cancelledId === 'string' || typeof cancelledId === 'number')) return { kind: 'cancel', id: cancelledId };
+  } catch { /* 非法请求交回原路由处理。 */ }
+  return undefined;
+}
 
 export interface TunnelHttpRequest {
   method: string;
@@ -42,6 +62,8 @@ export interface RunTunnel {
   token: string;
   sendWs(connId: string, data: string): void;
   closeWs(connId: string): void;
+  /** 这条隧道上的往来记录(见 linkActivity.ts)。 */
+  linkActivity(): DeviceHostedLinkActivity;
   close(): Promise<void>;
 }
 
@@ -106,8 +128,11 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
   const token = randomBytes(32).toString('base64url');
   const sockets = new Set<Socket>();
   const connections = new Map<string, WebSocket>();
+  // 每个 run 独立；保留 MCP session 和 JSON-RPC id 的类型，不能取消其它并行调用。
+  const pendingExecCalls = new Map<string, () => void>();
   let nextConn = 0;
   let closed = false;
+  const activity = new TunnelLinkActivity();
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -133,6 +158,56 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
         if (!FORWARDED_HEADERS.has(name) || value === undefined) continue;
         headers.push([name, Array.isArray(value) ? value.join(', ') : value]);
       }
+      const execMessage = execMcpMessage(req, requestPath, body);
+      const callKey = execMessage ? JSON.stringify([req.headers['mcp-session-id'] ?? null, execMessage.id]) : undefined;
+      if (execMessage?.kind === 'cancel') {
+        // SDK 总超时/单次取消只发通知，不关闭 transport。复用原反向请求的取消信号，
+        // 不新增跨端字段，也不关闭共享连接或重放工具操作。
+        const cancelPendingCall = pendingExecCalls.get(callKey!);
+        if (typeof cancelPendingCall === 'function') cancelPendingCall();
+        res.writeHead(202).end();
+        return;
+      }
+      if (callKey !== undefined && pendingExecCalls.has(callKey)) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({
+          jsonrpc: '2.0', id: execMessage!.id, error: { code: -32600, message: 'Request ID is already in use.' },
+        }));
+        return;
+      }
+      const streamId = execMessage?.kind === 'call'
+        && req.headers.accept?.split(',').some((part) => part.trim().split(';')[0] === 'text/event-stream')
+        ? execMessage.id : undefined;
+      let keepalive: ReturnType<typeof setInterval> | undefined;
+      const streamMessage = (value: unknown) => res.end(`event: message\ndata: ${JSON.stringify(value)}\n\n`);
+      const streamError = () => streamMessage({
+        jsonrpc: '2.0', id: streamId,
+        error: { code: -32603, message: 'The tool request could not be completed.' },
+      });
+      if (streamId !== undefined) {
+        // Claude Code 的 MCP fetch 在首份 HTTP 响应前默认只等 60s。及时建立标准 SSE 响应，
+        // 让等待用户确认与命令执行留在工具调用生命周期内，不改变工具执行超时，也不重放请求。
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        res.write(': waiting\n\n');
+        keepalive = setInterval(() => {
+          if (!res.destroyed && !res.writableNeedDrain) res.write(': waiting\n\n');
+        }, MCP_KEEPALIVE_MS);
+        keepalive.unref();
+      }
+      const release = () => {
+        clearInterval(keepalive);
+        if (callKey !== undefined && pendingExecCalls.get(callKey) === cancel) pendingExecCalls.delete(callKey);
+      };
+      const cancel = () => {
+        abort.abort();
+        release();
+        if (res.destroyed || res.writableEnded) return;
+        const cancelled = { jsonrpc: '2.0', id: execMessage!.id, error: { code: -32800, message: 'Request cancelled.' } };
+        if (streamId !== undefined) streamMessage(cancelled);
+        else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(cancelled));
+      };
+      if (callKey !== undefined) pendingExecCalls.set(callKey, cancel);
+      res.once('close', release);
+      activity.httpStarted();
       try {
         const response = await handlers.http({
           method: req.method ?? 'GET',
@@ -140,11 +215,23 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
           headers,
           ...(body.length ? { body } : {}),
         }, abort.signal);
-        if (res.destroyed) return;
+        if (res.destroyed || res.writableEnded) return;
+        if (streamId !== undefined) {
+          if (response.status !== 200 || !response.body) streamError();
+          else {
+            try { streamMessage(JSON.parse(response.body.toString('utf8'))); }
+            catch { streamError(); }
+          }
+          return;
+        }
         res.writeHead(response.status, Object.fromEntries(response.headers));
         res.end(response.body);
       } catch (error) {
-        if (res.destroyed) return;
+        if (res.destroyed || res.writableEnded) return;
+        if (streamId !== undefined) {
+          streamError();
+          return;
+        }
         // 错误消息/栈可能携带本机路径等信息，不原样回给隧道对端；按错误类别给固定文案。
         const raw = error instanceof Error ? error.message : String(error);
         const message = /aborted/i.test(raw)
@@ -152,6 +239,9 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
           : 'The task has ended on the computer where it runs.';
         res.writeHead(502, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: { code: 'REMOTE_AGENT_TUNNEL', message } }));
+      } finally {
+        release();
+        activity.httpFinished();
       }
     })();
   });
@@ -172,13 +262,18 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
       nextConn += 1;
       const connId = `c${nextConn}`;
       connections.set(connId, ws);
+      activity.connection(connId, false);
       handlers.wsOpen(connId, wsPath ?? '/');
       ws.on('message', (data, isBinary) => {
         if (isBinary) return;
-        handlers.wsMessage(connId, data.toString());
+        const text = data.toString();
+        activity.agentMessage(connId, text);
+        handlers.wsMessage(connId, text);
       });
       ws.on('close', () => {
-        if (connections.delete(connId)) handlers.wsClose(connId);
+        if (!connections.delete(connId)) return;
+        activity.connection(connId, true);
+        handlers.wsClose(connId);
       });
       ws.on('error', () => ws.terminate());
     });
@@ -198,14 +293,18 @@ export async function createRunTunnel(handlers: TunnelHandlers): Promise<RunTunn
     token,
     sendWs(connId, data) {
       const ws = connections.get(connId);
-      if (ws && ws.readyState === ws.OPEN) ws.send(data);
+      if (!ws || ws.readyState !== ws.OPEN) return;
+      activity.environmentMessage(connId, data);
+      ws.send(data);
     },
     closeWs(connId) {
       const ws = connections.get(connId);
       if (!ws) return;
       connections.delete(connId);
+      activity.connection(connId, true);
       ws.close();
     },
+    linkActivity: () => activity.snapshot(),
     async close() {
       if (closed) return;
       closed = true;

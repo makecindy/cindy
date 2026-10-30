@@ -79,7 +79,7 @@ describe('NewMakerDraftRoute local first-message send', () => {
       'const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;',
     );
     expect(source.slice(fifoRestore, catchRestore)).toContain(
-      'text: preNavDraftDoc ?? plainTextToTiptapDoc(message)',
+      'text: preNavDraftDoc ?? plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message)',
     );
     expect(source.slice(localSend, fifoRestore)).toContain(
       'rewriteBrowserCommentsFromRehomedFiles(',

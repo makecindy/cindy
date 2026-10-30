@@ -40,7 +40,8 @@ import { DesktopCaptureWindow } from './captureWindow';
 import { denyAppDesktopCapture } from './capturePermissions';
 import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store';
 import { throwIpcError } from '../utils/ipcValidate';
-import { RemoteDesktopController } from './controller';
+import { RemoteDesktopController, type DesktopControllerDeps } from './controller';
+import { getInputHandoffService } from '../input-handoff/service';
 import { ClipboardCounter } from './clipboardCounter';
 import { onQuit } from '../lifecycle';
 import {
@@ -78,7 +79,11 @@ import { ControlledOverlay } from './controlledOverlay';
 import { LinuxPrivacyScreen, supportsLinuxPrivacy, prepareLinuxPrivacy } from './linuxPrivacy';
 import { LinuxWindowActions, supportsOmarchyMenu } from './linuxWindowActions';
 import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
-import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
+import {
+  readWindowsDesktopSupport,
+  configureWindowsDesktopSupport,
+  WindowsDesktopSetupError,
+} from './windowsHost';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
@@ -160,7 +165,9 @@ async function ensurePortalCapture(lease: string): Promise<void> {
   });
   return portalReady;
 }
-const captureWindow = new DesktopCaptureWindow(() => remoteDesktop.stop());
+const captureWindow = new DesktopCaptureWindow(() =>
+  remoteDesktop.stop(undefined, undefined, 'capture-exited'),
+);
 const nativeCapture = new NativeDesktopCapture();
 const hyprlandCapture = new HyprlandCapture();
 const linuxAudio = new LinuxDesktopAudio();
@@ -173,6 +180,11 @@ let privacyExcluded: number[] = [];
 let overlayExcluded: number[] = [];
 const applyExcludedWindows = () =>
   nativeCapture.setExcludedWindows([...privacyExcluded, ...overlayExcluded]);
+// While the phone shows picture-in-picture the input helper is stopped on purpose;
+// the local exit confirmation then has nothing to pause, and cancelling it must not
+// bring remote control back.
+const pauseInputForPrivacy = (): Promise<() => Promise<void>> =>
+  remoteDesktop.viewOnlyBackground ? Promise.resolve(async () => {}) : input.pauseForPrivacy();
 const privacyScreen = new PrivacyScreen(
   (ids) => {
     privacyExcluded = ids;
@@ -183,11 +195,11 @@ const privacyScreen = new PrivacyScreen(
       .stopPrivacyByUser()
       .catch((error) => console.error('[remote-desktop] privacy exit lock failed', error));
   },
-  () => input.pauseForPrivacy(),
+  pauseInputForPrivacy,
 );
 const linuxPrivacy = new LinuxPrivacyScreen(
   () => remoteDesktop.stopPrivacyByUser(),
-  () => input.pauseForPrivacy(),
+  pauseInputForPrivacy,
 );
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&
@@ -205,6 +217,10 @@ const controlledOverlay = new ControlledOverlay(
   async (peer) => {
     if (!controllerDirectory) throw new Error('controller directory unavailable');
     await controllerDirectory.revoke(peer);
+  },
+  // Same as the main window's Disconnect, for the session the overlay names only.
+  (peer) => {
+    if (remoteDesktop.state?.peer === peer) remoteDesktop.stopByUser();
   },
 );
 /** Device-link owns names and revocation; injected at registration (no import cycle). */
@@ -265,8 +281,14 @@ let pending: {
   timer: ReturnType<typeof setTimeout>;
 } | null = null;
 // A dead input helper or a refused injection is an input failure, not a session
-// failure: release control and keep the lease, capture and media running.
-const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
+// failure: repair input once while keeping the lease, capture and media running.
+const input = new DesktopInputHost(
+  () => {
+    void remoteDesktop.releaseControl(true);
+  },
+  undefined,
+  (points) => controlledOverlay.viewerPointer(points),
+);
 const clipboardCounter = new ClipboardCounter(resolveDesktopInputBinary);
 // A display change holds native capture instead of stopping it: frames pause
 // until the changed display is known, then the same stream follows it. The
@@ -325,6 +347,7 @@ function stopVideo(): void {
   nativeOverlay = false;
   nativeSettings = undefined;
   nativeCapture.stop();
+  nativeCapture.setWindow(null);
   hyprlandCapture.stop();
   linuxAudio.stop();
   nativeDisplay = null;
@@ -402,6 +425,11 @@ async function offer(
     }
   }
   stopVideo();
+  // A 代输入 lease shows one window: only the macOS window stream, never a screen source or audio.
+  const handoff = remoteDesktop.handoffWindow(lease.lease);
+  if (handoff && process.platform !== 'darwin') throw new Error('DESKTOP_HANDOFF_UNAVAILABLE');
+  if (handoff && settings?.audio) throw new Error('DESKTOP_AUDIO_UNAVAILABLE');
+  nativeCapture.setWindow(handoff?.windowId ?? null);
   preparingOffer = true;
   const generation = offerGeneration;
   const current = () => generation === offerGeneration && remoteDesktop.hasLease(lease.lease);
@@ -416,7 +444,7 @@ async function offer(
     const hyprland = nativeWayland();
     if (hyprland && lease.display.id !== WAYLAND_DISPLAY_ID) await linuxMonitor(lease.display.id);
     let nativeAvailable = process.platform === 'darwin' || hyprland;
-    if (!hyprland) {
+    if (!hyprland && !handoff) {
       nativeAvailable ||=
         process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
       try {
@@ -456,10 +484,11 @@ async function offer(
       : null;
     nativeDisplay = nativeAvailable ? lease.display.id : null;
     nativeOverlay =
-      cursorOverlay === true &&
-      (process.platform === 'darwin' ||
-        (process.platform === 'win32' && nativeAvailable) ||
-        (hyprland && (await readLinuxCursorSupport())));
+      Boolean(handoff) ||
+      (cursorOverlay === true &&
+        (process.platform === 'darwin' ||
+          (process.platform === 'win32' && nativeAvailable) ||
+          (hyprland && (await readLinuxCursorSupport()))));
     if (!current() || host !== currentHost || currentHost.isDestroyed())
       throw new Error('DESKTOP_LEASE_EXPIRED');
     nativeSettings = settings;
@@ -593,6 +622,41 @@ export async function requestRemoteDesktop(peer: string, value: unknown): Promis
     value.op === 'credential'
     ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body))
     : remoteDesktop.request(peer, value);
+}
+
+/**
+ * 代输入 live view: the window a waiting request is about, chosen here from the
+ * request alone (never by the viewer), sized in points like a display.
+ */
+function handoffWindowDeps(): Pick<
+  DesktopControllerDeps,
+  'handoffWindow' | 'handoffCurrent' | 'handoffEnded'
+> {
+  return {
+    handoffWindow: async (requestId) => {
+      const live = await getInputHandoffService()?.liveWindow(requestId);
+      if (!live) return null;
+      const [x, y, width, height] = live.frame as [number, number, number, number];
+      const display = screen.getDisplayMatching({
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      });
+      return {
+        requestId,
+        windowId: live.windowId,
+        pid: live.pid,
+        displayId: String(display.id),
+        app: live.app,
+        ...(live.title ? { title: live.title } : {}),
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      };
+    },
+    handoffCurrent: (requestId) => getInputHandoffService()?.isCurrent(requestId) ?? false,
+    handoffEnded: (requestId) => getInputHandoffService()?.liveViewEnded(requestId),
+  };
 }
 
 async function setPrivacyScreen(enabled: boolean, current: () => boolean): Promise<void> {
@@ -747,8 +811,16 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     if (preparingOffer) return null;
     // Compatibility viewers must also wake/capture without waiting for
     // Chromium's thumbnail enumeration, which may hang on a sleeping display.
+    const handoff = lease ? remoteDesktop.handoffWindow(lease) : null;
+    if (handoff && process.platform !== 'darwin') throw new Error('DESKTOP_HANDOFF_UNAVAILABLE');
     if (process.platform === 'darwin' || windowsAvailable) {
-      const frame = await nativeCapture.frame(displayId, cursorOverlay === true, nativeSettings);
+      // A 代输入 lease reads only its window (the window stream needs the overlay mode).
+      if (!videoLease) nativeCapture.setWindow(handoff?.windowId ?? null);
+      const frame = await nativeCapture.frame(
+        displayId,
+        Boolean(handoff) || cursorOverlay === true,
+        nativeSettings,
+      );
       return encodeNativeRelayFrame(frame, (jpeg) => nativeImage.createFromBuffer(jpeg));
     }
     const available = await sources(true).catch((error) => {
@@ -843,7 +915,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
     else await waitForDisplayRestore(displayId, expected, beforeChange);
   },
   createViewerDisplay,
-  startInput: async (displayId) => {
+  ...(process.platform === 'darwin' ? handoffWindowDeps() : {}),
+  startInput: async (displayId, window) => {
     // A portal-selected window is not the whole compositor coordinate space.
     // Never allow a forged control request to drive that view-only fallback.
     if (
@@ -851,7 +924,8 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       (!nativeWayland() || !(await readLinuxDesktopInputSupport()))
     )
       throw new Error('DESKTOP_INPUT_UNSUPPORTED');
-    await input.start(displayId);
+    if (window) await input.start(displayId, { windowId: window.windowId, pid: window.pid });
+    else await input.start(displayId);
   },
   input: (events) => {
     try {
@@ -861,7 +935,7 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
       // lease's display is unavailable). Release control so the host and the
       // viewer agree, and so taking control again genuinely restarts the
       // helper instead of being skipped as "already controlling".
-      remoteDesktop.releaseControl();
+      void remoteDesktop.releaseControl(true);
       throw error;
     }
   },
@@ -909,7 +983,7 @@ export function registerRemoteDesktopIpc(
   onQuit('remote-desktop-stop', () => {
     clearInterval(timer);
     permissions.dismiss();
-    remoteDesktop.stop();
+    remoteDesktop.stop(undefined, undefined, 'shutdown');
   });
   onQuit('remote-desktop-restore', () => remoteDesktop.stopAndRestore(), 'async');
   const linuxLayoutChanged = () => {
@@ -924,22 +998,25 @@ export function registerRemoteDesktopIpc(
         if (generation !== offerGeneration || remoteDesktop.changingDisplay) return;
         const display = linuxDisplay(monitor);
         if (!remoteDesktop.displayGeometryMatches(id, display.width, display.height))
-          remoteDesktop.stop();
+          remoteDesktop.stop(undefined, undefined, 'display-changed');
       })
       .catch(() => {
-        if (generation === offerGeneration && !remoteDesktop.changingDisplay) remoteDesktop.stop();
+        if (generation === offerGeneration && !remoteDesktop.changingDisplay)
+          remoteDesktop.stop(undefined, undefined, 'display-failed');
       });
   };
   screen.on('display-removed', (_event, display) => {
     linuxLayoutChanged();
     if (remoteDesktop.changingDisplay) return;
-    if (String(display.id) === remoteDesktop.displayId) remoteDesktop.stop();
+    if (String(display.id) === remoteDesktop.displayId)
+      remoteDesktop.stop(undefined, undefined, 'display-changed');
   });
   screen.on('display-added', () => {
     linuxLayoutChanged();
     // A new screen invalidates mask coverage, not the selected capture geometry.
     // Include masks still being prepared, before the controller reports enabled.
-    if (privacyScreen.active && !remoteDesktop.changingDisplay) remoteDesktop.stop();
+    if (privacyScreen.active && !remoteDesktop.changingDisplay)
+      remoteDesktop.stop(undefined, undefined, 'display-changed');
   });
   screen.on('display-metrics-changed', (_event, display, metrics) => {
     if (
@@ -968,7 +1045,7 @@ export function registerRemoteDesktopIpc(
         (metric) => metric === 'bounds' || metric === 'scaleFactor' || metric === 'rotation',
       )
     )
-      remoteDesktop.stop();
+      remoteDesktop.stop(undefined, undefined, 'display-changed');
   });
   let sessionTransition = 0;
   const sessionChanged = (unlock = false) => {
@@ -980,7 +1057,7 @@ export function registerRemoteDesktopIpc(
       try {
         input.input([{ kind: 'release' }]);
       } catch {
-        remoteDesktop.stop();
+        remoteDesktop.stop(undefined, undefined, 'input-failed');
       }
     }
     if (videoLease && nativeDisplay && host && !host.isDestroyed())
@@ -1082,6 +1159,7 @@ export function registerRemoteDesktopIpc(
     return {
       enabled: readDeviceLinkSettings().remoteDesktopEnabled,
       active: remoteDesktop.state,
+      overlay: controlledOverlay.visible,
       permissionGuide: permissions.guideOpen,
       ...(checkWindowsSupport === true
         ? { windowsSupport: await readWindowsDesktopSupport() }
@@ -1096,11 +1174,14 @@ export function registerRemoteDesktopIpc(
     if (event.sender !== getDeepLinkMainWindow()?.webContents || windowsSetupBusy)
       throwIpcError('PERMISSION_DENIED', 'Windows desktop setup unavailable');
     windowsSetupBusy = true;
-    remoteDesktop.stop();
+    remoteDesktop.stop(undefined, undefined, 'disabled');
     try {
       await configureWindowsDesktopSupport(enabled);
-    } catch {
-      throwIpcError('PERMISSION_DENIED', 'Windows desktop support setup failed');
+    } catch (error) {
+      // Carry the helper's step code so settings can name the failed step.
+      // It holds no path or account name, only a fixed code and OS number.
+      const detail = error instanceof WindowsDesktopSetupError ? error.detail : undefined;
+      throwIpcError('PERMISSION_DENIED', detail ?? 'Windows desktop support setup failed');
     } finally {
       windowsSetupBusy = false;
     }
@@ -1111,7 +1192,7 @@ export function registerRemoteDesktopIpc(
     if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid desktop setting');
     await writeDeviceLinkSetting('remoteDesktopEnabled', enabled);
     if (!enabled) {
-      remoteDesktop.stop();
+      remoteDesktop.stop(undefined, undefined, 'disabled');
       permissions.dismiss();
     } else {
       await permissions.showIfNeeded(() => readDeviceLinkSettings().remoteDesktopEnabled);
@@ -1213,7 +1294,7 @@ export function registerRemoteDesktopIpc(
   });
   ipcMain.handle(DESKTOP_LOCAL.CAPTURE_STOP, (event) => {
     captureWindow.assertSender(event);
-    remoteDesktop.stop();
+    remoteDesktop.stop(undefined, undefined, 'capture-stop');
   });
   ipcMain.handle(DESKTOP_LOCAL.REPLY, (event, id: unknown, sdp: unknown) => {
     captureWindow.assertSender(event);

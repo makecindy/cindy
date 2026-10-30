@@ -22,7 +22,12 @@ import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from '
 
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
-import type { AgentEvent, ForkSdkSessionOptions, ForkSdkSessionResult } from './types/events.js';
+import {
+  isTerminalAgentErrorEvent,
+  type AgentEvent,
+  type ForkSdkSessionOptions,
+  type ForkSdkSessionResult,
+} from './types/events.js';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
@@ -39,11 +44,13 @@ import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilitie
 import { piExplicitSkillRuntimePath } from './agents/pi/skill-runtime-provenance.js';
 import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resource-assembly.js';
 import { Session, generateSessionId, type SessionStartupPreferences } from './session.js';
+import { withFastModePolicy } from './agents/shared/fast-mode-policy.js';
 import { NotSupportedError } from './types/capabilities.js';
 import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  LOCAL_AGENT_CLIENT,
 } from './agents/base-agent.js';
 import type {
   AgentSessionHandle,
@@ -149,9 +156,17 @@ export interface MakerDeps {
   visionBridge?: import('./types/vision-bridge.js').VisionBridgeHook;
   /**
    * 可选: Pi / Codex 工具循环疑似命中时的辅助模型复核入口。Claude Code 在 agent 内
-   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省 = 疑似即中断。
+   * 检测,由 AgentDeps.toolLoopReviewer 注入同一实现。缺省放行疑似,保留最终上限。
    */
   toolLoopReviewer?: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer;
+}
+
+/** A previous attempt still owns native resources; retry without changing route/history. */
+export class SessionCreationCleanupPendingError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Previous session startup cleanup is still pending; retry the task.', options);
+    this.name = 'SessionCreationCleanupPendingError';
+  }
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
@@ -233,6 +248,21 @@ function capabilitiesForSession(
       reason: 'platform-limited',
       message: '远端 Codex 会话暂不支持对话 rewind',
     },
+  };
+}
+
+/** External applications use only this small Session surface. Remote handles
+ * enforce the peer's actual capabilities; no local binary is required. */
+function applicationHandleCapabilities(handle: AgentSessionHandle): Capabilities {
+  const no = { supported: false, reason: 'not-implemented' } as const;
+  const yes = { supported: true } as const;
+  return {
+    switchModel: no, availableModels: [], hasFastMode: false,
+    effort: handle.setEffort ? yes : no, effortLevels: [], reasoningDisplay: [],
+    permissionModes: [], setPermissionModeMidSession: no,
+    multimodal: { text: yes, image: yes, file: no },
+    fork: no, rewind: no, abort: yes, sameTurnSteer: yes,
+    memory: { supported: no }, extraDirs: no,
   };
 }
 
@@ -430,6 +460,37 @@ interface FailedHandleCleanup {
   onCleaned?: () => void;
 }
 
+/**
+ * 在另一台电脑上运行的 Claude Code 会话，其新 vendor id（fork / 重建出的 id）要等这一轮
+ * 成功结束才写成持久编号。`pending` 只在同一 session 的持久化队列里读写，保证与事件同序。
+ */
+interface DeferredSdkSessionCommit {
+  pending?: string;
+}
+
+/**
+ * 这一轮没有正常落地：与对方电脑失联，或对方的 Claude 流中途崩溃 / resume 失败。
+ * 这类回合里新 fork 出的编号可能还没有对话记录，不能写成持久编号。
+ * 用户主动 Stop 等其它收尾不在此列：Claude 已经收下输入并写了记录，下一轮应接着它走。
+ */
+const UNFINISHED_TURN_REASONS = new Set([
+  'remote_agent_closed',
+  'remote_agent_lost',
+  'sdk_stream_crashed',
+  'bridge_sdk_stream_crashed',
+  'resume_session_not_found',
+  'resume_session_recovery_failed',
+]);
+
+function isUnfinishedRemoteTurnEvent(evt: AgentEvent): boolean {
+  const data = evt.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const { reason, message } = data as { reason?: unknown; message?: unknown };
+  if (typeof reason === 'string' && UNFINISHED_TURN_REASONS.has(reason)) return true;
+  return typeof message === 'string'
+    && /\[REMOTE_AGENT_(EXPIRED|DEVICE_UNREACHABLE|NOT_FOUND|UNAVAILABLE)\]/.test(message);
+}
+
 export class Maker {
   protected readonly agents: Partial<Record<AgentKind, BaseAgent>>;
   protected readonly storage: SessionStorage;
@@ -444,10 +505,12 @@ export class Maker {
    */
   private readonly inFlightSessionCreations = new Map<
     string,
-    { promise: Promise<Session> }
+    { promise: Promise<Session>; signal?: AbortSignal }
   >();
   /** All create paths, including anonymous ids, that may still publish or quarantine a handle. */
   private readonly pendingSessionCreations = new Set<Promise<Session>>();
+  /** Application-owned transcripts use the normal in-memory lifecycle without private storage. */
+  private readonly localAgentSessions = new Set<Session>();
   /** Once shutdown starts, no new handle may race past its creation barrier. */
   private shutdownStarted = false;
   /**
@@ -588,11 +651,12 @@ export class Maker {
    * 同 id 已有 active Session 或正在创建时直接复用 —— 适配"用户切回老 session
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
-  async createSession(opts: CreateSessionOptions): Promise<Session> {
+  async createSession(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (this.shutdownStarted) {
       throw new Error('Maker is shutting down; refusing to create a new session');
     }
-    const creation = this.createSessionWhileRunning(opts);
+    const creation = this.createSessionWhileRunning(opts, signal);
     this.pendingSessionCreations.add(creation);
     try {
       return await creation;
@@ -601,15 +665,48 @@ export class Maker {
     }
   }
 
-  private async createSessionWhileRunning(opts: CreateSessionOptions): Promise<Session> {
+  /** Keep replacement startup bounded without abandoning native cleanup ownership. */
+  private waitForSessionCleanup(cleanup: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let done = false;
+      const finish = (failed: boolean, error?: unknown) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
+        if (failed) reject(error); else resolve();
+      };
+      const timeout = setTimeout(() => finish(true, new SessionCreationCleanupPendingError()), 1000);
+      const abort = () => finish(true, signal?.reason);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      // Cleanup rejection still means native ownership is unresolved. Keep it
+      // distinct from the caller's abort reason so hosts cannot enter fallback.
+      void cleanup.then(() => finish(false), error => finish(true,
+        new SessionCreationCleanupPendingError({ cause: error })));
+    });
+  }
+
+  private async createSessionWhileRunning(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (!opts.id) {
-      return this.createSessionOnce(opts);
+      return this.createSessionOnce(opts, signal);
     }
 
     // Any handle that failed cleanup before publication still owns this
     // business id. Confirm its shutdown before checking/starting live state.
     if (this.failedHandleCleanups.has(opts.id)) {
-      await this.retryFailedHandleCleanup(opts.id);
+      await this.waitForSessionCleanup(this.retryFailedHandleCleanup(opts.id), signal);
+      signal?.throwIfAborted();
+    }
+
+    // A cancelled creation still owns its native startup until cleanup settles.
+    // Never hand that promise to a replacement. Bound this wait so a hung
+    // adapter cannot indefinitely hold a new caller; retries retain the barrier.
+    const cancelled = this.inFlightSessionCreations.get(opts.id);
+    if (cancelled?.signal?.aborted) {
+      await this.waitForSessionCleanup(cancelled.promise.then(() => undefined, () => undefined), signal);
+      return this.createSessionWhileRunning(opts, signal);
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
@@ -617,8 +714,13 @@ export class Maker {
     // 摘掉并与可能仍存活的底层 transport 并存。先重试同一个 close；只有真实
     // 关闭成功、status listener 将其移除后，才允许创建新的 handle。
     const existing = this.activeSessions.get(opts.id);
+    if (existing?.hasStartedClosing()) {
+      await this.waitForSessionCleanup(existing.close(), signal);
+      return this.createSessionWhileRunning(opts, signal);
+    }
     if (existing?.getStatus() === 'error') {
       await existing.close();
+      signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);
     if (reusable) return reusable;
@@ -626,7 +728,7 @@ export class Maker {
     const inFlight = this.inFlightSessionCreations.get(opts.id);
     if (inFlight) return inFlight.promise;
 
-    const creation = { promise: this.createSessionOnce(opts) };
+    const creation = { promise: this.createSessionOnce(opts, signal), signal };
     this.inFlightSessionCreations.set(opts.id, creation);
     try {
       return await creation.promise;
@@ -639,11 +741,15 @@ export class Maker {
   }
 
   /** 执行一次真实 session startup；带 id 的并发去重由 createSession 统一负责。 */
-  private async createSessionOnce(opts: CreateSessionOptions): Promise<Session> {
-    const agent = this.requireAgent(opts.agentKind);
+  private async createSessionOnce(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
+    // Visible application tasks use the ordinary persistence path, but their
+    // remote engine need not be installed on this controller either.
+    const agent = opts[LOCAL_AGENT_CLIENT] && opts.agentDeviceId
+      ? this.agents[opts.agentKind] : this.requireAgent(opts.agentKind);
     const id = opts.id ?? generateSessionId();
     const localPiPackageGeneration = (
-      opts.agentKind === 'pi' && !opts.remoteHostId && !opts.reviewMode
+      opts.agentKind === 'pi' && !opts.remoteHostId && !opts.agentDeviceId && !opts.reviewMode
     ) ? this.localPiPackageRuntimeGeneration : null;
 
     this.logger.debug('createSession ↓', {
@@ -699,6 +805,7 @@ export class Maker {
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
         await this.lifecycleHooks.prepareStartOptions(id, startOpts);
+        signal?.throwIfAborted();
       } catch (error) {
         await notifyStartFailed('prepare', error);
         throw error;
@@ -746,7 +853,17 @@ export class Maker {
     let codexThreadClaim: CodexThreadClaimLease | null = null;
     let handle: AgentSessionHandle;
     let agentStartAttempted = false;
+    // Local apps own their native history and require an explicit failed resume,
+    // including failures discovered on first send. Visible tasks still use this
+    // createSession path; never authorize a fresh conversation/replay for them.
+    const onInvalidResumeSession: StartSessionOptions['onInvalidResumeSession'] =
+      startOpts[LOCAL_AGENT_CLIENT]
+        ? async () => false
+        : opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
+          ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+          : undefined;
     try {
+      signal?.throwIfAborted();
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
@@ -756,6 +873,7 @@ export class Maker {
         });
       }
       agentStartAttempted = true;
+      if (startOpts.fastModePolicy && !(startOpts.fastModePolicy.isRequestAllowed?.() ?? startOpts.fastModePolicy.isAllowed())) startOpts.fastMode = false;
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
           throw new Error('A session cannot run its agent on another computer and on an SSH host at the same time');
@@ -774,14 +892,10 @@ export class Maker {
             ...startOpts,
             sessionId: id,
             sessionInstanceId,
-            onInvalidResumeSession:
-              opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-                ? (expectedSdkSessionId) =>
-                    this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-                : undefined,
+            onInvalidResumeSession,
           },
         });
-      } else handle = await agent.startSession({
+      } else handle = await (agent ?? this.requireAgent(opts.agentKind)).startSession({
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
@@ -791,12 +905,9 @@ export class Maker {
         // 就把 SDK 回填、已落库的 sdk_session_id 变成幽灵 id(见 claude-code/index.ts
         // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
         // send 会 resume 同一个不存在的会话反复失败。
-        onInvalidResumeSession:
-          opts.agentKind === 'claude-code' || opts.agentKind === 'pi'
-            ? (expectedSdkSessionId) =>
-                this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-            : undefined,
+        onInvalidResumeSession,
       });
+      handle = withFastModePolicy(handle, startOpts.fastModePolicy);
     } catch (error) {
       codexThreadClaim?.release();
       // A generic adapter error does not prove its process stopped. Preserve
@@ -820,6 +931,26 @@ export class Maker {
       }
       throw startupError;
     }
+    const rejectCancelledStartup = async (): Promise<never> => {
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle, promise: null,
+          onCleaned: () => { codexThreadClaim?.release(); notifyStartCleanupSucceeded(); },
+        });
+        this.logger.warn('failed to close cancelled startup', { sessionId: id, error: String(closeError) });
+      }
+      if (!cleanupFailed) codexThreadClaim?.release();
+      // Keep already-assigned native history. This unpublished handle must not
+      // run ordinary Session.onClose or release durable task/worktree ownership.
+      const error = signal?.reason ?? new Error('Session startup cancelled');
+      await notifyStartFailed('agent-start', error, cleanupFailed);
+      throw error;
+    };
+    if (signal?.aborted) return rejectCancelledStartup();
     if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
       try {
         if (codexThreadClaim) {
@@ -891,6 +1022,7 @@ export class Maker {
     let updatedSdkSessionId = false;
     try {
       existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
+      signal?.throwIfAborted();
       if (existingRowBeforePersistence) {
         updatedSdkSessionId = handle.id !== '<pending>'
           && existingRowBeforePersistence.sdkSessionId !== handle.id;
@@ -948,6 +1080,8 @@ export class Maker {
       await notifyStartFailed('storage', error, cleanupFailed);
       throw error;
     }
+
+    if (signal?.aborted) return rejectCancelledStartup();
 
     const rollbackStaleLocalPiMetadata = async (): Promise<void> => {
       const current = await this.storage.get(id);
@@ -1027,6 +1161,7 @@ export class Maker {
       }
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     if (this.lifecycleHooks.onStartSucceeded) {
       try {
         await this.lifecycleHooks.onStartSucceeded(id, startOpts);
@@ -1045,6 +1180,7 @@ export class Maker {
       return rejectStaleLocalPiAfterPersistence();
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     const session = new Session({
       id: meta.id,
       sessionInstanceId,
@@ -1054,7 +1190,7 @@ export class Maker {
       hostStartupPreferences: opts.hostStartupPreferences,
       capabilities: capabilitiesForSession(
         meta.agentKind,
-        agent.capabilities,
+        agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
         meta.agentDeviceId ?? startOpts.agentDeviceId,
         handle,
@@ -1064,10 +1200,17 @@ export class Maker {
       // 透传 remoteHostId 让 host 层在 hot path 上能 O(1) 判 local/remote
       // (不用每次 send 回 DB 读 SessionMeta — register.ts checkWorkDirExists 走这条)。
       remoteHostId: meta.remoteHostId ?? null,
+      // 取实际决定启动分支的 startOpts：任务记录事后读回的旧值不能把本机启动的会话标成远端。
+      agentDeviceId: startOpts.agentDeviceId || null,
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
     });
+
+    // 另一台电脑上的 Claude Code：新编号等这一轮成功结束才落库。失联的回合里，对方可能还没写出
+    // 这个编号的对话记录，提前落库会让下次发送 resume 到一个空会话，丢掉全部历史。
+    const deferredSdkSessionCommit: DeferredSdkSessionCommit | undefined =
+      opts.agentKind === 'claude-code' && startOpts.agentDeviceId ? {} : undefined;
 
     // 当 SDK 回填 sdkSessionId 时持久化
     session.onEvent((evt) => {
@@ -1094,14 +1237,24 @@ export class Maker {
             return;
           }
         }
-        void this.persistSdkSessionId(meta.id, evt.data).catch((e) => {
+        void this.persistSdkSessionId(meta.id, evt.data, deferredSdkSessionCommit).catch((e) => {
           this.logger.warn('failed to persist sdkSessionId', { error: String(e) });
         });
+        return;
+      }
+      if (!deferredSdkSessionCommit) return;
+      if (evt.type === 'done' && !isUnfinishedRemoteTurnEvent(evt)) {
+        void this.commitDeferredSdkSessionId(meta.id, deferredSdkSessionCommit).catch((e) => {
+          this.logger.warn('failed to commit deferred sdkSessionId', { error: String(e) });
+        });
+      } else if (evt.type === 'done' || (isTerminalAgentErrorEvent(evt) && isUnfinishedRemoteTurnEvent(evt))) {
+        void this.discardDeferredSdkSessionId(meta.id, deferredSdkSessionCommit);
       }
     });
 
     session.onStatusChange((status) => {
       if (status === 'closed') {
+        if (deferredSdkSessionCommit) void this.discardDeferredSdkSessionId(meta.id, deferredSdkSessionCommit);
         codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
@@ -1167,8 +1320,16 @@ export class Maker {
     );
   }
 
-  /** 串行持久化有效 vendor id，并屏蔽已判失效 query 的晚到事件。 */
-  private persistSdkSessionId(sessionId: string, sdkSessionId: string): Promise<void> {
+  /**
+   * 串行持久化有效 vendor id，并屏蔽已判失效 query 的晚到事件。
+   * 传入 `deferred` 时：库里已有另一个编号，就先只记在 `deferred.pending`，等这一轮成功再提交；
+   * 库里还没有编号（首轮）时没有可回退的对象，仍立即落库。
+   */
+  private persistSdkSessionId(
+    sessionId: string,
+    sdkSessionId: string,
+    deferred?: DeferredSdkSessionCommit,
+  ): Promise<void> {
     return this.enqueueSdkSessionPersistence(sessionId, async () => {
       if (this.invalidSdkSessionIds.get(sessionId)?.has(sdkSessionId)) {
         this.logger.debug('ignored stale sdkSessionId event after invalid-resume recovery', {
@@ -1177,7 +1338,43 @@ export class Maker {
         });
         return;
       }
+      if (deferred) {
+        const current = (await this.storage.get(sessionId))?.sdkSessionId;
+        if (current && current !== sdkSessionId) {
+          deferred.pending = sdkSessionId;
+          this.logger.debug('deferred sdkSessionId until the remote turn succeeds', {
+            sessionId,
+            sdkSessionId,
+          });
+          return;
+        }
+        deferred.pending = undefined;
+      }
       await this.storage.update(sessionId, { sdkSessionId });
+    });
+  }
+
+  /** 这一轮成功结束：把暂存的新 vendor id 写成持久编号（与 persistSdkSessionId 同一条队列，保序）。 */
+  private commitDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit): Promise<void> {
+    return this.enqueueSdkSessionPersistence(sessionId, async () => {
+      const sdkSessionId = deferred.pending;
+      deferred.pending = undefined;
+      if (!sdkSessionId) return;
+      if (this.invalidSdkSessionIds.get(sessionId)?.has(sdkSessionId)) return;
+      await this.storage.update(sessionId, { sdkSessionId });
+    });
+  }
+
+  /** 这一轮失联结束或会话关闭：丢掉暂存编号，库里保持上一个成功的编号。 */
+  private discardDeferredSdkSessionId(sessionId: string, deferred: DeferredSdkSessionCommit): Promise<void> {
+    return this.enqueueSdkSessionPersistence(sessionId, async () => {
+      if (deferred.pending) {
+        this.logger.warn('dropped uncommitted sdkSessionId after the remote turn did not finish', {
+          sessionId,
+          sdkSessionId: deferred.pending,
+        });
+      }
+      deferred.pending = undefined;
     });
   }
 
@@ -1313,7 +1510,7 @@ export class Maker {
     // Snapshot current sessions before the creation barrier. Existing local
     // Claude/PI processes must start terminating immediately; a stuck startup
     // must not consume the entire host quit window before their detach begins.
-    const initialSessionSnapshot = Array.from(this.activeSessions.values());
+    const initialSessionSnapshot = [...this.activeSessions.values(), ...this.localAgentSessions];
     const initialSessionIdentities = new Set(initialSessionSnapshot);
     const queueSessionDetaches = (
       sessions: readonly Session[],
@@ -1364,7 +1561,7 @@ export class Maker {
     // Only sessions published while the creation barrier was settling belong
     // to the late pass. Identity filtering avoids detaching an initial Session
     // twice when it remains in activeSessions until its first detach settles.
-    const lateSessionSnapshot = Array.from(this.activeSessions.values())
+    const lateSessionSnapshot = [...this.activeSessions.values(), ...this.localAgentSessions]
       .filter((session) => !initialSessionIdentities.has(session));
     const lateSessionDetaches = queueSessionDetaches(lateSessionSnapshot, 'late');
     const failedHandleCleanupSnapshot = Array.from(this.failedHandleCleanups.entries());
@@ -1440,7 +1637,49 @@ export class Maker {
     if (this.shutdownStarted) throw new Error('Maker is shutting down; refusing to start a hosted session');
     if (!opts.deviceHosted) throw new Error('hosted sessions require deviceHosted');
     if (opts.remoteHostId) throw new Error('hosted sessions cannot target an SSH host');
-    return this.requireAgent(kind).startSession(opts);
+    if (opts.fastModePolicy && !(opts.fastModePolicy.isRequestAllowed?.() ?? opts.fastModePolicy.isAllowed())) opts.fastMode = false;
+    return withFastModePolicy(await this.requireAgent(kind).startSession(opts), opts.fastModePolicy);
+  }
+
+  /** A local application owns the transcript; supplier execution stays in Maker. */
+  async startLocalAgentSession(kind: AgentKind, opts: StartSessionOptions): Promise<Session> {
+    if (this.shutdownStarted) throw new Error('Maker is shutting down');
+    if (!opts[LOCAL_AGENT_CLIENT] || opts.deviceHosted || opts.remoteHostId) {
+      throw new Error('Local application sessions require a Main-process capability');
+    }
+    const deviceId = opts[LOCAL_AGENT_CLIENT]!.agentDeviceId;
+    const agent = deviceId ? undefined : this.requireAgent(kind);
+    if (deviceId && !this.startDeviceAgentSession) throw new Error('Remote agent execution is unavailable');
+    const creation = (async () => {
+      const handle = deviceId
+        ? await this.startDeviceAgentSession!({ agentKind: kind, deviceId, options: opts })
+        : await agent!.startSession(opts);
+      if (this.shutdownStarted) {
+        await handle.close({ reason: 'account-boundary' });
+        throw new Error('Maker stopped before the local application session started');
+      }
+      const session = new Session({
+        id: opts.sessionId ?? generateSessionId(),
+        agentKind: kind,
+        workDir: opts.workingDir,
+        handle,
+        logger: this.logger,
+        permissionMode: opts.permissionMode,
+        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
+        toolLoopReviewer: this.toolLoopReviewer,
+      });
+      this.localAgentSessions.add(session);
+      session.onStatusChange(status => {
+        if (status === 'closed') this.localAgentSessions.delete(session);
+      });
+      return session;
+    })();
+    this.pendingSessionCreations.add(creation);
+    try {
+      return await creation;
+    } finally {
+      this.pendingSessionCreations.delete(creation);
+    }
   }
 
   /**

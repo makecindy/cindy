@@ -123,9 +123,8 @@ describe('mcp:custom:* CRUD handlers', () => {
       const result = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST, { agentKind });
       expect(deps.listMcpServers).toHaveBeenCalledWith({ agentKind });
       expect(result).toEqual({ agentKind, servers: rawList.map((server) => ({
-        ...server, available: ['mytools', 'local-http'].includes(server.id)
-          || (server.id === 'events' && agentKind === 'claude-code')
-          || (server.id === 'public-http' && agentKind !== 'pi'),
+        // Registered custom MCPs now use the Main-owned Apps facade for every harness.
+        ...server, available: ['mytools', 'local-http', 'events', 'public-http'].includes(server.id),
       })) });
     },
   );
@@ -174,7 +173,7 @@ describe('mcp:custom:* CRUD handlers', () => {
       agentKind: 'claude-code', botSessionId: 'canonical',
     });
     expect(deps.listMcpServers).toHaveBeenCalledWith({ agentKind, remoteHostId: 'ssh-host' });
-    expect(result).toEqual({ agentKind, servers: [expect.objectContaining({ id: 'mytools', available: agentKind !== 'codex' })] });
+    expect(result).toEqual({ agentKind, servers: [expect.objectContaining({ id: 'mytools', available: true })] });
   });
 
   it.each([null, {}, { agentKind: 'unknown' },
@@ -210,6 +209,22 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
     // Codex 侧失效:让新 codex 会话按新 MCP 配置重 spawn。
     expect(deps.invalidateCodex).toHaveBeenCalledOnce();
+  });
+
+  // P1 integration: both production write handlers reject the engine-owned id
+  // before storing or refreshing it; the config validator is not mocked.
+  it('rejects native Apps collisions on create and update before side effects', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerMcpHandlers(harness, deps);
+    for (const channel of [MAKER_INVOKE.MCP_CUSTOM_CREATE, MAKER_INVOKE.MCP_CUSTOM_UPDATE]) {
+      await expect(harness.invoke(channel, { ...validConfig, id: 'codex_apps' })).rejects.toThrow(/reserved/);
+    }
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    expect(deps.invalidateCodex).not.toHaveBeenCalled();
   });
 
   it('a failing invalidateCodex does not fail the CRUD (best-effort)', async () => {

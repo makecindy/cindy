@@ -10,11 +10,15 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock('lucide-react-native', () => Object.fromEntries(['Brain', 'Camera', 'Clock3', 'FileText', 'Hand', 'History', 'Info', 'Link2', 'Settings2', 'Sparkles'].map(key => [key, () => null])));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.account }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke, openLink: h.openLink }) }));
-vi.mock('@/device-link/remoteResources', () => ({ invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
+vi.mock('@/device-link/remoteResources', async original => ({ ...await original<object>(), invokeRemoteResourceAction: (...args: unknown[]) => h.invoke(...args) }));
 vi.mock('@/components/AppText', () => ({ Text: 'span', TextInput: 'input' }));
 vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, NativeSwitch: () => null, usesNativePullDownMenu: () => true }));
+vi.mock('@/session/CompanionCardButton', () => ({
+  CompanionCardActions: ({ children }: any) => createElement('div', {}, children),
+  CompanionCardButton: ({ label, onPress, disabled }: any) => createElement('button', { onClick: onPress, disabled }, label),
+}));
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: () => null }));
 vi.mock('@/session/CompanionChoice', () => ({ CompanionChoice: () => null }));
 vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: () => null }));
@@ -22,7 +26,7 @@ vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifact
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: (p: any) => { h.view = p; return p.models; } }));
-vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return null; } }));
+vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: (p: any) => { h.create = p; return p.models ?? null; } }));
 vi.mock('@/session/CompanionImportSheet', async () => {
   const { useEffect, useState } = await import('react');
   return { CompanionImportSheet: (p: any) => {
@@ -37,6 +41,8 @@ import { CompanionProfileSheet, CompanionCreateSheet } from '@/session/Companion
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const resource = { ref: { collectionId: 'teammates', kind: 'bot', id: 'bot' }, display: { title: 'Cindy' }, links: [], revision: 'v1' };
 const panel = { id: 'profile', values: { name: 'Cindy' }, action: { id: 'grant', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] } };
+import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
+import { parseCompanionProfileData } from '@/session/companionProfileData';
 let root: Root | undefined;
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(CompanionProfileSheet, { visible: true, resource, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true, onClose: h.close, onClosed: h.closed, onDeleted: h.deleted, onOpenSearch() {} }))); }
 beforeEach(() => { vi.clearAllMocks(); h.account = 1; h.read.mockResolvedValue({ resource, panels: [panel, { ...panel, id: 'models', values: { modelChain: '[]', followsDefault: false }, action: { id: 'model-grant', fields: [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }] } }] }); h.invoke.mockResolvedValue({ effects: [] }); });
@@ -297,4 +303,74 @@ it('blocks a duplicate name before submitting and keeps the form after a failed 
   expect(h.create.nameTaken).toBe(true); expect(h.create.error).toBe(true);
   expect(h.create.panel).toBeDefined(); expect(h.create.values.name).toBe('Nova');
   cache.writeRemoteCollectionCache(':1', 'teammates', []);
+});
+
+it('preserves creation drafts across the model picker and sends only an explicit route', async () => {
+  h.read.mockResolvedValue({ resource, panels: [{ ...panel, creationModelChain: '[]' }] });
+  await renderCreate();
+  await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+  const portrait = h.create.values.avatarImageBase64;
+  expect(h.create.modelMissing).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke).not.toHaveBeenCalled();
+  await act(async () => h.model.onPick(0));
+  expect(h.create.visible).toBe(false); expect(h.picker.visible).toBe(false);
+  await act(async () => h.create.onClosed()); expect(h.picker.visible).toBe(true);
+  const route = { harness: 'pi', model: 'available', providerId: 'provider', effort: '', fastMode: false };
+  await act(async () => h.picker.onSelect(route));
+  await act(async () => h.picker.onClose()); await act(async () => h.picker.onClosed());
+  expect(h.create.values).toMatchObject({ name: 'Nova', avatarImageBase64: portrait });
+  expect(h.create.modelMissing).toBe(false);
+  h.invoke.mockRejectedValueOnce(new Error('timeout'));
+  await act(async () => h.create.onSubmit());
+  const sent = h.invoke.mock.calls[0][2].input;
+  expect(sent.modelChain).toBe(JSON.stringify([route]));
+  expect(h.create.locked).toBe(true);
+  await act(async () => h.create.onSubmit());
+  expect(h.invoke.mock.calls[1][2].input).toEqual(sent);
+});
+
+
+it.each([undefined, JSON.stringify([{ harness: 'pi', model: 'default', providerId: 'provider' }])])(
+  'preserves default creation for host model metadata %s', async creationModelChain => {
+    h.read.mockResolvedValue({ resource, panels: [{ ...panel, creationModelChain }] });
+    await renderCreate();
+    await act(async () => h.create.onChange({ ...h.create.values, name: 'Nova' }));
+    expect(h.create.modelMissing).toBe(false);
+    await act(async () => h.create.onSubmit());
+    expect(h.invoke).toHaveBeenCalledTimes(1);
+    expect(h.invoke.mock.calls[0][2].input).not.toHaveProperty('modelChain');
+  },
+);
+
+// Invitation reads do not authorize a model run. Only a button sends the opaque host action.
+it.each([true, false])('mobile follow-up invitation saves the explicit choice, enable=%s', async enable => {
+  const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:cindy-default/follow-up' };
+  const raw = { ref, revision: '1', display: { title: 'Follow up' }, links: [],
+    blocks: [{ id: 'follow-up', primitive: 'form', fallbackMarkdown: 'Reads summaries on the teammate computer; uses model allowance.',
+      data: { actionId: 'enable-grant', values: { enabled: false }, invitationAvailable: true, operationActions: { dismiss: 'dismiss-grant' } } }],
+    actions: [{ id: 'enable-grant', label: 'Follow up', fields: [{ id: 'enabled', kind: 'toggle', label: 'Enabled' }] }, { id: 'dismiss-grant', label: 'Not now' }],
+  };
+  h.read.mockResolvedValue(parseCompanionProfileData(raw, ref));
+  const container = document.createElement('div'); root = createRoot(container);
+  await act(async () => root!.render(<CompanionFollowUpInvitation deviceId="host" deviceName="Mac" botId="cindy-default" />));
+  expect(h.invoke).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(raw.blocks[0].fallbackMarkdown);
+  const buttons = container.querySelectorAll('button'); expect(buttons).toHaveLength(2);
+  await act(async () => buttons[enable ? 1 : 0].click());
+  expect(h.invoke).toHaveBeenCalledWith(expect.any(Function), { deviceId: 'host', deviceName: 'Mac' }, {
+    collectionId: 'teammates', resourceRef: ref, actionId: enable ? 'enable-grant' : 'dismiss-grant', input: enable ? { enabled: true } : {},
+  }, 'en');
+  expect(container.querySelectorAll('button')).toHaveLength(0);
+});
+
+// Both platform views share dismissal/navigation: no resource binding may follow an IM task.
+it('opens the original IM task on its computer after the settings sheet closes', async () => {
+  await render();
+  await act(async () => h.view.channels.props.onOpenTask('channel-original'));
+  expect(h.close).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
+  await act(async () => h.view.onClosed());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'channel-original', deviceId: 'host' } });
+  expect(h.invoke).not.toHaveBeenCalled();
 });

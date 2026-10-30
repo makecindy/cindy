@@ -5,6 +5,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { HIDDEN_ANIMATION_ATTR } from '@/lib/hiddenAnimationGate';
 import { extractIpcError } from '@/utils/ipcError';
 
 const UNSUPPORTED_RETRY_AFTER_MS = 15 * 60_000;
@@ -16,14 +17,19 @@ function isSnapshotShape(value: unknown): value is Record<string, unknown> {
 
 export interface RemoteDeviceUsageMirror<T> {
   useMirror(deviceId: string | null, providerId?: string): T | null;
-  request(deviceId: string, providerId?: string): void;
+  request(deviceId: string, providerId?: string, queueIfPending?: boolean): void;
   resetForTest(): void;
 }
 
 export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   invokeChannel: string | null;
+  /** Optional reader for an existing channel with a legacy fallback. */
+  read?: (deviceId: string, providerId?: string) => Promise<unknown>;
+  /** Only visible, mounted consumers poll; all consumers still share the entry. */
+  refreshIntervalMs?: number;
+  decodeRead?: (value: unknown) => T | null | undefined;
   invokeArgs?: unknown[];
-  pushChannel: string;
+  pushChannel: string | null;
   defaultProviderId?: string;
   providerPushChannel?: string;
 }): RemoteDeviceUsageMirror<T> {
@@ -32,8 +38,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     revision: number;
     unsupportedUntil: number;
     pending: boolean;
+    refreshQueued: boolean;
     /** Last time a read or push settled this entry; 0 = never. */
     settledAt: number;
+    requestedAt: number;
     owner: ReturnType<typeof getDataOwnerGeneration>;
     listeners: Set<() => void>;
   };
@@ -52,7 +60,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         revision: 0,
         unsupportedUntil: 0,
         pending: false,
+        refreshQueued: false,
         settledAt: 0,
+        requestedAt: 0,
         owner: cacheOwner,
         listeners: new Set(),
       };
@@ -66,17 +76,24 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     entry.settledAt = Date.now();
     for (const notify of entry.listeners) notify();
   }
-  function request(deviceId: string, providerId?: string): void {
-    if (!cfg.invokeChannel) return;
+  function request(deviceId: string, providerId?: string, queueIfPending = false): void {
+    if (!cfg.invokeChannel && !cfg.read) return;
     const entry = entryFor(deviceId, providerId);
-    if (entry.pending || Date.now() < entry.unsupportedUntil) return;
+    if (entry.pending) {
+      if (queueIfPending) entry.refreshQueued = true;
+      return;
+    }
+    if (Date.now() < entry.unsupportedUntil) return;
     const revision = entry.revision;
     const args = [...(cfg.invokeArgs ?? [])];
     // Keep the legacy builtin call shape; scoped reads must explicitly name their provider.
     if (providerId && providerId !== cfg.defaultProviderId) args.push(providerId);
     entry.pending = true;
-    void window.electronAPI.deviceLink
-      .invoke(deviceId, cfg.invokeChannel, args)
+    entry.requestedAt = Date.now();
+    const reading = cfg.read
+      ? cfg.read(deviceId, providerId ?? cfg.defaultProviderId)
+      : window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args);
+    void reading
       .then((value) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
         // Older hosts may ignore new optional arguments. Never accept their builtin snapshot
@@ -88,7 +105,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
           (!isSnapshotShape(value) || value.providerId !== providerId)
         )
           return;
-        if (value === null || isSnapshotShape(value)) apply(entry, value as T | null);
+        if (cfg.decodeRead) {
+          const decoded = cfg.decodeRead(value);
+          if (decoded !== undefined) apply(entry, decoded);
+        } else if (value === null || isSnapshotShape(value)) apply(entry, value as T | null);
       })
       .catch((error: unknown) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
@@ -101,6 +121,10 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       })
       .finally(() => {
         entry.pending = false;
+        if (entry.refreshQueued) {
+          entry.refreshQueued = false;
+          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId);
+        }
       });
   }
   function useMirror(deviceId: string | null, providerId?: string): T | null {
@@ -118,8 +142,33 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         entry.settledAt > 0 &&
         Date.now() - entry.settledAt < MOUNT_REUSE_MS;
       entry.listeners.add(notify);
-      if (!settled) request(deviceId, providerId);
-      const off = window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
+      // The existing gate also includes native hide/minimize broadcasts: Electron
+      // can keep visibilityState "visible" while active turns disable throttling.
+      const visible = () => document.visibilityState !== 'hidden'
+        && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
+      if (!settled && (!cfg.refreshIntervalMs || visible())) request(deviceId, providerId);
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const poll = () => {
+        if (!isDataOwnerGenerationCurrent(entry.owner) || !visible()) return;
+        if (Date.now() - entry.requestedAt >= cfg.refreshIntervalMs!) request(deviceId, providerId);
+      };
+      const watchVisibility = () => {
+        clearInterval(timer);
+        timer = undefined;
+        if (visible()) {
+          poll();
+          timer = setInterval(poll, cfg.refreshIntervalMs);
+        }
+      };
+      if (cfg.refreshIntervalMs) {
+        watchVisibility();
+        document.addEventListener('visibilitychange', watchVisibility);
+      }
+      const hiddenObserver = cfg.refreshIntervalMs ? new MutationObserver(watchVisibility) : undefined;
+      hiddenObserver?.observe(document.documentElement, {
+        attributes: true, attributeFilter: [HIDDEN_ANIMATION_ATTR],
+      });
+      const off = cfg.pushChannel ? window.electronAPI.deviceLink.onRemotePush((push, ownerStamp) => {
         if (
           push.deviceId !== deviceId ||
           !isDataOwnerGenerationCurrent(entry.owner) ||
@@ -143,8 +192,11 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         if (value !== null && !isSnapshotShape(value)) return;
         entry.unsupportedUntil = 0;
         apply(entry, value as T | null);
-      });
+      }) : () => {};
       return () => {
+        clearInterval(timer);
+        hiddenObserver?.disconnect();
+        if (cfg.refreshIntervalMs) document.removeEventListener('visibilitychange', watchVisibility);
         entry.listeners.delete(notify);
         off();
       };

@@ -94,6 +94,14 @@ vi.mock('../../localDb/client/current.js', () => ({
     },
   }),
 }));
+const sharedWorkdirMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<{ remoteHostId: string | null }>>(async () => ({
+    remoteHostId: null,
+  })),
+);
+vi.mock('../../device-link/sharedTaskFileAccess.js', () => ({
+  assertSharedTaskWorkdir: sharedWorkdirMock,
+}));
 const startDirExportMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => string>(() => 'dir_1'));
 vi.mock('../dir-export.js', () => ({
   createDirExportDeps: () => ({}),
@@ -241,6 +249,214 @@ describe('file-browser device-op', () => {
     });
   });
 
+  describe('shared task guest', () => {
+    let current = true;
+    const sharedTask = {
+      author: { sharedTaskId: 'shared', sessionId: 'task', memberId: 'm', accountId: 'guest', displayName: 'Guest' },
+      isCurrent: () => current,
+      authorize: () => current,
+    };
+    const asGuest = <T>(fn: () => Promise<T>) =>
+      runDeviceLinkInvokeContext(
+        { controllerDeviceId: 'guest', channel: 'file-browser:remote-op', sharedTask },
+        fn,
+      );
+
+    beforeEach(() => {
+      current = true;
+      // Mirrors the real binding: membership is rechecked on every call.
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: null };
+      });
+    });
+
+    it('reads and writes the task workdir like the owner after binding it', async () => {
+      const entries = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(entries.map((e) => e.name)).toContain('src');
+      expect(sharedWorkdirMock).toHaveBeenCalledWith(sharedTask, workdir, 'file.read');
+      expect(
+        await asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'guest\n' }),
+        ),
+      ).toMatchObject({ ok: true });
+      expect(sharedWorkdirMock).toHaveBeenLastCalledWith(sharedTask, workdir, 'file.write');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('guest\n');
+    });
+
+    it('refuses export jobs, foreign workdirs and a different execution endpoint', async () => {
+      expect(
+        await asGuest(() => handleRemoteOp({ op: 'exportFileStart', workdir, relPath: 'src/a.ts' })),
+      ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
+      expect(uploadMock).not.toHaveBeenCalled();
+      sharedWorkdirMock.mockRejectedValueOnce(new Error('[PERMISSION_DENIED] not this task'));
+      await expect(asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))).rejects.toThrow(
+        'PERMISSION_DENIED',
+      );
+      expect(guardMock).not.toHaveBeenCalled();
+    });
+
+    it('gates an SSH search start like every other SSH request', async () => {
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: 'host-1' };
+      });
+      const started = vi.fn();
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          current = false;
+          await options?.beforeSend?.();
+          started(method);
+          return { searchId: 's-1' };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'searchCollect', workdir: '/remote/proj', query: 'needle' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(started).not.toHaveBeenCalled();
+      sshRequestMock.mockReset();
+    });
+
+    it('routes by the recorded task endpoint instead of reverse-resolving the path', async () => {
+      // The path exists locally and is also recorded for an SSH session: same-account
+      // controllers still see an ambiguous endpoint, a guest of the local task does not.
+      dbRowsMock.mockReturnValue([{ remoteHostId: 'other-host' }]);
+      await expect(handleRemoteOp({ op: 'listDir', workdir })).rejects.toThrow(/ambiguous/);
+      const entries = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(entries.map((e) => e.name)).toContain('src');
+      expect(sshRequestMock).not.toHaveBeenCalled();
+      // A task recorded on an SSH host goes to that host even though the path is local.
+      sharedWorkdirMock.mockImplementation(async () => ({ remoteHostId: 'ssh-1' }));
+      sshRequestMock.mockResolvedValue({ entries: [{ name: 'remote.ts' }] });
+      const remote = (await asGuest(() => handleRemoteOp({ op: 'listDir', workdir }))) as Array<{
+        name: string;
+      }>;
+      expect(remote.map((e) => e.name)).toEqual(['remote.ts']);
+      expect(sshRequestMock.mock.calls[0]?.[0]).toBe('ssh-1');
+      sshRequestMock.mockReset();
+    });
+
+    it('does not write when membership ends during the endpoint checks', async () => {
+      guardMock.mockImplementationOnce(async () => {
+        current = false;
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'late\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('export const a = 1;\n');
+    });
+
+    it('does not send an SSH write when membership ends while the connection is being built', async () => {
+      guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+      dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+      let taskHost = 'host-1';
+      sharedWorkdirMock.mockImplementation(async () => {
+        if (!current) throw new Error('[PERMISSION_DENIED] Shared task access changed');
+        return { remoteHostId: taskHost };
+      });
+      const sent = vi.fn();
+      // The manager awaits getClient, then awaits beforeSend right before sending.
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          current = false;
+          await options?.beforeSend?.();
+          sent(method);
+          return { size: 1, mtimeMs: 1 };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sent).not.toHaveBeenCalled();
+      // The owner moves the task to another SSH host while the connection is built.
+      current = true;
+      sshRequestMock.mockImplementation(
+        async (
+          _h: string,
+          method: string,
+          _p: unknown,
+          options?: { beforeSend?: () => void | Promise<void> },
+        ) => {
+          taskHost = 'host-2';
+          await options?.beforeSend?.();
+          sent(method);
+          return { size: 1, mtimeMs: 1 };
+        },
+      );
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sent).not.toHaveBeenCalled();
+      // Same-account controllers keep the unchanged three-argument call.
+      sshRequestMock.mockReset();
+      sshRequestMock.mockResolvedValue({ size: 1, mtimeMs: 1 });
+      await handleRemoteOp({ op: 'writeFile', workdir: '/remote/proj', relPath: 'a.ts', content: 'x' });
+      expect(sshRequestMock).toHaveBeenLastCalledWith('host-1', 'writeFile', {
+        workdir: '/remote/proj',
+        relPath: 'a.ts',
+        content: 'x',
+      });
+      sshRequestMock.mockReset();
+    });
+
+    it('rebinds the task workdir and endpoint after the endpoint checks, before touching files', async () => {
+      // The owner moves the task while this write is in flight.
+      guardMock.mockImplementationOnce(async () => {
+        sharedWorkdirMock.mockRejectedValueOnce(new Error('[PERMISSION_DENIED] moved'));
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'moved\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      expect(sharedWorkdirMock).toHaveBeenCalledTimes(2);
+      // The task switches to an SSH endpoint for the same path mid-request.
+      guardMock.mockImplementationOnce(async () => {
+        sharedWorkdirMock.mockResolvedValueOnce({ remoteHostId: 'ssh-1' });
+        return { allowed: true, source: 'filesystem' };
+      });
+      await expect(
+        asGuest(() =>
+          handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', content: 'moved\n' }),
+        ),
+      ).rejects.toThrow('PERMISSION_DENIED');
+      const read = (await handleRemoteOp({ op: 'readFile', workdir, relPath: 'src/a.ts' })) as {
+        data: { content: string };
+      };
+      expect(read.data.content).toBe('export const a = 1;\n');
+    });
+  });
+
   it('exportFile two-phase: start/status lifecycle and traversal rejection', async () => {
     await fsWriteFile(path.join(workdir, 'docs', 'x.md'), 'big\n', 'utf8').catch(async () => {
       await mkdir(path.join(workdir, 'docs'), { recursive: true });
@@ -361,6 +577,7 @@ describe('file-browser device-op', () => {
       docMode: undefined,
       includeIgnored: true,
       maxEntries: 2000,
+      showIgnoredDirs: false,
     });
   });
 
@@ -381,6 +598,7 @@ describe('file-browser device-op', () => {
         relPath: '',
         hideMetaFiles: true,
         docMode: undefined,
+        showIgnoredDirs: false,
       });
     },
   );
@@ -414,6 +632,7 @@ describe('file-browser device-op', () => {
       relPath: '',
       hideMetaFiles: true,
       docMode: undefined,
+      showIgnoredDirs: false,
     });
     const condition = dbWhereMock.mock.calls.at(-1)?.[0];
     expect(hasDeepValue(condition, '/remote/home/user/proj')).toBe(true);
@@ -470,6 +689,7 @@ describe('file-browser device-op', () => {
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
       workdir: sshWorkdir,
       hideMetaFiles: true,
+      consumerId: 'device-link',
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -546,6 +766,7 @@ describe('file-browser device-op', () => {
       expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
         workdir: sshWorkdir,
         hideMetaFiles: true,
+        consumerId: 'device-link',
       });
     });
     onFsWatchReleased(sshWorkdir);
@@ -554,6 +775,7 @@ describe('file-browser device-op', () => {
 
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
   });
 
@@ -666,6 +888,7 @@ describe('file-browser device-op', () => {
     });
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -841,6 +1064,7 @@ describe('file-browser device-op', () => {
     });
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
     const event = {
       event: 'fileTree',
@@ -850,6 +1074,68 @@ describe('file-browser device-op', () => {
     expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event.data, {
       dataOwnerId: 'owner-b',
       ownerGeneration: 8,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  /**
+   * 评审 P1：device-link 订阅的是**隐藏态**视图，而 daemon 的 watcher 用的是与
+   * desktop 文件树（可能开着「显示被忽略的目录」）并集后的 matcher —— dist / build
+   * 这类目录内部的事件也会发过来。转发前必须按 device-link 自己的可见性滤一道，
+   * 否则一次构建会把成千上万条控制器根本不会显示的帧推过 relay。
+   */
+  it('watch: SSH 转发前按 device-link 的隐藏态可见性过滤被忽略目录事件', async () => {
+    const sshWorkdir = '/remote/home/user/reveal-union-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockImplementation(() => Promise.resolve({ ok: true }));
+
+    await onFsWatchSubscribed(sshWorkdir);
+    const handler = sshListenerState.hostEventHandlers.at(-1);
+
+    // 隐藏态不可见的目录内部事件：一律丢弃（一级与嵌套层都要管）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist/bundle.js' },
+    });
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'add', relPath: 'packages/foo/build/out.map' },
+    });
+    // 大小写变体同样按不可见处理：matcher 的 ignorecase 默认让 DIST 与 dist 同义，
+    // 事件不该继续推过 relay（评审 P2）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'DIST/bundle.js' },
+    });
+    // 名单本身是混合大小写（Library / Temp / Logs），段比较折叠后仍要命中。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'remote/Library/x.dat' },
+    });
+    expect(pushSpy).not.toHaveBeenCalled();
+
+    // 普通路径照常转发。
+    const visible = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/app.ts' },
+    };
+    handler?.(visible);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, visible.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
+    });
+
+    // 与忽略目录同名的**普通文件**（叶子段）不算内部：listDir 会列出它，事件也必须转发
+    // （否则它的行陈旧到手动刷新）—— 忽略名单是目录规则，只判祖先段。
+    const sameNameFile = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist' },
+    };
+    handler?.(sameNameFile);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, sameNameFile.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -884,16 +1170,19 @@ describe('file-browser device-op', () => {
 
   // ── gzip(应用层压缩)────────────────────────────────────────────────────
 
-  it('caps op advertises gzip; unknown op stays a deterministic negative signal', async () => {
+  it('caps op advertises gzip + showIgnoredDirs; unknown op stays a deterministic negative signal', async () => {
     // caps 与 workdir 无关,guard 之前处理——guard 拒绝也不影响探测。
+    // 控制端用 showIgnoredDirs 决定「显示被忽略的目录」开关是可点还是禁用+升级提示。
     expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({
       ok: true,
       gzip: true,
+      showIgnoredDirs: true,
       completeDirectoryListing: true,
       fileRead: true,
       dirExport: true,
+      folderAttachment: true,
     });
-    // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
+    // 控制端把 unknown op 当"老端不支持压缩/开关"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,
       message: 'unknown op: nope',

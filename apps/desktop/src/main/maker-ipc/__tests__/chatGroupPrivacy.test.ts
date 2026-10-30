@@ -17,7 +17,8 @@ it('keeps different group grants in distinct model histories', () => {
   expect(parseBotGroupPlanRouteKey('group:group:plan:legacy')).toEqual({ groupId: 'group', planId: 'legacy' });
 });
 describe('chat-only group runtime', () => {
-  it.each(['group:test:access:chat:2', 'group:test:access:chat:2:plan:one'])('keeps %s free of owner memory, SOUL, home and learned skills', async routeKey => {
+  // A Thread's own lane of a chat-only grant is just as restricted as the group lane.
+  it.each(['group:test:access:chat:2', 'group:test:access:chat:2:plan:one', 'group:test:access:chat:2:thread:root', 'group:test:access:chat:2:mask:human', 'group:test:access:chat:2:mask:human:thread:root', 'group:test:access:chat:2:mask:human:personal-digest'])('keeps %s free of owner memory, SOUL, home and learned skills', async routeKey => {
     state.rows = [
       [{ botId: 'bot', role: 'group', routeKey, profileVersion: 1 }],
       [{ displayName: 'Companion', description: 'Public assistant' }],

@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  push: vi.fn(),
   invoke: vi.fn(),
   subscribe: vi.fn(async () => undefined),
   unsubscribe: vi.fn(async () => undefined),
@@ -18,8 +19,8 @@ vi.mock('react-native', () => ({
   View: ({ children, testID, accessibilityLabel }: any) => el('div', { 'data-testid': testID, 'aria-label': accessibilityLabel }, children),
   StyleSheet: { create: (value: unknown) => value },
 }));
-vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, options?: { name?: string }) => options?.name ? `${key}:${options.name}` : key }) }));
+vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress }, action.label) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('lucide-react-native', () => ({ CircleAlert: () => null, Sparkles: () => null }));
 vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
@@ -43,6 +44,7 @@ vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupSpeakerRow } from '@/session/BotGroupSpeakerRow';
+import i18n from '@/i18n';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -51,7 +53,8 @@ const identity = { botId: 'abu', name: '阿布' };
 async function render(props: Record<string, unknown>) {
   await act(async () => root.render(el(BotGroupSpeakerRow, { deviceId: 'mac', identity, online: true, onError: vi.fn(), sessionId: 's1', activity: 'reply', ...props } as any)));
 }
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN');
   vi.clearAllMocks(); h.pending = {}; h.live = {}; h.panel = null;
   h.invoke.mockResolvedValue([{ request: { requestId: 'r1' } }]);
   node = document.createElement('div'); root = createRoot(node);
@@ -62,9 +65,9 @@ it('follows the speaking lane while focused and seeds its pending prompts', asyn
   await render({});
   expect(h.subscribe).toHaveBeenCalledWith(expect.stringMatching(/^bot-group-speaker:s1:focus:/), 'mac', ['session:s1']);
   expect(h.invoke).toHaveBeenCalledWith('mac', 'maker:get-pending-interactions', ['s1']);
-  expect(h.setPending).toHaveBeenCalledWith('s1', [{ request: { requestId: 'r1' } }]);
-  // No live phase yet: a reply reads 「正在思考…」.
-  expect(node.textContent).toContain('copy:thinking');
+  expect(h.setPending).toHaveBeenCalledWith('s1', [{ request: { requestId: 'r1' } }], { deviceId: 'mac' });
+  // No observed phase must not falsely claim thinking.
+  expect(node.textContent).toContain('copy:processing');
   await act(async () => root.unmount());
   expect(h.unsubscribe).toHaveBeenCalledWith(expect.stringMatching(/^bot-group-speaker:s1:focus:/), 'mac', ['session:s1']);
   root = createRoot(node);
@@ -75,10 +78,10 @@ it('uses the live phase, and plain copy while planning or before a step reports 
   await render({});
   expect(node.textContent).toContain('copy:reading-file');
   await render({ activity: 'planning', sessionId: null });
-  expect(node.textContent).toContain('groupChat.speaking.planning');
+  expect(node.textContent).toContain(i18n.t('groupChat.speaking.planning'));
   expect(h.copy).toHaveBeenLastCalledWith(expect.objectContaining({ active: false }));
   await render({ activity: 'step', sessionId: 's2' });
-  expect(node.textContent).toContain('groupChat.speaking.step');
+  expect(node.textContent).toContain(i18n.t('groupChat.speaking.step'));
 });
 
 it('shows the teammate’s pending prompt inline instead of the working line', async () => {
@@ -92,7 +95,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'needs-interaction', compactDetail: '' };
   await render({});
-  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe('groupChat.waitingConfirm:阿布');
+  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: identity.name }));
   expect(h.panel).toBeNull();
 });
 
@@ -101,4 +104,28 @@ it('does not subscribe without a lane or while the computer is offline', async (
   await render({ online: false, sessionId: 's3' });
   expect(h.subscribe).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
+});
+
+// Regression: a group lane must open its original task on the correct computer.
+it('opens the ordinary task with no companion wrapper or new execution', async () => {
+  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false });
+  h.invoke.mockClear();
+  await act(async () => node.querySelector('button')!.click());
+  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'group-lane', deviceId: 'studio' } });
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+// Unit regression for PR #7233 / discussion_r4384096621: render a queued execution
+// through the real i18n hook/catalog. The previous key-only mock hid missing keys;
+// this minimal queued row must show localized copy instead of a resource path.
+it.each([
+  ['en', 'Getting started'],
+  ['zh-CN', '正在开始'],
+  ['zh-TW', '正在開始'],
+  ['ja', '開始しています'],
+  ['ko', '시작하는 중'],
+])('localizes queued work with the real %s catalog', async (locale, expected) => {
+  await i18n.changeLanguage(locale);
+  await render({ executionStatus: 'queued' });
+  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(expected);
 });

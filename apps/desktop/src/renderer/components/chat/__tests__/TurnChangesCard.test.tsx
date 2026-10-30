@@ -93,6 +93,7 @@ describe('TurnChangesCard file actions', () => {
     });
     mocks.useFileChipContextMenu.mockReturnValue({
       onContextMenu: mocks.onContextMenu,
+      onActivate: (_event: unknown, openDefault: () => void) => openDefault(),
       openAt: vi.fn(),
       menu: <div>file-context-menu</div> as ReactNode,
     });

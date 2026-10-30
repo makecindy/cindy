@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from './modelDisplayPricing.js';
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 /**
  * @cindy/model-providers — 类型定义。
@@ -183,6 +184,7 @@ export type OAuthProviderDescriptor =
  * 真实上游 + 鉴权 + model id 还原。加新供应商 = 加这份数据，不改路由器代码。
  */
 export interface RoutingDescriptor {
+  modelInterface?: ModelInterfaceSnapshot;
   /**
    * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
    * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
@@ -199,6 +201,10 @@ export interface RoutingDescriptor {
    * 缺省按 false 处理；它与模型图片输入能力独立，也不得从模型名推断。
    */
   supportsImageGeneration?: boolean;
+  /** Explicit standalone image API; independent of chat wire and Codex hosted tools. */
+  imageApi?: "openai-images";
+  /** Explicit standalone async video API, independent of the chat protocol. */
+  videoApi?: "xai-videos";
   /** Enterprise BYOK image model binding used by the Codex Images route. */
   imageModel?: { wireModel: string; litellmModel: string; supportsEdit: boolean };
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */
@@ -300,7 +306,29 @@ export interface ModelCost {
  * per-agent 拆分正是为了表达这种分歧:各 agent 列表里各写各的值。同一 agent 内、同一 id
  * 跨 provider(如 gpt-5.5 同时由 openai 与 xd 提供)则必须元数据一致(见 catalog.ts 校验)。
  */
+/** Non-sensitive, atomic execution selection. Stored with a running task. */
+export interface ModelInterfaceSnapshot {
+  profileId: string;
+  providerId: string;
+  revision: string;
+  api: PiModelApi;
+  wireModelId: string;
+  route: ProviderModelRouteConfig;
+  defaults: ModelMetadata;
+  compatibility: string[];
+  preferred: boolean;
+  nativeApis?: import('./modelAccessBean.js').ModelNativeApi[] | null;
+}
 export interface CatalogModel {
+  interfaceUnavailable?: boolean;
+  selectedInterface?: ModelInterfaceSnapshot;
+  availableInterfaces?: ModelInterfaceSnapshot[];
+  nativeApis?: import("./modelAccessBean.js").ModelNativeApi[] | null;
+  /** Same-provider display-only pricing; never inherited through public model metadata. */
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
+  costDiscount?: number;
+
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
@@ -309,7 +337,7 @@ export interface CatalogModel {
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
   /** Canonical model API from the accepted Registry; null explicitly means unverified. */
-  nativeApi?: PiModelApi | null;
+  nativeApi?: PiModelApi | import('./modelAccessBean.js').ModelNativeApi | null;
   /** 与 maker-core 现有 model id 一致（如 'claude-opus-4-8' / 'gpt-5.5' / 'codex/gpt-5.5'）。 */
   id: string;
   /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
@@ -328,7 +356,7 @@ export interface CatalogModel {
    * 厂商分组 id —— 决定模型在选择器右栏的分组归属（替代渲染层按 id 前缀硬猜）。
    * 当前取值与渲染层 ModelCategory 对齐：'anthropic' | 'gpt' | 'gpt-budget' | 'grok' |
    * 'google' | 'china' | 'ungrouped' | 'image' | 'video' | 'tts' | 'stt' | 'realtime' |
-   * 'embedding' | 'compression' | 'other'。
+   * 'embedding' | 'decision' | 'compression' | 'other'。
    * 缺省时渲染层回退到 id 前缀归类（categorize）。新增未知分组需在渲染层补 i18n 标签。
    */
   group?: string;
@@ -419,6 +447,8 @@ export interface CatalogModel {
    * 不能读跨 provider 拍平去重后的列表（那只保留首个 provider 的值，会错）。
    */
   supportsFastMode?: boolean;
+  /** Account-discovered Ultrafast access. Never inferred from a model name or plan label. */
+  supportsUltrafastMode?: boolean;
   /** Same-provider, same-harness catalog model used for Fast. null explicitly disables mapping.
    * Unlike a service tier, this changes the upstream model; availability must be checked per account.
    */
@@ -509,6 +539,10 @@ export interface ProviderMediaModel extends Pick<
   discoveredMetadata?: ModelMetadata;
   /** Local projection provenance; not part of the public Registry metadata. */
   sourceAgent?: AgentKind;
+  /** Same-provider display-only pricing; never inherited through public model metadata. */
+  displayPricing?: ModelDisplayPricing;
+  currency?: 'USD' | 'CNY';
+  costDiscount?: number;
   id: string;
   name: string;
   availability?: "available" | "requires_payment";
@@ -613,6 +647,13 @@ export interface Provider {
  * 并随用户配置持久化，避免已知长上下文模型被错误降级。
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
+  /** User override; absent follows the directory. Never persist derived snapshots. */
+  interfaceId?: string;
+  interfaceUnavailable?: boolean;
+  selectedInterface?: ModelInterfaceSnapshot;
+  availableInterfaces?: ModelInterfaceSnapshot[];
+  /** Current account discovery only; deliberately excluded from inheritable ModelMetadata. */
+  supportsUltrafastMode?: boolean;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;
   nameExplicit?: boolean;
@@ -769,6 +810,9 @@ export interface CustomProviderRuntimeConfig {
   requestPath?: string;
   /** Codex Responses runtime 是否支持原生图片生成与编辑；缺省为 false。 */
   supportsImageGeneration?: boolean;
+  /** Opt-in to standalone OpenAI Images generation/edits on this runtime's connection. */
+  imageApi?: "openai-images";
+  videoApi?: "xai-videos";
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
   /**

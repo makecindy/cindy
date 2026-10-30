@@ -25,6 +25,12 @@
     "fastTag": "Fast"
   },
   "options": {
+    "speed": {
+      "label": "Speed",
+      "standard": "Standard",
+      "fast": "Fast",
+      "ultrafast": "Ultrafast"
+    },
     "fastMode": "Fast Mode",
     "fastModeAccessibility": "Fast mode {{model}}",
     "reasoningEffort": "Reasoning Effort",
@@ -92,6 +98,10 @@
     "recommended": "Recommended",
     "source": "Source",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Provider Group · {{count}} computer",
+    "groupBadge_other": "Provider Group · {{count}} computers",
     "harness": "Harness",
     "restoreRecommended": "Restore recommended",
     "saveFailed": "Could not save. Please try again.",

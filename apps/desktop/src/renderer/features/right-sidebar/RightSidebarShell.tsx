@@ -27,10 +27,12 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -39,7 +41,7 @@ import { RightSidebarDetach } from '@/components/layout/RightSidebarDetach';
 import { RightSidebarMaximize } from '@/components/layout/RightSidebarMaximize';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
-import { TabBar, TabStrip } from './TabBar';
+import { TabBar, TabStrip, TabTitleLabel, type PopoutWindowOption } from './TabBar';
 import { EmptyState } from './EmptyState';
 import { getTabKind, hydrateTabState } from './registry';
 import {
@@ -62,13 +64,41 @@ import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
+import { useRetainedBrowserTabHosts } from './hooks/useRetainedBrowserTabHosts';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useTabCreationMenu } from './lib/useTabCreationMenu';
 import {
+  isTabPoppedOut,
+  summarizeSidebarTabWindows,
+  useSidebarTabWindowsState,
+} from '@/lib/sidebarTabWindowState';
+import {
+  isGlobalTabId,
+  removeGlobalTab,
+  setActiveGlobalTabId,
+  subscribeRevealSessionTab,
+  useActiveGlobalTabId,
+  useGlobalTabs,
+} from './globalTabs';
+import {
+  buildTabAvailabilities,
   mergeAvailableTabOrder,
   projectAvailableTabs,
 } from './tabAvailability';
+import { moveTabToGroup } from './moveTab';
+import {
+  DEFAULT_TAB_GROUP,
+  getGroupActiveTabId,
+  setGroupActiveTabId,
+  tabGroupOf,
+  subscribeTabGroups,
+  useTabGroupAssignments,
+  type TabGroupId,
+} from './tabGroups';
 
 const log = createLogger('rightSidebar.shell');
+/** 组内激活记忆的订阅(与组归属同一个通知源)。 */
+const subscribeGroupActive = (cb: () => void) => subscribeTabGroups(cb);
 const EMPTY_TAB_ID_SET = new Set<string>();
 /**
  * Mac 合并顶栏右端 spacer 宽度，对应 MainLayout 固定唤起按钮：28px 按钮 + 8px 右距。
@@ -78,6 +108,11 @@ const MAC_HEADER_ACTION_SPACER_PX = 36;
 type RightTabDirection = 'prev' | 'next';
 
 interface RightSidebarShellProps {
+  /**
+   * 本 Shell 承载哪个页签组(见 tabGroups.ts):只投影归属该组的页签。缺省右侧组
+   * (历史右侧栏);左 / 上 / 下边组由 TabGroupPanel 传入。弹出窗口(hostedTabIds)不分组。
+   */
+  groupId?: TabGroupId;
   /**
    * 当前 cc-agent session id;由 MainLayout 透传(CCAgentSessionView ownsRoute 时声明)。
    * null = 尚无激活会话(或不在 cc-agent 路由),store 不工作,Shell 渲染空状态。
@@ -118,8 +153,27 @@ interface RightSidebarShellProps {
   reserveLeftChromeActions?: boolean;
   /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区并预留布局空间。 */
   railChromeActionsHitHole?: boolean;
-  /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
-  onDetach?: () => void;
+  /**
+   * 「在独立窗口中打开」页签:主窗侧栏继续存在,只把该页签弹出到自己的窗口;带
+   * targetWindowId 时搬进已有的弹出窗口。顶栏按钮作用于当前激活页签(没有激活页签时
+   * 不渲染);页签右键菜单作用于被点的页签。弹出窗口(hostedTabIds 形态)与会话副窗不传。
+   */
+  onDetachTab?: (tabId: string, targetWindowId?: string) => void;
+  /**
+   * 页签独立窗口形态:Shell 只投影并挂载 main 指派给本窗口的这些页签(不分组),
+   * 激活位只在本窗口内存里,不写任务桶,也不向 main 上报「活跃侧栏会话」(主窗仍是
+   * 侧栏宿主权威)。页签全部从桶里消失后 Shell 渲染为空,由 SidebarTabWindowLayout 关窗。
+   */
+  hostedTabIds?: ReadonlySet<string>;
+  /** 独立窗口形态:右键菜单「合并回侧边栏」作用于被点的页签。 */
+  onMergeBackTab?: (tabId: string) => void;
+  /** 独立窗口形态:本窗口里经「+」新建的页签(乐观插入那一刻回调),宿主拿去收编。 */
+  onTabCreated?: (tabId: string) => void;
+  /** 当前激活页签变化(独立窗口的 ⌘W / 合并按钮要知道作用于谁)。 */
+  onActiveTabChange?: (tabId: string | null) => void;
+  /** 合并顶栏首 / 尾插槽(独立窗口的红绿灯让位、合并按钮与窗口控件)。 */
+  topbarLeading?: ReactNode;
+  topbarTrailing?: ReactNode;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
    *  false(空白处 = 拖面板手势面);detached 子窗口不传,默认 true。 */
   chromeWindowDrag?: boolean;
@@ -137,6 +191,7 @@ interface RightSidebarShellProps {
 }
 
 export function RightSidebarShell({
+  groupId = DEFAULT_TAB_GROUP,
   sessionId,
   workdir,
   remoteHostId,
@@ -149,13 +204,22 @@ export function RightSidebarShell({
   onShowSidebar,
   onMaximize,
   isMaximized,
-  onDetach,
+  onDetachTab,
+  hostedTabIds,
+  onMergeBackTab,
+  onTabCreated,
+  onActiveTabChange,
+  topbarLeading,
+  topbarTrailing,
   chromeWindowDrag = true,
   panelSide = 'right',
   onAllTabsClosed,
   reserveLeftChromeActions = false,
   railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
+  const soloMode = hostedTabIds !== undefined;
+  /** 右侧组是页签系统的"主组":任务级的激活位对账、快捷键、浏览器桥的活跃会话上报只由它做。 */
+  const isPrimaryGroup = groupId === DEFAULT_TAB_GROUP && !soloMode;
   const { isFullscreen } = useMacFullscreen();
   const chromeActionsLeft =
     isMac && !isFullscreen
@@ -175,6 +239,9 @@ export function RightSidebarShell({
       : 0;
   const { t } = useTranslation();
   const installedGhosts = useInstalledGhosts();
+  // 已弹出到独立窗口的页签:数据留在桶里,但本 Shell 不投影、不挂 body。
+  // 弹出窗口自身(soloMode)反过来只投影 main 指派给它承载的那几个。
+  const poppedOutTabs = useSidebarTabWindowsState();
 
   // RSB browser bridge (Phase 2):在 Shell 整个生命周期内只 init 一次。bridge 内部
   // 自带 idempotent guard,strict-mode 双 effect / 重复挂载都安全。bridge 绑定
@@ -202,6 +269,26 @@ export function RightSidebarShell({
   );
   const getBucketSnapshot = useCallback(() => getBucket(sessionId), [sessionId]);
   const bucket = useSyncExternalStore(subscribeBucket, getBucketSnapshot);
+  // 全局页签(不跟对话):在所有任务里都在场,切任务留在原位;与任务页签一起投影。
+  const globalTabs = useGlobalTabs();
+  const activeGlobalTabId = useActiveGlobalTabId();
+  const groupAssignments = useTabGroupAssignments();
+  const groupActiveVersion = useSyncExternalStore(
+    subscribeGroupActive,
+    () => getGroupActiveTabId(groupId, sessionId),
+  );
+  // 没有任务(sessionId=null)时任务桶不存在,但全局页签照常可展示——弹出窗口里
+  // 承载全局页签就是这种形态。
+  const contentReady = bucket.hydrated || sessionId === null;
+  const hiddenTabIds = useMemo<ReadonlySet<string> | undefined>(() => {
+    if (hostedTabIds) {
+      return new Set(
+        [...globalTabs, ...bucket.tabs].map((tab) => tab.id).filter((id) => !hostedTabIds.has(id)),
+      );
+    }
+    const ids = Object.keys(poppedOutTabs);
+    return ids.length > 0 ? new Set(ids) : undefined;
+  }, [bucket.tabs, globalTabs, hostedTabIds, poppedOutTabs]);
   const previousShellVisibleRef = useRef(shellVisible);
   const subagentsEligibilityKnown = typeof subagentsAvailable === 'boolean';
   const subagentsEnabled = subagentsAvailable === true;
@@ -211,7 +298,10 @@ export function RightSidebarShell({
     // null 也推(切到非 RSB 路由时),让 main 端清掉 active session — 否则
     // 之前的 sessionId 会成 stale 引用。隐藏的分离窗口只是预热/待命实例，不能
     // 覆盖主窗口当前的浏览器 session。setActiveSession 失败容错(preload 未就绪)。
-    if (shellVisible) {
+    // 单页签独立窗口不是侧栏宿主,不上报(主窗仍是「活跃侧栏会话」权威);边组同理。
+    if (soloMode || !isPrimaryGroup) {
+      // no-op
+    } else if (shellVisible) {
       void window.electronAPI?.rsbBrowserBridge
         ?.setActiveSession({ sessionId })
         .catch(() => undefined);
@@ -227,7 +317,7 @@ export function RightSidebarShell({
     void ensureHydrated(sessionId).catch((err) => {
       log.error('ensureHydrated failed', { sessionId, err });
     });
-  }, [sessionId, shellVisible]);
+  }, [isPrimaryGroup, sessionId, shellVisible, soloMode]);
 
   // Subagents eligibility is tri-state: `undefined` while the session row is
   // still loading, then true/false once the harness is known. Folding unknown
@@ -236,19 +326,65 @@ export function RightSidebarShell({
   // persist a different tab (or null) as active — the user's selection is gone
   // by the time eligibility resolves to true. Keep the tab projected while
   // unknown and only converge once we actually know.
-  const tabAvailability = useMemo(
-    () => ({
-      installedGhosts: remoteHostId || deviceLinkDeviceId !== null ? [] : installedGhosts,
-      subagentsAvailable: subagentsEnabled || !subagentsEligibilityKnown,
-    }),
-    [installedGhosts, remoteHostId, deviceLinkDeviceId, subagentsEligibilityKnown, subagentsEnabled],
+  // 可用性口径与页签组在场判定(tabGroupPanes)同源:两边必须对"哪些页签可见"
+  // 给出同一答案,否则会出现有组无页签的空壳。
+  const availabilities = useMemo(
+    () =>
+      buildTabAvailabilities({
+        installedGhosts,
+        remoteHostId,
+        deviceLinkDeviceId,
+        subagentsAvailable,
+        hiddenTabIds,
+      }),
+    [deviceLinkDeviceId, hiddenTabIds, installedGhosts, remoteHostId, subagentsAvailable],
   );
+  const tabAvailability = availabilities.session;
+  // 整个任务的可见页签投影(所有组):任务级激活位对账用它,不受本组过滤影响。
   const projectedTabs = useMemo(
     () => projectAvailableTabs(bucket.tabs, bucket.activeTabId, tabAvailability),
     [bucket.activeTabId, bucket.tabs, tabAvailability],
   );
-  const tabs = projectedTabs.tabs;
-  const activeTabId = projectedTabs.activeTabId;
+  const allPinnedTabs = useMemo(
+    () => projectAvailableTabs(globalTabs, null, availabilities.global).tabs,
+    [availabilities.global, globalTabs],
+  );
+  /** 页签是否归本 Shell 的组:弹出窗口不分组(它只投影被指派的那一个)。 */
+  const inGroup = useCallback(
+    (tabId: string) => soloMode || tabGroupOf(groupAssignments, tabId) === groupId,
+    [groupAssignments, groupId, soloMode],
+  );
+  const pinnedTabs = useMemo(
+    () => allPinnedTabs.filter((tab) => inGroup(tab.id)),
+    [allPinnedTabs, inGroup],
+  );
+  const sessionTabs = useMemo(
+    () => projectedTabs.tabs.filter((tab) => inGroup(tab.id)),
+    [inGroup, projectedTabs.tabs],
+  );
+  const sessionActiveTabId = projectedTabs.activeTabId;
+  /** 本组可见页签 = 归本组的全局页签(钉在前) + 归本组的当前任务页签。 */
+  const tabs = useMemo(() => [...pinnedTabs, ...sessionTabs], [pinnedTabs, sessionTabs]);
+  // 激活位:用户选中的全局页签优先并跨任务保持;否则是任务自己的激活页签(在本组时);
+  // 本组不含任务级激活页签时用组内上次选中的;再没有就落到第一个页签。
+  const groupRememberedActiveId = groupActiveVersion;
+  // 独立窗口:激活位只在本窗口内存里(不写任务桶、不碰主窗的全局激活位)。
+  const [hostedActiveTabId, setHostedActiveTabId] = useState<string | null>(null);
+  const activeTabId = soloMode
+    ? hostedActiveTabId && tabs.some((tab) => tab.id === hostedActiveTabId)
+      ? hostedActiveTabId
+      : (tabs.at(-1)?.id ?? null)
+    : activeGlobalTabId && pinnedTabs.some((tab) => tab.id === activeGlobalTabId)
+      ? activeGlobalTabId
+      : sessionActiveTabId && sessionTabs.some((tab) => tab.id === sessionActiveTabId)
+        ? sessionActiveTabId
+        : groupRememberedActiveId && tabs.some((tab) => tab.id === groupRememberedActiveId)
+          ? groupRememberedActiveId
+          : (sessionTabs[0]?.id ?? pinnedTabs[0]?.id ?? null);
+
+  useEffect(() => {
+    onActiveTabChange?.(activeTabId);
+  }, [activeTabId, onActiveTabChange]);
 
   // 首帧只挂当前激活 tab。其余 tab 在浏览器空闲期逐个补挂载，随后继续按原有
   // keep-alive 语义保留组件 / webview / 编辑器状态。这样恢复一个多 tab 会话时，
@@ -320,16 +456,26 @@ export function RightSidebarShell({
   // provisional during that window, so converging it would persist a decision
   // taken from incomplete information and destroy the restored selection.
   useEffect(() => {
-    if (!subagentsEligibilityKnown) return;
-    if (!bucket.hydrated || !sessionId || bucket.activeTabId === activeTabId) return;
-    void setActiveTab(sessionId, activeTabId).catch((err) => {
+    // 单页签独立窗口不写激活位:它只投影自己承载的页签,激活位归主窗侧栏管。
+    // 边组也不写:任务级激活位是整个任务(所有组)的对账,只由右侧组做一次。
+    if (soloMode || !isPrimaryGroup || !subagentsEligibilityKnown) return;
+    if (!bucket.hydrated || !sessionId || bucket.activeTabId === sessionActiveTabId) return;
+    void setActiveTab(sessionId, sessionActiveTabId).catch((err) => {
       log.error('unavailable active-tab reconciliation failed', {
         sessionId,
-        activeTabId,
+        activeTabId: sessionActiveTabId,
         err,
       });
     });
-  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId, subagentsEligibilityKnown]);
+  }, [
+    sessionActiveTabId,
+    bucket.activeTabId,
+    bucket.hydrated,
+    isPrimaryGroup,
+    sessionId,
+    soloMode,
+    subagentsEligibilityKnown,
+  ]);
 
   const prevTabCountRef = useRef<number | null>(null);
   useEffect(() => {
@@ -366,15 +512,17 @@ export function RightSidebarShell({
   ]);
 
   // 面板收束后不再注册的历史页签在 hydration 后静默关闭，避免显示死页签。
-  // `ghost:*`、`bot-delegations` 和 `bot-artifacts` 只作为数据库历史值保留。
+  // `ghost:*`、`bot-delegations`、`bot-artifacts` 和 `bot-workbench`(伙伴工作台已并入聊天头部
+  // 的近况浮层)只作为数据库历史值保留。
   // 这些 kind 已无渲染方,
   // 留着只会落到 PlaceholderBody 变成"敬请期待"的死页签。
   useEffect(() => {
-    if (!bucket.hydrated || !sessionId) return;
+    if (soloMode || !isPrimaryGroup || !bucket.hydrated || !sessionId) return;
     const legacyGhostTabs = bucket.tabs.filter((tab) =>
       tab.kind.startsWith('ghost:') ||
       tab.kind === ('bot-delegations' as TabKindId) ||
-      tab.kind === ('bot-artifacts' as TabKindId),
+      tab.kind === ('bot-artifacts' as TabKindId) ||
+      tab.kind === ('bot-workbench' as TabKindId),
     );
     if (legacyGhostTabs.length === 0) return;
     void (async () => {
@@ -386,24 +534,29 @@ export function RightSidebarShell({
         }
       }
     })();
-  }, [bucket.hydrated, bucket.tabs, sessionId]);
+  }, [bucket.hydrated, bucket.tabs, isPrimaryGroup, sessionId, soloMode]);
 
   // 关掉最后一个 tab → 通知 host 自动收起侧栏。只在 tab 数「从 >0 变 0」的转变时
   // 触发,不是"等于 0"就触发:
   //   - hydrated 后首帧 prev===null 不触发(区分"刚加载出来就是空"与"关到空");
   //   - 展开一个本就 0-tab 的 session 也不会被立刻折叠,用户仍能在 EmptyState 加 tab。
   // sessionId 变化时重置计数,避免"切到一个空 session"被误判成"关空"。
+  // 全局页签计入可见页签数:有全局页签在场时侧栏不会因任务页签关空而自动收起。
   useEffect(() => {
-    if (!bucket.hydrated) return; // 未 hydrate 的空数组不算"关空"
+    if (!contentReady) return; // 未 hydrate 的空数组不算"关空"
     const prev = prevTabCountRef.current;
     prevTabCountRef.current = tabs.length;
     if (prev !== null && prev > 0 && tabs.length === 0) {
       onAllTabsClosed?.();
     }
-  }, [bucket.hydrated, tabs.length, onAllTabsClosed]);
+  }, [contentReady, tabs.length, onAllTabsClosed]);
 
   const handleAdd = useCallback(
     (kind: TabKindId) => {
+      if (kind === 'cindy-make' && !CINDY_MAKE_ENABLED) {
+        log.warn('handleAdd ignored: Cindy Make is disabled');
+        return;
+      }
       if (!sessionId) {
         log.warn('handleAdd ignored: sessionId is null', { kind });
         return;
@@ -421,9 +574,30 @@ export function RightSidebarShell({
       // 单例 kind(当前仅 review)走 addOrFocusSingletonTab:已存在则切到现有,
       // 否则正常 addTab。menu meta 的 singleton 字段是数据来源,目前只有 review。
       const isSingleton = plugin?.menu?.singleton === true;
+      // 独立窗口:本窗口已承载该单例页签时直接切过去(窗口的激活位只在本地,走任务桶的
+      // 聚焦路径不会更新它,菜单里的「已打开」就成了无响应)。
+      if (soloMode && isSingleton) {
+        const existing = tabs.find((tab) => tab.kind === kind);
+        if (existing) {
+          setHostedActiveTabId(existing.id);
+          return;
+        }
+      }
+      // 边组里点「+」:新页签直接落在本组(乐观插入那一帧就带着组归属,不闪过右侧栏)。
+      // 独立窗口里点「+」:乐观插入那一刻交给宿主收编(登记为本窗口承载)。
+      const addOpts = soloMode
+        ? {
+            onOptimisticAdd: (tabId: string) => {
+              setHostedActiveTabId(tabId);
+              onTabCreated?.(tabId);
+            },
+          }
+        : isPrimaryGroup
+          ? undefined
+          : { groupId };
       const action = isSingleton
-        ? addOrFocusSingletonTab(sessionId, kind, initialState)
-        : addTab(sessionId, kind, initialState);
+        ? addOrFocusSingletonTab(sessionId, kind, initialState, addOpts)
+        : addTab(sessionId, kind, initialState, addOpts);
       void action.catch((err) => {
         // 按错误码 toast:专属文案挂在全局 ipcError 命名空间(RIGHT_SIDEBAR_*),其余错误落通用 addFailed 兜底。
         toast.error(
@@ -436,11 +610,43 @@ export function RightSidebarShell({
         log.error('handleAdd failed', { sessionId, kind, err });
       });
     },
-    [sessionId, subagentsEnabled, t],
+    [groupId, isPrimaryGroup, onTabCreated, sessionId, soloMode, subagentsEnabled, t, tabs],
   );
+
+  // 独立窗口里「+」菜单选了插件页签:新加的交给宿主收编;已打开的——本窗口承载就切过去,
+  // 在别的弹出窗口里就聚焦那扇窗口,在主窗侧栏里就收编进本窗口(主窗据弹出镜像把它隐藏)。
+  const handleGlobalTabSelected = useCallback(
+    (tabId: string, existed: boolean) => {
+      if (existed && tabs.some((tab) => tab.id === tabId)) {
+        setHostedActiveTabId(tabId);
+        return;
+      }
+      if (existed && isTabPoppedOut(tabId)) {
+        void window.electronAPI?.sidebarTabWindow
+          ?.focus(tabId)
+          .catch((err) => log.warn('focus plugin tab window failed', { tabId, err }));
+        return;
+      }
+      setHostedActiveTabId(tabId);
+      onTabCreated?.(tabId);
+    },
+    [onTabCreated, tabs],
+  );
+
+  const creationMenu = useTabCreationMenu({
+    sessionId, subagentsAvailable: subagentsEnabled, onSelect: handleAdd,
+    sideChatPlacement: soloMode
+      ? { onOptimisticAdd: (tabId) => { setHostedActiveTabId(tabId); onTabCreated?.(tabId); } }
+      : isPrimaryGroup ? undefined : { groupId },
+  });
 
   const handleClose = useCallback(
     (tabId: string) => {
+      // 全局页签的关闭是全局动作(所有任务里一起消失),不进任务桶。
+      if (isGlobalTabId(tabId)) {
+        removeGlobalTab(tabId);
+        return;
+      }
       if (!sessionId) return;
       void closeTab(sessionId, tabId).catch((err) => {
         log.error('handleClose failed', { sessionId, tabId, err });
@@ -451,28 +657,100 @@ export function RightSidebarShell({
 
   const handleActivate = useCallback(
     (tabId: string) => {
+      if (soloMode) {
+        setHostedActiveTabId(tabId);
+        return;
+      }
+      setGroupActiveTabId(groupId, sessionId, tabId);
+      if (isGlobalTabId(tabId)) {
+        setActiveGlobalTabId(tabId);
+        return;
+      }
+      // 选中本组的任务页签 = 离开本组里的全局页签(别的组里的全局页签不受影响);
+      // 任务自己的激活位照常落库。
+      const activeGlobal = activeGlobalTabId;
+      if (activeGlobal && pinnedTabs.some((tab) => tab.id === activeGlobal)) {
+        setActiveGlobalTabId(null);
+      }
       if (!sessionId) return;
       void setActiveTab(sessionId, tabId).catch((err) => {
         log.error('handleActivate failed', { sessionId, tabId, err });
       });
     },
-    [sessionId],
+    [activeGlobalTabId, groupId, pinnedTabs, sessionId, soloMode],
+  );
+
+  // 程序打开的任务页签(插件任务页)要露出来:与用户点选同口径离开本组的全局页签。
+  const revealContextRef = useRef({ activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds });
+  revealContextRef.current = { activeGlobalTabId, inGroup, pinnedTabs, hostedTabIds };
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    return subscribeRevealSessionTab((targetSessionId, tabId) => {
+      if (targetSessionId !== sessionId) return;
+      const context = revealContextRef.current;
+      if (soloMode) {
+        if (context.hostedTabIds?.has(tabId)) setHostedActiveTabId(tabId);
+        return;
+      }
+      // 与页签投影共用弹出归属镜像;不要依赖尚未重渲染的新页签列表。
+      if (!context.inGroup(tabId) || isTabPoppedOut(tabId)) return;
+      setGroupActiveTabId(groupId, sessionId, tabId);
+      const activeGlobal = context.activeGlobalTabId;
+      if (activeGlobal && context.pinnedTabs.some((tab) => tab.id === activeGlobal)) {
+        setActiveGlobalTabId(null);
+      }
+    });
+  }, [groupId, sessionId, soloMode]);
+
+  // 主窗:已弹出的页签窗口(同任务或只有全局页签的),右键菜单「移到窗口 …」的目标。
+  // 标签用窗口里第一个页签的标题(插件的 TabPillTitle 组件,不是字符串)。
+  const popoutWindows = useMemo<PopoutWindowOption[] | undefined>(() => {
+    if (soloMode || !onDetachTab) return undefined;
+    const options: PopoutWindowOption[] = [];
+    for (const summary of summarizeSidebarTabWindows(poppedOutTabs)) {
+      if (summary.sessionId !== null && summary.sessionId !== sessionId) continue;
+      const firstTab =
+        bucket.tabs.find((tab) => summary.tabIds.includes(tab.id)) ??
+        globalTabs.find((tab) => summary.tabIds.includes(tab.id));
+      if (!firstTab) continue;
+      options.push({
+        windowId: summary.windowId,
+        label: <TabTitleLabel tab={firstTab} sessionId={sessionId} />,
+      });
+    }
+    return options.length > 0 ? options : undefined;
+  }, [bucket.tabs, globalTabs, onDetachTab, poppedOutTabs, sessionId, soloMode]);
+
+  // 右键菜单「移到 …」:改组归属,目标组里立刻选中它;组 pane 的出现 / 隐藏由
+  // tabGroupPanes 按在场判定处理。
+  const handleMoveTab = useCallback(
+    (tabId: string, target: TabGroupId) => {
+      if (target !== groupId) moveTabToGroup(tabId, target, sessionId);
+    },
+    [groupId, sessionId],
   );
 
   const handleReorder = useCallback(
     (orderedIds: string[]) => {
       if (!sessionId) return;
-      const fullOrder = mergeAvailableTabOrder(bucket.tabs, orderedIds, tabAvailability);
+      // 只重排本组可见的页签:别的组的页签当作"不可见槽位"原位保留。
+      const hidden = new Set(tabAvailability.hiddenTabIds ?? []);
+      for (const tab of bucket.tabs) if (!inGroup(tab.id)) hidden.add(tab.id);
+      const fullOrder = mergeAvailableTabOrder(bucket.tabs, orderedIds, {
+        ...tabAvailability,
+        hiddenTabIds: hidden,
+      });
       void reorderTabs(sessionId, fullOrder).catch((err) => {
         log.error('handleReorder failed', { sessionId, orderedIds, err });
       });
     },
-    [bucket.tabs, sessionId, tabAvailability],
+    [bucket.tabs, inGroup, sessionId, tabAvailability],
   );
 
   const handleCycleTab = useCallback(
     (direction: RightTabDirection): boolean => {
-      if (!sessionId) return false;
+      // 独立页签窗口的激活位只在窗口本地,只有全局页签的窗口没有任务也要能切。
+      if (!sessionId && !soloMode) return false;
       // 右侧栏存在但折叠 / 单 tab 时按键语义是 no-op,仍需消费以免漏给系统菜单。
       if (!shellVisible || tabs.length < 2) return true;
       const activeIndex = tabs.findIndex((tab) => tab.id === activeTabId);
@@ -484,20 +762,18 @@ export function RightSidebarShell({
           : (activeIndex + (direction === 'next' ? 1 : -1) + tabs.length) % tabs.length;
       const nextTabId = tabs[nextIndex]?.id;
       if (!nextTabId || nextTabId === activeTabId) return false;
-      void setActiveTab(sessionId, nextTabId).catch((err) => {
-        log.error('cycle right sidebar tab failed', { sessionId, direction, nextTabId, err });
-      });
+      handleActivate(nextTabId);
       return true;
     },
-    [activeTabId, sessionId, shellVisible, tabs],
+    [activeTabId, handleActivate, sessionId, shellVisible, soloMode, tabs],
   );
 
   useAppShortcut('right-tab-prev', () => handleCycleTab('prev'), {
-    enabled: Boolean(sessionId),
+    enabled: soloMode || (Boolean(sessionId) && isPrimaryGroup),
     stopImmediate: true,
   });
   useAppShortcut('right-tab-next', () => handleCycleTab('next'), {
-    enabled: Boolean(sessionId),
+    enabled: soloMode || (Boolean(sessionId) && isPrimaryGroup),
     stopImmediate: true,
   });
 
@@ -507,7 +783,8 @@ export function RightSidebarShell({
   const handleCloseOthers = useCallback(
     async (keepTabId: string) => {
       if (!sessionId) return;
-      const targets = tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
+      // 「关闭其他 / 关闭所有」只作用于任务页签;全局页签要用户逐个显式关闭。
+      const targets = sessionTabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
       for (const tabId of targets) {
         try {
           await closeTab(sessionId, tabId);
@@ -517,13 +794,13 @@ export function RightSidebarShell({
         }
       }
     },
-    [sessionId, tabs],
+    [sessionId, sessionTabs],
   );
 
   // 右键菜单"关闭所有":关掉本 session 的全部 tab。
   const handleCloseAll = useCallback(async () => {
     if (!sessionId) return;
-    const targets = tabs.map((t) => t.id);
+    const targets = sessionTabs.map((t) => t.id);
     for (const tabId of targets) {
       try {
         await closeTab(sessionId, tabId);
@@ -532,7 +809,7 @@ export function RightSidebarShell({
         break;
       }
     }
-  }, [sessionId, tabs]);
+  }, [sessionId, sessionTabs]);
 
   // popup 路由已挪到窗口级常驻模块(lib/popupRouter.ts):订阅不随 Shell 生命
   // 周期,用户离开聊天视图 / main 端归属等待期间 route 切换都不再丢 popup。
@@ -547,7 +824,8 @@ export function RightSidebarShell({
   }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    // 只排除主窗的边组;独立页签窗口自己就是页签的承载方,浏览器 webview 转发的快捷键要收。
+    if (!soloMode && (!sessionId || !isPrimaryGroup)) return;
     const off = window.electronAPI.onRsbBrowserCommand(({ command }) => {
       if (command === 'right-tab-prev') {
         handleCycleTab('prev');
@@ -556,7 +834,21 @@ export function RightSidebarShell({
       }
     });
     return off;
-  }, [handleCycleTab, sessionId]);
+  }, [handleCycleTab, isPrimaryGroup, sessionId, soloMode]);
+
+  // 顶栏「在独立窗口中打开」作用于当前激活页签;没有激活页签时不渲染按钮。
+  const handleDetachActiveTab = useMemo(
+    () => (onDetachTab && activeTabId ? () => onDetachTab(activeTabId) : undefined),
+    [activeTabId, onDetachTab],
+  );
+
+  const bodyHosts = useRetainedBrowserTabHosts(
+    contentReady
+      ? tabs
+          .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
+          .map((tab) => ({ tab, sessionId, workdir, remoteHostId, deviceLinkDeviceId }))
+      : [],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
@@ -569,6 +861,7 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {topbarLeading}
           {!isFullscreen && railChromeActionsHitHole && (
             <div
               aria-hidden
@@ -614,18 +907,24 @@ export function RightSidebarShell({
               「+」wrapper 传 h-[30px](pill 高)而非 h-full:TabStrip 根高度由
               内容驱动,百分比高度会退化。 */}
           <TabStrip
-            tabs={tabs}
+            tabs={sessionTabs}
+            pinnedTabs={pinnedTabs}
             activeTabId={activeTabId}
             sessionId={sessionId}
             onActivate={handleActivate}
             onClose={handleClose}
             onReorder={handleReorder}
-            onAdd={handleAdd}
+            creationMenu={creationMenu}
             onCloseOthers={handleCloseOthers}
             onCloseAll={handleCloseAll}
+            onDetachTab={soloMode ? undefined : onDetachTab}
+            onMergeBackTab={onMergeBackTab}
+            popoutWindows={popoutWindows}
+            groupId={groupId}
+            onMoveTab={soloMode ? undefined : handleMoveTab}
+            onGlobalTabSelected={soloMode ? handleGlobalTabSelected : undefined}
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
-            subagentsAvailable={subagentsEnabled}
           />
           {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
               面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
@@ -634,7 +933,9 @@ export function RightSidebarShell({
             className="flex h-full shrink-0 items-center gap-0.5"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            {onDetach && <RightSidebarDetach size="toolbar" onDetach={onDetach} />}
+            {handleDetachActiveTab && (
+              <RightSidebarDetach size="toolbar" onDetach={handleDetachActiveTab} />
+            )}
             {onMaximize && (
               <RightSidebarMaximize
                 size="toolbar"
@@ -659,65 +960,59 @@ export function RightSidebarShell({
               style={{ width: MAC_HEADER_ACTION_SPACER_PX }}
             />
           )}
+          {topbarTrailing}
         </div>
       ) : (
         <TabBar
-          tabs={tabs}
+          tabs={sessionTabs}
+          pinnedTabs={pinnedTabs}
           activeTabId={activeTabId}
           sessionId={sessionId}
           onActivate={handleActivate}
           onClose={handleClose}
           onReorder={handleReorder}
-          onAdd={handleAdd}
+          creationMenu={creationMenu}
           showWindowControls={!isMac}
           onMaximize={onMaximize}
           onCloseSidebar={onCloseSidebar}
           onShowSidebar={onShowSidebar}
           panelSide={panelSide}
           isMaximized={isMaximized}
-          onDetach={onDetach}
+          onDetach={soloMode ? undefined : handleDetachActiveTab}
+          onDetachTab={soloMode ? undefined : onDetachTab}
+          onMergeBackTab={onMergeBackTab}
+          popoutWindows={popoutWindows}
+          groupId={groupId}
+          onMoveTab={soloMode ? undefined : handleMoveTab}
+          onGlobalTabSelected={soloMode ? handleGlobalTabSelected : undefined}
           onCloseOthers={handleCloseOthers}
           onCloseAll={handleCloseAll}
           chromeWindowDrag={chromeWindowDrag}
-          subagentsAvailable={subagentsEnabled}
         />
       )}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
         {/* 首次切到某 session 时 cache 尚未 hydrate(等 IPC list 回包),保留 panel
             背景而非闪 EmptyState —— EmptyState 是"真的没 tab"的 Welcome 内容。
             sessionId 为 null 也走这条:Shell 不显示任何内容(无激活会话)。 */}
-        {!bucket.hydrated ? null : tabs.length === 0 ? (
+        {!contentReady || soloMode || !sessionId || !isPrimaryGroup ? null : tabs.length === 0 ? (
           // tab 列表为空时永远渲染 EmptyState。审查页签只通过「+」dropdown 或
-          // EmptyState 的"打开审查"入口由用户主动创建。
-          <EmptyState
-            onAddFileTab={() => handleAdd('file-browser')}
-            onAddReviewTab={() => handleAdd('review')}
-            onAddSubagentsTab={() => handleAdd('subagents')}
-            onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
-            subagentsAvailable={subagentsEnabled}
-            onAddBrowserTab={() => handleAdd('web-browser')}
-            onAddTerminalTab={() => handleAdd('terminal')}
+          // EmptyState 的"审查"入口由用户主动创建。
+          <EmptyState menu={creationMenu} selectionOptions={{
+            groupId, onGlobalTabSelected: soloMode ? handleGlobalTabSelected : undefined,
+          }} />
+        ) : null}
+        {/* Keep one keyed list even when the foreground task is empty or still
+            hydrating. Pool-backed background browsers keep their original slot
+            and task context; the pool still decides when to release them. */}
+        {bodyHosts.map((host) => (
+          <PluginBodyHost
+            key={host.tab.id}
+            {...host}
+            active={host.sessionId === sessionId && host.tab.id === activeTabId}
+            shellVisible={shellVisible}
+            t={t}
           />
-        ) : (
-          // 所有 tab 都挂载,只切换可见性(规则 7:杜绝切顶层 tab 时 plugin 内部 state /
-          // webview / 编辑器 / 文件树 expansion 全部丢失重建)。pointer-events 用
-          // `hidden` 自然 disable,visibility 状态由 onVisibilityChange 给 plugin。
-          tabs
-            .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
-            .map((tab) => (
-            <PluginBodyHost
-              key={tab.id}
-              tab={tab}
-              active={tab.id === activeTabId}
-              sessionId={sessionId}
-              workdir={workdir}
-              remoteHostId={remoteHostId}
-              deviceLinkDeviceId={deviceLinkDeviceId}
-              shellVisible={shellVisible}
-              t={t}
-            />
-            ))
-        )}
+        ))}
       </div>
     </div>
   );

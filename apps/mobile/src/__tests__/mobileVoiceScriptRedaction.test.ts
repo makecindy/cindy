@@ -1,7 +1,10 @@
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
-import { afterEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const startedServers: Server[] = [];
 
@@ -10,6 +13,37 @@ afterEach(async () => {
 });
 
 describe('mobile voice script redaction', () => {
+  // credentials-and-local-storage.md: checking configuration must not send
+  // credentials or audio to a cloud endpoint until the explicit --run action.
+  // The failure-redaction test below runs with --run and cannot protect this gate.
+  it('keeps cloud preflight dry-run offline and hides its configured key', async () => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/mobile-voice-cloud-preflight.mjs'), 'utf8');
+    const start = source.indexOf('const DEFAULT_ASR_ENDPOINT =');
+    if (start < 0) throw new Error('Cloud preflight workflow entry was not found');
+    const secret = 'sk-preflight/dry run secret';
+    const fetch = vi.fn(() => { throw new Error('Unexpected cloud HTTP request'); });
+    const WebSocket = vi.fn(function () { throw new Error('Unexpected cloud WebSocket request'); });
+    const log = vi.fn();
+    const execution = runInNewContext('(async () => { ' + source.slice(start) + ' })()', {
+      mobileRoot: '/fixture/mobile', resolve, URL, fetch, WebSocket,
+      existsSync: () => false,
+      readFileSync: () => { throw new Error('Unexpected credential or environment file read'); },
+      console: { log, warn: log, error: log },
+      process: {
+        argv: ['node', 'mobile-voice-cloud-preflight.mjs'],
+        env: { XDT_MOBILE_VOICE_PROXY_BASE_URL: 'https://voice.invalid', XDT_MOBILE_VOICE_PROXY_API_KEY: secret },
+        exit: (code: number) => { throw new Error('preflight-exit:' + code); },
+      },
+    });
+    await expect(execution).rejects.toThrow('preflight-exit:0');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(WebSocket).not.toHaveBeenCalled();
+    const output = log.mock.calls.map(call => call.join(' ')).join(String.fromCharCode(10));
+    expect(output).toContain('dry run passed; add --run to call the cloud endpoints');
+    expect(output).not.toContain(secret);
+    expect(output).not.toContain(encodeURIComponent(secret));
+  });
+
   it('redacts synced voice keys from cloud preflight failure output', async () => {
     const secret = 'sk-script/redact secret';
     const server = createServer((_request, response) => {

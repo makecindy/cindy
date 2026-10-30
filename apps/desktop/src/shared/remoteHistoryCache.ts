@@ -1,5 +1,5 @@
 import type { HistoryMessageSource, HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
-import { historyWorkSummaries } from '@cindy/maker-shared/message-window';
+import { historyWorkSummaries, isHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 
 /** One eligibility rule for write admission, serialization and old cache reads. */
 export function currentRemoteHistoryDetails<T extends HistoryMessageSource>(snapshot: HistoryViewSnapshot<T>) {
@@ -111,6 +111,7 @@ export function decodeRemoteHistory<T extends HistoryMessageSource>(
       expanded: new Set(value.expanded),
       hasMore: value.hasMore,
       nextCursor: value.nextCursor,
+      ...(isHistoryCacheReceipt(value.readReceipt) ? { readReceipt: value.readReceipt } : {}),
       ready: true,
       loading: false,
       error: null,
@@ -132,6 +133,7 @@ export function encodeRemoteHistory<T extends HistoryMessageSource>(
       expanded: [...snapshot.expanded],
       hasMore: snapshot.hasMore,
       nextCursor: snapshot.nextCursor,
+      readReceipt: snapshot.readReceipt,
     },
     (key, value) => {
       // A cached transcript may be read offline. Never revive a live indicator or send payload.

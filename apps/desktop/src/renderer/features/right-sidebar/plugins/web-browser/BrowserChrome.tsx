@@ -59,6 +59,8 @@ import { cn } from '@/lib/utils';
 import { parseOmnibox } from './lib/parseOmnibox';
 
 export interface BrowserChromeProps {
+  /** 保活宿主失活/隐藏时，取消地址编辑并关闭挂在 body 上的菜单。 */
+  visible?: boolean;
   url: string;
   isLoading: boolean;
   canGoBack: boolean;
@@ -99,6 +101,7 @@ export interface BrowserChromeHandle {
 export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>(
   function BrowserChrome(
     {
+      visible = true,
       url,
       isLoading,
       canGoBack,
@@ -120,6 +123,22 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
     ref,
   ) {
     const { t } = useTranslation();
+    const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+    const moreMenuHiddenCloseRef = useRef(false);
+    const handleMoreMenuOpenChange = useCallback(
+      (open: boolean) => {
+        if (open) moreMenuHiddenCloseRef.current = false;
+        setMoreMenuOpen(open);
+        onOverlayOpenChange?.(open);
+      },
+      [onOverlayOpenChange],
+    );
+    useLayoutEffect(() => {
+      if (!visible) {
+        moreMenuHiddenCloseRef.current = true;
+        handleMoreMenuOpenChange(false);
+      }
+    }, [visible, handleMoreMenuOpenChange]);
 
     // URL pill 编辑态 —— 点 / focus 进入,Enter / Esc / blur 退出。
     // editingValue 是编辑态的临时 buffer,提交才 onNavigate 出去。
@@ -128,16 +147,26 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
     const inputRef = useRef<HTMLInputElement | null>(null);
     const suppressNextBlurSubmitRef = useRef(false);
 
+    useLayoutEffect(() => {
+      if (!visible) {
+        // Set the latch before removing the focused input: hiding a retained
+        // host must never commit an unfinished address through blur.
+        suppressNextBlurSubmitRef.current = true;
+        setEditing(false);
+      }
+    }, [visible]);
+
     // 进入编辑态时只负责 focus/select。editingValue 在 beginEdit 同步写入,避免
     // input 首帧先显示空值 / 旧值、下一帧再跳成 URL 的视觉闪动。
     useLayoutEffect(() => {
-      if (editing) {
-        requestAnimationFrame(() => {
+      if (editing && visible) {
+        const frame = requestAnimationFrame(() => {
           inputRef.current?.focus();
           inputRef.current?.select();
         });
+        return () => cancelAnimationFrame(frame);
       }
-    }, [editing]);
+    }, [editing, visible]);
 
     const beginEdit = useCallback(() => {
       suppressNextBlurSubmitRef.current = false;
@@ -171,13 +200,13 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
 
     const handleBlur = useCallback(
       (e: React.FocusEvent<HTMLInputElement>) => {
-        if (suppressNextBlurSubmitRef.current) {
+        if (!visible || suppressNextBlurSubmitRef.current) {
           suppressNextBlurSubmitRef.current = false;
           return;
         }
         submitValue(e.currentTarget.value);
       },
-      [submitValue],
+      [submitValue, visible],
     );
 
     const handleKey = useCallback(
@@ -216,6 +245,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--border-default)] bg-content-area px-2">
         {/* 左:导航按钮 */}
         <ChromeIconButton
+          visible={visible}
           icon={ArrowLeft}
           disabled={!canGoBack}
           onClick={onGoBack}
@@ -223,6 +253,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           disabledTooltip={t('rightSidebar.browser.goBackUnavailable')}
         />
         <ChromeIconButton
+          visible={visible}
           icon={ArrowRight}
           disabled={!canGoForward}
           onClick={onGoForward}
@@ -230,6 +261,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           disabledTooltip={t('rightSidebar.browser.goForwardUnavailable')}
         />
         <ChromeIconButton
+          visible={visible}
           icon={RotateCw}
           reducedMotionIcon={isLoading ? XIcon : undefined}
           spinning={isLoading}
@@ -263,7 +295,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
               placeholder={t('rightSidebar.browser.urlPlaceholder')}
               className={cn(
                 'min-w-0 flex-1 bg-transparent text-12 leading-none text-[var(--text-primary)]',
-                'placeholder:text-[var(--text-tertiary)] outline-none',
+                'placeholder:text-[var(--text-placeholder)] outline-none',
               )}
             />
           ) : (
@@ -284,6 +316,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
           message-square-plus = 页面评论(评论模式点选元素 → 评论进 composer,
           已实现,active 态高亮);ellipsis = 更多菜单(系统浏览器打开 / 复制链接)。 */}
         <ChromeIconButton
+          visible={visible}
           icon={Camera}
           onClick={onCaptureScreenshot}
           tooltip={t('rightSidebar.browser.screenshot')}
@@ -291,6 +324,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
         {/* detached 子窗口无 composer,评论无处落点 —— 直接不渲染该按钮。 */}
         {commentSupported && (
           <ChromeIconButton
+            visible={visible}
             icon={MessageSquarePlus}
             active={commentActive}
             onClick={onToggleComment}
@@ -303,9 +337,9 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
         )}
         {/* 更多菜单:trigger 复用 chrome 图标按钮视觉(默认态 + 菜单打开时 active 高亮,
           走 data-[state=open])。菜单项在无有效链接(新标签空白态)时置灰。 */}
-        <DropdownMenu onOpenChange={onOverlayOpenChange}>
+        <DropdownMenu open={visible && moreMenuOpen} onOpenChange={handleMoreMenuOpenChange}>
           <DropdownMenuTrigger asChild>
-            <Tip text={t('rightSidebar.browser.moreTools')} side="bottom">
+            <Tip text={t('rightSidebar.browser.moreTools')} side="bottom" disabled={!visible}>
               <button
                 type="button"
                 aria-label={t('rightSidebar.browser.moreTools')}
@@ -320,7 +354,16 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
               </button>
             </Tip>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[9rem]">
+          <DropdownMenuContent
+            align="end"
+            className="min-w-[9rem]"
+            onCloseAutoFocus={(event) => {
+              // Presence can finish closing after a rapid return to this task.
+              // Remember the hidden close until the next intentional opening;
+              // ordinary dismissal still restores the visible trigger focus.
+              if (!visible || moreMenuHiddenCloseRef.current) event.preventDefault();
+            }}
+          >
             <DropdownMenuItem
               disabled={!hasValidLink || !canOpenInSystemBrowser}
               onSelect={onOpenInSystemBrowser}
@@ -344,6 +387,7 @@ export const BrowserChrome = forwardRef<BrowserChromeHandle, BrowserChromeProps>
  * star 用)。disabled 时半透明 + 不可点。
  */
 function ChromeIconButton({
+  visible,
   icon: Icon,
   reducedMotionIcon: ReducedMotionIcon,
   size = 14,
@@ -355,6 +399,7 @@ function ChromeIconButton({
   tooltip,
   disabledTooltip,
 }: {
+  visible: boolean;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
   /** reduced-motion 下用静态动作图标表达 loading 状态，避免刷新/空闲态无法区分。 */
   reducedMotionIcon?: React.ComponentType<{
@@ -413,8 +458,10 @@ function ChromeIconButton({
     </button>
   );
 
+  // Disabling Tip unmounts its Radix root, clearing open portals and pending
+  // hover timers even if this host returns before the delay expires.
   return (
-    <Tip text={accessibleLabel} side="bottom">
+    <Tip text={accessibleLabel} side="bottom" disabled={!visible}>
       {disabled ? (
         <span
           role="button"

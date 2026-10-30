@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `scheduled_model_baseline` text;

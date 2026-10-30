@@ -11,6 +11,7 @@ describe('declaration forward compatibility is not Host authorization', () => {
   it.each([
     ['mobile', { channels: ['practice-ui'], panel: 'mobile/panel.html' }],
     ['mainView', { html: 'view.html' }],
+    ['taskView', { html: 'task.html' }],
     ['panel', { html: 'panel.html' }],
     ['card', {}],
     ['agent', {}],
@@ -67,4 +68,13 @@ describe('declaration forward compatibility is not Host authorization', () => {
   ])('still rejects malformed known fields and unsafe paths: %j', (fields) => {
     expect(validateGhostManifest({ ...base, ...fields }).ok).toBe(false);
   });
+});
+
+it('validates opt-in delegation while preserving unrelated future agent fields', () => {
+  const agent = { tasks: true, targets: true, delegation: true, future: extension };
+  expect(validateGhostManifest({ ...base, agent })).toMatchObject({ ok: true, manifest: { agent } });
+  for (const invalid of [{ delegation: true }, { tasks: true, delegation: true }, { tasks: true, targets: true, delegation: 'yes' }]) {
+    expect(validateGhostManifest({ ...base, agent: invalid }).ok).toBe(false);
+  }
+  expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: true } })).toMatchObject({ ok: true });
 });

@@ -1,6 +1,8 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
+import { randomUUID } from 'expo-crypto';
 import { useAuth } from '@/auth/AuthContext';
 import { Redirect, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -12,13 +14,15 @@ import { Text } from '@/components/AppText';
 import { MainWindowActionButton, MainWindowEmptyState } from '@/components/MobilePrimitives';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { getRemoteResource, invokeRemoteResourceAction, isMobileRemoteCollectionSupported, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
-import { formatRemoteError } from '@/device-link/remoteStatus';
+import { createRemoteReadRecovery } from '@/device-link/remoteReadRecovery';
+import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { SimpleStackHeader, simpleScreenSafeAreaEdges } from '@/platform/chrome';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import { goBackGuarded } from '@/utils/backGuard';
+import { CompanionProfileSheet } from '@/session/CompanionProfileSheet';
 
 function firstParam(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? '';
@@ -35,7 +39,7 @@ function RemoteResourceResolverScreenContent() {
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
   const router = useRouter();
-  const { invoke, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
+  const { invoke, openLink, connectionEpoch, status, onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   const { accountGeneration } = useAuth();
   const binding = `${accountGeneration}:${connectionEpoch}`;
   const currentBinding = useRef(binding); currentBinding.current = binding;
@@ -51,7 +55,7 @@ function RemoteResourceResolverScreenContent() {
   const resourceId = firstParam(params.resourceId);
   const resourceKind = firstParam(params.resourceKind);
   const deviceId = firstParam(params.deviceId);
-  const deviceName = firstParam(params.deviceName) || deviceId;
+  const deviceName = deviceDisplayName(deviceId, firstParam(params.deviceName));
   const title = firstParam(params.title) || t('devices.resources.titleFallback');
   const host = useMemo<RemoteResourceHostTarget>(
     () => ({ deviceId, deviceName }),
@@ -60,36 +64,52 @@ function RemoteResourceResolverScreenContent() {
   const [error, setError] = useState<string | null>(null);
   const [preparation, setPreparation] = useState<{ binding: string; resource: RemoteResource; stage: string } | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileOpenRef = useRef(false);
+  const pendingHistory = useRef<string | null>(null);
+  useEffect(() => {
+    profileOpenRef.current = false;
+    pendingHistory.current = null;
+    setProfileOpen(false);
+  }, [binding, deviceId, resourceId]);
   // Scoped to the resource binding so another teammate never inherits this notice.
   const [retryFailed, setRetryFailed] = useState<string | null>(null);
   const retryLock = useRef(false);
   const visiblePreparation = preparation?.binding === binding ? preparation : null;
+  const historyTarget = visiblePreparation?.resource.links.find(link => link.rel === 'conversation')?.target as RemoteSessionLinkTarget | undefined;
+  const historySessionId = historyTarget?.kind === 'session' && typeof historyTarget.sessionId === 'string' ? historyTarget.sessionId : null;
   const [attempt, setAttempt] = useState(0);
   const resolveGenerationRef = useRef(0);
+  const recovery = useRef<ReturnType<typeof createRemoteReadRecovery> | null>(null);
 
   const resolveConversation = useCallback(async () => {
     const generation = ++resolveGenerationRef.current;
+    if (profileOpenRef.current) return true;
     setError(null);
     if (!collectionId || !resourceId || !resourceKind || !deviceId) {
       setError(t('devices.resources.noHosts'));
       return;
     }
     try {
+      if (status !== 'online') { setError(t('devices.resources.hostOffline')); return; }
       // Resolve the opaque resource again on every open. A desktop module may
       // roll its canonical Session without invalidating the permanent route.
+      await openLink(deviceId);
+      if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
       const response = await getRemoteResource(invoke, host, {
         collectionId,
         id: resourceId,
         kind: resourceKind,
       }, i18n.language);
       if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
+      // Do not navigate away from an in-progress model edit when preparation recovers.
+      if (profileOpenRef.current) return true;
       const invitation = response.blocks?.find(block => block.id === 'invitation' && block.primitive === 'status');
       const stage = (invitation?.data as { stage?: string } | undefined)?.stage;
       if (resourceKind === 'bot' && stage && stage !== 'ready') {
         setPreparation({ binding, resource: response, stage });
         return stage !== 'failed';
       }
-      setPreparation(null);
       const link = response.links.find((item) => item.rel === 'conversation');
       const target = link?.target as RemoteSessionLinkTarget | undefined;
       if (!target || target.kind !== 'session' || typeof target.sessionId !== 'string') {
@@ -98,9 +118,12 @@ function RemoteResourceResolverScreenContent() {
       }
       const session = await invoke<RemoteSession>(deviceId, 'local-db:sessions:get', [target.sessionId]);
       if (resolveGenerationRef.current !== generation || currentBinding.current !== binding) return;
+      if (profileOpenRef.current) return true;
       if (!session || session.id !== target.sessionId || (resourceKind === 'bot' && session.source !== 'bot')) throw new Error(t('devices.resources.noConversation'));
       const existingOrigin = remoteSessionStore.getSessionDeviceId(session.id);
       if (existingOrigin && existingOrigin !== deviceId) throw new Error(t('devices.resources.noConversation'));
+      recovery.current?.succeeded();
+      setPreparation(null);
       remoteSessionStore.upsertDeviceSession(deviceId, deviceName, session);
       router.replace({
         pathname: '/sessions/[sessionId]',
@@ -114,9 +137,12 @@ function RemoteResourceResolverScreenContent() {
         },
       });
     } catch (cause) {
-      if (resolveGenerationRef.current === generation && currentBinding.current === binding) setError(formatRemoteError(cause));
+      if (profileOpenRef.current) return true;
+      if (resolveGenerationRef.current === generation && currentBinding.current === binding) {
+        setError(humanizeRemoteError(cause)); recovery.current?.failed(cause);
+      }
     }
-  }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, resourceId, resourceKind, router, t]);
+  }, [binding, collectionId, deviceId, deviceName, host, i18n.language, invoke, openLink, resourceId, resourceKind, router, status, t]);
 
   useFocusEffect(useCallback(() => {
     let disposed = false;
@@ -134,16 +160,18 @@ function RemoteResourceResolverScreenContent() {
       if (refreshAgain) { refreshAgain = false; void load(); }
       else if (pending) timer = setTimeout(() => { void load(); }, 2500);
     };
+    recovery.current = createRemoteReadRecovery(() => { void load(); },
+      () => !disposed && status === 'online' && AppState.currentState === 'active');
     const offPush = onRemoteResourceChanged((source, payload) => {
       if (source === deviceId && payload.collectionId === collectionId) void load();
     });
     const offTopic = startFocusedTopicSubscription({ deviceId, owner: `resource-resolver:${resourceId}`, topic: 'sessions', subscribe, unsubscribe });
     const appState = AppState.addEventListener('change', state => {
-      if (state === 'active') void load();
-      else { resolveGenerationRef.current += 1; if (timer) clearTimeout(timer); }
+      if (state === 'active') { recovery.current = createRemoteReadRecovery(() => { void load(); }, () => !disposed && status === 'online' && AppState.currentState === 'active'); void load(); }
+      else { resolveGenerationRef.current += 1; recovery.current?.dispose(); if (timer) clearTimeout(timer); }
     });
     void load();
-    return () => { disposed = true; resolveGenerationRef.current += 1; if (timer) clearTimeout(timer); offPush(); offTopic(); appState.remove(); };
+    return () => { disposed = true; recovery.current?.dispose(); resolveGenerationRef.current += 1; if (timer) clearTimeout(timer); offPush(); offTopic(); appState.remove(); };
   }, [attempt, collectionId, deviceId, onRemoteResourceChanged, resolveConversation, resourceId, status, subscribe, unsubscribe]));
 
   const retryInvitation = async () => {
@@ -198,6 +226,11 @@ function RemoteResourceResolverScreenContent() {
             <MainWindowActionButton action={{ label: retrying ? t('devices.resources.resolving') : t('devices.resources.retry'), onPress: () => { void retryInvitation(); }, testID: 'remoteResourceResolver.retryInvitation' }} />
           ) : null}
           {retryFailed === binding ? <Text accessibilityRole="alert" style={styles.muted} testID="remoteResourceResolver.retryInvitationFailed">{t('devices.companions.invitation.retryFailed')}</Text> : null}
+          <MainWindowActionButton action={{
+            label: t('devices.companionProfile.settingsTitle'),
+            onPress: () => { profileOpenRef.current = true; setProfileOpen(true); },
+            testID: 'remoteResourceResolver.settings',
+          }} />
         </View>
       ) : (
         <View style={styles.center}>
@@ -205,6 +238,20 @@ function RemoteResourceResolverScreenContent() {
           <Text style={styles.muted}>{t('devices.resources.resolving')}</Text>
         </View>
       )}
+      {visiblePreparation ? <CompanionProfileSheet
+        visible={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        onClosed={() => {
+          const sessionId = pendingHistory.current; pendingHistory.current = null;
+          profileOpenRef.current = false;
+          if (sessionId) router.push({ pathname: '/sessions/[sessionId]', params: { sessionId, deviceId, deviceName, resourceCollectionId: collectionId, resourceId, resourceKind, openSearch: '1', openSearchRequest: randomUUID() } });
+          else setAttempt(value => value + 1);
+        }}
+        onOpenSearch={historySessionId ? () => { pendingHistory.current = historySessionId; setProfileOpen(false); } : undefined}
+        resource={visiblePreparation.resource}
+        collectionId={collectionId} deviceId={deviceId} deviceName={deviceName} online={status === 'online'}
+        onDeleted={() => goBackGuarded(router)}
+      /> : null}
     </SafeAreaView>
   );
 }

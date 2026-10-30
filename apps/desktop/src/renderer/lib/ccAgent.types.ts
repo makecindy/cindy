@@ -1,3 +1,4 @@
+import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
@@ -5,6 +6,7 @@ import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
+import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
@@ -99,9 +101,15 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** Model boundary recorded by the host when the next input is dispatched. */
+  modelChange?: { fromModel: string; toModel: string; modelOnly: true };
+  /** Host-authored official MCP App snapshot; not an assistant prose reply. */
+  mcpApp?: boolean;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Exact native sampling attempt that failed before response completion. Original text is retained. */
+  failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
   parentUuid?: string;
   /** Claude transcript chain parent. Do not confuse with parentUuid, which is parent_tool_use_id. */
@@ -143,7 +151,8 @@ export interface CcMeta {
   /** Host-owned authorization evidence; IPC callers cannot mint or replace it. */
   autoReviewUserText?: string
     | { text: string; acceptedAt: number }
-    | { kind: 'scheduled-continuation' };
+    | { kind: 'scheduled-continuation' }
+    | AgentRequestReceipt;
 
   /**
    * Host-side origin marker（与 delivery 同类，非 SDK 字段）。
@@ -197,6 +206,8 @@ export interface CcMeta {
   sourceGroup?: MessageSourceGroup;
   /** Guest-safe independent assistant delivery; does not seal a model turn. */
   explicitDelivery?: boolean;
+  /** UI-only call transcript. Never replay as model messages or memory. */
+  voiceCall?: import("@cindy/maker-core").VoiceCallRecord;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;
@@ -274,9 +285,17 @@ export interface CcMeta {
    */
   /** Automatic reply to a private Bot message; retained without unread attention. */
   botPrivateReply?: boolean;
+  /** The accepted user input (clientId) the turn that wrote this row answers. */
+  replyToClientId?: string;
+  /** Main-owned input receipt, retained for audit; never an authorization grant. */
+  botTaskCoordinationInput?: import('../../shared/botTaskCoordination').BotTaskCoordination;
+  /** Accepted internal coordination turn, used to suppress successful completion attention. */
+  botTaskCoordination?: boolean;
   /** Turn of a Bot's hidden group-chat lane; the group chat surfaces its result and failures. */
   botGroupLane?: boolean;
   botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
+  /** Market opening: starter choices rendered as buttons below the message until the user speaks. */
+  botStarterOptions?: string[];
   botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
 
   /**
@@ -342,12 +361,14 @@ export interface Session {
   totalMoney?: RegionalMoney;
   contextTokens: number;
   contextWindow: number;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** Host-only temporary route; absent on older Desktop/device-link peers. */
   runtimeGeneration?: number;
   runtimeBaseline?: SessionRuntimeProfileProjection;
   runtimeEffective?: SessionRuntimeProfileProjection;
   runtimePending?: SessionRuntimePendingProjection | null;
+  /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
+  runtimeBaselineRecoveryPending?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -357,16 +378,30 @@ export interface Session {
   clearedAt: string | null; // ISO 8601 — messages before this timestamp are hidden
   pinnedAt: string | null;  // ISO 8601 — when pinned, null = not pinned
   /**
+   * 插件后台隐藏时刻（ISO 8601）。非 null = 声明 `agent.hiddenTasks` 的插件创建/切换的后台任务，
+   * 主进程任务列表已排除；只会出现在单任务读取（插件详情页「后台任务」打开或深链）。
+   * 老 payload 缺失按 null（可见）处理。
+   */
+  hiddenAt?: string | null;
+  /**
+   * 用户在该任务上开了「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息，
+   * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
+   */
+  notificationsMuted?: boolean;
+  /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
    * 与 updatedAt 解耦——改 model/effort/title 等字段不会动它。
    */
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   status: SessionStatus;
   /** 当前 session 接的 agent。老 session DEFAULT 'cc'。 */
   agentKind: AgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
+  /** Host-owned teammate link, also used by the existing history API. Display only. */
+  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
@@ -414,6 +449,11 @@ export interface Session {
    * 在那台电脑上。null/undefined = Agent 在本机。与 remoteHostId 互斥。
    */
   agentDeviceId?: string | null;
+  /**
+   * 本任务是另一台电脑上协同 Lead 派来的 Worker(任务、目录与命令都在本机)。
+   * null/undefined = 普通任务；旧版本 payload 没有该字段。
+   */
+  orcaRemoteLead?: OrcaRemoteLead | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——
@@ -467,7 +507,7 @@ export interface SessionRuntimeProfileProjection {
   model: string;
   providerId: string | null;
   effort: Effort | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface SessionRuntimePendingProjection {
@@ -500,9 +540,16 @@ export interface AgentSwitchContent {
   handoff: string;
   /** Phase 2:true = 目标引擎续接(resume)了自己的停泊原生会话,交接为增量模式。 */
   resumed?: boolean;
+  /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
+  nativeHistory?: 'restored' | 'fallback';
+  toAgentDeviceId?: string | null;
+  toAgentDeviceName?: string | null;
+  switchReason?: 'quota-rebalance';
 }
 
 export interface Message {
+  /** Local durable-push order, retained by the display cache. */
+  cacheReceipt?: import('@cindy/maker-shared/message-window').HistoryCacheReceipt;
   id: string;
   /**
    * SQLite insertion order for DB-backed history rows. Remote controllers use it

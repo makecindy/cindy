@@ -56,6 +56,35 @@ beforeEach(() => {
   files.available.mockReset().mockResolvedValue(true);
 });
 describe("local journal persistence", () => {
+  // Unit: unchanged 2-second render snapshots dominated the field log. Keep
+  // heartbeat, changed counters and stall/lifecycle evidence through the sink.
+  it('deduplicates render snapshots while retaining changes, periodic samples and stalls', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    const log = await import('./localDiagnostics');
+    const metrics = await import('../session/mobileMarkdownRenderMetrics');
+    const stop = log.startLocalDiagnostics();
+    const snapshots = () => files.append.mock.calls.flatMap(([batch]) => batch.trim().split('\n'))
+      .filter(line => line).map(line => JSON.parse(line)).filter(row => row.args?.[0] === 'render metrics');
+    try {
+      await log.hydrateDiagnostics();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(snapshots()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(snapshots()).toHaveLength(2);
+      metrics.recordMobileMessageRenderItem();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(snapshots()).toHaveLength(3);
+      lifecycle.listen.mock.calls[0][1]('active');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(snapshots()).toHaveLength(4);
+      const now = performance.now();
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(now + 10_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(snapshots()).toHaveLength(5);
+      expect((await log.diagnosticSnapshot()).some(event => event.event === 'js stall')).toBe(true);
+      clock.mockRestore();
+    } finally { stop(); }
+  });
   it("records both clocks and lifecycle distance for a foreground timer gap", async () => {
     vi.useFakeTimers();
     let now = 100;

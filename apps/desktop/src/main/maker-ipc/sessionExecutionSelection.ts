@@ -7,7 +7,7 @@ export interface SessionModelSelection {
   model?: string;
   providerId?: string | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
 }
 type Selection = SessionModelSelection;
 type Admission = Parameters<typeof resolveSendToSessionExecutionConfig>[0];
@@ -62,7 +62,7 @@ export interface SessionExecutionResolverDeps {
 /** sourceSessionId is Host-resolved from an authenticated call, never plugin-supplied. */
 export function createSessionExecutionResolver(deps: SessionExecutionResolverDeps) {
   return async (selection: Selection, sourceSessionId?: string,
-    existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean },
+    existing?: { agentKind: string; model: string; providerId?: string | null; effort?: string | null; fastMode?: boolean | 'ultrafast' },
   ): Promise<SessionExecutionSelection> => {
     const assertOwner = deps.captureOwner();
     assertOwner();
@@ -71,7 +71,7 @@ export function createSessionExecutionResolver(deps: SessionExecutionResolverDep
       if (!['cc', 'claude-code', 'codex', 'pi'].includes(existing.agentKind)) throw new Error('任务 Agent 不可用，请重新选择模型');
       source = { agentKind: (existing.agentKind === 'cc' ? 'claude-code' : existing.agentKind) as AgentKind,
         model: existing.model, providerId: existing.providerId,
-        effort: (existing.effort || undefined) as Effort | undefined, fastMode: existing.fastMode === true };
+        effort: (existing.effort || undefined) as Effort | undefined, fastMode: (existing.fastMode === 'ultrafast' ? 'ultrafast' : existing.fastMode === true) };
     } else if (!(selection.agentKind && selection.model && selection.providerId)) {
       source = sourceSessionId ? await deps.readCaller(sourceSessionId) : deps.readDefault();
       assertOwner();

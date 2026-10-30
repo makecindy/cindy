@@ -187,3 +187,49 @@ describe("remote credentials fingerprint boundary", () => {
     },
   );
 });
+
+it("changes the native fingerprint when incoming-share resources change", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const config = require(CONFIG_PATH);
+  const resources = [
+    "plugins/incoming-share-formats.swift",
+    "plugins/incoming-share-feedback.swift",
+    "plugins/incoming-share-strings.json",
+    "plugins/incoming-share-webpage.js",
+  ];
+  const fixture = mkdtempSync(join(tmpdir(), "cindy-share-fingerprint-"));
+  try {
+    mkdirSync(join(fixture, "plugins"));
+    for (const resource of resources) {
+      cpSync(resolve(dirname(CONFIG_PATH), resource), join(fixture, resource));
+    }
+    const sources = config.extraSources.filter((source: { filePath: string }) => resources.includes(source.filePath));
+    const script = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const { normalizeOptionsAsync } = require('@expo/fingerprint/build/Options');
+      const { createFingerprintFromSourcesAsync } = require('@expo/fingerprint/build/hash/Hash');
+      (async () => {
+        const root = process.argv[1];
+        const options = await normalizeOptionsAsync(root, { platforms: ['ios'], silent: true });
+        const hash = async () => (await createFingerprintFromSourcesAsync(${JSON.stringify(sources)}, root, options)).hash;
+        const baseline = await hash();
+        const changes = [];
+        for (const relative of ${JSON.stringify(resources)}) {
+          const file = path.join(root, relative);
+          const original = fs.readFileSync(file);
+          fs.appendFileSync(file, '\\n');
+          changes.push((await hash()) !== baseline);
+          fs.writeFileSync(file, original);
+        }
+        process.stdout.write(JSON.stringify(changes));
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+    const changed = JSON.parse(execFileSync(process.execPath, ["-e", script, fixture], {
+      cwd: dirname(CONFIG_PATH), encoding: "utf8", timeout: 15_000,
+    }));
+    expect(changed).toEqual(resources.map(() => true));
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

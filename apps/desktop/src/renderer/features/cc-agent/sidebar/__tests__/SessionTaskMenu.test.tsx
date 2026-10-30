@@ -20,7 +20,9 @@ const state = vi.hoisted(() => ({
   invoke: vi.fn(),
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
+  setMuted: vi.fn(),
 }));
+vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string, values?: { title: string; link: string }) => key === 'sharedTask.invitationMessage' ? `Join ${values?.title}\n${values?.link}\nOpen Cindy on mobile.` : key.startsWith('taskMigration.') ? key : key.split('.').at(-1) }),
 }));
@@ -86,6 +88,7 @@ beforeEach(() => {
   state.closeLink.mockResolvedValue(undefined);
   state.openLink.mockResolvedValue(undefined);
   state.writeClipboard.mockResolvedValue(undefined);
+  state.setMuted.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
     electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke } },
@@ -100,6 +103,7 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(labels()).toEqual([
     'pin',
     'rename',
+    'muteNotifications',
     'tags',
     'copy',
     'title',
@@ -116,11 +120,40 @@ it('loads only on open and groups task organization, sharing, viewing and remova
   expect(state.rowClick).not.toHaveBeenCalled();
 });
 
-it('hides moving a task whose agent runs on another computer, since its agent record stays there', () => {
+it('offers moving a task whose agent runs on another computer to another project', () => {
   render(<Harness target={{ ...session, agentDeviceId: 'device-b' } as Session} />);
   openMenu();
-  expect(labels()).not.toContain('moveToProject');
+  expect(labels()).toContain('moveToProject');
   expect(labels()).toContain('openInNewWindow');
+});
+
+it('mutes and unmutes one task from the menu', async () => {
+  render(<Harness />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'muteNotifications' }));
+  await waitFor(() => expect(state.setMuted).toHaveBeenCalledWith(session, true));
+});
+
+it('offers to allow notifications again once a task is muted', async () => {
+  const muted = { ...session, notificationsMuted: true } as Session;
+  render(<Harness target={muted} />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'unmuteNotifications' }));
+  await waitFor(() => expect(state.setMuted).toHaveBeenCalledWith(muted, false));
+});
+
+it('reports a failed mute instead of leaving the row showing a state that never persisted', async () => {
+  state.setMuted.mockRejectedValue(new Error('write failed'));
+  render(<Harness />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'muteNotifications' }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('muteNotificationsFailed'));
+});
+
+it('hides the mute entry for a task whose notifications another device sends', () => {
+  render(<Harness target={{ ...session, deviceLinkDeviceId: 'device-b' } as Session} />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'muteNotifications' })).toBeNull();
 });
 
 it('shows unpin without a branch entry even for a forked Pi task', () => {
@@ -133,6 +166,7 @@ it('shows unpin without a branch entry even for a forked Pi task', () => {
   expect(labels()).toEqual([
     'unpin',
     'rename',
+    'muteNotifications',
     'tags',
     'copy',
     'title',
@@ -208,7 +242,7 @@ it('shows stop sharing for an active host and closes only after confirmation', a
   state.host.mockResolvedValue({ available: true, detail: { sharedTaskId: 'share', status: 'active' } });
   render(<Harness />); openMenu();
   await screen.findByRole('menuitem', { name: 'manageSharing' });
-  expect(labels()).toEqual(['pin', 'rename', 'tags', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+  expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'manageSharing', 'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
   expect(screen.queryByRole('menuitem', { name: 'cancelSharing' })).toBeNull();
   await openSharingSubmenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'cancelSharing' }));

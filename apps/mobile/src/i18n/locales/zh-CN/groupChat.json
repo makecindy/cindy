@@ -1,8 +1,8 @@
 {
   "title": "群聊",
   "memberSeparator": "、",
-  "memberCount_one": "{{count}} 位伙伴",
-  "memberCount_other": "{{count}} 位伙伴",
+  "memberCount_one": "{{count}} 位成员",
+  "memberCount_other": "{{count}} 位成员",
   "organizer": "负责人",
   "waitingConfirm": "{{name}}在等你确认",
   "loadFailedTitle": "无法加载这个群聊",
@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "新建群聊",
-    "description": "选几位伙伴放进一个群。你说一句，它们会一起接话。",
     "nameLabel": "群名称",
     "namePlaceholder": "例如：周末出游",
     "nameRequired": "给群起个名字",
     "membersLabel": "选择伙伴",
     "selectedCount_one": "已选 {{count}} 位，最多 {{max}} 位",
     "selectedCount_other": "已选 {{count}} 位，最多 {{max}} 位",
-    "minMembers": "至少选 {{min}} 位伙伴",
-    "notEnoughBots": "至少需要 {{min}} 位可用的伙伴才能建群，先去添加伙伴吧。",
+    "close": "关闭",
+    "submitShort": "创建",
     "submit": "创建群聊",
-    "failed": "群聊没有建成，请稍后重试",
-    "chooseComputer": "在哪台电脑上建群",
-    "computerNote": "群聊建在 {{deviceName}} 上，伙伴们在这台电脑上干活。"
+    "failed": "群聊没有建成，请稍后重试"
   },
   "memberStatus": {
     "paused": "已暂停",
@@ -60,6 +57,8 @@
     "send": "发送"
   },
   "timeline": {
+    "newMessages_one": "{{count}} 条新消息",
+    "newMessages_other": "{{count}} 条新消息",
     "emptyTitle": "群里还没有消息",
     "emptyDescription": "说一句话开始，伙伴们会接着聊。@ 某位伙伴就只让它回答。",
     "roundEnded": "伙伴们说完了",
@@ -77,6 +76,12 @@
     "planDoneGeneric": "分工做完了",
     "olderOnComputer": "更早的消息请在电脑上查看"
   },
+  "quote": {
+    "label": "引用 {{name}}：{{summary}}",
+    "deleted": "原消息已删除",
+    "attachments": "{{name}} 等 {{total}} 个附件",
+    "unavailable": "无法找到这条消息。"
+  },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
     "memberFailed": "{{name}}这次没能回复",
@@ -87,7 +92,65 @@
     "workdirUnavailable": "{{name}}找不到工作目录",
     "stepFailed": "{{name}}这一步出错了，没做完",
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
-    "stepUnavailable": "{{name}}现在不可用，这一步没法做"
+    "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+    "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。",
+        "advice": "请伙伴的主人归档不用的任务。",
+        "details": "请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。"
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}无法回复：远程电脑保留的任务总数已达上限。",
+        "advice": "请远程电脑的主人释放不用的任务或提高上限。",
+        "details": "请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。"
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}无法回复：当前模型不支持图片。",
+        "advice": "请切换到支持图片的模型。",
+        "details": "请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。"
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}无法回复：当前没有可用模型。",
+        "advice": "请在伙伴设置中选择可用模型。",
+        "details": "请在伙伴设置中选择已连接的可用模型后重新发送。"
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}无法回复：模型连接需要重新认证。",
+        "advice": "请重新连接对应的模型来源。",
+        "details": "请在设置中重新连接对应模型来源后重新发送。"
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}无法回复：模型请求过于频繁。",
+        "advice": "请稍后重新发送。",
+        "details": "请稍后重新发送，或选择其他可用模型。"
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}无法回复：模型服务暂时繁忙。",
+        "advice": "请稍后重新发送。",
+        "details": "请稍后重新发送，或选择其他可用模型。"
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}无法回复：模型用量已达上限。",
+        "advice": "请检查配额或选择其他模型。",
+        "details": "请检查对应来源的配额，或选择其他可用模型。"
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}无法回复：网络连接失败。",
+        "advice": "请检查网络或Proxy。",
+        "details": "请检查网络或 Proxy 后重新发送。"
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}本次回复超时。",
+        "advice": "请重新发送消息。",
+        "details": "请重新发送消息，或选择其他可用模型。"
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}这次没能回复。",
+        "advice": "请重新发送消息。",
+        "details": "请重新发送消息；如果仍失败，请查看日志并反馈问题。"
+      }
+    },
+    "runtimeFailureSetupHint": "如需调整模型或设置，请在伙伴所属电脑上处理。"
   },
   "plan": {
     "intro_one": "这件事分 {{count}} 步，我这样分工：",
@@ -96,6 +159,7 @@
     "start": "开始",
     "dismiss": "不用了",
     "editHint": "想换人或改步骤，直接说",
+    "autoNote": "做完一步会自动交给下一位。",
     "pauseNote": "每做完一步会停下来，等你点「继续」。",
     "superseded": "已更新",
     "dismissed": "不用了",
@@ -120,11 +184,25 @@
     "allDone": "都做完了"
   },
   "speaking": {
+    "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
   },
+  "task": {
+    "state": {
+      "started": "进行中",
+      "waiting": "等你确认",
+      "completed": "已完成",
+      "failed": "失败了",
+      "cancelled": "已取消",
+      "timed-out": "已超时"
+    }
+  },
   "files": {
-    "onComputer": "文件在电脑上，回电脑打开"
+    "onComputer": "文件在电脑上，回电脑打开",
+    "loading": "加载中…",
+    "unavailable": "暂时无法加载",
+    "untitled": "附件"
   },
   "settings": {
     "open": "群设置",
@@ -135,12 +213,13 @@
     "minMembers": "群里至少要有 {{min}} 位伙伴",
     "maxMembers": "最多 {{max}} 位",
     "noMoreBots": "没有其他可以加入的伙伴了",
-    "nameSaveFailed": "群名称没能保存，已恢复原来的名字",
+    "nameSaveFailed": "群名称没能保存，输入已保留，请重试。",
     "membersSaveFailed": "成员没能更新，请再试一次",
     "replyMode": "没有 @ 人的时候",
     "replyModeAll": "大家都可以接话",
     "replyModeMentioned": "只有被 @ 的回答",
     "replyModeNote": "没什么可补充的伙伴不会说话。每轮最多聊 3 圈、10 条，之后等你点「继续讨论」。",
+    "replyModeNoteQueue": "伙伴们排队依次回答，前 5 位自动接着说。引用伙伴的消息或回复它的话题，也会叫到它。",
     "replyModeSaveFailed": "回复方式没能保存，请再试一次",
     "delete": "删除群聊",
     "deleteNote": "只删除这个群和群里的消息，伙伴本身、它们的记忆和私聊都不受影响。",
@@ -149,7 +228,7 @@
     "speakingMode": "发言方式",
     "speakingModeAuto": "自动",
     "speakingModeSequential": "始终轮流",
-    "speakingModeAutoNote": "没有 @ 人或 @所有人时，第一圈大家同时想，之后轮流接话；@ 了伙伴就按 @ 的先后轮流。",
+    "speakingModeAutoNote": "未 @ 人或 @所有人时，首轮同时思考，之后轮流；@ 伙伴按提及顺序轮流。",
     "speakingModeSequentialNote": "每次只有一位伙伴发言，后说的能看到前面的回答。",
     "speakingModeSaveFailed": "发言方式没能保存，请再试一次",
     "setOrganizer": "设为负责人",
@@ -161,18 +240,156 @@
     "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
-    "memberActions": "{{name}} 的操作"
+    "memberActions": "{{name}} 的操作",
+    "retry": "重试",
+    "conflict": "群设置已更新，请核对后再保存。输入已保留。",
+    "archive": "归档群聊",
+    "archiveConfirmTitle": "归档「{{name}}」？",
+    "archiveNote": "仅群主可归档。归档后不能继续发消息，历史消息保留。",
+    "description": "群简介",
+    "descriptionSaveFailed": "群简介未保存",
+    "makeAdmin": "设为管理员",
+    "removeAdmin": "取消管理员",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理员",
+      "member": "成员",
+      "guest": "访客"
+    },
+    "cloudStatus": {
+      "loading": "正在读取群设置…",
+      "permission": "只有群主和管理员可以修改这些设置",
+      "unavailable": "群设置读取失败，请重试"
+    }
   },
   "errors": {
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
+    "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",
     "planOpen": "正在分工，做完或停止后才能安排新的",
-    "planClosed": "这个安排已经结束或更新了"
+    "planClosed": "这个安排已经结束或更新了",
+    "invalidAttachment": "附件无法读取，请重新选择后发送。",
+    "attachmentUnavailable": "未能从手机取回附件，请检查设备连接后重试。",
+    "attachmentTooLarge": "附件超过 100 MB，请选择较小的文件。",
+    "mediaUploadFailed": "附件未能上传到群聊服务，请稍后重试。",
+    "authRequired": "登录已失效，请在电脑上重新登录。",
+    "chatUnavailable": "群聊服务暂时无法连接，请检查网络后重试。",
+    "importPending": "群历史记录仍在同步，请稍后重试。",
+    "requestTimeout": "还未确认操作结果，请刷新查看后再重试。",
+    "permissionDenied": "你没有执行此操作的群管理权限。",
+    "serviceError": "群聊服务处理失败，请稍后重试。",
+    "groupArchived": "本群已归档，不能执行此操作。",
+    "quoteUnavailable": "引用的消息已删除或不可见，已取消引用，请再发送一次",
+    "lifecycleUnavailable": "当前服务器或电脑暂不支持此操作。",
+    "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
+    "lastOwner": "请先转让群主或解散群聊，再退出。"
   },
   "followUp": {
     "next": "分工 · 下一步",
     "failedStep": "第 {{step}} 步没做完"
+  },
+  "server": {
+    "attachmentTooLarge": "群聊附件不能超过 {{size}} MB，请选择较小的文件。",
+    "offline": "暂时无法连接群聊，请重试。",
+    "loadFailed": "暂时无法读取群聊，请重试。",
+    "loadOlder": "加载更早的消息",
+    "attachmentFailed": "附件打开失败，请重试。",
+    "attachmentPreviewLoading": "正在读取附件…",
+    "attachmentPreviewFailed": "无法预览此附件，请重试。",
+    "attachmentPreviewTooLarge": "附件超过 10 MB，手机上无法预览。",
+    "attachmentPreviewBinary": "此附件不是可阅读的文本，无法预览。",
+    "attachmentPreviewTruncated": "预览最多显示 10,000 行、100,000 个字符。",
+    "attachmentPreviewEmpty": "此文件为空。",
+    "attachmentPreviewRetry": "重试",
+    "attachmentPreviewOpenOutside": "在浏览器中打开",
+    "attachmentPreviewClose": "关闭附件预览",
+    "previewUnavailable": "暂时无法读取消息预览",
+    "endpointUnavailable": "群聊服务配置暂不可用，请重试。"
+  },
+  "lifecycle": {
+    "dissolve": "解散群聊",
+    "dissolveNote": "解散后无法恢复。所有成员将无法发送消息，进行中的工作会停止，邀请会失效。成员仍可查看原本有权访问的历史消息。",
+    "hide": "从我的列表移除",
+    "hideNote": "从你所有设备的列表中移除此群聊。不改变成员关系，不删除历史消息、不停止进行中的工作，也不影响其他成员。",
+    "leave": "退出群聊",
+    "leaveNote": "你和你的伙伴将退出此群聊，不再接收新消息，也无法查看群历史。",
+    "unavailable": "当前服务器或电脑暂不支持此操作。",
+    "dissolved": "群聊已解散，仍可查看有权访问的历史消息。",
+    "failed": "操作未完成，请重试。",
+    "lastOwner": "请先转让群主或解散群聊，再退出。"
+  },
+  "mask": {
+    "toolAccess": "工具权限",
+    "catchup": {
+      "title": "@ 我的消息",
+      "me": "我",
+      "markAll": "全部标为已读",
+      "empty": "没有未读的 @ 消息",
+      "thread": "话题",
+      "main": "群聊",
+      "answered": "已代答"
+    },
+    "title": "AI 代答模式",
+    "settings": "AI 代答设置",
+    "companion": "我的伙伴",
+    "choose": "选择一位伙伴",
+    "enabled": "自动代答",
+    "triggerLabel": "触发方式",
+    "resumeAfter": "离开多久后恢复",
+    "start": "开始时间",
+    "end": "结束时间",
+    "startManual": "现在开启",
+    "stop": "停止代答",
+    "todos": "整理与我有关的待办",
+    "digestLabel": "汇总给我",
+    "saving": "正在保存…",
+    "saveError": "未能保存，仍按原设置代答。请重试。",
+    "retry": "重试",
+    "loading": "正在加载你的设置…",
+    "takeover": "我来回复",
+    "resume": "恢复代答",
+    "status": {
+      "enabled": "已启用",
+      "paused": "已让位",
+      "off": "未开启",
+      "offline": "已离线",
+      "waiting": "待触发",
+      "unbound": "未绑定"
+    },
+    "detail": {
+      "paused": "你已接回这段交流",
+      "off": "自动代答已关闭",
+      "offline": "代答已暂停 · 电脑离线",
+      "waiting": "等待手动开启",
+      "unbound": "尚未选择伙伴",
+      "enabled": "伙伴正在为你待答"
+    },
+    "trigger": {
+      "always": "永久触发",
+      "manual": "手动指定触发",
+      "scheduled": "定时触发"
+    },
+    "digest": {
+      "daily": "每日汇总",
+      "manual": "手动汇总"
+    },
+    "minutes": "{{count}} 分钟",
+    "presence": "你正在参与 · 离开 {{minutes}} 分钟后恢复",
+    "scheduledWait": "等待 {{time}} 开始",
+    "attribution": "{{name}} 为 {{owner}} 回复",
+    "digestNow": "立即整理",
+    "digestWorking": "整理中…",
+    "digestSent": "已发到伙伴私聊",
+    "digestFailed": "整理失败，请重试",
+    "digestEmpty": "暂无新的待整理内容",
+    "access": {
+      "chat": "仅群内交流",
+      "tools": "主人已授权工具与资料",
+      "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
+      "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
+      "confirm": "确认"
+    }
   }
 }

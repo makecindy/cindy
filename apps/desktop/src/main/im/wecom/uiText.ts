@@ -18,6 +18,7 @@ export const ui = {
     detachedBySlash: '🚪 已结束接管，后续消息回到企业微信对话。',
     detachedByRevoke: '⚠️ desktop 端已收回接管，后续消息回到企业微信对话。',
     notAttached: '当前没有正在接管的任务。',
+    companionManagedCommand: '🧭 这个连接已交给伙伴，模型、权限和工作目录跟随伙伴设置。请在 Cindy 的伙伴设置里修改。',
   },
   agent: {
     completedNoText: '✅ 任务已完成（本轮没有文本输出）',

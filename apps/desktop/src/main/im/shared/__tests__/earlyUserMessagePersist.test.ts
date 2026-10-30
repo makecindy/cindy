@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelIM, IMMessageEvent } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
+  recordImage: vi.fn(async () => undefined),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -36,6 +37,10 @@ vi.mock('../slashCommands', () => ({
 }));
 
 import { createMessageHandler } from '../messageHandler';
+vi.mock('../receivedImageHistory', async (original) => ({
+  ...(await original<typeof import('../receivedImageHistory')>()),
+  recordReceivedImageMessage: mocks.recordImage,
+}));
 import { activateImAccountBoundary } from '../../accountBoundary';
 import type { ImSlashHandlers } from '../slashCommands';
 import type { ImRunAgentTurnArgs, ImTurnRunner } from '../turnRunner';
@@ -65,7 +70,14 @@ interface Harness {
   reactToMessage: ReturnType<typeof vi.fn>;
 }
 
-function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = { withPrepare: true }): Harness {
+function wire(
+  opts: {
+    withPrepare: boolean;
+    channel?: string;
+    notificationSessionId?: string;
+    ambientTurnGate?: ImChannelAdapter['ambientTurnGate'];
+  } = { withPrepare: true },
+): Harness {
   const calls: string[] = [];
   const runAgentTurn = vi.fn(async () => undefined);
   const reactToMessage = vi.fn(async () => 'reaction-1');
@@ -95,13 +107,14 @@ function wire(opts: { withPrepare: boolean; notificationSessionId?: string } = {
   } as unknown as ChannelIM;
 
   const adapter = {
-    channel: 'feishu',
+    channel: opts.channel ?? 'feishu',
     ...(opts.notificationSessionId ? { resolveNotificationReply: async () => opts.notificationSessionId } : {}),
     im,
     ui: slackUi,
     threadScoped: false,
     processingEmoji: 'Eyes',
     ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
+    ...(opts.ambientTurnGate ? { ambientTurnGate: opts.ambientTurnGate } : {}),
   } as unknown as ImChannelAdapter;
 
   const attach = createMessageHandler(
@@ -128,6 +141,40 @@ beforeEach(() => {
 });
 
 describe('messageHandler early user-message persist', () => {
+  // Regression: local-history channels previously passed no image read lease to the provider.
+  it.each([
+    {
+      channel: 'wecom',
+      senderId: `group/${Buffer.from('chat').toString('base64url')}`,
+      messageId: 'msg',
+    },
+    { channel: 'dingtalk', senderId: 'owner', messageId: 'msg' },
+    { channel: 'discord', senderId: 'owner', messageId: 'chat|msg' },
+  ])(
+    'registers %s image history before assembling context, with native message IDs',
+    async ({ channel, senderId, messageId }) => {
+      const h = wire({ withPrepare: true, channel });
+      h.prepareAgentTurnText!.mockImplementation(async () => {
+        expect(mocks.recordImage).toHaveBeenCalledOnce();
+        return null;
+      });
+      h.deliver(
+        makeEvent({
+          channelName: channel as IMMessageEvent['channelName'],
+          senderId,
+          chatId: 'chat',
+          messageId,
+        }),
+      );
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledOnce());
+      expect(turnArgs(h.runAgentTurn).groupHistoryAccess).toEqual({
+        access: 'lane',
+        provider: `${channel}-personal:cli_bot`,
+        lane: { provider: `${channel}-personal:cli_bot`, chatId: 'chat', threadId: '' },
+      });
+      expect(mocks.recordImage).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg' }));
+    },
+  );
   it('先落库再拼群上下文, 并把落库结果透传给 turn', async () => {
     const h = wire();
     h.deliver(makeEvent());
@@ -148,6 +195,7 @@ describe('messageHandler early user-message persist', () => {
     expect(turnArgs(h.runAgentTurn).channelNoteSource).toEqual({
       chatKind: 'group',
       chatId: 'oc_chat',
+      senderIsOwner: true,
       senderId: 'ou_y',
     });
     expect(turnArgs(h.runAgentTurn).text).toBe('出行要注意什么吗');
@@ -233,7 +281,6 @@ describe('messageHandler early user-message persist', () => {
   });
 });
 
-
 it('does not persist a notification reply into the default IM session before dispatch', async () => {
   activateImAccountBoundary();
   const h = wire({ withPrepare: true, notificationSessionId: 'original-session' });
@@ -242,4 +289,41 @@ it('does not persist a notification reply into the default IM session before dis
     notificationSessionId: 'original-session', scopeKey: 'om_root',
   })));
   expect(h.persistEarly).not.toHaveBeenCalled();
+});
+
+/**
+ * 全响应(ambient)前置判定: 判成 skip 的消息不留任何痕迹 —— 排在 ack 与提前落库之前,
+ * 不拼上下文、不起轮次; 判不出来 / 抛错照常走; 被召唤的消息从不经过判定。
+ */
+describe('messageHandler ambient gate', () => {
+  it('drops a judged-skip ambient message before ack, early persist and context assembly', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+    await vi.waitFor(() => expect(ambientTurnGate).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.reactToMessage).not.toHaveBeenCalled();
+    expect(h.persistEarly).not.toHaveBeenCalled();
+    expect(h.prepareAgentTurnText).not.toHaveBeenCalled();
+    expect(h.runAgentTurn).not.toHaveBeenCalled();
+  });
+
+  it('runs the normal turn when the judge says proceed, and when it throws', async () => {
+    for (const gate of [vi.fn(async () => 'proceed' as const), vi.fn(async () => { throw new Error('judge down'); })]) {
+      const h = wire({ withPrepare: true, ambientTurnGate: gate as never });
+      h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', ambient: true, invoked: false }));
+      await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(h.persistEarly).toHaveBeenCalledTimes(1);
+      expect(h.prepareAgentTurnText).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('never consults the judge for a summoned message', async () => {
+    const ambientTurnGate = vi.fn(async () => 'skip' as const);
+    const h = wire({ withPrepare: true, ambientTurnGate });
+    h.deliver(makeEvent({ channelName: 'telegram', senderId: 'g/-100', invoked: true }));
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(ambientTurnGate).not.toHaveBeenCalled();
+  });
 });

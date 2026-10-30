@@ -35,6 +35,17 @@ describe('resolveHostContext mappers', () => {
     ).toBe(false);
   });
 
+  it('passes a linked Bot owner for pinned local sessions without exposing profiles', () => {
+    expect(contextFromLocalSessionRow({
+      id: 'bot-main', workingDir: '/repo', remoteHostId: null, agentKind: 'codex',
+      botId: 'bot-1', botRole: 'canonical',
+    }).botOwner).toEqual({ botId: 'bot-1', canonical: true });
+    expect(contextFromLocalSessionRow({
+      id: 'bot-history', workingDir: '/repo', remoteHostId: null, agentKind: 'codex',
+      botId: 'bot-1', botRole: 'history',
+    }).botOwner).toEqual({ botId: 'bot-1', canonical: false });
+  });
+
   it('fills device-link context from the main mirror list', () => {
     expect(
       contextFromDeviceLinkMirror('device-9', {

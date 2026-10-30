@@ -182,6 +182,31 @@ describe('pi remote file ops command hygiene', () => {
       .rejects.toThrow('remote stat returned an invalid response');
   });
 
+  it('lstat classifies symlinks without following them', async () => {
+    const { calls, host } = fakeHost('SYMLINK\n');
+    const ops = createRemotePiFileOps(host);
+
+    await expect(ops.lstat!('/link')).resolves.toEqual({ isSymbolicLink: true });
+    expect(calls[0].cmd).not.toContain('stat -L');
+    expect(calls[0].cmd).toContain('%F');
+    expect(calls[0].cmd).toContain('-- "$P"');
+  });
+
+  it('lstat classifies real entries and missing paths', async () => {
+    const real = fakeHost('OTHER\n');
+    await expect(createRemotePiFileOps(real.host).lstat!('/dir'))
+      .resolves.toEqual({ isSymbolicLink: false });
+
+    const missing = fakeHost('MISSING\n');
+    await expect(createRemotePiFileOps(missing.host).lstat!('/gone')).resolves.toBeNull();
+  });
+
+  it('lstat rejects malformed successful responses', async () => {
+    const { host } = fakeHost('unexpected remote output');
+    await expect(createRemotePiFileOps(host).lstat!('/x'))
+      .rejects.toThrow('remote lstat returned an invalid response');
+  });
+
   it('hashes the complete remote file in place without transferring its contents', async () => {
     const digest = 'a'.repeat(64);
     const { calls, host } = makeHostExec(`${digest}\n`);

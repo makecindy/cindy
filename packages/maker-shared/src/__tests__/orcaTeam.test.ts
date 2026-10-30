@@ -3,6 +3,9 @@ import {
   DEFAULT_ORCA_COLLABORATION_SETTINGS,
   buildDraftWorkerInitialTask,
   createWorkerLabel,
+  normalizeOrcaWorkerLabel,
+  normalizeOrcaWorkerRole,
+  orcaWorkerSessionTitle,
   orcaWorkerSlotState,
   parseOrcaCollaborationSettings,
   parseOrcaTeamWorkers,
@@ -24,11 +27,61 @@ describe('orca team shared helpers', () => {
     expect(shouldShowWorkerLabel('developer', 'developer')).toBe(false);
   });
 
+  it('normalizes worker labels and roles with the shared create/rename contract', () => {
+    expect(normalizeOrcaWorkerLabel('  Backend-2 ')).toEqual({ ok: true, value: 'backend-2' });
+    expect(normalizeOrcaWorkerLabel('')).toEqual({ ok: false, message: 'label required' });
+    expect(normalizeOrcaWorkerLabel('a'.repeat(33))).toEqual({
+      ok: false,
+      message: 'label must be 1-32 chars',
+    });
+    expect(normalizeOrcaWorkerLabel('前端')).toEqual({
+      ok: false,
+      message: 'label may only contain letters, numbers, hyphens and underscores',
+    });
+    expect(normalizeOrcaWorkerRole('  Reviewer ')).toEqual({ ok: true, value: 'Reviewer' });
+    expect(normalizeOrcaWorkerRole('   ')).toEqual({ ok: false, message: 'role required' });
+    expect(normalizeOrcaWorkerRole('r'.repeat(33))).toEqual({
+      ok: false,
+      message: 'role must be 1-32 chars',
+    });
+    expect(orcaWorkerSessionTitle('reviewer', 'reviewer-2')).toBe('Worker · reviewer · reviewer-2');
+    // role 与 label（忽略大小写）相同时只写一次，与创建侧 orcaWorkerTitle 同一形态。
+    expect(orcaWorkerSessionTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerSessionTitle('reader', 'READER')).toBe('Worker · reader');
+  });
+
   it('keeps pending Lead input as context only when a Worker task exists', () => {
     expect(buildDraftWorkerInitialTask(undefined, 'lead text')).toBeUndefined();
     expect(buildDraftWorkerInitialTask('  review  ', undefined)).toBe('review');
     expect(buildDraftWorkerInitialTask('review', 'lead text')).toContain('Pending Lead input:\n');
     expect(buildDraftWorkerInitialTask('review', 'lead text')?.endsWith('lead text')).toBe(true);
+  });
+
+  it('keeps the execution device of a worker running on another computer', () => {
+    const [remote, partial] = parseOrcaTeamWorkers([
+      {
+        id: 'w-1',
+        sessionId: 'proxy-1',
+        role: 'reader',
+        status: 'idle',
+        session: { agentKind: 'codex' },
+        executionDevice: {
+          deviceId: 'mac-mini',
+          remoteSessionId: 'remote-1',
+          deviceName: 'Mac mini',
+          reachable: false,
+        },
+      },
+      { id: 'w-2', sessionId: 's-2', executionDevice: { deviceId: 'x' } },
+    ]);
+    expect(remote!.executionDevice).toEqual({
+      deviceId: 'mac-mini',
+      remoteSessionId: 'remote-1',
+      deviceName: 'Mac mini',
+      reachable: false,
+    });
+    // 缺真实任务 id 的不当成远端 Worker(旧被控端或异常数据按本机处理)。
+    expect(partial).not.toHaveProperty('executionDevice');
   });
 
   it('parses worker records defensively and drops rows without identity', () => {

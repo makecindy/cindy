@@ -157,6 +157,22 @@ function validateHello(p: Record<string, unknown>): string | null {
   if (p.lifecycleAnnouncement !== undefined && typeof p.lifecycleAnnouncement !== 'boolean') {
     return 'hello.lifecycleAnnouncement must be a boolean when present';
   }
+  if (p.statusReactions !== undefined) {
+    const r = p.statusReactions;
+    const name = (v: unknown): v is string =>
+      typeof v === 'string' && v.length > 0 && v.length <= 64 && !/\s/.test(v);
+    const pool = (v: unknown, max: number): boolean =>
+      Array.isArray(v) && v.length > 0 && v.length <= max && v.every(name);
+    if (
+      !isPlainObject(r) ||
+      !name(r.queued) ||
+      !name(r.error) ||
+      !pool(r.processing, 16) ||
+      (r.expressiveError !== undefined && !pool(r.expressiveError, 64))
+    ) {
+      return 'hello.statusReactions must contain bounded reaction names and non-empty pools';
+    }
+  }
   // defaultWorkspace 可选(旧 desktop 不发 = 无默认)。成员关系在协议层卡死:
   // server 只能派发 workspaces 内的别名, 默认值若能指向清单外的别名, 等于给
   // 这条约束开了后门 —— 而它恰恰是 server 侧派发校验的唯一依据。
@@ -333,6 +349,8 @@ function validateAck(p: Record<string, unknown>): string | null {
 }
 
 function validateTurnEnd(p: Record<string, unknown>): string | null {
+  if (p.background !== undefined && p.background !== true) return 'turn.end.background must be true or absent';
+  if (p.background === true && p.clientFinal !== undefined) return 'background results cannot carry clientFinal';
   if (!isNonEmptyString(p.requestId)) return 'turn.end.requestId must be a non-empty string';
   if (!isNonEmptyString(p.externalKey)) return 'turn.end.externalKey must be a non-empty string';
   if (!isNullableString(p.sessionId)) return 'turn.end.sessionId must be a string or null';
@@ -1488,6 +1506,26 @@ function validateGroupMessage(p: Record<string, unknown>): string | null {
   }
   if (typeof p.text !== 'string' || p.text.length > GROUP_MESSAGE_TEXT_MAX) {
     return `group.message.text must be a string of at most ${GROUP_MESSAGE_TEXT_MAX} chars`;
+  }
+  if (
+    p.imageRefs !== undefined &&
+    (!Array.isArray(p.imageRefs) ||
+      p.imageRefs.length > 4 ||
+      p.imageRefs.some(
+        (ref) =>
+          !isPlainObject(ref) ||
+          typeof ref.fileId !== 'string' ||
+          ref.fileId.length < 1 ||
+          ref.fileId.length > 1024 ||
+          typeof ref.name !== 'string' ||
+          ref.name.length > 256 ||
+          typeof ref.mimeType !== 'string' ||
+          !/^image\/(jpeg|png|gif|webp)$/.test(ref.mimeType) ||
+          (ref.downloadToken !== undefined &&
+            (typeof ref.downloadToken !== 'string' || ref.downloadToken.length > 8192)),
+      ))
+  ) {
+    return 'group.message.imageRefs must contain at most 4 bounded image locators';
   }
   if (p.fileNames !== undefined) {
     if (

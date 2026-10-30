@@ -28,16 +28,25 @@ import { CindyMakeBuildProgress } from './CindyMakeBuildProgress';
 import { CindyMakeBuildFailure } from './CindyMakeBuildFailure';
 import { cindyMakeBuildStatusKey } from './cindyMakeBuildStatus';
 import { useCindyMakeBuildStop } from './useCindyMakeBuildStop';
+import {
+  CindyMakeContributionDialog,
+  CindyMakeContributionStatus,
+  contributionActionKey,
+  useCindyMakeContributions,
+} from './CindyMakeContribution';
 
 type Filter = 'all' | 'pending' | 'integrated' | 'ended';
 /** Historical facts and allowed actions come from Main; an old button cannot authorize a write. */
 export function CindyMakeHistoryPanel({
   active = true,
   hasPersonalVersion = false,
+  canGenerate = hasPersonalVersion,
   onState,
 }: {
   active?: boolean;
   hasPersonalVersion?: boolean;
+  /** Generating is offered for a first personal version too once there is something to use. */
+  canGenerate?: boolean;
   onState?: (state: CindyMakeHistoryState) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -63,6 +72,8 @@ export function CindyMakeHistoryPanel({
   // A failed build is persisted so it can still be retried, but an old failure
   // should not reappear as a fresh red banner every time this panel is opened.
   const [showBuildFailure, setShowBuildFailure] = useState(false);
+  const [contributing, setContributing] = useState<string>();
+  const contributions = useCindyMakeContributions(active);
   const request = useRef(0);
   const acting = useRef(false);
   const actionGeneration = useRef(0);
@@ -179,7 +190,7 @@ export function CindyMakeHistoryPanel({
         ? filter === 'all' || item.lifecycle === 'ended'
         : filter === 'integrated'
           ? item.integration === 'integrated'
-          : ['unintegrated', 'changed', 'reverted'].includes(item.integration) &&
+          : ['unintegrated', 'changed'].includes(item.integration) &&
             item.lifecycle !== 'ended'),
   );
   const selected = visible.find((item) => item.runId === selectedId) ?? visible[0];
@@ -242,6 +253,20 @@ export function CindyMakeHistoryPanel({
       )
     : [];
   if (selected?.canHide && !selectedActions.includes('retry-cleanup')) selectedActions.push('hide');
+  // A finished change can go to the official repository; Main checks it again on draft.
+  const contributedRound = selected?.completions.findLast(
+    (completion) => completion.tree && completion.baseTree,
+  );
+  const selectedContribution = selected && contributions.views[selected.runId];
+  const contributionKey =
+    selected &&
+    contributedRound &&
+    contributedRound.tree !== contributedRound.baseTree &&
+    !selected.operation &&
+    !['preparing', 'running'].includes(selected.lifecycle) &&
+    !['reverted', 'unchanged'].includes(selected.integration)
+      ? contributionActionKey(selectedContribution)
+      : undefined;
   useEffect(() => {
     const nextId = selected?.runId ?? '';
     if (nextId !== selectedId) select(nextId);
@@ -408,7 +433,7 @@ export function CindyMakeHistoryPanel({
   const rebuildPersonal = async () => {
     if (
       acting.current ||
-      !hasPersonalVersion ||
+      !canGenerate ||
       !state?.canBuild ||
       building ||
       !isDataOwnerGenerationCurrent(owner)
@@ -536,14 +561,18 @@ export function CindyMakeHistoryPanel({
             {t('cindyMake.history.title')} ·{' '}
             {t('cindyMake.history.taskCount', { count: items.length })}
           </h3>
-          {hasPersonalVersion && (
+          {canGenerate && (
             <Button
               variant="secondary"
               disabled={!!pending || failed || !state?.canBuild || building}
               loading={pending === 'rebuild-personal'}
               onClick={() => void rebuildPersonal()}
             >
-              {t('cindyMake.history.regeneratePersonal')}
+              {t(
+                hasPersonalVersion
+                  ? 'cindyMake.history.regeneratePersonal'
+                  : 'cindyMake.history.generatePersonal',
+              )}
             </Button>
           )}
         </div>
@@ -554,7 +583,7 @@ export function CindyMakeHistoryPanel({
                 total: items.length,
                 pending: items.filter(
                   (item) =>
-                    ['unintegrated', 'changed', 'reverted'].includes(item.integration) &&
+                    ['unintegrated', 'changed'].includes(item.integration) &&
                     item.lifecycle !== 'ended',
                 ).length,
                 integrated: items.filter((item) => item.integration === 'integrated').length,
@@ -811,6 +840,7 @@ export function CindyMakeHistoryPanel({
                       : statusKey(selected)),
                 )}
               </p>
+              {selectedContribution && <CindyMakeContributionStatus view={selectedContribution} />}
               <CindyMakeTestStep test={selected.test} />
               {!selectedIsGlobalFailure && (
                 <>
@@ -874,10 +904,26 @@ export function CindyMakeHistoryPanel({
                   )}
                 </Button>
               ))}
+              {contributionKey && (
+                <Button
+                  variant="secondary"
+                  disabled={!!pending || failed}
+                  onClick={() => setContributing(selected.runId)}
+                >
+                  {t(contributionKey)}
+                </Button>
+              )}
             </div>
           </div>
         )}
       </div>
+      {contributing && (
+        <CindyMakeContributionDialog
+          runId={contributing}
+          onOpenChange={(open) => !open && setContributing(undefined)}
+          onSubmitted={contributions.record}
+        />
+      )}
     </section>
   );
 }

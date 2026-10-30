@@ -4,6 +4,7 @@ import { TAB_IDS, TAB_LABEL_KEY } from '@/lib/tabLabels';
 
 import {
   buildSettingsSearchDocuments,
+  isLegacyAppearanceDeepLink,
   normalizeSettingsSearchText,
   resolveSettingsSearchTarget,
   searchSettings,
@@ -17,6 +18,7 @@ const translations: Record<string, string> = {
   'settings.sections.language': 'Language',
   'settings.sections.user': 'User',
   'settings.tabs.general': 'General',
+  'settings.tabs.appearance': 'Appearance',
   'settings.tabs.personalization': 'Personalization',
   'settings.wechatBot.title': '个人微信',
   'settings.wecomBot.title': '企业微信智能机器人',
@@ -35,15 +37,47 @@ describe('settings search catalog', () => {
     const documents = buildSettingsSearchDocuments(t, ['general']);
 
     expect(documents.every(({ entry }) => entry.tab === 'general')).toBe(true);
-    expect(documents.map(({ entry }) => entry.id)).toContain('general.appearance');
+    expect(documents.map(({ entry }) => entry.id)).toContain('general.language');
+    expect(documents.map(({ entry }) => entry.id)).not.toContain('appearance');
     expect(documents.map(({ entry }) => entry.id)).not.toContain('personalization.memory');
   });
 
   it('ranks exact section matches before broader category matches', () => {
-    const documents = buildSettingsSearchDocuments(t, ['general']);
+    const documents = buildSettingsSearchDocuments(t, ['general', 'appearance']);
     const matches = searchSettings(documents, 'appearance');
 
-    expect(matches[0]?.entry.id).toBe('general.appearance');
+    expect(matches[0]?.entry.id).toBe('appearance');
+  });
+
+  it('routes legacy appearance deep links to the Appearance tab', () => {
+    expect(isLegacyAppearanceDeepLink(null, 'appearance')).toBe(true);
+    expect(isLegacyAppearanceDeepLink('general', 'general.appearance')).toBe(true);
+    expect(isLegacyAppearanceDeepLink(null, 'settings.appearance.modeLabel')).toBe(true);
+    expect(isLegacyAppearanceDeepLink('personalization', 'streamFade')).toBe(true);
+    expect(isLegacyAppearanceDeepLink('personalization', 'personalization.streamFade')).toBe(true);
+    expect(resolveSettingsSearchTarget('appearance', 'streamFade')).toBe(
+      'settings-search-target-appearance-stream-fade',
+    );
+  });
+
+  it('resolves legacy concrete anchor ids to the Appearance tab', () => {
+    expect(isLegacyAppearanceDeepLink(null, 'settings-search-target-general-appearance')).toBe(true);
+    expect(
+      isLegacyAppearanceDeepLink('personalization', 'settings-search-target-personalization-stream-fade'),
+    ).toBe(true);
+    expect(resolveSettingsSearchTarget('appearance', 'settings-search-target-general-appearance')).toBe(
+      'settings-panel-appearance',
+    );
+    expect(
+      resolveSettingsSearchTarget('appearance', 'settings-search-target-personalization-stream-fade'),
+    ).toBe('settings-search-target-appearance-stream-fade');
+  });
+
+  it('keeps sections that still live on General or Personalization in place', () => {
+    expect(isLegacyAppearanceDeepLink(null, 'notifications')).toBe(false);
+    expect(isLegacyAppearanceDeepLink('personalization', 'memory')).toBe(false);
+    expect(isLegacyAppearanceDeepLink(null, null)).toBe(false);
+    expect(isLegacyAppearanceDeepLink('remote-control', 'appearance')).toBe(false);
   });
 
   it('returns no results for an empty or unknown query', () => {
@@ -153,6 +187,9 @@ describe('settings search catalog', () => {
       SETTINGS_SEARCH_ENTRIES.flatMap((entry) => [entry.targetId, entry.fallbackTargetId]),
     );
     for (const target of targets) {
+      // The shared WeChat component selects its anchor at runtime. Its catalog target
+      // and companion isolation are checked against real DOM in WechatBotSection.test.tsx.
+      if (target === 'personal-im-wechat') continue;
       if (target) {
         const dynamicProviderAnchor =
           /^cindy-im-(slack|telegram|x)$/.test(target) &&

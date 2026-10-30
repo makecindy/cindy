@@ -23,6 +23,10 @@ import type {
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
 import { t } from '../../i18n';
+import { Session } from '@cindy/maker-core';
+import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot';
+import { createIpcError } from '../../../shared/ipc-errors';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { CindyGhostsHostDeps } from '../ghost';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
@@ -256,8 +260,21 @@ vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
 }));
 
-const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
-const { createCindyGhostsMcpServer } = await import('cindy-tools');
+const communityReadMock = vi.fn();
+const communitySubmitMock = vi.fn();
+const communityPreparedMock = vi.fn();
+vi.mock('../../plugin-contributions/host.js', () => ({
+  listMyPlugins: (...args: unknown[]) => communityReadMock(...args),
+  submitContribution: (...args: unknown[]) => communitySubmitMock(...args),
+  mapContributionError: (error: unknown) => { throw error; },
+}));
+vi.mock('../../plugin-contributions/prepared.js', () => ({
+  contributionOwnerKey: () => 'test-owner', assertContributionOwner: vi.fn(),
+  getPreparedContribution: (...args: unknown[]) => communityPreparedMock(...args),
+}));
+
+const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost');
+const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
@@ -333,7 +350,7 @@ function makeDeps(
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
   for (const dir of [WORKDIR, `${WORKDIR} `, '/proj/beta', 'E:/Repo']) {
-    for (const id of ['art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
+    for (const id of ['art', '_root__art', 'other', 'missing', 'sleeping', 'account', 'workflow-guide']) {
       setGhostDisabledForWorkdir(dir, id, false);
     }
   }
@@ -437,7 +454,7 @@ beforeEach(() => {
   dirDepositMock.mockClear();
   saveDepositMock.mockClear();
   liveGrantStateMock.mockReset();
-  liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null });
+  liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true });
   callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
@@ -500,6 +517,46 @@ beforeEach(() => {
 });
 
 describe('Forge session workdir gate', () => {
+  it.each(['forgeScaffold', 'forgePack', 'forgeInstall'] as const)('blocks Pi %s after the UI plan intent is consumed until native execution exits Plan', async (operation) => {
+    let executionPlan: boolean | null = true;
+    let close!: () => void;
+    const closed = new Promise<void>((resolve) => { close = resolve; });
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const handle = {
+      id: 'pi', agentKind: 'pi', model: 'test',
+      async *events() { await closed; }, async close() { close(); }, setInteractionResolver() {},
+      getPlanMode: () => false, getExecutionPlanMode: () => executionPlan,
+    };
+    const session = new Session({ id: 's1', sessionInstanceId: 's1-instance', agentKind: 'pi', workDir: WORKDIR,
+      permissionMode: 'bypassPermissions', handle: handle as never,
+      capabilities: { planMode: { supported: true } } as never, logger });
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, permissionMode: 'bypassPermissions', planModeEnabled: false, remoteHostId: null });
+    liveGrantStateMock.mockImplementation((id, instance) => {
+      const snapshot = resolveGhostFsSessionSnapshot(() => session, id, instance);
+      return { permissionMode: session.stablePermissionModeState?.mode ?? null, remoteHostId: null,
+        isCurrent: () => !!snapshot && !snapshot.planModeEnabled && snapshot.isCurrent?.() === true };
+    });
+    packGhostDirMock.mockResolvedValue({ ok: true, buf: Buffer.from('packed'),
+      cindyPath: path.join(WORKDIR, 'plugin-src', 'demo-1.0.0.cindy'),
+      manifest: { id: 'demo', name: 'Demo', version: '1.0.0' } });
+    const deps = makeDeps('pi');
+    const invoke = () => operation === 'forgeScaffold'
+      ? deps.forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'x', name: 'X' })
+      : deps[operation]({ dir: path.join(WORKDIR, 'plugin-src') });
+    try {
+      expect(session.getPlanMode()).toBe(false);
+      for (const state of [true, null]) {
+        executionPlan = state;
+        expect(await invoke()).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      }
+      expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+      expect(packGhostDirMock).not.toHaveBeenCalled();
+      expect(forgeInstallPackageMock).not.toHaveBeenCalled();
+      executionPlan = false;
+      expect(await invoke()).toMatchObject({ ok: true });
+    } finally { await session.close(); }
+  });
+
   it('holds the owner mutation lease across the Forge operation', async () => {
     const operation = makeDeps().forgePack({ dir: path.join(WORKDIR, 'plugin-src') });
     expect(captureMutationOwnerMock).toHaveBeenCalledTimes(1);
@@ -514,6 +571,7 @@ describe('Forge session workdir gate', () => {
     expect(packGhostDirMock).toHaveBeenCalledWith(path.join(WORKDIR, 'plugin-src'), {
       sessionWorkdir: WORKDIR,
       forbiddenRootDirs: [],
+      isCurrent: expect.any(Function),
     });
   });
 
@@ -550,6 +608,7 @@ describe('Forge session workdir gate', () => {
     });
 
     expect(forgeInstallPackageMock).toHaveBeenCalledWith(cindyPath, {
+      isCurrent: expect.any(Function),
       ghostId: 'demo',
       packageSha256: createHash('sha256').update(bytes).digest('hex'),
       // Agent 安装的插件确认投给调用所在的任务。
@@ -1205,9 +1264,44 @@ describe('connect_account shares Host live plugin policy', () => {
     await deps.connectAccount!({ kind: 'host', id: 'grok' });
     expect(authorizationRequestMock).toHaveBeenCalledTimes(2);
   });
+  it('persists the installed instance identity for a bot connection', async () => {
+    isAuthorizationSessionMock.mockResolvedValue(true);
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: '/fake/_ns/acme/art' },
+    ]);
+    await makeDeps('claude-code', 'bot-session', 'bot-instance').connectAccount!({ kind: 'plugin', id: 'art' });
+    expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', {
+      kind: 'plugin', id: 'art', namespace: 'acme',
+    });
+    listMock.mockReturnValue([{ ...(chipGhost('art') as object), namespaceState: 'pending' as const }]);
+    await makeDeps('claude-code', 'bot-session', 'bot-instance').connectAccount!({ kind: 'plugin', id: 'art' });
+    expect(authorizationRequestMock).toHaveBeenLastCalledWith('bot-session', { kind: 'plugin', id: 'art' });
+  });
 });
 
 describe('connect_account ordinary task entry', () => {
+  it('selects an explicit root when an organization instance shares its id', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: null },
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: '/fake/_ns/acme/art' },
+    ]);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art', namespace: null }))
+      .toMatchObject({ ok: true, status: 'ready' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: 'art' }));
+  });
+  it('rechecks a physically namespaced organization after its setup completes', async () => {
+    setupAssessmentMock.mockReturnValue(configured);
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: null },
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: '/fake/_ns/acme/art' },
+    ]);
+    expect(await makeDeps().connectAccount!({ kind: 'plugin', id: 'art', namespace: 'acme' }))
+      .toMatchObject({ ok: true, status: 'ready' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_ns__acme__art' }));
+  });
   it('keeps Host-derived GitHub login on its existing path without a cloud-only adapter', async () => {
     listMock.mockReturnValue([chipGhost('cindy-github')]);
     const signal = new AbortController().signal;
@@ -1290,6 +1384,141 @@ describe('connect_account ordinary task entry', () => {
 });
 
 describe('花名册 / ghost_list 过滤', () => {
+  // PR #6434: list already hides an unavailable owner projection; wrong-address
+  // info/manual/call/setup must preserve that boundary before any side effect.
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    '%s hides namespace recovery targets while the active owner is unavailable', async (agentKind) => {
+      listMock.mockReturnValue([{
+        ...(chipGhost('art', ['tool']) as object),
+        namespace: 'outgoing-owner',
+        dir: path.join(tmpUserData, '_ns', 'outgoing-owner', 'art'),
+      }]);
+      activeSessionAvailableMock.mockReturnValue(false);
+      const deps = makeDeps(agentKind);
+      expect(JSON.parse((await handleGhostList(deps)).content[0].text).ghosts).toEqual([]);
+      const target = { ghost_id: 'art', namespace: null };
+      for (const result of [
+        await handleGhostInfo(deps, target),
+        await handleGhostManual(deps, target),
+        await handleGhostCall(deps, { ...target, tool: 'run', attachments: ['cindy-media://blobs/example.png'] }),
+      ]) {
+        expect(result.isError).toBe(true);
+        expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+        expect((result.content[0] as { text: string }).text).not.toContain('outgoing-owner');
+      }
+      const connection = await deps.connectAccount!({ kind: 'plugin', id: 'art', namespace: null });
+      expect(connection).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND' });
+      expect(JSON.stringify(connection)).not.toContain('outgoing-owner');
+      expect(ensureReadyMock).not.toHaveBeenCalled();
+      expect(grantAttachmentsMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // Regression: a listed root was repeatedly addressed with the string "null".
+  // Exercise the real MCP handlers and host resolver with the same session deps;
+  // a rejected address must never reach setup, attachment grants or dispatch.
+  it.each(['claude-code', 'codex', 'pi'] as const)(
+    '%s recovers in the same session after correcting a quoted null namespace', async (agentKind) => {
+      listMock.mockReturnValue([{
+        ...(chipGhost('art', ['tool'], {
+          manual: { items: [{ dir: 'docs', name: 'guide', description: 'Usage guide' }] },
+        }) as object),
+        namespace: null,
+        dir: path.join(tmpUserData, '_ns', '_root', 'art'),
+      }]);
+      const deps = makeDeps(agentKind);
+      const listed = JSON.parse((await handleGhostList(deps)).content[0].text).ghosts[0];
+      expect(listed).toMatchObject({ id: 'art', namespace: null });
+      const wrong = { ghost_id: listed.id, namespace: 'null' };
+      const results = [
+        await handleGhostInfo(deps, wrong),
+        await handleGhostManual(deps, wrong),
+        await handleGhostCall(deps, { ...wrong, tool: 'run', attachments: ['cindy-media://blobs/example.png'] }),
+      ];
+      const target = { ghost_id: listed.id, namespace: listed.namespace };
+      for (const result of results) {
+        expect(result.isError).toBe(true);
+        const payload = JSON.parse((result.content[0] as { text: string }).text);
+        expect(payload).toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+        expect(payload.message).toContain(JSON.stringify(target));
+      }
+      await expect(deps.connectAccount!({ kind: 'plugin', id: 'art', namespace: 'null' }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+      expect(ensureReadyMock).not.toHaveBeenCalled();
+      expect(grantAttachmentsMock).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(JSON.parse((await handleGhostInfo(deps, target)).content[0].text))
+        .toMatchObject({ ok: true, ghost: { id: 'art', namespace: null } });
+      expect(JSON.parse((await handleGhostManual(deps, target)).content[0].text))
+        .toMatchObject({ ok: true, manual: [{ name: 'guide' }] });
+      expect(JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text))
+        .toMatchObject({ ok: true, result: 'done' });
+      expect(dispatchMock).toHaveBeenCalledOnce();
+      expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_root__art' }));
+      setGhostDisabledForWorkdir(WORKDIR, '_root__art', true);
+      expect(JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text))
+        .toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+      expect(dispatchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap(
+    (agentKind) => [true, false].map((pending) => ({ agentKind, pending })),
+  ))(
+    '$agentKind preserves a missing namespace through discovery, calls and manuals (pending=$pending)',
+    async ({ agentKind, pending: isPending }) => {
+      const pending = {
+        ...(chipGhost('art', ['tool'], {
+          manual: { items: [{ dir: 'docs', name: 'guide', description: 'Usage guide' }] },
+        }) as object),
+        dir: path.join(tmpUserData, 'art'),
+        ...(isPending ? { namespaceState: 'pending' as const } : {}),
+      };
+      listMock.mockReturnValue([pending]);
+      const deps = makeDeps(agentKind);
+      const listed = JSON.parse((await handleGhostList(deps)).content[0].text).ghosts[0];
+      const info = JSON.parse((await handleGhostInfo(deps, { ghost_id: 'art' })).content[0].text).ghost;
+      for (const discovered of [listed, info]) {
+        const target = {
+          ghost_id: discovered.id,
+          ...(Object.hasOwn(discovered, 'namespace') ? { namespace: discovered.namespace } : {}),
+        };
+        const called = JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text);
+        expect(called).toMatchObject({ ok: true, result: 'done' });
+        const manual = JSON.parse((await handleGhostManual(deps, target)).content[0].text);
+        expect(manual).toMatchObject({ ok: true, manual: [{ name: 'guide' }] });
+        expect(discovered).not.toHaveProperty('namespace');
+      }
+      expect(deps.getRosterItems?.()[0]).not.toHaveProperty('namespace');
+      expect(getGhostRosterPrompt({ workingDir: WORKDIR })).not.toContain('"namespace"');
+      if (isPending) {
+        await expect(deps.getAwakeGhost('art', null)).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_NAMESPACE_MISMATCH' });
+      }
+      expect(dispatchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('keeps explicit root and organization namespaces in discovery with same-name instances', async () => {
+    listMock.mockReturnValue([
+      { ...(chipGhost('art') as object), namespace: null, dir: path.join(tmpUserData, '_ns', '_root', 'art') },
+      { ...(chipGhost('art') as object), namespace: 'acme', dir: path.join(tmpUserData, '_ns', 'acme', 'art') },
+    ]);
+    const deps = makeDeps();
+    const listed = JSON.parse((await handleGhostList(deps)).content[0].text).ghosts;
+    expect(listed.map(({ namespace }: { namespace: string | null }) => namespace)).toEqual([null, 'acme']);
+    for (const discovered of listed) {
+      const target = { ghost_id: discovered.id, namespace: discovered.namespace };
+      const info = JSON.parse((await handleGhostInfo(deps, target)).content[0].text);
+      expect(info).toMatchObject({ ok: true, ghost: { id: 'art', namespace: discovered.namespace } });
+      expect(JSON.parse(((await handleGhostCall(deps, { ...target, tool: 'run' })).content[0] as { text: string }).text))
+        .toMatchObject({ ok: true, result: 'done' });
+    }
+    expect(dispatchMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ ghostId: '_root__art' }));
+    expect(dispatchMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ ghostId: '_ns__acme__art' }));
+    await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+  });
+
   it('被禁用的意识不进花名册与现查清单;其余照常', async () => {
     setGhostDisabledForWorkdir(WORKDIR, 'art', true);
     const deps = makeDeps();
@@ -1530,18 +1759,19 @@ describe('Manual-only Ghost discovery and read gates', () => {
   it.each(['claude-code', 'codex', 'pi'] as const)(
     '%s discovers Manual-only plugins through both rosters, list and info',
     async (agentKind) => {
-      const ghost = manualOnlyGhost();
+      const ghost = { ...manualOnlyGhost(), namespace: null };
       listMock.mockReturnValue([ghost, chipGhost('art')]);
       const deps = makeDeps(agentKind);
       const roster = deps.getRosterItems?.() ?? [];
       expect(roster.map(({ id }) => id)).toEqual(['workflow-guide', 'art']);
       expect(roster[0]).toEqual({
-        id: 'workflow-guide', name: 'Workflow Guide', recall: ghost.manifest.whenToUse,
+        id: 'workflow-guide', namespace: null, name: 'Workflow Guide', recall: ghost.manifest.whenToUse,
       });
       const ghosts = await deps.listAwakeGhosts();
       expect(ghosts).toHaveLength(2);
       expect(ghosts[0]).toEqual({
         ...roster[0],
+        namespace: null,
         tools: [],
         manual: [{ name: 'workflow-guide', description: 'Build workflow' }],
         setup: { state: 'ready', revision: 0, groups: [] },
@@ -1919,6 +2149,58 @@ describe('ghost_call 兜底拒绝', () => {
 });
 
 describe('session-context 宿主铸造', () => {
+  it.each([null, 'acme'])('pins namespace %s across revalidation when a twin exists', async (namespace) => {
+    listMock.mockReturnValue([
+      chipGhost('art', ['tool', 'session-context']),
+      {
+        ...(chipGhost('art', ['tool', 'session-context']) as object),
+        namespace: 'acme',
+        dir: path.join(tmpUserData, '_ns', 'acme', 'art'),
+      },
+    ]);
+    sessionSnapshotMock.mockResolvedValueOnce({
+      workingDir: WORKDIR,
+      permissionMode: 'auto',
+      planModeEnabled: true,
+      remoteHostId: null,
+    });
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      namespace,
+      tool: 'run',
+      args: {
+        session_context: {
+          session_id: 'forged',
+          workdir: '/tmp/forged',
+          workdir_is_local: true,
+          workdir_is_read_only: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, result: 'done' });
+    expect(ensureReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ghostId: namespace === null ? 'art' : '_ns__acme__art' }),
+    );
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ghostId: namespace === null ? 'art' : '_ns__acme__art',
+        args: {
+          session_context: {
+            session_id: 's1',
+            workdir: WORKDIR,
+            workdir_is_local: true,
+            workdir_is_read_only: true,
+          },
+        },
+      }),
+    );
+    const dispatched = dispatchMock.mock.calls.at(0)?.at(0) as Record<string, unknown> | undefined;
+    expect(dispatched).not.toHaveProperty('namespace');
+  });
+
   it('剥除上游伪造值，并按会话权限注入可信只读状态', async () => {
     listMock.mockReturnValue([chipGhost('art', ['tool', 'session-context'])]);
     sessionSnapshotMock.mockResolvedValueOnce({
@@ -2798,7 +3080,154 @@ describe('Full Access 插件文件交接', () => {
 });
 
 
+describe('installation-bound directory grant memory', () => {
+  const lanes = [
+    { lane: 'dir', namespace: undefined, installDir: path.join(tmpUserData, 'art') },
+    { lane: 'save_dir', namespace: null, installDir: path.join(tmpUserData, '_ns', '_root', 'art') },
+    { lane: 'attachments-dir', namespace: 'acme', installDir: path.join(tmpUserData, '_ns', 'acme', 'art') },
+  ] as const;
+  const revision = '00000000-0000-4000-8000-000000000001';
+  const replacementRevision = '00000000-0000-4000-8000-000000000002';
+
+  function fixture(entry: typeof lanes[number], scenario: string) {
+    const target: InstalledGhost = {
+      ...(chipGhost('art') as InstalledGhost),
+      dir: entry.installDir,
+      approval: { state: 'approved', revision },
+      ...(entry.namespace !== undefined ? { namespace: entry.namespace } : {}),
+    };
+    listMock.mockReturnValue([target]);
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null });
+    const directory = path.join(outsideDir, `${scenario}-${entry.lane}`);
+    fs.mkdirSync(directory, { recursive: true });
+    const deps = makeDeps('claude-code', `${scenario}-${entry.lane}`);
+    let requestNumber = 0;
+    const request = () => {
+      requestNumber += 1;
+      const file = path.join(directory, `file-${requestNumber}.png`);
+      if (entry.lane === 'attachments-dir') fs.writeFileSync(file, `${scenario}-${requestNumber}`);
+      return deps.callGhostTool({
+        ghostId: 'art',
+        ...(entry.namespace !== undefined ? { namespace: entry.namespace } : {}),
+        tool: 'run',
+        args: {},
+        ...(entry.lane === 'dir' ? { dir: directory } : {}),
+        ...(entry.lane === 'save_dir' ? { saveDir: directory } : {}),
+        ...(entry.lane === 'attachments-dir' ? { attachments: [file] } : {}),
+      });
+    };
+    const clearEffects = () => {
+      dispatchMock.mockClear();
+      dirDepositMock.mockClear();
+      saveDepositMock.mockClear();
+      grantAttachmentsMock.mockClear();
+      ledgerAddRefMock.mockClear();
+    };
+    const expectNoEffects = () => {
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(dirDepositMock).not.toHaveBeenCalled();
+      expect(saveDepositMock).not.toHaveBeenCalled();
+      expect(grantAttachmentsMock).not.toHaveBeenCalled();
+      expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    };
+    return { target, request, clearEffects, expectNoEffects };
+  }
+
+  it.each(lanes)('$lane remembers consent only for the approved installation', async (entry) => {
+    const { target, request, clearEffects, expectNoEffects } = fixture(entry, 'cached');
+    confirmRequestMock.mockResolvedValue({ confirmed: true, allowDirs: true });
+    expect(await request()).toMatchObject({ ok: true });
+    expect(await request()).toMatchObject({ ok: true });
+    expect(confirmRequestMock).toHaveBeenCalledTimes(1);
+
+    target.approval = { state: 'approved', revision: replacementRevision };
+    confirmRequestMock.mockResolvedValue({ confirmed: false, allowDirs: false });
+    clearEffects();
+    expect(await request()).toMatchObject({ ok: false });
+    expect(confirmRequestMock).toHaveBeenCalledTimes(2);
+    expectNoEffects();
+  });
+
+  it.each(lanes)('$lane rejects late consent without remembering or handing off files', async (entry) => {
+    const { target, request, expectNoEffects } = fixture(entry, 'pending');
+    let enterConfirmation!: () => void;
+    const entered = new Promise<void>((resolve) => { enterConfirmation = resolve; });
+    let finishConfirmation!: (decision: { confirmed: boolean; allowDirs: boolean }) => void;
+    confirmRequestMock.mockImplementationOnce(() => new Promise((resolve) => {
+      finishConfirmation = resolve;
+      enterConfirmation();
+    }));
+    const pending = request();
+    await entered;
+    Object.assign(target.approval, { revision: replacementRevision });
+    finishConfirmation({ confirmed: true, allowDirs: true });
+    expect(await pending).toMatchObject({ ok: false });
+    expectNoEffects();
+
+    target.approval = { state: 'approved', revision };
+    confirmRequestMock.mockResolvedValue({ confirmed: false, allowDirs: false });
+    expect(await request()).toMatchObject({ ok: false });
+    expect(confirmRequestMock).toHaveBeenCalledTimes(2);
+    expectNoEffects();
+  });
+});
+
 describe('Host Auto review', () => {
+  it.each(['dir', 'saveDir'] as const)('%s keeps native approval for an unchanged canonical target', async (lane) => {
+    const canonical = fs.realpathSync.native(outsideDir);
+    const reviewAction = vi.fn(async () => ({ verdict: 'block' as const }));
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null,
+      autoReviewOwner: 'native', isCurrent: () => true, reviewAction });
+    expect(await makeDeps('codex').callGhostTool({ ghostId: 'art', tool: 'run', args: {}, [lane]: canonical })).toMatchObject({ ok: true });
+    expect(reviewAction).not.toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledOnce();
+  });
+
+  it('reviews a Host canonical path when the original harness target is unknown', async () => {
+    const reviewAction = vi.fn(async () => ({ verdict: 'block' as const }));
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null,
+      autoReviewOwner: 'native', isCurrent: () => true, reviewAction });
+    expect(await authorizeDesktopSessionPath({ sessionId: 's1', sessionInstanceId: 's1-instance',
+      workingDir: WORKDIR, path: fs.realpathSync.native(outsideDir), toolName: 'computer.read', operation: 'read',
+    }, liveGrantStateMock)).toMatchObject({ allowed: false });
+    expect(reviewAction).toHaveBeenCalledOnce();
+  });
+
+  // PR #6731: native approval saw the alias, not the canonical outside target.
+  // Existing owner tests use direct paths and cannot detect this scope change.
+  // Unit: exercise real symlink resolution through each production handoff entry.
+  it.each(['dir', 'saveDir', 'attachments', 'forge'] as const)('%s reviews a resolved outside target hidden by a symlink', async (lane) => {
+    const workspace = fs.mkdtempSync(path.join(tmpUserData, 'native-workspace-'));
+    const target = path.join(outsideDir, lane === 'attachments' ? 'secret.png' : `native-${lane}`);
+    if (lane === 'attachments') fs.writeFileSync(target, 'private');
+    else fs.mkdirSync(target, { recursive: true });
+    const aliasDir = path.join(workspace, 'link');
+    fs.symlinkSync(lane === 'attachments' ? outsideDir : target, aliasDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const alias = lane === 'attachments' ? path.join(aliasDir, 'secret.png') : aliasDir;
+    const canonical = fs.realpathSync.native(target);
+    const reviewAction = vi.fn(async (_action: { description?: string }) => ({ verdict: 'block' as const, reason: 'outside target is unauthorized' }));
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null,
+      autoReviewOwner: 'native', isCurrent: () => true, reviewAction });
+    const deps = makeDeps('codex', `native-alias-${lane}`);
+    alsSessionContextMock.mockReturnValue({ agentKind: 'codex', workingDir: workspace,
+      sessionId: `native-alias-${lane}`, sessionInstanceId: `native-alias-${lane}-instance` });
+    sessionSnapshotMock.mockResolvedValue({ workingDir: workspace, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null });
+    const actual = await vi.importActual<typeof import('../../cindy-brain/ghostLocalPathGrant')>('../../cindy-brain/ghostLocalPathGrant');
+    classifyLocalAttachmentPathMock.mockImplementation(actual.classifyLocalAttachmentPath);
+    const result = lane === 'forge'
+      ? await deps.forgePack({ dir: alias })
+      : await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {},
+        ...(lane === 'attachments' ? { attachments: [alias] } : { [lane]: alias }) });
+    expect(result).toMatchObject({ ok: false });
+    expect(reviewAction).toHaveBeenCalledOnce();
+    expect(JSON.parse(reviewAction.mock.calls[0]![0].description!)).toMatchObject({ input: { files: [{ absPath: canonical }] } });
+    expect(dirDepositMock).not.toHaveBeenCalled();
+    expect(saveDepositMock).not.toHaveBeenCalled();
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(packGhostDirMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it.each(['bypassPermissions', 'auto', 'ask'].flatMap((permissionMode) =>
     [false, true].map((grantOnly) => ({ permissionMode, grantOnly })),
   ))('$permissionMode / grant_only=$grantOnly 在最终授权记账前再次复核', async ({ permissionMode, grantOnly }) => {
@@ -2992,6 +3421,42 @@ describe('Host Auto review', () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
   });
+
+  // Regression: Guardian allowed screenshot delivery, then Cindy re-reviewed and blocked it.
+  // Exercise the production handoff/media entries and count actual reviewer invocations.
+  it.each(['native', 'cindy'] as const)('%s owns file handoff and media approval exactly once', async (autoReviewOwner) => {
+    const file = path.join(outsideDir, 'single-review.png');
+    fs.writeFileSync(file, 'png');
+    let permissionMode = 'auto';
+    const reviewAction = vi.fn(async () => ({ verdict: 'block' as const, reason: 'second opinion' }));
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode, remoteHostId: null,
+      autoReviewOwner, isCurrent: () => true, reviewAction }));
+    const deps = makeDeps('codex', 'single-review');
+    const request = { ghostId: 'art', tool: 'run', args: {}, attachments: [file] };
+    expect(await deps.callGhostTool(request)).toMatchObject({ ok: autoReviewOwner === 'native' });
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    expect(await deps.callMedia?.({ action: 'resolve_local_path', url })).toMatchObject({ ok: autoReviewOwner === 'native' });
+    expect(reviewAction).toHaveBeenCalledTimes(autoReviewOwner === 'native' ? 0 : 2);
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    if (autoReviewOwner === 'native') {
+      expect(ledgerRefs.map((ref) => [ref.refKind, ref.originKind])).toEqual([['ghost-tool-grant', 'tool']]);
+      permissionMode = 'ask';
+      await deps.callGhostTool(request);
+      expect(confirmRequestMock).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each(['remote', 'expired', 'unknown'] as const)('native ownership cannot bypass %s authority', async (state) => {
+    const reviewAction = vi.fn(async () => ({ verdict: 'block' as const }));
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', autoReviewOwner: 'native',
+      remoteHostId: state === 'remote' ? 'ssh-host' : null,
+      isCurrent: state === 'unknown' ? undefined : () => state !== 'expired', reviewAction });
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    expect(await makeDeps('codex', 'native-boundary').callMedia?.({ action: 'resolve_local_path', url })).toMatchObject({ ok: false });
+    expect(reviewAction).toHaveBeenCalledTimes(state === 'expired' ? 0 : 1);
+  });
 });
 
 it.each([false, true])('only marks a teammate setup plan as reauthorization with a current suggestion (%s)', async (reauth) => {
@@ -3096,5 +3561,179 @@ describe('market install live authority', () => {
     const controller = new AbortController(); controller.abort();
     expect(await deps.installMarket!({ pluginId: 'p1', releaseId: 'r1' }, controller.signal)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(market.detail).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('personal contribution account surface', () => {
+  beforeEach(() => {
+    communityReadMock.mockReset();
+    communitySubmitMock.mockReset();
+    communityPreparedMock.mockReset();
+    communityPreparedMock.mockReturnValue({ summary: {
+      preparedId: 'prepared-1', ghostId: 'hello', name: 'Hello', description: 'Current installed plugin',
+      version: '1.0.0', sha256: 'a'.repeat(64), releaseNotes: 'Complete release changes.\nIncludes all fixes.',
+    } });
+    communitySubmitMock.mockReturnValue({ localId: 'prepared-1', phase: 'preparing' });
+  });
+
+  it('blocks an account read when the live helper surface is restricted', async () => {
+    communityReadMock.mockReset();
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => false });
+    const result = await makeDeps().communityContribution!({ action: 'list' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(communityReadMock).not.toHaveBeenCalled();
+  });
+
+  it('discards personal results if the helper surface becomes restricted during the read', async () => {
+    let allowed = true;
+    communityReadMock.mockImplementationOnce(async () => { allowed = false; return { privateReason: 'private author record' }; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => allowed });
+    const result = await makeDeps().communityContribution!({ action: 'list' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(JSON.stringify(result)).not.toContain('private author record');
+  });
+
+  it('allows an ordinary current account task to read its own records', async () => {
+    communityReadMock.mockResolvedValueOnce({ plugins: [] });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    await expect(makeDeps().communityContribution!({ action: 'list' })).resolves.toEqual({ ok: true, result: { plugins: [] } });
+  });
+
+  it('returns a known publishing precondition so the author can fix the original package', async () => {
+    const error = createIpcError('PRECONDITION_FAILED', 'This version is already submitted; install a new version before publishing.');
+    communityPreparedMock.mockImplementationOnce(() => { throw error; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    await expect(makeDeps().communityContribution!({ action: 'submit', id: 'prepared-1' }))
+      .resolves.toEqual({ ok: false, errorCode: 'PRECONDITION_FAILED', message: error.message });
+    expect(communitySubmitMock).not.toHaveBeenCalled();
+  });
+
+  it.each([new Error('private-transport-token'), createIpcError('INTERNAL', 'private-transport-token')])('does not expose unexpected publishing failures (%#)', async (error) => {
+    communityPreparedMock.mockImplementationOnce(() => { throw error; });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const result = await makeDeps().communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+    expect(JSON.stringify(result)).not.toContain('private-transport-token');
+    expect(communitySubmitMock).not.toHaveBeenCalled();
+  });
+
+  it('submits the fixed preparation in Full Access without an extra confirmation', async () => {
+    const permission = vi.fn();
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const deps = makeDeps('pi', 'author', 'author-instance', {}, undefined, permission);
+    await expect(deps.communityContribution!({ action: 'submit', id: 'prepared-1' })).resolves.toMatchObject({ ok: true });
+    expect(communityPreparedMock).toHaveBeenCalledWith('prepared-1');
+    expect(communitySubmitMock).toHaveBeenCalledExactlyOnceWith('prepared-1', expect.any(Function));
+    expect(permission).not.toHaveBeenCalled();
+  });
+
+  it('keeps accepted background submission alive after normal input completion but rechecks its scope', async () => {
+    let active = true, writable = true, allowed = true;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null,
+      isCurrent: () => writable, contributionAccountAllowed: async (accepted = false) => allowed && (active || accepted) });
+    const deps = makeDeps('pi', 'author', 'author-instance');
+    await expect(deps.communityContribution!({ action: 'submit', id: 'prepared-1' })).resolves.toMatchObject({ ok: true });
+    const check = communitySubmitMock.mock.calls[0][1] as () => Promise<void>;
+    active = false;
+    await expect(check()).resolves.toBeUndefined();
+    await expect(deps.communityContribution!({ action: 'list' })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    writable = false;
+    await expect(check()).rejects.toThrow('PERMISSION_DENIED');
+    writable = true; allowed = false;
+    await expect(check()).rejects.toThrow('PERMISSION_DENIED');
+  });
+
+  it.each(['allow', 'block'] as const)('honors Auto %s for the exact public bytes', async (verdict) => {
+    const permission = vi.fn();
+    const reviewAction = vi.fn<(action: { description: string }) => Promise<{ verdict: typeof verdict; reason: string }>>()
+      .mockResolvedValue({ verdict, reason: 'Public publishing is outside the approved scope.' });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, reviewAction,
+      isCurrent: () => true, contributionAccountAllowed: async () => true });
+    const result = await makeDeps('codex', 'author', 'author-instance', {}, undefined, permission)
+      .communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(JSON.parse(reviewAction.mock.calls[0]![0].description)).toMatchObject({
+      toolName: 'ghost_contribution_submit', input: {
+        prepared_id: 'prepared-1', ghost_id: 'hello', version: '1.0.0', sha256: 'a'.repeat(64), public: true,
+      },
+    });
+    expect(result).toMatchObject(verdict === 'allow' ? { ok: true } : {
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+      message: 'Public publishing is outside the approved scope.',
+    });
+    expect(communitySubmitMock).toHaveBeenCalledTimes(verdict === 'allow' ? 1 : 0);
+    expect(permission).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('rechecks the account surface after Ask confirmation (restricted=%s)', async (restrict) => {
+    let allowed = true;
+    const permission = vi.fn(async () => {
+      allowed = !restrict;
+      return { kind: 'permission' as const, behavior: 'allow' as const };
+    });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'ask', remoteHostId: null,
+      isCurrent: () => true, contributionAccountAllowed: async () => allowed });
+    const result = await makeDeps('pi', 'author', 'author-instance', {}, undefined, permission)
+      .communityContribution!({ action: 'submit', id: 'prepared-1' });
+    expect(permission).toHaveBeenCalledWith('author', 'author-instance', expect.objectContaining({
+      toolName: 'ghost_contribution_submit', metadata: { hostOwnedConfirmation: 'plugin_contribution' },
+      input: { prepared_id: 'prepared-1', ghost_id: 'hello', version: '1.0.0', sha256: 'a'.repeat(64) },
+      description: expect.stringContaining('Complete release changes.\nIncludes all fixes.'),
+    }), expect.any(AbortSignal));
+    expect(permission).toHaveBeenCalledWith('author', 'author-instance', expect.objectContaining({
+      description: expect.stringContaining('Once a submission is accepted for review, its version number cannot be reused'),
+    }), expect.any(AbortSignal));
+    expect(result).toMatchObject(restrict ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
+    expect(communitySubmitMock).toHaveBeenCalledTimes(restrict ? 0 : 1);
+  });
+});
+
+describe('「我的浏览器」取代插件自有页面工具', () => {
+  function pageControlGhost(): unknown {
+    return chipGhost('my-browser', ['tool'], {
+      tools: [
+        { name: 'browser_read', description: 'read' },
+        { name: 'browser_act', description: 'act' },
+        { name: 'browser_policy', description: 'policy' },
+      ],
+      manual: { items: [{ dir: 'manual/browser', name: 'browser', description: 'browser manual' }] },
+      browserExtension: {
+        protocol: 'cindy-browser-extension/3',
+        extensionIds: ['a'.repeat(32)],
+        pageControl: true,
+        pageControlReplaces: { tools: ['browser_read', 'browser_act'], manual: ['browser'] },
+      },
+    });
+  }
+  afterEach(() => setPageControlGhostProvider(() => null));
+
+  it('宿主经该插件提供页面控制时,只隐藏被取代的工具与手册;调用被引导到 browser 工具', async () => {
+    listMock.mockReturnValue([pageControlGhost()]);
+    setPageControlGhostProvider(() => installedGhostStoragePart(pageControlGhost() as InstalledGhost));
+    const deps = makeDeps();
+    const [ghost] = await deps.listAwakeGhosts();
+    expect(ghost.tools.map((tool) => tool.name)).toEqual(['browser_policy']);
+    expect(ghost.manual ?? []).toEqual([]);
+    const refused = await deps.callGhostTool({ ghostId: 'my-browser', tool: 'browser_read', args: {} });
+    expect(refused).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND', message: expect.stringContaining('user-browser') });
+    await expect(deps.readGhostManual({ ghostId: 'my-browser', path: 'browser/MANUAL.md' })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('browser 工具'),
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('桥接未运行(没有页面控制)时插件工具照常可见', async () => {
+    listMock.mockReturnValue([pageControlGhost()]);
+    const [ghost] = await makeDeps().listAwakeGhosts();
+    expect(ghost.tools.map((tool) => tool.name)).toEqual(['browser_read', 'browser_act', 'browser_policy']);
+    expect(ghost.manual?.map((item) => item.name)).toEqual(['browser']);
   });
 });

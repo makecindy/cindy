@@ -66,11 +66,12 @@ it('allows the stop callback to restore the caret after the final transcript ren
   inputBeforeStop.rememberSelection(final, { start: final.length, end: final.length });
   const document = render(final);
   const end = input.current!.getSelection(final).end;
-  // This is the screen's unmount/replacement guard before restoring focus.
+  // This is the screen's unmount/replacement guard before restoring the caret.
   if (input.current === inputBeforeStop) {
-    inputBeforeStop.applyDocumentAndFocusSelection(document, end);
+    inputBeforeStop.applyDocumentAndSetSelection(document, end);
   }
-  expect(bridge.setDocument).toHaveBeenCalledWith(expect.anything(), final.length, true);
+  // Dictation ending must not raise the keyboard on its own.
+  expect(bridge.setDocument).toHaveBeenCalledWith(expect.anything(), final.length, false);
 });
 
 it('restores the insertion end before an existing suffix and maps quote attachments', () => {

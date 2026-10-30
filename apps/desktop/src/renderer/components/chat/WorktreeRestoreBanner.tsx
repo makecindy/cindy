@@ -1,3 +1,5 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Button } from '@/components/ui/button';
 /**
  * 「工作区已被回收 / 有未应用快照」恢复横幅(P1,输入框上方,与 InterruptedTurnBanner 同位置)
  * ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FolderX, RefreshCw, X } from 'lucide-react';
+import { FolderX, RefreshCw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -176,54 +178,35 @@ export function WorktreeRestoreBanner({
   const pending = variant === 'pending';
 
   return (
-    <div
-      className={cn(
-        'mx-auto flex items-start gap-2 rounded-md px-3 py-2',
-        'border bg-[var(--error-bg)] border-[var(--error-border)]',
-        className,
-      )}
+    <ErrorNotice
+      className={cn('mx-auto', className)}
       style={style}
       data-testid="worktree-restore-banner"
-    >
-      <FolderX size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
-      <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {pending
+      icon={<FolderX size={16} />}
+      message={
+        pending
           ? t('chat.worktreeRestoreBanner.textPendingSnapshot')
-          : t('chat.worktreeRestoreBanner.text')}
-      </span>
-      <button
-        type="button"
-        onClick={() => void handleRestore()}
-        disabled={restoring}
-        className={cn(
-          'shrink-0 flex items-center gap-1 text-xs font-medium',
-          'text-[var(--error-fg-strong)]',
-          'hover:opacity-70 transition-opacity',
-          'disabled:opacity-50 disabled:cursor-not-allowed',
-        )}
-        title={t('chat.worktreeRestoreBanner.restoreTitle')}
-      >
-        <span className={cn('inline-flex', restoring && 'animate-spin motion-reduce:animate-none')}>
+          : t('chat.worktreeRestoreBanner.text')
+      }
+      onDismiss={() => {
+        setPhase('hidden');
+        if (sessionId) clearOwnAttentionFor(sessionId);
+      }}
+      dismissLabel={t('chat.worktreeRestoreBanner.dismissTitle')}
+      actions={
+        <Button
+          size="sm"
+          compact
+          onClick={() => void handleRestore()}
+          loading={restoring}
+          title={t('chat.worktreeRestoreBanner.restoreTitle')}
+        >
           <RefreshCw size={12} />
-        </span>
-        {restoring
-          ? t('chat.worktreeRestoreBanner.restoring')
-          : pending
+          {pending
             ? t('chat.worktreeRestoreBanner.applySnapshotAction')
             : t('chat.worktreeRestoreBanner.restoreAction')}
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setPhase('hidden');
-          // 用户主动忽略 = 处置(本视图内),清红点。重开会话自查再命中会重新打上。
-          if (sessionId) clearOwnAttentionFor(sessionId);
-        }}
-        className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
-        title={t('chat.worktreeRestoreBanner.dismissTitle')}
-      >
-        <X size={14} />
-      </button>
-    </div>
+        </Button>
+      }
+    />
   );
 }

@@ -6,15 +6,20 @@ import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainVie
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { BotsFeatureLayout } from '../BotsFeatureLayout';
 
-const mocks = vi.hoisted(() => ({ profiles: [{ id: 'one', status: 'active' }] }));
+const mocks = vi.hoisted(() => ({
+  profiles: [{ id: 'one', status: 'active' }],
+  registerTaskSidebar: vi.fn(),
+}));
 vi.mock('../botStore', () => ({
   refreshBotProfiles: vi.fn(),
   useBotProfiles: () => mocks.profiles,
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBotSync: vi.fn() }));
-vi.mock('../BotsSidebar', () => ({ BotsSidebar: () => null }));
 vi.mock('../BotSettingsDrawer', () => ({ BotSettingsDrawer: () => null }));
-vi.mock('../../feature-context', () => ({ useOwnTopNavScrollableRows: vi.fn() }));
+// Teammate routes share the task sidebar: the layout registers it instead of swapping in its own.
+vi.mock('../../cc-agent/useRegisterCCAgentSidebar', () => ({
+  useRegisterCCAgentSidebar: mocks.registerTaskSidebar,
+}));
 
 function Navigation() {
   const navigate = useNavigate();
@@ -61,7 +66,15 @@ function mount(history: { current: MainViewHistory }, initialEntry = '/bots/one/
     </MainViewHistoryContext.Provider>,
   );
 }
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mocks.registerTaskSidebar.mockClear();
+});
+
+it('registers the shared task sidebar on teammate routes', () => {
+  mount({ current: { lastMatchedKey: 'bots', paths: {} } as MainViewHistory });
+  expect(mocks.registerTaskSidebar).toHaveBeenCalled();
+});
 
 it.each(['/bots/roster', '/bots/roster/?step=avatar#picker'])(
   'returns through the teammate entry resolver after leaving creation at %s',

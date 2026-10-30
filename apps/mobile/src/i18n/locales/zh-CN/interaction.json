@@ -21,6 +21,7 @@
     "allowOnceConfirm": "确认允许一次",
     "highRisk": "高风险",
     "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
+    "autoReviewReason": "自动审批需要你决定：{{reason}}",
     "fullAccessConfirm": {
       "title": "开启完全访问？",
       "description": "完全访问会关闭工作区沙箱并跳过常规审批。{{appName}} 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
@@ -75,6 +76,8 @@
     "next": "下一步",
     "answerRequired": "选择或输入回答后才能继续。",
     "submit": "提交",
+    "sendAndContinue": "发送并继续",
+    "closeAnswer": "关闭",
     "planReviewTitle": "审阅 Claude 的计划",
     "planExpand": "展开计划",
     "planEditHint": "使用编辑模式调整计划",
@@ -129,6 +132,10 @@
     "fallback": {
       "title": "需要处理远程请求",
       "label": "请求"
+    },
+    "input_handoff": {
+      "title": "需要你代为输入",
+      "label": "代输入"
     }
   },
   "rewind": {
@@ -244,6 +251,129 @@
     "inlineFormAction": "在电脑端填写{{label}}",
     "inlineFormActionGeneric": "在电脑端填写一项配置"
   },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "这个页面没有使用安全连接，输入的内容可能被他人读取。",
+      "ip-address": "这个页面使用 IP 地址而不是域名，请确认它是你预期的网站。",
+      "local-host": "这个页面来自本机服务，请确认它是你预期的程序。",
+      "local-file": "这个页面是本地文件，请确认它是你预期的内容。",
+      "punycode": "这个网址包含特殊字符，可能在冒充其他网站，请仔细核对。",
+      "embedded-frame": "输入框位于嵌入的其他网站中，请确认来源可信。"
+    },
+    "agentControlled": "这个界面由 Agent 打开。填写前请确认它确实是你要登录的地方。",
+    "error": {
+      "decision": "操作没有送达，请重试。",
+      "stale": "界面已经变化，请按最新内容操作。",
+      "submit": "输入没有送达，请重试。"
+    },
+    "terminal": {
+      "succeeded": "已交还给 Agent。",
+      "cancelled": "已取消代输入。",
+      "failed": "代输入已结束。",
+      "expired": "等待时间过长，代输入已结束。"
+    },
+    "failure": {
+      "permission": "Cindy 没有读取这台电脑界面的权限。请在系统设置的辅助功能中允许 Cindy。",
+      "target_gone": "目标窗口已关闭。",
+      "unreadable": "无法读取这个界面。可以在宿主电脑上直接完成，然后交还给 Agent。",
+      "action_failed": "刚才的操作没有生效，请检查界面后重试。",
+      "timeout": "等待时间过长，代输入已结束。",
+      "unsupported": "这台电脑暂不支持代输入。",
+      "origin_changed": "填写前页面已变化，什么都没有填入。请确认现在的页面后再填写。",
+      "picture_unavailable": "没能显示这一步的画面。请在系统设置中允许 Cindy 录制屏幕，并确认窗口没有被最小化。",
+      "screen_locked": "这台电脑的屏幕已锁定（显示器休眠也会锁屏）。请先唤醒并解锁，再让 Agent 重试。",
+      "nothing_to_fill": "这个界面没有需要你输入的内容，已交还给 Agent 继续。"
+    },
+    "phase": {
+      "reading": "正在读取界面…",
+      "working": "正在填写…",
+      "finishing": "看起来已经完成，{{count}} 秒后交还给 Agent。",
+      "finishingNow": "看起来已经完成，正在交还给 Agent…"
+    },
+    "action": {
+      "stay": "还没完成",
+      "done": "交还给 Agent",
+      "cancel": "取消代输入",
+      "claim": "改在这里处理",
+      "picture": "看画面",
+      "backToForm": "回到表单",
+      "liveView": "实时画面",
+      "fill": "填写",
+      "skip": "跳过",
+      "continue": "继续",
+      "close": "取消",
+      "showPassword": "显示密码",
+      "hidePassword": "隐藏密码",
+      "scan": "扫码"
+    },
+    "remoteUnavailable": "这台电脑不能从远程接收输入。请在宿主电脑上完成这一步，再交还给 Agent。",
+    "unnamedField": "输入框",
+    "passwordField": "密码",
+    "codeField": "验证码",
+    "filledHint": "已有内容；留空则保持不变。",
+    "record": {
+      "doneOn_one": "主人在 {{device}} 完成了 {{count}} 步输入",
+      "doneOn_other": "主人在 {{device}} 完成了 {{count}} 步输入",
+      "doneHost_one": "主人在宿主电脑上完成了 {{count}} 步输入",
+      "doneHost_other": "主人在宿主电脑上完成了 {{count}} 步输入",
+      "donePhone_one": "主人在手机上完成了 {{count}} 步输入",
+      "donePhone_other": "主人在手机上完成了 {{count}} 步输入",
+      "doneElsewhere_one": "主人在另一台设备上完成了 {{count}} 步输入",
+      "doneElsewhere_other": "主人在另一台设备上完成了 {{count}} 步输入",
+      "done": "代输入已完成",
+      "nothingToFill": "无需输入，已交还给 Agent",
+      "cancelled": "代输入已取消",
+      "expired": "代输入已超时",
+      "failed": "代输入未完成"
+    },
+    "holder": {
+      "elsewhere": "正在 {{device}} 上处理，也可以改在这里处理。",
+      "host": "宿主电脑",
+      "phone": "手机",
+      "otherDevice": "另一台设备"
+    },
+    "agentNote": "Agent 补充：{{note}}",
+    "picture": {
+      "hint": "点按画面里的位置，Cindy 会在宿主电脑上点按同一个位置。",
+      "open": "显示这一步的画面",
+      "openHint": "这一步无法整理成表单。画面只加密发送到这台设备，不会保存。",
+      "alt": "目标窗口的画面",
+      "loading": "正在获取画面…",
+      "error": "没能取得画面，请重试。",
+      "field": "当前输入框",
+      "type": "输入",
+      "typeEnter": "输入并回车"
+    },
+    "liveViewHint": "在这里实时查看这一个窗口，点按和输入只会进入这个窗口。",
+    "deviceCode": {
+      "prompt": "用这个代码登录",
+      "copy": "复制代码",
+      "copied": "已复制代码",
+      "copyFailed": "复制失败",
+      "open": "在本设备打开",
+      "openFailed": "无法打开链接",
+      "then": "在打开的页面输入代码并完成登录，然后点「交还给 Agent」。"
+    },
+    "sheetNote": "只会填进电脑上的这一处，不会交给 Agent，也不会保存。",
+    "nothingLeft": "这里没有需要你填写的了。",
+    "qr": {
+      "open": "在本机打开 {{site}}",
+      "openApp": "在本机打开 {{site}} 链接",
+      "share": "存图或分享",
+      "copyLink": "复制链接",
+      "copyText": "复制内容",
+      "copied": "已复制。",
+      "copyFailed": "没能复制，请重试。",
+      "openFailed": "这台设备打不开这个链接。可以存图后在 App 的「扫一扫」里从相册识别。",
+      "shareFailed": "没能打开分享，请重试。",
+      "hintLink": "在本机打开会唤起对应的 App 完成登录；也可以存图后在 App 的「扫一扫」里从相册识别。登录后会自动继续。",
+      "hint": "存图后在 App 的「扫一扫」里从相册识别，或用另一台设备扫这个码。登录后会自动继续。",
+      "alt": "电脑上的二维码。点按会点在电脑上的这个码上。",
+      "loading": "正在获取二维码…",
+      "failed": "没能取得二维码，点按重试。",
+      "scanned": "已扫码，等你在手机上确认。确认后会自动继续。"
+    }
+  },
   "presentation": {
     "action": {
       "submitting": "提交中"
@@ -255,7 +385,12 @@
       "allowTitle": "允许后电脑端会继续执行",
       "tool": "工具：{{tool}}",
       "title": "允许使用 {{tool}}？",
-      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。"
+      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。",
+      "titleCommand": "允许运行这条命令？",
+      "titleFileRead": "允许读取文件？",
+      "titleFileWrite": "允许修改文件？",
+      "titleBrowser": "允许浏览器执行这一步？",
+      "titlePlugin": "允许使用插件「{{plugin}}」？"
     },
     "ask": {
       "progress": "第 {{current}}/{{total}} 个问题",

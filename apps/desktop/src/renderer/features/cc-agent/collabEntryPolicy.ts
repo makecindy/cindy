@@ -22,6 +22,8 @@ export interface CollabEntryTarget {
   workingDir?: string | null;
   /** sessions.orca_role。'worker' = Orca Worker 子会话,自己不能再开协同。草稿恒为空。 */
   orcaRole?: string | null;
+  /** 另一台电脑上协同 Lead 派来的 Worker(sessions.orca_remote_lead 非空)，同样不能再开协同。 */
+  orcaRemoteWorker?: boolean;
   /** SSH 远端工作区所属 host。非空 = workingDir 是那台远端主机上的路径。 */
   remoteHostId?: string | null;
   /** device-link 被控设备 deviceId。非空 = 这个项目和会话的真身都在那台被控设备上。 */
@@ -64,12 +66,13 @@ function nonEmpty(value: string | null | undefined): string | null {
  * | dialogue 草稿(尚无运行目录)       | ✅       | skipProjectQuery(仅用户/全局级) |
  * | 本地 dialogue(已有运行目录)       | ✅       | 查询目录;Main 区分托管/显式目录 |
  * | Orca Worker 子会话                | ❌       | —                               |
+ * | 另一台电脑派来的远端 Worker       | ❌       | —                               |
  *
  * 两个远端维度**可以同时成立**(在被控设备上打开的 SSH 远端项目):此时既要隧道到被控端,
  * 又要在被控端跳过项目级 —— 两个字段互相独立,不是二选一。
  */
 export function resolveCollabEntryPolicy(target: CollabEntryTarget): CollabEntryPolicyScope {
-  if (target.orcaRole === 'worker') return NOT_ELIGIBLE;
+  if (target.orcaRole === 'worker' || target.orcaRemoteWorker) return NOT_ELIGIBLE;
   if (target.workspaceKind !== 'project' && target.workspaceKind !== 'dialogue') {
     return NOT_ELIGIBLE;
   }

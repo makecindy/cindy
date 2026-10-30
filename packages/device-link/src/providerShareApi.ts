@@ -22,6 +22,8 @@ export interface ProviderShareMember extends ProviderSharePerson {
 
 export interface ProviderShareRequestItem extends ProviderSharePerson {
   requestId: string;
+  /** SHA-256 of this request's invitation; absent on older servers. Not an invitation or credential. */
+  linkId?: string;
   pairingCode: string;
   createdAt: string;
   expiresAt: string;
@@ -139,6 +141,14 @@ export function isProviderShareInvitation(value: unknown): value is string {
   return typeof value === 'string' && INVITATION.test(value);
 }
 
+function linkId(value: unknown): { linkId?: string } {
+  if (value === undefined) return {};
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error('Invalid provider share link id');
+  }
+  return { linkId: value };
+}
+
 function parseOwned(value: unknown): ProviderShareOwned {
   const item = row(value);
   return {
@@ -161,6 +171,7 @@ function parseOwned(value: unknown): ProviderShareOwned {
       return {
         ...person(request),
         requestId: providerShareIdentifier(request.requestId),
+        ...linkId(request.linkId),
         pairingCode: pairing(request.pairingCode),
         createdAt: timestamp(request.createdAt),
         expiresAt: timestamp(request.expiresAt),
@@ -236,7 +247,7 @@ export function createProviderShareApi(options: ProviderShareApiOptions) {
         identityCard: text(input.identityCard, 8192),
       });
       if (!isProviderShareInvitation(value.invitation)) throw new Error('Invalid provider share invitation');
-      return { shareId: providerShareIdentifier(value.shareId), invitation: value.invitation, expiresAt: timestamp(value.expiresAt) };
+      return { shareId: providerShareIdentifier(value.shareId), invitation: value.invitation, expiresAt: timestamp(value.expiresAt), ...linkId(value.linkId) };
     },
     async approve(requestId: string) {
       const value = await request(`/requests${segment(requestId)}/approve`, 'POST', {});

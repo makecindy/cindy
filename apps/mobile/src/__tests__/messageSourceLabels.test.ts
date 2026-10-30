@@ -9,11 +9,19 @@ import {
   shortDeviceId,
   sourceDeviceDisplayName,
   sourceDeviceLabel,
+  sourceIdText,
   sourcePluginLabel,
 } from "@/session/messageSourceLabels";
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+// #7631: phone history must identify the same application as Desktop and the model note.
+it('shows the local application name and app ID in visible task history', () => {
+  const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+  expect(sourcePluginLabel(sourcePlugin)).toBe('由本机应用「TapTap」发送');
+  expect(sourceIdText({ sourcePlugin })).toBe('应用 ID：com.taptap.pc');
 });
 
 const phone = {
@@ -90,6 +98,27 @@ describe("device source label", () => {
 });
 
 describe("sender labels", () => {
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'])(
+    'keeps the MCP server name and ID visible in %s',
+    async (language) => {
+      await i18n.changeLanguage(language);
+      try {
+        const sourcePlugin = { pluginId: 'mcp-app:reports', name: 'Reports' };
+        expect(sourcePluginLabel(sourcePlugin)).toContain('Reports');
+        expect(sourcePluginLabel({ pluginId: sourcePlugin.pluginId })).toContain('reports');
+        const idText = sourceIdText({ sourcePlugin });
+        expect(idText).toBe(i18n.t('mcpApps.serverId', { id: 'reports' }));
+        expect(idText).toContain('reports');
+        expect(idText).not.toContain('mcp-app:');
+        expect(i18n.t('mcpApps.cardTitle', { title: 'Dashboard' })).toBe(
+          `Dashboard · ${i18n.t('mcpApps.appName')}`,
+        );
+      } finally {
+        await i18n.changeLanguage('zh-CN');
+      }
+    },
+  );
+
   it("formats plugin, automation (incl. redacted) and Orca titles with the shared wording", () => {
     expect(sourcePluginLabel({ pluginId: "p", name: "日报" })).toBe(
       "由插件「日报」发送",

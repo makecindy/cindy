@@ -293,7 +293,37 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+const OUTPUT_DELIVERY_ROUTING = {
+  overrides: [
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'tool', id: 'Artifact' },
+      invocation: 'disabled',
+    },
+    {
+      capabilityId: 'output-delivery',
+      source: { kind: 'harness-builtin', harness: 'claude-code', surface: 'mcp', id: 'claude.ai Claude Docs' },
+      invocation: 'disabled',
+    },
+  ],
+} as const satisfies CapabilityRoutingPolicy;
+
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('removes host-disabled built-in tools and MCP servers from a local session', async () => {
+    const { handle } = await startSession(undefined, {
+      capabilityRouting: OUTPUT_DELIVERY_ROUTING,
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      disallowedTools?: string[];
+      settings?: { deniedMcpServers?: unknown };
+    };
+
+    expect(options.disallowedTools).toEqual(['Artifact']);
+    expect(options.settings?.deniedMcpServers).toEqual([
+      { serverName: 'claude.ai Claude Docs' },
+    ]);
+    await handle.close();
+  });
   it('captures known writes before execution and marks Bash opaque only after execution', async () => {
     const beforeKnownFileWrite = vi.fn(async () => undefined);
     const noteOpaqueWrite = vi.fn();
@@ -745,6 +775,17 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
     expect(result.behavior).toBe('allow');
     expect(result.updatedPermissions).toBeUndefined();
+    // A live owner permission change supersedes the IM policy on this same turn.
+    await handle.setPermissionMode!('bypassPermissions');
+    expect((await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-full-access',
+    })).behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
+    await handle.setPermissionMode!('ask');
+    await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, {
+      toolUseID: 't-policy-restored',
+    });
+    expect(permissionRequests(seen)).toHaveLength(2);
     await handle.close();
   });
 
@@ -968,10 +1009,13 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.close();
   });
 
-  it('Full access overrides a pending prompt-each-time MCP approval', async () => {
+  it.each([false, true])('Full access overrides a pending MCP approval (IM policy=%s)', async (imPolicy) => {
     const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
       // 决策永不返回：请求挂起，等模式切换来结算。
       decide: () => undefined,
+    });
+    if (imPolicy) await handle.send({ type: 'user', content: 'Merge the contacts.' }, {
+      turnPermissionPolicy: { origin: { kind: 'im', channel: 'feishu' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true },
     });
 
     const pending = canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_merge' }, {
@@ -1261,6 +1305,7 @@ describe('fail-closed still precedes the MCP policy', () => {
     const { handle, canUseTool, seen } = await startSession(() => 'auto-approve', {
       permissionMode: 'auto',
     });
+    expect(handle.getAutoReviewOwner?.()).toBe('cindy');
 
     const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-auto-trusted' });
 
@@ -1673,7 +1718,7 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
-  it.each([false, true])('remote Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+  it.each([false, true])('remote Auto to Full access applies the owner choice during review (IM policy=%s)', async (restricted) => {
     let release!: (decision: { verdict: 'allow' }) => void;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt-each-time', {
@@ -1691,7 +1736,7 @@ describe('remote sessions share the same permission semantics', () => {
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
     await handle.setPermissionMode!('bypassPermissions');
     release({ verdict: 'allow' });
-    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(await pending).toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
@@ -1777,6 +1822,13 @@ describe('remote sessions share the same permission semantics', () => {
       {
         toolNamePrefix: 'AskUserQuestion',
         sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
+      },
+      {
+        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
@@ -1890,7 +1942,10 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
+      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+    }));
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1972,7 +2027,10 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
+    expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
+      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+    }));
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',
@@ -1983,5 +2041,34 @@ describe('remote sessions share the same permission semantics', () => {
     ).resolves.toMatchObject({ behavior: 'deny' });
     expect(permissionRequests(failed.seen)).toHaveLength(0);
     await failed.handle.close();
+  });
+});
+
+describe('remote sessions apply host-disabled built-in surfaces', () => {
+  it('passes disallowed tools and denied MCP servers to the remote daemon', async () => {
+    const config = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = config;
+    const workingDir = await makeTempDir();
+    let startParams: Record<string, unknown> | undefined;
+    const deps = createDeps(() => 'auto-approve');
+    deps.capabilityRouting = OUTPUT_DELIVERY_ROUTING;
+    deps.remoteCcQueryFactory = (async (args: { startParams: Record<string, unknown> }) => {
+      startParams = args.startParams;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-remote-output-routing',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+
+    expect(startParams?.disallowedTools).toEqual(['Artifact']);
+    expect(
+      (startParams?.extraOptions as { settings?: { deniedMcpServers?: unknown } })
+        ?.settings?.deniedMcpServers,
+    ).toEqual([{ serverName: 'claude.ai Claude Docs' }]);
+    await handle.close();
   });
 });

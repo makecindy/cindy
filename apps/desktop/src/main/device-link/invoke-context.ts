@@ -56,6 +56,14 @@ export function runDeviceLinkInvokeContext<T>(
   return storage.run(context, fn);
 }
 
+/**
+ * 在本机自己发起的内部操作里运行 `fn`，不继承调用方的 device-link 来源：比如供应商组在发送前替任务换电脑，
+ * 触发它的可能是手机发来的一条消息，但换电脑本身是本机的决定，不能按「来自控制端」把错误码降级。
+ */
+export function runOutsideDeviceLinkInvokeContext<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 export function getDeviceLinkInvokeContext(): DeviceLinkInvokeContext | null {
   return storage.getStore() ?? null;
 }

@@ -1,6 +1,7 @@
-import type { DesktopIceServer } from '@cindy/device-link';
+import type { DesktopIceServer, FilePeerCloseReason } from '@cindy/device-link';
 export const FILE_PEER_LOCAL = {
   REGISTER: 'file-peer:host:register',
+  CLOSED: 'file-peer:host:closed',
   COMMAND: 'file-peer:host:command',
   REPLY: 'file-peer:host:reply',
   READ: 'file-peer:host:read',
@@ -17,6 +18,7 @@ export type FilePeerCommand =
   | { action: 'receive'; connection: string; ticket: string; size: number; sink: string }
   | { action: 'close'; connection: string };
 export interface FilePeerHostApi {
+  closed(connection: string, reason?: FilePeerCloseReason): Promise<void>;
   register(): Promise<void>;
   onCommand(fn: (id: string, command: FilePeerCommand) => void): () => void;
   reply(id: string, ok: boolean, value?: string): Promise<void>;

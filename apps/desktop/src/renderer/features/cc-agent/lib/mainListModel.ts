@@ -24,6 +24,8 @@
  */
 
 import type { Session } from '@/lib/ccAgent.types';
+import { withProjectSessions } from './projectGrouping';
+import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import {
   MACHINE_ALL,
@@ -200,8 +202,10 @@ function entryTimeMs(entry: MainListEntry, sortBy: FilterSortBy = 'recency'): nu
   return max;
 }
 
-function entryPriorityRecencyMs(entry: MainListEntry, ctx: MainListPriorityContext): number {
-  const sessions = getMainListEntrySessions(entry);
+function sessionGroupPriorityRecencyMs(
+  sessions: readonly Session[],
+  ctx: MainListPriorityContext,
+): number {
   let max = 0;
   for (const s of sessions) {
     const ms = sessionPriorityRecencyMs(s, ctx);
@@ -210,8 +214,10 @@ function entryPriorityRecencyMs(entry: MainListEntry, ctx: MainListPriorityConte
   return max;
 }
 
-function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): number {
-  const sessions = getMainListEntrySessions(entry);
+function sessionGroupPriorityRank(
+  sessions: readonly Session[],
+  ctx: MainListPriorityContext,
+): number {
   let min: number = LIVE_TASK_PRIORITY.rest;
   for (const s of sessions) {
     const rank = sessionPriorityRank(s, ctx);
@@ -219,6 +225,18 @@ function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): 
     if (min === LIVE_TASK_PRIORITY.waiting) break;
   }
   return min;
+}
+
+/** 项目行与折叠侧栏共用的优先级比较：档位优先，同档再比最近活动。 */
+export function compareSessionGroupsByPriority(
+  a: readonly Session[],
+  b: readonly Session[],
+  ctx: MainListPriorityContext,
+): number {
+  return (
+    sessionGroupPriorityRank(a, ctx) - sessionGroupPriorityRank(b, ctx) ||
+    sessionGroupPriorityRecencyMs(b, ctx) - sessionGroupPriorityRecencyMs(a, ctx)
+  );
 }
 
 /**
@@ -349,6 +367,21 @@ export function buildMainListEntries({
   scheduleSessionIndex,
 }: BuildMainListEntriesInput): MainListEntry[] {
   const ctx = priorityContext;
+  if (!CINDY_MAKE_ENABLED) {
+    const keep = (session: Session) => !isCindyMakeFamilySource(session.source);
+    projects = projects.flatMap((project) => {
+      const sessions = project.sessions.filter(keep);
+      if (sessions.length === project.sessions.length) return [project];
+      return sessions.length ? [{ ...project, sessions }] : [];
+    });
+    dialogues = dialogues.filter(keep);
+    unclassified = unclassified.filter(keep);
+    bots = bots.flatMap((bot) => {
+      const sessions = bot.sessions.filter(keep);
+      if (sessions.length === bot.sessions.length) return [bot];
+      return sessions.length ? [{ ...bot, sessions }] : [];
+    });
+  }
   const entries: MainListEntry[] = [];
   const partitioned = partitionCindyMakeSessions({ projects, dialogues, unclassified });
   projects = partitioned.projects;
@@ -400,7 +433,7 @@ export function buildMainListEntries({
   for (const project of projects) {
     entries.push({
       kind: 'project',
-      project: { ...project, sessions: sortSessionsForMainList(project.sessions, sortBy, ctx) },
+      project: withProjectSessions(project, sortSessionsForMainList(project.sessions, sortBy, ctx)),
     });
   }
 
@@ -438,9 +471,10 @@ function compareEntriesBySortBy(
   ctx: MainListPriorityContext,
 ): number {
   if (sortBy === 'priority') {
-    return (
-      entryPriorityRank(a, ctx) - entryPriorityRank(b, ctx) ||
-      entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx)
+    return compareSessionGroupsByPriority(
+      getMainListEntrySessions(a),
+      getMainListEntrySessions(b),
+      ctx,
     );
   }
   const timeDifference = entryTimeMs(b, sortBy) - entryTimeMs(a, sortBy);

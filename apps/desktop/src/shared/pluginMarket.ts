@@ -1,5 +1,5 @@
 import type { GhostManifest, InstalledGhost } from './ghost';
-import type { PluginIconMetadata } from '@cindy/plugin-protocol';
+import type { PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -13,11 +13,19 @@ export type PluginMarketItemSource = 'server' | 'git-market' | 'local-market';
 
 /** Renderer-safe Plugin 市场列表项；所有字段都来自协议或本地安装事实。 */
 export interface PluginMarketItem {
+  usageStatistics?: PluginUsageStatistics;
+  downloadStatistics?: PluginDownloadStatistics;
   pluginId: string;
   ghostId: string;
+  /** Host-verified namespace. Missing is legacy wire; null is root. */
+  namespace?: string | null;
   name: string;
   description: string | null;
   author: string | null;
+  /** Display identity from verified public publishing; never grants runtime trust. */
+  publisherKind?: 'official' | 'personal' | null;
+  /** Main verified a public installation's market origin; attribution spans versions. */
+  installedAuthor?: string | null;
   scope: PluginMarketScope;
   organizationId: string | null;
   defaultInstall: boolean;
@@ -51,6 +59,11 @@ export interface PluginMarketSnapshot {
   customSourceNames: string[];
   /** 本轮发现失败的自定义市场名；失败来源不影响其它来源和官方市场。 */
   unavailableCustomSourceNames: string[];
+  /**
+   * 企业目录单独不可用时的错误码，包含客户端尚未认识的新码。null 或缺失表示本轮没有这个状态；
+   * 公开目录和已安装插件照常。
+   */
+  organizationAccessError?: string | null;
 }
 
 /** 服务端清理的一次性汇总提示：按 owner 缓存，consume 前跨多轮对账累加，consume 后即清。 */

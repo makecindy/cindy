@@ -43,6 +43,11 @@ vi.mock('@cindy/maker-shared/project-order-sync', () => ({
 
 function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebarFilterReturn {
   return {
+    creators: 'all',
+    creatorOptions: [],
+    toggleCreator: vi.fn(),
+    setCreatorsAll: vi.fn(),
+    setCreatorsNone: vi.fn(),
     status: 'active',
     projects: 'all',
     projectsAsSet: null,
@@ -128,6 +133,10 @@ describe('sidebar display settings menu', () => {
     expect(rows[0].textContent).toContain('项目、对话、设备');
     expect(rows[2].textContent).toContain('跟随任务');
     const submenu = await openSubmenu(/^任务排序/);
+    // PR #6196: preserve the historical glass-menu clipping regression through
+    // real unit DOM containment; content/click assertions alone miss a lost portal.
+    expect(root.contains(submenu)).toBe(false);
+    expect(document.body.contains(submenu)).toBe(true);
     expect(
       within(submenu)
         .getAllByRole('menuitem')
@@ -164,6 +173,21 @@ describe('sidebar display settings menu', () => {
     expect(screen.getAllByRole('menu').length).toBeGreaterThan(1);
   });
 
+  it('marks the trigger with a dot only while the list shows archived tasks', () => {
+    // Dash 反馈:切到「已归档」后列表和平常几乎一样,误以为内容没更新。
+    // 「全部」不提醒,所以不能用 status !== 'active' 代替。
+    const dot = (status: 'active' | 'archived' | 'all') => {
+      const { unmount } = render(
+        <SidebarFilterPopover filter={makeFilter({ status })} allKnownProjects={[]} open={false} />,
+      );
+      const trigger = screen.getByRole('button', { name: /^侧边栏显示设置/ });
+      const found = trigger.querySelector('span[aria-hidden]') !== null;
+      unmount();
+      return found;
+    };
+    expect([dot('active'), dot('archived'), dot('all')]).toEqual([false, true, false]);
+  });
+
   it('hides unavailable grouping choices and their summary without clearing saved device preference', async () => {
     const filter = makeFilter({ groupBy: 'flat' });
     render(<Preview filter={filter} remote={false} />);
@@ -177,4 +201,22 @@ describe('sidebar display settings menu', () => {
     ).toEqual(['项目', '对话']);
     expect(filter.groupDevice).toBe(true);
   });
+});
+
+it('keeps the creator submenu open for multiple selections and exposes an all reset', async () => {
+  const filter = makeFilter({ creators: ['[null,"a"]'], creatorOptions: [
+    { id: 'a', name: 'Dash', avatar: '', avatarColor: 'blue' },
+    { id: 'a', name: 'Dash', deviceId: 'remote', deviceName: 'Laptop', avatar: '', avatarColor: 'blue' },
+  ] });
+  render(<Preview filter={filter} />);
+  await openSubmenu(/^筛选/);
+  const submenu = await openSubmenu(/^伙伴/);
+  expect(within(submenu).getByRole('menuitemcheckbox', { name: 'Dash' }).getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(within(submenu).getByRole('menuitemcheckbox', { name: 'Dash Laptop' }));
+  expect(filter.toggleCreator).toHaveBeenCalledWith('["remote","a"]');
+  expect(screen.getAllByRole('menu')).toHaveLength(3);
+  fireEvent.click(within(submenu).getByRole('menuitem', { name: '全部' }));
+  expect(filter.setCreatorsAll).toHaveBeenCalledOnce();
+  fireEvent.click(within(submenu).getByRole('menuitem', { name: '都不显示' }));
+  expect(filter.setCreatorsNone).toHaveBeenCalledOnce();
 });

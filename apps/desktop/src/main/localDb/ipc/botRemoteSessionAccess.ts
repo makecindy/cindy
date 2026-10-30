@@ -33,13 +33,16 @@ export async function readRemoteBotSessionAccessBatch(
       const rows = await db.select({
         id: sessions.id,
         source: sessions.source,
+        hiddenAt: sessions.hiddenAt,
         visible: sql<number>`${sql.raw(remoteVisibleSessionSql('sessions'))}`,
       }).from(sessions)
         .where(inArray(sessions.id, chunk));
       if (!isDataOwnerBroadcastScopeCurrent(owner)) return denyAll();
       for (const row of rows) {
-        access.set(row.id, row.source !== 'bot' ? 'ordinary'
-          : row.visible ? 'visible' : 'hidden');
+        // Hidden is a listing preference, not an owner access boundary.
+        // Companion history and orphaned transcripts remain readable by exact ID.
+        access.set(row.id, row.source !== 'bot' ? (row.hiddenAt != null ? 'background' : 'ordinary')
+          : row.visible && row.hiddenAt == null ? 'visible' : 'background');
       }
     }
   }

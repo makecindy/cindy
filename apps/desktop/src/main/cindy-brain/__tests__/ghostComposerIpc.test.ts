@@ -52,6 +52,23 @@ describe('remote composer catalog boundary', () => {
     expect(mocks.trusted).not.toHaveBeenCalled();
   });
 
+  it('keeps directory disablement on the instance key when ids collide', () => {
+    const root = ghost('helper');
+    const migrated = { ...ghost('helper'), namespace: 'acme' as const, instanceKey: 'helper' };
+    const installed = { ...ghost('helper'), namespace: 'acme' as const, instanceKey: '_ns__acme__helper' };
+    const result = createGhostComposerListHandler({
+      list: () => [root, migrated, installed],
+      disabledIds: () => ['helper'],
+    })(event, '/host/project');
+    expect(result.map((item) => [item.instanceKey, item.namespace ?? null, item.enabled])).toEqual([
+      ['helper', null, false],
+      ['helper', 'acme', false],
+      ['_ns__acme__helper', 'acme', true],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/private|approval/);
+    expect(ghostComposerListSchema.safeParse(result).success).toBe(true);
+  });
+
   it('validates local senders and rejects shared-task or mismatched invoke contexts', () => {
     const list = vi.fn(() => [ghost('art')]);
     const handler = createGhostComposerListHandler({ list, disabledIds: () => [] });

@@ -11,7 +11,7 @@ const logger = vi.hoisted(() => ({
   debug: vi.fn(),
 }));
 
-vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
+vi.mock('electron', () => ({ app: { once: vi.fn() }, ipcMain: { handle: vi.fn() } }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => logger,
 }));

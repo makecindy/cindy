@@ -209,8 +209,11 @@ it('accounts a near-budget binary snapshot without serializing or copying its bu
     view: { id: `fixture-${index}`, name: 'Fixture', category: 'memory' as const, selected: true },
     asset: { name: `${index}.bin`, bytes },
   }));
-  const toJSON = vi.spyOn(Buffer.prototype, 'toJSON').mockImplementation(() => { throw new Error('buffer copied'); });
+  const toJSON = vi.spyOn(bytes, 'toJSON').mockImplementation(() => { throw new Error('buffer copied'); });
   try {
+    // #6928 Windows CI: Vitest serializes unrelated IPC buffers during awaits.
+    // Check the same serialization path without spawning a process in this unit test.
+    expect(JSON.parse(JSON.stringify(Buffer.from([1])))).toEqual({ type: 'Buffer', data: [1] });
     await reserveSnapshotItems(items, createImportBudget());
     expect(items.every(item => item.asset.bytes === bytes)).toBe(true);
     await expect(reserveSnapshotItems([...items, ...items.slice(0, 2)], createImportBudget())).rejects.toThrow('SOURCE_SNAPSHOT_TOO_LARGE');

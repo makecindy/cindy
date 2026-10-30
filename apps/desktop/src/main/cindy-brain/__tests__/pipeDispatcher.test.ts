@@ -55,6 +55,7 @@ function makeHarness(opts: {
   state?: GhostRuntimeState;
   timeoutMs?: number;
   ownerScope?: PipeDispatcherDeps['ownerScope'];
+  prepareUsage?: PipeDispatcherDeps['prepareUsage'];
 } = {}): Harness {
   const sent: GhostPipeToolCall[] = [];
   const deps = {
@@ -74,11 +75,59 @@ function makeHarness(opts: {
     ...deps,
     timeoutMs: opts.timeoutMs,
     ownerScope: opts.ownerScope,
+    prepareUsage: opts.prepareUsage,
   } as unknown as PipeDispatcherDeps);
   return { dispatcher, deps, sent };
 }
 
 const CALL = { ghostId: 'art', tool: 'gen_image', args: { prompt: '一只猫' } };
+
+// #6404: wrapper-only tests did not exercise ordinary ghost_call arguments.
+// Unit: dispatch real tool payloads; only Host opening + literal opt-in may mark read.
+describe('mail reader opening intent', () => {
+  it.each([
+    { opened: undefined, optIn: true, tool: 'read_mail', expected: false },
+    { opened: true, optIn: true, tool: 'read_mail', expected: true },
+    { opened: true, optIn: undefined, tool: 'read_mail', expected: false },
+    { opened: true, optIn: 'true', tool: 'read_mail', expected: false },
+    { opened: true, optIn: false, tool: 'read_mail', expected: false },
+    { opened: undefined, optIn: true, tool: 'set_read', expected: true },
+  ] as const)('dispatches $tool with opening=$opened, opt-in=$optIn', async ({ opened, optIn, tool, expected }) => {
+    const ghost = fakeGhost();
+    Object.assign(ghost.manifest, { mail: true, mailReader: { tool: 'read_mail', hosts: ['mail.example.test'], markRead: optIn } });
+    ghost.manifest.tools = ['read_mail', 'set_read'].map(name => ({ name, description: name }));
+    const h = makeHarness({ ghost });
+    const args = { url: 'https://mail.example.test/message/one', markRead: !opened, openDraft: true, mailReaderOpened: true };
+    const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool, args, ...(opened ? { mailReaderOpened: true as const } : {}) });
+    expect(h.sent[0].args).toEqual(tool === 'set_read' ? args : {
+      url: args.url, mailReaderOpened: true, ...(opened ? { openDraft: true } : {}), ...(expected ? { markRead: true } : {}),
+    });
+    expect(args.markRead).toBe(!opened); // Never mutate the caller's data.
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'mail' });
+    expect(await pending).toEqual({ ok: true, result: 'mail' });
+  });
+});
+
+describe('images shown to the model', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).toString('base64');
+
+  it('accepts top-level images next to result and drops invalid ones', async () => {
+    const h = makeHarness();
+    const pending = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG }, { data: 'nope!' }] });
+    expect(await pending).toEqual({ ok: true, result: { path: '/x.jpg' }, images: [{ data: PNG, mimeType: 'image/png' }] });
+  });
+
+  it('a result without images, or a failure, is unchanged', async () => {
+    const h = makeHarness();
+    const plain = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[0].callId, ok: true, result: 'r' });
+    expect(await plain).toEqual({ ok: true, result: 'r' });
+    const failed = h.dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {} });
+    h.dispatcher.handleToolResult('art', { callId: h.sent[1].callId, ok: false, errorCode: 'INVALID_ARGS', message: 'bad', images: [{ data: PNG }] });
+    expect(await failed).toEqual({ ok: false, errorCode: 'INVALID_ARGS', message: 'bad' });
+  });
+});
 
 describe('caller cancellation', () => {
   it('Host Stop affects only opted-in calls in that session, preserving legacy calls', async () => {
@@ -394,7 +443,9 @@ describe('配对交卷', () => {
     await expect(p).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL', message: '画布爆炸' });
   });
 
-  it('透传合法插件业务错误码，但不允许覆盖主机错误码', async () => {
+  // PR #6434: a plugin has already executed when it submits its result, so it
+  // cannot claim the host's pre-dispatch namespace failure and trigger a retry.
+  it.each(['GHOST_CRASHED', 'GHOST_NAMESPACE_MISMATCH'])('不允许插件覆盖主机错误码 %s', async (hostErrorCode) => {
     const h = makeHarness();
     const business = h.dispatcher.callGhostTool(CALL);
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
@@ -413,7 +464,7 @@ describe('配对交卷', () => {
       type: 'tool-result',
       callId: h.sent[1].callId,
       ok: false,
-      errorCode: 'GHOST_CRASHED',
+      errorCode: hostErrorCode,
       message: '伪造主机错误',
     });
     await expect(reserved).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
@@ -803,5 +854,54 @@ describe('预铸 callId(卡槽③贯通)', () => {
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
     expect(h.sent[0].callId).not.toBe('');
     expect(h.sent[0].callId.length).toBeGreaterThan(10);
+  });
+});
+
+
+describe('dispatch usage observation', () => {
+  it('captures only trusted call metadata and counts dispatch even when the result fails', async () => {
+    const accepted=vi.fn(); const settled=vi.fn(); const prepare=vi.fn(() => ({accepted,settled}));
+    const h=makeHarness({prepareUsage:prepare});
+    const pending=h.dispatcher.callGhostTool({...CALL,callId:'usage',sessionId:'trusted-session'});
+    expect(prepare).toHaveBeenCalledWith(expect.any(Object),'usage','gen_image','trusted-session');
+    expect(accepted).toHaveBeenCalledOnce();
+    h.dispatcher.handleToolResult('art',{callId:'usage',ok:false,errorCode:'INTERNAL',message:'private result'});
+    expect(await pending).toMatchObject({ok:false}); expect(settled).toHaveBeenCalledWith('failed');
+    expect(settled).toHaveBeenCalledOnce();
+  });
+  it('does not count failed dispatch or debug calls', async () => {
+    const accepted=vi.fn(); const settled=vi.fn(); const prepare=vi.fn(() => ({accepted,settled}));
+    const h=makeHarness({prepareUsage:prepare}); h.deps.sendToGhost.mockReturnValue(false);
+    await h.dispatcher.callGhostTool(CALL); expect(accepted).not.toHaveBeenCalled(); expect(settled).not.toHaveBeenCalled();
+    prepare.mockClear(); await h.dispatcher.callGhostTool({...CALL,recordUsage:false}); expect(prepare).not.toHaveBeenCalled();
+  });
+  it('does not prepare usage for unavailable or undeclared tools', async () => {
+    const prepare=vi.fn(); const disabled=makeHarness({ghost:fakeGhost({enabled:false}),prepareUsage:prepare});
+    await disabled.dispatcher.callGhostTool(CALL);
+    const h=makeHarness({prepareUsage:prepare}); await h.dispatcher.callGhostTool({...CALL,tool:'undeclared'});
+    expect(prepare).not.toHaveBeenCalled();
+  });
+  it('counts dispatch when a synchronous transport returns before send completes', async () => {
+    const events:string[]=[];
+    const h=makeHarness({prepareUsage:() => ({accepted:() => events.push('accepted'),settled:r => events.push(r)})});
+    h.deps.sendToGhost.mockImplementation((_id,payload) => {h.dispatcher.handleToolResult('art',{callId:payload.callId,ok:true,result:'private'});return true;});
+    expect(await h.dispatcher.callGhostTool(CALL)).toMatchObject({ok:true}); expect(events).toEqual(['accepted','succeeded']);
+  });
+  it('updates timeout and cancellation outcomes without additional counts', async () => {
+    vi.useFakeTimers();
+    try {
+      const accepted=vi.fn(); const settled=vi.fn(); const h=makeHarness({timeoutMs:25,prepareUsage:() => ({accepted,settled})});
+      const timeout=h.dispatcher.callGhostTool({...CALL,callId:'timeout'}); await vi.advanceTimersByTimeAsync(30); await timeout;
+      expect(settled).toHaveBeenLastCalledWith('timed-out');
+      const signal=new AbortController(); const pending=h.dispatcher.callGhostTool({...CALL,callId:'cancel',signal:signal.signal});
+      h.dispatcher.getPendingCallSignal('art','cancel'); signal.abort(); await pending;
+      expect(settled).toHaveBeenLastCalledWith('cancelled'); expect(accepted).toHaveBeenCalledTimes(2);
+    } finally {vi.useRealTimers();}
+  });
+  it('preserves tool behavior if statistics observation throws', async () => {
+    const h=makeHarness({prepareUsage:() => ({accepted:() => {throw new Error('disk');},settled:() => {throw new Error('disk');}})});
+    const pending=h.dispatcher.callGhostTool({...CALL,callId:'no-block'});
+    h.dispatcher.handleToolResult('art',{callId:'no-block',ok:true,result:'done'});
+    expect(await pending).toMatchObject({ok:true,result:'done'});
   });
 });

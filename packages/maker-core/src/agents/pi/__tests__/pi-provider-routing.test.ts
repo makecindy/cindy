@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
 import {
+  promises as fs,
   mkdirSync,
   existsSync,
   mkdtempSync,
@@ -18,9 +19,12 @@ vi.setConfig({ testTimeout: 30_000 });
 
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
+import { piCacheRouteKey } from '../cache-compatibility.js';
+import * as piSubagentRuns from '../pi-subagent-runs.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
+  spawnBinaryPath: undefined as string | undefined,
   env: {} as Record<string, string | undefined>,
   requests: [] as Array<Record<string, unknown>>,
   responses: [] as Array<Record<string, unknown>>,
@@ -46,6 +50,7 @@ const captured = vi.hoisted(() => ({
   remoteModels: new Map<string, string>(),
   refreshAckMode: 'ok' as 'ok' | 'invalid',
   hasRefreshCommand: true,
+  failThinkingLevel: null as null | 'reject' | 'throw',
   requestHandler: undefined as
     | undefined
     | ((command: Record<string, unknown>) => Promise<{
@@ -58,11 +63,13 @@ const captured = vi.hoisted(() => ({
 
 vi.mock("../transport.js", () => ({
   createPiStdioTransport: (opts: {
+    binaryPath: string;
     args: string[];
     env: Record<string, string | undefined>;
     onProcessSpawned?: (pid: number) => void | (() => void);
   }) => {
     // spawn 参数断言移到 transport 工厂(spawn 行为在 stdio transport)。
+    captured.spawnBinaryPath = opts.binaryPath;
     captured.args = [...opts.args];
     captured.env = { ...(opts.env ?? {}) };
     opts.onProcessSpawned?.(1234);
@@ -130,6 +137,12 @@ vi.mock("../rpc-client.js", () => {
         }
         if (command.type === 'refresh_models' || command.type === 'set_compaction_reserve_tokens') {
           return { success: false, error: `Unknown command: ${command.type}` };
+        }
+        if (command.type === 'set_thinking_level' && captured.failThinkingLevel === 'reject') {
+          return { success: false, error: 'mock reject' };
+        }
+        if (command.type === 'set_thinking_level' && captured.failThinkingLevel === 'throw') {
+          throw new Error('mock rpc timeout');
         }
         const response = captured.requestHandler
           ? await captured.requestHandler(command)
@@ -208,10 +221,11 @@ vi.mock("../rpc-client.js", () => {
   };
 });
 
-import { PiAgent } from "../index.js";
+import { PiAgent, pickSupportedEffort } from "../index.js";
 import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
+  MAIN_OWNED_SEND_CONTEXT,
   type AgentDeps,
   type PiNativeProvidersResult,
 } from "../../base-agent.js";
@@ -266,6 +280,7 @@ describe("Pi provider-aware model routing", () => {
 
   beforeEach(() => {
     captured.args = [];
+    captured.spawnBinaryPath = undefined;
     captured.requests = [];
     captured.responses = [];
     captured.onEvent = undefined;
@@ -279,6 +294,7 @@ describe("Pi provider-aware model routing", () => {
     captured.remoteModels.clear();
     captured.refreshAckMode = 'ok';
     captured.hasRefreshCommand = true;
+    captured.failThinkingLevel = null;
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-provider-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-provider-cwd-"));
@@ -338,6 +354,143 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.requests.some(request => request.type === 'set_fast_mode')).toBe(false);
     await handle.close();
     expect(JSON.parse(query({ provider: 'relay', model: 'private-sol' })).fast).toBe(false);
+  });
+
+  it('re-asserts the session effort after a full-path model switch (pi resets it to the model default)', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+          {
+            id: 'model-b',
+            displayName: 'Model B',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'model-a', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+          { id: 'native-b', name: 'Native B', baseUrl: 'http://b.test', api: 'openai-completions', models: [{ id: 'model-b', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+        ],
+        env: {},
+      }),
+    };
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'model-switch-effort',
+      workingDir: cwd,
+      model: 'model-a',
+      providerId: 'native-a',
+      effort: 'max',
+    });
+    const thinkingCalls = () =>
+      captured.requests.filter((request) => request.type === 'set_thinking_level');
+    expect(thinkingCalls().at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+
+    // ① 带显式 effort 的跨模型切换：set_model 后下发该档。
+    const afterStartup = thinkingCalls().length;
+    await handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' });
+    expect(thinkingCalls().slice(afterStartup)).toContainEqual({
+      type: 'set_thinking_level', level: 'low',
+    });
+
+    // ② 不带 effort 切回：恢复会话原档位（mutableEffort 已被①更新为 low）。
+    const beforeRestore = thinkingCalls().length;
+    await handle.setModel!('model-a', { providerId: 'native-a' });
+    expect(captured.requests.slice(beforeRestore)).toContainEqual({
+      type: 'set_model', provider: 'native-a', modelId: 'model-a',
+    });
+    expect(thinkingCalls().slice(beforeRestore)).toContainEqual({
+      type: 'set_thinking_level', level: 'low',
+    });
+
+    await handle.close();
+  });
+
+  it('effort 恢复失败不阻断已确认的模型切换，也不把被拒档位记成已生效', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'model-a',
+            displayName: 'Model A',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+          {
+            id: 'model-b',
+            displayName: 'Model B',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'max'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          { id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-completions', models: [{ id: 'model-a', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+          { id: 'native-b', name: 'Native B', baseUrl: 'http://b.test', api: 'openai-completions', models: [{ id: 'model-b', reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] },
+        ],
+        env: {},
+      }),
+    };
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'model-switch-effort-restore-fail',
+      workingDir: cwd,
+      model: 'model-a',
+      providerId: 'native-a',
+      effort: 'max',
+    });
+
+    // ① set_thinking_level 超时/链路抛错：模型路由已确认，setModel 必须照常完成，
+    //    不能把已成功的切换变成失败（否则子代理快照收尾被跳过，pending 卡死委派）。
+    captured.failThinkingLevel = 'throw';
+    await expect(handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' }))
+      .resolves.toBeUndefined();
+    expect(handle.getEffort!()).toBe('max');
+
+    // ② set_thinking_level 被拒：mutableEffort 不跟随未生效的目标档。
+    captured.failThinkingLevel = 'reject';
+    await handle.setModel!('model-a', { providerId: 'native-a', effort: 'low' });
+    expect(handle.getEffort!()).toBe('max');
+
+    // ③ 成功路径不受影响：恢复生效后 getEffort 报新档。
+    captured.failThinkingLevel = null;
+    await handle.setModel!('model-b', { providerId: 'native-b', effort: 'low' });
+    expect(handle.getEffort!()).toBe('low');
+
+    await handle.close();
   });
 
   it("uses providerId as the primary key when duplicate model ids exist", async () => {
@@ -453,6 +606,7 @@ describe("Pi provider-aware model routing", () => {
     };
     expect(apiResolver).toHaveBeenCalledWith("openai", "shared-model", {
       remote: false,
+      runtimeBinaryPath: deps.binaryPath,
     });
     expect(descriptorResolver).toHaveBeenCalledWith("openai", "shared-model");
     expect(
@@ -1107,6 +1261,185 @@ describe("Pi provider-aware model routing", () => {
       level: "xhigh",
     });
     await handle.close();
+  });
+
+  it.each([false, true])("scopes learned compatibility to the real upstream behind a proxy: %s", async (proxied) => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({
+          authenticated: true,
+          identity: "custom",
+          authSource: "api-key" as const,
+        }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: "http://127.0.0.1:9988" },
+      binaryPath: path.join(agentHome, "pi"),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: "glm-5.3-flash",
+            displayName: "GLM-5.3-Flash",
+            contextWindow: 1_000_000,
+            efforts: ["low", "high", "max"],
+            defaultEffort: "high",
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+        (modelId === "glm-5.3-flash" || modelId === "glm-5.3-wire") &&
+        providerId === "opencode-go" && routeKey === piCacheRouteKey('https://opencode.ai/zen/go/v1', 'openai-completions')
+          ? { supportsLongCacheRetention: false }
+          : undefined,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: "opencode-go",
+            sourceProviderId: "opencode-go",
+            name: "OpenCode Go",
+            baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : "https://opencode.ai/zen/go/v1",
+            ...(proxied ? { cacheIdentityBaseUrl: 'https://opencode.ai/zen/go/v1' } : {}),
+            api: "openai-completions",
+            models: [
+              {
+                id: "glm-5.3-flash",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+                compat: {
+                  supportsStore: false,
+                  supportsDeveloperRole: false,
+                  maxTokensField: "max_tokens",
+                },
+              },
+              {
+                // Public model ID differs from wire ID; only the wire identity is learned.
+                id: "glm-5.3",
+                wireId: "glm-5.3-wire",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+              },
+            ],
+          },
+          {
+            // BYOM：models.json 键是命名空间化 runtime id，会话/自愈键是 sourceProviderId。
+            id: "cindy-byom-opencode-go",
+            sourceProviderId: "opencode-go",
+            name: "OpenCode Go (BYOM)",
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "glm-5.3-flash",
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_000_000,
+                maxTokens: 131_072,
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: "pi-native-compat-override",
+      workingDir: cwd,
+      model: "glm-5.3-flash",
+      providerId: "opencode-go",
+    });
+    const models = JSON.parse(
+      readFileSync(
+        path.join(captured.env.PI_CODING_AGENT_DIR as string, "models.json"),
+        "utf8",
+      ),
+    ) as { providers: Record<string, { models?: Array<Record<string, unknown>> }> };
+    expect(models.providers["opencode-go"]?.models).toEqual([
+      expect.objectContaining({
+        id: "glm-5.3-flash",
+        compat: expect.objectContaining({
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+        }),
+      }),
+      // The learned wire model is distinct from the public model alias.
+      expect.objectContaining({
+        id: "glm-5.3-wire",
+      }),
+    ]);
+    // BYOM 命名空间 provider 用 sourceProviderId 命中同一条学习结果。
+    expect(models.providers["cindy-byom-opencode-go"]?.models).toEqual([
+      expect.objectContaining({
+        id: "glm-5.3-flash",
+      }),
+    ]);
+    const rules = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'pi-cache-compatibility.json'), 'utf8'));
+    expect(rules).toContainEqual(expect.objectContaining({ provider: 'opencode-go', id: 'glm-5.3-wire', api: 'openai-completions', providerId: 'opencode-go', routeKey: piCacheRouteKey('https://opencode.ai/zen/go/v1', 'openai-completions'), baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : 'https://opencode.ai/zen/go/v1' }));
+    for (const model of models.providers['opencode-go']!.models!) expect(model.compat ?? {}).not.toHaveProperty('supportsLongCacheRetention', false);
+    await handle.close();
+  });
+
+  it.each(['send', 'native', 'queued'])('freezes per-input cache learning across expiry and relearning: %s', async (mode) => {
+    let active = true;
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'https://cache.example/v1', api: 'openai-completions',
+      models: [{ id: 'local-model' }],
+    }], env: {} }));
+    deps.resolvePiNativeCompatOverride = vi.fn(() => active ? { supportsLongCacheRetention: false } : undefined);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'cache-expiry-receipt', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      expect(deps.resolvePiNativeCompatOverride).not.toHaveBeenCalled();
+      for (const expected of [true, false, true]) {
+        active = expected;
+        if (mode === 'send') await handle.send({ type: 'user', content: 'try cache' });
+        if (mode !== 'queued') captured.onEvent!({ type: 'agent_start' });
+        if (mode === 'queued') {
+          captured.onEvent!({ type: 'queue_update', steering: [], followUp: ['try cache'] });
+          captured.onEvent!({ type: 'queue_update', steering: [], followUp: [] });
+        }
+        const message = { role: 'user', content: [{ type: 'text', text: 'try cache' }] };
+        captured.onEvent!({ type: 'message_start', message });
+        const key = createHash('sha256').update(JSON.stringify(message)).digest('hex');
+        // Older registries still acknowledge the exact direct-input snapshot.
+        captured.onEvent!({ type: 'extension_ui_request', method: 'input', title: 'cindy:cache-input',
+          id: 'cache-input', placeholder: JSON.stringify({ key, direct: mode !== 'queued' }) });
+        // Expiry or another session's learning during the request must not
+        // change whether this input actually started with the override.
+        active = !expected;
+        captured.onEvent!({ type: 'agent_start' }); // Pi's native retry, no new user.
+        captured.onEvent!({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        // Consumed steer is another user message in the same execution. It
+        // must neither refresh the receipt nor treat an auto-retry as input.
+        captured.onEvent!({ type: 'agent_start' }); // continue() may flush steering as its first message.
+        captured.onEvent!({ type: 'queue_update', steering: ['steer'], followUp: [] });
+        captured.onEvent!({ type: 'queue_update', steering: [], followUp: [] });
+        const steer = { role: 'user', content: [{ type: 'text', text: 'steer' }] };
+        captured.onEvent!({ type: 'message_start', message: steer });
+        captured.onEvent!({ type: 'extension_ui_request', method: 'input', title: 'cindy:cache-input',
+          id: 'cache-steer', placeholder: JSON.stringify({ key: createHash('sha256').update(JSON.stringify(steer)).digest('hex'), direct: false }) });
+        captured.onEvent!({ type: 'agent_start' });
+        captured.onEvent!({ type: 'message_start', message: { role: 'toolResult', content: [] } });
+        captured.onEvent!({ type: 'auto_retry_end', success: false,
+          finalError: '400: unsupported parameter: prompt_cache_retention' });
+        let event;
+        do { event = await events.next(); } while (!event.done && event.value.type !== 'error');
+        expect(event.value?.data).toMatchObject({ piCacheCompatibility: { applied: expected,
+          providerId: 'native-a', wireModelId: 'local-model',
+          routeKey: piCacheRouteKey('https://cache.example/v1', 'openai-completions') } });
+        captured.onEvent!({ type: 'agent_end', messages: [] });
+      }
+    } finally { await handle.close(); }
   });
 
   it("routes a persisted BYOM id through its namespaced PI runtime provider", async () => {
@@ -2356,7 +2689,7 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it("does not live-refresh xAI when the caller pins the gateway with providerId null", async () => {
-    let resolves = 0;
+    const resolvedProviders: Array<string | null | undefined> = [];
     captured.requestHandler = async (command) =>
       command.type === "get_state"
         ? {
@@ -2404,8 +2737,8 @@ describe("Pi provider-aware model routing", () => {
       },
       resolvePiGatewayModelApi: () => "openai-responses",
       resolvePiAgentHome: () => agentHome,
-      resolvePiNativeProviders: async () => {
-        resolves += 1;
+      resolvePiNativeProviders: async (selection) => {
+        resolvedProviders.push(selection?.providerId);
         return {
           providers: [
             {
@@ -2426,10 +2759,11 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
-    expect(resolves).toBe(1);
+    expect(resolvedProviders).toEqual(["native-a"]);
     captured.requests.length = 0;
     await handle.setModel!("xai/grok-4.6", { providerId: null });
-    expect(resolves).toBe(2);
+    // Changing the gateway connection identity may refresh its cache route rules.
+    expect(resolvedProviders.slice(1).every(id => id === null)).toBe(true);
     expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "cindy",
@@ -3081,7 +3415,13 @@ describe("Pi provider-aware model routing", () => {
           logout: async () => {},
           getAuthEnv: async () => ({ CINDY_PI_API_KEY: "gateway-key" }),
         },
-        runtimeConfig: { endpoint: "http://127.0.0.1:9988/" },
+        runtimeConfig: {
+          endpoint: "http://127.0.0.1:9988/",
+          get remoteEndpoint() {
+            if (api !== 'openai-completions' && api !== 'openai-responses') throw new Error('Unrelated protocol must not read cache identity');
+            return 'https://gateway.example.test/v1';
+          },
+        },
         binaryPath: path.join(agentHome, "pi"),
         logger: noopLogger,
         capabilityAdditions: {
@@ -3177,7 +3517,7 @@ describe("Pi provider-aware model routing", () => {
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -3237,7 +3577,7 @@ describe("Pi provider-aware model routing", () => {
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -3278,6 +3618,63 @@ describe("Pi provider-aware model routing", () => {
       xhigh: null,
       max: null,
     });
+    await handle.close();
+  });
+
+  it('keeps gateway caching native and emits exact dynamic recovery rules', async () => {
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'z-ai/glm-5.3-flash',
+          displayName: 'GLM 5.3 Flash',
+          contextWindow: 200_000,
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({
+        api: 'openai-completions',
+        compat: { supportsStore: false },
+      }),
+      resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+        providerId === 'xd' && modelId === 'z-ai/glm-5.3-flash' && routeKey === piCacheRouteKey('https://gateway.test/v1', 'openai-completions')
+          ? { supportsLongCacheRetention: false }
+          : undefined,
+    };
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'gateway-compat-override',
+      workingDir: cwd,
+      model: 'z-ai/glm-5.3-flash',
+      providerId: 'xd',
+      effort: 'high',
+    });
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models?: Array<{ id: string; compat?: Record<string, unknown> }> }>;
+    };
+    // gateway 路由也必须吃上自愈结果，否则学习一次却不生效、还被防循环闩锁永久关闭。
+    expect(models.providers.cindy?.models).toEqual([
+      expect.objectContaining({
+        id: 'z-ai/glm-5.3-flash',
+        compat: expect.objectContaining({
+          supportsStore: false,
+        }),
+      }),
+    ]);
+    expect(models.providers.cindy?.models?.[0].compat).not.toHaveProperty('supportsLongCacheRetention', false);
+    const rules = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'pi-cache-compatibility.json'), 'utf8'));
+    expect(rules).toContainEqual(expect.objectContaining({ provider: 'cindy', id: 'z-ai/glm-5.3-flash', providerId: 'xd', api: 'openai-completions' }));
     await handle.close();
   });
 
@@ -3708,6 +4105,1246 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("re-applies the retained thinking level to the target model after a model switch", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-level-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // Pi 的 set_model 不重置 thinking level：必须在切换完成后按保留档位重下发，
+    // 否则上一个模型的 off/旧档位会漂移给新模型。
+    const switched = captured.requests.slice(beforeSwitch);
+    const setModelIndex = switched.findIndex(
+      (request) => request.type === "set_model" && request.modelId === "model-b",
+    );
+    const levelIndex = switched.findIndex(
+      (request) => request.type === "set_thinking_level",
+    );
+    expect(setModelIndex).toBeGreaterThanOrEqual(0);
+    expect(levelIndex).toBeGreaterThan(setModelIndex);
+    expect(switched[levelIndex]).toEqual({ type: "set_thinking_level", level: "high" });
+    await handle.close();
+  });
+
+  it("turns thinking off after a model switch when the caller reports thinking is off", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: false });
+
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
+  it("turns thinking off when the target model has no thinking levels at all", async () => {
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: null, high: null, xhigh: null, max: null },
+                },
+                { id: "model-b" },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-non-reasoning-target",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "low",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", {
+      providerId: "native-a",
+      effort: "low",
+      thinkingEnabled: true,
+    });
+
+    // 目标模型声明为不支持思考：明确发 off，不能把上一个模型的档位带过去。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
+  it("falls back to a supported level when the retained effort is unavailable on the target", async () => {
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+                },
+                {
+                  id: "model-b",
+                  reasoning: true,
+                  thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+                },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-effort-fallback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // high 不在目标快照：不能保持旧档位（在新模型的 map 里是 null = 关思考），
+    // 必须回落到目标可用档位。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "low" });
+    await handle.close();
+  });
+
+  it("prefers the target model default effort when the retained effort is unavailable", async () => {
+    const baseDeps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "native-a",
+            name: "Native A",
+            baseUrl: "http://a.test",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+              },
+              {
+                id: "model-b",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      [
+        { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+      ],
+    );
+    const agent = new PiAgent({
+      ...baseDeps,
+      resolvePiRuntimeModelDescriptor: (_providerId, modelId) =>
+        modelId === "model-b"
+          ? {
+              id: "model-b",
+              displayName: "B",
+              contextWindow: 200_000,
+              efforts: ["low", "medium"],
+              defaultEffort: "medium",
+            }
+          : null,
+    });
+    const handle = await agent.startSession({
+      sessionId: "thinking-default-effort-fallback",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    expect(captured.requests.slice(beforeSwitch)).toContainEqual({
+      type: "set_thinking_level",
+      level: "medium",
+    });
+    await handle.close();
+  });
+
+  it("applies the target snapshot when a thinking-on switch carries no effort at all", async () => {
+    const baseDeps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "native-a",
+            name: "Native A",
+            baseUrl: "http://a.test",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null },
+              },
+              {
+                id: "model-b",
+                reasoning: true,
+                thinkingLevelMap: { minimal: null, low: "low", medium: "medium", high: null, xhigh: null, max: null },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      [
+        { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "medium"], defaultEffort: "medium" },
+      ],
+    );
+    const agent = new PiAgent({
+      ...baseDeps,
+      resolvePiRuntimeModelDescriptor: (_providerId, modelId) =>
+        modelId === "model-b"
+          ? {
+              id: "model-b",
+              displayName: "B",
+              contextWindow: 200_000,
+              efforts: ["low", "medium"],
+              defaultEffort: "medium",
+            }
+          : null,
+    });
+    // 无 effort 目录的 BYOM 会话：selection 不带档位、会话也没有保留档位。
+    const handle = await agent.startSession({
+      sessionId: "thinking-no-effort-on-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // 用户明确要开思考、目标也支持：即使没有可用的期望档位也必须按目标快照收敛，
+    // 不能什么都不发——否则上一个模型的 off 会原样留下（推理进正文）。
+    expect(captured.requests.slice(beforeSwitch)).toContainEqual({
+      type: "set_thinking_level",
+      level: "medium",
+    });
+    await handle.close();
+  });
+
+  it("re-declares the session effort when the switch target only exists after session start", async () => {
+    // 2026-10-09 实测：用户在会话中途新建 provider/模型后直接热切。该路由不在
+    // 启动快照里——preview 必须走 live-refresh 重建能力表，收敛块随后按会话档位
+    // 显式下发 set_thinking_level。这条链一旦断裂（快照外就沉默、或误判目标不
+    // 支持思考而发 off），切模后的首轮就没有思考声明，模型会把推理写进正文。
+    let includeLate = false;
+    const lateProvider = {
+      id: "late-prov",
+      sourceProviderId: "late-prov",
+      name: "Late Provider",
+      baseUrl: "http://late.test",
+      api: "openai-completions" as const,
+      models: [
+        {
+          id: "late-model",
+          wireId: "late-model",
+          reasoning: true,
+          contextWindow: 200_000,
+          thinkingLevelMap: {
+            minimal: null,
+            low: "low",
+            medium: null,
+            high: "high",
+            xhigh: null,
+            max: "max",
+          },
+        },
+      ],
+    };
+    const startupProviders = {
+      providers: [
+        {
+          id: "native-a",
+          sourceProviderId: "native-a",
+          name: "Native A",
+          baseUrl: "http://a.test",
+          api: "openai-completions" as const,
+          models: [{ id: "local-model", contextWindow: 200_000 }],
+        },
+      ],
+      env: {},
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => (includeLate ? { providers: [lateProvider], env: {} } : startupProviders),
+        [
+          { id: "local-model", displayName: "Local", contextWindow: 200_000, efforts: [], defaultEffort: null },
+          {
+            id: "late-model",
+            displayName: "Late",
+            contextWindow: 200_000,
+            efforts: ["low", "high", "max"],
+            defaultEffort: null,
+          },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "late-provider-thinking",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-a",
+      effort: "max",
+    });
+    includeLate = true;
+    const beforeSwitch = captured.requests.length;
+
+    // 无 intent 载体（旁路入口 / UI 只选模型的形状）：档位仍必须按会话档位显式
+    // 重发。2026-10-06 lead 案例就是切换没带载体 → 上游 off 原样继承 →
+    // usage.reasoning 归零、推理整段写进正文。
+    await handle.setModel!("late-model", { providerId: "late-prov" });
+
+    const switched = captured.requests.slice(beforeSwitch);
+    // 目标不在启动快照 → 必须发生一次 native catalog 重建（get_available_models
+    // 或 models.json 重写），否则后面的档位收敛无从谈起。
+    expect(switched.some((request) => request.type === "set_model")).toBe(true);
+    // 档位必须显式下发为会话档位：既不能沉默（一条都没有），更不能误判成
+    // 「不支持思考」而主动发 off。
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "max" });
+    expect(switched).not.toContainEqual({ type: "set_thinking_level", level: "off" });
+    await handle.close();
+  });
+
+  it("reopens thinking at the session effort instead of a hardcoded xhigh", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [{ id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } }],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-reopen-keeps-effort",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+
+    await handle.setThinkingEnabled!(true);
+
+    // 显式打开思考要回到会话当前的期望档位（high），而不是固定 xhigh：否则用户
+    // 选好的档位被抹平，紧随其后的切模还会按被抹平的档位归一化。
+    expect(captured.requests.slice(before)).toContainEqual({
+      type: "set_thinking_level",
+      level: "high",
+    });
+    await handle.close();
+  });
+
+  it("keeps the session effort when thinking is toggled off and back on", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [{ id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } }],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-toggle-keeps-effort",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+
+    await handle.setThinkingEnabled!(false);
+    await handle.setThinkingEnabled!(true);
+
+    // 关掉思考不丢档位记忆：再打开要回到用户选的 high，而不是启动档位/默认档。
+    expect(
+      captured.requests
+        .slice(before)
+        .filter((request) => request.type === "set_thinking_level"),
+    ).toEqual([
+      { type: "set_thinking_level", level: "off" },
+      { type: "set_thinking_level", level: "high" },
+    ]);
+    await handle.close();
+  });
+
+  it("retries the post-switch thinking level once before giving up", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-retry-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const before = captured.requests.length;
+    failNextThinking = true;
+
+    await handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+
+    // 瞬时拒绝重试一次：两次下发都发出去，切模本身仍然成功。
+    expect(
+      captured.requests
+        .slice(before)
+        .filter((request) => request.type === "set_thinking_level"),
+    ).toHaveLength(2);
+    await handle.close();
+  });
+
+  it("re-applies the session effort when a switch to a reasoning-capable model carries no intent", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-converged-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 旁路入口（scheduler / IM 回滚 / 插件任务 / 会话恢复）不带 thinking 载体，也必须按会话
+    // 档位重新下发一次：历史实现的「没有意图就不动」让 Pi 保留旧档位，实测表现是切模后
+    // usage.reasoning 归零、推理整段写进正文（2026-10-06 Orca lead 切 commandcode 实报）。
+    const switched = captured.requests.slice(beforeSwitch);
+    expect(switched).toContainEqual({ type: "set_thinking_level", level: "high" });
+    await handle.close();
+  });
+
+  it("keeps the thinking level untouched when a switch without an intent targets a model without thinking levels", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b" },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-untouched-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 载体缺失只补「开」：目标自身没有档位时不猜、不写（要关思考的调用方会显式传 false）。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps thinking off after a carrier-less switch when the user had turned it off", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-stays-off-without-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setThinkingEnabled!(false);
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 用户明确关过思考：无载体切换不得悄悄重新开启（scheduler 复用会话即此类入口），
+    // 也不得把用户关掉后的关闭状态改写成档位。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps thinking off and the remembered tier on a same-route select of a non-thinking model", async () => {
+    // 同路由重选不支持思考的模型：下发 xhigh 会让请求"成功"但改动档位记忆，
+    // 用户之后切回支持 xhigh 的模型就被静默改成 xhigh。
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-plain", reasoning: false },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-plain", displayName: "Plain", contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "same-route-non-thinking-model",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setModel!("model-plain", { providerId: "native-a" });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-plain", { providerId: "native-a", thinkingEnabled: true });
+
+    const levels = captured.requests
+      .slice(beforeSwitch)
+      .filter((request) => request.type === "set_thinking_level")
+      .map((request) => String(request.level));
+    expect(levels).toEqual(["off"]);
+    expect(handle.getEffort!()).toBe("high");
+    // 发 off 是能力所致，不是用户主动关闭：不带档位切回推理模型时必须恢复思考。
+    const beforeBack = captured.requests.length;
+    await handle.setModel!("model-a", { providerId: "native-a" });
+    const restored = captured.requests
+      .slice(beforeBack)
+      .filter((request) => request.type === "set_thinking_level")
+      .map((request) => String(request.level));
+    // 至少下发一次 high（开启逻辑与切模收尾都可能各下一次，后者是幂等的）。
+    expect(restored).toContain("high");
+    await handle.close();
+  });
+
+  it("picks a tier the current model supports when re-enabling thinking", () => {
+    // 用户先在 high 关闭思考、再不带到档位切到不支持 high 的模型：记忆档位仍是 high，
+    // 重新开启时直接下发会被拒（开启失败）或与当前能力对不上。
+    expect(pickSupportedEffort(["low", "medium"], "high", "low")).toBe("low");
+    // 记忆档位本身受支持时优先用它（不要把用户选的档位降掉）。
+    expect(pickSupportedEffort(["low", "high"], "high", "low")).toBe("high");
+    // 快照未声明档位（undefined）时保持旧行为：用记忆档位。
+    expect(pickSupportedEffort(undefined, "high", "low")).toBe("high");
+    // 全都不支持时不猜档位，由调用方回落到历史默认。
+    expect(pickSupportedEffort(["low"], "high", null)).toBeNull();
+  });
+
+  it("applies an explicit thinking intent on a same-route setModel", async () => {
+    // 同路由早返回原来直接 return：会话当前关思考、调用方重选同一模型并传
+    // thinkingEnabled:true 时，请求"成功"但 Pi 仍关闭，发送结算还会清掉这份选择。
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [{ id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } }],
+            },
+          ],
+          env: {},
+        }),
+        [{ id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" }],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "same-route-thinking-intent",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setThinkingEnabled!(false);
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-a", { providerId: "native-a", thinkingEnabled: true });
+
+    const levels = captured.requests
+      .slice(beforeSwitch)
+      .filter((request) => request.type === "set_thinking_level")
+      .map((request) => String(request.level));
+    expect(levels).toContain("high");
+    await handle.close();
+  });
+
+  it("serializes setThinkingEnabled behind an in-flight model switch", async () => {
+    // 2026-10-17 Greptile P1：setModel 走 runExclusivePiRpc 而 setThinkingEnabled 直发。
+    // 切模进行中用户关闭思考：不排队的话，切模收尾仍按更早的 thinkingEnabled:true
+    // 载体重新下发开启并清掉关闭标记——用户看到关闭成功、实际被覆盖。修复后整个
+    // setThinkingEnabled 同队列串行，意图按时间序线性化，后发者胜。
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let releaseSwitch!: () => void;
+    const switchGate = new Promise<void>((resolve) => { releaseSwitch = resolve; });
+    const thinkingOrder: string[] = [];
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        await switchGate;
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        thinkingOrder.push(String(command.level));
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses" as const,
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-toggle-serializes-with-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const beforeSwitch = captured.requests.length;
+    const switchPromise = handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true });
+    // 等切模真正进入临界区、卡在门控的 set_model 上（对齐真实竞态：切模已持锁进行中）。
+    await vi.waitFor(() => {
+      if (!captured.requests.slice(beforeSwitch).some((r) => r.type === "set_model")) {
+        throw new Error("switch has not reached set_model yet");
+      }
+    });
+
+    // 切模进行中发起关闭：修复后它必须排队等切模收尾完成，最后落地。
+    const togglePromise = handle.setThinkingEnabled!(false);
+    releaseSwitch();
+    await Promise.all([switchPromise, togglePromise]);
+
+    // 用户的关闭是更新的意图，必须最后生效；收尾按旧载体下发的开启在其之前。
+    expect(thinkingOrder[thinkingOrder.length - 1]).toBe("off");
+    // 终态标记保持「用户已关」：随后的无载体切模不得再发任何档位。
+    const beforeFinal = captured.requests.length;
+    await handle.setModel!("model-a", { providerId: "native-a" });
+    expect(
+      captured.requests.slice(beforeFinal).some((r) => r.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("remembers an explicitly chosen effort when a switch keeps thinking off", async () => {
+    // 2026-10-18 Greptile P1：思考关着时档位不下发（下发会重开思考），但用户本次
+    // selection 里显式选的档位是独立决定，必须记入期望档位——否则重开思考时回到
+    // 更早的旧值（high），与界面选中的档位不一致。
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses" as const,
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-remembers-chosen-effort",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    const levels = () =>
+      captured.requests.filter((r) => r.type === "set_thinking_level").map((r) => String(r.level));
+
+    // 载体 low + thinkingEnabled:false：off 下发，但 low 要被记住。
+    await handle.setModel!("model-b", { providerId: "native-a", effort: "low", thinkingEnabled: false });
+    await handle.setThinkingEnabled!(true);
+    expect(levels()[levels().length - 1]).toBe("low");
+
+    // 既有标记关闭 + 仅带 effort 的载体：不下发档位（标记仍关），但 high 同样要被记住。
+    await handle.setThinkingEnabled!(false);
+    const before = captured.requests.length;
+    await handle.setModel!("model-a", { providerId: "native-a", effort: "high" });
+    expect(
+      captured.requests.slice(before).some((r) => r.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.setThinkingEnabled!(true);
+    expect(levels()[levels().length - 1]).toBe("high");
+    await handle.close();
+  });
+
+  it("keeps the explicit-off marker when re-enabling thinking is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-marker-survives-rejected-enable",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+    await handle.setThinkingEnabled!(false);
+    // 重开思考被拒绝：抛错的同时不得把「明确关闭」标记提前清掉（Pi 实际仍是 off）。
+    failNextThinking = true;
+    await expect(handle.setThinkingEnabled!(true)).rejects.toThrow(/set_thinking_level/);
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 一次已报错的操作不得在之后的无载体切模里意外生效：保持关闭。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps the declared-off marker when the startup off assert is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    let failNextThinking = false;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        if (failNextThinking) {
+          failNextThinking = false;
+          return { success: false, error: "transient" };
+        }
+        return { success: true, data: {} };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    // 宿主带的用户意图：启动即关；这次 off 下发被拒（只告警）。
+    failNextThinking = true;
+    const handle = await agent.startSession({
+      sessionId: "thinking-off-marker-survives-rejected-startup",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+      thinkingEnabled: false,
+    });
+    const beforeSwitch = captured.requests.length;
+
+    await handle.setModel!("model-b", { providerId: "native-a" });
+
+    // 启动 off 被拒只告警，但意图标记必须保留：无载体切模不得重开用户关闭的思考，
+    // 否则恢复失败一次就永久丢失「明确关闭」。
+    expect(
+      captured.requests
+        .slice(beforeSwitch)
+        .some((request) => request.type === "set_thinking_level"),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps the model switch successful when the post-switch thinking level is rejected", async () => {
+    const denseMap = {
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    } as const;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return {
+          success: true,
+          data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } },
+        };
+      }
+      if (command.type === "set_model") {
+        return { success: true, data: { contextWindow: 200_000 } };
+      }
+      if (command.type === "set_thinking_level") {
+        return { success: false, error: "unsupported level" };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(
+      byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-a",
+              name: "Native A",
+              baseUrl: "http://a.test",
+              api: "openai-responses",
+              models: [
+                { id: "model-a", reasoning: true, thinkingLevelMap: { ...denseMap } },
+                { id: "model-b", reasoning: true, thinkingLevelMap: { ...denseMap } },
+              ],
+            },
+          ],
+          env: {},
+        }),
+        [
+          { id: "model-a", displayName: "A", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+          { id: "model-b", displayName: "B", contextWindow: 200_000, efforts: ["low", "high"], defaultEffort: "low" },
+        ],
+      ),
+    );
+    const handle = await agent.startSession({
+      sessionId: "thinking-rejected-after-switch",
+      workingDir: cwd,
+      model: "model-a",
+      providerId: "native-a",
+      effort: "high",
+    });
+
+    // 档位收敛失败不能把已经确认的模型切换改判成失败（否则上层会回滚 route）。
+    await expect(
+      handle.setModel!("model-b", { providerId: "native-a", thinkingEnabled: true }),
+    ).resolves.toBeUndefined();
+    expect(handle.model).toBe("model-b");
+    await handle.close();
+  });
+
   it("accepts the low placeholder after switching to a non-reasoning gateway model", async () => {
     const availableModels: readonly ModelDescriptor[] = [
       {
@@ -3812,7 +5449,7 @@ describe("Pi provider-aware model routing", () => {
 
   it.each([
     { label: 'different live window', window: 400_000, action: 'rebuild' },
-    { label: 'matching live window', window: 128_000, action: 'hot' },
+    { label: 'matching live window', window: 128_000, action: 'rebuild' },
     { label: 'missing live window', window: undefined, action: 'rebuild' },
     { label: 'failed live catalog read', window: null, action: 'rebuild' },
   ] as const)('checks an inherited model before switching: $label', async ({ window, action }) => {
@@ -3835,11 +5472,16 @@ describe("Pi provider-aware model routing", () => {
         ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: captured.runtimeProvider === 'pi-native' ? window : 200_000 } }
         : {} };
     };
-    const handle = await new PiAgent(deps).startSession({
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
       sessionId: 'inherited-window', workingDir: cwd, model: 'local-model', providerId: 'native-a',
     });
     const config = captured.env.PI_CODING_AGENT_DIR!;
     const before = ['models.json', 'settings.json'].map(file => readFileSync(path.join(config, file), 'utf8'));
+    const startupSettings = JSON.parse(before[1]) as {
+      compaction?: { modelOverrides?: Record<string, { reserveTokens?: number }> };
+    };
+    expect(startupSettings.compaction?.modelOverrides).not.toHaveProperty('pi-native/wire-model');
     captured.requests.length = 0;
     const preview = await handle.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' });
     expect(preview).toMatchObject({ action, targetContextWindow: window ?? null, windowVerified: false });
@@ -3857,6 +5499,145 @@ describe("Pi provider-aware model routing", () => {
       expect(captured.closes).toBe(0);
     }
     await handle.close();
+    if (typeof window === 'number') {
+      const rebuilt = await agent.startSession({
+        sessionId: 'inherited-window', workingDir: cwd,
+        model: 'catalog-alias', providerId: 'native-account',
+      });
+      const rebuiltSettings = JSON.parse(readFileSync(
+        path.join(captured.env.PI_CODING_AGENT_DIR!, 'settings.json'), 'utf8',
+      )) as { compaction?: { modelOverrides?: Record<string, { reserveTokens?: number }> } };
+      expect(rebuiltSettings.compaction?.modelOverrides?.['pi-native/wire-model']?.reserveTokens)
+        .toBe(window * 0.25);
+      await rebuilt.close();
+    }
+  });
+
+  it('keeps a learned inherited window below a later Cindy working-window override', async () => {
+    let workingWindow: number | undefined;
+    const deps = byomDeps(async () => ({ providers: [
+      { id: 'native-a', name: 'Current', baseUrl: 'http://a.test', api: 'openai-completions',
+        models: [{ id: 'local-model', contextWindow: 200_000 }] },
+      { id: 'pi-native', sourceProviderId: 'native-account', name: 'Inherited', baseUrl: 'http://b.test',
+        inheritModels: true, modelIdAliases: { 'catalog-alias': 'catalog-model' },
+        models: [{ id: 'catalog-model', wireId: 'wire-model' }] },
+    ], env: {} }));
+    deps.runtimeConfig = { ...deps.runtimeConfig, piAutoCompactThresholdPct: 75 };
+    deps.resolveModelContextLimit = (provider, model) =>
+      provider === 'native-account' && (model === 'catalog-model' || model === 'catalog-alias')
+        ? workingWindow ?? null
+        : null;
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_available_models') return { success: true, data: { models: [
+        { provider: 'pi-native', id: 'wire-model', contextWindow: 400_000 },
+      ] } };
+      return { success: true, data: command.type === 'get_state'
+        ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: captured.runtimeProvider === 'pi-native' ? 400_000 : 200_000 } }
+        : {} };
+    };
+
+    const agent = new PiAgent(deps);
+    const initial = await agent.startSession({
+      sessionId: 'learned-working-window', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    expect(await initial.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ action: 'rebuild', targetContextWindow: 400_000 });
+    await initial.close();
+
+    workingWindow = 150_000;
+    captured.initialProvider = undefined;
+    captured.initialModel = undefined;
+    captured.runtimeProvider = undefined;
+    captured.runtimeModel = undefined;
+    const rebuilt = await agent.startSession({
+      sessionId: 'learned-working-window', workingDir: cwd,
+      model: 'catalog-alias', providerId: 'native-account',
+    });
+    const rebuiltSettings = JSON.parse(readFileSync(
+      path.join(captured.env.PI_CODING_AGENT_DIR!, 'settings.json'), 'utf8',
+    )) as { compaction?: {
+      reserveTokens?: number;
+      modelOverrides?: Record<string, { reserveTokens?: number }>;
+    } };
+    // Pi 0.x uses this global reserve: retain the 400K physical capacity and
+    // express the 150K working window as its 112.5K used-token threshold.
+    expect(rebuiltSettings.compaction?.reserveTokens).toBe(287_500);
+    expect(rebuiltSettings.compaction?.modelOverrides?.['pi-native/wire-model']?.reserveTokens)
+      .toBe(37_500);
+    expect(await rebuilt.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ action: 'hot', targetContextWindow: 150_000 });
+    await rebuilt.close();
+  });
+
+  it('does not reuse an inherited window after the managed Pi binary changes', async () => {
+    const v1Path = path.join(agentHome, 'pi-v1');
+    const v2Path = path.join(agentHome, 'pi-v2');
+    let binaryPath = v1Path;
+    let liveWindow = 400_000;
+    const resolvedBinaryPaths: Array<string | undefined> = [];
+    const deps = byomDeps(async (input) => {
+      resolvedBinaryPaths.push(input.runtimeBinaryPath);
+      return { providers: [
+        { id: 'native-a', name: 'Current', baseUrl: 'http://a.test', api: 'openai-completions',
+          models: [{ id: 'local-model', contextWindow: 200_000 }] },
+        { id: 'pi-native', sourceProviderId: 'native-account', name: 'Inherited', baseUrl: 'http://b.test',
+          inheritModels: true, modelIdAliases: { 'catalog-alias': 'catalog-model' },
+          models: [{ id: 'catalog-model', wireId: 'wire-model' }] },
+      ], env: {} };
+    });
+    let observeFreeze = false;
+    let signalFrozen!: () => void;
+    const binaryFrozen = new Promise<void>((resolve) => { signalFrozen = resolve; });
+    Object.defineProperty(deps, 'binaryPath', { configurable: true, get: () => {
+      const current = binaryPath;
+      if (observeFreeze) {
+        observeFreeze = false;
+        signalFrozen();
+      }
+      return current;
+    } });
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_available_models') return { success: true, data: { models: [
+        { provider: 'pi-native', id: 'wire-model', contextWindow: liveWindow },
+      ] } };
+      return { success: true, data: command.type === 'get_state'
+        ? { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } }
+        : {} };
+    };
+
+    const agent = new PiAgent(deps);
+    observeFreeze = true;
+    const firstStart = agent.startSession({
+      sessionId: 'binary-window-v1', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+      makerMemoryEnabled: true, makerMemoryIndexSnapshot: '',
+    });
+    // Publish v2 after startSession freezes v1, while the async memory-scope
+    // lookup still precedes native-provider resolution.
+    await binaryFrozen;
+    binaryPath = v2Path;
+    const first = await firstStart;
+    expect(resolvedBinaryPaths).toEqual([v1Path]);
+    expect(captured.spawnBinaryPath).toBe(v1Path);
+    expect(await first.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ targetContextWindow: 400_000 });
+    expect(resolvedBinaryPaths).toEqual([v1Path, v1Path]);
+    await first.close();
+
+    liveWindow = 200_000;
+    captured.requests.length = 0;
+    const afterUpdate = await agent.startSession({
+      sessionId: 'binary-window-v2', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+    });
+    expect(captured.spawnBinaryPath).toBe(v2Path);
+    const settings = JSON.parse(readFileSync(
+      path.join(captured.env.PI_CODING_AGENT_DIR!, 'settings.json'), 'utf8',
+    )) as { compaction?: { modelOverrides?: Record<string, { reserveTokens?: number }> } };
+    expect(settings.compaction?.modelOverrides).not.toHaveProperty('pi-native/wire-model');
+    expect(await afterUpdate.previewModelSwitch?.('catalog-alias', { providerId: 'native-account' }))
+      .toMatchObject({ targetContextWindow: 200_000 });
+    expect(resolvedBinaryPaths).toEqual([v1Path, v1Path, v2Path, v2Path]);
+    await afterUpdate.close();
   });
 
   it('refreshes a managed adapter when the same model ID gets a new descriptor', async () => {
@@ -3881,6 +5662,76 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.requests.filter((request) => request.type === 'get_available_models')).toHaveLength(1);
     expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
     await handle.close();
+  });
+
+  it.each(['ok', 'invalid'] as const)('captures a coherent resume snapshot after a concurrent model refresh: %s', async (ack) => {
+    let endpoint = 'http://a.test';
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: endpoint, api: 'openai-completions',
+      models: [{ id: 'local-model', contextWindow: 200_000 }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'resume-during-refresh', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    const config = captured.env.PI_CODING_AGENT_DIR!;
+    const rulesFile = path.join(config, 'pi-cache-compatibility.json');
+    const modelsFile = path.join(config, 'models.json');
+    const write = fs.writeFile.bind(fs);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const writingRules = new Promise<void>(resolve => { entered = resolve; });
+    let blocked = false;
+    const writer = vi.spyOn(fs, 'writeFile').mockImplementation(async (file, ...args) => {
+      if (String(file) === rulesFile && !blocked) {
+        blocked = true;
+        entered();
+        await gate;
+      }
+      return write(file, ...args);
+    });
+    const reader = vi.spyOn(fs, 'readFile');
+    const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun')
+      .mockResolvedValue('123e4567-e89b-42d3-a456-426614174098');
+    let switching: Promise<unknown> | undefined;
+    let resuming: Promise<unknown> | undefined;
+    try {
+      endpoint = 'http://b.test';
+      captured.refreshAckMode = ack;
+      switching = handle.setModel!('local-model', { providerId: 'native-a' })
+        .then(() => undefined, error => error);
+      await writingRules;
+      expect(readFileSync(modelsFile, 'utf8')).toContain('http://b.test');
+      expect(readFileSync(rulesFile, 'utf8')).toContain('http://a.test');
+      reader.mockClear();
+      resuming = handle.resumeBackgroundTask!('terminal-task', 'continue')
+        .then(runId => runId, error => error);
+      // Let the resume reach its read boundary while refresh is held mid-write.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reader.mock.calls.some(([file]) => String(file) === modelsFile)).toBe(false);
+      expect(resumeSpy).not.toHaveBeenCalled();
+      release();
+      const result = await switching;
+      if (ack === 'invalid') expect(result).toBeInstanceOf(Error);
+      else expect(result).toBeUndefined();
+      expect(await resuming).toBeUndefined();
+      expect(resumeSpy).toHaveBeenCalledOnce();
+      const snapshot = resumeSpy.mock.calls[0][3]!.runtimeSnapshot!;
+      const expected = ack === 'ok' ? 'http://b.test' : 'http://a.test';
+      expect(JSON.parse(snapshot.modelsJson.toString()).providers['native-a'].baseUrl).toBe(expected);
+      expect(JSON.parse(snapshot.cacheRulesJson!.toString())).toContainEqual(expect.objectContaining({
+        provider: 'native-a', baseUrl: expected,
+      }));
+    } finally {
+      release();
+      await Promise.allSettled([switching, resuming]);
+      await handle.close();
+      writer.mockRestore();
+      reader.mockRestore();
+      resumeSpy.mockRestore();
+    }
   });
 
   it.each(['provider', 'model'] as const)('retains only the running credential when its %s disappears during catalog refresh', async (removed) => {
@@ -3996,11 +5847,13 @@ describe("Pi provider-aware model routing", () => {
 
   it('restores exact private catalog bytes when the adapter rejects before mutation', async () => {
     let name = 'Before';
+    let learned = false;
     const deps = byomDeps(async () => ({ providers: [{
       id: 'native-a', name: 'Native A', adapterProvider: 'openai',
       baseUrl: 'http://a.test', api: 'openai-completions',
       models: [{ id: 'local-model', name, contextWindow: 200_000 }],
     }], env: {} }));
+    deps.resolvePiNativeCompatOverride = () => learned ? { supportsLongCacheRetention: false } : undefined;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'invalid-refresh-rollback', workingDir: cwd,
       model: 'local-model', providerId: 'native-a',
@@ -4010,13 +5863,17 @@ describe("Pi provider-aware model routing", () => {
     const settingsPath = path.join(configHome, 'settings.json');
     const beforeModels = readFileSync(modelsPath, 'utf8');
     const beforeSettings = readFileSync(settingsPath, 'utf8');
+    const rulesPath = path.join(configHome, 'pi-cache-compatibility.json');
+    const beforeRules = readFileSync(rulesPath, 'utf8');
     name = 'After';
+    learned = true;
     captured.refreshAckMode = 'invalid';
     captured.requests.length = 0;
     await expect(handle.setModel!('local-model', { providerId: 'native-a' }))
       .rejects.toThrow(/rejected the native provider refresh payload/);
     expect(readFileSync(modelsPath, 'utf8')).toBe(beforeModels);
     expect(readFileSync(settingsPath, 'utf8')).toBe(beforeSettings);
+    expect(readFileSync(rulesPath, 'utf8')).toBe(beforeRules);
     expect(captured.requests.some((request) => request.type === 'set_model')).toBe(false);
     expect(captured.closes).toBe(0);
     await handle.close();
@@ -5350,6 +7207,148 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("arms startup plan mode without changing a running resumed Pi turn", async () => {
+    installPlanModeExtension();
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        captured.onEvent?.({ type: "agent_start" });
+        return { success: true, data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === "get_entries") return { success: true, data: { entries: [] } };
+      return { success: true, data: {} };
+    };
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "plan-resume-busy", workingDir: cwd, model: "local-model", planMode: true,
+    });
+    expect(handle.getPlanMode!()).toBe(true);
+    expect(handle.getExecutionPlanMode!()).toBe(false);
+    expect(captured.requests.some((request) => request.message === "/plan")).toBe(false);
+    await handle.close();
+  });
+
+  it("keeps a consumed plan snapshot active when a late checkbox clear arrives", async () => {
+    installPlanModeExtension();
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "plan-late-clear", workingDir: cwd, model: "local-model",
+    });
+    await handle.send({ type: "user", content: "plan this" }, { planMode: true });
+    await handle.setPlanMode!(false);
+    expect(handle.getPlanMode!()).toBe(false);
+    expect(handle.getExecutionPlanMode!()).toBe(true);
+    expect(captured.requests.filter((request) => request.message === "/plan")).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(["startup", "checkbox"])("preserves %s plan intent after prompt rejection for a snapshot-free retry", async (source) => {
+    installPlanModeExtension();
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: `plan-rejected-retry-${source}`, workingDir: cwd, model: "local-model",
+      planMode: source === "startup",
+    });
+    if (source === "checkbox") await handle.setPlanMode!(true);
+    let rejectPrompt = true;
+    captured.requestHandler = async (command) => command.type === "prompt" && command.message !== "/plan" && rejectPrompt
+      ? { command: "prompt", success: false, error: "prompt rejected before acceptance" }
+      : { success: true, data: {} };
+    const message = { type: "user" as const, content: "must remain read-only" };
+    await expect(handle.send(message)).rejects.toMatchObject({ code: "TURN_DISPATCH_REJECTED" });
+    expect(handle.getPlanMode!()).toBe(true);
+    expect(handle.getExecutionPlanMode!()).toBe(true);
+    rejectPrompt = false;
+    await handle.send(message);
+    expect(handle.getPlanMode!()).toBe(false);
+    expect(handle.getExecutionPlanMode!()).toBe(true);
+    // Retrying must not toggle the native read-only turn back to ordinary mode.
+    expect(captured.requests.filter((request) => request.message === "/plan")).toHaveLength(1);
+    expect(captured.requests.filter((request) => request.message === message.content)).toHaveLength(2);
+    await handle.close();
+  });
+
+  it.each(["pi install npm:fixture-extension", "pi update --all"].flatMap((command) =>
+    ["missing", "sync", "sync-no-intent", "toggle"].map((failure) => ({ command, failure })),
+  ))("rejects $command before mutation when plan setup fails: $failure", async ({ command, failure }) => {
+    if (failure !== "missing") installPlanModeExtension();
+    const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
+    const handle = await new PiAgent({
+      ...byomDeps(async () => ({ providers: [], env: {} })), mutatePiManagedPackage,
+    }).startSession({ sessionId: `plan-package-${failure}`, workingDir: cwd, model: "local-model" });
+    captured.requestHandler = async (request) => request.message === "/plan" || request.type === "get_entries"
+      ? { success: false, error: "plan setup failed" }
+      : { success: true, data: {} };
+    if (failure.startsWith("sync")) {
+      // A failed native switch makes the mirror unknown; the send must resync.
+      await expect(handle.setPlanMode!(true)).rejects.toThrow("plan setup failed");
+    }
+    captured.requests = [];
+    await expect(handle.send({ type: "user", content: command }, {
+      ...(failure === "sync-no-intent" ? {} : { planMode: true }),
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: "desktop" }, rawChannelText: command },
+    })).rejects.toThrow(failure === "missing" ? "extension is unavailable"
+      : failure.startsWith("sync") ? "plan-mode state is unavailable" : "plan setup failed");
+    expect(mutatePiManagedPackage).not.toHaveBeenCalled();
+    expect(captured.requests.filter((request) => request.type === "prompt" && request.message !== "/plan")).toHaveLength(0);
+    await handle.close();
+  });
+
+  it("finishes plan setup before accepting a managed package mutation", async () => {
+    installPlanModeExtension();
+    const order: string[] = [];
+    const mutatePiManagedPackage = vi.fn(async () => {
+      order.push("mutation");
+      return { changed: true };
+    });
+    const handle = await new PiAgent({
+      ...byomDeps(async () => ({ providers: [], env: {} })), mutatePiManagedPackage,
+    }).startSession({ sessionId: "plan-package-order", workingDir: cwd, model: "local-model" });
+    captured.requestHandler = async (request) => {
+      if (request.type === "prompt") order.push(request.message === "/plan" ? "plan" : "receipt");
+      return { success: true, data: {} };
+    };
+    const command = "pi install npm:fixture-extension";
+    await handle.send({ type: "user", content: command }, {
+      planMode: true,
+      [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: "desktop" }, rawChannelText: command },
+    });
+    expect(order).toEqual(["plan", "mutation", "receipt"]);
+    expect(mutatePiManagedPackage).toHaveBeenCalledOnce();
+    expect(handle.getExecutionPlanMode!()).toBe(true);
+    await handle.close();
+  });
+
+  it("does not dispatch a planned message when the native toggle fails", async () => {
+    installPlanModeExtension();
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "plan-send-failure", workingDir: cwd, model: "local-model",
+    });
+    captured.requestHandler = async (command) => command.message === "/plan"
+      ? { success: false, error: "toggle failed" }
+      : { success: true, data: {} };
+    await expect(handle.send({ type: "user", content: "must remain read-only" }, { planMode: true }))
+      .rejects.toThrow("toggle failed");
+    expect(captured.requests.some((request) => request.message === "must remain read-only")).toBe(false);
+    expect(handle.getExecutionPlanMode!()).toBeNull();
+    await handle.close();
+  });
+
+  it.each(["startup", "snapshot"])("keeps ordinary sends usable when the unavailable plan extension rejects %s intent", async (source) => {
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "plan-missing-extension", workingDir: cwd, model: "local-model",
+      planMode: source === "startup",
+    });
+    await expect(handle.send({ type: "user", content: "plan only" }, source === "snapshot" ? { planMode: true } : undefined))
+      .rejects.toThrow("plan-mode extension is unavailable");
+    expect(captured.requests.some((request) => request.message === "plan only")).toBe(false);
+    expect(handle.getPlanMode!()).toBe(source === "startup");
+    expect(handle.getExecutionPlanMode!()).toBe(false);
+    expect(captured.closes).toBe(0);
+    await handle.setPlanMode!(false);
+    await handle.send({ type: "user", content: "ordinary message" });
+    expect(captured.requests.some((request) => request.message === "ordinary message")).toBe(true);
+    expect(captured.requests.some((request) => request.message === "/plan")).toBe(false);
+    expect(captured.closes).toBe(0);
+    await handle.close();
+  });
+
   it("keeps plan mode unknown after sync failure and refuses a blind toggle until it can resync", async () => {
     installPlanModeExtension();
     let entriesAvailable = false;
@@ -5402,6 +7401,54 @@ describe("Pi provider-aware model routing", () => {
     ).toHaveLength(1);
     expect(handle.getPlanMode!()).toBe(false);
     await handle.close();
+  });
+
+  it.each([true, false])("refuses sends with unknown plan state and recovers persisted=%s without a blind toggle", async (enabled) => {
+    installPlanModeExtension();
+    let entriesAvailable = false;
+    let rejectPrompt = true;
+    captured.requestHandler = async (command) => {
+      if (command.type === "get_state") {
+        return { success: true, data: { sessionFile: "/mock/s.jsonl", model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === "get_entries") {
+        return entriesAvailable
+          ? { success: true, data: { entries: [{ customType: "plan-mode", data: { enabled } }] } }
+          : { success: false, error: "temporary rpc failure" };
+      }
+      if (command.type === "prompt" && rejectPrompt) return { command: "prompt", success: false, error: "prompt rejected" };
+      return { success: true, data: {} };
+    };
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: `plan-unknown-send-${enabled}`, workingDir: cwd, model: "local-model",
+    });
+    const message = { type: "user" as const, content: "continue the task" };
+    try {
+      expect(handle.getPlanMode!()).toBeNull();
+      expect(handle.getExecutionPlanMode!()).toBeNull();
+      await expect(handle.send(message)).rejects.toMatchObject({ code: "TURN_DISPATCH_REJECTED" });
+      expect(captured.requests.filter((request) => request.type === "prompt")).toHaveLength(0);
+      expect(handle.getExecutionPlanMode!()).toBeNull();
+      expect(captured.closes).toBe(0);
+
+      // A later retry recovers the native choice, including an existing plan.
+      entriesAvailable = true;
+      await expect(handle.send(message)).rejects.toThrow("prompt rejected");
+      expect(handle.getPlanMode!()).toBe(enabled);
+      expect(handle.getExecutionPlanMode!()).toBe(enabled);
+      rejectPrompt = false;
+      await handle.send(message);
+      expect(captured.requests.filter((request) => request.message === "/plan")).toHaveLength(0);
+      expect(handle.getPlanMode!()).toBe(false);
+      expect(handle.getExecutionPlanMode!()).toBe(enabled);
+
+      captured.onEvent?.({ type: "agent_end", messages: [] });
+      await handle.send({ type: "user", content: "next ordinary turn" });
+      expect(handle.getExecutionPlanMode!()).toBe(false);
+      expect(captured.requests.filter((request) => request.message === "/plan")).toHaveLength(enabled ? 1 : 0);
+    } finally {
+      await handle.close();
+    }
   });
 
   it("marks plan mode unknown when a toggle transport failure may have happened after execution", async () => {
@@ -6223,6 +8270,69 @@ describe("Pi provider-aware model routing", () => {
     expect(expected).toMatch(/^[0-9a-f]{16}$/);
   });
 
+  // The append system prompt rides in a configHome file, so the command line no
+  // longer carries its text. Remote launch identity therefore has to hash the
+  // content itself, or a changed prompt would attach to the process that booted
+  // with the old one.
+  it("hashes the append system prompt into remote spawn env so a changed prompt restarts", async () => {
+    const remoteStub: import("../transport.js").PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: "/remote/pi",
+      killRemoteSession: async () => {},
+    };
+    const capturedRemoteEnvs: Array<Record<string, string | undefined>> = [];
+    let systemPrompt = 'remote product prompt v1';
+    const startRemote = async () => {
+      const base = byomDeps(async () => ({ providers: [], env: {} }));
+      const agent = new PiAgent({
+        ...base,
+        runtimeConfig: {
+          ...base.runtimeConfig,
+          remoteEndpoint: "https://gateway.example.test",
+          systemPrompt,
+        },
+        resolveRemotePiBinaryPath: async () => "/remote/pi",
+        getRemotePiTransport: async (_hostId, opts) => {
+          capturedRemoteEnvs.push({ ...(opts.env ?? {}) });
+          return remoteStub;
+        },
+        getRemotePiFileOps: () => ({
+          mkdirp: async () => {},
+          writeFile: async () => {},
+          stat: async () => ({ isFile: true }),
+          rm: async () => {},
+          listDir: async () => [],
+          readFile: async () => { throw new Error("Unexpected remote file read in empty directory fixture"); },
+          sha256File: async () => { throw new Error("Unexpected remote file hash in empty directory fixture"); },
+        }),
+      });
+      const handle = await agent.startSession({
+        sessionId: "remote-prompt-hash",
+        workingDir: cwd,
+        model: "local-model",
+        remoteHostId: "remote-host",
+      });
+      await handle.close();
+    };
+
+    await startRemote();
+    await startRemote();
+    systemPrompt = 'remote product prompt v2';
+    await startRemote();
+
+    expect(capturedRemoteEnvs).toHaveLength(3);
+    const hashes = capturedRemoteEnvs.map((env) => env.CINDY_PI_APPEND_SYSTEM_PROMPT_HASH);
+    expect(hashes[0]).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashes[1]).toBe(hashes[0]);
+    expect(hashes[2]).not.toBe(hashes[0]);
+  });
+
   it("isolates remote configHome by models.json hash so a later route change does not overwrite the live child", async () => {
     const remoteStub: import("../transport.js").PiTransport = {
       writeLine: async () => {},
@@ -6336,6 +8446,10 @@ describe("Pi provider-aware model routing", () => {
     )?.[1];
     expect(modelsJson).toBeTruthy();
     expect(settingsJson).toBeTruthy();
+    const cacheRules = [...written.entries()].find(([filePath]) =>
+      filePath.endsWith("pi-cache-compatibility.json"),
+    )?.[1];
+    expect(cacheRules).toBeTruthy();
     const modelsOnlyHash = createHash("sha256")
       .update(modelsJson!)
       .digest("hex");
@@ -6343,6 +8457,8 @@ describe("Pi provider-aware model routing", () => {
       .update(modelsJson!)
       .update("\n")
       .update(settingsJson!)
+      .update("\n")
+      .update(cacheRules!)
       .digest("hex");
     expect(launchHash).not.toBe(modelsOnlyHash);
     expect(capturedRemoteEnvs).toHaveLength(1);
@@ -6438,6 +8554,10 @@ describe("Pi provider-aware model routing", () => {
     const config = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR!, "models.json"), "utf8"));
     expect(config.providers["native-openai"].headers["x-cindy-pi-provider-id"]).toBe("openai");
     expect(config.providers["native-account-b"].headers["x-cindy-pi-provider-id"]).toBe("account-b");
+    expect(JSON.parse(captured.env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS!)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'native-openai', cachedCodex: true }),
+      expect.objectContaining({ id: 'native-account-b', cachedCodex: true }),
+    ]));
     expect(subagentAccounts).toEqual(expect.arrayContaining(["openai", "account-b"]));
     for (const account of ["account-b", "openai"]) {
       await handle.setModel!(model, { providerId: account });

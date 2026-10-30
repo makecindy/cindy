@@ -12,6 +12,7 @@ import {
   peekProviderShareLinkIntentForTest,
   takeProviderShareLinkIntent,
 } from '@/device-link/providerShareLinkIntent';
+import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
 
 const invitation = 'A'.repeat(43);
@@ -19,8 +20,13 @@ const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=ht
 const shareInvitation = 'B'.repeat(43);
 const shareIncoming = 'cindy://provider-share/join?invitation=' + shareInvitation + '&server=https%3A%2F%2Frelay.example.test%2Fdl';
 const shareWebLink = 'https://relay.example.test/dl/provider-share/join#' + shareInvitation;
-beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); setMobileAuthOwner(null); });
-afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); vi.useRealTimers(); });
+const relayCode = 'R'.repeat(43);
+const relayOwnerKey = 'Q'.repeat(43);
+const relayPairSecret = 'S'.repeat(43);
+const relayUnsignedIncoming = 'cindy://relay/join?u=' + encodeURIComponent('https://relay.home.example:47820/') + '&c=' + relayCode;
+const relayIncoming = relayUnsignedIncoming + '&o=' + relayOwnerKey + '&s=' + relayPairSecret;
+beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); setMobileAuthOwner(null); });
+afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
   it('keeps the invitation out of router state, survives login, and clears on an account change', () => {
@@ -97,6 +103,64 @@ describe('mobile native deep-link redirects', () => {
     expect(peekProviderShareLinkIntentForTest()).toBeNull();
   });
 
+  // Self-hosted relay join (docs/self-hosted-relay-plan.md §5.1): the one-time join code is a secret,
+  // so the router only ever sees the bare join page; the parsed link lives in memory for that page.
+  it.each([true, false])('routes relay join links to the join page without the join code (initial=%s)', initial => {
+    for (const path of [
+      relayIncoming,
+      relayIncoming.replace('cindy://', 'cindycn://'),
+      relayIncoming.replace('cindy://', 'cindydev://'),
+      relayIncoming.replace('cindy:/', ''),
+      relayIncoming.replace('cindy://', ''),
+    ]) {
+      const route = redirectSystemPath({ path, initial });
+      expect(route).toBe('/relay-join');
+      expect(getPendingRelayJoinIntent()?.link).toEqual({
+        baseUrl: 'https://relay.home.example:47820',
+        code: relayCode,
+        ownerPublicKey: relayOwnerKey,
+        pairSecret: relayPairSecret,
+      });
+      expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+    }
+  });
+
+  it('keeps nothing for malformed relay join links and forgets a valid one after expiry or an account switch', () => {
+    for (const path of [
+      relayIncoming.replace('c=' + relayCode, 'c=short'),
+      // Pre-signature links carry no owner key / pairing secret, so the certificate could never be checked.
+      relayUnsignedIncoming,
+      'cindy://relay/join?u=' + encodeURIComponent('ftp://relay.home.example') + '&c=' + relayCode,
+      'xdt-maker://relay/join?u=https%3A%2F%2Frelay.home.example&c=' + relayCode,
+      '/relay?c=' + relayCode,
+    ]) {
+      expect(redirectSystemPath({ path, initial: false })).toBe('/relay-join');
+      expect(getPendingRelayJoinIntent()?.link).toBeNull();
+    }
+    redirectSystemPath({ path: relayIncoming, initial: true });
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(getPendingRelayJoinIntent()).toBeNull();
+
+    redirectSystemPath({ path: relayIncoming, initial: false });
+    setMobileAuthOwner('first'); // the first sign-in claims a link scanned while signed out
+    expect(getPendingRelayJoinIntent()?.link).not.toBeNull();
+    invalidateMobileAuthOwnerForSwitch();
+    expect(getPendingRelayJoinIntent()).toBeNull();
+  });
+
+  // 首次登录的真实账号发布顺序：匿名扫码 → switching 缓存清理 → 账号提交。
+  // 旧测试只直接 setMobileAuthOwner，漏掉了会清空扫码意图的中间步骤。tier: unit，生产深链入口。
+  it('preserves an anonymous relay join through fresh-login cleanup and clears it on a later account switch', () => {
+    expect(redirectSystemPath({ path: relayIncoming, initial: true })).toBe('/relay-join');
+    const original = getPendingRelayJoinIntent();
+    invalidateMobileAuthOwnerForSwitch();
+    expect(getPendingRelayJoinIntent()).toBe(original);
+    setMobileAuthOwner('first');
+    expect(getPendingRelayJoinIntent()).toBe(original);
+    invalidateMobileAuthOwnerForSwitch();
+    expect(getPendingRelayJoinIntent()).toBeNull();
+  });
+
   it.each([true, false])('keeps WeChat SDK callbacks out of navigation (initial=%s)', (initial) => {
     for (const path of [
       'cindycn://oauth?code=test-wechat-code&state=test-state',
@@ -136,7 +200,7 @@ describe('mobile native deep-link redirects', () => {
     }
   });
 
-  it('waits for a pending batch on cold start and preserves the warm share handoff', () => {
+  it('lets the pending-batch bridge own cold and warm share navigation', () => {
     expect(redirectSystemPath({
       path: 'cindycn://expo-sharing',
       initial: true,
@@ -144,7 +208,12 @@ describe('mobile native deep-link redirects', () => {
     expect(redirectSystemPath({
       path: '/expo-sharing?source=share-extension',
       initial: false,
-    })).toBe('/sessions/new');
+    })).toBeNull();
+  });
+
+  it.each(['cindy://auth?code=fixture&state=fixture', 'cindycn://auth?error=access_denied&state=fixture', '/auth?code=fixture'])('keeps the current route for warm OAuth callbacks: %s', path => {
+    expect(redirectSystemPath({path, initial: false})).toBeNull();
+    expect(redirectSystemPath({path, initial: true})).toBe('/');
   });
 
   it('preserves existing auth and ordinary deep-link behavior', () => {

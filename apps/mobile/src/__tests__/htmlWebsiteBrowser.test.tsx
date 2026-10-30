@@ -86,3 +86,18 @@ it('can navigate after the renderer terminates', async () => {
   expect(state.web.source.uri).toBe('https://example.org/recover');
   expect(state.chrome.loading).toBe(true);
 });
+
+const hidden = () => [state.web.style].flat(Infinity).some((style: any) => style?.opacity === 0);
+it('hides each renderer over the themed backing until its first document loads', async () => {
+  mount(Promise.resolve()); await act(async () => {});
+  expect(hidden()).toBe(true);
+  act(() => state.web.onLoadEnd());
+  expect(hidden()).toBe(false);
+  act(() => state.web.onNavigationStateChange({ url: 'https://example.com/next', loading: true }));
+  expect(hidden()).toBe(false);
+  act(() => state.web.onContentProcessDidTerminate());
+  act(() => state.chrome.onReload());
+  expect(hidden()).toBe(true);
+  act(() => state.web.onLoadEnd());
+  expect(hidden()).toBe(false);
+});

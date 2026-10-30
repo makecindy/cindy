@@ -1,12 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
-import { describe, expect, it, vi } from 'vitest';
-import { createRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRemoteSyncCoordinator, waitForCachedSubscription } from '@/device-link/remoteSyncTask';
+import { createTransientTopicSubscriptionCoordinator } from '@/device-link/transientTopicSubscription';
+import { SubscriptionAcknowledgements } from '@/device-link/subscriptionAcknowledgements';
 import { runConnectionScopedSessionMetadataRead, waitForIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { syncSessionMessageWindow } from '@/session/sessionMessageWindowSync';
 import { shouldClearOperationErrorAfterSync } from '@/session/sessionSyncErrorRecovery';
-import { hasOlderMessagesAfterReopen, shouldKeepOlderMessagesAffordance } from '@/session/messagePaging';
+import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
+import {
+  bridgeLatestMessagePage,
+  hasOlderMessagesAfterReopen,
+  shouldKeepOlderMessagesAffordance,
+} from '@/session/messagePaging';
 import { HistoryViewController, isHistoryViewUnavailable, projectHistoryView } from '@cindy/maker-shared/message-window';
 
 // Execute the actual page callbacks, not a duplicate orchestration written for tests.
@@ -14,11 +21,15 @@ import { HistoryViewController, isHistoryViewUnavailable, projectHistoryView } f
 const source = ts.createSourceFile('screen.tsx', readFileSync(
   resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8',
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const compiledCallbacks = new Map<string, string>();
 function pageCallback(name: string, bindings: Record<string, unknown>): (...args: any[]) => Promise<void> {
+  const cached = compiledCallbacks.get(name);
+  if (cached) return new Function(...Object.keys(bindings), `${cached}\nreturn callback;`)(...Object.values(bindings));
   let expression: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(source) === name
-      && node.initializer && ts.isCallExpression(node.initializer)) {
+      && node.initializer && ts.isCallExpression(node.initializer)
+      && node.initializer.expression.getText(source) === 'useCallback') {
       expression = node.initializer.arguments[0];
     }
     ts.forEachChild(node, visit);
@@ -28,6 +39,7 @@ function pageCallback(name: string, bindings: Record<string, unknown>): (...args
   const compiled = ts.transpileModule(`const callback = ${expression.getText(source)};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
+  compiledCallbacks.set(name, compiled);
   return new Function(...Object.keys(bindings), `${compiled}\nreturn callback;`)(...Object.values(bindings));
 }
 function deferred<T>() {
@@ -51,8 +63,11 @@ function historyAvailable(status: string, presence: boolean | null): boolean {
     `return ${expression.getText(source)};`)(status, () => presence, 'd1');
 }
 const tick = () => new Promise((done) => setTimeout(done, 0));
+afterEach(() => vi.useRealTimers());
 const session = { id: 's1', updatedAt: '2026-09-06T00:00:00Z', _count: { messages: 100 } };
-const page = { messages: [{ id: 'm1' }], limit: 1, reducedByPayloadTooLarge: false };
+const page = {
+  messages: [{ id: 'm1' }] as { id: string; clientId?: string }[], limit: 1, reducedByPayloadTooLarge: false,
+};
 
 function fixture(reopen = false, remoteHistoryAvailable = true) {
   const state = {
@@ -81,6 +96,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     isSessionMessageWindowSynced: vi.fn(() => false),
     setMessages: vi.fn((_id, rows) => { state.rows = rows; }),
     setLatestMessageWindow: vi.fn((_id, rows) => { state.rows = rows; }),
+    latestMessageWindowNeedsBridge: vi.fn(() => false),
     markSessionMessagesSynced: vi.fn(),
     setPendingInteractions: vi.fn(), setInputProjectionIfCurrent: vi.fn(),
     setActiveSessionSnapshots: vi.fn(),
@@ -104,8 +120,10 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     sessionSubscriptionIdentityRef: { current: JSON.stringify(['d1', 's1', 1]) },
     createRemoteSyncReopenCoordinator: () => ({ captureVersion: () => 0 }),
     reopenLink: async () => undefined, openLink: async () => undefined,
-    subscribe: async () => undefined, sessionsSubscriptionCoordinatorRef: { current: null },
+    subscribe: async () => undefined,
+    sessionsSubscriptionCoordinatorRef: { current: createTransientTopicSubscriptionCoordinator() },
     // Retry delays / transport single-flight are tested separately; preserve callbacks and fences here.
+    waitForCachedSubscription: (async () => undefined) as typeof waitForCachedSubscription,
     retryRemoteSyncRead: (_run: unknown, read: () => unknown) => read(),
     runConnectionScopedSessionMetadataRead, waitForIndependentSnapshotReads, syncSessionMessageWindow,
     runSessionProjectionSnapshotSingleFlight: (_scope: unknown, _epoch: unknown, read: () => unknown) => read(),
@@ -117,6 +135,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     getSubscriptionIdentity: (): number | null => null, notificationResponse: null,
     syncedNotificationResponseRef: { current: null },
     shouldKeepOlderMessagesAffordance, hasOlderMessagesAfterReopen,
+    bridgeLatestMessagePage,
     messageWindowReconciledRef: { current: false },
     setHasOlderMessages: (value: boolean) => { state.older = value; },
     setLoading: (value: boolean) => { state.loading = value; },
@@ -125,6 +144,7 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
     setOutboxTransportHold: (update: (value: typeof state.hold) => typeof state.hold) => { state.hold = update(state.hold); },
     latchOutboxTransportHold: (error: string) => { state.hold = { deviceId: 'd1', error }; },
     setLastSyncedAt: (value: number) => { state.synced = value; },
+    setMessageHistoryRead: vi.fn(),
     setContentSyncedKey: vi.fn(), contentRecoveryKeyRef: { current: null },
     setSessionMetadataSyncedKey: vi.fn(),
     setReadAckSyncedKey: (value: string) => { state.readAck = value; },
@@ -144,6 +164,33 @@ function fixture(reopen = false, remoteHistoryAvailable = true) {
 }
 
 describe('production session recovery callbacks', () => {
+  // Existing callback-execution guard: PR #6325 missed a focused reconnect where
+  // only the new list topic is ACKed. Use the real waiter and ACK table here so
+  // an old completed Promise cannot start the actual page's history read early.
+  it('waits for current detail ACK before the cached reconnect read', async () => {
+    vi.useFakeTimers();
+    const f = fixture(true);
+    const acks = new SubscriptionAcknowledgements(() => {});
+    const topics = ['sessions', 'session:s1'] as const;
+    acks.set('d1', new Set(topics));
+    acks.delete('d1');
+    acks.set('d1', new Set(['sessions']));
+    f.bindings.waitForCachedSubscription = waitForCachedSubscription;
+    f.bindings.getSubscriptionIdentity = () => acks.identity('d1', topics);
+    const coordinator = createRemoteSyncCoordinator(pageCallback('syncSession', f.bindings));
+    coordinator.setContext('d1:s1:reconnect');
+    const sync = coordinator.request({ reason: 'connection' });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.state.rows).toEqual([{ id: 'cached', clientId: 'cached' }]);
+    expect(f.maker.listMessages).not.toHaveBeenCalled();
+    acks.set('d1', new Set(topics));
+    await vi.advanceTimersByTimeAsync(50);
+    await sync;
+    expect(f.maker.listMessages).toHaveBeenCalledTimes(1);
+    expect(f.state.rows).toEqual(page.messages);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([null, true])('recovers cached history with an online relay and presence=%s', async (presence) => {
     // A failed roster request leaves presence unknown even after link/subscription
     // recovery. Evaluate the real page gate and then execute its real sync callback.
@@ -247,6 +294,34 @@ describe('production session recovery callbacks', () => {
     expect(f.state.rows).toEqual(page.messages);
     expect(f.store.markSessionMessagesSynced).toHaveBeenCalled();
   });
+  it('reads before the latest page until it joins the verified window, then commits once', async () => {
+    const f = fixture(true);
+    f.store.latestMessageWindowNeedsBridge.mockReturnValueOnce(true).mockReturnValue(false);
+    f.maker.listMessages
+      .mockResolvedValueOnce({ ...page, messages: [{ id: 'm2', clientId: 'm2' }], limit: 1 })
+      .mockResolvedValueOnce({ ...page, messages: [{ id: 'm1', clientId: 'm1' }], limit: 1 });
+    await f.sync();
+    expect(f.maker.listMessages.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      { limit: 20 },
+      { limit: 20, before: 'm2' },
+    ]);
+    expect(f.store.setLatestMessageWindow).toHaveBeenCalledTimes(1);
+    expect(f.state.rows.map((row) => row.id)).toEqual(['m1', 'm2']);
+  });
+
+  it('does not commit an unbridged window when a bridge read fails', async () => {
+    const f = fixture(true);
+    const cached = f.state.rows;
+    f.store.latestMessageWindowNeedsBridge.mockReturnValue(true);
+    f.maker.listMessages
+      .mockResolvedValueOnce({ ...page, messages: [{ id: 'm2', clientId: 'm2' }], limit: 1 })
+      .mockRejectedValueOnce(new Error('INVOKE_TIMEOUT'));
+    await f.sync().catch(() => undefined);
+    expect(f.store.setLatestMessageWindow).not.toHaveBeenCalled();
+    expect(f.state.rows).toBe(cached);
+    expect(f.state.syncError).not.toBeNull();
+  });
+
   it('accepts a history view without certifying sparse rows as a complete raw window', async () => {
     const f = fixture();
     f.bindings.historyView.view.getSnapshot = () => ({ ready: true, error: null });
@@ -259,16 +334,18 @@ describe('production session recovery callbacks', () => {
   });
 
   it('routes the visible history retry to pagination rather than full sync', () => {
-    const screen = source.getFullText().replace(/\r\n/g, '\n');
-    expect(screen).toContain('const bannerError = connectionRecoveryError ?? historyError;');
-    expect(screen).toContain('const bannerRetriesHistory = connectionRecoveryError === null && historyError !== null;');
-    expect(screen).toContain('requestErrorAutoRecovering={bannerRetriesHistory ? false : undefined}');
-    expect(screen).toContain('loading={loading || loadingEarlier}');
+    const values = new Map<string, ts.Expression>();
+    const props = new Map<string, ts.Expression>();
     let onSync: ts.Expression | undefined;
     const find = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.initializer) values.set(node.name.getText(source), node.initializer);
       if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'ConnectionBanner') {
-        const prop = node.attributes.properties.find(p => ts.isJsxAttribute(p) && p.name.getText(source) === 'onSync') as ts.JsxAttribute;
-        onSync = (prop.initializer as ts.JsxExpression).expression;
+        for (const prop of node.attributes.properties) {
+          if (ts.isJsxAttribute(prop) && prop.initializer && ts.isJsxExpression(prop.initializer) && prop.initializer.expression) {
+            props.set(prop.name.getText(source), prop.initializer.expression);
+          }
+        }
+        onSync = props.get('onSync');
       }
       ts.forEachChild(node, find);
     };
@@ -279,8 +356,25 @@ describe('production session recovery callbacks', () => {
     expect(loadEarlierMessages).toHaveBeenCalledOnce(); expect(requestSync).not.toHaveBeenCalled(); expect(retry).not.toHaveBeenCalled();
     run(false, { error: 'lookup failed', retry }, loadEarlierMessages, requestSync);
     expect(retry).toHaveBeenCalledOnce(); expect(requestSync).toHaveBeenCalledExactlyOnceWith({ reason: 'manual', replaceMessages: false });
-    const errorSources = screen.slice(screen.indexOf('const connectionError ='), screen.indexOf('const bannerError ='));
-    expect(errorSources).not.toContain('historyError');
+    function evaluate(expression: ts.Expression | undefined, bindings: Record<string, unknown>) {
+      if (!expression) throw new Error('Missing production banner expression');
+      return new Function(...Object.keys(bindings), `return (${expression.getText(source)});`)(...Object.values(bindings));
+    }
+    for (const historyError of [null, 'earlier page failed']) {
+      for (const connectionFailure of [null, 'connection failed']) {
+        const connectionError = evaluate(values.get('connectionError'), { historyError, isDeviceAccessRevoked: false, syncError: connectionFailure, error: null, isDeviceUnresponsive: false, resolveEffectiveConnectionError });
+        expect(connectionError).toBe(connectionFailure);
+        const connectionRecoveryError = evaluate(values.get('connectionRecoveryError'), { companionEntry: { error: null }, activeOutboxTransportError: null, connectionError });
+        const bannerError = evaluate(values.get('bannerError'), { connectionRecoveryError, historyError });
+        const bannerRetriesHistory = evaluate(values.get('bannerRetriesHistory'), { connectionRecoveryError, historyError });
+        expect(bannerError).toBe(connectionFailure ?? historyError);
+        expect(bannerRetriesHistory).toBe(connectionFailure === null && historyError !== null);
+        expect(evaluate(props.get('requestErrorAutoRecovering'), { bannerRetriesHistory })).toBe(bannerRetriesHistory ? false : undefined);
+      }
+    }
+    for (const loading of [false, true]) for (const loadingEarlier of [false, true]) {
+      expect(evaluate(props.get('loading'), { loading, loadingEarlier })).toBe(loading || loadingEarlier);
+    }
   });
 
   it.each([false, true])('keeps late history and pagination after projection rejects (reopen=%s)', async (reopen) => {

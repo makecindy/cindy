@@ -325,10 +325,9 @@ export function LoginScreen({
       !auth.initialized ||
       (!additionalAccount && auth.isAuthenticated) ||
       initializedLoginRef.current
-    )
-      return;
+    ) return;
     initializedLoginRef.current = true;
-    void auth.dispatchLoginAction({ type: 'reset' });
+    void auth.dispatchLoginAction({ type: 'initialize' });
   }, [additionalAccount, auth]);
 
   useEffect(() => {
@@ -1139,11 +1138,11 @@ export function LoginScreen({
           y={LOGIN_LOADING_RING.yBrowser}
         />
         <LoginPrimaryButton
-          disabled={auth.isBusy}
           label={loginText('cancel')}
           onPress={reset}
           testID="login.cancelBrowserButton"
         />
+        {errorNode}
       </LoginPanel>
     );
   };
@@ -1377,7 +1376,7 @@ export function LoginScreen({
       ) : null}
 
       {additionalAccount && onClose ? (
-        <View style={{ position: 'absolute', right: spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
+        <View style={{ position: 'absolute', right: insets.right + spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
           <HomeHeaderGlassButton accessibilityLabel={t('shared.closePanel')}
             disabled={auth.isBusy} onPress={onClose} testID="login.closeButton">
             <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />

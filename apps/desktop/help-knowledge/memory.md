@@ -1,40 +1,45 @@
 ---
 id: memory
 title: Memory across conversations
-summary: The "Cindy" master switch turns on shared cross-agent memory (default on); when off, each agent uses its own native memory — all in Settings > Personalization > Memory.
+summary: Settings > Personalization > Memory — the "Cindy" switch (on by default) turns on shared memory per working directory; when it's off, Claude Code and Codex use their own native memory. Teammates such as Cindy keep their own memory, viewable in the teammate's settings.
 tab: personalization
 ---
 Memory lets the agents carry context across your conversations — facts about you, your projects, and how you like to work. There are two kinds, and one master switch chooses between them.
 
 **Where it lives:**
 
-- Settings > Personalization > Memory.
+- Settings > Personalization > **Memory**.
 
 **The "Cindy" master switch (default ON):**
 
-- Turning **Cindy** on enables a **shared, cross-agent memory** scoped to each working directory — Claude Code and Codex sessions in the same directory draw on the same memory.
-- While it's on, the per-agent native toggles below are **disabled / grayed out**, because the shared memory supersedes them.
-- It's **on by default** for new installs.
+- Turning **Cindy** on enables a **shared memory** scoped to each working directory — Claude Code, Codex, and Pi tasks in the same working directory draw on the same memory.
+- While it's on, the **Claude Code** and **Codex** native-memory rows below are **disabled / grayed out**, because the shared memory replaces them.
+- The **Pi** row is the opposite: it's only available while Cindy is on. It controls whether Pi saves its long-session compression summaries to Cindy memory for future Pi tasks.
 
 **Per-agent native memory (used when the master switch is OFF):**
 
-- When Cindy is off, each agent falls back to **its own native memory** — so turning the master off does not mean "no memory," it means Claude Code and Codex each remember things their own way.
-- Separate toggles let you enable / disable native memory for **Claude Code** and **Codex** independently (these are only interactive while the master switch is off).
+- When Cindy is off, Claude Code and Codex each fall back to **their own native memory** — so turning the master off doesn't mean "no memory"; it means each agent remembers things its own way.
+- The **Claude Code** and **Codex** rows each have their own switch (only usable while Cindy is off).
 
 **Resetting:**
 
-- **Per-agent reset** clears a single agent's native memory.
-- **Reset all Cindy memory** clears the shared cross-agent memory for every working directory.
-- A section-level **reset to defaults** restores the switches themselves.
-- Resets ask for confirmation and aren't undoable.
+- The reset button on the **Cindy** row deletes all Cindy memories for every project.
+- The reset button on an agent row deletes all memories that agent has accumulated across every project.
+- When you've changed the switches, a **Custom** badge and a **Restore default** button appear next to the Memory title; it restores the switches (not the memories).
+- Resets ask for confirmation and can't be undone.
+
+**Teammates (such as Cindy) have their own memory:**
+
+- A teammate keeps its own memory, separate from the task memory above. To see or edit it, open the teammate's chat, click its name / avatar at the top to open its settings, and choose **Memory**. There you can search memories, open one to read or edit it, delete it, or turn **Use memory** off.
 
 **What memory is, what it isn't:**
 
-- It's the agents' **long-term memory across sessions** — notes about you and your projects.
-- It's **not** the in-session chat history (that's always persisted to the session itself).
-- It's **not** your Personalization custom instructions (those are standing instructions you write; memory is what the agents record about you).
+- It's the agents' **long-term memory across tasks** — notes about you and your projects.
+- It's **not** the chat history of a task (that is always saved with the task).
+- It's **not** your custom instructions in Personalization (those are standing instructions you write; memory is what the agents record).
+- To make the agent remember something specific, just tell it in the chat (for example "remember that we use pnpm in this repo").
 
 **Notes:**
 
-- Changes take effect on the **next** chat / agent turn — toggling mid-conversation doesn't retroactively scrub current context.
-- Memory is stored locally and does not migrate if you change machines or wipe the app's user data.
+- After changing a memory switch you usually need to **start a new task** for it to take effect; running tasks keep the setting they started with (running Codex tasks switch after their current turn finishes).
+- Memory and these switches belong to your signed-in account on this computer. Memory is stored locally and doesn't move to another computer.

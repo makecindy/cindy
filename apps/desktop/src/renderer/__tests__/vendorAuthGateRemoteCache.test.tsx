@@ -10,15 +10,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 const confirm = vi.fn(async () => true);
+const navigate = vi.fn();
+const revalidate = vi.fn();
 const cachedProviders = vi.fn<(deviceId: string) => unknown>(() => null);
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm }),
 }));
 vi.mock('@/hooks/useVendorReadiness', () => ({
-  useVendorReadiness: () => ({ revalidate: vi.fn() }),
+  useVendorReadiness: () => ({ revalidate }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { getDeviceName: () => 'Mac mini' },
@@ -41,17 +43,19 @@ const provider = (over: Partial<ProviderView>): ProviderView =>
     ...over,
   }) as ProviderView;
 
-const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+const defaultInvoke = async (_deviceId: string, channel: string) => {
   if (channel === 'maker:agent:status') return { binaryReady: true, authReady: true };
   if (channel === 'maker:provider:list') return { providers: [provider({})] };
-  throw new Error(`unexpected channel ${channel}`);
-});
+  throw new Error('unexpected channel ' + channel);
+};
+const invoke = vi.fn(defaultInvoke);
 
 function channels(): string[] {
   return invoke.mock.calls.map((call) => call[1]);
 }
 
 beforeEach(() => {
+  invoke.mockImplementation(defaultInvoke);
   vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
 });
 
@@ -59,6 +63,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   invoke.mockClear();
   confirm.mockClear();
+  navigate.mockClear();
+  revalidate.mockReset();
   cachedProviders.mockReset();
   cachedProviders.mockReturnValue(null);
 });
@@ -105,5 +111,57 @@ describe('useVendorAuthGate device-link 来源快照复用', () => {
       proceed: true,
     });
     expect(channels().sort()).toEqual(['maker:agent:status', 'maker:provider:list']);
+  });
+});
+
+describe('useVendorAuthGate 本机恢复引导', () => {
+  it('Pi 组件缺失时确认进入设置 → 关于', async () => {
+    revalidate.mockResolvedValue('binary-missing');
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('pi')).resolves.toEqual({ proceed: false });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/settings?tab=about');
+  });
+
+  it('Pi 组件缺失时取消不导航', async () => {
+    revalidate.mockResolvedValue('binary-missing');
+    confirm.mockResolvedValueOnce(false);
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('pi')).resolves.toEqual({ proceed: false });
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('Pi 来源不足仍进入模型供应商页', async () => {
+    revalidate.mockResolvedValue('unauthenticated');
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('pi')).resolves.toEqual({ proceed: false });
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/settings?tab=providers');
+  });
+
+  it('远程 Pi 缺少组件时只显示信息，不导航控制端设置', async () => {
+    invoke.mockImplementation(async (_deviceId: string, channel: string) => {
+      if (channel === 'maker:agent:status') return { binaryReady: false, authReady: true };
+      if (channel === 'maker:provider:list')
+        return {
+          providers: [
+            provider({
+              agents: ['pi'],
+              routing: { pi: { upstream: '', authStrategy: 'none' } },
+              models: { pi: [] },
+            }),
+          ],
+        };
+      throw new Error('unexpected channel ' + channel);
+    });
+    const { result } = renderHook(() => useVendorAuthGate());
+
+    await expect(result.current.checkAndConfirm('pi', { deviceId: 'dev' })).resolves.toEqual({
+      proceed: false,
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

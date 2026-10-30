@@ -34,3 +34,16 @@ export function resolveBotChatIdentity(
 ): BotChatIdentity | null {
   return binding && binding.sessionId === sessionId ? binding : null;
 }
+
+/**
+ * The first hello of a just-invited teammate is composed by the host while the chat is already open.
+ * Show that wait only while it is the truth: the invitation is still at its welcome stage, history has
+ * loaded, and nothing — the opening, a welcome turn or the user's own message — is in the chat yet.
+ */
+export function isBotOpeningPending(input: {
+  invitationStage: string | undefined;
+  historyLoaded: boolean;
+  messageCount: number;
+}): boolean {
+  return input.invitationStage === 'welcome' && input.historyLoaded && input.messageCount === 0;
+}

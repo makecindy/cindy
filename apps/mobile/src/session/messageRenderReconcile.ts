@@ -13,7 +13,7 @@ function sameDeferred(a?: DeferredHistoryWork, b?: DeferredHistoryWork): boolean
   if (!a || !b) return a === b;
   return a.owner === b.owner && a.key === b.key && a.revision === b.revision
     && a.expanded === b.expanded && a.loading === b.loading && a.failed === b.failed
-    && a.previewComplete === b.previewComplete;
+    && a.previewComplete === b.previewComplete && a.awaitingDetails === b.awaitingDetails;
 }
 
 /**

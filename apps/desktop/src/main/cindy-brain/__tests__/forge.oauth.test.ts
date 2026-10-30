@@ -40,7 +40,7 @@ describe('FORGE_GUIDE · oauth 凭证章节', () => {
       'tokenBroker 没同时声明 redirectPort',
       '或与 clientSecret 同时声明',
       '三路资格',
-      '静态官方前缀照旧放行',
+      '随包官方种子或受信任公开市场的官方插件',
       '当前组织的服务端',
       'organization market 包已安装',
       'organizationId 与当前组织一致',

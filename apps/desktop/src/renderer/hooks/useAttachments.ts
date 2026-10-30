@@ -57,6 +57,8 @@ export interface AttachmentRejection {
   message: string;
 }
 
+export type PendingFolder = string | { path: string; source: 'task' } | { path: string; source: 'local'; file: File };
+
 export interface UseAttachmentsReturn {
   attachments: AttachedFile[];
   hasAttachments: boolean;
@@ -73,11 +75,11 @@ export interface UseAttachmentsReturn {
   /** Clear all inline rejections. */
   clearRejections: () => void;
   /** Queue a folder path for insertion as an @dir mention chip. */
-  addFolderPath: (folderPath: string) => void;
+  addFolderPath: (folderPath: string, source?: 'task' | File) => void;
   /** Bumps whenever a pending folder path is queued. */
   pendingFoldersVersion: number;
   /** Drain and return all queued folder paths (clears the queue). */
-  consumePendingFolders: () => string[];
+  consumePendingFolders: () => PendingFolder[];
   /** Queue a file mention payload for insertion as an @file chip. */
   addFileMention: (payload: ComposerFileMentionPayload) => void;
   /** Bumps whenever a pending file mention is queued. */
@@ -416,15 +418,17 @@ export function useAttachments(sessionId?: string, draftKey?: string): UseAttach
   // ── Folder path queue ──
   // Drop handlers push folder paths here; ChatInput consumes them as
   // @dir mention chips (it has editor access, useAttachments does not).
-  const pendingFoldersRef = useRef<string[]>([]);
+  const pendingFoldersRef = useRef<PendingFolder[]>([]);
   const [pendingFoldersVersion, setPendingFoldersVersion] = useState(0);
 
-  const addFolderPath = useCallback((folderPath: string) => {
-    pendingFoldersRef.current = [...pendingFoldersRef.current, folderPath];
+  const addFolderPath = useCallback((folderPath: string, source?: 'task' | File) => {
+    pendingFoldersRef.current = [...pendingFoldersRef.current,
+      source === 'task' ? { path: folderPath, source }
+        : source ? { path: folderPath, source: 'local', file: source } : folderPath];
     setPendingFoldersVersion((version) => version + 1);
   }, []);
 
-  const consumePendingFolders = useCallback((): string[] => {
+  const consumePendingFolders = useCallback((): PendingFolder[] => {
     const paths = pendingFoldersRef.current;
     pendingFoldersRef.current = [];
     return paths;

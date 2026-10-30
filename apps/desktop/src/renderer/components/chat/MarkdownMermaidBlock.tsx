@@ -30,6 +30,12 @@ import { toast } from '@/lib/toast';
 import { resolveExportBackground, svgToPngBlob } from '@/lib/rasterizeToImage';
 import { MermaidLightbox } from './MermaidLightbox';
 import { useCopyAsImage } from './useCopyAsImage';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface MarkdownMermaidBlockProps {
   raw: string;
@@ -64,6 +70,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
   const [dark, setDark] = useState<boolean>(isDarkMode);
   const [copied, setCopied] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const copyTimerRef = useRef<number | null>(null);
   const blockRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +87,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
       if (!current) throw new Error('no svg rendered');
       const blob = await svgToPngBlob(current, {
         background: resolveExportBackground(blockRef.current),
+        fontFamily: window.getComputedStyle(blockRef.current ?? document.body).fontFamily,
       });
       return { blob, plainText: rawRef.current };
     });
@@ -221,6 +229,11 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           role="button"
           tabIndex={0}
           onClick={() => setLightboxOpen(true)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setMenuPos({ x: event.clientX, y: event.clientY });
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
@@ -360,6 +373,35 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
         </button>
       </div>
 
+      {svg != null && !showSourceView ? (
+        <DropdownMenu
+          open={menuPos !== null}
+          onOpenChange={(open) => {
+            if (!open) setMenuPos(null);
+          }}
+        >
+          <DropdownMenuTrigger asChild>
+            <span
+              aria-hidden
+              data-fixed-menu-anchor
+              style={{
+                position: 'fixed',
+                left: menuPos?.x ?? 0,
+                top: menuPos?.y ?? 0,
+                width: 0,
+                height: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={2}>
+            <DropdownMenuItem onClick={copyAsImage}>
+              <Copy className="mr-2 h-4 w-4" />
+              {t('chat.media.copyImage')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       {lightboxOpen && svg != null ? (
         <MermaidLightbox
           svg={svg}

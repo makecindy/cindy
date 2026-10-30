@@ -34,7 +34,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -47,7 +47,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;
@@ -116,6 +116,7 @@ export interface UsageHistoryTask {
   title: string;
   model: string;
   providerId: string | null;
+  source?: string | null;
   contextTokens: number;
   contextWindow: number;
   /** unix ms */
@@ -201,7 +202,7 @@ function finiteNumber(value: unknown, fallback = 0): number {
 }
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media';
 }
 
 function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
@@ -554,7 +555,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
 }
 
 /** 影响「最耗 token 的任务」展示的任务字段。 */
-const TASK_META_KEYS = ['title', 'status', 'model', 'providerId'] as const;
+const TASK_META_KEYS = ['title', 'status', 'model', 'providerId', 'source'] as const;
 
 export type UsageHistoryWindow = number | 'all';
 

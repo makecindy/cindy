@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
+import { emptyPluginInstanceRegistry } from '../../cindy-brain/pluginInstanceRegistry.js';
+import type { InstalledGhost } from '../../../shared/ghost.js';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
@@ -74,7 +77,14 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
+  refreshPluginUsageBindings: vi.fn(async () => undefined),
+  confirmLegacyLibraryReattach: async () => false,
   getGhostManager: () => ({
+    createBackgroundRefresh() {
+      const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
+      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
+    },
+    async listAsync() { return this.list(); },
     list: () =>
       (runtime.listSequence ? runtime.listSequence() : runtime.ghosts).map((ghost) => ({
         ...ghost,
@@ -646,6 +656,7 @@ describe('PluginMarketService 自定义市场聚合', () => {
       enabled: true,
     });
     expect(runtime.install).toHaveBeenCalledTimes(1);
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('sourceChanged');
   });
 });
 
@@ -1719,6 +1730,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
@@ -1980,6 +1992,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { version: '2.0.0' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha', '2.0.0'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       sourceKey: marketSourceKey({ type: 'local', path: dirB }),
@@ -2274,6 +2287,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }, TEST_INSTALL_CONTEXT),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
+    expect(runtime.install.mock.calls[0]?.[1]).toHaveProperty('sourceChanged', true);
     expect(h.ledger.installationForGhost('server-plugin')).toMatchObject({
       pluginId: item.id,
       source: 'market',
@@ -2312,6 +2326,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'alpha' } } });
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       manifestCap: ghostManifest('alpha'),
+      sourceChanged: true,
     });
     expect(h.ledger.installationForGhost('alpha')).toMatchObject({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
@@ -2373,6 +2388,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       updatedAt: '2026-07-30T02:00:00.000Z',
     });
 
+    runtime.ghosts = [installedGhost(root, 'alpha')];
     await expect(h.service.uninstall(pluginId)).resolves.toEqual({ ok: true });
     expect(runtime.uninstall).toHaveBeenCalledWith('alpha', { skipMarketLedger: true });
     expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
@@ -2465,7 +2481,7 @@ describe('Agent custom marketplace boundaries', () => {
     expect(h.ledger.read()).toEqual(before);
   });
 
-  it('forwards live authority to custom package placement after packaging', async () => {
+  it.each(['early', 'late'])('forwards live authority to the %s custom package commit', async (stage) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-agent-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
@@ -2474,8 +2490,10 @@ describe('Agent custom marketplace boundaries', () => {
     let current = true;
     const place = vi.fn();
     runtime.install.mockImplementation(async (_file, options) => {
+      if (stage === 'late') options.beforeCommitInLock?.();
       current = false;
-      options.beforeCommitInLock?.();
+      if (stage === 'early') options.beforeCommitInLock?.();
+      else options.assertCurrent?.();
       place();
       throw new Error('unreachable');
     });

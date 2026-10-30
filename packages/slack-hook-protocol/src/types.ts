@@ -268,6 +268,17 @@ export interface HookEnvelope<TType extends HookMessageType, TPayload> {
 
 // ── 阶段 1: 连接与身份 ───────────────────────────────────────────────────────
 
+/** Cosmetic status reactions in the current connection's platform-native format.
+ * Client owns the palette; server owns lifecycle, cleanup and API fallbacks.
+ * Limits: 64 chars per name, 1–16 processing variants, 1–64 expressive errors.
+ */
+export interface HookStatusReactions {
+  queued: string;
+  processing: readonly string[];
+  error: string;
+  expressiveError?: readonly string[];
+}
+
 /**
  * hello(desktop -> server): 建连后第一帧, 自报身份与能力。
  * 工作区别名映射变更后, desktop 重发 hello 即时生效(server 以最新一帧为准)。
@@ -305,6 +316,10 @@ export interface HelloPayload {
    * 默认开启处理;新客户端始终显式发送当前有效值。
    */
   lifecycleAnnouncement?: boolean;
+  /** Optional client palette. Old servers ignore it; absent means server defaults.
+   * Re-hello replaces the declaration, including clearing it when omitted.
+   */
+  statusReactions?: HookStatusReactions;
 }
 
 /** welcome(server -> desktop): hello 的应答, 握手完成。 */
@@ -501,6 +516,8 @@ export interface TurnEndUsage {
  * 为 'error' 时 errorMessage 必须为非空字符串。
  */
 export interface TurnEndPayload {
+  /** session-result-v1: a new result for the bound lane, not a dispatched/reopened request. */
+  background?: true;
   requestId: string;
   externalKey: string;
   sessionId: string | null;
@@ -1330,6 +1347,8 @@ export interface LifecyclePreferencePayload {
  * 时才登记续跑记账并发帧; 缺席则维持旧行为(渠道消息停在失败上)。
  */
 export const HOOK_FEATURE_TURN_REOPEN = 'turn-reopen-v1';
+/** New messages for background execution in an existing IM-bound session. Excludes X. */
+export const HOOK_FEATURE_SESSION_RESULT = 'session-result-v1';
 
 /**
  * 双向能力标识：server 会在收到普通 turn.end 后回 turn.delivery，并以
@@ -1806,6 +1825,14 @@ export interface GroupMessageRecipient {
  * 条目按同一组 id 关联, prompt 缺失上下文时 agent 可按 id 查本地窗口兜底。
  * 一次性凭证(如 Telegram 绑定深链 /start <token>)由 server 过滤, 不转发。
  */
+export interface GroupMessageImageRef {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  /** Recipient-bound proof for POST /telegram/group-image; never a bot token. */
+  downloadToken?: string;
+}
+
 export interface GroupMessagePayload {
   /** IM 平台标识(开放集合, 当前 'telegram')。 */
   provider: string;
@@ -1825,6 +1852,7 @@ export interface GroupMessagePayload {
   text: string;
   /** 附件文件名列表(仅名字, 不携带字节; 桌面窗口行内标注用)。 */
   fileNames?: string[];
+  imageRefs?: GroupMessageImageRef[];
   /** 消息在 IM 平台的发送时刻(unix ms)。 */
   sentAt: number;
 }

@@ -79,6 +79,12 @@ export function createPluginTaskStore(db: DbClient): PluginTaskStore {
         sql`NOT EXISTS (SELECT 1 FROM ${sessions} WHERE ${sessions.id} = ${row.id})`,
       ));
     },
+    relocatePlugin: async (from, to) => {
+      if (from === to) return;
+      await db.drizzle.update(table).set({
+        pluginId: to, revision: sql`${table.revision} + 1`,
+      }).where(eq(table.pluginId, from));
+    },
     revokePlugin: async (pluginId) => {
       // Keep the identity/request key so reinstall cannot replay or recreate old tasks.
       await db.drizzle.update(table).set({

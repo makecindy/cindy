@@ -1,4 +1,6 @@
 import { Button } from '@/components/ui/button';
+import { CatalogDeviceScope, type CatalogDeviceControl } from '@/features/plugin/useCatalogDevice';
+import { useSkillhubTarget } from './SkillhubTargetContext';
 /**
  * SkillhubHomeView — 技能(SkillHub)首页,/skillhub/local index。
  *
@@ -9,7 +11,7 @@ import { Button } from '@/components/ui/button';
 
 import { buildMarketSkillRoute, withSkillDetailReturn } from './lib/detailRoutes';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams, type Location } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { skillhubCatalogKey } from '../../../shared/skillhubCatalog';
@@ -32,6 +34,7 @@ import {
   PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
   PluginManagementLayout,
   PluginManagementPage,
+  CatalogTargetControls,
 } from '@/features/plugin/PluginManagementLayout';
 import { buildLocalSkillRoute, findLocalSkillByPath } from './lib/localRoutes';
 import {
@@ -64,6 +67,8 @@ import { OfficialSkillBadge } from './components/OfficialSkillBadge';
 import { useSkillhubHomeNavigation } from './hooks/useSkillhubHomeNavigation';
 import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
 
+import './skillhub-home.css';
+
 const KIND_ICON: Record<string, LucideIcon> = {
   skill: Package,
   command: SquareTerminal,
@@ -75,18 +80,54 @@ function includesSkillQuery(values: ReadonlyArray<string | undefined>, query: st
   return values.some((value) => value?.toLocaleLowerCase().includes(query));
 }
 
-export function SkillhubHomeView({
+const RemoteSkillsPage = lazy(() => import('./RemoteSkillsPage').then((module) => ({ default: module.RemoteSkillsPage })));
+
+export function SkillhubHomeView(
+  props: {
+    embedded?: boolean;
+    active?: boolean;
+    navigationLocation?: Location;
+    onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
+  } = {},
+) {
+  return (
+    <CatalogDeviceScope>
+      {(device, online, generation, deviceControl) =>
+        device ? (
+          <Suspense fallback={null}><RemoteSkillsPage
+            key={`${generation}:${device.deviceId}`}
+            device={device}
+            online={online}
+            deviceControl={deviceControl}
+            embedded={props.embedded}
+            active={props.active}
+            onSelectCatalogTab={props.onSelectCatalogTab}
+          /></Suspense>
+        ) : (
+          <SkillhubHomeContent deviceControl={deviceControl} {...props} />
+        )
+      }
+    </CatalogDeviceScope>
+  );
+}
+
+export function SkillhubHomeContent({
+  deviceControl,
+  notice,
   embedded = false,
   active = true,
   navigationLocation,
   onSelectCatalogTab,
 }: {
+  deviceControl?: CatalogDeviceControl;
+  notice?: ReactNode;
   embedded?: boolean;
   active?: boolean;
   navigationLocation?: Location;
   onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void;
 } = {}) {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
   const navigate = useNavigate();
   const [initialSearch] = useSearchParams();
   const { skills, projects, bootstrapped, syncResults } = useSkillhub();
@@ -220,15 +261,16 @@ export function SkillhubHomeView({
 
   const returnTo = `/skillhub/local?${new URLSearchParams({ tab: catalogTab, q: query, category: categoryFilter })}`;
   const openLocal = (local: SkillhubSkill) => {
+    if (target) return target.openLocal(local);
     const route = withSkillDetailReturn(buildLocalSkillRoute(local), returnTo);
     navigate(route, { state: { from: '/skillhub/local', resetHistory: true, skillhubHome: { catalogTab, query } } });
   };
-  const openMarket = () => navigate('/skillhub/market');
-  const openCatalogSkill = (skill: MarketSkill) => navigate(buildMarketSkillRoute(skill, returnTo));
+  const openMarket = () => target ? target.openMarketList() : navigate('/skillhub/market');
+  const openCatalogSkill = (skill: MarketSkill) => target ? target.openMarket(skill) : navigate(buildMarketSkillRoute(skill, returnTo));
   const homeCatalogTabs = visibleHomeCatalogTabs(showOrganization);
 
   const handleImportSkill = useCallback(async () => {
-    if (importBusy) return;
+    if (target || importBusy) return;
     setImportBusy(true);
     try {
       const picked = await window.electronAPI.skillhub.pickLocal();
@@ -250,13 +292,15 @@ export function SkillhubHomeView({
     } finally {
       setImportBusy(false);
     }
-  }, [importBusy, t]);
+  }, [importBusy, t, target]);
 
   const closeImportPicker = useCallback(() => {
     setImportPickerOpen(false);
     setImportGrantToken(null);
     setImportTarget(null);
   }, []);
+  const showMarketCatalog = catalogTab !== 'local' &&
+    (!normalizedQuery || catalogItems.length > 0 || marketLoading || marketError);
 
   return (
     <PluginManagementLayout
@@ -274,7 +318,7 @@ export function SkillhubHomeView({
           loading={importBusy}
           type="button"
           onClick={() => void handleImportSkill()}
-          disabled={importBusy}
+          disabled={importBusy || !!target}
           aria-label={t('skillhub.home.importAria')}
           className="plugin-management-action-trigger shrink-0 shadow-[var(--plugin-card-shadow)]"
         >
@@ -290,23 +334,31 @@ export function SkillhubHomeView({
         )}
       >
         <main className="h-full overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable_both-edges]">
-          <PluginManagementPage className="gap-8">
-            <header className="plugin-motion-page-header flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0 pt-1">
-                <h1 className="text-28 font-medium leading-tight text-[var(--text-primary)]">
-                  {t('skillhub.home.title')}
-                </h1>
-                <p className="mt-2 max-w-2xl text-14 leading-6 text-[var(--text-secondary)]">
-                  {t('skillhub.home.description')}
-                </p>
+          <PluginManagementPage className="gap-5">
+            <header className="plugin-motion-page-header flex flex-col gap-3" data-catalog-region="heading">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 basis-72 pt-1">
+                  <h1 className="text-28 font-medium leading-tight text-[var(--text-primary)]">
+                    {t('skillhub.home.title')}
+                  </h1>
+                  <p className="mt-2 max-w-2xl text-14 leading-6 text-[var(--text-secondary)]">
+                    {t('skillhub.home.description')}
+                  </p>
+                </div>
+                {deviceControl && <CatalogTargetControls computer={deviceControl} />}
               </div>
-              <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1" style={WINDOW_NO_DRAG_STYLE}>
+              {notice}
+            </header>
+
+            <div className="flex min-w-0 flex-col gap-3" data-catalog-region="filters">
+              <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[var(--border-default)]" style={WINDOW_NO_DRAG_STYLE}>
                 <SegmentedControl
+                  className="skill-catalog-source-tabs min-w-0"
                   role="radiogroup"
                   aria-label={t('skillhub.home.catalogFiltersAria')}
-                  height={32}
-                  optionHeight={28}
-                  optionClassName="px-3.5 text-12"
+                  height={40}
+                  optionHeight={40}
+                  optionClassName="px-1 text-13"
                   value={catalogTab}
                   onValueChange={(tab) => {
                     setCatalogTab(tab);
@@ -320,38 +372,32 @@ export function SkillhubHomeView({
                   }))}
                 />
                 <button
-                    type="button"
-                    onClick={openMarket}
-                    className={cn(
-                      'inline-flex shrink-0 items-center gap-1 rounded-full px-3.5 py-2 text-12 text-[var(--text-secondary)]',
-                      'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    )}
-                  >
-                    {t('skillhub.home.catalogMore')}
-                    <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
+                  type="button"
+                  onClick={openMarket}
+                  className={cn(
+                    'inline-flex shrink-0 items-center gap-1 rounded-full px-3.5 py-2 text-12 text-[var(--text-secondary)]',
+                    'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  )}
+                >
+                  {t('skillhub.home.catalogMore')}
+                  <ChevronRight size={13} strokeWidth={1.8} aria-hidden="true" />
                 </button>
               </div>
-            </header>
+              {showMarketCatalog && categories.length > 0 ? (
+                <SkillCategoryFilterBar
+                  categories={categories}
+                  selectedCategory={categoryFilter}
+                  allLabel={t('skillhub.market.categoryAll')}
+                  ariaLabel={t('skillhub.home.categoryFiltersAria')}
+                  onSelectCategory={setCategoryFilter}
+                />
+              ) : null}
+            </div>
 
             {/* ① 当前云端目录摘要 */}
-            {catalogTab !== 'local' && (!normalizedQuery || catalogItems.length > 0 || marketLoading || marketError) ? (
+            {showMarketCatalog ? (
               <section className="plugin-motion-page-section min-w-0">
-                {categories.length > 0 ? (
-                  <SkillCategoryFilterBar
-                    categories={categories}
-                    selectedCategory={categoryFilter}
-                    allLabel={t('skillhub.market.categoryAll')}
-                    ariaLabel={t('skillhub.home.categoryFiltersAria')}
-                    scrollLeftLabel={t('skillhub.home.scrollCategoriesLeft')}
-                    scrollRightLabel={t('skillhub.home.scrollCategoriesRight')}
-                    scrollStartLabel={t('skillhub.home.categoryScrollAtStart')}
-                    scrollEndLabel={t('skillhub.home.categoryScrollAtEnd')}
-                    onSelectCategory={setCategoryFilter}
-                    className="mb-4"
-                  />
-                ) : null}
-
                 <MarketListError error={marketError} loading={marketLoading} onRetry={reloadMarket} />
                 {(marketLoading || !marketResponseCurrent) && catalogItems.length === 0 ? (
                   // 占位骨架:与真实卡片同栅格、同行数、同高度,内容到位后原地替换不跳动。
@@ -418,7 +464,7 @@ export function SkillhubHomeView({
                       <LocalGroup
                         skills={globalSkills}
                         syncResults={syncResults}
-                        active={active}
+                        active={active && !target}
                         onOpen={openLocal}
                       />
                     )}
@@ -428,7 +474,7 @@ export function SkillhubHomeView({
                         label={g.label}
                         skills={g.skills}
                         syncResults={syncResults}
-                        active={active}
+                        active={active && !target}
                         onOpen={openLocal}
                       />
                     ))}

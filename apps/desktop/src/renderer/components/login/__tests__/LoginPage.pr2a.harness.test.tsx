@@ -177,7 +177,7 @@ describe('method-choice', () => {
     const hint = screen.getByTestId('login-sso-required-hint');
     expect(hint.textContent).toBe('login.ssoRequired');
     expect(hint.style.top).toBe('380px');
-    expect(hint.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(hint.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(screen.queryByTestId('login-method-personal')).toBeNull();
   });
 });
@@ -209,10 +209,10 @@ describe('verification-code', () => {
 
     expect((screen.getByTestId('login-input') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('login.signIn').closest('button')?.disabled).toBe(true);
-    // 倒计时首帧 60(247:1614 样式:placeholder 色无 underline 不可交互)
+    // 倒计时首帧 60(247:1614 样式:次要档、无 underline、不可交互)
     const countdown = screen.getByTestId('login-resend-countdown');
     expect(countdown.textContent).toBe('login.resendCountdown#60');
-    expect(countdown.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(countdown.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(countdown.className).not.toContain('underline');
     // tick 后逐秒重算;到 0 切重发链接
     act(() => vi.advanceTimersByTime(1_000));
@@ -381,7 +381,7 @@ describe('binding', () => {
     expect(screen.getByText('login.binding.emailTitle')).toBeTruthy();
     const sentTo = screen.getByTestId('login-binding-sent-to');
     expect(sentTo.textContent).toBe('login.codeSentTo#bind@example.com');
-    expect(sentTo.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(sentTo.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(screen.queryByTestId('login-resend-link')).toBeNull();
     const button = screen.getByText('login.completeSignIn').closest('button') as HTMLButtonElement;
     expect(button.disabled).toBe(true);

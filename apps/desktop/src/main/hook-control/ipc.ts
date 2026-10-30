@@ -1,3 +1,4 @@
+import { registerGroupImageReader, fetchOfficialGroupImage } from './groupImageBridge.js';
 /**
  * hook-control/ipc.ts
  * ---------------------------------------------------------------------------
@@ -9,6 +10,9 @@
  * 现值缺失尝试 refresh 一次; 登录/登出经 onAuthStateChange 触发 manager.sync
  * 即连即断。没有密钥概念, 旧 safeStorage secret 文件由 store 迁移时清理。
  */
+
+import { requireXCompanion, resolveXCompanionTarget } from './xCompanion.js';
+import { captureChannelAccount } from '../im/shared/openChannelSession.js';
 
 import path from 'node:path';
 import fs from 'node:fs';
@@ -24,8 +28,8 @@ import { createLogger } from '../logger.js';
 import { t } from '../i18n.js';
 import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
 import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
-import { getMaker, restartCodexAfterAuthModeChange } from '../maker-host/index.js';
-import { shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { onChannelTurn } from '../maker-ipc/channelTurnSignal.js';
+import { getMaker } from '../maker-host/index.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { resolveFreshSourceBranch, WorktreeManager } from '../worktree/index.js';
@@ -95,6 +99,7 @@ import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
 import { createHookRequestLedger } from './requestLedger.js';
+import { createHookMediaStore } from '../cindy-media/hookOutbox.js';
 import {
   buildGroupContextPrefix,
   listTelegramKnownGroupsForStableBinding,
@@ -120,13 +125,6 @@ let store: SlackHookStore | null = null;
 let manager: HookControlManager | null = null;
 let disposeAuthListener: (() => void) | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
-let codexMcpRefreshPending = false;
-let codexMcpRefreshRunning = false;
-let codexMcpRefreshRetryTimer: NodeJS.Timeout | null = null;
-let latestSlackToolProviderEnabled = false;
-
-const CODEX_MCP_REFRESH_RETRY_MS = 2_000;
-
 function hookControlAvailable(): boolean {
   return getAppCapabilities().canUseCindyAccountServices;
 }
@@ -171,56 +169,6 @@ function disabledHookView(): SlackHookView {
       defaultWorkspace: null,
     },
   };
-}
-
-/**
- * Slack 绑定态会改变 lizi_slack 是否出现在 Codex 的冻结 MCP 清单里。
- *
- * 先软关 Codex app-server(含 busy turn 的 fail-closed 检查)，成功后再关 HTTP
- * bridge / 清 spawn cache；反过来会让仍在运行的 session 指向已停 bridge。
- * busy 时保留 pending 并低频重试，避免「绑定发生在 Codex turn 中」后必须重启
- * 整个 App 才能看到工具。多次快速翻转合并到同一条串行 drain，不并发 dispose。
- */
-function requestCodexMcpRefreshForSlackAvailability(enabled: boolean): void {
-  latestSlackToolProviderEnabled = enabled;
-  codexMcpRefreshPending = true;
-  if (codexMcpRefreshRetryTimer !== null) {
-    clearTimeout(codexMcpRefreshRetryTimer);
-    codexMcpRefreshRetryTimer = null;
-  }
-  void drainCodexMcpRefreshForSlackAvailability();
-}
-
-async function drainCodexMcpRefreshForSlackAvailability(): Promise<void> {
-  if (codexMcpRefreshRunning) return;
-  codexMcpRefreshRunning = true;
-  try {
-    while (codexMcpRefreshPending) {
-      codexMcpRefreshPending = false;
-      try {
-        await restartCodexAfterAuthModeChange(shutdownCodexEnvironment);
-        log.info('Codex MCP environment refreshed after Slack provider availability changed', {
-          enabled: latestSlackToolProviderEnabled,
-        });
-      } catch (err) {
-        codexMcpRefreshPending = true;
-        log.warn('Codex MCP refresh deferred after Slack provider availability changed', {
-          enabled: latestSlackToolProviderEnabled,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        break;
-      }
-    }
-  } finally {
-    codexMcpRefreshRunning = false;
-  }
-  if (codexMcpRefreshPending && codexMcpRefreshRetryTimer === null) {
-    codexMcpRefreshRetryTimer = setTimeout(() => {
-      codexMcpRefreshRetryTimer = null;
-      void drainCodexMcpRefreshForSlackAvailability();
-    }, CODEX_MCP_REFRESH_RETRY_MS);
-    codexMcpRefreshRetryTimer.unref?.();
-  }
 }
 
 function broadcastStatus(view: SlackHookView): void {
@@ -308,9 +256,45 @@ function parseWorkspacePrefsWrite(payload: unknown): {
 
 const remotePrefsSnapshotGenerations = new Map<HookPrefsChannel, number>();
 
+function broadcastWorkspaceProviderSources(entries: ReturnType<typeof listWorkspaceProviderSources>): void {
+  // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed() && isAppContentWindow(w)) {
+      w.webContents.send(HOOK_CONTROL_EVENT.WORKSPACE_PROVIDER_SOURCE_CHANGED, entries);
+    }
+  }
+}
+
+/**
+ * server 快照落地可能清掉配对来源(applyIncomingServerWorkspacePrefs, issue #5912),
+ * 落地后把现有条目推给设置页; 给了落地前快照时只在有变化时推。
+ */
+function rebroadcastWorkspaceProviderSources(before?: string): void {
+  try {
+    const entries = listWorkspaceProviderSources();
+    if (before === undefined || JSON.stringify(entries) !== before) {
+      broadcastWorkspaceProviderSources(entries);
+    }
+  } catch (err) {
+    log.warn(
+      `workspace provider source broadcast failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+function snapshotWorkspaceProviderSources(): string {
+  try {
+    return JSON.stringify(listWorkspaceProviderSources());
+  } catch {
+    return '';
+  }
+}
+
 function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWorkspacePrefs[]): void {
   try {
+    const sourcesBefore = snapshotWorkspaceProviderSources();
     applyIncomingServerWorkspacePrefs(channel, prefs);
+    rebroadcastWorkspaceProviderSources(sourcesBefore);
     remotePrefsSnapshotGenerations.set(
       channel,
       (remotePrefsSnapshotGenerations.get(channel) ?? 0) + 1,
@@ -370,6 +354,8 @@ const mirrorWorkspacePrefs = createWorkspacePrefsMirror({
   onLocalPrefsChanged: (channel) => {
     if (channel === 'slack') broadcastPrefs(slackLocalPrefsView());
     else broadcastProviderPrefs(providerLocalPrefsView(channel));
+    // 重连镜像同样经 applyIncomingServerWorkspacePrefs 落快照, 可能清掉配对来源(issue #5912)。
+    rebroadcastWorkspaceProviderSources();
   },
   onError: (channel, err) => {
     log.warn(
@@ -434,6 +420,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     });
   }
   if (!manager) {
+    const mediaStore = createHookMediaStore();
     const dispatcher = createHookDispatcher({
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
@@ -471,6 +458,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
           name: meta.name,
           url: meta.url,
           enabled: meta.enabled,
+          ...(provider === 'x' ? { companionBotId: config.xCompanionBotId ?? null } : {}),
           workspaces: config.workspaces,
           createdAt: 0,
         };
@@ -481,9 +469,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       }),
       terminalLedger: createHookRequestLedger({
         filePath: ownerScopedUserDataPath('hook-request-ledger.json'),
+        releaseMedia: mediaStore.release,
         log,
       }),
+      mediaStore,
       runner: createMakerHookSessionRunner({ log }),
+      resolveCompanionTarget: resolveXCompanionTarget,
       buildContextPrefix: buildGroupContextPrefix,
       // 新建 hook 会话默认预建独立 worktree(并发隔离); deps 组装与
       // maker-ipc/register.ts 的 use_worktree 分支同款。失败由 dispatcher
@@ -552,6 +543,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 「用户在桌面端点了重试 / 继续任务」信号 -> 把那一轮接回渠道原消息
       // (turn.reopen, 协议阶段 18)。信号由 maker 的发送事务发布。
       subscribeUiContinuation: onUiContinuation,
+      subscribeChannelTurn: (listener) => onChannelTurn((session, phase, source) => listener(session.id, session.workDir, phase, source)),
       subscribeUiSessionIntervention: onUiSessionIntervention,
       subscribeUiTurnDispatching: onUiTurnDispatching,
       subscribeUiTurnUndispatched: onUiTurnUndispatched,
@@ -587,7 +579,6 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // Pi is optional on unsupported/unprepared platforms.
       agents: getMaker().listAvailableAgents(),
       notifyStatus: broadcastStatus,
-      onSlackToolProviderEnabledChanged: requestCodexMcpRefreshForSlackAvailability,
       notifyPrefs: (view) => {
         persistUnsolicitedServerPrefs('slack', view.prefs);
         broadcastPrefs(slackLocalPrefsView());
@@ -657,6 +648,26 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     // Slack 网关工具桥: lizi_slack provider 经叶子注册表取用(不直接 import
     // 本模块, 避免 mcp-providers <-> ipc 的静态引用闭环)
     const m = manager;
+    registerGroupImageReader(async (lane, downloadToken) => {
+      if (!hookControlAvailable()) return null;
+      const binding = m.snapshot().telegram.binding;
+      if (binding?.state !== 'confirmed' || lane.provider !== `telegram:${binding.principalId}`)
+        return null;
+      const token = authManager.getAccessToken();
+      if (!token) return null;
+      const bytes = await fetchOfficialGroupImage(
+        getClientEndpoint('telegramHookWsUrl'),
+        token,
+        downloadToken,
+      );
+      const current = m.snapshot().telegram.binding;
+      return hookControlAvailable() &&
+        current?.state === 'confirmed' &&
+        current.bindingId === binding.bindingId &&
+        current.principalId === binding.principalId
+        ? bytes
+        : null;
+    });
     registerSlackToolBridge({
       availability: () =>
         hookControlAvailable()
@@ -710,6 +721,35 @@ function registerTrustedHookControlHandler(channel: string, handler: HookControl
     assertTrustedHookControlSender(event);
     return handler(event, ...args);
   });
+}
+
+/** Compare-and-set of the official X account's teammate (IPC and the teammate settings host share it). */
+export async function changeXCompanionBinding(botId: string | null, expectedBotId: string | null) {
+  requireHookControl();
+  const assertAccount = captureChannelAccount();
+  const { store: s, manager: m } = ensureInstances();
+  if (botId !== null) await requireXCompanion(botId);
+  assertAccount();
+  if ((s.get().xCompanionBotId ?? null) !== expectedBotId) {
+    throwIpcError('PRECONDITION_FAILED', 'X companion assignment changed');
+  }
+  translateValidation(() => s.setXCompanionBotId(botId));
+  const hook = m.snapshot();
+  broadcastStatus(hook);
+  return hook;
+}
+
+/** What a teammate's settings page may show of the official X account: no URLs, accounts or tokens. */
+export function readXCompanionSummary(): { available: boolean; visible: boolean; enabled: boolean; connected: boolean; companionBotId: string | null } {
+  const x = hookControlAvailable() ? ensureInstances().manager.snapshot().x : disabledHookView().x;
+  return {
+    available: x.available,
+    // The same rule that decides whether this computer's own settings list the X card.
+    visible: x.url.length > 0 || x.capabilityPending || x.available || x.enabled,
+    enabled: x.enabled,
+    connected: x.binding?.state === 'confirmed',
+    companionBotId: x.companionBotId ?? null,
+  };
 }
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
@@ -872,6 +912,16 @@ export function registerHookControlIpc(): void {
       return { hook: m.snapshot() };
     },
   );
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_COMPANION, async (_e, payload) => {
+    const p = requireObject(payload);
+    return {
+      hook: await changeXCompanionBinding(
+        requireNullableString(p.botId, 'botId'),
+        requireNullableString(p.expectedBotId, 'expectedBotId'),
+      ),
+    };
+  });
 
   // 发起 Slack 账号绑定(SIWS OIDC): 经已连接的 WS 发 bind.start(无参); server
   // 回 bind.update(pending, authorizeUrl), main 打开系统浏览器并广播状态。
@@ -1135,6 +1185,10 @@ export function registerHookControlIpc(): void {
       if (providerId !== null && providerId.length > 128) {
         throwIpcError('INVALID_PARAMS', 'providerId too long');
       }
+      const agentDeviceId = p.agentDeviceId == null ? null : requireString(p.agentDeviceId, 'agentDeviceId');
+      if (agentDeviceId && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(agentDeviceId) || !providerId)) {
+        throwIpcError('INVALID_PARAMS', 'remote provider route invalid');
+      }
       // 条目总量上限(codex review): 键合法性校验挡不住海量唯一 teamId 的无限
       // 追加 —— 新增(非替换/删除)且已达上限时拒绝。按精确键判新增(不能用
       // getWorkspaceProviderSource, 它的 teamId null 兜底会把新 team 误判为已存在)。
@@ -1154,19 +1208,14 @@ export function registerHookControlIpc(): void {
       // throwIpcError 协议给稳定错误码, 细节留 main 日志。
       let entries: ReturnType<typeof setWorkspaceProviderSource>;
       try {
-        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId);
+        entries = setWorkspaceProviderSource(channel, teamId, workspace, providerId, agentDeviceId);
       } catch (err) {
         log.warn(
           `workspace provider source write failed: ${err instanceof Error ? err.message : String(err)}`,
         );
         throwIpcError('INTERNAL', 'failed to persist workspace provider source');
       }
-      // 多窗口同步(codex review): 会话副窗也能开设置页, 写后全窗口广播全量条目。
-      for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && isAppContentWindow(w)) {
-          w.webContents.send(HOOK_CONTROL_EVENT.WORKSPACE_PROVIDER_SOURCE_CHANGED, entries);
-        }
-      }
+      broadcastWorkspaceProviderSources(entries);
       return { entries };
     },
   );
@@ -1196,6 +1245,12 @@ export function registerHookControlIpc(): void {
   log.info('hook-control ipc registered');
 }
 
+/** Read the current owner's already-loaded assignment without starting a transport. */
+export function readXCompanionAssignment(): { botId: string; enabled: boolean } | null {
+  const config = store?.get();
+  return config?.xCompanionBotId ? { botId: config.xCompanionBotId, enabled: config.xEnabled } : null;
+}
+
 /** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
@@ -1213,6 +1268,7 @@ export async function stopHookControlAccount(): Promise<void> {
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   unregisterSlackToolBridge();
+  registerGroupImageReader(null);
   resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
@@ -1220,11 +1276,6 @@ export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boole
   store = null;
 }
 export function disposeHookControl(): void {
-  codexMcpRefreshPending = false;
-  if (codexMcpRefreshRetryTimer !== null) {
-    clearTimeout(codexMcpRefreshRetryTimer);
-    codexMcpRefreshRetryTimer = null;
-  }
   disposeAuthListener?.();
   disposeAuthListener = null;
   observedAuthRealm = null;

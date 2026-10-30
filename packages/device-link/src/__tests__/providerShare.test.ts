@@ -114,6 +114,30 @@ describe('provider share api', () => {
     await api({ requestId: 'r1', status: 'pending', pairingCode: '0042', expiresAt: new Date().toISOString() }, calls).sendRequest(TOKEN, 'card');
     expect(calls[0]).toEqual({ path: '/api/device-link/provider-shares/requests', body: { invitation: TOKEN, identityCard: 'card' } });
   });
+
+  it.each([undefined, 'a'.repeat(64)])('accepts old and new link responses and preserves linkId %s', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    const result = await api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    });
+    expect(result.linkId).toBe(linkId);
+    const request = { requestId: 'r1', linkId, displayName: 'Guest', avatarUrl: null, region: 'global',
+      pairingCode: '0042', createdAt: expiresAt, expiresAt };
+    const shares = await api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [request] }] }).listOwned();
+    expect(shares[0].requests[0].linkId).toBe(linkId);
+  });
+
+  it.each(['invalid', 'A'.repeat(64), 'a'.repeat(63), null])('rejects malformed linkId %s on links and owner requests', async (linkId) => {
+    const expiresAt = new Date().toISOString();
+    await expect(api({ shareId: 's1', invitation: TOKEN, expiresAt, linkId }).createLink({
+      providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Computer', identityCard: 'card',
+    })).rejects.toThrow('Invalid provider share link id');
+    await expect(api({ shares: [{ shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic',
+      hostDeviceId: 'desktop', createdAt: expiresAt, members: [], requests: [{ requestId: 'r1', linkId,
+        displayName: 'Guest', avatarUrl: null, region: 'global', pairingCode: '0042', createdAt: expiresAt, expiresAt }] }] })
+      .listOwned()).rejects.toThrow('Invalid provider share link id');
+  });
 });
 
 describe('provider share received catalogs', () => {
@@ -131,6 +155,24 @@ describe('provider share received catalogs', () => {
 });
 
 describe('provider share identity scrubbing', () => {
+  // provider-sharing.md §6: org/membership suffixes must not cross accounts.
+  // Existing cases covered subscription identities, not Cindy AI membership names.
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])('removes membership identity from shared labels and catalogs: %s', async (name) => {
+    const { scrubProviderShareLabel, scrubSharedProviderCatalog, parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const provider = { id: 'xd', name, logoKind: 'xd' };
+    expect(scrubProviderShareLabel(name)).toBe('Cindy AI');
+    expect(scrubSharedProviderCatalog({ providers: [provider] })).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    const [entry] = parseProviderShareReceivedCatalogs({ shares: [{
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'xd', providerLabel: name, deviceName: 'Cindy',
+      owner: { displayName: 'Alice', avatarUrl: null }, status: 'active', hostOnline: true,
+      catalog: { providers: [provider] },
+    }] });
+    expect(entry?.providerLabel).toBe('Cindy AI');
+    expect(entry?.catalog).toEqual({ providers: [{ id: 'xd', name: 'Cindy AI' }] });
+    expect(provider.name).toBe(name); // Same-account presentation is not mutated.
+    expect(provider.logoKind).toBe('xd');
+  });
+
   it('drops account identity fields and removes login names or emails from provider names', async () => {
     const { scrubProviderShareLabel, scrubSharedProvider, scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
     expect(scrubProviderShareLabel('OpenAI · alice@corp.com')).toBe('OpenAI');
@@ -144,6 +186,64 @@ describe('provider share identity scrubbing', () => {
     };
     expect(scrubSharedProvider(provider)).toEqual({ id: 'openai-2', name: 'OpenAI', connected: true });
     expect(JSON.stringify(scrubSharedProviderCatalog({ providers: [provider], providerOrder: ['openai-2'] }))).not.toContain('alice');
+    // 供应商组摘要列着组内电脑，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic' });
+  });
+
+  it('keeps only a sane group size for guests', async () => {
+    const { readProviderShareGroupSize, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', groupSize: 3, group: { members: [{ label: 'Mini' }] } }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', groupSize: 3 });
+    for (const groupSize of [0, -1, 2.5, 513, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', groupSize })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
+    expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
+    expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
+  it('keeps only anonymous status enums and preserves positions for unknown or malicious entries', async () => {
+    const { readProviderShareGroupStatus, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const provider = {
+      id: 'anthropic', groupSize: 3, group: { members: [{ label: 'private-name' }] },
+      groupStatus: ['available', { state: 'busy', label: 'private-name', running: 7 }, 'private-device-id'],
+    };
+    expect(scrubSharedProvider(provider)).toEqual({ id: 'anthropic', groupSize: 3, groupStatus: ['available', 'unknown', 'unknown'] });
+    for (const groupStatus of [null, {}, ['available'], Array(513).fill('available')]) {
+      expect(readProviderShareGroupStatus({ groupSize: 3, groupStatus })).toBeNull();
+      expect(scrubSharedProvider({ groupSize: 3, groupStatus })).toEqual({ groupSize: 3 });
+    }
+    expect(readProviderShareGroupStatus({ groupStatus: ['available'] })).toBeNull();
+    expect(readProviderShareGroupStatus({ groupSize: 2, groupStatus: ['needs-update', 'busy'] })).toEqual(['needs-update', 'busy']);
+  });
+
+  it('keeps only a sane guest running count', async () => {
+    const { readProviderShareGuestRunning, scrubSharedProvider } = await import('../providerShareCatalog.js');
+    expect(scrubSharedProvider({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 }))
+      .toEqual({ id: 'anthropic', name: 'Anthropic', guestRunning: 0 });
+    expect(scrubSharedProvider({ id: 'anthropic', guestRunning: 3 })).toEqual({ id: 'anthropic', guestRunning: 3 });
+    for (const guestRunning of [-1, 2.5, 4097, '3', null]) {
+      expect(scrubSharedProvider({ id: 'anthropic', guestRunning })).toEqual({ id: 'anthropic' });
+    }
+    expect(readProviderShareGuestRunning({ guestRunning: 4 })).toBe(4);
+    expect(readProviderShareGuestRunning({ guestRunning: '4' })).toBeNull();
+    expect(readProviderShareGuestRunning(null)).toBeNull();
+  });
+
+  it('keeps the computer-wide running count out of shared catalogs', async () => {
+    const { scrubSharedProvider } = await import('../providerShareCatalog.js');
+    const { readProviderRunningTurns } = await import('../providerGroup.js');
+    // 那台的总数含分享者本人与其他受邀者的任务，只给同账号电脑。
+    expect(scrubSharedProvider({ id: 'anthropic', runningTurns: 5, guestRunning: 1 }))
+      .toEqual({ id: 'anthropic', guestRunning: 1 });
+    expect(readProviderRunningTurns({ runningTurns: 0 })).toBe(0);
+    expect(readProviderRunningTurns({ runningTurns: 12 })).toBe(12);
+    for (const runningTurns of [-1, 2.5, 4097, '3', null]) {
+      expect(readProviderRunningTurns({ runningTurns })).toBeNull();
+    }
+    expect(readProviderRunningTurns([])).toBeNull();
+    expect(readProviderRunningTurns(null)).toBeNull();
   });
 
   it('drops a login name cut short by the 50-character auto-name limit', async () => {

@@ -1361,3 +1361,41 @@ describe('ExternalChromeBackend proxy lifecycle', () => {
     );
   });
 });
+
+describe('ExternalChromeBackend external link handoff', () => {
+  it('reports an agent open as tab creation only while it may still create the tab', async () => {
+    // An agent tab looks exactly like a clicked link (URL at creation, no
+    // opener); if `open` were not reported, the handoff would take the agent's
+    // tab away and send it to the user's browser.
+    const seen: Record<string, boolean> = {};
+    let isAgentOpeningTab: () => boolean = () => false;
+    const handoff = { ensure: vi.fn(), dispose: vi.fn() };
+    const backend = new ExternalChromeBackend({
+      call: vi.fn(async (req: BrowserControlRequest): Promise<BrowserControlResult> => {
+        seen[req.action] = isAgentOpeningTab();
+        return { ok: true, action: req.action, status: 200, data: {} };
+      }),
+    }, fakeLogger(), {
+      isBrowserGone: vi.fn(async () => true),
+      createLinkHandoff: (predicate) => {
+        isAgentOpeningTab = predicate;
+        return handoff;
+      },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await backend.call({ action: 'snapshot' });
+      await backend.call({ action: 'open', url: 'https://example.com/' });
+
+      expect(seen).toMatchObject({ snapshot: false, open: true });
+      // Chrome's creation event may trail the call's reply.
+      expect(isAgentOpeningTab()).toBe(true);
+      vi.setSystemTime(Date.now() + 1_000);
+      expect(isAgentOpeningTab()).toBe(false);
+      // Each call re-attaches the handoff after a browser restart.
+      expect(handoff.ensure).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

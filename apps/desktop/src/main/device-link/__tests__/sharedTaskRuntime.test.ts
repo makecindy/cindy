@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type HostRecord = {
-  options: { creationState: unknown; isCurrent(): boolean; revoke(sharedTaskId: string, memberId?: string): void };
+  options: { creationState: unknown; isCurrent(): boolean; revoke(sharedTaskId: string, memberId?: string): void;
+    readSession(sessionId: string): Promise<{ id: string; source?: string | null } | null> };
   restore: ReturnType<typeof vi.fn>;
+  needsAuthorityRefresh: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
   closeLocallyForBoundary: ReturnType<typeof vi.fn>;
 };
@@ -10,7 +12,7 @@ const state = vi.hoisted(() => ({
   accountId: 'owner', region: 'global', authenticated: true,
   session: { mode: 'cloud', dataOwnerId: 'owner', generation: 1 }, boundary: false,
   db: { client: { query: vi.fn(), exec: vi.fn() }, clientEpoch: 1 },
-  hosts: [] as HostRecord[], dispatch: vi.fn(),
+  hosts: [] as HostRecord[], dispatch: vi.fn(), forgetList: vi.fn(),
   captureClose: vi.fn(), close: vi.fn(), journalClose: vi.fn(), journalPrepare: vi.fn(), journalRollback: vi.fn(), journalFinalize: vi.fn(),
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => state.db }));
@@ -30,11 +32,12 @@ vi.mock('../../authManager.js', () => ({
   getDeviceId: () => 'host-device', getActiveAuthRealm: () => state.region,
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }) }));
-vi.mock('../sharedTaskApi.js', () => ({ sharedTaskApi: {}, captureSharedTaskBoundaryClose: state.captureClose }));
+vi.mock('../sharedTaskApi.js', () => ({ sharedTaskApi: {}, captureSharedTaskBoundaryClose: state.captureClose, forgetSharedTaskList: state.forgetList }));
 vi.mock('../sharedTaskDispatch.js', () => ({ setSharedTaskDispatchHost: state.dispatch }));
 vi.mock('../sharedTaskHost.js', () => ({
   SharedTaskHost: class {
     restore = vi.fn(async () => undefined);
+    needsAuthorityRefresh = vi.fn(() => false);
     closeLocallyForBoundary = vi.fn(async () => ['sharedTask-a', 'sharedTask-b']);
     // The real Host disposes each existing grant through this callback.
     dispose = vi.fn(async () => { this.options.revoke('sharedTask-a'); });
@@ -53,7 +56,8 @@ import {
 } from '../sharedTaskRuntime';
 
 function start() {
-  const client = { hasServerCapability: () => true, getStatus: () => 'online', start: vi.fn(), stop: vi.fn(), revoke: vi.fn() };
+  const client = { hasServerCapability: () => true, getStatus: () => 'online', getConnectionEpoch: () => 1,
+    start: vi.fn(), stop: vi.fn(), revoke: vi.fn() };
   startSharedTaskRuntime({ client: client as never, revoke: client.revoke, changed: vi.fn() });
   return client;
 }
@@ -78,6 +82,16 @@ afterEach(async () => {
 });
 
 describe('shared runtime stable owner recommit', () => {
+  it('preserves the raw task source for shared-task restoration without changing the database', async () => {
+    const session = { id: 'session', title: 'Legacy Make', status: 'active', source: 'cindy-make-merge' };
+    state.db.client.query.mockResolvedValue([session]);
+    start();
+    await expect(state.hosts[0].options.readSession('session')).resolves.toEqual(session);
+    expect(state.db.client.query).toHaveBeenCalledExactlyOnceWith(
+      'SELECT id, title, status, source FROM sessions WHERE id = ? LIMIT 1', ['session']);
+    expect(state.db.client.exec).not.toHaveBeenCalled();
+  });
+
   it('prepares and rolls back a terminal journal only in the captured profile database', async () => {
     const db = state.db.client;
     const prepared = await prepareSharedTaskClosureForTask('session', db);
@@ -121,6 +135,44 @@ describe('shared runtime stable owner recommit', () => {
     expect(state.journalClose).toHaveBeenCalledOnce();
     await closeSharedTaskForTask('session', {});
     expect(state.journalClose).toHaveBeenCalledOnce();
+  });
+  // Every online Desktop runs this; idle hosts must not read the server each tick.
+  it('reads the server once per start or reconnect, then only while the host needs authority', async () => {
+    const relay = start();
+    const host = state.hosts[0];
+    const serverReads = () => host.restore.mock.calls.filter(([network]) => network).length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(serverReads()).toBe(1);
+    expect(host.restore).toHaveBeenCalledTimes(13);
+    host.needsAuthorityRefresh.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(serverReads()).toBe(3);
+    host.needsAuthorityRefresh.mockReturnValue(false);
+    // A reconnect that finished between ticks is never observed offline.
+    relay.getConnectionEpoch = () => 2;
+    host.restore.mockRejectedValueOnce(new Error('offline'));
+    state.forgetList.mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(serverReads()).toBe(4);
+    // The reconnect sync must not reuse a list cached before the reconnect.
+    expect(state.forgetList).toHaveBeenCalledOnce();
+    // Fault radius: a reconnect, even with a failed sync, is answered by an HTTP
+    // read only; no relay restart and no peer/share revocation.
+    expect(relay.start).not.toHaveBeenCalled();
+    expect(relay.stop).not.toHaveBeenCalled();
+    expect(relay.revoke).not.toHaveBeenCalled();
+    // A failed sync retries after the server interval, not on every local tick.
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(serverReads()).toBe(4);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(serverReads()).toBe(5);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(serverReads()).toBe(5);
+    // A clock set back an hour must not postpone the next needed read.
+    host.needsAuthorityRefresh.mockReturnValue(true);
+    vi.setSystemTime(Date.now() - 3_600_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(serverReads()).toBe(6);
   });
   it('reconciles profile-local terminal changes while relay is offline', async () => {
     const relay = start();

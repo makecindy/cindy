@@ -11,9 +11,11 @@
  *  - unknown：名单外 —— 不确定，按保守处理（视觉桥配置 UI 默认不勾选，允许用户手动勾）。
  *
  * 归一化：runtime 的 body.model 形态多样 —— `deepseek/deepseek-v4-flash`、裸
- * `deepseek-v4-flash`、带 `[1m]` 后缀、`codex/` 前缀等。判定统一剥掉后缀/前缀再匹配，
+ * `deepseek-v4-flash`、带 `[1m]` 后缀、`openai-codex/` / `codex/` 前缀等。判定统一剥掉后缀/前缀再匹配，
  * 保证「目录 id」与「请求体 model」都能命中同一名单。
  */
+
+import { stripCodexGatewayWirePrefix } from './classification.js';
 
 export type VisionCapability = 'vision' | 'no-vision' | 'unknown';
 
@@ -49,16 +51,15 @@ const NO_VISION_ID_PREFIXES: readonly string[] = [
 ];
 
 /**
- * 剥掉请求体 model 的归一化噪声：`[1m]` 窗口后缀、`codex/` 等前缀、provider 命名空间。
+ * 剥掉请求体 model 的归一化噪声：`[1m]` 窗口后缀、`openai-codex/` / `codex/` 前缀、provider 命名空间。
  * 返回与目录前缀可匹配的规范化 id。
  */
 export function normalizeVisionModelId(model: string): string {
   let id = model.trim();
   // `[1m]` / `[32k]` 上下文窗口后缀（claude-code SDK 按目录 1M 窗口追加）。
   id = id.replace(/\[\d+[km]?\]$/i, '');
-  // 前缀剥到「provider/家族名」粒度，保留命名空间（如 deepseek/、anthropic/）。
-  // codex 命名空间模型（codex/gpt-5.5）是 Responses 路线，视觉能力与 gpt-5.5 一致。
-  if (id.startsWith('codex/')) id = id.slice('codex/'.length);
+  // 折扣命名空间（openai-codex/gpt-5.5、codex/gpt-5.5）是 Responses 路线，视觉能力与裸 gpt id 一致。
+  id = stripCodexGatewayWirePrefix(id);
   return id;
 }
 

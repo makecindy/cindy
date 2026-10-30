@@ -34,6 +34,8 @@ function fixture() {
   };
   const Image = Object.assign(ExpoImage, { getSize: vi.fn() });
   const bindings = { React, View, Text: View, ExpoImage, Image,
+    MessageLoadingImage: ExpoImage,
+    MessageImagePlaceholder: ({ style }: any) => <View style={style} testID="message.mediaThumbLoading" />,
     useTranslation: () => ({ t: (key: string) => key }),
     useThemedStyles: () => ({}), makeStyles: () => ({}),
     useRecyclingState: React.useState, useState: React.useState, useLayoutEffect: React.useLayoutEffect,
@@ -177,7 +179,7 @@ describe('image frame continuity', () => {
         ts.forEachChild(node, visit);
       }
       visit(file);
-      expect(properties).toHaveLength(selected.length);
+      if (properties.length !== selected.length) throw new Error('Missing production row geometry');
       return new Function('spacing', 'MOBILE_MESSAGE_LIST_BOTTOM_PADDING', `return ({${properties.join(',')}});`)(spacing, 0);
     }
     const pending = styles(pendingSource, ['rowWrap', 'bubbleRow', 'content', 'attachmentStrip']);

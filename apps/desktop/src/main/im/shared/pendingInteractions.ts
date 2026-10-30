@@ -17,6 +17,7 @@ import {
   buildAskNoAnswerDecision,
   buildPermissionDenyDecision,
   buildPlanDenyDecision,
+  type SessionPermissionRequest,
 } from './interactionCardModel';
 
 interface PendingEntry {
@@ -30,12 +31,10 @@ interface PendingEntry {
   /** For sanity / log: which kind we're awaiting. */
   kind: InteractionDecision['kind'];
   /**
-   * Original toolName from the InteractionRequest (only set when kind ===
-   * 'permission'). Needed to construct `permissionUpdates` for "always
-   * allow this tool" semantics — cardActionHandler doesn't have access to
-   * the request, so we stash it here at register time.
+   * Original permission context, including host-owned session consent.
+   * Only the stored request determines "always allow"; button payloads do not.
    */
-  toolName?: string;
+  permissionRequest?: SessionPermissionRequest;
   /**
    * 授权卡原始正文(title + body, 仅 kind === 'permission')。点击后收口时
    * 保留它再追加决策结果 — 用户需要看到自己批准的是什么, 不能整卡换成
@@ -45,7 +44,7 @@ interface PendingEntry {
   /**
    * 多题/多选打勾卡的原始问题(仅 kind === 'ask_user_question' 且
    * needsAskMultiCard 时登记)。ask:multi 按键要按问题下标改写勾选态并
-   * 重建卡片, cardActionHandler 拿不到原始请求, 与 toolName 同理登记在此。
+   * 重建卡片, cardActionHandler 拿不到原始请求, 与 permissionRequest 同理登记在此。
    */
   askQuestions?: AskUserQuestionItem[];
   /**
@@ -65,7 +64,7 @@ export function registerPending(
   extras?: {
     sharedPermission?: SharedPermission;
     owner?: symbol;
-    toolName?: string;
+    permissionRequest?: SessionPermissionRequest;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
     askSelections?: Map<number, Set<number>>;
@@ -97,7 +96,7 @@ export function registerPendingExternal(
   extras?: {
     sharedPermission?: SharedPermission;
     owner?: symbol;
-    toolName?: string;
+    permissionRequest?: SessionPermissionRequest;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
     askSelections?: Map<number, Set<number>>;
@@ -113,7 +112,7 @@ export function registerPendingExternal(
     messageId,
     kind,
     owner: extras?.owner,
-    toolName: extras?.toolName,
+    permissionRequest: extras?.permissionRequest,
     permissionCard: extras?.permissionCard,
     askQuestions: extras?.askQuestions,
     askSelections: extras?.askSelections,

@@ -61,9 +61,18 @@ describe('providerDisplayTitle / formatPriceLine / buildRowMetaLine', () => {
   it('内置供应商用桌面 zh-CN 标题,自定义回退 name', () => {
     expect(providerDisplayTitle({ id: 'anthropic', name: 'x' })).toBe('Anthropic');
     expect(providerDisplayTitle({ id: 'openai', name: 'x' })).toBe('OpenAI');
-    expect(providerDisplayTitle({ id: 'xd', name: 'x' })).toBe('Cindy AI');
+    expect(providerDisplayTitle({ id: 'xd', name: 'XD Gateway' })).toBe('Cindy AI');
     expect(providerDisplayTitle({ id: 'my-proxy', name: '我的代理' })).toBe('我的代理');
   });
+
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'uses the source computer identity %s in model rows', (name) => {
+      const provider = { id: 'xd', name };
+      expect(providerDisplayTitle(provider)).toBe(name);
+      expect(buildRowMetaLine({ provider, model: { id: 'auto', contextWindow: 272_000 } }))
+        .toBe(`${name} · 272K 上下文`);
+    },
+  );
 
   it('价格行对齐桌面 priceTip 文案;无价 null', () => {
     expect(formatPriceLine({ inputUsdPerMtok: 3, outputUsdPerMtok: 15 })).toBe(
@@ -383,10 +392,15 @@ describe('rowFastEditable / rowFastOn(严格 per-(供应商, 模型))', () => {
 });
 
 describe('budgetRowDisabled(折扣版置灰三态)', () => {
-  it("只有 codex/ 前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
+  it("只有折扣前缀且被控端明确 absent 才置灰;unknown 不误伤", () => {
     expect(budgetRowDisabled('codex/gpt-5.5', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent')).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'present')).toBe(false);
     expect(budgetRowDisabled('codex/gpt-5.5', 'unknown')).toBe(false);
     expect(budgetRowDisabled('gpt-5.5', 'absent')).toBe(false);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'builtin' })).toBe(true);
+    expect(budgetRowDisabled('openai-codex/gpt-6.1-sol', 'absent', { source: 'user' })).toBe(false);
+    expect(budgetRowDisabled('codex/gpt-5.5', 'absent', { source: 'organization' })).toBe(false);
   });
 });

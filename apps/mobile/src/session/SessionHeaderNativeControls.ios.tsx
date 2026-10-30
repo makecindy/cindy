@@ -11,10 +11,11 @@ import {
   VStack,
 } from "@expo/ui/swift-ui";
 import { Folder, Monitor, Pin, type LucideIcon } from "lucide-react-native";
-import { View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { Text } from "@/components/AppText";
 import { QuietSyncIndicator } from "@/components/QuietSyncIndicator";
 import { TaskTagDots } from './TaskTags';
+import { useDoubleTap } from './useDoubleTap';
 import {
   accessibilityHint,
   accessibilityElement,
@@ -38,7 +39,7 @@ import {
   useTheme,
 } from "@/theme";
 import { BlurBackdrop, FLOATING_CHROME_BLUR_INTENSITY } from "./BlurBackdrop";
-import { edgeBlurMask } from "./edgeBlurMask";
+import { edgeBlurMask, headerBlurLayers, HEADER_BLUR_LAYER_INTENSITY, type EdgeBlurMask } from "./edgeBlurMask";
 import type {
   SessionHeaderNativeActionsProps,
   SessionHeaderNativeBackProps,
@@ -48,11 +49,13 @@ import type {
 /**
  * A stationary, feathered backdrop: scrolling content passes beneath it.
  * `height` is the chrome area; the blur is solid over most of it and eases out
- * across its content-side edge (see edgeBlurMask).
+ * across its content-side edge. Headers use the progressive layers of
+ * headerBlurLayers; the composer keeps one layer (see edgeBlurMask).
  */
-export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0 }: { height: number; edge?: 'top' | 'bottom'; inset?: number }) {
-  const { mode } = useTheme();
-  const mask = edgeBlurMask(chromeHeight, edge);
+export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', inset = 0, fadeInside }: { height: number; edge?: 'top' | 'bottom'; inset?: number; fadeInside?: number }) {
+  const layers = edge === 'top'
+    ? headerBlurLayers(chromeHeight, fadeInside).map((mask) => ({ mask, intensity: HEADER_BLUR_LAYER_INTENSITY }))
+    : [{ mask: edgeBlurMask(chromeHeight, edge, fadeInside), intensity: FLOATING_CHROME_BLUR_INTENSITY }];
   return (
     <View
       pointerEvents="none"
@@ -62,40 +65,49 @@ export function SessionHeaderNativeBlur({ height: chromeHeight, edge = 'top', in
         ...(edge === 'top' ? { top: inset } : { bottom: inset }),
         left: 0,
         right: 0,
-        height: mask.height,
+        height: layers[0]!.mask.height,
         zIndex: 9,
       }}
     >
-      <Host colorScheme={mode} ignoreSafeArea="all" style={{ flex: 1 }}>
-        <Mask modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}>
-          <RNHostView>
-            <View style={{ flex: 1 }}>
-              <BlurBackdrop intensity={FLOATING_CHROME_BLUR_INTENSITY} overlayColor="transparent" />
-            </View>
-          </RNHostView>
-          <Mask.Content>
-            <Rectangle
-              modifiers={[
-                foregroundStyle({
-                  type: "linearGradient",
-                  colors: mask.colors,
-                  startPoint: mask.startPoint,
-                  endPoint: mask.endPoint,
-                }),
-              ]}
-            />
-          </Mask.Content>
-        </Mask>
-      </Host>
+      {layers.map(({ mask, intensity }, index) => <MaskedBlur key={index} mask={mask} intensity={intensity} />)}
     </View>
+  );
+}
+
+function MaskedBlur({ mask, intensity }: { mask: EdgeBlurMask; intensity: number }) {
+  const { mode } = useTheme();
+  return (
+    <Host colorScheme={mode} ignoreSafeArea="all" style={StyleSheet.absoluteFill}>
+      <Mask modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}>
+        <RNHostView>
+          <View style={{ flex: 1 }}>
+            <BlurBackdrop intensity={intensity} overlayColor="transparent" />
+          </View>
+        </RNHostView>
+        <Mask.Content>
+          <Rectangle
+            modifiers={[
+              foregroundStyle({
+                type: "linearGradient",
+                colors: mask.colors,
+                startPoint: mask.startPoint,
+                endPoint: mask.endPoint,
+              }),
+            ]}
+          />
+        </Mask.Content>
+      </Mask>
+    </Host>
   );
 }
 
 export function SessionHeaderNativeTitle({ title,
   tags,
   onTagsPress,
+  onTitleDoubleTap,
   pinned, syncing, syncingImmediately, notice }: SessionHeaderNativeTitleProps) {
   const { colors } = useTheme();
+  const handleTitlePress = useDoubleTap(onTitleDoubleTap);
   const style = {
     alignSelf: 'center' as const,
     maxWidth: '100%' as const,
@@ -123,7 +135,9 @@ export function SessionHeaderNativeTitle({ title,
   );
   return (
     <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
-      <View style={style}>
+      {/* 双击标题改名;不参与读屏焦点,读屏用户从「任务详情」进入重命名。 */}
+      <Pressable accessible={false} disabled={!onTitleDoubleTap} onPress={handleTitlePress}
+        style={style} testID="session.titleArea">
         {/* The title sits directly on the bar: no capsule material behind it. */}
         <View style={{ flexDirection: "row", minWidth: 0, alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
           {pinned ? <Pin color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
@@ -142,7 +156,7 @@ export function SessionHeaderNativeTitle({ title,
             {notice}
           </Text>
         ) : null}
-      </View>
+      </Pressable>
     </View>
   );
 }

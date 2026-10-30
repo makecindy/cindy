@@ -1,12 +1,23 @@
 {
   "id": "crates-search",
-  "match": ["crates.io"],
-  "description": "用 crates.io 的公开搜索 API 搜 Rust crate,返回 JSON(名称/描述等)。读接口而非扒 DOM。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://crates.io/api/v1/crates?q={{query|url}}&per_page=20" },
-    { "action": "wait", "loadState": "load" },
-    { "action": "extract", "as": "json", "extract": { "fields": { "body": "body" } } }
+  "match": [
+    "crates.io"
   ],
-  "output": "{{json}}"
+  "description": "Search the public crates.io registry by keyword",
+  "access": "read",
+  "adapter": "crates/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword (e.g. \"serde\", \"async runtime\")"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Max results (1-100)"
+    }
+  },
+  "steps": []
 }

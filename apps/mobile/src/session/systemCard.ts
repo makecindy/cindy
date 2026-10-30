@@ -34,7 +34,10 @@ export type MobileSystemCardType =
   | 'auto-resume'
   | 'learn'
   // session-agent-switch 边界卡(desktop 落库 role='agent_switch',读侧派生)。
-  | 'agent-switch';
+  | 'agent-switch'
+  // 代输入结束留痕(隐藏续接行派生)。
+  | 'input-handoff'
+  | 'mcp-app';
 export type MobileSystemCardPresentation = SystemCardPresentation;
 
 /** goal 达成记录文案(对齐桌面 GoalCompleteCard 的 goal.complete.record)。 */
@@ -102,7 +105,7 @@ export function buildMobileSystemCardData(
 ): Record<string, unknown> {
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
-  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch') return {};
+  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
   return buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
@@ -132,6 +135,8 @@ export function formatMobileSystemCard(
   if (type === 'auto-resume') return formatAutoResumeCard(data);
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);
+  // 代输入留痕由 InputHandoffRecordRow 渲染,不走通用卡片。
+  if (type === 'input-handoff' || type === 'mcp-app') return { title: '', rows: [] };
   return formatSystemCard(type, data);
 }
 
@@ -183,14 +188,18 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
   const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
   if (!hasInterruptionContext) return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
+  // 供应商组正在换电脑:错误先不呈现,只写「正在换一台电脑继续」。
+  const groupSwitchPending = data?.live === true && !!data.groupSwitchPending && typeof data.groupSwitchPending === 'object';
   const title = data?.live === true
-    ? attempt && maxAttempts
+    ? groupSwitchPending
+      ? i18n.t('message.systemCard.autoResume.groupSwitchPending')
+      : attempt && maxAttempts
       ? i18n.t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts })
       : i18n.t('message.systemCard.autoResume.pending')
     : i18n.t(`message.systemCard.autoResume.${outcome ?? 'neutral'}`);
   const subtitle = attempt && maxAttempts && sessionTotal
     ? i18n.t('message.systemCard.autoResume.details', { attempt, total: maxAttempts, count: sessionTotal }) : undefined;
-  return { title, ...(error ? { body: error } : {}), subtitle, rows: [] };
+  return { title, ...(error && !groupSwitchPending ? { body: error } : {}), subtitle, rows: [] };
 }
 
 type AgentSwitchTranslate = (key: string, options?: Record<string, unknown>) => string;
@@ -199,6 +208,7 @@ type AgentSwitchTranslate = (key: string, options?: Record<string, unknown>) => 
  * 远程 Agent:边界行带 toAgentDeviceId 键 = 这次切换把 Agent 换到了另一台电脑上运行
  * (null = 被控电脑本机),标题改说位置;引擎同时换了再以「 · 目标引擎」带上。没换电脑
  * 返回 null,调用方沿用「已从 X 切换到 Y」。名称是切换时的快照,缺名时按位置给通用说法。
+ * 用户确认为了先用那台的配额换过去的(switchReason: 'quota-rebalance')最后写明原因,与桌面一致。
  */
 export function formatAgentSwitchLocationLabel(
   data: Record<string, unknown> | undefined,
@@ -206,14 +216,17 @@ export function formatAgentSwitchLocationLabel(
 ): string | null {
   const location = readAgentSwitchLocationTarget(data);
   if (!location) return null;
-  const label = location.kind === 'named'
+  const place = location.kind === 'named'
     ? translate('message.systemCard.agentSwitchLocation', { device: location.name })
     : translate(location.kind === 'thisComputer'
       ? 'message.systemCard.agentSwitchLocationThisComputer'
       : 'message.systemCard.agentSwitchLocationOtherComputer');
   const from = mobileAgentLabelFromUnknown(data?.fromAgentKind);
   const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
-  return from === to ? label : `${label} · ${to}`;
+  const label = from === to ? place : `${place} · ${to}`;
+  return data?.switchReason === 'quota-rebalance'
+    ? `${label} · ${translate('message.systemCard.agentSwitchLocationQuotaRebalance')}`
+    : label;
 }
 
 /**
@@ -228,7 +241,8 @@ function formatAgentSwitchCard(data: Record<string, unknown> | undefined): Syste
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
+  if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
+  else if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
     title: formatAgentSwitchLocationLabel(data, (key, options) => i18n.t(key, options))
       ?? i18n.t('message.systemCard.agentSwitch', { from, to }),

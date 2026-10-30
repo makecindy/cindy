@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
@@ -22,8 +23,50 @@ beforeAll(async () => {
 const readFileChunk = vi.fn(async (_uri: string, _position: number, length: number) =>
   Buffer.alloc(length, 0x78).toString('base64'),
 );
+beforeEach(() => setMobileAuthOwner('alice'));
 
 describe('mobileAttachmentUpload', () => {
+  // Unit: late peer completion must not retain removed uploads or an invalidated owner's pixels.
+  it.each(['cancelled', 'outbox-removed', 'account-switched'] as const)('does not retain a late upload after %s', async (reason) => {
+    const abort = new AbortController();
+    let active = true;
+    const retainImage = vi.fn();
+    const off = installPeerUpload(async (_device, _uri, metadata) => {
+      if (reason === 'cancelled') abort.abort();
+      if (reason === 'outbox-removed') active = false;
+      if (reason === 'account-switched') { setMobileAuthOwner('bob'); setMobileAuthOwner('alice'); }
+      return buildPeerAttachmentRef({ ...metadata, ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' });
+    });
+    try {
+      await uploadMobileAttachmentFromFile({ name: 'photo.png', size: 4, mimeType: 'image/png' }, 'file:///source', {
+        token: 'token', deviceId: 'computer', signal: abort.signal, isActive: () => active,
+        deps: { readFileChunk, retainImage },
+      });
+      expect(retainImage).not.toHaveBeenCalled();
+    } finally { off(); }
+  });
+  // Unit regression: background outbox calls this entry without the composer's onUploaded.
+  // The immutable snapshot must be retained before it is removed on either transport.
+  it.each(['oss', 'peer'] as const)('retains the sent %s image snapshot before cleanup', async (transport) => {
+    const order: string[] = [];
+    let retained: { ref: string; uri: string } | undefined;
+    const apiFetch = vi.fn(async () => ({ putUrl: 'https://oss.example/upload', key: 'uploads/photo.png' }));
+    const off = installPeerUpload(async (_device, _uri, metadata) => transport === 'peer'
+      ? buildPeerAttachmentRef({ ...metadata, ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }) : null);
+    try {
+      const attachment = await uploadMobileAttachmentFromFile({ name: 'photo.png', size: 4, mimeType: 'image/png' }, 'file:///draft', {
+        deviceId: 'computer', token: 'token', deps: {
+          apiFetch: apiFetch as unknown as typeof apiFetchRaw,
+          readFileChunk, uploadFile: async () => ({ status: 200 }),
+          snapshotFile: async () => ({ uri: 'file:///snapshot', size: 4, cleanup: async () => { order.push('cleanup'); } }),
+          retainImage: async (ref, uri) => { retained = { ref, uri }; order.push('retain'); },
+        },
+      });
+      expect(retained).toEqual({ ref: attachment.url ?? attachment.path, uri: 'file:///snapshot' });
+      expect(order).toEqual(['retain', 'cleanup']);
+    } finally { off(); }
+  });
+
   it('uploads prepared bytes to the captured peer without presigning OSS', async () => {
     const apiFetch = vi.fn();
     const peer = vi.fn(async (_device, _uri, metadata) => buildPeerAttachmentRef({ ...metadata, ticket: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }));
@@ -236,6 +279,19 @@ describe('mobileAttachmentUpload', () => {
       'Content-Type': 'image/png',
       'x-oss-object-acl': 'private',
     }, { signal: expect.any(AbortSignal), onProgress: expect.any(Function) });
+  });
+
+  // Unit regression: real direct-chat PUT returned SignatureDoesNotMatch because the
+  // device-link uploader added an ACL header absent from the Chat Server signature.
+  // Existing native upload coverage checks only the device-link header contract.
+  it('uploads a Chat Server file without adding unsigned OSS headers', async () => {
+    const uploadFile = vi.fn(async (_url: string, _uri: string, headers: Record<string, string>) =>
+      Object.keys(headers).length === 1 && headers['Content-Type'] === 'image/png'
+        ? { status: 200 }
+        : { status: 403, body: '<Error><Code>SignatureDoesNotMatch</Code></Error>' });
+    await expect(putMobileAttachmentUploadFromFile('https://chat-upload.example/signed', 'file:///photo.png', 'image/png',
+      { uploadFile }, { signedHeaders: { 'Content-Type': 'image/png' } })).resolves.toBeUndefined();
+    expect(uploadFile).toHaveBeenCalledOnce();
   });
 
   it('returns an OSS-ref attachment after successful native file upload', async () => {

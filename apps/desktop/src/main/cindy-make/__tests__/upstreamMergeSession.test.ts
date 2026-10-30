@@ -165,6 +165,27 @@ describe('dedicated upstream merge session', () => {
       }
     },
   );
+  it('asks the resolver to keep both computers’ changes when combining with GitHub', async () => {
+    setMainLocale('zh-CN');
+    await ensureUpstreamMergeSession(
+      userData,
+      { ...state, strategy: 'combine', ref: 'github', remote: { base: 'e'.repeat(40) } },
+      { agentKind: 'codex' },
+      vi.fn(),
+      () => true,
+    );
+    expect(h.insert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: '09-20 14:07 合并两台电脑的修改' }),
+    );
+    const prompt = String(h.dispatch.mock.calls.at(-1)?.[1]);
+    expect(prompt).toContain('两边的功能都不能丢');
+    expect(prompt).toContain(state.upstreamCommit);
+    expect(prompt).toContain(state.baselineCommit!);
+    expect(prompt).toContain('e'.repeat(40));
+    for (const forbidden of ['rebase --skip', 'reset --hard', 'ours/theirs', '禁止 push'])
+      expect(prompt).toContain(forbidden);
+    expect(prompt).not.toContain('最新官方版本');
+  });
   it('reopens an existing task without changing its timestamp or dispatching the first message twice', async () => {
     h.reads.push([row], [{ id: 'first-message' }]);
     expect(

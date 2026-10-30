@@ -3,6 +3,7 @@
  * live in durableOutbox.ts / durableOutboxDelivery.ts; this module has no page ownership.
  * Recovery helpers remain for legacy direct sends and composer editing.
  */
+import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { i18n } from '@/i18n';
 import { isDurableOutboxHandedOff, type DurableOutboxRecord } from '@/session/durableOutbox';
 import type { MobileSessionReference } from '@/session/sessionReferences';
@@ -73,7 +74,7 @@ export function shouldHoldOutboxDispatchForConnection(
 export function hasActiveOutboxHandoff(
   records: readonly Pick<
     DurableOutboxRecord,
-    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'cleanupOutcome'
+    'deviceId' | 'item' | 'state' | 'error' | 'cancelRequested' | 'suspended' | 'retrySafe' | 'historyConfirmed' | 'cleanupOutcome'
   >[],
   target: { deviceId: string; sessionId: string },
   connection: MobileOutboxConnectionState,
@@ -148,6 +149,8 @@ export interface MobileOutboxItem {
   agentReferences: AgentInputReference[];
   pastedTextRanges: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges: Array<{ start: number; end: number }>;
+  /** 伙伴私聊引用回复;旧记录没有该字段。 */
+  replyQuote?: ChatReplyQuote;
   /**
    * 发送时刻的权限档快照:plan 一次性语义在点发送时就恢复会话档,dispatch 重读
    * store 拿到的已是恢复后的值,消息本身必须仍按发送时刻的档位派发。
@@ -169,6 +172,8 @@ export interface MobileOutboxItem {
   waitingIds: readonly string[];
   /** 已失败的上传任务(可经 controller.retry 重跑)。 */
   failedIds: readonly string[];
+  /** 持久发件箱:上次尝试中上传抛错的槽(只用于展示单图重传)。 */
+  failedUploadSlot?: number;
   /** enqueue RPC 失败的错误文案(附件失败时为 null,错误看 failedIds)。 */
   enqueueError: string | null;
   phase: MobileOutboxPhase;
@@ -185,6 +190,8 @@ export interface MobileOutboxThumb {
   previewRef?: string;
   /** 对应上传任务尚未落定(渲染转圈遮罩)。 */
   uploading: boolean;
+  /** 这张图上传失败:只在它上面放重传按钮,其余图与正文保持原样。 */
+  failed?: boolean;
 }
 
 /** InlineQueueSection 渲染 outbox 行所需的最小视图数据。 */
@@ -194,6 +201,7 @@ export interface MobileOutboxDisplayItem {
   quotesEncoded: boolean;
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   attachmentCount: number;
   uploadedCount: number;
   /** 图片槽缩略格(按槽序);非图片附件走 fileCount 计数行。 */
@@ -202,6 +210,10 @@ export interface MobileOutboxDisplayItem {
   fileCount: number;
   fileNames?: string[];
   failed: boolean;
+  /** 已交给电脑(发送中 / 待确认 / 电脑已接手):断线时不是「等着发」,而是在等对账。 */
+  dispatching?: boolean;
+  /** 本机写入发件箱的时刻(手机时钟),跨重启稳定,用于伙伴对话的时间分隔。 */
+  sentAt?: number;
   /** False while a first-message creation record still owns recovery of the draft. */
   canCancel?: boolean;
   /** 失败原因(附件失败给统一文案,enqueue 失败给 RPC 错误)。 */
@@ -236,8 +248,11 @@ export function buildOutboxItem(input: {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  replyQuote?: ChatReplyQuote;
   permissionModeAtSend: string;
   planModeAtSend?: boolean;
+  /** Optional source order across ready and pending slots, for external shares. */
+  attachmentOrder?: readonly number[];
   /** 发送时刻已就绪的附件(占前段槽位)。 */
   readyAttachments: readonly RemoteSerializedAttachment[];
   /** 就绪附件的本地预览 uri(与 readyAttachments 对齐;缺失传 null)。 */
@@ -268,6 +283,15 @@ export function buildOutboxItem(input: {
     if (upload.failed) failedIds.push(upload.localId);
     else waitingIds.push(upload.localId);
   }
+  if (input.attachmentOrder) {
+    const originalSlots = [...slots], originalMeta = [...slotMeta];
+    input.attachmentOrder.forEach((original, position) => {
+      slots[position] = originalSlots[original]; slotMeta[position] = originalMeta[original];
+    });
+    for (const localId of Object.keys(slotByLocalId)) {
+      slotByLocalId[localId] = input.attachmentOrder.indexOf(slotByLocalId[localId]);
+    }
+  }
   return {
     clientId: input.clientId,
     sessionId: input.sessionId,
@@ -279,6 +303,7 @@ export function buildOutboxItem(input: {
     agentReferences: input.agentReferences ?? [],
     pastedTextRanges: input.pastedTextRanges ?? [],
     slashCommandRanges: input.slashCommandRanges ?? [],
+    ...(input.replyQuote ? { replyQuote: input.replyQuote } : {}),
     permissionModeAtSend: input.permissionModeAtSend,
     ...(input.planModeAtSend !== undefined ? { planModeAtSend: input.planModeAtSend } : {}),
     attachmentSlots: slots,
@@ -455,6 +480,10 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
   const thumbnails: MobileOutboxThumb[] = [];
   let fileCount = 0;
   const fileNames: string[] = [];
+  const failedSlots = new Set(item.failedIds.map((localId) => item.slotByLocalId[localId]));
+  // 失败后没有槽在上传;只有投递记下的那个槽(上传时抛错)才标失败,入队失败等不标任何图片。
+  const failed = item.phase === 'failed';
+  if (failed && item.failedUploadSlot !== undefined) failedSlots.add(item.failedUploadSlot);
   item.attachmentSlots.forEach((slot, index) => {
     const meta = item.slotMeta[index];
     if (meta?.kind !== 'image') {
@@ -466,7 +495,8 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
       key: `${item.clientId}-slot-${index}`,
       uri: meta.previewUri,
       ossRef: slot ? (slot.url ?? slot.path) : null,
-      uploading: slot === null,
+      uploading: slot === null && !failed,
+      ...(slot === null && failedSlots.has(index) ? { failed: true } : {}),
     });
   });
   return {
@@ -475,12 +505,14 @@ export function outboxDisplayItem(item: MobileOutboxItem): MobileOutboxDisplayIt
     quotesEncoded: item.quotesEncoded,
     pastedTextRanges: item.pastedTextRanges,
     slashCommandRanges: item.slashCommandRanges,
+    ...(item.replyQuote ? { replyQuote: item.replyQuote } : {}),
     attachmentCount,
     uploadedCount,
     thumbnails,
     fileCount,
     fileNames,
     failed: item.phase === 'failed',
+    ...(item.phase === 'dispatching' ? { dispatching: true } : {}),
     errorText: item.phase !== 'failed'
       ? null
       : (item.enqueueError ?? (item.failedIds.length > 0 ? i18n.t('session.row.attachmentUploadFailed') : null)),

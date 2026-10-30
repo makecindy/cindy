@@ -27,6 +27,9 @@ const nativeSurfaceMocks = vi.hoisted(() => ({
   attribute: vi.fn(),
 }));
 
+// Native capture's focus/frame/lifecycle contract has its own injected tests.
+vi.mock('../nativeTrackpad', () => ({ installNativeTrackpad: vi.fn() }));
+
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   createRsbNativePopupSurface: nativeSurfaceMocks.create,
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
@@ -38,6 +41,9 @@ import {
   LOGIN_CAPTCHA_PARTITION,
 } from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
+import { CURRENT_APP_ID } from '../../shared/brandRegion';
+import * as appSessionState from '../appSessionState';
+import { resolveGhostMediaHandoverTarget } from '../cindy-brain/ghostMediaHandoverTargetTracker';
 import {
   BLANK_POPUP_WINDOW_WEB_PREFERENCES,
   DEFERRED_POPUP_ROUTE_TIMEOUT_MS,
@@ -52,7 +58,9 @@ import {
   authorizeGhostWebviewAttach,
   hardenLoginCaptchaSession,
   installGhostGuestNavigationHandlers,
+  installGhostMediaHandoverSource,
   installBrowserGuestHandlers,
+  installBrowserVideoReferrer,
   installDeferredPopupRouter,
   installLoginCaptchaGuestHandlers,
   isAllowedLoginCaptchaUrl,
@@ -61,6 +69,26 @@ import {
   setLoginCaptchaOriginResolver,
   setRsbPopupOpenerResolver,
 } from '../webview-security';
+
+// Unit: login return/reload sent YouTube's own URL as Referer and the real
+// embedded player returned 152-4. Exercise the request callback, not source text.
+it('retains app identity on player return without replacing website embed origins', () => {
+  const onBeforeSendHeaders = vi.fn();
+  const browserSession = { webRequest: { onBeforeSendHeaders } } as unknown as Session;
+  installBrowserVideoReferrer(browserSession);
+  installBrowserVideoReferrer(browserSession);
+  expect(onBeforeSendHeaders).toHaveBeenCalledTimes(1);
+  const [filter, request] = onBeforeSendHeaders.mock.calls[0];
+  expect(filter.urls).toEqual(['https://www.youtube.com/embed/*']);
+  for (const referrer of [undefined, 'https://www.youtube.com/embed/E5wWVwe7-6E', 'https://www.youtube.com/']) {
+    const callback = vi.fn();
+    request({ requestHeaders: { ...(referrer ? { referer: referrer } : {}), Accept: 'text/html' } }, callback);
+    expect(callback).toHaveBeenCalledWith({ requestHeaders: { Referer: `https://${CURRENT_APP_ID}/`, Accept: 'text/html' } });
+  }
+  const callback = vi.fn();
+  request({ requestHeaders: { Referer: 'https://example.org/article' } }, callback);
+  expect(callback).toHaveBeenCalledWith({ requestHeaders: { Referer: 'https://example.org/article' } });
+});
 
 describe('applyWebviewHardening', () => {
   it('locks down all webPreferences fields per Codex tY', () => {
@@ -123,8 +151,10 @@ describe('applyWebviewHardening', () => {
     expect(webPreferences.preload).toBe('/app/.vite/build/browserCommentPreload.js');
   });
 
-  it('forces partition to BROWSER_PARTITION (overrides any renderer-set value)', () => {
-    const webPreferences: Record<string, unknown> = {};
+  // Unit: Chromium selects the actual cookie store from WebPreferences, not
+  // only tag params. The old video partition must not survive browser routing.
+  it('forces the actual guest cookie store to the browser partition', () => {
+    const webPreferences: Record<string, unknown> = { partition: 'cindy-video-embed' };
     const params: Record<string, string> = {
       partition: 'persist:evil-other-session',
     };
@@ -132,6 +162,7 @@ describe('applyWebviewHardening', () => {
     applyWebviewHardening(webPreferences, params);
 
     expect(params.partition).toBe(BROWSER_PARTITION);
+    expect(webPreferences.partition).toBe(BROWSER_PARTITION);
   });
 
   it('fills BROWSER_PARTITION when renderer did not set partition at all', () => {
@@ -338,7 +369,9 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
 
     expect(authorizeGhostWebviewAttach(webPreferences, params, resolver)).toEqual({
       id: 'same-ghost',
+      instanceId: 'same-ghost',
       owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+      isCurrent: expect.any(Function),
     });
     expect(resolver).toHaveBeenCalledWith(
       'cindy-ghost-same-ghost',
@@ -350,6 +383,39 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     );
     expect(webPreferences.nodeIntegration).toBe(false);
     expect('allowpopups' in params).toBe(false);
+  });
+
+  it('retains the verified physical instance separately from the URL host', () => {
+    const resolver = vi.fn(() => ({
+      ghost: {
+        manifest: { id: 'helper' }, namespace: 'acme',
+        dir: '/plugins/_ns/acme/helper',
+      },
+      partition: 'cindy-ghost-owner:cloud:opaque-owner-a:_ns__acme__helper',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+    })) as never;
+    expect(authorizeGhostWebviewAttach({}, {
+      partition: 'cindy-ghost-_ns__acme__helper',
+      src: 'cindy-ghost://helper/panel.html',
+    }, resolver)).toEqual({
+      id: 'helper', instanceId: '_ns__acme__helper',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+      isCurrent: expect.any(Function),
+    });
+  });
+
+  it('keeps a stamped installation on its verified physical root key', () => {
+    const resolver = vi.fn(() => ({
+      ghost: { manifest: { id: 'helper' }, namespace: 'acme', dir: '/plugins/helper' },
+      partition: 'cindy-ghost-owner:cloud:opaque-owner-a:_ns__acme__helper',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+    })) as never;
+    expect(authorizeGhostWebviewAttach({}, {
+      partition: 'cindy-ghost-_ns__acme__helper', src: 'cindy-ghost://helper/panel.html',
+    }, resolver)).toEqual({
+      id: 'helper', instanceId: 'helper', owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+      isCurrent: expect.any(Function),
+    });
   });
 
   it('Main 解析或协议注册异常时不核准 attach', () => {
@@ -529,8 +595,113 @@ describe('installLoginCaptchaGuestHandlers(captcha guest 导航闸)', () => {
   });
 });
 
+describe('Ghost handover attach lifetime', () => {
+  const uri = 'cindy-ghost://helper/preview/' + 'a'.repeat(64) + '.png';
+
+  afterEach(() => vi.restoreAllMocks());
+
+  function makeSource(instanceId = '_ns__acme__helper') {
+    const host = Object.assign(new EventEmitter(), { id: 10, isDestroyed: vi.fn(() => false) });
+    const guest = Object.assign(new EventEmitter(), {
+      id: 20, isDestroyed: vi.fn(() => false),
+      executeJavaScript: vi.fn().mockResolvedValue(undefined),
+      setWindowOpenHandler: vi.fn(),
+    });
+    let current = true;
+    installGhostGuestNavigationHandlers(
+      host as unknown as WebContents, guest as unknown as WebContents, 'helper', () => true,
+      { preview: vi.fn(), external: vi.fn() }, instanceId, () => current,
+    );
+    const ready = () => {
+      guest.emit('dom-ready');
+      const script = guest.executeJavaScript.mock.lastCall?.[0] as string;
+      return JSON.parse(script.slice(script.lastIndexOf(',') + 1, -1)) as string;
+    };
+    return { host, guest, ready, expire: () => { current = false; } };
+  }
+
+  it('wires registration into the real guest handlers and retires a reloaded guest token', () => {
+    const source = makeSource();
+    const token = source.ready();
+    expect(resolveGhostMediaHandoverTarget(token, uri)).toEqual({ ghostId: 'helper', instanceId: '_ns__acme__helper' });
+    const replacement = source.ready();
+    expect(replacement).not.toBe(token);
+    expect(resolveGhostMediaHandoverTarget(token, uri)).toBeNull();
+    expect(resolveGhostMediaHandoverTarget(replacement, uri)?.instanceId).toBe('_ns__acme__helper');
+    source.guest.emit('destroyed');
+    expect(resolveGhostMediaHandoverTarget(replacement, uri)).toBeNull();
+    expect(source.host.listenerCount('destroyed')).toBe(0);
+  });
+
+  it.each(['destroyed', 'render-process-gone', 'did-navigate'])('revokes the source on guest %s', (event) => {
+    const source = makeSource();
+    const token = source.ready();
+    source.guest.emit(event, {}, 'cindy-ghost://helper/panel.html', false, true);
+    expect(resolveGhostMediaHandoverTarget(token, uri)).toBeNull();
+    source.guest.emit('destroyed');
+  });
+
+  it('does not retire a source on subframe or same-document navigation', () => {
+    const source = makeSource();
+    const token = source.ready();
+    source.guest.emit('did-start-navigation', {}, 'cindy-ghost://helper/panel.html', true, true);
+    source.guest.emit('did-start-navigation', {}, 'cindy-ghost://helper/frame.html', false, false);
+    const navigation = { preventDefault: vi.fn() };
+    source.guest.emit('will-navigate', navigation, uri);
+    expect(navigation.preventDefault).toHaveBeenCalledOnce();
+    expect(resolveGhostMediaHandoverTarget(token, uri)?.instanceId).toBe('_ns__acme__helper');
+    source.guest.emit('destroyed');
+  });
+
+  it('revokes a source when its host closes or receipt expires', () => {
+    const source = makeSource();
+    const token = source.ready();
+    source.expire();
+    expect(resolveGhostMediaHandoverTarget(token, uri)).toBeNull();
+    source.guest.emit('dom-ready');
+    expect(source.guest.executeJavaScript).toHaveBeenCalledOnce();
+    source.guest.emit('destroyed');
+    const other = makeSource('helper');
+    const rootToken = other.ready();
+    other.host.emit('destroyed');
+    expect(resolveGhostMediaHandoverTarget(rootToken, uri)).toBeNull();
+    other.guest.emit('destroyed');
+  });
+
+  it('rechecks the Main attach receipt and owner generation, including A to B to A', () => {
+    const session = vi.spyOn(appSessionState, 'getActiveAppSession').mockReturnValue({ mode: 'cloud', dataOwnerId: 'owner-a', generation: 1 });
+    const approved = {
+      ghost: { manifest: { id: 'helper', version: '1.0.0' }, dir: '/plugins/_ns/acme/helper', namespace: 'acme', approval: { state: 'approved', revision: 'receipt-a' } },
+      partition: 'cindy-ghost-owner:cloud:owner-a:_ns__acme__helper',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+    };
+    const resolver = vi.fn(() => approved);
+    const attach = authorizeGhostWebviewAttach({}, { partition: 'cindy-ghost-_ns__acme__helper', src: 'cindy-ghost://helper/panel.html' }, resolver as never);
+    expect(attach?.isCurrent()).toBe(true);
+    resolver.mockReturnValue({ ...approved, ghost: { ...approved.ghost, approval: { state: 'approved', revision: 'receipt-b' } } });
+    expect(attach?.isCurrent()).toBe(false);
+    resolver.mockReturnValue(approved);
+    session.mockReturnValue({ mode: 'cloud', dataOwnerId: 'owner-b', generation: 2 });
+    expect(attach?.isCurrent()).toBe(false);
+    session.mockReturnValue({ mode: 'cloud', dataOwnerId: 'owner-a', generation: 3 });
+    expect(attach?.isCurrent()).toBe(false);
+  });
+
+  it('revokes tokens when script injection fails', async () => {
+    const host = Object.assign(new EventEmitter(), { isDestroyed: () => false });
+    const guest = Object.assign(new EventEmitter(), { isDestroyed: () => false, executeJavaScript: vi.fn().mockRejectedValue(new Error('gone')) });
+    installGhostMediaHandoverSource(host as unknown as WebContents, guest as unknown as WebContents, { ghostId: 'helper', instanceId: 'helper' }, () => true);
+    guest.emit('dom-ready');
+    const script = guest.executeJavaScript.mock.lastCall?.[0] as string;
+    const token = JSON.parse(script.slice(script.lastIndexOf(',') + 1, -1)) as string;
+    await Promise.resolve();
+    expect(resolveGhostMediaHandoverTarget(token, uri)).toBeNull();
+    guest.emit('destroyed');
+  });
+});
+
 describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用导航链)', () => {
-  function makeHarness() {
+  function makeHarness(instanceId?: string) {
     let openHandler: (() => { action: 'deny' }) | null = null;
     const guest = new EventEmitter() as EventEmitter & {
       setWindowOpenHandler: ReturnType<typeof vi.fn>;
@@ -538,8 +709,9 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
     guest.setWindowOpenHandler = vi.fn((handler) => {
       openHandler = handler;
     });
-    const host = { id: 10 } as unknown as WebContents;
+    const host = Object.assign(new EventEmitter(), { id: 10 }) as unknown as WebContents;
     let ownerActive = true;
+    let attachCurrent = true;
     const gesture = vi.fn();
     const preview = vi.fn();
     const external = vi.fn();
@@ -549,6 +721,8 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
       'xd-sites',
       () => ownerActive,
       { gesture, preview, external },
+      instanceId,
+      () => attachCurrent,
     );
     return {
       guest,
@@ -559,9 +733,25 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
       setOwnerActive: (active: boolean) => {
         ownerActive = active;
       },
+      setAttachCurrent: (current: boolean) => { attachCurrent = current; },
       getOpenHandler: () => openHandler,
     };
   }
+
+  it('does not navigate or record a gesture after its attached instance is replaced', () => {
+    const harness = makeHarness('_ns__acme__xd-sites');
+    const url = 'https://example.invalid/control';
+    harness.guest.emit('will-navigate', { preventDefault: vi.fn() }, url);
+    expect(harness.external).toHaveBeenCalledTimes(1);
+    const isCurrent = harness.external.mock.calls[0]![4] as () => boolean;
+    expect(isCurrent()).toBe(true);
+    harness.setAttachCurrent(false);
+    expect(isCurrent()).toBe(false);
+    harness.guest.emit('will-navigate', { preventDefault: vi.fn() }, url);
+    harness.guest.emit('before-input-event', {}, { type: 'mouseDown' });
+    expect(harness.external).toHaveBeenCalledTimes(1);
+    expect(harness.gesture).not.toHaveBeenCalled();
+  });
 
   it('普通 HTTPS <a> 的 will-navigate 被拦下并带真实 host/guest 交给外链处理', () => {
     const harness = makeHarness();
@@ -576,8 +766,20 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
       harness.host,
       harness.guest,
       expect.any(Function),
+      undefined,
     );
     expect(harness.preview).not.toHaveBeenCalled();
+  });
+
+  it('carries the attached organization instance through external navigation and gestures', () => {
+    const harness = makeHarness('_ns__acme__xd-sites');
+    harness.guest.emit('will-navigate', { preventDefault: vi.fn() }, 'https://example.com/');
+    expect(harness.external).toHaveBeenCalledWith(
+      'xd-sites', 'https://example.com/', harness.host, harness.guest,
+      expect.any(Function), '_ns__acme__xd-sites',
+    );
+    harness.guest.emit('before-mouse-event', {}, { type: 'mouseDown' });
+    expect(harness.gesture).toHaveBeenCalledWith('_ns__acme__xd-sites');
   });
 
   it('预览仍走既有处理，同 Ghost 协议普通页面仍允许原位导航', () => {
@@ -592,6 +794,17 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
     expect(previewEvent.preventDefault).toHaveBeenCalledOnce();
     expect(harness.preview).toHaveBeenCalledOnce();
     expect(allowEvent.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('passes the verified instance to preview without changing the manifest URL host', () => {
+    const harness = makeHarness('_ns__xd__xd-sites');
+    const url = 'cindy-ghost://xd-sites/preview/' + 'a'.repeat(64) + '.png';
+    const event = { preventDefault: vi.fn() };
+    harness.guest.emit('will-navigate', event, url);
+    expect(harness.preview).toHaveBeenCalledExactlyOnceWith(
+      'xd-sites', url, harness.host, harness.guest, expect.any(Function), '_ns__xd__xd-sites',
+    );
+    expect(event.preventDefault).toHaveBeenCalledOnce();
   });
 
   it('HTTP/自定义协议被静默拦下，不进入外链处理', () => {
@@ -876,6 +1089,40 @@ describe('installDeferredPopupRouter', () => {
     });
     // 旧 host 不再收到 —— 它的 Shell 已退订,发它就是丢消息。
     expect(hostContents.send).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:installDeferredPopupRouter 经 host resolver 发送 popup;可观察的是 resolver
+  //   收到捕获时的 hostContents,并可据此让「弹出到独立窗口的页签」的 popup 留在那扇窗口 renderer。
+  // - Bug / 规则依据:review「弹出的浏览器页签的 window.open 被改投整栏侧栏,popup 页签无法显示、
+  //   原生 popup surface owner 校验失败」。
+  // - 现有覆盖缺口:现有用例的 resolver 不看捕获的 host。
+  // - 最小失败输入:resolver 对捕获的页签窗口 host 返回其自身,对其它 host 返回侧栏宿主。
+  it('把捕获的 hostContents 交给 host resolver,页签窗口的 popup 留在原 renderer', () => {
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    const sidebarHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    const seen: unknown[] = [];
+    setRsbPopupHostResolver((captured) => {
+      seen.push(captured);
+      return captured === hostContents ? captured : sidebarHost;
+    });
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    expect(seen).toEqual([hostContents]);
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    });
+    expect(sidebarHost.send).not.toHaveBeenCalled();
   });
 
   it('host resolver 解析失败或返回已销毁 host 时回落捕获的 hostContents', () => {

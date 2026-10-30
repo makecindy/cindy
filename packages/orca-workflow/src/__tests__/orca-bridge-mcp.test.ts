@@ -274,6 +274,54 @@ function parseToolJson(result: unknown): Record<string, unknown> {
 }
 
 describe('orca_worker_bridge MCP helpers', () => {
+  // PR #6659 discussion_r4335862026: ordinary Claude contexts also have a runtime
+  // accessor. Existing caller checks covered tool errors, not MCP exposure. Unit:
+  // the public provider must omit this server for ordinary/Lead Claude sessions,
+  // while preserving local/remote Workers and shared Codex/Pi bridge factories.
+  it.each<{
+    name: string; agentKind: AgentKind; vendorOptions?: Record<string, unknown>; enabled: boolean;
+  }>([
+    { name: 'ordinary Claude', agentKind: 'claude-code', enabled: false },
+    { name: 'Claude Lead', agentKind: 'claude-code', vendorOptions: { orcaRole: 'lead' }, enabled: false },
+    { name: 'local Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRole: 'worker' }, enabled: true },
+    { name: 'remote Claude Worker', agentKind: 'claude-code', vendorOptions: { orcaRemoteWorker: true }, enabled: true },
+    { name: 'shared Codex bridge', agentKind: 'codex', enabled: true },
+    { name: 'shared Pi bridge', agentKind: 'pi', enabled: true },
+  ])('mounts Worker tools only where needed: $name', ({ agentKind, vendorOptions, enabled }) => {
+    const { maker } = makeProvider();
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger(),
+      persistUserMessage: async () => undefined, wireSession: () => undefined,
+    });
+    const ctx: McpProviderContext = { agentKind, workingDir: '', vendorOptions };
+    if (agentKind === 'claude-code') ctx.sessionId = 'claude-session';
+    ctx.getSessionContext = () => ctx.sessionId ? ctx : undefined;
+
+    expect(provider.isEnabled?.(ctx)).toBe(enabled);
+    const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer } | null;
+    if (!enabled) expect(config).toBeNull();
+    else expect(Object.keys(config!.instance._registeredTools)).toEqual([
+      'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
+    ]);
+  });
+
+  // Live cross-device probe: an authenticated Worker with no local role could see
+  // send_to_lead but was rejected. Forward before local-link resolution, preserving
+  // local handler behavior and the four existing MCP definitions (unit tier).
+  it('forwards a remote session report before resolving a local Worker link', async () => {
+    const { maker } = makeProvider({});
+    const forward = vi.fn(async () => ({ content: [{ type: 'text' as const,
+      text: JSON.stringify({ ok: true, queued: true, lead_session_id: 'lead-on-pc' }) }], isError: false }));
+    const provider = createOrcaWorkerBridgeMcpProvider({ getMaker: () => maker as unknown as Maker,
+      logger: makeLogger(), persistUserMessage: vi.fn(), wireSession: vi.fn(), forwardRemoteWorkerTool: forward });
+    const server = getServer(provider, { agentKind: 'codex', workingDir: '/worker',
+      sessionId: 'remote-worker', mcpCallerAttested: true, mcpCallerKind: 'root' });
+    const result = await server._registeredTools.send_to_lead.handler({ worker_id: 'worker-on-pc', message: 'result' });
+    expect(parseToolJson(result)).toMatchObject({ ok: true, queued: true, lead_session_id: 'lead-on-pc' });
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect(Object.keys(server._registeredTools)).toEqual(['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status']);
+  });
+
   it('keeps the caller policy and model-only report contract concise', () => {
     expect(authorizeSendToLeadCaller({
       agentKind: 'codex',
@@ -468,7 +516,10 @@ describe('orca_worker_bridge MCP helpers', () => {
       logger,
       workerLink,
     });
+    const finishReport = vi.fn<(accepted: boolean) => Promise<void>>(async () => {});
+    const captureLocalWorkerReport = vi.fn(() => finishReport);
     const workerProvider = createOrcaWorkerBridgeMcpProvider({
+      captureLocalWorkerReport,
       dispatchInterAgentMessage,
       getMaker: () => base.maker as unknown as Maker,
       logger: logger as never,
@@ -496,6 +547,8 @@ describe('orca_worker_bridge MCP helpers', () => {
     });
     return {
       ...base,
+      finishReport,
+      captureLocalWorkerReport,
       seedExistingLeadResult: async () => {
         await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
         lead.emit({ type: 'done', data: { result: 'Existing lead result' } } as AgentEvent);
@@ -551,7 +604,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([]);
   });
 
-  it('persists the report and marks the worker done after send_to_lead succeeds', async () => {
+  it('persists the report without completing the still-running Worker', async () => {
     const lead = makeSession('lead-1');
     const { server, persisted, statusUpdates } = makeWorkerBridgeLeadHarness(lead);
     const result = await server._registeredTools.send_to_lead.handler({
@@ -568,7 +621,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       sessionId: 'lead-1',
       content: JSON.stringify({ orcaSource: 'worker', content: 'completed work' }),
     }]);
-    expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(statusUpdates).toEqual([]);
     expect(lead.sent).toHaveLength(1);
   });
 
@@ -592,11 +645,13 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(json).not.toHaveProperty('steer_fallback_reason');
     expect(lead.isTurnRunning()).toBe(true);
     expect(lead.sent).toEqual([]);
-    expect(h.statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(h.statusUpdates).toEqual([]);
     // A retained queue row can drain after the worker has received a new task.
     // Its old accepted callback must not settle that newer task again.
     await accepted?.();
-    expect(h.statusUpdates).toHaveLength(1);
+    expect(h.statusUpdates).toHaveLength(0);
+    expect(h.captureLocalWorkerReport).toHaveBeenCalledWith('worker-session-1');
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it('forwards explicit send_to_lead delivery and omits it when the worker keeps the default', async () => {
@@ -638,7 +693,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       worker_id: 'worker-1',
       lead_session_id: 'lead-1',
     });
-    expect(h.statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(h.statusUpdates).toEqual([]);
   });
 
   it('does not settle the worker report when host dispatch is rejected', async () => {
@@ -647,6 +702,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     }));
     expectToolError(await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'result' }));
     expect(h.statusUpdates).toEqual([]);
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   it('hydrates lead provider route before cold send_to_lead creates the lead session', async () => {
@@ -1112,7 +1168,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       result: 'Partial new answer',
     });
     expect(persisted).toHaveLength(1);
-    expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(statusUpdates).toEqual([]);
   });
 
   it('read_lead and lead_status stay running across claim-bearing continuation boundaries', async () => {
@@ -1460,7 +1516,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       content: '{"orcaSource":"worker","content":"Done"}',
     }]);
     expect(lead.sent).toEqual([{ type: 'user', content: '[From Orca Worker (worker_id: worker-1)]\nDone' }]);
-    expect(statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    expect(statusUpdates).toEqual([]);
     expect(wired).toEqual([]);
     expect(JSON.stringify(result)).toContain('\\"ok\\":true');
   });

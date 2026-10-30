@@ -1,6 +1,10 @@
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
+import { withNewSessionCreationRemoval } from '@/session/newSessionCreation';
 import { useHeaderHeight } from 'expo-router/react-navigation';
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSharedValue } from 'react-native-reanimated';
 import {
   ActivityIndicator,
@@ -17,6 +21,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
+import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import { unresponsiveDevicesStore, useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useGuardedPush } from '@/utils/useGuardedPush';
@@ -40,8 +45,11 @@ import {
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { isExplicitRemoteNotFoundError } from '@/session/newSessionWorktree';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
+import { useRemoteProjectAliases } from '@/session/remoteProjectAliases';
+import { resolveMobileProjectRouteTitle } from '@/session/projectAliasPresentation';
 import {
   automationGroupKey,
   buildRemoteSessionListContext,
@@ -77,6 +85,7 @@ import {
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
+import { useTeammateRoster } from '@/session/useTeammateRoster';
 import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
@@ -103,6 +112,7 @@ import {
   loadSharedSessionScheduleIndex,
 } from '@/session/scheduleIndex';
 import { shouldSuppressRemoteListEmptyState } from '@/session/sessionEmptyState';
+import { anyMayHaveBoundSchedules, countSessionsWithActiveBoundSchedules } from '@/session/archiveScheduleConfirm';
 import type { RemoteSession } from '@/session/types';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -138,6 +148,8 @@ const DeviceListCell = createDisclosureListCell();
 function DeviceDetailScreenContent() {
   const viewport = useContext(HomeListViewportContext);
   const screenFocused = useIsFocused();
+  // Task rows mark the teammate looking after them from the roster cache; keep it current here too.
+  useTeammateRoster(screenFocused);
   const screenFocusedRef = useRef(screenFocused);
   screenFocusedRef.current = screenFocused;
   const [appStateActive, setAppStateActive] = useState(AppState.currentState === 'active');
@@ -160,12 +172,13 @@ function DeviceDetailScreenContent() {
     automationWorkingDir?: string;
     automationSessionIds?: string;
     statusFilter?: string;
+    search?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
-  const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.name) ?? readRouteString(params.deviceName));
   // 从首页「查看全部 N 条对话」进来时带 workingDir + 项目名 → 仅显示该项目的会话(项目作用域)。
   const projectWorkingDir = readRouteString(params.workingDir);
-  const projectName = readRouteString(params.projectName);
+  const routeProjectName = readRouteString(params.projectName);
   // 从自动化组「查看全部 N 次运行」进来时带组键 + 任务名 → 仅显示该任务的运行(自动化任务作用域)。
   const automationScopeKey = readRouteString(params.automationGroupKey);
   const automationScopeName = readRouteString(params.automationName);
@@ -186,6 +199,7 @@ function DeviceDetailScreenContent() {
   const scheduleEventSnapshot = useRemoteScheduleEventSnapshot(deviceId);
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
   const allSessions = useRemoteSessions();
+  const projectAliases = useRemoteProjectAliases();
   // filter 必须 memo:裸 filter 每次渲染都产新数组,会让下游全部 [sessions, ...] 依赖的
   // useMemo 逐 emit 失效,派生链(索引 → sections → 全列表行)整体重建(2026-07-18
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
@@ -196,35 +210,50 @@ function DeviceDetailScreenContent() {
     () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
     [allSessions, deviceId, projectWorkingDir],
   );
+  const projectName = useMemo(() => resolveMobileProjectRouteTitle({
+    deviceId,
+    workingDir: projectWorkingDir,
+    routeTitle: routeProjectName,
+    sessions,
+    projectAliases,
+  }), [deviceId, projectAliases, projectWorkingDir, routeProjectName, sessions]);
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
     () => parseRouteStatusFilter(readRouteString(params.statusFilter)),
   );
+  const requestedListFilter = automationScopeKey ? 'all' : remoteListStatusFilter(statusFilter);
+  const listQueryScope = useMemo(() => ({ deviceId, filter: requestedListFilter }), [deviceId, requestedListFilter]);
+  const listQueryScopeRef = useRef(listQueryScope);
+  listQueryScopeRef.current = listQueryScope;
+  const [syncedListQueryScope, setSyncedListQueryScope] = useState<typeof listQueryScope | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => { setError(null); }, [listQueryScope]);
   // 熔断 open(电脑端未响应):relay 可能仍 online,可见性与 banner 文案单独入参。
   const unresponsiveDevices = useUnresponsiveDevices();
   const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  const effectiveError = resolveEffectiveConnectionError(error, deviceUnresponsive);
   const searchOrigins = useMemo(() => (deviceId ? [{
     deviceId,
     deviceName,
     reachable: !deviceUnresponsive,
   }] : []), [deviceId, deviceName, deviceUnresponsive]);
   const searchProjects = useMemo(
-    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined),
-    [deviceId, sessions],
+    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined, projectAliases),
+    [deviceId, sessions, projectAliases],
   );
   const indexedSearch = useConversationSearch({
     enabled: !automationScopeKey && !!deviceId,
     lockedWorkingDirs: projectWorkingDir ? [projectWorkingDir] : null,
     origins: searchOrigins,
     projects: searchProjects,
+    projectAliases,
   });
   const searchQuery = indexedSearch.query;
   const setSearchQuery = indexedSearch.setQuery;
@@ -263,6 +292,11 @@ function DeviceDetailScreenContent() {
   const [expandedAutomationGroups, setExpandedAutomationGroups] = useState<string[]>([]);
   const [bulkActionPending, setBulkActionPending] = useState<MobileSessionBulkAction | null>(null);
   const [bulkConfirmAction, setBulkConfirmAction] = useState<MobileSessionBulkAction | null>(null);
+  // 批量归档确认里「绑定了自动化的任务数」;按请求序号丢弃过期结果。
+  const [bulkScheduleCount, setBulkScheduleCount] = useState(0);
+  // 查询返回(成功或失败)前不允许确认归档,否则提醒还没出现任务就已归档。
+  const [bulkScheduleLoading, setBulkScheduleLoading] = useState(false);
+  const bulkScheduleRequestRef = useRef(0);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(
     () => new Map(),
@@ -295,21 +329,34 @@ function DeviceDetailScreenContent() {
 
   const syncSessions = useCallback(async () => {
     if (!deviceId) return;
+    const owner = getMobileAuthOwner();
+    const isCurrentQuery = () => listQueryScopeRef.current === listQueryScope && isMobileAuthOwnerCurrent(owner);
+    if (!isCurrentQuery()) return;
     setLoading(true);
     setError(null);
     try {
       const mutationEpoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId);
       const list = await withTransientRemoteRetry(async () => {
         await subscribe(`device:${deviceId}`, deviceId, ['sessions']);
-        return invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
+        const sessions = await invoke<RemoteSession[]>(deviceId, 'local-db:sessions:list', [
           LIST_LIMIT,
           // 自动化任务作用域页承诺展示"该任务的全部 N 次运行",归档的 run 也算,
           // 必须拉全量;其余模式仍按当前筛选拉取。
-          automationScopeKey ? 'all' : remoteListStatusFilter(statusFilter),
+          requestedListFilter,
           // 首拉 / reseed / 筛选重拉都是权威快照，不并入被控端写前查询。
           { includePinned: true, fresh: true },
         ]);
+        return readTeammateTasks({ invoke, deviceId, deviceName, scope: JSON.stringify([owner, deviceId, listQueryScope]),
+          sessions: Array.isArray(sessions) ? sessions : [], previous: remoteSessionStore.getHomeSessions(),
+          status: requestedListFilter, limit: LIST_LIMIT, current: isCurrentQuery,
+          publishInitial: rows => {
+            if (isCurrentQuery() && remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
+              remoteSessionStore.setDeviceSessions(deviceId, deviceName, rows);
+            }
+          },
+        });
       });
+      if (!isCurrentQuery()) return;
       if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(deviceId, mutationEpoch)) {
         // The existing sync runner queues one follow-up after this stale read.
         remoteSessionStore.requestReseed(deviceId);
@@ -334,12 +381,13 @@ function DeviceDetailScreenContent() {
           setScheduleIndex(new Map());
         });
       setLastSyncedAt(Date.now());
+      setSyncedListQueryScope(listQueryScope);
     } catch (err) {
-      setError(formatRemoteError(err));
+      if (isCurrentQuery()) setError(formatRemoteError(err));
     } finally {
-      setLoading(false);
+      if (isCurrentQuery()) setLoading(false);
     }
-  }, [automationScopeKey, canLoadScheduleIndex, deviceId, deviceName, invoke, maker, statusFilter, subscribe]);
+  }, [canLoadScheduleIndex, deviceId, deviceName, invoke, listQueryScope, maker, requestedListFilter, subscribe]);
   const loadSessions = useRemoteSyncTask(syncSessions);
 
   useEffect(() => {
@@ -352,7 +400,7 @@ function DeviceDetailScreenContent() {
 
   useEffect(() => {
     void loadSessions();
-  }, [loadSessions, statusFilter]);
+  }, [loadSessions, listQueryScope]);
 
   useEffect(() => {
     if (screenFocused && appStateActive && scheduleEventSnapshot.sessionIndexVersion > 0) void loadSessions();
@@ -409,6 +457,8 @@ function DeviceDetailScreenContent() {
 
   const sections = useMemo(
     () => buildRemoteSessionSections(sessions, Date.now(), {
+      projectAliases,
+      projectAliasDeviceId: deviceId,
       messagePreviewIndex,
       pendingInteractionIndex,
       scheduleIndex,
@@ -424,6 +474,8 @@ function DeviceDetailScreenContent() {
     }),
     [
       automationScopeKey,
+      deviceId,
+      projectAliases,
       i18nInstance.language,
       messagePreviewIndex,
       pendingInteractionIndex,
@@ -482,13 +534,17 @@ function DeviceDetailScreenContent() {
     () => deviceSessionEmptyState(statusFilter, searchQuery),
     [searchQuery, statusFilter, t],
   );
-  // 首同步完成前(lastSyncedAt === null)抑制"还没有对话"空状态,避免冷进(deep link)先闪空态
-  // 再跳成真列表(规则 7:不闪空白/不跳变)。同步失败时 ConnectionBanner 已有错误 + 重试入口。
+  // 当前设备和筛选同步完成前抑制空状态，旧筛选的成功不能证明新筛选为空。
+  // 同步失败时 ConnectionBanner 已有错误提示，不再同时显示 loading 或空结果。
   // 抑制期渲染 RemoteListSyncingPlaceholder(800ms 内空白,超时浮现「正在同步」),
   // 慢链路 / 连接翻覆下首同步拖长时不再是无限期纯白。
   const suppressListEmptyState = shouldSuppressRemoteListEmptyState({
-    itemCount: visibleSessionIds.length,
-    hasSyncedThisOpen: lastSyncedAt !== null,
+    // Used only by ListEmptyComponent. An automation group may be empty even
+    // when the host's unfiltered sections contain other tasks.
+    itemCount: 0,
+    hasSyncedThisOpen: syncedListQueryScope === listQueryScope,
+    loading: loading || indexedSearch.status === 'searching',
+    failed: !!effectiveError,
   });
   useEffect(() => {
     setSelectedSessionIds((prev) => {
@@ -596,9 +652,15 @@ function DeviceDetailScreenContent() {
       const failed: typeof rows = [];
       await Promise.all(rows.map(async (row) => {
         try {
-          const updated = await maker.patchSessionMeta(row.session.id, patch);
+          const updated = await withNewSessionCreationRemoval(row.session.id, deviceId, patch.status,
+            () => maker.patchSessionMeta(row.session.id, patch));
           if (updated) remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, updated);
-        } catch {
+        } catch (err) {
+          if (isExplicitRemoteNotFoundError(err) && patch.status !== undefined) {
+            remoteSessionStore.applySessionPatch(row.rowDeviceId, row.session.id, { status: 'deleted' });
+            remoteSessionStore.requestReseed(row.rowDeviceId);
+            return;
+          }
           failed.push(row);
         }
       }));
@@ -619,6 +681,14 @@ function DeviceDetailScreenContent() {
     }
   }, [bulkActionPending, deviceId, loadSessions, maker, t]);
 
+  // 确认卡打开后所选任务变了:提醒是按打开时的候选算的,关掉卡片让用户重新发起,
+  // 避免确认时归档了从未被查询过的任务。
+  useEffect(() => {
+    bulkScheduleRequestRef.current += 1;
+    setBulkScheduleLoading(false);
+    setBulkConfirmAction(null);
+  }, [selectedSessionIds]);
+
   const requestBulkAction = useCallback((action: MobileSessionBulkAction) => {
     const summary = bulkActionSummaries[action];
     if (summary.candidates.length === 0) {
@@ -635,8 +705,21 @@ function DeviceDetailScreenContent() {
       );
       return;
     }
+    const scheduleRequest = ++bulkScheduleRequestRef.current;
+    setBulkScheduleCount(0);
+    // 全部已知无绑定时不查询、不禁用确认(与单条路径同一个快路径)。
+    const needsLookup = action === 'archive' && anyMayHaveBoundSchedules(deviceId, summary.candidates);
+    setBulkScheduleLoading(needsLookup);
+    if (needsLookup) {
+      void countSessionsWithActiveBoundSchedules(deviceId, invoke, summary.candidates)
+        .then((count) => {
+          if (bulkScheduleRequestRef.current !== scheduleRequest) return;
+          setBulkScheduleCount(count);
+          setBulkScheduleLoading(false);
+        });
+    }
     setBulkConfirmAction(action);
-  }, [bulkActionSummaries, t]);
+  }, [bulkActionSummaries, deviceId, invoke, t]);
 
   const actionOverlays = (
     <>
@@ -736,7 +819,9 @@ function DeviceDetailScreenContent() {
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={
+          ListEmptyComponent={suppressListEmptyState ? (
+            effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
+          ) : (
             <MainWindowEmptyState
               centered
               copy={t('devices.detail.automationScope.emptyCopy')}
@@ -748,7 +833,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          }
+          )}
         />
         {actionOverlays}
       </SafeAreaView>
@@ -873,7 +958,7 @@ function DeviceDetailScreenContent() {
               />
             )}
             ListEmptyComponent={suppressListEmptyState ? (
-              <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
+              effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
             ) : (
               <MainWindowEmptyState
                 centered
@@ -1133,11 +1218,17 @@ function DeviceDetailScreenContent() {
               <View style={styles.bulkConfirmCard} testID="deviceDetail.bulkConfirmCard">
                 <Text style={styles.bulkConfirmTitle}>{bulkConfirmSummary.title}</Text>
                 <Text style={styles.bulkConfirmText}>{bulkConfirmSummary.description}</Text>
+                {bulkConfirmSummary.action === 'archive' && bulkScheduleCount > 0 ? (
+                  <Text style={styles.bulkConfirmText}>
+                    {t('session.menu.archiveScheduleBulkNotice', { count: bulkScheduleCount })}
+                  </Text>
+                ) : null}
                 <MainWindowActionGroup
                   primaryActions={[
                     {
                       accessibilityLabel: bulkActionAccessibilityLabel(bulkConfirmSummary.action, t),
-                      disabled: bulkActionPending !== null || bulkConfirmSummary.candidates.length === 0,
+                      disabled: bulkActionPending !== null || bulkConfirmSummary.candidates.length === 0
+                        || (bulkConfirmSummary.action === 'archive' && bulkScheduleLoading),
                       label: bulkActionPending === bulkConfirmSummary.action
                         ? bulkActionPendingLabel(bulkConfirmSummary.action, t)
                         : bulkConfirmSummary.confirmText,
@@ -1206,7 +1297,7 @@ function DeviceDetailScreenContent() {
             section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
           )}
           ListEmptyComponent={suppressListEmptyState ? (
-            <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
+            effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
           ) : (
             <MainWindowEmptyState
               centered
@@ -1310,6 +1401,7 @@ function DeviceDetailSessionRow({
       onArchive={swipe.onArchive}
       onShowOptions={swipe.onShowOptions}
       onTogglePin={swipe.onTogglePin}
+      onMarkRead={swipe.onMarkRead}
       registry={swipe.registry}
       session={item.session as RemoteSession}
       testID={`${testID}.swipe`}

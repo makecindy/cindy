@@ -38,6 +38,7 @@ import { MarketLocalSkills } from './components/MarketLocalSkills';
 import { ManageMenu, type MarketCardManageAction } from './components/MarketCard';
 import { ScanResultDialog } from './ScanResultDialog';
 import type { ScanResultPayload } from './PublishDialog';
+import { useSkillhubBrowseApi } from './SkillhubTargetContext';
 
 interface SkillhubMarketDetailViewProps {
   skill: MarketSkill | null;
@@ -73,6 +74,7 @@ export function SkillhubMarketDetailView({
   learnSkillEnabled = true,
 }: SkillhubMarketDetailViewProps) {
   const { t } = useTranslation();
+  const api = useSkillhubBrowseApi();
   const navigate = useNavigate();
   const metaResize = useMetaColumnResize();
   const { dataOwnerId } = useAuth();
@@ -116,7 +118,7 @@ export function SkillhubMarketDetailView({
     setFile(null);
     setFilesError(null);
     setSelectedPath(null);
-    void window.electronAPI.skillhub
+    void api
       .getPublishedFiles({ name: skillName, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
@@ -137,7 +139,7 @@ export function SkillhubMarketDetailView({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, skill?.catalogScope, skillName, skillVersion, t]);
+  }, [panelOpen, skill?.catalogScope, skillName, skillVersion, t, api]);
 
   useEffect(() => {
     if (!panelOpen || !skillName || !selectedPath) {
@@ -148,7 +150,7 @@ export function SkillhubMarketDetailView({
     let cancelled = false;
     // 不预清空 file:切换文件时保留旧内容直到新内容到达,避免空白帧
     setFileLoading(true);
-    void window.electronAPI.skillhub
+    void api
       .readPublishedFile({ name: skillName, path: selectedPath, version: skillVersion, catalogScope: skill?.catalogScope })
       .then((res) => {
         if (cancelled) return;
@@ -168,7 +170,7 @@ export function SkillhubMarketDetailView({
     return () => {
       cancelled = true;
     };
-  }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t]);
+  }, [panelOpen, selectedPath, skill?.catalogScope, skillName, skillVersion, t, api]);
 
   const tree = useMemo(() => buildPreviewTree(files), [files]);
   const currentScanResult = scanResultOwner && isDataOwnerGenerationCurrent(scanResultOwner) ? scanResult : null;
@@ -199,7 +201,7 @@ export function SkillhubMarketDetailView({
                         if (!isDataOwnerGenerationCurrent(owner)) return;
                         const requestId = ++scanRequestId.current;
                         const isCurrentRequest = () => requestId === scanRequestId.current && isDataOwnerGenerationCurrent(owner);
-                        void window.electronAPI.skillhub
+                        void api
                           .getScanStatus({
                             slug: skill.name,
                             version: reviewVersion,

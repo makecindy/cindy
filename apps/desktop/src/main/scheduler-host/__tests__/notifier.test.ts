@@ -17,6 +17,11 @@ vi.mock('../../device-link', () => ({
   sendMobileSessionNotify: vi.fn(() => true),
 }));
 
+const isSessionNotificationsMutedSync = vi.fn((_sessionId: string): boolean => false);
+vi.mock('../../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: (sessionId: string) => isSessionNotificationsMutedSync(sessionId),
+}));
+
 const schedule = {
   id: 'schedule-1',
   name: '每日检查',
@@ -69,6 +74,22 @@ function createNotifier(opts?: {
 describe('DesktopNotifier desktop status mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isSessionNotificationsMutedSync.mockReset().mockReturnValue(false);
+  });
+
+  it('「消息免打扰」任务只断个人提醒，共享群通知照旧', async () => {
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+    const { notifier, sendMarkdownText, publishMarkdown } = createNotifier();
+
+    await notifier.notify(
+      { ...schedule, notify: { desktop: true, feishu: true, wecomGroup: true } } as Schedule,
+      run('success'),
+    );
+
+    expect(isSessionNotificationsMutedSync).toHaveBeenCalledWith('session-1');
+    expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(publishMarkdown).toHaveBeenCalled();
   });
 
   it('maps a successful run to done', async () => {

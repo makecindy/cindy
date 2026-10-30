@@ -4,6 +4,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ modal: null as any, surface: null as any, mounts: 0 }));
+vi.mock('@/components/MobilePrimitives', () => ({ MainWindowActionButton: () => null }));
+vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), iconSize: {}, iconStroke: {}, radius: {} }));
+vi.mock('lucide-react-native', () => ({ X: () => null }));
 vi.mock('react-native', () => ({ useWindowDimensions: () => ({ width: 400, height: 800 }) }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20, left: 0, right: 0 }) }));
 vi.mock('@/session/SheetModal', () => ({ SheetModal: (props: any) => { h.modal = props; return props.children; } }));

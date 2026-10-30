@@ -1,6 +1,10 @@
 import type { IpcMainInvokeEvent, NativeImage } from 'electron';
 
-import { MAX_CLIPBOARD_PNG_BYTES } from '../shared/pngClipboard.js';
+import {
+  MAX_CLIPBOARD_PNG_BYTES,
+  MAX_CLIPBOARD_PNG_EDGE,
+  MAX_CLIPBOARD_PNG_PIXELS,
+} from '../shared/pngClipboard.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 
 /** Native clipboard dependencies keep validation testable without Electron. */
@@ -45,9 +49,9 @@ export function copyPngToClipboard(
   if (
     !width ||
     !height ||
-    width > 16_384 ||
-    height > 16_384 ||
-    width * height > 4096 ** 2 + 16_384
+    width > MAX_CLIPBOARD_PNG_EDGE ||
+    height > MAX_CLIPBOARD_PNG_EDGE ||
+    width * height > MAX_CLIPBOARD_PNG_PIXELS
   ) {
     throwIpcError('INVALID_PARAMS', 'Clipboard PNG dimensions exceed export limits');
   }

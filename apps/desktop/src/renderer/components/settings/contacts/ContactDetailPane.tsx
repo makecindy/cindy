@@ -44,7 +44,7 @@ interface Draft {
 
 const inputCls = cn(
   'rounded-lg bg-[var(--settings-input-bg)] px-2.5 text-13 outline-none',
-  'text-[var(--settings-input-text)] placeholder:text-[var(--settings-section-desc)]',
+  'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
 );
 
 // Compact actions share Button feedback while retaining the contacts palette.

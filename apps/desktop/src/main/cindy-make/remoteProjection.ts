@@ -4,10 +4,16 @@ import {
   parseCindyMakeBuildOutput,
 } from '../../shared/cindyMakeBuildDiagnostic.js';
 import type { MakeDoctorReport } from '../../shared/cindyMakeDoctor.js';
+import type { CindyMakeContributionState } from '../../shared/cindyMakeContribution.js';
 import type {
   CindyMakeCompletionMeta,
   CindyMakePersonalBuildState,
 } from '../../shared/cindyMakeSession.js';
+import type {
+  CindyMakeRemoteError,
+  CindyMakeRemoteSync,
+} from '../../shared/cindyMakePersonalRemote.js';
+import type { CindyMakeSyncState } from '../../shared/cindyMakeSync.js';
 
 export const MAKE_REMOTE_COLLECTION = 'cindy-make';
 export const makeRemoteRef = (sessionId: string) => ({
@@ -24,6 +30,19 @@ export interface MakeRemoteSnapshot {
   sharedBuild?: CindyMakePersonalBuildState;
   recoverable: boolean;
   sourceMergePending?: boolean;
+  personal?: MakeRemotePersonalSnapshot;
+}
+
+export interface MakeRemotePersonalSnapshot {
+  remote?: { sync?: CindyMakeRemoteSync; error?: CindyMakeRemoteError };
+  /** The single local Sync pipeline, projected separately from GitHub storage status. */
+  personalSync?: CindyMakeSyncState;
+  contributions?: readonly MakeRemoteContributionSnapshot[];
+}
+
+export interface MakeRemoteContributionSnapshot {
+  number: number;
+  state?: CindyMakeContributionState;
 }
 type Translate = (key: string, values?: Record<string, string>) => string;
 
@@ -214,6 +233,54 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
       source.sourceMergePending,
     );
   }
+  const personalDetails: string[] = [];
+  if (source.personal?.remote?.sync)
+    personalDetails.push(t('cindyMake.storage.status.' + source.personal.remote.sync));
+  if (source.personal?.remote?.error)
+    personalDetails.push(t('cindyMake.storage.errors.' + source.personal.remote.error));
+  const personalSync = source.personal?.personalSync;
+  if (personalSync?.running && personalSync.step)
+    personalDetails.push(t('cindyMake.sync.step.' + personalSync.step));
+  const waiting = personalSync?.waiting;
+  if (waiting) {
+    const waitingKey = waiting.abandoning
+      ? 'cindyMake.sync.waiting.abandoning'
+      : waiting.reason === 'working'
+        ? 'cindyMake.sync.waiting.working.' + waiting.kind
+        : waiting.reason === 'interrupted'
+          ? 'cindyMake.sync.waiting.interrupted.' + (waiting.sessionId ? 'task' : 'start')
+          : 'cindyMake.sync.waiting.' + waiting.reason;
+    personalDetails.push(t(waitingKey, { count: String(waiting.missing ?? 0) }));
+  }
+  const done = personalSync?.done;
+  if (done && !done.generateFirst) {
+    personalDetails.push(
+      !done.ref
+        ? t('cindyMake.sync.doneCurrent')
+        : done.ref === 'main'
+          ? t('cindyMake.sync.doneDevelopment')
+          : t('cindyMake.sync.done', { ref: done.ref }),
+    );
+  }
+  if (done?.generateFirst)
+    personalDetails.push(t('cindyMake.sync.generateFirst', { ref: done.generateFirst }));
+  if (done?.ahead) personalDetails.push(t('cindyMake.sync.ahead'));
+  if (done?.buildFirst) personalDetails.push(t('cindyMake.sync.buildFirst'));
+  if (done?.uploadAfterBuild && !done.buildFirst)
+    personalDetails.push(t('cindyMake.sync.uploadAfterBuild'));
+  if (done?.held && !done.ahead) personalDetails.push(t('cindyMake.sync.held', { ref: done.held }));
+  if (personalSync?.error) personalDetails.push(t('cindyMake.sync.errors.' + personalSync.error));
+  for (const contribution of source.personal?.contributions ?? []) {
+    personalDetails.push(
+      t('cindyMake.contribution.state.' + (contribution.state ?? 'submitted'), {
+        number: String(contribution.number),
+      }),
+    );
+  }
+  if (personalDetails.length)
+    description = [description, ...personalDetails].filter(Boolean).join('\n\n');
+  const hasWorkflow = blocked || (!source.busy && source.recoverable);
+  if (!hasWorkflow && personalDetails.length && !source.busy) title = t('cindyMake.title');
   const fallbackMarkdown = [title, description, ...details].filter(Boolean).join('\n\n');
   return {
     ref: makeRemoteRef(source.sessionId),
@@ -225,7 +292,7 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
     },
     links,
     blocks:
-      blocked || (!source.busy && source.recoverable)
+      hasWorkflow
         ? [
             {
               id: 'workflow',
@@ -234,7 +301,9 @@ export function projectMakeRemoteCard(source: MakeRemoteSnapshot, t: Translate):
               data: { input: blocked ? 'blocked' : 'available', busy },
             },
           ]
-        : [],
+        : personalDetails.length
+          ? [{ id: 'personal-status', primitive: 'markdown', fallbackMarkdown }]
+          : [],
     actions,
   };
 }

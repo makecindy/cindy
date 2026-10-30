@@ -79,7 +79,7 @@ export async function projectBotSkillMounts(root: string, skills: Iterable<BotSk
     pluginRoot: root,
     // Only the byte-bounded native prefix is sorted/retained in memory.
     skills: small.sort((a, b) => a.name.localeCompare(b.name)).map(item => ({
-      name: item.name, description: item.description, path: item.dirPath, filePath: item.filePath,
+      name: item.name, description: item.description, path: item.dirPath, filePath: item.filePath, updatedAt: item.updatedAt,
     })),
   };
 

@@ -1,3 +1,4 @@
+import { normalizeVoiceConversationPreferences, normalizeVoiceConversationSelection, normalizeSentencePlaybackOverrides, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
   DictationDictionaryLearningAction,
@@ -6,7 +7,13 @@ import type {
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
-import { coalesceDictionaryLearningActions, DICTIONARY_CANDIDATE_PROMOTION_COUNT } from '@cindy/voice-input-core';
+import {
+  coalesceDictionaryLearningActions,
+  DEFAULT_SPEAKER_GATE_STRICTNESS,
+  DICTIONARY_CANDIDATE_PROMOTION_COUNT,
+  isSpeakerGateStrictness,
+  type SpeakerGateStrictness,
+} from '@cindy/voice-input-core';
 export {
   compactVoiceInputHistoryIfNeeded,
   estimateVoiceInputHistoryContextChars,
@@ -78,6 +85,12 @@ export interface VoiceInputDictionaryCandidate {
 }
 
 export interface VoiceInputSettings {
+  /** Explicit speech selection; absent means follow the available catalog. */
+  conversationSelection?: VoiceConversationSelection | null;
+  /** Per-companion overrides; absence inherits the default without copying it. */
+  conversationSelections?: Record<string, VoiceConversationSelection | null>;
+  /** Missing entries follow the enabled default; false waits for the complete reply. */
+  conversationSentencePlayback?: Record<string, boolean>;
   language: VoiceInputLanguage;
   microphoneDeviceId: string | null;
   muteSystemAudio: boolean;
@@ -112,6 +125,18 @@ export interface VoiceInputSettings {
   composerLongPressEnabled: boolean;
   /** 用户对上面那个开关的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。 */
   composerLongPressEnabledOverride?: boolean | null;
+  /**
+   * 「识别我的声音」:听写时按本机录入的声纹静音旁人。需要先下载模型并录入声纹;
+   * 声纹缺失或模型未就绪时即使为 true 也不过滤。按设备、按账号保存,不跨设备同步。
+   */
+  speakerFilterEnabled: boolean;
+  /**
+   * 声纹过滤的灵敏度(**有效值** = 默认 + 用户 override)。阈值随验证数据会调,
+   * 未自定义的用户跟随版本默认。写请走 {@link speakerFilterStrictnessOverride}。
+   */
+  speakerFilterStrictness: SpeakerGateStrictness;
+  /** 用户对灵敏度的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。 */
+  speakerFilterStrictnessOverride?: SpeakerGateStrictness | null;
   dictionaryEntries: VoiceInputDictionaryEntry[];
   dictionaryCandidates: VoiceInputDictionaryCandidate[];
   suppressedAutomaticDictionaryTexts: string[];
@@ -137,10 +162,11 @@ export interface VoiceInputDataSnapshot {
  * 按同一规则转写成 `*Override = null`。
  */
 export type VoiceInputSettingsPatch = Partial<
-  Omit<VoiceInputSettings, 'dictionarySyncEnabled' | 'composerLongPressEnabled'>
+  Omit<VoiceInputSettings, 'dictionarySyncEnabled' | 'composerLongPressEnabled' | 'speakerFilterStrictness'>
 > & {
   dictionarySyncEnabled?: boolean | null;
   composerLongPressEnabled?: boolean | null;
+  speakerFilterStrictness?: SpeakerGateStrictness | null;
 };
 
 export type VoiceInputDictionaryLearningEvidence = Pick<
@@ -152,10 +178,10 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
 export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
 
 /**
- * 长按输入框语音输入的系统默认值。默认关闭:按住鼠标通常是在选字,只有用户主动
- * 打开才改变这个手势的含义。
+ * 长按输入框语音输入默认开启。设置页不展示开关；手动配置仍可通过
+ * composerLongPressEnabledOverride 显式关闭，删除 override 恢复默认。
  */
-export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = false;
+export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = true;
 
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
@@ -503,6 +529,8 @@ export function getDefaultVoiceInputSettings(
     // 有效值 = 默认;override 缺省不写(见 dictionarySyncEnabledOverride 注释)。
     dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED,
     composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED,
+    speakerFilterEnabled: false,
+    speakerFilterStrictness: DEFAULT_SPEAKER_GATE_STRICTNESS,
     dictionaryEntries: [],
     dictionaryCandidates: [],
     suppressedAutomaticDictionaryTexts: [],
@@ -518,12 +546,18 @@ export function normalizeVoiceInputSettings(
   const defaults = getDefaultVoiceInputSettings(platform, region);
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
+  const conversationSelections = normalizeVoiceConversationPreferences(candidate.conversationSelections);
+  const conversationSentencePlayback = normalizeSentencePlaybackOverrides(candidate.conversationSentencePlayback);
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;
   const shortcut =
     'shortcut' in candidate
       ? normalizeVoiceInputShortcut(candidate.shortcut)
       : defaults.shortcut;
   return {
+    ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
+      ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
+    ...(Object.keys(conversationSelections).length ? { conversationSelections } : {}),
+    ...(Object.keys(conversationSentencePlayback).length ? { conversationSentencePlayback } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:
       typeof candidate.microphoneDeviceId === 'string' && candidate.microphoneDeviceId.trim().length > 0
@@ -560,6 +594,11 @@ export function normalizeVoiceInputSettings(
     // 默认不同时才当作用户的显式选择,相同则视为未自定义。
     ...normalizeDictionarySyncOverride(candidate),
     ...normalizeComposerLongPressOverride(candidate),
+    speakerFilterEnabled:
+      typeof candidate.speakerFilterEnabled === 'boolean'
+        ? candidate.speakerFilterEnabled
+        : defaults.speakerFilterEnabled,
+    ...normalizeSpeakerFilterStrictnessOverride(candidate),
     dictionaryEntries: normalizeVoiceInputDictionaryEntries(
       candidate.dictionaryEntries ?? (candidate as { customDictionary?: unknown }).customDictionary,
     ),
@@ -972,6 +1011,16 @@ function normalizeComposerLongPressOverride(
     return { composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED };
   }
   return { composerLongPressEnabled: override, composerLongPressEnabledOverride: override };
+}
+
+function normalizeSpeakerFilterStrictnessOverride(
+  candidate: Partial<VoiceInputSettings>,
+): Pick<VoiceInputSettings, 'speakerFilterStrictness'> & { speakerFilterStrictnessOverride?: SpeakerGateStrictness } {
+  const override = candidate.speakerFilterStrictnessOverride;
+  if (!isSpeakerGateStrictness(override)) {
+    return { speakerFilterStrictness: DEFAULT_SPEAKER_GATE_STRICTNESS };
+  }
+  return { speakerFilterStrictness: override, speakerFilterStrictnessOverride: override };
 }
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {

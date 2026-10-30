@@ -35,7 +35,6 @@ import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
 import { initRsbBrowserBridge } from './features/right-sidebar/lib/rsbBrowserBridge';
-import { isGhostPanelWindow } from './lib/ghostPanelWindow';
 import { isSecondaryWindow } from './lib/secondaryWindow';
 import {
   installForegroundRecoveryDiagnostics,
@@ -207,7 +206,7 @@ void (async () => {
   // or unmounted sidebar UI. Only the primary and dedicated sidebar windows
   // can own RSB tabs; other full-app windows must not publish an empty pool
   // snapshot into the primary registry.
-  if (!isGhostPanelWindow() && !isSecondaryWindow()) {
+  if (!isSecondaryWindow()) {
     const disposeRsbBrowserBridge = initRsbBrowserBridge();
     import.meta.hot?.dispose(disposeRsbBrowserBridge);
   }

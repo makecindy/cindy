@@ -23,8 +23,10 @@
  */
 
 import path from 'node:path';
+import { installNativeTrackpad } from './nativeTrackpad';
 
 import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron';
+import { CURRENT_APP_ID } from '../shared/brandRegion';
 
 import {
   BROWSER_PARTITION,
@@ -32,7 +34,8 @@ import {
   LOGIN_CAPTCHA_PAGE_PATH,
   LOGIN_CAPTCHA_PARTITION,
 } from '../shared/webviewPartition';
-import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
+import { GHOST_PARTITION_PREFIX, ghostInstallApprovalToken, type GhostPanelMediaTarget } from '../shared/ghost';
+import { installedGhostStoragePart } from '../shared/pluginIdentity';
 import { getActiveAppSession, type AppSessionMode } from './appSessionState.js';
 import {
   matchesElectronInput,
@@ -47,7 +50,10 @@ import {
   resolveGhostWebviewAttach,
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
+import { ghostMediaHandoverDragScript, ghostMediaHandoverTargetTracker } from './cindy-brain/ghostMediaHandoverTargetTracker.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
+import { REMOTE_PLUGIN_SETTINGS_PARTITION } from '../shared/remotePluginSettings.js';
+import { resolveRemoteSettingsAttach } from './cindy-brain/remotePluginSettingsController.js';
 import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
@@ -105,6 +111,7 @@ export function applyWebviewHardening(
   // 也跑在我们指定的隔离 session 里(cookies / IDB / cache 单一来源)。Codex
   // 用 Tb('app') 映射拿 partition 字符串,我们用单一常量,实质等价。
   params.partition = BROWSER_PARTITION;
+  webPreferences.partition = BROWSER_PARTITION;
 
   // ── webPreferences:guest 页面的渲染环境 ────────────────────────────────────
   // 全部对齐 Codex tY(line 49849-49859):
@@ -177,7 +184,7 @@ export function authorizeGhostWebviewAttach(
   webPreferences: Record<string, unknown>,
   params: Record<string, string>,
   resolver: GhostWebviewAttachResolver = resolveGhostWebviewAttach,
-): { id: string; owner: { mode: AppSessionMode; dataOwnerId: string } } | null {
+): { id: string; instanceId: string; owner: { mode: AppSessionMode; dataOwnerId: string }; isCurrent(): boolean } | null {
   let resolved: ReturnType<GhostWebviewAttachResolver> = null;
   try {
     resolved = resolver(params.partition, params.src);
@@ -186,13 +193,38 @@ export function authorizeGhostWebviewAttach(
   }
   if (!resolved) return null;
 
+  const partitionClaim = params.partition;
+  const entryUrl = params.src;
+  const generation = getActiveAppSession().generation;
+  const instanceId = installedGhostStoragePart(resolved.ghost);
+  const approval = ghostInstallApprovalToken(resolved.ghost.approval);
+  const directory = resolved.ghost.dir;
+  const version = resolved.ghost.manifest.version;
+  const owner = resolved.owner;
+
   // Electron 在触发 will-attach-webview 前已经把 params.partition 复制进
   // webPreferences.partition，之后创建 guest 时读取的是后者。两边都必须由
   // Main 的核准结果覆盖，否则只改 attribute dict 不会改变真实 session。
   params.partition = resolved.partition;
   webPreferences.partition = resolved.partition;
   applyGhostWebviewHardening(webPreferences, params);
-  return { id: resolved.ghost.manifest.id, owner: resolved.owner };
+  return {
+    id: resolved.ghost.manifest.id,
+    instanceId,
+    owner: resolved.owner,
+    isCurrent: () => {
+      const active = getActiveAppSession();
+      if (active.generation !== generation || active.mode !== owner.mode || active.dataOwnerId !== owner.dataOwnerId) return false;
+      try {
+        const current = resolver(partitionClaim, entryUrl);
+        return current !== null && current.owner.mode === owner.mode && current.owner.dataOwnerId === owner.dataOwnerId
+          && installedGhostStoragePart(current.ghost) === instanceId && current.ghost.dir === directory
+          && current.ghost.manifest.version === version && ghostInstallApprovalToken(current.ghost.approval) === approval;
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 /**
@@ -633,9 +665,15 @@ function isRoutablePopupUrl(url: string): boolean {
  * hostContents 过时 —— 旧 renderer 的 Shell 已退订,fanOut 不缓冲,消息发过去
  * 就是丢弃。发送时刻动态解析当前 host 才能落到活着的订阅者。
  */
-let popupHostResolver: (() => WebContents | null) | null = null;
+let popupHostResolver: ((capturedHost: WebContents) => WebContents | null) | null = null;
 
-export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | null): void {
+/**
+ * 解析函数收到捕获时的 hostContents:弹出到独立窗口的页签,其 guest 就挂在那扇窗口的 renderer
+ * 上,popup 必须回到同一个 renderer(原生 popup surface 的 owner 校验也认它),解析函数据此放行。
+ */
+export function setRsbPopupHostResolver(
+  resolver: ((capturedHost: WebContents) => WebContents | null) | null,
+): void {
   popupHostResolver = resolver;
 }
 
@@ -648,7 +686,7 @@ function sendBrowserPopup(
   let current: WebContents | null = null;
   if (popupHostResolver) {
     try {
-      current = popupHostResolver();
+      current = popupHostResolver(hostContents);
     } catch {
       current = null;
     }
@@ -738,6 +776,7 @@ export function installBrowserGuestHandlers(
   hostContents: WebContents,
   guestContents: WebContents,
 ): void {
+  installNativeTrackpad(hostContents, guestContents);
   guestContents.setWindowOpenHandler((details) => {
     if (!isRoutablePopupUrl(details.url) && !isInitialBlankPopupUrl(details.url)) {
       return { action: 'deny' };
@@ -790,7 +829,7 @@ export function installBrowserGuestHandlers(
     event.preventDefault();
     let target: WebContents | null = null;
     try {
-      target = popupHostResolver?.() ?? null;
+      target = popupHostResolver?.(hostContents) ?? null;
     } catch {
       target = null;
     }
@@ -806,7 +845,14 @@ export function installBrowserGuestHandlers(
 
 interface GhostGuestNavigationHandlers {
   gesture?: typeof noteGhostUserGesture;
-  preview: typeof handleGhostPreviewNavigation;
+  preview: (
+    ghostId: string,
+    url: string,
+    hostContents: WebContents,
+    guestContents: WebContents,
+    isOwnerActive: () => boolean,
+    instanceId?: string,
+  ) => void;
   external: typeof handleGhostExternalLinkNavigation;
 }
 
@@ -834,11 +880,17 @@ export function installGhostGuestNavigationHandlers(
     preview: handleGhostPreviewNavigation,
     external: handleGhostExternalLinkNavigation,
   },
+  instanceId?: string,
+  isAttachCurrent?: () => boolean,
 ): void {
+  if (instanceId && isAttachCurrent) {
+    installGhostMediaHandoverSource(hostContents, guestContents, { ghostId, instanceId }, () => isOwnerActive() && isAttachCurrent());
+  }
   guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const isCurrent = () => isOwnerActive() && (!isAttachCurrent || isAttachCurrent());
   const noteGesture = () => {
-    if (!isOwnerActive()) return;
-    (handlers.gesture ?? noteGhostUserGesture)(ghostId);
+    if (!isCurrent()) return;
+    (handlers.gesture ?? noteGhostUserGesture)(instanceId ?? ghostId);
   };
   guestContents.on('before-mouse-event', (_event, mouse) => {
     if (mouse.type === 'mouseDown') noteGesture();
@@ -849,7 +901,7 @@ export function installGhostGuestNavigationHandlers(
   guestContents.on('will-navigate', (event, url) => {
     // owner commit 后、Renderer 卸载旧 guest 前仍可能收到导航事件。旧页
     // 不能借新 owner 的同名插件声明或授权代开外链。
-    if (!isOwnerActive()) {
+    if (!isCurrent()) {
       event.preventDefault();
       return;
     }
@@ -857,11 +909,62 @@ export function installGhostGuestNavigationHandlers(
     if (nav === 'allow') return;
     event.preventDefault();
     if (nav === 'preview') {
-      handlers.preview(ghostId, url, hostContents, guestContents, isOwnerActive);
+      handlers.preview(ghostId, url, hostContents, guestContents, isCurrent, instanceId);
     } else if (nav === 'external') {
-      handlers.external(ghostId, url, hostContents, guestContents, isOwnerActive);
+      handlers.external(ghostId, url, hostContents, guestContents, isCurrent, instanceId);
     }
   });
+}
+
+export function installGhostMediaHandoverSource(
+  hostContents: WebContents,
+  guestContents: WebContents,
+  target: GhostPanelMediaTarget & { instanceId: string },
+  isAttachCurrent: () => boolean,
+): void {
+  let sourceToken: string | null = null;
+  const revoke = () => {
+    if (sourceToken) ghostMediaHandoverTargetTracker.revoke(sourceToken);
+    sourceToken = null;
+  };
+  const isCurrent = () => !hostContents.isDestroyed() && !guestContents.isDestroyed() && isAttachCurrent();
+  guestContents.on('dom-ready', () => {
+    revoke();
+    if (!isCurrent()) return;
+    const token = ghostMediaHandoverTargetTracker.register({ ...target, isCurrent });
+    sourceToken = token;
+    void guestContents.executeJavaScript(ghostMediaHandoverDragScript(token)).catch(() => {
+      ghostMediaHandoverTargetTracker.revoke(token);
+      if (sourceToken === token) sourceToken = null;
+    });
+  });
+  guestContents.on('did-navigate', revoke);
+  guestContents.on('render-process-gone', revoke);
+  guestContents.once('destroyed', () => {
+    revoke();
+    hostContents.removeListener('destroyed', revoke);
+  });
+  hostContents.once('destroyed', revoke);
+}
+
+const browserVideoReferrers = new WeakSet<Session>();
+
+/** Login redirects/reloads can replace the app Referer with the player's own URL. */
+export function installBrowserVideoReferrer(browserSession: Session): void {
+  if (browserVideoReferrers.has(browserSession)) return;
+  // Single owner for this browser session's header listener; default-session MCP
+  // hooks are separate. Preserve a website's real embedding origin when present.
+  browserSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.youtube.com/embed/*'] }, (details, callback) => {
+    const headers = { ...details.requestHeaders };
+    const key = Object.keys(headers).find(name => name.toLowerCase() === 'referer');
+    const referrer = key ? headers[key] : undefined;
+    if (!referrer || /^https:\/\/www\.youtube\.com(?:\/|$)/i.test(referrer)) {
+      if (key) delete headers[key];
+      headers.Referer = `https://${CURRENT_APP_ID}/`;
+    }
+    callback({ requestHeaders: headers });
+  });
+  browserVideoReferrers.add(browserSession);
 }
 
 export function installWebviewHardener(): void {
@@ -871,8 +974,23 @@ export function installWebviewHardener(): void {
     // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
     let pendingCaptchaAttach = false;
+    let pendingRemoteSettings: ReturnType<typeof resolveRemoteSettingsAttach> = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
+      pendingRemoteSettings = null;
+      pendingGhostAttach = null;
+      if (typeof params.partition === 'string' && params.partition.startsWith(REMOTE_PLUGIN_SETTINGS_PARTITION)) {
+        const view = resolveRemoteSettingsAttach(contents, params.partition, params.src);
+        if (!view) { e.preventDefault(); return; }
+        params.partition = view.partition;
+        webPreferences.partition = view.partition;
+        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
+        webPreferences.experimentalFeatures = false;
+        webPreferences.navigateOnDragDrop = false;
+        delete webPreferences.enableBlinkFeatures;
+        pendingRemoteSettings = view;
+        return;
+      }
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
@@ -913,6 +1031,7 @@ export function installWebviewHardener(): void {
         pendingCaptchaAttach = true;
         return;
       }
+      installBrowserVideoReferrer(session.fromPartition(BROWSER_PARTITION));
       applyWebviewHardening(
         webPreferences as unknown as Record<string, unknown>,
         params,
@@ -922,6 +1041,12 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      if (pendingRemoteSettings) {
+        const view = pendingRemoteSettings;
+        pendingRemoteSettings = null;
+        try { view.current(); view.attach(guestContents); } catch { guestContents.close(); }
+        return;
+      }
       if (pendingCaptchaAttach) {
         pendingCaptchaAttach = false;
         // 挑战页零弹窗;顶层导航只允许停留在托管挑战页白名单内(Turnstile 的
@@ -937,6 +1062,10 @@ export function installWebviewHardener(): void {
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        installNativeTrackpad(contents, guestContents, () => {
+          if (!isGhostGuestOwnerActive(authorized.owner)) return false;
+          return authorized.isCurrent();
+        });
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);
@@ -946,6 +1075,9 @@ export function installWebviewHardener(): void {
           guestContents,
           ghostId,
           () => isGhostGuestOwnerActive(authorized.owner),
+          undefined,
+          authorized.instanceId,
+          authorized.isCurrent,
         );
         return;
       }

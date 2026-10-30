@@ -11,6 +11,9 @@ const modelSelectorI18nRef = vi.hoisted(() => ({
   resolvedLanguage: 'zh-CN',
 }));
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
@@ -647,6 +650,45 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('unified panel remote failures show retry instead of no matching models', async () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.error = 'offline';
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(SharedModelSelector, {
+        modelId: 'remote-model',
+        effort: 'medium',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+      }),
+    );
+    try {
+      const trigger = screen.getByRole('button', { name: /模型读取失败/ });
+      expect(trigger.textContent).toContain('模型读取失败');
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+      expect(screen.getByText('无法读取远程设备上的模型。请检查连接后重试。')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '重新读取模型' })).toBeTruthy();
+      expect(screen.queryByText('没有匹配的模型')).toBeNull();
+      deviceProvidersRef.prefetch.mockRejectedValueOnce(new Error('offline'));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+        await Promise.resolve();
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.error = null;
+      visibleModelsRef.models = originalModels;
+    }
+  });
+
   it('orders local provider sections by the Settings display preference', () => {
     providersRef.providers = [
       ...providersRef.DEFAULT_PROVIDERS,
@@ -1193,7 +1235,8 @@ describe('ModelSelector trigger variants', () => {
         name: /Next message: Codex · GPT-5\.5, effort: medium/,
       });
       expect(trigger.textContent).toContain('GPT-5.5');
-      expect(trigger.textContent).toContain('Next: Codex');
+      expect(trigger.textContent).toContain('Codex');
+      expect(trigger.textContent).not.toContain('Next:');
       expect(trigger.getAttribute('aria-label')).not.toContain('Current');
       // 切换失败时 intent 会保留供重试；重复渲染仍明确标成“下条消息”，不会隐藏身份。
       view.rerender(React.createElement(IntentTrigger, { refresh: 2 }));
@@ -2722,7 +2765,7 @@ describe('ModelSelector trigger variants', () => {
     expect(searchInput.hasAttribute('disabled')).toBe(true);
     expect(searchInput.className).toContain('cursor-not-allowed');
     expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled-tertiary)]');
+    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
     expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
 
     fireEvent.click(opusRow);

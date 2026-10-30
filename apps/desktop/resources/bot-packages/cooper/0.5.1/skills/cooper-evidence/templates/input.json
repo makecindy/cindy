@@ -1,0 +1,17 @@
+{
+  "stories": [
+    {
+      "url": "https://EXAMPLE.invalid/story#section",
+      "title": "合成技术更新",
+      "publishedOn": "2026-10-15",
+      "evidence": "synthetic://source-excerpt"
+    },
+    {
+      "url": "https://example.invalid/story#other",
+      "title": "同URL合成更新",
+      "publishedOn": "2026-10-15",
+      "evidence": "synthetic://source-excerpt"
+    }
+  ],
+  "seenUrls": []
+}

@@ -62,7 +62,7 @@ async function hasEquivalentFileAtBase(
  * 列出 worktree 中 Git 忽略、且 base checkout 没有同路径同内容副本的文件。
  *
  * `git status --porcelain` 与非强制 `git worktree remove` 都不会保护 ignored 文件；
- * 预创建补偿回收必须显式探测。`.xdtworktreeinclude` 从 base 复制来的未变化 `.env`
+ * 预创建补偿回收必须显式探测。worktree include 文件从 base 复制来的未变化 `.env`
  * 仍可安全回收，因为 base 中保留着逐字节等价副本；独有或已变化的 ignored 内容
  * 一律返回给调用方保留整个 worktree。Git/文件读取失败会抛出，由调用方 fail closed。
  */

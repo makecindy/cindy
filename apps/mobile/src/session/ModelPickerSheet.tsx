@@ -69,6 +69,8 @@ const SECONDARY_SLIDE_OUT_EASING = Easing.bezier(...motionEasing.in);
 const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
 
 export interface ModelPickerSheetProps {
+  /** Host-owned context, such as the plugin requesting this selection. */
+  title?: string;
   unified?: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
@@ -97,7 +99,7 @@ export interface ModelPickerSheetProps {
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
-  selectedFastMode: boolean;
+  selectedFastMode: boolean | 'ultrafast';
   loading?: boolean;
   disabled?: boolean;
   emptyHint?: string;
@@ -106,7 +108,7 @@ export interface ModelPickerSheetProps {
   onSelectProviderRow(row: ProviderModelRow): void;
   onSelectFlatModel(option: MobileModelOption): void;
   onChangeSelectedEffort?(effort: string): void;
-  onChangeSelectedFastMode?(enabled: boolean): void | Promise<void>;
+  onChangeSelectedFastMode?(enabled: boolean | 'ultrafast'): void | Promise<void>;
   modelMemory?: MobileModelMemoryAccessors;
   pricing?: MobileModelPricingMap | null;
   apiKeyStatus?: DeviceApiKeyStatus;
@@ -132,6 +134,7 @@ export function ModelPickerSheet(props: ModelPickerSheetProps) {
 }
 function LegacyModelPickerSheet({
   visible,
+  title,
   onClose,
   onClosed,
   providers,
@@ -514,7 +517,7 @@ function LegacyModelPickerSheet({
   if (Platform.OS === 'ios') {
     return (
       <ComposerSheet nativeContent visible={visible} onClose={onClose} onClosed={onClosed} backLabel={t('models.picker.backToModels')}
-        title={view.kind === 'models' ? t('models.picker.title') : secondaryTitle}
+        title={view.kind === 'models' ? title ?? t('models.picker.title') : secondaryTitle}
         onBack={view.kind === 'models' ? undefined : backToModels} testID={testID}>
         {view.kind === 'models' ? <>
           <ModelPickerNativeHeader query={query} onChangeQuery={setQuery}
@@ -547,7 +550,7 @@ function LegacyModelPickerSheet({
         scrollRef={scrollRef}
         snap={primarySnap}
         testID={testID}
-        title={t('models.picker.title')}
+        title={title ?? t('models.picker.title')}
       >
         {permissionRow}
         {noResults ? (

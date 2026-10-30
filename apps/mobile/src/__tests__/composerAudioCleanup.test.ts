@@ -62,6 +62,8 @@ function pageCleanup(page: string, recording: boolean, starting: boolean) {
     voiceStateTransitionRef: { current: "idle" },
     setVoiceState: vi.fn(),
     setComposerVoiceHoldArmed: vi.fn(),
+    voiceCaretPlacementSeqRef: { current: 0 },
+    setVoiceCaretPlacementPending: vi.fn(),
     discardPendingPrewarm,
     setAudioModeAsync,
   };
@@ -103,6 +105,8 @@ describe.each(["new.tsx", "[sessionId].tsx"])("%s audio cleanup", (page) => {
       expect(run.bindings.voiceStartupSeqRef).toEqual({ current: 2 });
       if (page === "[sessionId].tsx") {
         expect(run.bindings.setVoiceState).toHaveBeenCalledWith("idle");
+        expect(run.bindings.setVoiceCaretPlacementPending).toHaveBeenCalledWith(false);
+        expect(run.bindings.voiceCaretPlacementSeqRef).toEqual({ current: 1 });
       }
     },
   );

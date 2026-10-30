@@ -1,4 +1,7 @@
+import type { CapturedAgentRequest } from './forwardedRequest.js';
+import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestReceipt, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from '../../shared/botPeerAddress.js';
+import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
@@ -34,6 +37,11 @@ const MAX_SENDER_ID_CHARS = MAX_BOT_PEER_ADDRESS_CHARS;
 const MAX_MESSAGES_PER_THREAD = 12;
 const THREAD_IDLE_TIMEOUT_MS = 15 * 60_000;
 const LIMIT_COOLDOWN_MS = 5 * 60_000;
+
+/** Routine lanes speak as their companion, with the same per-turn tool authorization. */
+function isCompanionMessageSource(role: string | null | undefined): boolean {
+  return role === 'canonical' || role === 'routine';
+}
 
 function trustedHeaderLabel(value: string, maxChars: number): string {
   const withoutControlCharacters = Array.from(value, (character) => {
@@ -90,10 +98,10 @@ export type BotDirectMessageResult =
 /** Device transport is injected; it retains device-link's account and control gates. */
 export interface BotMessageTransport {
   selfDeviceId(): string | null;
-  verifySender(input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string }, assertCurrent: () => void): Promise<boolean>;
+  verifySender(input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string; requestSource?: ForwardedRequestSource }, assertCurrent: () => void): Promise<boolean>;
   resolve(targetId: string): Promise<{ id: string; name: string; bridgeSessionId?: string }>;
   list(): Promise<{ agents: Array<{ id: string; name: string; deviceId: string; deviceName: string }>; unavailableDevices: Array<{ deviceId: string; deviceName: string; errorCode: string }> }>;
-  send(input: { targetId: string; senderBotId: string; senderName?: string; message: string; messageId: string; bridgeSessionId?: string }, assertCurrent: () => void): Promise<BotDirectMessageResult>;
+  send(input: { targetId: string; senderBotId: string; senderName?: string; message: string; messageId: string; bridgeSessionId?: string; requestSource?: ForwardedRequestSource }, assertCurrent: () => void): Promise<BotDirectMessageResult>;
   readReceipt?(input: { targetId: string; senderBotId: string; messageId: string }, assertCurrent: () => void): Promise<{ messageId: string; accepted: true | null }>;
   readReply?(input: { targetId: string; sessionId: string; messageId: string }, assertCurrent: () => void): Promise<{
     delivered: boolean; replies: Array<{ id: string; content: string }>; truncated: boolean;
@@ -102,7 +110,10 @@ export interface BotMessageTransport {
 
 export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
+  /** Capture the accepted caller input, never model-written claims of approval. */
+  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
+    autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
     dispatcherSessionId?: string;
     message: string;
@@ -134,7 +145,8 @@ async function activeRoster(beforeReturn?: () => Promise<void>): Promise<BotRost
     .where(eq(botProfiles.status, 'active'))
     .orderBy(desc(botProfiles.updatedAt));
   await beforeReturn?.();
-  return roster;
+  // Demoted copies run on another computer, where list_agents finds them remotely.
+  return roster.filter(row => !isCompanionShadowed(row.id));
 }
 
 async function failed(
@@ -305,13 +317,13 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
   };
 
   // senderSessionId and the durable Bot link retain the source identity across
-  // restarts. A missing local link cannot prove canonical authority either.
+  // restarts. A missing local link cannot prove companion ownership either.
   const canRestoreDelivery = async (db: ReturnType<typeof getDbClient>['drizzle'], row: typeof botDirectMessages.$inferSelect): Promise<boolean> => {
     if (row.deliveryStatus === 'failed') return false;
     if (!row.senderSessionId) return !!parseBotPeerAddress(row.senderBotId); // Remote peer, not a deleted local source.
     const [link] = await db.select({ role: botSessionLinks.role }).from(botSessionLinks)
       .where(and(eq(botSessionLinks.sessionId, row.senderSessionId), eq(botSessionLinks.botId, row.senderBotId))).limit(1);
-    return link?.role === 'canonical';
+    return isCompanionMessageSource(link?.role);
   };
 
   const assertRestoredQueuedDelivery = async (sessionId: string, clientId: string): Promise<void> => {
@@ -459,14 +471,25 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     callerSessionId: string;
     targetBotId: string;
     message: string;
-  }, remoteSender?: { id: string; name: string; messageId: string }): Promise<BotDirectMessageResult> => {
+  }, remoteSender?: { id: string; name: string; messageId: string; requestSource?: ForwardedRequestSource }): Promise<BotDirectMessageResult> => {
     const ownerScope = deps.captureOwnerScope?.();
     const ownerIsCurrent = (): boolean =>
       ownerScope === undefined || !deps.isOwnerScopeCurrent || deps.isOwnerScopeCurrent(ownerScope);
-    const message = input.message.trim();
-    if (!message || message.length > MAX_MESSAGE_CHARS) {
+    const rawMessage = input.message.trim();
+    if (!rawMessage || rawMessage.length > (remoteSender ? 200_000 : MAX_MESSAGE_CHARS)) {
       return failed('INVALID_ARGS', `message 必须为 1-${MAX_MESSAGE_CHARS} 个字符`);
     }
+
+    const captured: CapturedAgentRequest = remoteSender ? { message: rawMessage,
+      autoReviewUserText: { kind: 'agent-request',
+        ...(remoteSender.requestSource ? { request: remoteSender.requestSource } : {}) } }
+      : await deps.captureRequest?.(input.callerSessionId, rawMessage)
+        ?? { message: rawMessage, autoReviewUserText: { kind: 'agent-request' } };
+    // No original words means a normal peer message, including on older peers
+    // whose optional requestSource validator requires a quotation envelope.
+    if (captured.autoReviewUserText.request?.userText === null)
+      captured.autoReviewUserText = { kind: 'agent-request' };
+    const message = captured.message;
 
     const caller = remoteSender ? {
       botId: remoteSender.id, botName: remoteSender.name, sessionSource: 'bot',
@@ -481,7 +504,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     }
     const groupAuthority = caller.role === 'group'
       ? await authorizeGroupTool(input.callerSessionId, caller.botId, 'owner-action') : null;
-    if ((!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null) {
+    if ((!groupAuthority && !isCompanionMessageSource(caller.role)) || caller.linkArchivedAt !== null) {
       return failed('NOT_CANONICAL_BOT_SESSION', 'send_to_agent 只能从伙伴主任务发送');
     }
     if (caller.botId === input.targetBotId) {
@@ -692,7 +715,6 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           `[Group source: ${trustedHeaderLabel(groupAuthority.sourceGroup?.name ?? '', MAX_SENDER_NAME_CHARS)} (${trustedHeaderLabel(groupAuthority.sourceGroup?.groupId ?? '', MAX_SENDER_ID_CHARS)}); lane: ${trustedHeaderLabel(input.callerSessionId, MAX_SENDER_ID_CHARS)}]`,
           'Replies go to the sender teammate\'s private chat with its owner. They are not delivered to the group lane. Retain this group source when replying.',
         ] : []),
-        `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call send_to_agent with target_id="${senderId}". Do not send acknowledgement-only replies.`,
         message,
       ].join('\n\n');
       const deliveryId = remoteSender?.messageId ?? createId();
@@ -828,7 +850,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         // running tools. Transport writes are never automatically replayed.
         try {
           const result = await deps.transport!.send({ targetId: input.targetBotId,
-            senderBotId: caller.botId, senderName: caller.botName, message, messageId: deliveryId, bridgeSessionId }, () => {
+            senderBotId: caller.botId, senderName: caller.botName, message, messageId: deliveryId, bridgeSessionId, requestSource: captured.autoReviewUserText.request }, () => {
             if (!ownerIsCurrent()) throw new Error('[OWNER_CHANGED] Account changed');
           });
           if (!result.ok && result.errorCode !== 'DELIVERY_UNKNOWN') {
@@ -852,7 +874,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       {
         try {
           dispatched = await deps.dispatch({
-            targetSessionId: targetSessionId!, message: envelope,
+            targetSessionId: targetSessionId!, message: envelope, autoReviewUserText: captured.autoReviewUserText,
             ...(groupAuthority ? { dispatcherSessionId: input.callerSessionId } : {}),
             // Group routing details belong only to the agent wire. Shared
             // history and queue projections can expose the persisted body.
@@ -898,7 +920,9 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       throw error;
     }
   };
-  const receiveRemote = async (input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string }) => {
+  const receiveRemote = async (input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string; requestSource?: ForwardedRequestSource }) => {
+    if (input.requestSource !== undefined && (!readForwardedRequestSource(input.requestSource)
+      || !matchesForwardedRequest(input.requestSource, input.message))) return failed('INVALID_ARGS', 'Request source does not match the forwarded body');
     if (!deps.transport) return failed('HOST_NOT_READY', 'Device messaging is not ready');
     const scope = deps.captureOwnerScope?.();
     const assertCurrent = () => {
@@ -913,7 +937,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       if (!await deps.transport.verifySender(input, assertCurrent)) return failed('PERMISSION_DENIED', 'Sender has no matching canonical message reservation');
       assertCurrent();
       return sendMessage({ callerSessionId: '', targetBotId: input.targetBotId, message: input.message },
-        { id: senderId, name: sender.name, messageId: input.messageId });
+        { id: senderId, name: sender.name, messageId: input.messageId, requestSource: readForwardedRequestSource(input.requestSource) ?? undefined });
     } catch (error) { return transportFailure(error); }
   };
   // One in-flight discovery per current owner, shared by all local teammate sessions.
@@ -924,7 +948,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     const caller = await loadCaller(callerSessionId);
     const groupAuthority = caller?.role === 'group'
       ? await authorizeGroupTool(callerSessionId, caller.botId, 'owner-action') : null;
-    if (!caller || (!groupAuthority && caller.role !== 'canonical') || caller.linkArchivedAt !== null
+    if (!caller || (!groupAuthority && !isCompanionMessageSource(caller.role)) || caller.linkArchivedAt !== null
       || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active canonical teammate is required' };
     }
@@ -958,7 +982,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     return { ok: true as const, agents: [...local.map(row => ({ ...row, local: true })),
       ...remote.agents.map(row => ({ ...row, local: false }))], unavailableDevices: remote.unavailableDevices, ...(discoveryError ? { discoveryError } : {}) };
   };
-  const verifyRemoteMessage = async (input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string }): Promise<boolean> => {
+  const verifyRemoteMessage = async (input: { controllerDeviceId: string; senderBotId: string; targetBotId: string; messageId: string; message: string; requestSource?: ForwardedRequestSource }): Promise<boolean> => {
     const scope = deps.captureOwnerScope?.();
     const [row] = await getDbClient().drizzle.select().from(botDirectMessages)
       .where(eq(botDirectMessages.id, input.messageId)).limit(1);
@@ -966,7 +990,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       || row.content !== input.message.trim() || row.deliveryStatus === 'failed' || !row.senderSessionId) return false;
     const caller = await loadCaller(row.senderSessionId);
     if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope)) return false;
-    return !!caller && caller.botId === input.senderBotId && caller.role === 'canonical' && caller.linkArchivedAt === null
+    return !!caller && caller.botId === input.senderBotId && isCompanionMessageSource(caller.role) && caller.linkArchivedAt === null
       && caller.sessionSource === 'bot' && caller.sessionStatus === 'active' && caller.botStatus === 'active';
   };
   /** Read only the receipt belonging to the authenticated source device and exact pair. */
@@ -995,7 +1019,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const caller = await loadCaller(input.callerSessionId);
       if (
         !caller ||
-        caller.role !== 'canonical' ||
+        !isCompanionMessageSource(caller.role) ||
         caller.linkArchivedAt !== null ||
         caller.sessionSource !== 'bot' ||
         caller.sessionStatus !== 'active' ||
@@ -1025,7 +1049,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           await withPairLock(pairKey, async () => {
             const currentCaller = await loadCaller(input.callerSessionId);
             assertCurrent();
-            if (!currentCaller || currentCaller.botId !== caller.botId || currentCaller.role !== 'canonical'
+            if (!currentCaller || currentCaller.botId !== caller.botId || !isCompanionMessageSource(currentCaller.role)
               || currentCaller.linkArchivedAt !== null || currentCaller.sessionStatus !== 'active' || currentCaller.botStatus !== 'active')
               throw Object.assign(new Error('Caller inactive'), { code: 'OWNER_CHANGED' });
             const [row] = await db.select().from(botDirectMessages).where(eq(botDirectMessages.id, sent.id)).limit(1);
@@ -1057,7 +1081,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           if (
             !currentCaller ||
             currentCaller.botId !== caller.botId ||
-            currentCaller.role !== 'canonical' ||
+            !isCompanionMessageSource(currentCaller.role) ||
             currentCaller.linkArchivedAt !== null ||
             currentCaller.sessionStatus !== 'active' ||
             currentCaller.botStatus !== 'active'

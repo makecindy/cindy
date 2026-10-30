@@ -27,15 +27,35 @@ export function parseSavedUpstreamMerge(raw: string, userData: string): SavedUps
     typeof state.upstreamCommit !== 'string' ||
     (state.upstreamCommit !== '' && !/^[0-9a-f]{40}$/i.test(state.upstreamCommit)) ||
     (state.baselineTree !== undefined && !/^[0-9a-f]{40,64}$/i.test(state.baselineTree)) ||
-    (state.strategy !== undefined && state.strategy !== 'rebase') ||
+    (state.strategy !== undefined && state.strategy !== 'rebase' && state.strategy !== 'combine') ||
+    (state.strategy === 'combine' && !state.remote) ||
     (state.rebaseBase !== undefined && !/^[0-9a-f]{40}$/i.test(state.rebaseBase)) ||
     (state.rebaseReview !== undefined && typeof state.rebaseReview !== 'boolean') ||
+    (state.needsInput !== undefined && typeof state.needsInput !== 'boolean') ||
+    (state.reminded !== undefined && typeof state.reminded !== 'boolean') ||
+    (state.missing !== undefined &&
+      (!state.missing ||
+        !Number.isSafeInteger(state.missing.count) ||
+        state.missing.count < 1 ||
+        !Array.isArray(state.missing.commits) ||
+        state.missing.commits.length > 50 ||
+        state.missing.commits.length > state.missing.count ||
+        !state.missing.commits.every((commit) => /^[0-9a-f]{40}$/i.test(commit)) ||
+        (state.missing.result !== undefined && !/^[0-9a-f]{40}$/i.test(state.missing.result)))) ||
     (state.cancellationRequested !== undefined &&
       typeof state.cancellationRequested !== 'boolean') ||
     (state.cleanupPending !== undefined && typeof state.cleanupPending !== 'boolean') ||
     (state.taskOwned !== undefined &&
       (typeof state.taskOwned !== 'boolean' || (state.taskOwned && !saved.sessionOwner))) ||
     (state.feature !== undefined && (!validFeaturePlan(state.feature) || !saved.sessionOwner)) ||
+    (state.remote !== undefined &&
+      (!state.remote ||
+        typeof state.remote.base !== 'string' ||
+        !/^[0-9a-f]{40}$/i.test(state.remote.base) ||
+        (state.remote.commit !== undefined &&
+          (typeof state.remote.commit !== 'string' ||
+            !/^[0-9a-f]{40}$/i.test(state.remote.commit))) ||
+        state.feature !== undefined)) ||
     (state.tree !== undefined && !/^[0-9a-f]{40,64}$/i.test(state.tree)) ||
     (state.baselineCommit !== undefined && !/^[0-9a-f]{40}$/i.test(state.baselineCommit)) ||
     (state.sessionId !== undefined &&
@@ -68,6 +88,22 @@ function validFeaturePlan(feature: MakeFeatureMergePlan): boolean {
     feature.nextStep <= (feature.mergeCommit ? 1 : feature.steps.length)
   );
 }
+/**
+ * A retained candidate whose resolver task is not there: it never opened, failed to
+ * open, or was removed. Sync opens (or reopens) it, keeping the candidate's work.
+ */
+export function resumable(state: CindyMakeMergeState): boolean {
+  return (
+    !state.feature &&
+    !state.ownedByAnotherAccount &&
+    !state.cancellationRequested &&
+    !!state.hasWorkspace &&
+    ((!state.sessionId &&
+      (state.status === 'conflict' || (state.status === 'failed' && state.error === 'startFailed'))) ||
+      (state.status === 'failed' && state.error === 'unavailable'))
+  );
+}
+
 export interface UpstreamMergeDependencies {
   read: () => SavedUpstreamMerge | undefined;
   write: (saved: SavedUpstreamMerge) => void;
@@ -85,6 +121,8 @@ export interface UpstreamMergeDependencies {
     state: CindyMakeMergeState,
     isCurrent: () => boolean,
     publish?: (state: CindyMakeMergeState) => Promise<void>,
+    /** The user chose to use a result that does not carry every change. */
+    options?: { acceptMissing?: boolean },
   ) => Promise<CindyMakeMergeState>;
   prepareFeature?: (
     state: CindyMakeMergeState,
@@ -93,6 +131,12 @@ export interface UpstreamMergeDependencies {
     isCurrent: () => boolean,
   ) => Promise<CindyMakeMergeState>;
   applied?: (state: CindyMakeMergeState, isCurrent: () => boolean) => Promise<void>;
+  /** Combine the fork's personal version with this computer's (see `preparePersonalCombine`). */
+  prepareCombine?: (
+    state: CindyMakeMergeState,
+    publish: (state: CindyMakeMergeState) => Promise<void>,
+    isCurrent: () => boolean,
+  ) => Promise<CindyMakeMergeState>;
   session: (
     state: CindyMakeMergeState,
     options: CindyMakeTaskOptions | undefined,
@@ -100,6 +144,8 @@ export interface UpstreamMergeDependencies {
     isCurrent: () => boolean,
   ) => Promise<string>;
   running: (sessionId: string) => boolean;
+  /** Ask the resolver, in its own task, to put the changes the result lost back. */
+  remind?: (state: CindyMakeMergeState, isCurrent: () => boolean) => Promise<void>;
   /** Wait between terminal observation and the provider's idle state. */
   sleep?: (milliseconds: number) => Promise<void>;
   refresh: () => Promise<void>;
@@ -233,6 +279,16 @@ export class UpstreamMergeController {
     );
   }
   private save(state: CindyMakeMergeState): void {
+    // A finished combine is stored like an official update: older clients reject
+    // `combine`, and nothing of it remains to resume.
+    if (
+      state.strategy === 'combine' &&
+      (state.status === 'merged' || state.status === 'cancelled') &&
+      !state.hasWorkspace &&
+      !state.cleanupPending &&
+      !state.cancellationRequested
+    )
+      state = { ...state, strategy: 'rebase' };
     // In-flight Git/session callbacks cannot erase a persisted Stop decision.
     if (
       this.saved?.state.id === state.id &&
@@ -256,11 +312,14 @@ export class UpstreamMergeController {
     const state = this.saved?.state;
     if (!state) return;
     const code = (error as { code?: string })?.code;
+    // A failure says what is missing now, never an older list.
+    const missing = (error as { missing?: CindyMakeMergeState['missing'] })?.missing;
     this.save({
       ...state,
       status: 'failed',
       hasWorkspace: this.deps.hasWorkspace(state),
       error: errors.has(code ?? '') ? (code as CindyMakeMergeState['error']) : 'gitFailed',
+      missing,
     });
   }
   private async acceptResult(result: CindyMakeMergeState, isCurrent: () => boolean): Promise<void> {
@@ -336,6 +395,12 @@ export class UpstreamMergeController {
   async update(
     options?: CindyMakeTaskOptions,
     signal?: AbortSignal,
+    /**
+     * `target` pins the official version the caller already chose; `autoResolve`
+     * opens the resolution task on conflict without another decision (the user's
+     * Sync is that decision). Task-owned updates always resolve automatically.
+     */
+    extra: { target?: { ref: string; commit: string }; autoResolve?: boolean } = {},
   ): Promise<CindyMakeMergeState | undefined> {
     signal?.throwIfAborted();
     await this.finishPreviousCleanup();
@@ -382,7 +447,8 @@ export class UpstreamMergeController {
             status: 'fetching',
             ref: '',
             upstreamCommit: '',
-            ...(signal ? { taskOwned: true } : {}),
+            // Sync and task preparation own their candidate: either may abandon it.
+            ...(signal || (extra.autoResolve && owner) ? { taskOwned: true } : {}),
           },
         };
         this.save(this.saved.state);
@@ -390,7 +456,7 @@ export class UpstreamMergeController {
         signal?.addEventListener('abort', markCancelled, { once: true });
         markCancelled();
         signal?.throwIfAborted();
-        const latest = await this.deps.latest();
+        const latest = extra.target ?? (await this.deps.latest());
         signal?.throwIfAborted();
         if (signal && this.deps.owner() !== owner) throw mergeError('busy');
         this.save({ ...this.saved!.state, ref: latest.ref, upstreamCommit: latest.commit });
@@ -401,19 +467,18 @@ export class UpstreamMergeController {
           () => !signal || this.deps.owner() === owner,
         );
         this.save(result);
-        // Task preparation authorizes its existing dedicated conflict task.
-        // Manual Settings updates still wait for the explicit resolve decision.
+        // Task preparation and Sync authorize their dedicated conflict task.
         if (
-          signal &&
-          !signal.aborted &&
+          (signal || extra.autoResolve) &&
+          !signal?.aborted &&
           this.deps.owner() === owner &&
           result.status === 'conflict'
         )
           await this.createResolutionTask(options, owner, signal);
         await this.deps.refresh().catch(() => undefined);
       });
-      if (signal && !operationId) {
-        signal.throwIfAborted();
+      if ((signal || extra.autoResolve) && !operationId) {
+        signal?.throwIfAborted();
         throw mergeError('busy');
       }
       return result;
@@ -640,6 +705,144 @@ export class UpstreamMergeController {
       signal?.removeEventListener('abort', markCancelled);
     }
   }
+  /**
+   * Combine the GitHub version `remote.commit` with this computer's personal
+   * version. A conflict opens its resolution task when `autoResolve` (Sync);
+   * otherwise it waits for the explicit resolve decision.
+   */
+  async combine(
+    remote: { commit: string; base: string },
+    options?: CindyMakeTaskOptions,
+    autoResolve = false,
+  ): Promise<CindyMakeMergeState | undefined> {
+    const hash = /^[0-9a-f]{40}$/i;
+    if (!hash.test(remote.commit) || !hash.test(remote.base) || !this.deps.prepareCombine)
+      throw mergeError('unavailable');
+    await this.finishPreviousCleanup();
+    const owner = this.deps.owner();
+    if (
+      !owner ||
+      this.active ||
+      this.saved?.state.cancellationRequested ||
+      (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
+    )
+      throw mergeError('busy');
+    let started = false;
+    const result = await this.run(async () => {
+      if (
+        this.deps.owner() !== owner ||
+        this.saved?.state.cancellationRequested ||
+        (this.saved?.state.hasWorkspace && this.saved.state.status !== 'merged')
+      )
+        return;
+      this.saved = {
+        sessionOwner: owner,
+        state: {
+          id: randomUUID(),
+          status: 'merging',
+          ref: 'github',
+          upstreamCommit: remote.commit,
+          remote: { base: remote.base, commit: remote.commit },
+          ...(autoResolve ? { taskOwned: true } : {}),
+        },
+      };
+      this.save(this.saved.state);
+      started = true;
+      const result = await this.deps.prepareCombine!(
+        this.saved.state,
+        async (next) => this.save(next),
+        () => this.deps.owner() === owner,
+      );
+      this.save(result);
+      if (autoResolve && result.status === 'conflict' && this.deps.owner() === owner)
+        await this.createResolutionTask(options, owner);
+      await this.deps.refresh().catch(() => undefined);
+    });
+    if (!started) throw mergeError('busy');
+    return result;
+  }
+  /**
+   * Give up a source operation that waits for its conflict (Sync's Abandon): stop its
+   * resolver and discard the candidate. Nothing is adopted; both versions stay as they were.
+   */
+  async abandon(operationId: string): Promise<CindyMakeMergeState | undefined> {
+    const state = this.saved?.state;
+    const owner = this.deps.owner();
+    // While its result is being checked or adopted, Abandon could no longer promise that
+    // nothing changes; it waits until that settles.
+    if (
+      !state ||
+      state.id !== operationId ||
+      state.feature ||
+      state.status === 'merged' ||
+      state.status === 'cancelled' ||
+      state.status === 'checking' ||
+      this.active ||
+      (this.saved?.sessionOwner && this.saved.sessionOwner !== owner)
+    )
+      throw mergeError('busy');
+    if (!state.sessionId && !state.cancellationRequested && !state.taskOwned)
+      return this.cancel(operationId);
+    // Stopping a resolver needs the owning account; never persist a half-owned state.
+    if (!owner || this.saved?.sessionOwner !== owner) throw mergeError('busy');
+    if (!state.taskOwned) this.save({ ...state, taskOwned: true });
+    return this.cancelBuild(operationId);
+  }
+  /**
+   * Sync finishes a retained source operation before anything else: an Abandon that
+   * could not finish is completed, a conflict without a task gets its resolver. A
+   * candidate interrupted before its rebase ran waits for Abandon instead of an Agent
+   * that cannot act; everything else is returned as it is for Sync to show.
+   */
+  async resumeForSync(options?: CindyMakeTaskOptions): Promise<CindyMakeMergeState | undefined> {
+    const state = this.status();
+    if (!state || state.feature || state.ownedByAnotherAccount) return state;
+    if (state.cancellationRequested)
+      return state.taskOwned ? this.cancelBuild(state.id) : this.cancel(state.id);
+    if (resumable(state)) return this.resolve(options, state.id);
+    return state;
+  }
+  /**
+   * The user chose to use a checked result although some of their changes are not in
+   * it (Sync's "use it anyway"). Both original versions stay in backup refs.
+   */
+  async acceptMissing(operationId: string): Promise<CindyMakeMergeState | undefined> {
+    const state = this.saved?.state;
+    const owner = this.deps.owner();
+    if (
+      this.active ||
+      !owner ||
+      !state ||
+      state.id !== operationId ||
+      state.feature ||
+      state.status !== 'failed' ||
+      state.error !== 'checksFailed' ||
+      !state.missing ||
+      !state.sessionId ||
+      !state.hasWorkspace ||
+      state.cancellationRequested ||
+      this.saved?.sessionOwner !== owner ||
+      this.deps.running(state.sessionId)
+    )
+      throw mergeError('busy');
+    const sessionId = state.sessionId;
+    return this.run(async () => {
+      const isCurrent = () =>
+        this.saved?.state.id === operationId &&
+        !this.saved.state.cancellationRequested &&
+        this.saved.sessionOwner === owner &&
+        this.deps.owner() === owner &&
+        !this.deps.running(sessionId);
+      if (!isCurrent()) throw mergeError('busy');
+      this.interruption = undefined;
+      this.save({ ...state, status: 'checking', error: undefined });
+      const result = await this.deps.apply(state, isCurrent, async (next) => this.save(next), {
+        acceptMissing: true,
+      });
+      await this.acceptResult(result, isCurrent);
+      await this.deps.refresh().catch(() => undefined);
+    });
+  }
   private async createResolutionTask(
     options: CindyMakeTaskOptions | undefined,
     owner: string,
@@ -730,9 +933,17 @@ export class UpstreamMergeController {
             this.deps.owner() === owner &&
             !this.deps.running(sessionId)
           : isCurrent();
-      const result = await this.deps.apply(state, canFinishAdoption, async (next) =>
-        this.save(next),
-      );
+      let result: CindyMakeMergeState;
+      try {
+        result = await this.deps.apply(state, canFinishAdoption, async (next) => this.save(next));
+      } catch (error) {
+        const missing = (error as { missing?: CindyMakeMergeState['missing'] })?.missing;
+        // The result lost changes: the resolver is asked once, in its task, to put them back.
+        if (!missing || state.reminded || !this.deps.remind || !isCurrent()) throw error;
+        this.save({ ...state, status: 'resolving', missing, reminded: true, error: undefined });
+        await this.deps.remind(this.saved!.state, isCurrent);
+        return;
+      }
       await this.acceptResult(result, canFinishAdoption);
       if (result.feature && result.status === 'conflict' && isCurrent()) {
         // Unresolved files from this turn are not a new conflict. Stop waiting
@@ -797,8 +1008,19 @@ export class UpstreamMergeController {
       accepted = true;
       this.acceptedTurn += 1;
       this.interruption = undefined;
-      if (state.status === 'failed' && state.error === 'interrupted')
-        this.save({ ...state, status: 'resolving', error: undefined });
+      // The user answered the resolver, or continued it after an interruption or a failed check.
+      if (
+        (state.status === 'failed' && state.error === 'interrupted') ||
+        state.needsInput ||
+        (state.status === 'failed' && state.missing)
+      )
+        this.save({
+          ...state,
+          status: 'resolving',
+          error: undefined,
+          needsInput: undefined,
+          missing: undefined,
+        });
     };
   }
 }

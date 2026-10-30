@@ -16,8 +16,8 @@
 // base.sha 与 head.sha 作为范围。
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { isSignOffHookInstalled } from './install-dco-hook.mjs';
 
@@ -336,7 +336,8 @@ function main() {
 }
 
 // 仅作为入口执行时运行；被 import 时只导出纯函数，便于单测。
-const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isDirectRun =
+  process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectRun) {
   try {
     main();

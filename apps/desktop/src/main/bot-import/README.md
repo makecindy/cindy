@@ -427,6 +427,83 @@ runtime interpreter parses the selected script without executing business action
 This checks availability and syntax, not a full business execution; scripts with
 external data still require actual read evidence.
 
+## Messaging bots move to the teammate (`companion-import-bots-v1`)
+
+Controllers that advertise `companion-import-bots-v1` (the local renderer and
+`import_agent` always do; Mobile sends it) get a separate `bots` category:
+`inspectImportSource(..., { bots: true })` emits one entry per bot with `platform`, the most
+human name available and, when evident, `owner`. Hermes covers Telegram, Discord, Feishu /
+Lark, WeCom and DingTalk (env first, then `platforms.<name>.extra`); OpenClaw covers
+Telegram, Discord and Feishu with OpenClaw's own account inheritance, and lists a bot only
+for the agent its account routes to (a channel-wide binding, else the default agent). A bot
+that other agents also route through is listed unselected. OpenClaw WeCom / DingTalk are
+external plugins without a known config shape and are not read. A platform the source has
+disabled is listed unselected and shown as already off.
+
+Owners: Telegram uses the single allowed user, else the allowed user that is the home
+channel, else the only admin who is also allowed; Discord the single allowed user; Feishu
+the single `ou_` admin (Hermes) or the single `feishu:` owner / allowFrom entry (OpenClaw);
+WeCom / DingTalk only a single explicit allowed user. Two to five Telegram / Discord
+candidates become exclusive per-owner alternatives with none preselected; none or more than
+five gives one entry with `IMPORT_IM_BOT_OWNER_MISSING`.
+
+`botTakeover.ts` runs the handover from the transfer's connections pass, after the teammate
+exists and the environment is saved. It persists `receipt.bots[entryId]` (`stopping` →
+`stopped` → `connected`, the original switch value, whether it was live, whether it
+restarted) before and after each native mutation, mirroring the automation `phase`:
+
+1. An existing connection for the same platform identity on this teammate completes the
+   entry; one on another teammate returns `IMPORT_IM_BOT_IN_USE`.
+2. A fresh attempt first runs `assertBotImConnectionAddable`, so nothing is stopped for a
+   teammate that could not take the bot.
+3. The switch is turned off with the source's own command (Hermes
+   `config set platforms.<name>.enabled false`; OpenClaw `config patch --stdin` on the
+   account or channel `enabled`) and re-read; an unconfirmed change returns
+   `IMPORT_IM_BOT_SOURCE_STOP_UNCONFIRMED` without connecting.
+4. A live Hermes bot (`gateway_state.json`, including the host's `<profile>:<platform>`
+   entry, with a running writer) gets `gateway restart`, never for a parked profile (a
+   restart would unpark it); then `gateway_state.json` is polled about every 2 s for up to
+   120 s. A bot that is still live keeps the switch off and returns
+   `IMPORT_IM_BOT_SOURCE_STOP_UNCONFIRMED`. OpenClaw relies on hot reload with a 3 s settle.
+5. The connection is added through `addBotImConnection` (owner carried for Feishu / WeCom /
+   DingTalk, the 5 s Telegram conflict window). If it fails, the original switch is restored
+   (unset when it was absent) and a restarted gateway is restarted again.
+
+Background reconciliation resumes an interrupted takeover but never retries a reported
+outcome; an explicit retry resumes from the saved record. A missing CLI returns
+`SOURCE_COMMAND_UNAVAILABLE`. Commands never carry credentials. Deleting the teammate does
+not re-enable bots in the source.
+
+## Telegram and Discord bots become the teammate's own connections (legacy controllers)
+
+`sources.ts` reads Telegram tokens (`channels.telegram[.accounts.<id>].botToken` or
+`tokenFile`; Hermes `TELEGRAM_BOT_TOKEN`) and Discord tokens (`channels.discord[.accounts.<id>].token`,
+a plain string or an env SecretRef; `DISCORD_BOT_TOKEN` for the default account; Hermes
+`DISCORD_BOT_TOKEN`). Token values keep `${NAME}` references until selection, like every
+other credential. The owner ID comes from one explicit user ID only:
+
+- OpenClaw: `commands.ownerAllowFrom` entries `telegram:<id>` / `discord:<id>`, otherwise the
+  account's effective `allowFrom` (a named account without its own list inherits
+  `channels.<channel>.allowFrom`; Discord also reads the legacy `dm.allowFrom`). The
+  `telegram:` / `tg:` and `discord:` / `user:` prefixes are stripped.
+- Hermes: `TELEGRAM_ALLOWED_USERS` / `DISCORD_ALLOWED_USERS` (comma-separated).
+
+Wildcards, access groups and lists naming several users give no owner; the import does
+not guess. After the teammate is created, the connections pass calls `connectImBot`, which
+runs the same `addBotImConnection` as 伙伴设置 → 消息平台 with the resolved token. A
+Telegram connection that reports a polling conflict within 5 seconds (the source gateway
+still running) is removed again. Retries reuse an existing connection for the same token
+and teammate, and background reconciliation keeps an earlier outcome instead of
+reconnecting.
+
+A missing owner or a failed connection never fails the import. The entry shows
+`needs-attention` with `IMPORT_IM_BOT_OWNER_MISSING`, `IMPORT_IM_BOT_GATEWAY_RUNNING`,
+`IMPORT_IM_BOT_IN_USE` or `IMPORT_IM_BOT_CONNECT_FAILED` (copy under `bots.import.*` on
+Desktop and `companionImport.*` on Mobile), and the user can add the bot later from
+消息平台. These codes are advisory: the resolved credential is still saved for legacy
+delivery, and automations that depend on the entry are not blocked. Tokens are never
+logged; only the channel and the issue code are.
+
 ## Save first, finish setup in chat
 
 GUI imports send the additive `deferSetup` flag (the command defaults it to true).

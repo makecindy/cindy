@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +23,12 @@ export interface CindyMakePreflightProps {
   createOptions?: CindyMakeTaskOptions;
   onOpenChange: (open: boolean) => void;
 }
+
+/**
+ * Continue is offered once the official lookup finished, also when it failed: not
+ * knowing whether a similar official change exists never blocks making one.
+ */
+const LOOKUP_FINISHED = ['found', 'notFound', 'failed'];
 
 /** Checks belong to this dialog; only Continue creates a persistent task. */
 export function CindyMakePreflightDialog({
@@ -87,7 +94,7 @@ export function CindyMakePreflightDialog({
       submitting.current ||
       confirmClose ||
       report?.status !== 'completed' ||
-      !['found', 'notFound'].includes(report.upstream?.status ?? '')
+      !LOOKUP_FINISHED.includes(report.upstream?.status ?? '')
     )
       return;
     submitting.current = true;
@@ -141,8 +148,7 @@ export function CindyMakePreflightDialog({
         : report?.source?.status === 'preparing'
           ? 'source'
           : 'environment'
-      : report.status === 'completed' &&
-          ['found', 'notFound'].includes(report.upstream?.status ?? '')
+      : report.status === 'completed' && LOOKUP_FINISHED.includes(report.upstream?.status ?? '')
         ? 'ready'
         : 'incomplete';
 
@@ -213,14 +219,17 @@ export function CindyMakePreflightDialog({
               />
             )}
             {failed && (
-              <p role="alert" className="text-13 text-[var(--error-fg)]">
-                {t('cindyMake.code.preparationFailed')}
-              </p>
+              <ErrorNotice role="alert" message={t('cindyMake.code.preparationFailed')} />
             )}
           </div>
           {report?.status === 'completed' &&
-            ['found', 'notFound'].includes(report.upstream?.status ?? '') && (
-              <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            LOOKUP_FINISHED.includes(report.upstream?.status ?? '') && (
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {report.upstream?.status === 'failed' && (
+                  <p className="mr-auto text-12 text-[var(--text-secondary)]">
+                    {t('cindyMake.upstream.failedContinue')}
+                  </p>
+                )}
                 <Button
                   variant="primary"
                   className="border-[var(--border-default)] enabled:hover:border-[var(--button-primary-hover)] enabled:active:border-[var(--button-primary-pressed)]"

@@ -4,6 +4,9 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ContextSheetGoalCreateForm, ContextSheetGoalView } from '@/session/ContextSheetGoalView.ios';
 
+vi.mock('react-native', () => ({ View: ({ children }: any) => createElement('div', null, children) }));
+vi.mock('lucide-react-native', () => ({ CircleAlert: () => null }));
+
 const bridge = vi.hoisted(() => ({ props: new Map<string, any>(), mode: 'light' }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const React = await import('react');
@@ -11,7 +14,7 @@ vi.mock('@expo/ui/swift-ui', async () => {
     if (p.testID) bridge.props.set(p.testID, p);
     return React.createElement('div', null, p.children);
   };
-  return { Button: control, DisclosureGroup: control, Picker: control, ProgressView: control, Text: control, TextField: control,
+  return { Section: control, VStack: control, HStack: control, RNHostView: control, Button: control, DisclosureGroup: control, Picker: control, ProgressView: control, Text: control, TextField: control,
     useNativeState: (initial: string) => {
       const state = React.useRef({ value: initial, get() { return this.value; }, set(value: string) { this.value = value; } });
       return state.current;
@@ -19,7 +22,7 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => Object.fromEntries(
-  ['buttonBorderShape', 'controlSize', 'accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
+  ['listRowBackground', 'listRowInsets', 'listRowSeparator', 'fixedSize', 'buttonBorderShape', 'controlSize', 'accessibilityHint', 'accessibilityLabel', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]).concat([['shapes', { rectangle: () => ({}) }] as any]),
 ));
 vi.mock('@/theme', () => ({ navigationChrome: { target: 44 }, useTheme: () => ({ colors: {
   cta: bridge.mode === 'dark' ? 'white' : 'black',
@@ -76,8 +79,8 @@ it.each(['light', 'dark'])('pairs the goal label and busy indicator with the CTA
   bridge.mode = mode;
   const foreground = mode === 'dark' ? 'black' : 'white';
   mount({ initial: { objective: '目标' } });
-  expect(control('goalStartButton').children.props.modifiers).toContainEqual({ foregroundStyle: foreground });
+  expect(control('goalStartButton').children.props.children.props.modifiers).toContainEqual({ foregroundStyle: foreground });
   mount({ busy: true, initial: { objective: '目标' } });
-  expect(control('goalStartButton').children.props.modifiers).toContainEqual({ tint: foreground });
+  expect(control('goalStartButton').children.props.children.props.modifiers).toContainEqual({ tint: foreground });
   expect(control('goalStartButton').modifiers).toContainEqual({ disabled: true });
 });

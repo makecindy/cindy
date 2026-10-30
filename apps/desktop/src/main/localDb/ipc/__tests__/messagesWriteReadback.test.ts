@@ -69,7 +69,8 @@ vi.mock('../../client/current', () => ({
   getDbClient: () => h.client,
 }));
 
-import { createMessage, updateMessageContent } from '../messages';
+import { broadcastMessageRow, createMessage, updateMessageContent } from '../messages';
+import { messageToCamel } from '../../mapper';
 
 function setupDb(): void {
   const sqlite = new Database(':memory:', { verbose: (sql) => h.queries.push(String(sql)) });
@@ -121,6 +122,33 @@ describe('message write paths avoid large-content readback', () => {
     setupDb();
   });
 
+  it('keeps View-only MCP App data out of create, reload and owner broadcasts', async () => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    const content = { mcpApp: {
+      version: 1, serverId: 'private-server', serverRevision: 'private-revision',
+      resourceUri: 'ui://private/app',
+      tool: { name: 'form', title: 'Draft', inputSchema: { type: 'object', private: 'schema' } },
+      arguments: { private: 'input' },
+      result: { content: [{ type: 'text', text: 'Saved', _meta: { private: 'block' } }],
+        structuredContent: { private: 'structured' }, _meta: { private: 'view-only' } },
+    } };
+    const publicContent = { mcpAppHistory: { version: 1, title: 'Draft', text: 'Saved' } };
+    const created = await createMessage('s1', { clientId: 'app-card', role: 'assistant', content, agentMeta: { mcpApp: true } });
+    expect(created.content).toEqual(publicContent);
+    const row = (await h.db!.select().from(messages))[0]!;
+    expect(JSON.parse(row.content)).toEqual(content);
+    expect(messageToCamel(row).content).toEqual(publicContent);
+    expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created',
+      expect.objectContaining({ message: expect.objectContaining({ clientId: 'app-card', content: publicContent }) }));
+    vi.mocked(tapWindowBroadcast).mockClear();
+    // The shared broadcaster also accepts Main-created rows without the DB mapper.
+    broadcastMessageRow('s1', { ...created, content });
+    expect(tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:messages:created',
+      expect.objectContaining({ message: expect.objectContaining({ content: publicContent }) }));
+    expect(content.mcpApp.result._meta).toEqual({ private: 'view-only' });
+  });
+
   it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
     const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
     const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
@@ -156,6 +184,19 @@ describe('message write paths avoid large-content readback', () => {
       expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
     }
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
+  // #6420: native delivery commits refs under its own task guard; the generic async hook must not race it.
+  it('defers automatic attachment refs only for the Host writer that owns their guarded commit', async () => {
+    const content = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    await createMessage('s1', { clientId: 'native-image', role: 'tool_result', content }, {
+      beforePublish: async () => {}, deferMediaRefs: true,
+    });
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(h.sqlite!.prepare('SELECT content FROM messages WHERE client_id = ?').pluck().get('native-image'))
+      .toBe(content);
+    await createMessage('s1', { clientId: 'ordinary-image', role: 'tool_result', content });
+    expect(h.mediaRefCalls).toEqual([{ sessionId: 's1', role: 'tool_result', content }]);
   });
 
   it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {

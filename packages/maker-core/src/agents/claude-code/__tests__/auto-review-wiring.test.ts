@@ -1,4 +1,4 @@
-import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT } from '../../base-agent.js';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT, type DeviceHostedSession } from '../../base-agent.js';
 /**
  * Auto-review 接线集成测试:官方 Claude OAuth 在没有 host MCP 时保留原生 Auto classifier；
  * 一旦有 host MCP 或使用第三方路由,映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
@@ -163,6 +163,7 @@ async function startSession(
   permissionMode: PermissionMode,
   options: {
     providerId?: string;
+    deviceHosted?: DeviceHostedSession;
     authSource?: 'oauth' | 'api-key';
     reviewVerdict?: 'allow' | 'block' | 'ask';
     reviewer?: AgentDeps['reviewAutoPermissionAction'];
@@ -204,6 +205,7 @@ async function startSession(
     providerId: options.providerId ?? 'xd',
     workingDir,
     permissionMode,
+    deviceHosted: options.deviceHosted,
     extraDirs: options.extraDirs,
     writableDirs: options.writableDirs,
   });
@@ -221,9 +223,25 @@ async function startSession(
     });
   }
 
+  const preToolUse = async (toolName: string, toolInput: unknown) => {
+    const opts = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
+      { hooks?: { PreToolUse?: Array<{ matcher?: string; hooks: Array<(input: unknown, id: string, ctx: unknown) => Promise<unknown>> }> } };
+    const decisions: unknown[] = [];
+    for (const matcher of opts.hooks?.PreToolUse ?? []) {
+      if (matcher.matcher && !new RegExp(`^(?:${matcher.matcher})$`).test(toolName)) continue;
+      for (const hook of matcher.hooks) {
+        decisions.push(await hook({ hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: toolInput, session_id: 's', transcript_path: '', cwd: workingDir }, 'tu', { signal: new AbortController().signal }));
+      }
+    }
+    return decisions
+      .map((d) => (d as { hookSpecificOutput?: { permissionDecision?: string } })?.hookSpecificOutput?.permissionDecision)
+      .filter(Boolean);
+  };
+
   return {
     agent,
     handle,
+    preToolUse,
     canUseTool: queryOptions.canUseTool,
     fakeQuery,
     queryPermissionMode: queryOptions.permissionMode,
@@ -261,6 +279,69 @@ afterEach(async () => {
 });
 
 describe('Auto-review wiring: native first, Cindy fallback', () => {
+  // 2026-10-24: Claude subscription users keep Claude's own Auto review even though Cindy
+  // always attaches host MCPs; Cindy's hook hands back only the calls Cindy must decide.
+  it('keeps native Claude Auto with host MCPs and routes only Cindy-owned calls back to Cindy', async () => {
+    const policies: Record<string, 'auto-approve' | 'prompt' | 'prompt-each-time'> = {
+      cindy_orca: 'auto-approve', custom_prompt_mcp: 'prompt', always_confirm_mcp: 'prompt-each-time',
+    };
+    const { handle, preToolUse, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      mcpProviderNames: Object.keys(policies),
+      mcpToolApprovalPolicy: ({ serverName }) => policies[serverName] ?? 'prompt',
+    });
+    expect(queryPermissionMode).toBe('auto');
+    expect(handle.getAutoReviewOwner?.()).toBe('native');
+    // Trusted MCP goes to canUseTool (Host shortcut, no model) so delegated scope is still re-checked.
+    expect(await preToolUse('mcp__cindy_orca__create_workers', { workers: [] })).toEqual(['ask']);
+    expect(await preToolUse('mcp__always_confirm_mcp__send', { to: 'x' })).toEqual(['ask']);
+    // Ordinary MCP calls and shell commands are left to the native classifier alone.
+    expect(await preToolUse('mcp__custom_prompt_mcp__write_record', { value: 1 })).toEqual([]);
+    expect(await preToolUse('Bash', { command: 'npm test' })).toEqual([]);
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('keeps native Claude Auto when the SDK init reveals settings MCPs', async () => {
+    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      initMcpServerNames: ['settings_prompt_mcp'],
+      blockMcpServerStatus: true,
+      rejectPermissionModeChange: true,
+    });
+
+    expect(queryPermissionMode).toBe('auto');
+    await vi.waitFor(() => expect(fakeQuery.mcpServerStatus).toHaveBeenCalled());
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(fakeQuery.close).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('routes channel-turn tool calls to Cindy because native Auto cannot see requester authority', async () => {
+    const { handle, preToolUse } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      mcpProviderNames: ['custom_prompt_mcp', 'cindy_orca'],
+      mcpToolApprovalPolicy: ({ serverName }) => (serverName === 'cindy_orca' ? 'auto-approve' : 'prompt'),
+    });
+    await handle.send({ type: 'user', content: 'group request' }, {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram', taskId: 'group-turn' },
+        confirmationSurface: 'channel',
+        forceConfirmToolCall: () => false,
+      },
+    });
+    expect(handle.getAutoReviewOwner?.()).toBe('cindy');
+    expect(await preToolUse('Bash', { command: 'npm test' })).toEqual(['ask']);
+    expect(await preToolUse('mcp__custom_prompt_mcp__write_record', { value: 1 })).toEqual(['ask']);
+    // A channel policy outranks trusted-MCP approval and read-only shortcuts.
+    expect(await preToolUse('Read', { file_path: 'README.md' })).toEqual(['ask']);
+    expect(await preToolUse('mcp__cindy_orca__create_workers', { workers: [] })).toEqual(['ask']);
+    await handle.close();
+  });
+
   it('keeps SDK auto for official Claude OAuth without host MCPs', async () => {
     const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
       providerId: 'anthropic',
@@ -268,93 +349,6 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     });
     expect(queryPermissionMode).toBe('auto');
     expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
-    await handle.close();
-  });
-
-  it('downgrades native OAuth Auto after SDK init reveals a settings MCP', async () => {
-    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      initMcpServerNames: ['settings_prompt_mcp'],
-      blockMcpServerStatus: true,
-    });
-
-    // Settings MCPs are not host-injected, so startup legitimately begins native Auto.
-    expect(queryPermissionMode).toBe('auto');
-    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default'));
-    await handle.close();
-  });
-
-  it('closes instead of leaving settings MCPs in native Auto when downgrade fails', async () => {
-    const { handle, fakeQuery } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      initMcpServerNames: ['settings_prompt_mcp'],
-      rejectPermissionModeChange: true,
-    });
-
-    await vi.waitFor(() => expect(fakeQuery.close).toHaveBeenCalledTimes(1));
-    await handle.close();
-  });
-
-  it('does not close an already-default host-MCP session when SDK init reports settings MCPs', async () => {
-    const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      mcpProviderNames: ['cindy_orca'],
-      initMcpServerNames: ['cindy_orca', 'settings_prompt_mcp'],
-      blockMcpServerStatus: true,
-      rejectPermissionModeChange: true,
-    });
-
-    expect(queryPermissionMode).toBe('default');
-    await vi.waitFor(() => expect(fakeQuery.mcpServerStatus).toHaveBeenCalled());
-    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
-    expect(fakeQuery.close).not.toHaveBeenCalled();
-    await handle.close();
-  });
-
-  it('uses SDK default for official Claude OAuth when a host MCP is registered', async () => {
-    const { handle, canUseTool, queryPermissionMode, seen } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      mcpProviderNames: ['cindy_orca'],
-      mcpToolApprovalPolicy: () => 'auto-approve',
-    });
-    expect(queryPermissionMode).toBe('default');
-
-    const result = await canUseTool(
-      'mcp__cindy_orca__create_workers',
-      { workers: [] },
-      { toolUseID: 'oauth-orca-mcp' },
-    );
-    expect(result.behavior).toBe('allow');
-    expect(seen).toHaveLength(0);
-    await handle.close();
-  });
-
-  it('reviews the actual operation for prompt MCPs in official Claude OAuth Auto', async () => {
-    const { handle, canUseTool, queryPermissionMode, seen, reviewAutoPermissionAction } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      mcpProviderNames: ['custom_prompt_mcp'],
-      mcpToolApprovalPolicy: () => 'prompt',
-    });
-    expect(queryPermissionMode).toBe('default');
-
-    const result = await canUseTool(
-      'mcp__custom_prompt_mcp__write_record',
-      { value: 'approved by the interaction resolver' },
-      { toolUseID: 'oauth-prompt-mcp' },
-    );
-
-    expect(result.behavior).toBe('allow');
-    expect(permissionRequests(seen)).toHaveLength(0);
-    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
-    expect(JSON.parse((reviewedRequest(reviewAutoPermissionAction).action as { description: string }).description)).toMatchObject({
-      toolName: 'mcp__custom_prompt_mcp__write_record',
-      input: { value: 'approved by the interaction resolver' },
-    });
     await handle.close();
   });
 
@@ -531,6 +525,8 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
       { toolUseID: 'pending-network' },
     );
     await vi.waitFor(() => expect(permissionRequests(seen)).toHaveLength(2));
+    // AI asks carry the reviewer's reason to the confirmation card.
+    expect(permissionRequests(seen)[0]?.metadata).toMatchObject({ autoReviewReason: 'reviewed' });
 
     await handle.setWritableDirs!([]);
 
@@ -872,7 +868,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await next.handle.close();
   });
 
-  it.each([false, true])('Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+  it.each([false, true])('Auto to Full access applies the owner choice during review (IM policy=%s)', async (restricted) => {
     let release!: (decision: { verdict: 'allow' }) => void;
     const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
     const { handle, canUseTool, seen } = await startSession('auto', {
@@ -887,7 +883,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
     await handle.setPermissionMode!('bypassPermissions');
     release({ verdict: 'allow' });
-    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(await pending).toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
@@ -1325,4 +1321,28 @@ it.each(['Do not publish.', ''])('keeps live Claude intent %j over stale continu
   const intent=reviewedRequest(reviewAutoPermissionAction).userIntent;
   if(restriction) expect(JSON.stringify(intent)).toContain(restriction); else expect(intent).toBe('');
  } finally {await handle.close();}
+});
+
+
+it.each([false, true])('honors Full access for worktree edits and tests without asking (hosted=%s)', async hosted => {
+  const { handle, canUseTool, seen, reviewAutoPermissionAction } = await startSession('bypassPermissions', {
+    deviceHosted: hosted ? {
+      workingDir: '/repo', extraDirs: [], writableDirs: [], platform: 'darwin', shell: '/bin/zsh',
+      isGitRepo: true, tunnelUrl: 'http://127.0.0.1:1', tunnelToken: 'test-only', mcpServers: [],
+    } : undefined,
+    reviewVerdict: 'ask',
+  });
+  try {
+    const input = { command: `cd /repo-contacts-worktree && python3 - <<'PY'
+p='cindy-contacts/main.js'
+s=open(p,encoding='utf-8').read()
+s=s.replace('LIMIT 200', 'ORDER BY id')
+open(p,'w',encoding='utf-8').write(s)
+PY
+node --test .tests/cindy-contacts.test.mjs` };
+    expect((await canUseTool(hosted ? 'mcp__cindy_exec__Bash' : 'Bash', input, { toolUseID: 'worktree-edit' })).behavior)
+      .toBe('allow');
+    expect(seen).toEqual([]);
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+  } finally { await handle.close(); }
 });

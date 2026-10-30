@@ -123,7 +123,7 @@ describe('Node runtime packaging contract', () => {
     expect(worker).toContain('__CINDY_NODE__');
     // Pin the complete public surface, allowing only formatting differences.
     expect(worker).toMatch(
-      /Object\.freeze\(\{\s*spawnEntry,\s*bindDeviceAuthorization: \(\) => deviceAuthorization\.bind\(\),\s*bindAuthorization: \(\) => authorization\.bind\(\)\s*\}\)/,
+      /Object\.freeze\(\{\s*spawnEntry,\s*bindDeviceAuthorization: \(\) => deviceAuthorization\.bind\(\),\s*bindHostServices: \(\) => hostServices\.bind\(\),\s*bindAuthorization: \(\) => authorization\.bind\(\)\s*\}\)/,
     );
     expect(worker).toContain('GHOST_NODE_CHILD_MODE_FLAG');
     expect(worker).not.toContain("require('node:child_process')");

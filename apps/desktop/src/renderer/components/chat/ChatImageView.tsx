@@ -7,7 +7,7 @@
  *
  * variant 决定尺寸 + 边框,行为(click→ImageLightbox / error→placeholder /
  * draggable=false / hover opacity)完全一致:
- *   - 'user-attached': 用户上传到 chat 输入框的图,固定 280×180,无边框。
+ *   - 'user-attached': 用户附图通常收进 280×180；高宽比 >3 时顶部预览 240×240。
  *     视觉上"附件"感,不抢主区域注意力。
  *   - 'tool-output':   agent 工具产出的图(art 出图、飞书拉图等),走 Markdown
  *     内嵌图同款规则 min(100%, 50vw, 480px) × min(40vh, 420px),带 tool-card
@@ -24,7 +24,7 @@
  */
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Box, Copy, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
@@ -38,10 +38,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { extractIpcError } from '@/utils/ipcError';
 import { ImageLightbox } from './ImageLightbox';
+import { useImageClipboard } from './useImageClipboard';
 import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
+import { ChatLoadingImage } from './ChatLoadingImage';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { useRemoteMediaErrorRetry } from '@/hooks/useRemoteMediaErrorRetry';
+import { isRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
+import { useImageLoadFailure } from './useImageLoadFailure';
 import type { ToolMediaModelFile } from './AgentActionRow';
 
 export type ChatImageVariant = 'user-attached' | 'tool-output';
@@ -81,7 +85,7 @@ const VARIANT_STYLES: Record<
   }
 > = {
   'user-attached': {
-    // F-MSG-IMG: 用户上传图固定 280×180——附件感,不抢主区域。
+    // 普通用户附图保持 contain 边界；长图在加载自然尺寸后使用顶部预览。
     style: { maxWidth: 280, maxHeight: 180 },
     className: 'rounded-xl object-contain cursor-pointer hover:opacity-90 transition-opacity',
   },
@@ -112,19 +116,31 @@ export function ChatImageView({
 }: ChatImageViewProps) {
   const { t } = useTranslation();
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
-  // gallery + lightbox + 本机操作判定),远程媒体的 reveal/copy 自然失效。
+  // gallery + lightbox + 动作判定),保留远端归属。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
   // 'image' = 2D 预览图 lightbox; 'model' = `<model-viewer>` 3D lightbox。
   // 同一个 state 槽位避免两种 lightbox 同时出现 (且统一受 scroll-lock 影响)。
   const [lightboxOpen, setLightboxOpen] = useState<'image' | 'model' | null>(null);
   const previewTriggerRef = useRef<HTMLImageElement>(null);
+  const longImageHintId = useId();
+  const [imageSize, setImageSize] = useState<{ src: string; width: number; height: number } | null>(null);
+  // #6796: crop only the thumbnail; gallery, lightbox and clipboard retain displaySrc.
+  // Key the measurement by the resolved URL so replacement/remote resolution cannot
+  // temporarily apply the previous image's dimensions to a different attachment.
+  const longImage =
+    variant === 'user-attached' && !modelFile &&
+    imageSize?.src === displaySrc && imageSize.width > 0 &&
+    imageSize.height / imageSize.width > 3;
   const closePreview = () => {
     setLightboxOpen(null);
     previewTriggerRef.current?.focus({ preventScroll: true });
   };
-  // 错误态 + 远程媒体失败自愈(退避重取,覆盖被控端物化竞态窗口)收口在
-  // hook 里;本机 scheme 的失败不重试,行为与从前一致。
+  // Remote URLs retain bounded transport retries; local images share Markdown's
+  // confirmed-missing diagnosis and focus/online retry, using the displayed URL.
   const { errored, onLoadError } = useRemoteMediaErrorRetry(displaySrc);
+  const localFailure = useImageLoadFailure(displaySrc);
+  const remote = isRemoteMediaUrl(displaySrc);
+  const imageStatus = remote ? (errored ? 'unavailable' : null) : localFailure.status;
   // Right-click → 复制图片 / 打开图片所在目录. Mirrors MarkdownRenderer.LightboxImage
   // and ImageLightbox so user-attached 图和 assistant tool-output 图右键交互一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -133,36 +149,24 @@ export function ChatImageView({
   // 没响应。pending 状态显示 spinner + 抑制重复点击。
   const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
 
-  if (errored) {
-    return <ImageMissingPlaceholder filename={filename} />;
+  const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(displaySrc);
+
+  if (imageStatus) {
+    return <ImageMissingPlaceholder filename={filename} status={imageStatus} />;
   }
 
   const { style, className } = VARIANT_STYLES[variant];
 
-  // 只有缓存到本地 (xdt-image://) 的图才能 reveal/copy 原图。
-  // base64 fallback (data:) 没有对应文件,菜单整段不渲染。
-  // 但 modelFile 路径不依赖本地缓存的预览图 — fileId 直接打到 mivo 后端拉
-  // 模型,所以只要有 modelFile 菜单就可用。
-  const canRevealInFolder =
-    displaySrc.startsWith('xdt-image://') || displaySrc.startsWith('cindy-media://');
-  const showMenu = modelFile !== undefined || canRevealInFolder;
+  const showMenu = modelFile !== undefined || canCopy || canRevealInFolder;
 
   async function handleCopyImage(): Promise<void> {
-    const res = await window.electronAPI.copyMediaToClipboard({ url: displaySrc });
-    if (res.success) {
-      toast.success(t('chat.media.imageCopied'));
-    } else {
-      toast.error(res.error ?? t('chat.media.copyFailed'));
-    }
     setMenuPos(null);
+    await copyImage();
   }
 
   async function handleRevealInFolder(): Promise<void> {
-    const res = await window.electronAPI.showItemInFolder({ url: displaySrc });
-    if (!res.success) {
-      toast.error(res.error ?? t('chat.media.openFolderFailed'));
-    }
     setMenuPos(null);
+    await revealImage();
   }
 
   async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
@@ -196,46 +200,70 @@ export function ChatImageView({
 
   return (
     <>
-      <img
-        ref={previewTriggerRef}
-        src={displaySrc}
-        alt={filename}
-        style={style}
-        className={cn(className, CHAT_FOCUS_CLASS, 'motion-reduce:transition-none')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            event.currentTarget.click();
-          }
-        }}
-        draggable={false}
-        // 会话内翻图的数据源:lightbox 打开后会扫描所有带此属性的图,按 DOM
-        // 顺序拼成可左右翻页的列表。见 ImageLightbox.collectGallery。
-        data-gallery-src={displaySrc}
-        // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
-        // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
-        // 用户仍可右键 "打开模型" 用系统程序打开。
-        onClick={(e) => {
-          const next =
-            modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase())
-              ? 'model'
-              : 'image';
-          // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
-          // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
-          // 不进 gallery,不标记。
-          if (next === 'image') e.currentTarget.dataset.galleryActive = '1';
-          setLightboxOpen(next);
-        }}
-        onContextMenu={(e) => {
-          if (!showMenu) return;
-          e.preventDefault();
-          e.stopPropagation();
-          setMenuPos({ x: e.clientX, y: e.clientY });
-        }}
-        onError={onLoadError}
-      />
+      <span
+        className={longImage ? 'relative inline-flex min-w-0 max-w-full' : 'contents'}
+        style={longImage ? { width: 240, aspectRatio: '1' } : undefined}
+      >
+        <ChatLoadingImage
+          ref={previewTriggerRef}
+          src={displaySrc}
+          alt={filename}
+          style={longImage ? {
+            position: 'absolute', inset: 0,
+            width: '100%', height: '100%',
+            objectFit: 'cover', objectPosition: 'top',
+          } : style}
+          aria-describedby={longImage ? longImageHintId : undefined}
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            if (!image.isConnected) return;
+            setImageSize({ src: displaySrc, width: image.naturalWidth, height: image.naturalHeight });
+          }}
+          className={cn(className, CHAT_FOCUS_CLASS, 'motion-reduce:transition-none')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              event.currentTarget.click();
+            }
+          }}
+          draggable={false}
+          // 会话内翻图的数据源:lightbox 打开后会扫描所有带此属性的图,按 DOM
+          // 顺序拼成可左右翻页的列表。见 ImageLightbox.collectGallery。
+          data-gallery-src={displaySrc}
+          // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
+          // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
+          // 用户仍可右键 "打开模型" 用系统程序打开。
+          onClick={(e) => {
+            const next =
+              modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase())
+                ? 'model'
+                : 'image';
+            // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
+            // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
+            // 不进 gallery,不标记。
+            if (next === 'image') e.currentTarget.dataset.galleryActive = '1';
+            setLightboxOpen(next);
+          }}
+          onContextMenu={(e) => {
+            if (!showMenu) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setMenuPos({ x: e.clientX, y: e.clientY });
+          }}
+          onError={remote ? onLoadError : localFailure.onError}
+        />
+        {longImage && (
+          <span
+            id={longImageHintId}
+            data-share-exclude
+            className="pointer-events-none absolute bottom-2 left-2 right-2 w-fit max-w-[calc(100%_-_16px)] rounded-full bg-[var(--surface-elevated)] px-2 py-1 text-12 leading-[1.33] text-[var(--text-primary)]"
+          >
+            {t('chat.media.longImagePreview')}
+          </span>
+        )}
+      </span>
       {showMenu ? (
         <DropdownMenu
           open={menuPos !== null}
@@ -294,14 +322,18 @@ export function ChatImageView({
               </>
             ) : (
               <>
-                <DropdownMenuItem onClick={handleCopyImage}>
-                  <Copy className="mr-2 h-4 w-4" />
-                  {t('chat.media.copyImage')}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleRevealInFolder}>
-                  <FolderOpen className="mr-2 h-4 w-4" />
-                  {t('chat.media.revealImage')}
-                </DropdownMenuItem>
+                {canCopy && (
+                  <DropdownMenuItem onClick={handleCopyImage}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    {t('chat.media.copyImage')}
+                  </DropdownMenuItem>
+                )}
+                {canRevealInFolder && (
+                  <DropdownMenuItem onClick={handleRevealInFolder}>
+                    <FolderOpen className="mr-2 h-4 w-4" />
+                    {t('chat.media.revealImage')}
+                  </DropdownMenuItem>
+                )}
               </>
             )}
           </DropdownMenuContent>

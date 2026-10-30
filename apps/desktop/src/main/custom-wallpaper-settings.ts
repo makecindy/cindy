@@ -57,6 +57,9 @@ export function readReferencedClientWallpaperUrls(): string[] {
     customUrl,
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')
-      .map((item) => blobUrl(item.sha256, '.mp4', 'client-wallpaper')),
+      .flatMap((item) => [
+        ...('sha256' in item ? [blobUrl(item.sha256, '.mp4', 'client-wallpaper')] : []),
+        ...(item.image ? [blobUrl(item.image.sha256, '.webp', 'client-wallpaper')] : []),
+      ]),
   ].filter(Boolean);
 }

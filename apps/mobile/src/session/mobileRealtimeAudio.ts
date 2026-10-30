@@ -5,13 +5,19 @@ import {
 } from 'expo-modules-core';
 import type { AudioTrace } from '@cindy/voice-input-core';
 import { i18n } from '@/i18n';
+import { logMobileVoice } from '@/session/mobileVoiceDiagnostics';
 
 export type MobileRealtimeAudioChunk = {
   pcm16: ArrayBuffer;
   trace: AudioTrace;
+  /** Older native modules and Expo Audio timestamp JS delivery instead. */
+  timestampSource?: 'hardware' | 'delivery';
+  /** Explicit native stop receipt; never inferred from a late event. */
+  drained?: boolean;
 };
 
 type NativeAudioChunkEvent = {
+  captureId?: string;
   base64Pcm16: string;
   capturedAt: number;
   chunkIndex: number;
@@ -21,11 +27,20 @@ type NativeAudioChunkEvent = {
 
 type NativeAudioErrorEvent = {
   message: string;
+  captureId?: string;
 };
 
 type NativeRealtimeAudioModule = {
-  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<void>;
+  start(options?: { sampleRate?: number; bufferSize?: number; captureId?: string }): Promise<{
+    inputPortTypes: string[];
+    inputSampleRate: number;
+    inputChannels: number;
+    ioBufferDurationMs?: number;
+    sessionActivatedAt?: number;
+    engineStartedAt?: number;
+  } | void>;
   stop(): Promise<void>;
+  stopAndDrain?(afterIndex: number, stoppedAt: number): Promise<NativeAudioChunkEvent[]>;
   prewarm(): Promise<void>;
 };
 
@@ -97,6 +112,11 @@ const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
+// The custom Apple module owns one native engine. A replacement must wait for
+// the previous caller's complete start/stop lifecycle, including late cleanup.
+let customNativeCaptureReleased: Promise<void> = Promise.resolve();
+let nextCaptureId = 0;
+let nativePrewarm: Promise<void> | undefined;
 
 export function isMobileRealtimeAudioAvailable(): boolean {
   if (isE2eMockRealtimeAudioEnabled()) return true;
@@ -117,12 +137,12 @@ export function shouldShowMobileVoiceUi(
 
 export async function startMobileRealtimeAudio(
   options: {
-    onChunk: (chunk: MobileRealtimeAudioChunk) => void;
+    onChunk: (chunk: MobileRealtimeAudioChunk) => boolean | void;
     onError?: (error: Error) => void;
     sampleRate?: number;
     bufferSize?: number;
   },
-): Promise<() => Promise<void>> {
+): Promise<(stoppedAt?: number) => Promise<void>> {
   if (isE2eMockRealtimeAudioEnabled()) {
     return startE2eMockRealtimeAudio(options);
   }
@@ -140,46 +160,92 @@ export async function startMobileRealtimeAudio(
 async function startCustomNativeRealtimeAudio(
   binding: RealtimeAudioNativeBinding,
   options: {
-    onChunk: (chunk: MobileRealtimeAudioChunk) => void;
+    onChunk: (chunk: MobileRealtimeAudioChunk) => boolean | void;
     onError?: (error: Error) => void;
     sampleRate?: number;
     bufferSize?: number;
   },
-): Promise<() => Promise<void>> {
-  const subscriptions: EventSubscription[] = [
-    binding.module.addListener('onAudioChunk', (event) => {
-      options.onChunk({
-        pcm16: decodeBase64ToArrayBuffer(event.base64Pcm16),
-        trace: {
-          capturedAt: event.capturedAt,
-          convertedAt: Date.now(),
-          chunkIndex: event.chunkIndex,
-          sampleRate: event.sampleRate,
-          durationMs: event.durationMs,
-        },
-      });
-    }),
-    binding.module.addListener('onAudioError', (event) => {
-      options.onError?.(new Error(event.message));
-    }),
-  ];
-
+): Promise<(stoppedAt?: number) => Promise<void>> {
+  const previousCapture = customNativeCaptureReleased;
+  let releaseCapture!: () => void;
+  customNativeCaptureReleased = new Promise<void>((resolve) => { releaseCapture = resolve; });
+  await previousCapture;
+  const subscriptions: EventSubscription[] = [];
+  const captureId = String(++nextCaptureId);
+  let lastChunkIndex = -1;
+  const deliver = (event: NativeAudioChunkEvent, drained = false): void => {
+    if (event.captureId !== undefined && event.captureId !== captureId) return;
+    if (event.chunkIndex <= lastChunkIndex) return;
+    const accepted = options.onChunk({
+      pcm16: decodeBase64ToArrayBuffer(event.base64Pcm16),
+      trace: {
+        capturedAt: event.capturedAt,
+        convertedAt: Date.now(),
+        chunkIndex: event.chunkIndex,
+        sampleRate: event.sampleRate,
+        durationMs: event.durationMs,
+      },
+      timestampSource: binding.module.stopAndDrain ? 'hardware' : 'delivery',
+      ...(drained ? { drained: true } : {}),
+    });
+    // A stop can beat the native start receipt. Audio rejected as an ordinary
+    // late event must remain replayable through the explicit drain receipt.
+    if (accepted !== false) lastChunkIndex = event.chunkIndex;
+  };
   try {
-    await binding.module.start({
+    subscriptions.push(binding.module.addListener('onAudioChunk', (event) => {
+      deliver(event);
+    }));
+    subscriptions.push(binding.module.addListener('onAudioError', (event) => {
+      if (event.captureId !== undefined && event.captureId !== captureId) return;
+      options.onError?.(new Error(event.message));
+    }));
+    const input = await binding.module.start({
       sampleRate: options.sampleRate ?? 16_000,
       bufferSize: options.bufferSize ?? DEFAULT_NATIVE_AUDIO_BUFFER_SIZE,
+      captureId,
+    });
+    logMobileVoice('debug', 'capture input', {
+      backend: 'ios-native',
+      // Older installed native modules return void; capture remains compatible.
+      inputPortTypes: input?.inputPortTypes ?? ['unknown'],
+      inputSampleRate: input?.inputSampleRate,
+      inputChannels: input?.inputChannels,
+      ...(input?.ioBufferDurationMs === undefined ? {} : {
+        ioBufferDurationMs: input.ioBufferDurationMs,
+        sessionActivatedAt: input.sessionActivatedAt,
+        engineStartedAt: input.engineStartedAt,
+      }),
     });
   } catch (error) {
-    subscriptions.forEach((subscription) => subscription.remove());
+    try {
+      subscriptions.forEach((subscription) => subscription.remove());
+    } finally {
+      releaseCapture();
+    }
     throw error;
   }
 
-  let stopped = false;
-  return async () => {
-    if (stopped) return;
-    stopped = true;
-    subscriptions.forEach((subscription) => subscription.remove());
-    await binding.module.stop();
+  let stopping: Promise<void> | undefined;
+  return (stopRequestedAt) => {
+    stopping ??= (async () => {
+      const stoppedAt = stopRequestedAt ?? Date.now();
+      try {
+        try {
+          subscriptions.forEach((subscription) => subscription.remove());
+        } finally {
+          if (binding.module.stopAndDrain) {
+            const chunks = await binding.module.stopAndDrain(lastChunkIndex, stoppedAt);
+            for (const chunk of chunks) deliver(chunk, true);
+          } else {
+            await binding.module.stop();
+          }
+        }
+      } finally {
+        releaseCapture();
+      }
+    })();
+    return stopping;
   };
 }
 
@@ -192,7 +258,7 @@ async function startCustomNativeRealtimeAudio(
 async function startExpoAudioRealtimeAudio(
   module: ExpoAudioNativeModule,
   options: {
-    onChunk: (chunk: MobileRealtimeAudioChunk) => void;
+    onChunk: (chunk: MobileRealtimeAudioChunk) => boolean | void;
     onError?: (error: Error) => void;
     sampleRate?: number;
   },
@@ -279,6 +345,12 @@ async function startExpoAudioRealtimeAudio(
 
   try {
     await stream.start();
+    logMobileVoice('debug', 'capture input', {
+      backend: 'expo-audio',
+      inputPortTypes: ['unknown'],
+      inputSampleRate: stream.sampleRate,
+      inputChannels: stream.channels,
+    });
     streamStarted = true;
     lastChunkAt = Date.now();
     watchdog = setInterval(() => {
@@ -307,7 +379,9 @@ export function prewarmMobileRealtimeAudio(): void {
   if (isE2eMockRealtimeAudioEnabled()) return;
   const binding = getNativeBinding();
   if (!binding) return;
-  void binding.module.prewarm().catch(() => undefined);
+  nativePrewarm ??= binding.module.prewarm().catch(() => undefined).finally(() => {
+    nativePrewarm = undefined;
+  });
 }
 
 export const __testing = {
@@ -509,7 +583,7 @@ function isE2eMockRealtimeAudioEnabled(): boolean {
 }
 
 function startE2eMockRealtimeAudio(options: {
-  onChunk: (chunk: MobileRealtimeAudioChunk) => void;
+  onChunk: (chunk: MobileRealtimeAudioChunk) => boolean | void;
   sampleRate?: number;
 }): Promise<() => Promise<void>> {
   let stopped = false;

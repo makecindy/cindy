@@ -6,6 +6,8 @@
  * (mobile i18n 化后由 models.json catalog 供文案,在使用点求值 i18n.t)。组件只做渲染,
  * 这里可 node 单测。
  */
+import { isCodexGatewayWireModel } from '@cindy/model-providers/classification';
+import { isCustomRoutedProvider } from '@cindy/model-providers/provider-identity';
 import { getModel, modelSupportsFastMode, type ProviderView } from '@cindy/model-providers/registry';
 import type { SectionModel } from '@cindy/model-providers/sections';
 import type { AgentKind } from '@cindy/model-providers/types';
@@ -34,6 +36,7 @@ export interface PickerRowModel {
   defaultEffort: string | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
 }
 
 /** 上下文窗口 tokens → 紧凑展示("1M" / "272K" / "8192")。移植桌面 formatContextWindow。 */
@@ -58,6 +61,8 @@ const PROVIDER_TITLE: Record<string, string> = {
 };
 
 export function providerDisplayTitle(p: Pick<ProviderView, 'id' | 'name'>): string {
+  // Names belong to the source computer, not the phone's signed-in account.
+  if (p.id === 'xd') return p.name?.startsWith('Cindy AI · ') ? p.name : PROVIDER_TITLE.xd;
   return PROVIDER_TITLE[p.id] ?? p.name;
 }
 
@@ -331,11 +336,11 @@ export function rowFastOn(args: {
   model: PickerRowModel;
   providerId: string | null;
   selected: boolean;
-  liveFastMode: boolean;
+  liveFastMode: boolean | 'ultrafast';
   agentKind: AgentKind | null;
   fastEditable: boolean;
   memory?: MobileModelMemoryAccessors;
-}): boolean {
+}): boolean | 'ultrafast' {
   if (!args.fastEditable) return false;
   if (args.selected) return args.liveFastMode;
   if (!args.agentKind || !args.providerId) return false;
@@ -344,9 +349,15 @@ export function rowFastOn(args: {
 
 /**
  * budget 档置灰判定(桌面 budgetDisabledOf 同口径,key 判定换成被控端 presence 探测):
- * `codex/` 前缀 且 被控端明确无 key 才置灰;'unknown'(旧被控端 / 拉取失败)不置灰,
- * 宁可放行到被控端请求期报错也不误伤。
+ * `openai-codex/` 或 `codex/` 前缀且被控端明确无 key 才置灰。自定义/组织供应商目录里的
+ * 同前缀模型走该供应商自己的路由,不吃 Cindy 网关 key gate。没传 provider 时保持原前缀判定。
+ * 'unknown'(旧被控端 / 拉取失败)不置灰,宁可放行到被控端请求期报错也不误伤。
  */
-export function budgetRowDisabled(modelId: string, keyStatus: DeviceApiKeyStatus): boolean {
-  return modelId.startsWith('codex/') && keyStatus === 'absent';
+export function budgetRowDisabled(
+  modelId: string,
+  keyStatus: DeviceApiKeyStatus,
+  provider?: Pick<ProviderView, 'source'> | null,
+): boolean {
+  if (isCustomRoutedProvider(provider)) return false;
+  return isCodexGatewayWireModel(modelId) && keyStatus === 'absent';
 }

@@ -1,10 +1,16 @@
-/** Ordinary local Session API. No Bot/Orca identity or permission override is accepted. */
+import type { PluginMessageAttachment } from './pluginAttachments.js';
+/** Ordinary local Session API. Identity and permission grants remain Host-owned. */
 export interface PluginTaskRoute {
   agentKind: 'cc' | 'codex' | 'pi';
   providerId: string;
   model: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
+}
+export const PLUGIN_TASK_PERMISSION_MODES = ['ask', 'auto', 'bypassPermissions'] as const;
+export type PluginTaskPermissionMode = (typeof PLUGIN_TASK_PERMISSION_MODES)[number];
+export function isPluginTaskPermissionMode(value: unknown): value is PluginTaskPermissionMode {
+  return typeof value === 'string' && (PLUGIN_TASK_PERMISSION_MODES as readonly string[]).includes(value);
 }
 export type PluginTaskRunStatus =
   | 'queued'
@@ -25,6 +31,23 @@ export interface PluginTaskView {
   permissionMode?: string;
   /** Independent Plan Mode; the stored permission remains available after it ends. */
   planModeEnabled?: boolean;
+  /**
+   * Background task: omitted from the task list, search, notifications and Agent Island.
+   * Only plugins declaring `agent.hiddenTasks` can set it; the user can still open or
+   * reveal it from the plugin detail page. The task service always returns a boolean;
+   * the field is optional only for Host-internal readers that predate it.
+   */
+  hidden?: boolean;
+}
+/** Plugin detail page「后台任务」row (Desktop-only IPC; never sent to the plugin sandbox). */
+export interface PluginBackgroundTask {
+  taskId: string;
+  title: string;
+  status: 'active' | 'archived';
+  /** Last activity, unix ms. */
+  updatedAt: number;
+  /** A turn is running in this Desktop process. */
+  running: boolean;
 }
 export interface PluginTaskRun {
   runId: string;
@@ -32,6 +55,8 @@ export interface PluginTaskRun {
   inputMessageId: string;
   status: PluginTaskRunStatus;
   acceptedAt: number;
+  /** Opaque Host invocation correlation; never a permission grant. */
+  invocationId?: string;
   acceptedConfig: PluginTaskRoute;
   execution?: { instanceId: string; generation: number };
   /** Host-observed retry input aliases; never supplied by the plugin. */
@@ -58,17 +83,26 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
 }
 export type PluginTaskRequest = (
   | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
-  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute }
+  | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
       kind: 'create';
       /** Optional active tool-call context; Host resolves its task and checks plugin ownership. */
       callId?: string;
       requestKey: string;
-      title: string;
+      title?: string;
+      /** Opt in to Host naming after the first accepted message; omit title. */
+      autoTitle?: boolean;
       route?: PluginTaskRoute;
+      /** New task only; the plugin's Host card ceiling applies only when enabled. */
+      permissionMode?: PluginTaskPermissionMode;
       isolatedWorkspace?: boolean;
+      /** Requires `agent.hiddenTasks`; creates the task as a background task. */
+      hidden?: boolean;
     }
+  | { type: 'tasks-request'; kind: 'setHidden'; taskId: string; hidden: boolean }
+  /** Archive this plugin's own idle task; the user can unarchive it from the task list or plugin page. */
+  | { type: 'tasks-request'; kind: 'archive'; taskId: string }
   | { type: 'tasks-request'; kind: 'list'; after?: string; limit?: number }
   | { type: 'tasks-request'; kind: 'get'; taskId: string }
   | { type: 'tasks-request'; kind: 'startTeam' | 'getTeam'; taskId: string }
@@ -83,6 +117,11 @@ export type PluginTaskRequest = (
       requestKey: string;
       expectedRevision: number;
       text: string;
+      /** Supplementary material, collapsed in the conversation but sent to the Agent. */
+      context?: string;
+      attachments?: PluginMessageAttachment[];
+      /** Optional Host-issued parent invocation; correlation only, not execution authority. */
+      invocationId?: string;
     }
   | { type: 'tasks-request'; kind: 'getRun'; runId: string }
   | { type: 'tasks-request'; kind: 'listRuns'; taskId: string; after?: string; limit?: number }

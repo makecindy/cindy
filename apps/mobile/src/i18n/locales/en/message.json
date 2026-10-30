@@ -9,12 +9,17 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "Sent by local app “{{name}}”",
+    "sourceLocalAppId": "App ID: {{id}}",
+    "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",
     "moreActions": "More message actions",
+    "reply": "Reply",
     "newMessagesToBottom": "New messages, jump to bottom",
     "jumpToBottom": "Jump to bottom",
     "openForkOrigin": "Open fork source message",
     "viewForkOrigin": "View fork source",
     "emptyMessages": "No messages yet",
+    "historyNotCached": "No history cached on this phone. Connect to the computer to sync.",
     "syncing": "Syncing",
     "copyLinkHint": "Tap to copy message link",
     "sentTime": "Sent at {{time}}",
@@ -66,6 +71,7 @@
     "copyStateCopied": "Copied",
     "copyStateFailed": "Copy failed",
     "copyStateCopy": "Copy",
+    "copyCode": "Copy Code",
     "thinkingHidden": "Thinking hidden",
     "thinkingDone": "Thought for {{duration}}",
     "thinkingActive": "Thinking {{elapsed}}",
@@ -100,11 +106,13 @@
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",
+    "sessionFallbackPill": "Continued from summary",
     "sessionResumedPill": "Resumed original session",
     "handoffContentDesc": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "handoffContentDescEnglishSource": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "openDiagramDetail": "Open diagram detail",
-    "sessionChipFallback": "Session {{id}}",
+    "sessionChipFallback": "A session",
+    "messageChipFallback": "Quoted message",
     "imageFallbackTitle": "Image",
     "mermaidExportFailedTitle": "Export failed",
     "mermaidRenderIncompleteBody": "The diagram isn't fully rendered yet or the export failed. Try again later.",
@@ -167,7 +175,9 @@
     "diffEditCount": "{{n}} edits",
     "groupSentNamed": "Sent from group “{{name}}”",
     "groupSent": "Sent from a group",
-    "sourceGroupId": "Group ID: {{id}}"
+    "sourceGroupId": "Group ID: {{id}}",
+    "selectText": "Select Text",
+    "you": "You"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -178,6 +188,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "Original image unavailable",
+    "retryOriginal": "Retry Original Image",
+    "loadingOriginal": "Loading original image…",
     "sourceMissing": "The source image is missing on this computer. Import the original file again.",
     "deviceOffline": "The computer is disconnected. Reconnect and try again.",
     "cancelAnnotation": "Cancel annotation",
@@ -225,6 +238,10 @@
     "cancel": "Cancel",
     "edit": "Edit",
     "steer": "Interject",
+    "steerQueued": "Not delivered yet. Your message is still queued.",
+    "moveUp": "Move earlier",
+    "moveDown": "Move later",
+    "cancelSend": "Cancel send",
     "collapseQueued": "Collapse queued messages",
     "expandRemainingQueued": "Expand {{n}} more queued messages",
     "collapse": "Collapse",
@@ -233,7 +250,15 @@
     "sendingMessage": "Sending message: {{text}}",
     "uploadingAttachments": "Uploading attachments {{uploaded}}/{{total}}",
     "delete": "Delete",
-    "retry": "Retry"
+    "retry": "Retry",
+    "notSent": "Not sent",
+    "imagesNotUploaded_one": "{{count}} image didn't upload",
+    "imagesNotUploaded_other": "{{count}} images didn't upload",
+    "waitingForComputer": "Sends when your computer is back",
+    "waitingForNetwork": "Sends when you’re back online",
+    "queued": "Queued",
+    "retryImage": "Upload this image again",
+    "waitingMessage": "Waiting to send: {{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -260,12 +285,25 @@
       "usageReset": "Usage reset, continued automatically",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
+      "groupSwitchPending": "Switching to another computer…",
       "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
       "detail": {
         "reason": "Interruption reason",
         "attempt": "Attempt {{attempt}}/{{total}}",
         "sessionTotal": "{{count}} reconnects in this session"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} hit its usage limit; continued on {{to}}",
+        "auth": "{{from}} is signed out; continued on {{to}}",
+        "unavailable": "Couldn’t reach {{from}}; continued on {{to}}",
+        "overload": "{{from}} was overloaded; continued on {{to}}",
+        "failed": "{{from}} ran into a problem; continued on {{to}}"
+      },
+      "agentReconnect": {
+        "named": "Reconnected to {{computer}}; continued there",
+        "unnamed": "Reconnected to the original computer; continued there"
+      },
+      "groupSwitch": "Continued on another computer automatically"
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",
@@ -274,6 +312,7 @@
     "agentSwitchLocation": "Agent moved to {{device}}",
     "agentSwitchLocationThisComputer": "Agent moved back to this computer",
     "agentSwitchLocationOtherComputer": "Agent moved to another computer",
+    "agentSwitchLocationQuotaRebalance": "its quota should be used first",
     "learnStarted": "Skill learning started",
     "learnStartedBody": "Distillation runs in the background on desktop. When it's done, review the skill draft on desktop.",
     "learnFailed": "Skill learning couldn't start",
@@ -374,5 +413,15 @@
     "memory": "Remembered: {{title}}",
     "skillCreated": "Created skill: {{title}}",
     "skillUpdated": "Updated skill: {{title}}"
+  },
+  "richAnswer": {
+    "send": "Send Message",
+    "sending": "Sending…",
+    "sent": "Submitted",
+    "sendFailed": "The message was not submitted. Your entries are still here.",
+    "playVideo": "Play video",
+    "openVideoSource": "Open original video",
+    "calculationUnavailable": "Unable to calculate this value.",
+    "incomplete": "Some content could not be displayed."
   }
 }

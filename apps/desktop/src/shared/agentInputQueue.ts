@@ -1,3 +1,5 @@
+import type { AgentRequestReceipt } from './forwardedRequest.js';
+import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoordination.js';
 /**
  * Agent input queue wire contract.
  *
@@ -165,7 +167,7 @@ export interface AgentInputCreateOpts {
   providerId?: string | null;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   permissionMode?: string;
   /** 计划模式一级开关(与 permissionMode 正交), lazy-create / rehydrate 时透传给 maker。 */
   planMode?: boolean;
@@ -203,6 +205,51 @@ export interface AutoResumeInfo {
   maxAttempts: number;
   /** 本会话累计自动重连次数（不设上限，纯展示）。 */
   sessionTotal: number;
+  /**
+   * 供应商组自动换电脑后的续跑(reason 仍为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON，记账与额度重置
+   * 后的续跑同一条路径)：活动行据此显示「{from} {原因}，已换到 {to} 继续」。旧端忽略该字段。
+   */
+  agentSwitch?: AutoResumeAgentSwitch;
+  /**
+   * 供应商组里任务所在的那台连不上，等它恢复后留在原电脑继续(reason 同样为 USAGE_LIMIT_RESET_AUTO_RESUME_REASON)：
+   * 活动行显示「{computer} 已重新连上，继续运行」，读不到名称时不写电脑名。旧端忽略该字段，显示成「用量已恢复，
+   * 已自动继续」(与 agentSwitch 相同)。
+   */
+  agentReconnect?: AutoResumeAgentReconnect;
+  /**
+   * 分享的人这边的自动换电脑(分享者的供应商组替它换了一台，本机不知道是哪台)：活动行显示「已自动换一台
+   * 电脑继续」，不出现电脑名称(docs/product-rules/provider-groups.md §8)。旧端忽略该字段。
+   */
+  groupSwitch?: AutoResumeGroupSwitch;
+  /**
+   * 只出现在投影的进行中行：供应商组正在为这次失败换电脑，错误先不呈现，行内显示「正在换一台电脑继续」
+   * (provider-groups.md §6.1)。此时 attempt / maxAttempts / sessionTotal 都是 0(不是重连，不显示次数)；
+   * 旧端忽略该字段，显示成「重新连接中」。
+   */
+  groupSwitchPending?: AutoResumeGroupSwitch;
+}
+
+export interface AutoResumeGroupSwitch {
+  cause: AutoResumeAgentSwitchCause;
+}
+
+/**
+ * 换电脑的原因(docs/product-rules/provider-groups.md §6.1)。`failed` = 那台出了别的问题(Agent 意外退出、服务报错
+ * 用尽重试等)。旧端不认识的原因整条忽略，活动行退回「用量已恢复，已自动继续」。
+ */
+export type AutoResumeAgentSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'overload' | 'failed';
+
+export interface AutoResumeAgentSwitch {
+  /** 原电脑的显示名。 */
+  from: string;
+  /** 换到的电脑的显示名。 */
+  to: string;
+  cause: AutoResumeAgentSwitchCause;
+}
+
+export interface AutoResumeAgentReconnect {
+  /** 重新连上的那台电脑的显示名；读不到时为空。 */
+  computer: string;
 }
 
 /** 账号额度重置后自动继续时 `AutoResumeInfo.reason` 的取值（活动行据此换文案）。 */
@@ -248,11 +295,15 @@ export interface RecoveryCheckpoint {
 export const HOST_ONLY_AGENT_PREFIX = Symbol('host-only-agent-prefix');
 
 export interface AgentInputQueuedMessage {
+  /** Rejection marker only. The positive authorization is a Main-only, non-persisted guard. */
+  taskActionRequiresAuthorization?: true;
+  /** Main-owned delegation receipt; stripped from renderer/device-link input. */
+  botTaskCoordination?: BotTaskCoordination;
   [HOST_ONLY_AGENT_PREFIX]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
-  autoReviewUserText?: string | { kind: 'delegated-continuation' };
+  autoReviewUserText?: string | AgentRequestReceipt;
   /** Host-owned text-only input; retained by queue persistence and retry. */
   toolsDisabled?: boolean;
   clientId: string;
@@ -391,6 +442,7 @@ export interface AgentInputQueuedMessage {
   /**
    * 本次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。随 `autoResume`
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
+   * 首次派发前的组限额恢复只带 info、不设 autoResume：保留原用户气泡与用户轮记账，另显示恢复活动。
    */
   autoResumeInfo?: AutoResumeInfo;
   /** Bounded, durable handoff state shared by manual and automatic recovery. */
@@ -446,6 +498,8 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
 
 export interface AgentInputProjection {
   sessionId: string;
+  /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
+  turnInProgress?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；
@@ -483,6 +537,9 @@ export interface AgentInputProjection {
    * resending this string through the normal composer path.
    */
   errorRetryText: string | null;
+  /** Host confirms this error belongs to a persisted scheduled input whose recovery ended.
+   * Missing on older hosts means unavailable; never infer it from conversation history. */
+  errorCanContinue?: boolean;
   /**
    * 凭证切换等待态:发送需要重启共享 codex 进程,但被列出的会话(其它本地 Codex
    * 任务)挡住。等待中的那条消息保留在队首,挡路任务结束后 main 自动重发;renderer
@@ -523,14 +580,16 @@ export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string
 }
 
 /**
- * 队列崩溃恢复快照不能持久化跨设备引用正文或瞬时 Bot 状态。两者只在当前
- * 进程内存中存活；恢复后正文保留 fail-closed 标记，Bot 状态必须重新查询，
- * 不能把崩溃前的 working/idle 当成当前事实。
+ * 队列崩溃恢复快照不能持久化跨设备引用正文、瞬时 Bot 状态或尚未落库的
+ * 原用户消息自动继续标记。它们只在当前进程内存中存活；恢复后正文保留
+ * fail-closed 标记，Bot 状态必须重新查询，手动恢复不能冒充自动继续。
  */
 export function sanitizeQueuedMessageForPersistence(
   item: AgentInputQueuedMessage,
 ): AgentInputQueuedMessage {
-  let changed = false;
+  const transientUsageResume = !item.autoResume
+    && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON;
+  let changed = transientUsageResume;
   let persistedContent = item.persistedContent;
   let agentReferences = item.agentReferences;
   let chatMessage = item.chatMessage;
@@ -608,6 +667,7 @@ export function sanitizeQueuedMessageForPersistence(
       : {}),
   };
   delete sanitized[HOST_ONLY_AGENT_PREFIX];
+  if (transientUsageResume) delete sanitized.autoResumeInfo;
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -1110,7 +1170,8 @@ export function buildMakerUserMessage(
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
     : facingText;
   // Combine the host source with the latest body, including any Ghost rewrite.
-  const agentFacingText = (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
+  const agentFacingText = (queued.botTaskCoordination ? coordinationModelPrefix(queued.botTaskCoordination) : '')
+    + (queued[HOST_ONLY_AGENT_PREFIX] ?? '') + authoredText;
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

@@ -36,7 +36,7 @@ function fixture(workingDir?: string, afterResolve?: () => void) {
     snapshot, PluginTaskError,
     resolveRoute: async () => ({}),
     assertPlugin: () => { if (owner !== snapshot || !authorized) throw new PluginTaskError('PERMISSION_DENIED', 'Owner changed'); },
-    readPluginTaskConfig: () => ({ ...cfg }),
+    getPluginTaskDefaults: () => ({ ...cfg }),
     resolvePluginWorkerDirectory: resolve,
     createPluginTaskSession: create,
     clampPluginTaskPermissionMode: (mode: string) => mode,

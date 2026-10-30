@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { stringArrayParam } from './_array-param.js';
 
 const slug = z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,127}$/);
 const publishShape = {
@@ -11,9 +12,9 @@ const publishShape = {
   visibility: z.enum(['public', 'private', 'shared']).optional(),
   display_name: z.string().trim().min(1).max(200).optional(),
   summary: z.string().trim().min(1).max(1000).optional(),
-  tags: z.array(slug).max(20).optional(),
+  tags: stringArrayParam(z.array(slug).max(20)).optional(),
   changelog: z.string().trim().max(5000).optional(),
-  visible_slugs: z.array(slug).max(100).optional(),
+  visible_slugs: stringArrayParam(z.array(slug).max(100)).optional(),
 };
 export type SkillhubPublishInput = z.infer<z.ZodObject<typeof publishShape>>;
 export type SkillhubAgentRequest =

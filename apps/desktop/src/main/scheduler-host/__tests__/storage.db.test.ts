@@ -141,8 +141,10 @@ const SCHEDULER_DDL = [
       interval_ms INTEGER,
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
+      model_agent_device_id TEXT,
       model TEXT,
       provider_id TEXT,
+      agent_device_id TEXT,
       effort TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
@@ -275,6 +277,42 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
     storage: new DrizzleScheduleStorage(() => db),
   };
 }
+
+it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
+  const harness = createStorageHarness();
+  try {
+    harness.sqlite.prepare(`INSERT INTO sessions (id, title, created_at, updated_at)
+      VALUES ('sess-media', 'media task', 1, 1)`).run();
+    await harness.storage.insert(baseSchedule({ targetSessionId: 'sess-media' }));
+    await harness.storage.insertRun({ id: 'run-media', scheduleId: 'sch-1', sessionId: 'sess-media',
+      firedAt: 10, status: 'success', costAttribution: 'exact' });
+    const origin = { kind: 'scheduler', scheduleId: 'sch-1', runId: 'run-media' };
+    const insert = harness.sqlite.prepare(`INSERT INTO messages
+      (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES (?, ?, 'sess-media', ?, '{}', ?, ?)`);
+    insert.run('user-media', 'user-media', 'user', JSON.stringify({ origin,
+      mediaCosts: [{ amount: 0.75, currency: 'USD', approximate: false, kind: 'actual-cost' }],
+    }), 10);
+    if (mode !== 'tool-only') {
+      insert.run('answer-media', 'answer-media', 'assistant', JSON.stringify({ origin,
+        turnCostUsd: 0.25, turnCostIsEstimate: mode === 'subscription',
+        // Display totals must not be counted a second time by scheduler billing.
+        userTurnCostUsd: 1,
+      }), 11);
+    }
+    const actual = mode === 'api' ? 1 : 0.75;
+    const estimated = mode === 'subscription' ? 0.25 : 0;
+    for (let read = 0; read < 2; read++) {
+      expect(await harness.storage.listRuns('sch-1')).toMatchObject([{
+        costMoney: { amount: actual }, estimatedValueMoney: { amount: estimated }, costAttribution: 'exact',
+      }]);
+      expect(await harness.storage.listCostSummaries()).toMatchObject([{
+        scheduleId: 'sch-1', totalMoney: { amount: actual },
+        totalEstimatedValueMoney: { amount: estimated },
+      }]);
+    }
+  } finally { harness.close(); }
+});
 
 function enableLegacySessionFallback(
   harness: ReturnType<typeof createStorageHarness>,
@@ -590,7 +628,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         stderrTruncated: false, timedOut: false, aborted: false } as const;
       const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
         harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
-      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2 });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'provider mismatch' });
+      expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a'))
+        .toMatchObject({ errorMsg: 'provider mismatch' });
       await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
       const before = await harness.storage.listSidebarIndexRuns();
       expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
@@ -1871,5 +1911,35 @@ it('deduplicates only identical unrecovered failures across persistent history',
     await h.storage.insertRun({ ...failed, id: 'execution', firedAt: 67, errorMsg: 'model unavailable' });
     await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 68, status: 'success' });
     expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, errorMsg: 'model unavailable' })).toBe(false);
+  } finally { h.close(); }
+});
+
+// 心跳持续权限失配：引擎把失败与放行的 gate 结果写进同一条 run，runner 的失败通知
+// 也必须带同一份 gate 结果，否则 stderr 不同会让每一轮都重新通知。
+it('deduplicates a persistent permission mismatch until the heartbeat succeeds', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const gate = {
+      status: 'passed', decision: 'run', exitCode: 0, timedOut: false, aborted: false, checkSucceeded: true,
+      durationMs: 1, stdout: 'CINDY_PRECHECK_OK', stderr: 'gate warning on stderr', stdoutTruncated: false, stderrTruncated: false,
+    } as unknown as NonNullable<ScheduleRun['preRunHookResult']>;
+    const errorMsg = '[SCHEDULED_TASK_PERMISSION_MISMATCH] The bound task task-1 is saved as auto, Plan off but its running session uses bypassPermissions, Plan off; the heartbeat was not dispatched. It runs again once the task runs with its saved setting.';
+    // 第一次告警：此前没有同样的失败，通知照发。
+    const first: ScheduleRun = { id: 'mismatch-1', scheduleId: 'sch-1', firedAt: 10, status: 'failed', errorMsg, preRunHookResult: gate };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(first)).toBe(false);
+    await h.storage.insertRun(first);
+    // 下一轮同样失配：runner 通知时的 run 尚未落库，按同文案同 gate 结果命中去重。
+    const second: ScheduleRun = { ...first, id: 'mismatch-2', firedAt: 20 };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(second)).toBe(true);
+    // 不带 gate 结果的通知对不上 stderr，去重失效（这就是 runner 要带上它的原因）。
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...second, preRunHookResult: undefined })).toBe(false);
+    await h.storage.insertRun(second);
+    // gate 跳过（无变化）不算恢复：执行类失败只认 success。
+    await h.storage.insertRun({ id: 'idle-skip', scheduleId: 'sch-1', firedAt: 25, status: 'skipped', preRunHookResult: { ...gate, status: 'skipped', decision: 'skip', exitCode: 2 } as never });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...first, id: 'mismatch-3', firedAt: 30 })).toBe(true);
+    // 真实恢复：一次成功执行之后，再出现同样的失配重新通知。
+    await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 40, status: 'success' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...first, id: 'mismatch-4', firedAt: 50 })).toBe(false);
   } finally { h.close(); }
 });

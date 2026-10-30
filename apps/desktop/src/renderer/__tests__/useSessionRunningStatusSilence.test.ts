@@ -13,7 +13,8 @@ import {
 } from '@/lib/silencedSessionDoneStore';
 import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
-import { noteSessionTurnStartedForAlerts } from '@/hooks/usePendingAlertAttention';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { noteSessionTurnStartedForAlerts, refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import {
   addSessionAttention,
   clearSessionAttention,
@@ -69,6 +70,7 @@ vi.mock('@/lib/sessionAttentionStore', () => ({
 
 vi.mock('@/hooks/usePendingAlertAttention', () => ({
   noteSessionTurnStartedForAlerts: vi.fn(),
+  refreshPendingAlerts: vi.fn(async () => {}),
 }));
 
 function status(isRunning: boolean, hasError = false, sideTask?: boolean): SessionStatusInfo {
@@ -103,6 +105,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.pausedQueueSessions.clear();
     resetSilencedSessionDoneStoreForTests();
     resetSessionStartingStoreForTests();
+    setDataOwnerGeneration(null);
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -641,6 +644,117 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
   });
 
+  it('does not repeat an already cleared pending reminder after the sidebar remounts', async () => {
+    setDataOwnerGeneration('remount-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    await emitSnapshot(new Map([['s-remount', {
+      ...status(false), hasPendingAskUser: true, pendingRequestKeys: ['ask:request-1'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    first.result.current.clearNotification('s-remount');
+    first.unmount();
+    vi.mocked(addSessionAttention).mockClear();
+
+    setDataOwnerGeneration('remount-owner', 2);
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-remount', 'awaiting');
+  });
+
+  it('alerts on the next handoff step after remount without repeating the current step', async () => {
+    // #3259: a new owner-input step needs a fresh reminder even while pending stays true.
+    setDataOwnerGeneration('handoff-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    const handoffStatus = (step: number, actionable = true): SessionStatusInfo => ({
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: actionable,
+      pendingRequestKeys: [`handoff:same-request:${step}`],
+    });
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledExactlyOnceWith('s-handoff', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+    first.result.current.clearNotification('s-handoff');
+    first.unmount();
+    vi.mocked(addSessionAttention).mockClear();
+
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-handoff', 'awaiting');
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1, false)]]));
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+
+    // The Host advances stepNumber before publishing a non-actionable finishing card.
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2, false)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-handoff', 'awaiting');
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-handoff', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+    expect(addSessionAttention).toHaveBeenCalledWith('s-handoff', 'awaiting');
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps generic mobile delivery for a new permission alongside a handoff step', async () => {
+    setDataOwnerGeneration('mixed-handoff-owner');
+    const onSessionNeedsReply = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+
+    await emitSnapshot(new Map([['s-mixed', {
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: true,
+      pendingRequestKeys: ['handoff:same-request:1'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-mixed', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+
+    await emitSnapshot(new Map([['s-mixed', {
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: true,
+      hasPendingPermission: true,
+      pendingRequestKeys: ['handoff:same-request:1', 'permission:new-request'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-mixed');
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+  });
+
+  it('alerts for a different request while the sidebar is hidden, then again for a new owner', async () => {
+    setDataOwnerGeneration('first-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-1'],
+    }]]));
+    first.unmount();
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-2'],
+    }]]));
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-2'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-3'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(3);
+    await emitSnapshot(new Map([
+      ['s-pending', {
+        ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-3'],
+      }],
+      ['new-task', {
+        ...status(false), hasPendingAskUser: true, pendingRequestKeys: ['ask:new-task-request'],
+      }],
+    ]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(4);
+
+    setDataOwnerGeneration('second-owner');
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(6);
+  });
+
   it('clears awaiting attention when resolving a card immediately starts a continuation', async () => {
     vi.mocked(getSessionAttentionKind).mockReturnValue('awaiting');
     vi.mocked(hasSessionAttention).mockReturnValue(true);
@@ -823,5 +937,79 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(600); });
 
     expect(onSessionDone).toHaveBeenCalledExactlyOnceWith('paused');
+  });
+});
+
+describe('useSessionRunningStatus stale error dot', () => {
+  afterEach(() => {
+    storeMock.snapshot = new Map();
+    storeMock.listeners.clear();
+    storeMock.terminalErrorSessions.clear();
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('retires the error dot when the next turn finishes cleanly after the start missed it', async () => {
+    vi.useFakeTimers();
+    let kind: ReturnType<typeof getSessionAttentionKind>;
+    vi.mocked(addSessionAttention).mockImplementation((_sessionId, next) => {
+      kind = next;
+    });
+    vi.mocked(clearSessionAttention).mockImplementation(() => {
+      kind = undefined;
+      return true;
+    });
+    vi.mocked(getSessionAttentionKind).mockImplementation(() => kind);
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(false, true)]]));
+    expect(kind).toBe('error');
+
+    // 自动续跑(换电脑后继续、额度恢复后继续)启动那一刻还读到旧错误：当时没收掉。
+    await emitSnapshot(new Map([['s', status(true)]]));
+    expect(kind).toBe('error');
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).toHaveBeenCalledWith('s', { intent: 'explicit' });
+    // 派生账本重算：仍有未处置的错误尾行会重新点亮。
+    expect(refreshPendingAlerts).toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(kind).toBe('done');
+  });
+
+  it('stops owning its dot once the user handled it, so a later dot from elsewhere stays', async () => {
+    vi.useFakeTimers();
+    let kind: ReturnType<typeof getSessionAttentionKind>;
+    vi.mocked(addSessionAttention).mockImplementation((_sessionId, next) => {
+      kind = next;
+    });
+    vi.mocked(getSessionAttentionKind).mockImplementation(() => kind);
+    renderHook(() => useSessionRunningStatus(undefined));
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(false, true)]]));
+    // 用户关掉横幅：红点被处置。
+    kind = undefined;
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(true)]]));
+    // 这一轮里别的来源(如 Make 卡片失败)点了红点，但这一轮本身正常结束。
+    kind = 'error';
+    vi.mocked(clearSessionAttention).mockClear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).not.toHaveBeenCalledWith('s', { intent: 'explicit' });
+  });
+
+  it('leaves an error dot it did not set to the pending-alert ledger', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getSessionAttentionKind).mockReturnValue('error');
+    renderHook(() => useSessionRunningStatus(undefined));
+    storeMock.terminalErrorSessions.add('s');
+    await emitSnapshot(new Map([['s', status(true)]]));
+    storeMock.terminalErrorSessions.clear();
+    await emitSnapshot(new Map([['s', status(false)]]));
+    expect(clearSessionAttention).not.toHaveBeenCalledWith('s', { intent: 'explicit' });
+    expect(refreshPendingAlerts).toHaveBeenCalled();
   });
 });

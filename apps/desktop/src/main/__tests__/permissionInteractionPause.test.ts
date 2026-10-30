@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from '../maker-ipc/sharedPermission';
 import { beginInteractionRoute, installDesktopInteractionHandler, type InteractionHandler, type InteractionSession } from '../maker-ipc/interactionRouter';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setSharedTaskInteractionReader, type SharedTaskPeerCapture } from '../device-link/sharedTaskDispatch.js';
@@ -12,7 +12,7 @@ const ast = ts.createSourceFile('register.ts', source, ts.ScriptTarget.ES2022, t
 const names = new Set([
   'installDesktopInteractionListener', 'clearPendingInteraction',
   'schedulePendingPermissionTimeout', 'setPendingInteractionTimeoutsPaused',
-  'resolvePendingInteraction', 'defaultDecisionForPending',
+  'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
   'bindSharedPermission',
 ]);
@@ -55,7 +55,7 @@ function harness() {
     setExecutionPaused: (id: string, value: boolean) => { if (value) held.add(id); else held.delete(id); },
     onInteractionResolved: vi.fn(),
   };
-  const listeners = new Map<string, (request: InteractionRequest) => Promise<InteractionDecision>>();
+  const listeners = new Map<string, InteractionResolver>();
   const entries = new Map();
   const dismiss = vi.fn();
   const deps = {
@@ -86,7 +86,7 @@ function harness() {
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
-  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler) => {
+  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal) => {
     const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
     runtime.install(session);
     const lease = channel ? beginInteractionRoute(session, {
@@ -96,7 +96,7 @@ function harness() {
       onCancel: () => true,
     }) : undefined;
     const settled = vi.fn();
-    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest);
+    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest, signal);
     void promise.then(settled);
     return { promise, settled, lease };
   };
@@ -190,6 +190,35 @@ it('rejects a guest replacement tool input without consuming the pending request
 });
 
 describe('permission timeout follows the task pause lifecycle', () => {
+  // IM permission contract: production listener cancellation must dismiss paused cards too.
+  // Existing cases stop the whole task; a single aborted provider request must also settle
+  // Desktop and an IM takeover, reject late approval, and leave other tasks alone (unit).
+  it.each(['desktop', 'im-takeover'])('dismisses an aborted request while paused on %s', async (surface) => {
+    const h = harness();
+    const abort = new AbortController();
+    const p = h.request('permission', 'task', 'permission', undefined, abort.signal);
+    const other = h.request('other', 'other-task');
+    const taken = surface === 'im-takeover' ? h.take('task')[0] : undefined;
+    h.hold('task', true);
+    const allow = { kind: 'permission', behavior: 'allow' } as const;
+    if (taken) taken.resolve(allow);
+    else expect(h.answer('permission', allow)).toBe(false);
+    expect(p.settled).not.toHaveBeenCalled();
+    abort.abort();
+    const denied = { kind: 'permission', behavior: 'deny', reason: 'session_aborted' };
+    await expect(p.promise).resolves.toEqual(denied);
+    expect(h.entries.has('permission')).toBe(false);
+    expect(h.dismiss).toHaveBeenCalledTimes(1);
+    if (taken) await expect(taken.sharedPermission!.result).resolves.toEqual(denied);
+    h.hold('task', false);
+    expect(h.answer('permission', allow)).toBe(false);
+    expect(taken?.sharedPermission?.decide(allow)).not.toBe(true);
+    expect(h.entries.has('other')).toBe(true);
+    expect(other.settled).not.toHaveBeenCalled();
+    expect(h.answer('other', allow)).toBe(true);
+    await expect(other.promise).resolves.toEqual(allow);
+  });
+
   it('holds a shared route timeout until resume without closing either surface early', async () => {
     const h = harness();
     h.hold('task', true);

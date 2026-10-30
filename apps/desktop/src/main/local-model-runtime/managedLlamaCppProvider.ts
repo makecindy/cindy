@@ -1,4 +1,5 @@
 import type { CustomProviderConfig } from '@cindy/model-providers';
+import { isDeepStrictEqual } from 'node:util';
 import {
   LLAMACPP_DEFAULT_CONTEXT,
   llamaCppContextSize,
@@ -71,6 +72,15 @@ export function buildManagedLlamaCppProvider(
     runtimes,
   };
 }
+function sameManagedProviderConfig(
+  left: CustomProviderConfig,
+  right: CustomProviderConfig,
+): boolean {
+  // Preserve JSON value semantics (including omitted undefined properties),
+  // but ignore object insertion order. Model array order remains significant.
+  return isDeepStrictEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)));
+}
+
 export async function ensureManagedLlamaCppProvider(
   models: LlamaCppModel[] | undefined,
   stillActive: () => boolean,
@@ -86,7 +96,7 @@ export async function ensureManagedLlamaCppProvider(
   // reconciliation must never undo deletion, including deletion during CAS.
   if (!existing && models !== undefined) return false;
   const next = buildManagedLlamaCppProvider(models ?? [], existing ?? undefined, catalog);
-  if (JSON.stringify(next) === JSON.stringify(existing)) return false;
+  if (existing && sameManagedProviderConfig(next, existing)) return false;
   if (existing) {
     if (!(await updateCustomProviderIfUnchanged(existing.id, existing, next))) {
       if (!stillActive()) throw new Error('OWNER_CHANGED');
@@ -97,8 +107,10 @@ export async function ensureManagedLlamaCppProvider(
       if (!current) return false;
       if (
         isManagedLlamaCppProvider(current) &&
-        JSON.stringify(buildManagedLlamaCppProvider(models ?? [], current, catalog)) ===
-          JSON.stringify(current)
+        sameManagedProviderConfig(
+          buildManagedLlamaCppProvider(models ?? [], current, catalog),
+          current,
+        )
       )
         return false;
       throw new Error('PROVIDER_CONFLICT');

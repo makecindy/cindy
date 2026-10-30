@@ -19,6 +19,7 @@ import { createRemoteDeviceUsageMirror } from '../hooks/remoteDeviceUsageMirror'
 import {
   selectRemoteCodexAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteClaudeAccountUsage,
   useRemoteXaiRateLimit,
   resetRemoteDeviceUsageMirrorsForTest,
 } from '../hooks/useRemoteDeviceUsage';
@@ -35,6 +36,10 @@ type PushListener = (
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn<(deviceId: string, channel: string, args: unknown[]) => Promise<unknown>>(),
   pushListeners: [] as PushListener[],
+  reopenedListeners: [] as Array<(value: { deviceId: string }) => void>,
+  peerResetListeners: [] as Array<(value: { deviceId: string }) => void>,
+  statusListeners: [] as Array<(value: { status: 'online' | 'connecting' | 'stopped' }) => void>,
+  presenceListeners: [] as Array<(value: { deviceId: string; online: boolean }) => void>,
 }));
 
 function emitPush(push: { deviceId: string; channel: string; payload: unknown }): void {
@@ -56,11 +61,31 @@ beforeEach(() => {
   resetRemoteClaudeSessionRouteCacheForTest();
   mocks.invoke.mockReset();
   mocks.pushListeners.length = 0;
+  mocks.presenceListeners.length = 0;
+  mocks.statusListeners.length = 0;
+  mocks.peerResetListeners.length = 0;
+  mocks.reopenedListeners.length = 0;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       deviceLink: {
         invoke: mocks.invoke,
+        onPeerLinkReopened: (listener: (value: { deviceId: string }) => void) => {
+          mocks.reopenedListeners.push(listener);
+          return () => { mocks.reopenedListeners = mocks.reopenedListeners.filter(item => item !== listener); };
+        },
+        onPeerLinkReset: (listener: (value: { deviceId: string }) => void) => {
+          mocks.peerResetListeners.push(listener);
+          return () => { mocks.peerResetListeners = mocks.peerResetListeners.filter(item => item !== listener); };
+        },
+        onPresenceChanged: (listener: (value: { deviceId: string; online: boolean }) => void) => {
+          mocks.presenceListeners.push(listener);
+          return () => { mocks.presenceListeners = mocks.presenceListeners.filter(item => item !== listener); };
+        },
+        onStatusChanged: (listener: (value: { status: 'online' | 'connecting' | 'stopped' }) => void) => {
+          mocks.statusListeners.push(listener);
+          return () => { mocks.statusListeners = mocks.statusListeners.filter(item => item !== listener); };
+        },
         onRemotePush: (cb: PushListener) => {
           mocks.pushListeners.push(cb);
           return () => {
@@ -356,4 +381,126 @@ describe('remote account parity', () => {
     rerender({ device: 'device-2' });
     expect(seen).toEqual([null]);
   });
+});
+
+// Unit: the remote mirror must retain the daily-limit switch on reads and pushes,
+// including a switch-off update without dropping the monthly quota.
+it('mirrors enterprise daily-limit changes through device-link', async () => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: 1, fetchedAt: 1, dailyLimitEnabled: true };
+  mocks.invoke.mockResolvedValue(quota);
+  const view = renderHook(() => useRemoteClaudeAccountUsage('daily-switch'));
+  await flushMicrotasks();
+  expect(view.result.current).toEqual(quota);
+  const disabled = { ...quota, todaySpend: null, dailyLimitEnabled: false };
+  act(() => emitPush({ deviceId: 'daily-switch', channel: 'usage:claude-account-changed', payload: disabled }));
+  expect(view.result.current).toEqual(disabled);
+});
+
+it.each(['unlimited', 'invalidated'])('retains remote quota on unavailable reads but replays a missed %s clear', async (quotaState) => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 };
+  mocks.invoke.mockResolvedValue(quota);
+  const first = renderHook(() => useRemoteClaudeAccountUsage('device-quota'));
+  await flushMicrotasks();
+  expect(first.result.current).toEqual(quota);
+  first.unmount();
+  mocks.invoke.mockResolvedValue(null);
+  const unavailable = renderHook(() => useRemoteClaudeAccountUsage('device-quota'));
+  await flushMicrotasks();
+  expect(unavailable.result.current).toEqual(quota);
+  unavailable.unmount();
+  mocks.invoke.mockResolvedValue({ quotaState });
+  const cleared = renderHook(() => useRemoteClaudeAccountUsage('device-quota'));
+  await flushMicrotasks();
+  expect(cleared.result.current).toBeNull();
+});
+
+it('rereads only the recovered quota peer while consumers remain mounted', async () => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 };
+  mocks.invoke.mockResolvedValue(quota);
+  const a = renderHook(() => useRemoteClaudeAccountUsage('peer-a'));
+  const b = renderHook(() => useRemoteClaudeAccountUsage('peer-b'));
+  await flushMicrotasks();
+  mocks.invoke.mockClear();
+  mocks.invoke.mockResolvedValue({ quotaState: 'unlimited' });
+  act(() => mocks.presenceListeners.forEach(cb => cb({ deviceId: 'peer-a', online: false })));
+  act(() => mocks.presenceListeners.forEach(cb => cb({ deviceId: 'peer-a', online: true })));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(mocks.invoke.mock.calls[0]?.[0]).toBe('peer-a');
+  expect(a.result.current).toBeNull();
+  expect(b.result.current).toEqual(quota);
+});
+
+it('queues a recovery read when a previous quota request is still in flight', async () => {
+  let finish!: (value: unknown) => void;
+  mocks.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  mocks.invoke.mockResolvedValue({ quotaState: 'unlimited' });
+  const a = renderHook(() => useRemoteClaudeAccountUsage('peer-pending'));
+  act(() => mocks.presenceListeners.forEach(cb => cb({ deviceId: 'peer-pending', online: true })));
+  await act(async () => finish(null));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  expect(a.result.current).toBeNull();
+});
+
+it('rereads when the target comes online after an early relay recovery read fails', async () => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 };
+  mocks.invoke.mockResolvedValue(quota);
+  const view = renderHook(() => useRemoteClaudeAccountUsage('peer-late'));
+  await flushMicrotasks();
+  act(() => mocks.statusListeners.forEach(cb => cb({ status: 'online' })));
+  act(() => mocks.presenceListeners.forEach(cb => cb({ deviceId: 'peer-late', online: true })));
+  await flushMicrotasks();
+  mocks.invoke.mockRejectedValue(new Error('target offline'));
+  act(() => mocks.statusListeners.forEach(cb => cb({ status: 'connecting' })));
+  act(() => mocks.statusListeners.forEach(cb => cb({ status: 'online' })));
+  await flushMicrotasks();
+  expect(view.result.current).toEqual(quota);
+  mocks.invoke.mockClear();
+  mocks.invoke.mockResolvedValue({ quotaState: 'unlimited' });
+  act(() => mocks.presenceListeners.forEach(cb => cb({ deviceId: 'peer-late', online: true })));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(view.result.current).toBeNull();
+});
+
+it('rereads only the reset peer without needing relay or presence changes', async () => {
+  const quota = { spend: 12, maxBudget: 100, currency: 'CNY', todaySpend: null, fetchedAt: 1 };
+  mocks.invoke.mockResolvedValue(quota);
+  const a = renderHook(() => useRemoteClaudeAccountUsage('reset-a'));
+  const b = renderHook(() => useRemoteClaudeAccountUsage('reset-b'));
+  await flushMicrotasks();
+  mocks.invoke.mockClear();
+  mocks.invoke.mockResolvedValue({ quotaState: 'unlimited' });
+  act(() => mocks.peerResetListeners.forEach(cb => cb({ deviceId: 'reset-a' })));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(mocks.invoke.mock.calls[0]?.[0]).toBe('reset-a');
+  expect(a.result.current).toBeNull();
+  expect(b.result.current).toEqual(quota);
+  a.unmount();
+  b.unmount();
+  expect(mocks.peerResetListeners).toHaveLength(0);
+});
+
+it('rereads the recovered peer after the initial reset read failed, leaving its neighbor untouched', async () => {
+  const finite = { spend: 1, maxBudget: 10, currency: 'CNY', fetchedAt: 1 };
+  mocks.invoke.mockResolvedValue(finite);
+  const a = renderHook(() => useRemoteClaudeAccountUsage('retry-a'));
+  const b = renderHook(() => useRemoteClaudeAccountUsage('retry-b'));
+  await flushMicrotasks();
+  mocks.invoke.mockRejectedValueOnce(new Error('first open failed'));
+  act(() => mocks.peerResetListeners.forEach(cb => cb({ deviceId: 'retry-a' })));
+  await flushMicrotasks();
+  expect(a.result.current).toEqual(finite);
+  mocks.invoke.mockClear();
+  mocks.invoke.mockResolvedValue({ quotaState: 'invalidated' });
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'retry-a' })));
+  await flushMicrotasks();
+  expect(a.result.current).toBeNull();
+  expect(b.result.current).toEqual(finite);
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(mocks.invoke.mock.calls[0]?.[0]).toBe('retry-a');
+  a.unmount(); b.unmount();
+  expect(mocks.reopenedListeners).toHaveLength(0);
 });

@@ -1,8 +1,8 @@
 {
   "title": "Group Chats",
   "memberSeparator": ", ",
-  "memberCount_one": "{{count}} teammate",
-  "memberCount_other": "{{count}} teammates",
+  "memberCount_one": "{{count}} member",
+  "memberCount_other": "{{count}} members",
   "organizer": "Organizer",
   "waitingConfirm": "{{name}} is waiting for your go-ahead",
   "loadFailedTitle": "Couldn’t Load This Group Chat",
@@ -16,19 +16,16 @@
   },
   "create": {
     "title": "New Group Chat",
-    "description": "Put a few teammates in one group. Say something and they’ll chime in together.",
     "nameLabel": "Group Name",
     "namePlaceholder": "e.g. Weekend Trip",
     "nameRequired": "Enter a group name",
     "membersLabel": "Choose Teammates",
     "selectedCount_one": "{{count}} selected, up to {{max}}",
     "selectedCount_other": "{{count}} selected, up to {{max}}",
-    "minMembers": "Choose at least {{min}} teammates",
-    "notEnoughBots": "You need at least {{min}} available teammates to start a group chat. Add a teammate first.",
+    "close": "Close",
+    "submitShort": "Create",
     "submit": "Create Group Chat",
-    "failed": "Couldn’t create the group chat. Try again in a moment.",
-    "chooseComputer": "Choose a Computer",
-    "computerNote": "This group chat lives on {{deviceName}}, and its teammates work there."
+    "failed": "Couldn’t create the group chat. Try again in a moment."
   },
   "memberStatus": {
     "paused": "Paused",
@@ -60,6 +57,8 @@
     "send": "Send"
   },
   "timeline": {
+    "newMessages_one": "{{count}} new message",
+    "newMessages_other": "{{count}} new messages",
     "emptyTitle": "No messages in this group yet",
     "emptyDescription": "Say something to get started and your teammates will join in. @ a teammate to have only them reply.",
     "roundEnded": "Teammates are done",
@@ -77,6 +76,12 @@
     "planDoneGeneric": "Work split finished",
     "olderOnComputer": "Earlier messages are on your computer"
   },
+  "quote": {
+    "label": "Quoting {{name}}: {{summary}}",
+    "deleted": "Original message was deleted",
+    "attachments": "{{name}} and others ({{total}} files)",
+    "unavailable": "This message is no longer available."
+  },
   "notice": {
     "memberJoined": "{{name}} joined the group",
     "memberFailed": "{{name}} couldn’t reply this time",
@@ -87,7 +92,65 @@
     "workdirUnavailable": "{{name}} can’t find the working directory",
     "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
     "stepTimeout": "{{name}} took too long, so this step was stopped",
-    "stepUnavailable": "{{name}} is unavailable and can’t do this step"
+    "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+    "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.",
+        "advice": "Ask the teammate’s owner to archive unused sessions.",
+        "details": "Ask the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing."
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}} can’t reply: the remote computer has reached its total remote session limit.",
+        "advice": "Ask the remote computer’s owner to release unused sessions or raise the limit.",
+        "details": "Ask that computer’s owner to release unused sessions or raise the limit in Remote & sharing."
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}} could not reply: the current model does not support images.",
+        "advice": "Choose an image-capable model.",
+        "details": "Choose an image-capable model, or enable and configure Vision Bridge in Settings → Personalization, then send your message again."
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}} could not reply: no model is available.",
+        "advice": "Choose an available model in teammate settings.",
+        "details": "Choose a connected, available model in the teammate settings, then send your message again."
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}} could not reply: the model connection needs authentication.",
+        "advice": "Reconnect the model provider.",
+        "details": "Reconnect the model provider in Settings, then send your message again."
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}} could not reply: too many model requests.",
+        "advice": "Send your message again later.",
+        "details": "Send your message again later, or choose another available model."
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}} couldn't reply: the model service is temporarily overloaded.",
+        "advice": "Send your message again later.",
+        "details": "Try sending again later, or choose another available model."
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}} could not reply: the model usage limit was reached.",
+        "advice": "Check the quota or choose another model.",
+        "details": "Check the provider quota, or choose another available model."
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}} could not reply: the network connection failed.",
+        "advice": "Check your network or proxy.",
+        "details": "Check your network or proxy, then send your message again."
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}} did not reply before the timeout.",
+        "advice": "Send your message again.",
+        "details": "Send your message again, or choose another available model."
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}} could not reply this time.",
+        "advice": "Send your message again.",
+        "details": "Send your message again. If it still fails, check the logs and report the issue."
+      }
+    },
+    "runtimeFailureSetupHint": "To change the model or settings, use the computer where this teammate runs."
   },
   "plan": {
     "intro_one": "This takes {{count}} step. Here’s who does it:",
@@ -96,6 +159,7 @@
     "start": "Start Plan",
     "dismiss": "Skip Plan",
     "editHint": "To change who does what, just say so",
+    "autoNote": "Each finished step starts the next one automatically.",
     "pauseNote": "Work pauses after each step until you click “Start Next Step”.",
     "superseded": "Updated",
     "dismissed": "Skipped",
@@ -120,11 +184,25 @@
     "allDone": "All done"
   },
   "speaking": {
+    "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
   },
+  "task": {
+    "state": {
+      "started": "In progress",
+      "waiting": "Waiting for your confirmation",
+      "completed": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "timed-out": "Timed out"
+    }
+  },
   "files": {
-    "onComputer": "These files are on your computer. Open them there."
+    "onComputer": "These files are on your computer. Open them there.",
+    "loading": "Loading…",
+    "unavailable": "Unavailable right now",
+    "untitled": "Attachment"
   },
   "settings": {
     "open": "Group Settings",
@@ -135,12 +213,13 @@
     "minMembers": "A group chat needs at least {{min}} teammates",
     "maxMembers": "Up to {{max}}",
     "noMoreBots": "No other teammates are available to add",
-    "nameSaveFailed": "Couldn’t save the group name. The previous name was kept.",
+    "nameSaveFailed": "The group name could not be saved. Your input was kept. Please retry.",
     "membersSaveFailed": "Couldn’t update members. Try again.",
     "replyMode": "When No One Is @Mentioned",
     "replyModeAll": "Anyone Can Reply",
     "replyModeMentioned": "Only @Mentioned Reply",
     "replyModeNote": "Teammates with nothing to add stay quiet. Each round runs up to 3 passes and 10 messages, then waits for you to click “Continue Discussion”.",
+    "replyModeNoteQueue": "Teammates answer one at a time; the first five go on by themselves. Quoting a teammate or replying in its thread also calls it.",
     "replyModeSaveFailed": "Couldn’t save the reply setting. Try again.",
     "delete": "Delete Group Chat",
     "deleteNote": "Only this group chat and its messages are deleted. The teammates, their memory, and their private chats aren’t affected.",
@@ -149,7 +228,7 @@
     "speakingMode": "Speaking order",
     "speakingModeAuto": "Automatic",
     "speakingModeSequential": "One at a time",
-    "speakingModeAutoNote": "Without @mentions or with @Everyone, teammates think at the same time in the first pass, then reply one after another. Mentioned teammates answer in the order you mentioned them.",
+    "speakingModeAutoNote": "No mentions or @Everyone: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
     "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
     "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
     "setOrganizer": "Make Organizer",
@@ -161,18 +240,156 @@
     "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
     "add": "Add teammate",
     "projectDirOnComputer": "Choose or change it on your computer",
-    "memberActions": "Actions for {{name}}"
+    "memberActions": "Actions for {{name}}",
+    "retry": "Retry",
+    "conflict": "Group settings changed. Review them before saving again. Your input was kept.",
+    "archive": "Archive group chat",
+    "archiveConfirmTitle": "Archive “{{name}}”?",
+    "archiveNote": "Only a group owner can archive it. This stops new messages and keeps the history.",
+    "description": "Group Description",
+    "descriptionSaveFailed": "Couldn’t save the group description.",
+    "makeAdmin": "Make Admin",
+    "removeAdmin": "Remove Admin Role",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "guest": "Guest"
+    },
+    "cloudStatus": {
+      "loading": "Loading settings…",
+      "permission": "Only group owners and admins can change these settings.",
+      "unavailable": "Couldn’t load group settings. Try again."
+    }
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",
     "planOpen": "A work split is underway. Finish or stop it before starting another.",
-    "planClosed": "This plan has already ended or been updated."
+    "planClosed": "This plan has already ended or been updated.",
+    "invalidAttachment": "This attachment cannot be read. Select it again and send.",
+    "attachmentUnavailable": "Could not retrieve the attachment from your phone. Check the device connection and retry.",
+    "attachmentTooLarge": "The attachment exceeds 100 MB. Choose a smaller file.",
+    "mediaUploadFailed": "Could not upload the attachment to the chat service. Try again later.",
+    "authRequired": "Your sign-in has expired. Sign in again on your computer.",
+    "chatUnavailable": "The chat service is unavailable. Check your connection and retry.",
+    "importPending": "Group history is still syncing. Try again later.",
+    "requestTimeout": "The result is not confirmed yet. Refresh to check before retrying.",
+    "permissionDenied": "You do not have permission to manage this group.",
+    "serviceError": "The chat service could not complete the request. Try again later.",
+    "groupArchived": "This group is archived. This action is unavailable.",
+    "quoteUnavailable": "The quoted message was deleted or is no longer visible. The quote was removed. Send again.",
+    "lifecycleUnavailable": "The current server or computer does not support this action yet.",
+    "groupDissolved": "This group has been dissolved. You can still read the available history.",
+    "lastOwner": "Transfer ownership or dissolve this group before leaving."
   },
   "followUp": {
     "next": "Plan · Next step",
     "failedStep": "Step {{step}} didn't finish"
+  },
+  "server": {
+    "attachmentTooLarge": "Group attachments must be {{size}} MB or smaller. Choose a smaller file.",
+    "offline": "Can’t connect to group chat. Try again.",
+    "loadFailed": "Can’t load this group chat right now. Try again.",
+    "loadOlder": "Load Earlier Messages",
+    "attachmentFailed": "Couldn’t open the attachment. Try again.",
+    "attachmentPreviewLoading": "Loading attachment…",
+    "attachmentPreviewFailed": "Couldn’t preview this attachment. Try again.",
+    "attachmentPreviewTooLarge": "This file is larger than 10 MB and can’t be previewed here.",
+    "attachmentPreviewBinary": "This attachment isn’t readable text and can’t be previewed here.",
+    "attachmentPreviewTruncated": "Preview limited to 10,000 lines and 100,000 characters.",
+    "attachmentPreviewEmpty": "This file is empty.",
+    "attachmentPreviewRetry": "Try again",
+    "attachmentPreviewOpenOutside": "Open in browser",
+    "attachmentPreviewClose": "Close attachment preview",
+    "previewUnavailable": "Preview unavailable",
+    "endpointUnavailable": "Group chat service configuration is unavailable. Please retry."
+  },
+  "lifecycle": {
+    "dissolve": "Dissolve group",
+    "dissolveNote": "This cannot be undone. Messaging will stop for everyone, active work will stop, and invitations will expire. Members keep access to the history they can already read.",
+    "hide": "Remove from my list",
+    "hideNote": "Remove this chat from your list on all your devices. This does not change membership, delete history, stop ongoing work, or affect other members.",
+    "leave": "Leave group",
+    "leaveNote": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
+    "unavailable": "The current server or computer does not support this action yet.",
+    "dissolved": "This group has been dissolved. You can still read the available history.",
+    "failed": "Could not complete this action. Try again.",
+    "lastOwner": "Transfer ownership or dissolve this group before leaving."
+  },
+  "mask": {
+    "toolAccess": "Tool access",
+    "catchup": {
+      "title": "Mentions of me",
+      "me": "Me",
+      "markAll": "Mark all as read",
+      "empty": "No unread mentions",
+      "thread": "Thread",
+      "main": "Group chat",
+      "answered": "Replied for you"
+    },
+    "title": "AI reply mode",
+    "settings": "AI reply settings",
+    "companion": "My teammate",
+    "choose": "Choose a teammate",
+    "enabled": "Automatic replies",
+    "triggerLabel": "Trigger",
+    "resumeAfter": "Resume after being away",
+    "start": "Start time",
+    "end": "End time",
+    "startManual": "Start now",
+    "stop": "Stop replies",
+    "todos": "Collect my to-dos",
+    "digestLabel": "Send me a digest",
+    "saving": "Saving…",
+    "saveError": "Couldn't save. Your previous settings still apply. Retry.",
+    "retry": "Retry",
+    "loading": "Loading your settings…",
+    "takeover": "I'll reply",
+    "resume": "Resume AI replies",
+    "status": {
+      "enabled": "Enabled",
+      "paused": "Paused",
+      "off": "Off",
+      "offline": "Offline",
+      "waiting": "Waiting",
+      "unbound": "Not set"
+    },
+    "detail": {
+      "paused": "You've taken over this exchange",
+      "off": "Automatic replies are off",
+      "offline": "Replies paused · Computer offline",
+      "waiting": "Waiting for you to start",
+      "unbound": "No teammate selected",
+      "enabled": "Your teammate is ready to reply for you."
+    },
+    "trigger": {
+      "always": "Always enabled",
+      "manual": "Manual",
+      "scheduled": "Scheduled"
+    },
+    "digest": {
+      "daily": "Daily",
+      "manual": "Manually"
+    },
+    "minutes": "{{count}} minutes",
+    "presence": "You're here · Resumes after {{minutes}} min away",
+    "scheduledWait": "Starts at {{time}}",
+    "attribution": "{{name}} replied for {{owner}}",
+    "digestNow": "Summarize now",
+    "digestWorking": "Summarizing…",
+    "digestSent": "Sent to your teammate chat",
+    "digestFailed": "Could not summarize. Try again.",
+    "digestEmpty": "Nothing new to summarize",
+    "access": {
+      "chat": "Group conversation only",
+      "tools": "Owner authorized tools and information",
+      "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
+      "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
+      "confirm": "Confirm"
+    }
   }
 }

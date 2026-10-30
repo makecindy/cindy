@@ -25,6 +25,12 @@
     "fastTag": "快速"
   },
   "options": {
+    "speed": {
+      "label": "速度",
+      "standard": "标准",
+      "fast": "快速",
+      "ultrafast": "超快"
+    },
     "fastMode": "快速模式",
     "fastModeAccessibility": "快速模式 {{model}}",
     "reasoningEffort": "推理强度",
@@ -92,6 +98,10 @@
     "recommended": "推荐",
     "source": "来源",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "供应商组 · {{count}} 台电脑",
+    "groupBadge_other": "供应商组 · {{count}} 台电脑",
     "harness": "Harness",
     "restoreRecommended": "恢复推荐",
     "saveFailed": "未能保存，请重试。",

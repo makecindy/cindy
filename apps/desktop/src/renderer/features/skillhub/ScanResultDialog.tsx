@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 /**
  * ScanResultDialog — hub 安全扫描完成后弹出的独立结果弹窗。
@@ -284,40 +285,34 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
           {(rejectionReason || failedGates.length > 0) && (
             <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-2">
               {rejectionReason && (
-                <section className="mb-3 select-text rounded-xl border border-[var(--error-border)] bg-[var(--error-bg)] p-3">
-                  <h3 className="text-sm font-medium text-[var(--text-primary)]">
-                    {t('skillhub.scanResult.rejectionReason')}
-                  </h3>
-                  <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-[var(--text-secondary)]">
-                    {rejectionReason}
-                  </p>
-                </section>
+                <ErrorNotice
+                  className="mb-3 select-text"
+                  message={<h3 className="font-medium">{t('skillhub.scanResult.rejectionReason')}</h3>}
+                  description={<p className="whitespace-pre-wrap break-words">{rejectionReason}</p>}
+                />
               )}
               {/* Failed gates with details */}
               {failedGates.length > 0 && (
                 <div className="flex flex-col gap-2">
                   {failedGates.map((gate) => (
-                    <div
+                    <ErrorNotice
                       key={gate.name}
-                      className="rounded-lg border border-[var(--error-border)] bg-[var(--error-bg)] p-3"
+                      message={
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
+                            {scanGateLabel(gate, t)}
+                          </span>
+                          <span
+                            className={cn(
+                              'ml-auto shrink-0 rounded-full border px-2 py-0.5',
+                              'border-[var(--error-border)] text-xs font-medium leading-none text-[var(--error-fg)]',
+                            )}
+                          >
+                            {scanStatusLabel(gate.status, t)}
+                          </span>
+                        </div>
+                      }
                     >
-                      <div className="flex items-center gap-2">
-                        <AlertTriangle
-                          size={14}
-                          className="shrink-0 text-[var(--error-fg-strong)]"
-                        />
-                        <span className="text-sm font-medium text-[var(--msg-assistant-text)]">
-                          {scanGateLabel(gate, t)}
-                        </span>
-                        <span
-                          className={cn(
-                            'ml-auto shrink-0 rounded-full border px-2 py-0.5',
-                            'border-[var(--error-border)] text-xs font-medium leading-none text-[var(--error-fg)]',
-                          )}
-                        >
-                          {scanStatusLabel(gate.status, t)}
-                        </span>
-                      </div>
                       {visibleScanIssues(gate, t).length > 0 && (
                         <div className="mt-2 flex flex-col gap-1.5 pl-5">
                           {visibleScanIssues(gate, t).map((issue, i) => (
@@ -340,7 +335,7 @@ export function ScanResultDialog({ open, onClose, result }: ScanResultDialogProp
                           ))}
                         </div>
                       )}
-                    </div>
+                    </ErrorNotice>
                   ))}
                 </div>
               )}

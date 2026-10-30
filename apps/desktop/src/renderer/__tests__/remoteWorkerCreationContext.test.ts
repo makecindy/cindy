@@ -20,6 +20,15 @@ describe('remote Orca Worker creation context', () => {
     expect(selection).toContain('target.hostId');
     expect(read('components/settings/RemoteHostDetail.tsx')).toContain('loadSshSessionModelSelection(hostId)');
   });
+
+  it('writes the SSH no-effort sentinel instead of omitting the session field', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const newSession = await createSession(');
+    const end = draft.indexOf('if (!newSession)', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(draft.slice(start, end)).toContain("effort: sshEffort ?? '',");
+  });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
 
@@ -73,7 +82,7 @@ describe('remote Orca Worker creation context', () => {
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
     expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
-    expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
+    expect(selector).toContain('return isCodexGatewayWireModel(id) && !hasSavedKey;');
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',

@@ -1,138 +1,47 @@
 import { z } from 'zod';
+import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 /**
- * 伙伴工作台:主人把本机项目交给伙伴后,伙伴先读懂项目里的任务,再按主人的意思继续。
- *
- * 权限只来自主人的那次「交给伙伴」(工作台里点选,或主人本人那一轮让伙伴用 add_workbench_project
- * 记下):宿主从 callerSessionId 反查伙伴
- * (只认本机、在用的伙伴主任务),目标必须落在该伙伴已接手的项目里——Cindy 任务要是
- * 普通本机任务、未归档删除、不是任何伙伴自己的隐藏任务;本机 Claude Code / Codex / Pi 会话的
- * 工作目录要在已接手项目内;PR / issue 要属于已接手项目的 GitHub 远端;参考链接只认 https
- * 或项目内路径。工具层不接受 botId,越权一律由宿主确定性拒绝。
+ * 伙伴工作台(2026-10-17 放弃「项目」):工作台是「一眼」——等你 / 在做两块加一行页脚,
+ * 数据来自宿主的程序级观察层(不碰 AI)。伙伴跟进的范围不再按目录授予:
+ *  - 总调度伙伴(主人设置里「自动跟进所有任务」的那个)可读本机全部任务与在线电脑上的任务;别的伙伴开的
+ *    任务默认只看不跟,除非宿主已把跟进交给它(TASK_FOLLOWED_BY_OTHER_BOT);
+ *  - 其它伙伴只碰自己开的(后台任务)或明确接手(set_workbench_task_responsibility)的任务。
+ * 宿主从 callerSessionId 反查伙伴(只认本机、在用的伙伴主任务),工具层不接受 botId,
+ * 越权一律由宿主确定性拒绝。
  */
 
-export type WorkbenchTaskStateWire =
-  | 'running'
-  | 'waiting'
-  | 'queued'
-  | 'stopped'
-  | 'automation'
-  | 'done';
+export type GlanceKindWire = 'waiting' | 'working';
 
-export type WorkbenchVerdictWire = 'unfinished' | 'idea' | 'done';
-
-export interface WorkbenchBriefGithubItemWire {
-  number: number;
+/** 宿主「一眼」投影的一行(与 Desktop shared/botAutonomy.ts 的 GlanceRow 同形)。 */
+export interface GlanceRowWire {
+  sessionId: string;
+  deviceId: string | null;
+  deviceName: string | null;
+  online: boolean;
   title: string;
-  state: string;
-  updatedAt: string;
-  url: string;
+  kind: GlanceKindWire;
+  /** 状态表 phase(running / usage-limit / waiting-* / errored);旧宿主可能缺省。 */
+  phase?: string;
+  minutes: number;
+  question: string | null;
+  waitingFor: 'permission' | 'answer' | 'error' | null;
+  followerBotId: string | null;
 }
 
-/** 宿主现算的项目素材:有界、只看近期、带缓存。 */
-export interface WorkbenchProjectBriefWire {
-  /** 顶层与 docs/ 下两级以内的 Markdown 路径,重要的在前(只给路径,要看再用文件工具读)。 */
-  docs: string[];
-  /** 不是 git 仓库时最近 14 天改过的文件(最多 20 个)。 */
-  recent: Array<{ path: string; modifiedAt: string }>;
-  git: {
-    branch: string | null;
-    changes: number | null;
-    commits: Array<{ sha: string; date: string; author: string; subject: string }>;
-    branches: Array<{ name: string; date: string }>;
-    /** 查 PR / issue 用的 GitHub 仓库(fork 工作流优先 upstream)。 */
-    remote: string | null;
-    /** upstream 与 origin 里的 GitHub 仓库;pr: / issue: 条目可以用其中任意一个。 */
-    remotes: string[];
-  } | null;
-  github:
-    | { repo: string; pullRequests: WorkbenchBriefGithubItemWire[]; issues: WorkbenchBriefGithubItemWire[] }
-    | { unavailable: 'no-credential' | 'not-github' | 'error' };
-}
-
-export interface WorkbenchProjectWire {
-  name: string;
-  path: string;
-  exists: boolean;
-  brief: WorkbenchProjectBriefWire | null;
-}
-
-export interface WorkbenchJudgmentWire {
-  title: string;
-  verdict: WorkbenchVerdictWire;
-  next: string | null;
-  ref?: string | null;
-  updatedAt: string;
-}
-
-/** 会话的起始目的与最近几条;宿主只读头尾,不读全文。 */
-export interface WorkbenchDigestWire {
-  purpose: string | null;
-  recent: Array<{ role: 'user' | 'assistant'; text: string }>;
-}
-
-export interface WorkbenchTaskWire {
-  /** Cindy 任务是 session id;还没接过来的本机会话是 `claude:<id>` / `codex:<id>` / `pi:<id>`。 */
-  taskId: string;
-  source: 'cindy' | 'claude-code' | 'codex' | 'pi';
-  /** 已经是 Cindy 里的任务(本机会话被继续过之后也会变成 true)。 */
-  imported: boolean;
-  /** 清洗过的原始标题。 */
-  title: string;
-  project: string;
-  /** 只有 Cindy 任务有运行状态;本机会话为 null。 */
-  state: WorkbenchTaskStateWire | null;
-  /** delegated = 你开的后台任务。 */
-  kind: 'existing' | 'delegated';
-  lastActiveAt: string | null;
-  messageCount: number | null;
-  digest: WorkbenchDigestWire | null;
-  /** 你之前写下的判断;还没读过为 null。 */
-  judgment: WorkbenchJudgmentWire | null;
-}
-
-/** 你写下的 PR / issue / 建议条目。 */
-export interface WorkbenchItemWire {
-  taskId: string;
-  project: string;
-  judgment: WorkbenchJudgmentWire;
-}
-
-export interface WorkbenchAutomationWire {
-  id: string;
-  name: string;
-  /** routine = 你自己的例行任务;automation = 已接手项目里的自动化。 */
-  kind: 'routine' | 'automation';
-  state: WorkbenchTaskStateWire;
-  project: string | null;
-  nextRunAt: string | null;
-  lastResult: string | null;
-}
-
-export interface BotWorkbenchSnapshotWire {
-  projects: WorkbenchProjectWire[];
-  tasks: WorkbenchTaskWire[];
-  items: WorkbenchItemWire[];
-  automations: WorkbenchAutomationWire[];
-  counts: Record<WorkbenchVerdictWire | 'unjudged', number>;
-  /** 候选多于返回条数时为 true;totalTasks 是实际总数。 */
-  truncated: boolean;
-  totalTasks: number;
-  /** 超过 30 天没动、没有列出的会话数。 */
-  olderCount: number;
-}
-
-export interface WorkbenchJudgmentInputWire {
-  taskId: string;
-  title: string;
-  verdict: WorkbenchVerdictWire;
-  next?: string | null;
-  ref?: string | null;
-  project?: string | null;
+/** 宿主「一眼」投影(与 Desktop shared/botAutonomy.ts 的 BotGlance 同形)。 */
+export interface BotGlanceWire {
+  botId: string;
+  scope: 'all' | 'own';
+  waiting: GlanceRowWire[];
+  working: GlanceRowWire[];
+  lastSweepAt: number;
+  doneToday: number;
+  offlineDevices: string[];
 }
 
 export interface WorkbenchTranscriptWire {
@@ -141,26 +50,19 @@ export interface WorkbenchTranscriptWire {
 }
 
 export interface BotWorkbenchCallbacks {
-  get(params: { callerSessionId: string }): Promise<ControlResult<{ workbench: BotWorkbenchSnapshotWire }, string>>;
+  projects?: (params: { callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean }) => Promise<ControlResult<{ projects: Array<Record<string, unknown>> }, string>>;
+  setResponsibility?: (params: { callerSessionId: string; taskId: string; responsible: boolean }) => Promise<ControlResult<{ taskId: string; responsible: boolean }, string>>;
+  todos?: (
+    callerSessionId: string,
+    operation: 'list' | 'update' | 'preflight' | 'ingest',
+    input?: unknown,
+  ) => Promise<ControlResult<Record<string, unknown>, string>>;
+
+  get(params: { callerSessionId: string }): Promise<ControlResult<{ workbench: BotGlanceWire }, string>>;
   read(params: {
     callerSessionId: string;
     taskId: string;
   }): Promise<ControlResult<{ taskId: string; transcript: WorkbenchTranscriptWire }, string>>;
-  set(
-    params: { callerSessionId: string } & WorkbenchJudgmentInputWire,
-  ): Promise<ControlResult<{ taskId: string; judgment: WorkbenchJudgmentWire }, string>>;
-  setMany(params: {
-    callerSessionId: string;
-    items: WorkbenchJudgmentInputWire[];
-  }): Promise<
-    ControlResult<
-      {
-        saved: number;
-        results: Array<{ taskId: string; ok: true } | { taskId: string; ok: false; errorCode: string; message: string }>;
-      },
-      string
-    >
-  >;
   continueTask(params: {
     callerSessionId: string;
     taskId: string;
@@ -171,22 +73,10 @@ export interface BotWorkbenchCallbacks {
         taskId: string;
         delivery: 'started' | 'queued';
         queuedMessageId?: string;
-        importedFrom?: string;
-        startedFrom?: string;
       },
       string
     >
   >;
-  /** 主人在这一轮亲口交代时,把一个本机项目目录交给伙伴(与工作台里「交给伙伴」同一份记录)。 */
-  addProject(params: {
-    callerSessionId: string;
-    path: string;
-  }): Promise<ControlResult<{ project: { name: string; path: string }; projectCount: number }, string>>;
-  /** 主人让伙伴别再管某个项目时,从工作台移除它;项目里的任务与文件都不动。 */
-  removeProject(params: {
-    callerSessionId: string;
-    path: string;
-  }): Promise<ControlResult<{ path: string; removed: boolean }, string>>;
 }
 
 export interface BotWorkbenchToolDeps {
@@ -195,7 +85,6 @@ export interface BotWorkbenchToolDeps {
 }
 
 export const WORKBENCH_MESSAGE_MAX_CHARS = 4_000;
-export const WORKBENCH_BATCH_MAX = 30;
 
 function missingSession() {
   return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴主任务。');
@@ -204,37 +93,31 @@ function missingSession() {
 const TASK_ID = z
   .string()
   .min(1)
-  .max(256)
-  .describe('get_workbench 返回的 taskId;或你新写的 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n>、idea:<slug>');
+  .max(512)
+  .describe('任务 id:本机任务直接写 id;另一台电脑上的任务写 deviceId::sessionId(get_workbench 返回的 task_id 原样用)');
 
-const JUDGMENT_FIELDS = {
-  task_id: TASK_ID,
-  title: z.string().min(1).max(40).describe('人话标题'),
-  verdict: z.enum(['unfinished', 'idea', 'done']).describe('你的判断'),
-  next: z.string().max(120).optional().describe('一句下一步;done 可省略'),
-  ref: z
-    .string()
-    .max(2000)
-    .optional()
-    .describe('可选参考:https 链接,或已接手项目内的文件绝对路径(例如 docs/design.md)'),
-  project: z.string().max(1024).optional().describe('idea 条目归属的项目路径;只交了一个项目时可省略'),
-};
+const iso = (ms: number) => (Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null);
 
-function judgmentInput(item: {
-  task_id: string;
-  title: string;
-  verdict: WorkbenchVerdictWire;
-  next?: string;
-  ref?: string;
-  project?: string;
-}): WorkbenchJudgmentInputWire {
-  return {
-    taskId: item.task_id,
+/** 给模型看的「一眼」:只留判断要用的字段,task_id 可直接交给 get_task_digest。 */
+export function glanceForModel(glance: BotGlanceWire): Record<string, unknown> {
+  const row = (item: GlanceRowWire) => ({
+    task_id: item.sessionId,
     title: item.title,
-    verdict: item.verdict,
-    next: item.next ?? null,
-    ...(item.ref ? { ref: item.ref } : {}),
-    ...(item.project ? { project: item.project } : {}),
+    ...(item.phase ? { phase: item.phase } : {}),
+    minutes: item.minutes,
+    ...(item.deviceName ? { device: item.deviceName } : {}),
+    ...(item.online ? {} : { online: false }),
+    ...(item.kind === 'waiting' && item.waitingFor ? { waiting_for: item.waitingFor } : {}),
+    ...(item.question ? { question: item.question } : {}),
+    ...(item.followerBotId && item.followerBotId !== glance.botId ? { followed_by: item.followerBotId } : {}),
+  });
+  return {
+    scope: glance.scope,
+    waiting: glance.waiting.map(row),
+    working: glance.working.map(row),
+    done_today: glance.doneToday,
+    last_sweep_at: iso(glance.lastSweepAt),
+    ...(glance.offlineDevices.length ? { offline_devices: glance.offlineDevices } : {}),
   };
 }
 
@@ -243,32 +126,62 @@ export function registerBotWorkbenchTools(
   deps: BotWorkbenchToolDeps,
 ): void {
   const callerSessionId = () => deps.getSessionContext().sessionId ?? null;
+  if (deps.callbacks.projects) {
+    const projects = deps.callbacks.projects;
+    registry.register({
+      name: 'list_teammate_projects', category: 'bots',
+      description: 'List your linked projects with their computer, directory and availability. Read relevant project instructions and materials on demand with your file tools; keep project knowledge in its existing location, not your personal memory. Foreign-computer paths must not be read locally. include_available also lists local registered projects you can link. This does not read project contents, assign tasks, authorize repository changes or start background work.',
+      inputShape: { include_available: z.boolean().optional() },
+      handler: async ({ include_available }) => {
+        const id = callerSessionId(); if (!id) return missingSession();
+        const result = await projects({ callerSessionId: id, includeAvailable: include_available });
+        return result.ok ? okPayload({ projects: result.projects }) : errorPayload(result.errorCode, result.message);
+      },
+    });
+    registry.register({
+      name: 'set_teammate_project', category: 'bots',
+      description: 'Link or unlink one project in your own teammate settings when the owner requests it. Use the project_id from list_teammate_projects(include_available=true). Unlinking preserves files, project registration, memory and task responsibility. Linking is context only, not authorization to edit a repository, contact tasks or scan in the background.',
+      inputShape: { project_id: z.string().regex(/^[a-f0-9]{64}$/), linked: z.boolean() },
+      handler: async ({ project_id, linked }) => {
+        const id = callerSessionId(); if (!id) return missingSession();
+        const result = await projects({ callerSessionId: id, projectId: project_id, linked });
+        return result.ok ? okPayload({ projects: result.projects }) : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
+  if (deps.callbacks.todos) registerTodoTools(registry, callerSessionId, deps.callbacks.todos);
+
+  if (deps.callbacks.setResponsibility) {
+    const change = deps.callbacks.setResponsibility;
+    registry.register({
+      name: 'set_workbench_task_responsibility',
+      category: 'bots',
+      description: 'Explicitly take or release responsibility for one Cindy task on this computer. Taking needs the owner\'s request in this turn; you may release on your own. Tasks you start yourself are recorded by the host. Release only changes your responsibility; it does not stop, move, archive or delete the task, and does not affect Todo. Taking responsibility alone does not start execution; the host then wakes you when the task gets stuck, waits, errors or finishes.',
+      inputShape: { task_id: z.string().min(1).max(256), responsible: z.boolean() },
+      handler: async ({ task_id, responsible }) => {
+        const id = callerSessionId();
+        if (!id) return missingSession();
+        const result = await change({ callerSessionId: id, taskId: task_id, responsible });
+        return result.ok ? okPayload({ task_id: result.taskId, responsible: result.responsible }) : errorPayload(result.errorCode, result.message);
+      },
+    });
+  }
 
   registry.register({
     name: 'get_workbench',
     category: 'bots',
     description:
-      '读取你的工作台:主人交给你的项目,每个项目的素材(brief:文档路径、git 分支与最近 14 天提交、我打开的 PR 与 issue;项目很多时只有最近交代的前 8 个带 brief,其余为 null,需要时用文件工具自己看),'
-      + '项目里最近 30 天的会话(项目里的 Cindy 任务——包括主人自己开的——不管你判断过没有都在,最多 30 条;再补本机 Claude Code / Codex / Pi 会话,合计最多 40 条;更早的只给 olderCount),你写过的 PR / issue / 建议条目,你的例行任务与项目里的自动化。'
-      + '主人提到这个项目、让你跟进或问进展时,先看工作台;主人自己在项目里开的任务也在里面,它们属于你知道的项目事务,不需要主人逐个告诉你。'
-      + '每条会话带 digest:起始目的与最后几条对话,足够大多数判断,不用逐个读全文。'
-      + '接手的做法:主人把项目交给你时,先调用它;再用你自己的文件工具读 brief.docs 里最前面的一两份(README / DESIGN / AGENTS 之类),弄清项目是做什么的、在往哪走;'
-      + '然后看最近的提交(不是 git 仓库时看 brief.recent)和会话 digest,一次性用 set_workbench_tasks 批量写下判断;只有拿不准的几件才 read_workbench_task。'
-      + '判断与下一步要体现你对项目的理解(它在项目里处于什么位置、和哪份文档或哪次提交有关),不要只复述会话。'
-      + '项目文档(如 DESIGN.md)、最近的 PR 与 issue 同样是素材:值得做的写成 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n> 或 idea:<slug> 条目,带上 ref。'
-      + '判断标准:最后一条是没被执行的要求、报错中断、明确留下的待办 → unfinished;讨论过方案或想法但之后没人动 → idea;已交付、纯问答、与项目无关 → done。'
-      + '写完后在聊天里用几句话告诉主人:没做完的几件各一句下一步,值得做的几件各一句建议,问主人要接着做哪件。不要自作主张开始做;只有主人点头的那件才 continue_workbench_task。'
-      + '主人在工作台上点「跟进」时会发来「跟进「<标题>」」(其它语言如 Follow up on “<标题>”):先调用本工具按标题找到那一条,'
-      + '再 continue_workbench_task——会话条目发一句承接上文、收到就能接着做的指令;PR / issue / 建议条目会在项目目录开后台任务。'
-      + '找不到同名条目就问主人是哪一件,不要猜;有几条同名时列出候选让主人选。'
-      + '要在项目里开全新的任务时用 start_session_task,把 working_dir 设为该项目路径。',
+      '读取你的工作台「一眼」:waiting 是在等主人的任务(等权限 / 等回答 / 出错),working 是正在做的任务,'
+      + '另有今天做完几件与上次扫描时间。总调度伙伴(scope=all)看到本机与在线电脑上的全部任务;其它伙伴(scope=own)只看自己开的或明确接手的任务。'
+      + '每行带 phase(working 里 usage-limit 表示撞上用量上限)。定时兜底叫醒时逐件看 waiting,以及 working 里 usage-limit 或久无进展的任务:'
+      + '先 get_task_digest 读摘要再决定。只读,不改任何任务。',
     inputShape: {},
     handler: async () => {
       const sessionId = callerSessionId();
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.get({ callerSessionId: sessionId });
       return result.ok
-        ? okPayload({ workbench: result.workbench })
+        ? okPayload({ workbench: glanceForModel(result.workbench) })
         : errorPayload(result.errorCode, result.message);
     },
   });
@@ -277,8 +190,8 @@ export function registerBotWorkbenchTools(
     name: 'read_workbench_task',
     category: 'bots',
     description:
-      '只读一件候选会话最近的内容(用户与助手的文字,去掉工具结果与系统提示,最多约 4000 字,保留最近的)。'
-      + 'digest 不够判断时才用。本机 Claude Code / Codex / Pi 会话只读转录文件头尾,不会导入。PR / issue / 建议条目没有对话记录,看 ref。只能读主人交给你的项目里的会话。',
+      '只读一件任务最近的内容(用户与助手的文字,去掉工具结果与系统提示,最多约 4000 字,保留最近的)。'
+      + '先用 get_task_digest;摘要不够判断时才用。总调度伙伴可读任意任务(另一台电脑上的需在线);其它伙伴只能读自己开的或接手的任务。',
     inputShape: { task_id: TASK_ID },
     handler: async ({ task_id }) => {
       const sessionId = callerSessionId();
@@ -291,56 +204,16 @@ export function registerBotWorkbenchTools(
   });
 
   registry.register({
-    name: 'set_workbench_task',
-    category: 'bots',
-    description:
-      '写下你对一件事的理解,主人的工作台立刻显示。整条替换之前的判断。多件时用 set_workbench_tasks。'
-      + 'task_id:get_workbench 返回的会话 taskId,或你新写的 pr:<owner>/<repo>#<n>、issue:<owner>/<repo>#<n>(须是已接手项目的 GitHub 仓库)、idea:<slug>(小写字母数字与连字符,3–40 位)。'
-      + 'title:人话标题,不超过 40 字,说清这件事是什么;verdict:unfinished(没做完、可以接着做)/ idea(聊过但没下文,建议往下做)/ done(做完或与项目无关,工作台不显示);'
-      + 'next:一句下一步,不超过 120 字,unfinished / idea 必填;ref:可选参考(https 链接或项目内文件路径)。只写有依据的判断,不要编造。',
-    inputShape: JUDGMENT_FIELDS,
-    handler: async (args) => {
-      const sessionId = callerSessionId();
-      if (!sessionId) return missingSession();
-      const result = await deps.callbacks.set({ callerSessionId: sessionId, ...judgmentInput(args) });
-      return result.ok
-        ? okPayload({ task_id: result.taskId, judgment: result.judgment })
-        : errorPayload(result.errorCode, result.message);
-    },
-  });
-
-  registry.register({
-    name: 'set_workbench_tasks',
-    category: 'bots',
-    description:
-      `批量写下判断(1–${WORKBENCH_BATCH_MAX} 条),字段与 set_workbench_task 相同。逐条校验,一条不合格不影响其它条;返回每条的结果。`
-      + '接手项目时优先用它:看完 get_workbench 的 brief 与 digest 后一次写完。',
-    inputShape: {
-      items: z.array(z.object(JUDGMENT_FIELDS)).min(1).max(WORKBENCH_BATCH_MAX).describe('判断列表'),
-    },
-    handler: async ({ items }) => {
-      const sessionId = callerSessionId();
-      if (!sessionId) return missingSession();
-      const result = await deps.callbacks.setMany({
-        callerSessionId: sessionId,
-        items: items.map((item) => judgmentInput(item)),
-      });
-      return result.ok
-        ? okPayload({ saved: result.saved, results: result.results })
-        : errorPayload(result.errorCode, result.message);
-    },
-  });
-
-  registry.register({
     name: 'continue_workbench_task',
     category: 'bots',
     description:
-      '主人点头后(包括主人在工作台上点「跟进」),让工作台上的一件任务接着做:给它发一句话,消息以你的名义投递,任务正忙时排到当前一轮之后。'
-      + '如果它还是没接过来的本机 Claude Code / Codex 会话,宿主先只导入这一条,再投递;返回里的 task_id 是导入后的新任务 id,之后用它。'
-      + 'Pi 会话、导入不了的会话,以及 PR / issue / 建议条目:宿主在该项目目录里开一条你的后台任务(与 start_session_task 同一条路径),'
-      + '目标是条目标题 + 你的 message + 参考与摘要;返回 started_from 为原条目,task_id 是新后台任务,之后用 message_session_task 跟进。'
-      + '只能作用于主人交给你的项目里的任务;你自己用 start_session_task 开的后台任务继续用 message_session_task。'
-      + '把 message 写成那件任务收到就能直接开始做的一句指令,带上必要的背景;不要重复它已经做完的外部操作。',
+      '让一件任务接着做:给它发一句话,消息标明由你发出,任务正忙时排到当前一轮之后。'
+      + '主人这一轮开口时按主人的意思发；自主唤醒（跟进、例行任务）时只用来让交给你跟进的任务按原目标接着做，不借它追加新要求、改目标或停止任务，那些要等主人开口。'
+      + '总调度伙伴可继续没有伙伴开的任务(含在线电脑上的)、自己开的任务,以及已交给它跟进的任务;别的伙伴开的任务默认由那位伙伴跟进,'
+      + '会返回 TASK_FOLLOWED_BY_OTHER_BOT,只能读不能继续,需要接手时告诉主人可在那位伙伴的设置里打开「它开的任务也交给你跟进」。'
+      + '其它伙伴只能继续自己接手的任务,你自己开的后台任务继续用 message_session_task。'
+      + '发之前先 get_task_digest 确认它还需要这句话;把 message 写成那件任务收到就能直接做的一句指令,不要重复它已经做完的外部操作。'
+      + '返回 DELIVERY_UNKNOWN 时消息可能已送达,先读摘要确认再决定是否重发。',
     inputShape: {
       task_id: TASK_ID,
       message: z
@@ -363,50 +236,146 @@ export function registerBotWorkbenchTools(
             task_id: result.taskId,
             delivery: result.delivery,
             ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
-            ...(result.importedFrom ? { imported_from: result.importedFrom } : {}),
-            ...(result.startedFrom ? { started_from: result.startedFrom } : {}),
           })
         : errorPayload(result.errorCode, result.message);
     },
   });
+}
 
+const deadline = z.object({
+  kind: z.enum(['date', 'instant']),
+  date: z.string().max(10),
+  timeZone: z.string().max(100),
+  at: z.string().max(80).optional(),
+  sourceId: z.string().max(512).optional(),
+  sourceVersion: z.number().int().nonnegative().optional(),
+  quote: z.string().max(2000).optional(),
+  observedAt: z.string().max(80).optional(),
+});
+const todoPatch = z.object({
+  id: z.string().max(128).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+  key: z.string().min(1).max(512).optional(),
+  origin: z.enum(['assigned', 'discovered']).optional(),
+  title: z.string().min(1).max(300).optional(),
+  progress: z.string().max(4000).optional(),
+  outcome: z.string().min(1).max(4000).optional(),
+  value: z.string().max(4000).optional(),
+  next: z
+    .object({
+      label: z.string().min(1).max(100),
+      instruction: z.string().min(1).max(4000),
+      kind: z.enum(['advance', 'view', 'decide']),
+    })
+    .nullable()
+    .optional(),
+  sources: z
+    .array(
+      z.object({
+        kind: z.enum(['conversation', 'mail', 'feishu', 'github', 'community', 'task']),
+        id: z.string().min(1).max(512),
+        label: z.string().min(1).max(300),
+        ref: z.string().max(2000).optional(),
+        project: z.string().max(4096).optional(),
+        version: z.number().int().nonnegative().optional(),
+        observedAt: z.string().max(80).optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
+  associations: z
+    .array(
+      z.object({
+        kind: z.enum(['task', 'pr']),
+        id: z.string().max(512),
+        label: z.string().max(300),
+      }),
+    )
+    .max(100)
+    .optional(),
+  sourceDeadline: deadline.nullable().optional(),
+  deadlineOverride: z.object({ value: deadline.nullable() }).optional(),
+  deadlineCandidate: z
+    .object({ value: deadline, reason: z.string().max(2000) })
+    .nullable()
+    .optional(),
+  suggestedDate: z.string().max(10).nullable().optional(),
+  resolvedActionRequestId: z.string().min(1).max(128).optional(),
+  operation: z
+    .enum(['complete', 'reopen', 'delete', 'mute', 'later', 'restore', 'confirm-deadline'])
+    .optional(),
+  until: z.string().max(80).optional(),
+  completion: z
+    .object({
+      summary: z.string().min(1).max(4000),
+      ref: z.string().max(2000).optional(),
+    })
+    .optional(),
+});
+function registerTodoTools(
+  registry: XdtHelperToolRegistry,
+  caller: () => string | null,
+  callback: NonNullable<BotWorkbenchCallbacks['todos']>,
+) {
+  const run = async (op: 'list' | 'update' | 'preflight' | 'ingest', input?: unknown) => {
+    const id = caller();
+    if (!id) return missingSession();
+    const result = await callback(id, op, input);
+    return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+  };
   registry.register({
-    name: 'add_workbench_project',
+    name: 'list_teammate_todos',
     category: 'bots',
     description:
-      '把主人这台电脑上的一个项目目录交给你跟进,工作台立刻多出这个项目;之后它就在你的负责范围里,主人事先安排的那几轮也能处理它里面的任务。'
-      + '只在主人本人这一轮明确说要交给你(例如「这个项目以后你盯着」「把 ~/code/foo 交给你」)时用;不要因为聊到某个项目就自己加。'
-      + 'path 填绝对路径;主人只说了项目名时先用 list_projects 找到它的路径。不能交整个磁盘根目录或主目录。'
-      + '加完先 get_workbench 接手,再用几句话告诉主人你看到了什么。',
+      '按id/key读取同一事务（含完成/忽略记录），或分页搜索自己的清单，每页25条并返回总数。独立于项目/任务。维护优先精确读；无变化不扫描信息源。',
     inputShape: {
-      path: z.string().min(1).max(4096).describe('项目目录的绝对路径'),
+      id: z.string().max(128).optional(),
+      key: z.string().max(512).optional(),
+      query: z.string().max(300).optional(),
+      view: z.enum(['open', 'done', 'hidden']).optional(),
+      origin: z.enum(['all', 'assigned', 'discovered']).optional(),
+      offset: z.number().int().nonnegative().optional(),
     },
-    handler: async ({ path }) => {
-      const sessionId = callerSessionId();
-      if (!sessionId) return missingSession();
-      const result = await deps.callbacks.addProject({ callerSessionId: sessionId, path });
-      return result.ok
-        ? okPayload({ project: result.project, project_count: result.projectCount })
-        : errorPayload(result.errorCode, result.message);
-    },
+    handler: (input) => run('list', input),
   });
-
   registry.register({
-    name: 'remove_workbench_project',
+    name: 'update_teammate_todo',
     category: 'bots',
     description:
-      '主人本人这一轮说不用你再管某个项目时,把它从你的工作台移除。项目里的任务、文件和你写过的判断都不会被删,只是不再归你跟进。'
-      + 'path 用 get_workbench 里该项目的 path（也可以写 ~/ 开头）。工作台里没有这个项目时返回 PROJECT_NOT_IN_WORKBENCH，什么都没移除，照实告诉主人。',
+      '新建或部分更新同一事务。新建必须带key、title、outcome（预期结果或完成标准）；key跨来源标识同一问题；已存在时用id+expectedRevision，冲突先读再合并，省略字段保留旧值。发现可入单但不自动授权执行/发送。完成必须携带可核验summary/ref；停止/合并未必满足outcome。删除/静音保留抑制记录，只有用户恢复可解除。来源可指向任务（kind=task，id 为本机任务 id 或 deviceId::sessionId），不需要项目。跟进处理完一件事后更新或完成对应事务。到期保留来源/时区，模糊日期用candidate，用户覆盖不被新来源改掉；稍后不修改期限。',
+    inputShape: { patch: todoPatch },
+    handler: ({ patch }) => run('update', patch satisfies TodoPatch),
+  });
+  registry.register({
+    name: 'preflight_teammate_todo_events',
+    category: 'bots',
+    description:
+      '现有已授权事件流的便宜增量预检：按来源游标、稳定问题key及忽略/完成记录过滤（project 只作原样回传，不再裁剪范围），只有review事件需要取相关正文/模型判断。本工具不连接、扫描或新建定时器；无新事件不调用。',
     inputShape: {
-      path: z.string().min(1).max(4096).describe('要移除的项目路径'),
+      events: z
+        .array(
+          z.object({
+            source: z.string().max(512),
+            sequence: z.number().int().nonnegative(),
+            key: z.string().max(512),
+            project: z.string().max(4096).optional(),
+          }),
+        )
+        .max(100),
     },
-    handler: async ({ path }) => {
-      const sessionId = callerSessionId();
-      if (!sessionId) return missingSession();
-      const result = await deps.callbacks.removeProject({ callerSessionId: sessionId, path });
-      return result.ok
-        ? okPayload({ path: result.path, removed: result.removed })
-        : errorPayload(result.errorCode, result.message);
+    handler: ({ events }) => run('preflight', events),
+  });
+  registry.register({
+    name: 'record_teammate_todo_event',
+    category: 'bots',
+    description:
+      '原子保存一条成功处理的增量事件与Todo更新或no-action结果。source+sequence幂等，按来源顺序逐条提交，不跳过失败事件；失败不会推进游标。重复、已完成、已忽略的同一key不会重建。不同来源同一反馈沿用key/id，不能擅自绕过用户拒绝。',
+    inputShape: {
+      source: z.string().max(512),
+      sequence: z.number().int().nonnegative(),
+      patch: todoPatch.optional(),
+      skip: z.enum(['duplicate', 'suppressed', 'outside-scope', 'no-action']).optional(),
     },
+    handler: (input) => run('ingest', input),
   });
 }

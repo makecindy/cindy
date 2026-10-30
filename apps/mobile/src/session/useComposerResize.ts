@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { runOnJS, runOnUI, useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
+import { runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { Gesture } from '@/platform/gestureHandler';
 import { COMPOSER_TEXT_LINE_HEIGHT, COMPOSER_TEXT_VERTICAL_PADDING } from '@/session/composerTextMetrics';
 import {
@@ -13,8 +13,10 @@ import {
   computeComposerResizeBounds,
   resolveComposerInputHeight,
   settleComposerResizeDrag,
+  shouldDismissComposerDuringDrag,
   shouldDismissComposerOnRelease,
 } from '@/session/composerResize';
+import { composerPullTranslation, type ComposerPullEvent, type ComposerPullThroughBridge } from '@/session/composerPullThrough';
 
 const isStoreClient = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
@@ -30,6 +32,8 @@ export interface UseComposerResizeInput {
   onSnapToAuto?: () => void;
   /** Only gesture boundaries cross to JS; never publish per-frame heights. */
   onGrabberTouchActiveChange?: (active: boolean) => void;
+  /** 聊天记录拖进输入框时由列表侧接手；与按住顶边拖动走同一套调高逻辑。 */
+  pullThrough?: ComposerPullThroughBridge;
 }
 
 /** UI-thread resize. React remembers the settled height, not the pointer stream. */
@@ -50,6 +54,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
   const dragHeight = useSharedValue(model.visibleContentHeight);
   const dragTranslation = useSharedValue(0);
   const startAbsoluteY = useSharedValue(0);
+  const dismissedGestureId = useSharedValue(0);
   useLayoutEffect(() => {
     const nextGeometry = { collapsed: input.collapsed === true, bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight };
     // Check the generation and publish together on UI: another gesture may
@@ -87,14 +92,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
     current.onGrabberTouchActiveChange?.(false);
   }, [awaitingCollapse, gestureId]);
 
-  const scrollGesture = useMemo(() => Gesture.Native(), []);
-  const gesture = useMemo(() => Gesture.Pan()
-    // Dedicated grabber: own the touch before the keyboard's ancestor ScrollView.
-    .minDistance(0)
-    .blocksExternalGesture(scrollGesture)
-    .onBegin((event) => {
+  // 手柄拖动与「聊天记录拖进输入框」共用的三段 UI 线程逻辑。
+  const drag = useMemo(() => {
+    const beginAt = (absoluteY: number) => {
       'worklet';
-      startAbsoluteY.value = event.absoluteY;
+      startAbsoluteY.value = absoluteY;
       awaitingCollapse.value = false;
       gestureId.value += 1;
       // A second drag can begin before the first JS completion is delivered.
@@ -103,29 +105,83 @@ export function useComposerResize(input: UseComposerResizeInput) {
       dragHeight.value = startHeight.value;
       dragTranslation.value = 0;
       runOnJS(begin)(gestureId.value);
-    })
-    .onUpdate((event) => {
+    };
+    const moveBy = (translationY: number) => {
       'worklet';
-      // The grabber itself moves with the resizing frame. Use screen coordinates
-      // so its changing origin cannot feed back into the drag distance.
-      dragTranslation.value = Number.isFinite(event.absoluteY)
-        ? event.absoluteY - startAbsoluteY.value
-        : event.translationY;
-      dragHeight.value = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY: dragTranslation.value });
-    })
-    .onFinalize((event, successful) => {
+      if (dismissedGestureId.value === gestureId.value) return;
+      dragTranslation.value = translationY;
+      dragHeight.value = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY });
+      // 拖到一行、折叠完工具栏后再多拉一段即收起，不等松手。
+      if (shouldDismissComposerDuringDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY })) {
+        dismissedGestureId.value = gestureId.value;
+        runOnJS(finish)(dragHeight.value, startHeight.value, translationY, true, gestureId.value);
+      }
+    };
+    const finalize = (translationY: number, successful: boolean) => {
       'worklet';
+      // 已在拖动途中收起：之后的抬手或取消不再结算。
+      if (dismissedGestureId.value === gestureId.value) return;
       if (!successful) {
         // Cancellation must restore the settled frame even while JS is busy,
         // so a new gesture cannot inherit the canceled temporary height.
         dragHeight.value = geometry.value.visibleHeight;
         active.value = false;
       }
-      const translationY = Number.isFinite(event.absoluteY)
-        ? event.absoluteY - startAbsoluteY.value
-        : event.translationY;
       runOnJS(finish)(dragHeight.value, startHeight.value, translationY, successful, gestureId.value);
-    }), [active, awaitingCollapse, begin, dragHeight, dragTranslation, finish, geometry, gestureId, scrollGesture, startAbsoluteY, startHeight]);
+    };
+    return { beginAt, moveBy, finalize };
+  }, [active, awaitingCollapse, begin, dismissedGestureId, dragHeight, dragTranslation, finish, geometry, gestureId, startAbsoluteY, startHeight]);
+
+  const scrollGesture = useMemo(() => Gesture.Native(), []);
+  const gesture = useMemo(() => Gesture.Pan()
+    // Dedicated grabber: own the touch before the keyboard's ancestor ScrollView.
+    .minDistance(0)
+    .blocksExternalGesture(scrollGesture)
+    .onBegin((event) => {
+      'worklet';
+      drag.beginAt(event.absoluteY);
+    })
+    .onUpdate((event) => {
+      'worklet';
+      // The grabber itself moves with the resizing frame. Use screen coordinates
+      // so its changing origin cannot feed back into the drag distance.
+      drag.moveBy(Number.isFinite(event.absoluteY)
+        ? event.absoluteY - startAbsoluteY.value
+        : event.translationY);
+    })
+    .onFinalize((event, successful) => {
+      'worklet';
+      drag.finalize(Number.isFinite(event.absoluteY)
+        ? event.absoluteY - startAbsoluteY.value
+        : event.translationY, successful);
+    }), [drag, scrollGesture, startAbsoluteY]);
+
+  // 列表侧接手：event 每次都带完整位置，同一帧内合并的 begin / move / end 也能按状态补齐。
+  const pullThroughEvent = input.pullThrough?.event;
+  const pullThroughId = useSharedValue(0);
+  const pullThroughOpen = useSharedValue(false);
+  useAnimatedReaction(
+    () => pullThroughEvent?.value ?? null,
+    (event: ComposerPullEvent | null) => {
+      if (event === null || event.id <= 0) return;
+      if (event.active) {
+        if (event.id > pullThroughId.value) {
+          pullThroughId.value = event.id;
+          pullThroughOpen.value = true;
+          drag.beginAt(event.startY);
+        }
+        if (event.id === pullThroughId.value && pullThroughOpen.value) drag.moveBy(composerPullTranslation(event));
+        return;
+      }
+      // 只收尾已经开始的那次接手；开始与结束挤在同一帧时什么都没发生，无需收尾。
+      if (event.id !== pullThroughId.value || !pullThroughOpen.value) return;
+      pullThroughOpen.value = false;
+      const translationY = composerPullTranslation(event);
+      drag.moveBy(translationY);
+      drag.finalize(translationY, event.successful);
+    },
+    [drag, pullThroughEvent],
+  );
 
   useLayoutEffect(() => {
     mounted.current = true;

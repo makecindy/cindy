@@ -14,6 +14,7 @@
  */
 
 import type { Topic } from '@cindy/device-link';
+import type { HistoryPageShape } from '../localDb/ipc/historyViewReader';
 
 /** legacy 老控制端(link-open)订阅的「全部」topic 标记。 */
 export const LEGACY_TOPIC = '*';
@@ -48,13 +49,24 @@ const rememberedTopicsByController = new Map<string, Set<StoredTopic>>();
  * 新控制端误判成 legacy，否则 set-model 的显式 provider null 会被当成占位。
  */
 const rememberedCapabilitiesByController = new Map<string, Set<string>>();
-const historyViewsByController = new Map<string, Map<string, { ready: boolean; liveKeys: readonly string[]; expanded: Set<string> }>>();
+interface HistoryViewRecord {
+  ready: boolean;
+  liveKeys: readonly string[];
+  expanded: Set<string>;
+  /** The controller's latest page asked for work lines, so it also accepts work patches. */
+  workLines: boolean;
+  /** Last latest-page shape this controller received, by page read or work patch. */
+  shape?: HistoryPageShape;
+  shapeSeq: number;
+}
+const historyViewsByController = new Map<string, Map<string, HistoryViewRecord>>();
 
 /** Capture this subscription before reading; only its successful result may enable filtering. */
 export function prepareHistoryView(deviceId: string, sessionId: string) {
   if (!controllerHasTopic(deviceId, `session:${sessionId}`)) return undefined;
   const views = historyViewsByController.get(deviceId) ?? new Map();
-  const view = views.get(sessionId) ?? { ready: false, liveKeys: [], expanded: new Set<string>() };
+  const view: HistoryViewRecord = views.get(sessionId)
+    ?? { ready: false, liveKeys: [], expanded: new Set<string>(), workLines: false, shapeSeq: 0 };
   views.set(sessionId, view);
   historyViewsByController.set(deviceId, views);
   const isCurrent = () => historyViewsByController.get(deviceId)?.get(sessionId) === view;
@@ -62,10 +74,15 @@ export function prepareHistoryView(deviceId: string, sessionId: string) {
     disable(): void {
       if (isCurrent()) views.delete(sessionId);
     },
-    update(liveKeys: readonly string[]): void {
+    update(liveKeys: readonly string[], latest?: { workLines: boolean; shape?: HistoryPageShape }): void {
       if (!isCurrent()) return;
       view.liveKeys = [...liveKeys];
       view.ready = true;
+      if (latest) {
+        view.workLines = latest.workLines;
+        view.shape = latest.shape;
+        view.shapeSeq += 1;
+      }
     },
     setExpanded(keys: readonly string[]): void {
       // Intent alone cannot opt a peer in or revive an old link/subscription.
@@ -83,6 +100,21 @@ export function clearHistoryViews(deviceId: string): void {
 export function hasHistoryView(deviceId: string, sessionId: string, includePending = false): boolean {
   const view = historyViewsByController.get(deviceId)?.get(sessionId);
   return !!view && (includePending || view.ready);
+}
+
+/** A controller that opted into work lines; `seq` changes whenever its delivered shape changes. */
+export function historyWorkPatchTarget(deviceId: string, sessionId: string): { shape: HistoryPageShape; seq: number } | null {
+  const view = historyViewsByController.get(deviceId)?.get(sessionId);
+  return view?.ready && view.workLines && view.shape ? { shape: view.shape, seq: view.shapeSeq } : null;
+}
+
+/** Record a patched shape unless a newer page read was delivered meanwhile. */
+export function recordHistoryWorkPatch(deviceId: string, sessionId: string, seq: number, shape: HistoryPageShape): boolean {
+  const view = historyViewsByController.get(deviceId)?.get(sessionId);
+  if (!view?.ready || view.shapeSeq !== seq) return false;
+  view.shape = shape;
+  view.shapeSeq += 1;
+  return true;
 }
 
 export function projectsHistoryDetails(deviceId: string, sessionId: string): boolean {
@@ -199,6 +231,14 @@ export function updateControllerMetadata(
 
 export function controllerHasTopic(deviceId: string, topic: string): boolean {
   return registry.get(deviceId)?.topics.has(topic as StoredTopic) === true;
+}
+
+/** 该控制端当前持有及断线恢复记住的全部 topic(去重)。 */
+export function getControllerTopics(deviceId: string): string[] {
+  return [...new Set([
+    ...(registry.get(deviceId)?.topics ?? []),
+    ...(rememberedTopicsByController.get(deviceId) ?? []),
+  ])];
 }
 
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */

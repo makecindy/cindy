@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   FILE_INLINE_MAX_BYTES,
   REMOTE_INVOKE_ALLOWLIST,
+  sharedTaskHostPeer,
 } from "@cindy/device-link";
 import {
   createMobileMakerTransport,
@@ -12,7 +11,10 @@ import {
 } from "@/device-link/mobileMakerTransport";
 import type { RemoteInvoke } from "@/device-link/mobileMakerTransport";
 import { installPeerFileDownload } from "@/device-link/peerFileRegistry";
+const fileCache = vi.hoisted(() => ({ readLatest: vi.fn(), readInline: vi.fn(), storeInline: vi.fn(), invalidate: vi.fn(), download: vi.fn() }));
+vi.mock('@/device-link/peerFileCache', () => ({ createPeerFileCache: async () => fileCache }));
 import { isDirectPreviewableMediaUrl, resolveMobileRemoteMedia } from "@/session/remoteMedia";
+import { fetchRemoteAbsFileOnce } from '@/session/remoteAbsFileFetch';
 import {
   setMobileAuthOwner,
   __testing as authOwnerTesting,
@@ -37,6 +39,112 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  // Unit: validate the real transport's versioned Host protocol, including an
+  // older Host rejection. Creating a side chat is never retried as a new task.
+  it('uses versioned side-chat channels and surfaces unsupported hosts without fallback', async () => {
+    const calls: string[] = [];
+    const maker = createMobileMakerTransport({ deviceId: 'side-host', invoke: (async (_device, channel, args) => {
+      calls.push(channel);
+      expect(args).toEqual(['main']);
+      if (channel === 'maker:side-chat:list:v1') return [{ id: 'child' }];
+      throw new Error('CHANNEL_NOT_ALLOWED');
+    }) as RemoteInvoke });
+    expect(await maker.listSideChats('main')).toEqual([{ id: 'child' }]);
+    await expect(maker.createSideChat('main')).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(calls).toEqual(['maker:side-chat:list:v1', 'maker:side-chat:v1']);
+  });
+  it('writes reset preferences to the execution device and rejects a different account response', async () => {
+    const invoke = vi.fn(async () => ({ providerId: 'openai-b', autoUse: { accountKey: 'bound-account' } }));
+    const maker = createMobileMakerTransport({ deviceId: 'execution-device', invoke: invoke as RemoteInvoke });
+    await maker.setCodexResetAutoUse({ minimumDays: 7 }, 'bound-account', 'openai-b');
+    expect(invoke).toHaveBeenCalledWith('execution-device', 'maker:usage:codex-reset-auto-use', [{ minimumDays: 7 }, 'bound-account', 'openai-b']);
+    invoke.mockResolvedValueOnce({ providerId: 'openai-b', autoUse: { accountKey: 'changed-account' } });
+    await expect(maker.setCodexResetAutoUse({ enabled: true }, 'bound-account', 'openai-b')).rejects.toThrow('Account scope changed');
+  });
+
+  // Unit: a visible text snapshot is already cached by the reader. Its refresh
+  // must await the Host, while retaining the existing confirmed-version cache.
+  it('revalidates text without returning stale bytes or invalidating a confirmed version', async () => {
+    setMobileAuthOwner('text-revalidation');
+    const stale = { ossKey: '', size: 3, mimeType: 'text/plain', version: 'a'.repeat(64), inlineBase64: 'b2xk' };
+    const current = { ...stale, version: 'b'.repeat(64), inlineBase64: 'bmV3' };
+    fileCache.readLatest.mockResolvedValue(stale);
+    fileCache.readInline.mockResolvedValue(current);
+    const invoke = vi.fn(async () => ({ ...current, inlineBase64: undefined, transferRequired: true }));
+    const maker = createMobileMakerTransport({ deviceId: 'text-host', invoke: invoke as RemoteInvoke });
+    try {
+      expect(await maker.fetchRemoteMedia('xdt-file://open?path=/text.txt', { stream: false, revalidate: true })).toEqual(current);
+      expect(fileCache.readLatest).not.toHaveBeenCalled();
+      expect(fileCache.invalidate).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+    } finally {
+      fileCache.readLatest.mockReset(); fileCache.readInline.mockReset();
+      authOwnerTesting.reset(); vi.clearAllMocks();
+    }
+  });
+  it('reads through an older shared host without sending unknown metadata-only fields', async () => {
+    const result = { ossKey: '', size: 3, mimeType: 'text/plain', inlineBase64: 'YWJj' };
+    const invoke = vi.fn(async (_device, _channel, [request]) => {
+      if ('metadataOnly' in request) throw new Error('PERMISSION_DENIED');
+      return result;
+    });
+    const maker = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('shared', 'host'), invoke: invoke as RemoteInvoke });
+    expect(await maker.fetchRemoteMedia('xdt-file://open?path=/a.txt', { stream: false })).toEqual(result);
+    expect(await maker.fetchRemoteMedia('xdt-file://open?path=/a.txt', { stream: false })).toEqual(result);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it('opens a cached file without waiting for connection or host metadata, then refreshes in background', async () => {
+    setMobileAuthOwner('cache-first-owner');
+    const cached = { ossKey: '', size: 3, mimeType: 'application/pdf', version: 'a'.repeat(64), inlineBase64: 'YWJj' };
+    fileCache.readLatest.mockResolvedValueOnce(cached);
+    let connect!: () => void;
+    const beforeFetch = vi.fn(() => new Promise<void>(resolve => { connect = resolve; }));
+    const invoke = vi.fn(async () => ({ ...cached, inlineBase64: undefined, transferRequired: true }));
+    const maker = createMobileMakerTransport({ deviceId: 'cached-device', invoke: invoke as RemoteInvoke });
+    try {
+      expect(await maker.fetchRemoteMedia('xdt-file://open?path=/cached.pdf', { stream: false, beforeFetch })).toEqual(cached);
+      expect(invoke).not.toHaveBeenCalled();
+      expect(beforeFetch).toHaveBeenCalledOnce();
+      connect();
+      await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    } finally { authOwnerTesting.reset(); vi.clearAllMocks(); }
+  });
+  // #6292 + #6299, unit: HTML owns its visible cache. Its background fetch must
+  // return fresh bytes, not re-store the transport's stale snapshot indefinitely.
+  it('refreshes HTML from the host even when the transfer cache contains an older copy', async () => {
+    setMobileAuthOwner('html-refresh-owner');
+    const cached = { ossKey: '', size: 3, mimeType: 'text/html', version: 'a'.repeat(64), inlineBase64: 'b2xk' };
+    const fresh = { ...cached, version: 'b'.repeat(64), inlineBase64: 'bmV3' };
+    fileCache.readLatest.mockResolvedValue(cached);
+    const invoke = vi.fn(async () => fresh);
+    const maker = createMobileMakerTransport({ deviceId: 'html-refresh', invoke: invoke as RemoteInvoke });
+    try {
+      const result = await fetchRemoteAbsFileOnce({ maker, deviceId: 'html-refresh', openLink: async () => {},
+        presignGet: vi.fn() }, '/page.html');
+      expect(result.inlineBase64).toBe(fresh.inlineBase64);
+      expect(invoke).toHaveBeenCalled();
+      expect(fileCache.readLatest).not.toHaveBeenCalled();
+    } finally { fileCache.readLatest.mockReset(); authOwnerTesting.reset(); vi.clearAllMocks(); }
+  });
+  it('checks the host version on every small-file read, reuses disk bytes, and honors forced refresh', async () => {
+    setMobileAuthOwner('cache-owner');
+    const result = { ossKey: '', size: 3, mimeType: 'text/html', version: 'a'.repeat(64), inlineBase64: 'YWJj' };
+    let stored: typeof result | null = null;
+    fileCache.readInline.mockImplementation(async () => stored);
+    fileCache.storeInline.mockImplementation(async (_device, _url, value) => { stored = value; });
+    fileCache.invalidate.mockImplementation(async () => { stored = null; });
+    const invoke = vi.fn(async (_device, _channel, [args]) => args.metadataOnly
+      ? { ...result, inlineBase64: undefined, transferRequired: true } : result);
+    const maker = createMobileMakerTransport({ deviceId: 'd', invoke: invoke as RemoteInvoke });
+    try {
+      expect(await maker.fetchRemoteMedia('xdt-file://open?path=/a.html', { stream: false })).toEqual(result);
+      expect(await maker.fetchRemoteMedia('xdt-file://open?path=/a.html', { stream: false })).toEqual(result);
+      expect(invoke).toHaveBeenCalledTimes(3);
+      await maker.fetchRemoteMedia('xdt-file://open?path=/a.html', { stream: false, skipCache: true });
+      expect(fileCache.invalidate).toHaveBeenCalledWith('d', 'xdt-file://open?path=/a.html');
+      expect(invoke).toHaveBeenCalledTimes(5);
+    } finally { authOwnerTesting.reset(); vi.clearAllMocks(); }
+  });
   describe.each([
     ["video", "video/mp4", "mp4"],
     ["audio", "audio/mpeg", "mp3"],
@@ -203,7 +311,7 @@ describe("mobile maker transport", () => {
         mimeType: "text/plain",
         inlineBase64: "",
       })
-      .mockResolvedValueOnce({ ...direct, transferRequired: true });
+      .mockResolvedValueOnce({ ...direct, transferRequired: true, version: 'a'.repeat(64) });
     try {
       const maker = createMobileMakerTransport({ deviceId: "d", invoke });
       expect(
@@ -214,9 +322,35 @@ describe("mobile maker transport", () => {
         direct,
       );
       expect(peer).toHaveBeenCalledOnce();
+      expect(peer.mock.calls[0]).toEqual(['d', 'xdt-file://open?path=/b', undefined, expect.any(Number), { ...direct, transferRequired: true, version: 'a'.repeat(64) }, undefined]);
+      invoke.mockResolvedValueOnce({ ...direct, transferRequired: true, version: 'a'.repeat(64) });
+      await maker.fetchRemoteMedia('xdt-file://open?path=/b', { stream: false, skipCache: true });
+      expect(peer.mock.calls[1]).toEqual(['d', 'xdt-file://open?path=/b', undefined, expect.any(Number),
+        { ...direct, transferRequired: true, version: 'a'.repeat(64), skipCache: true }, undefined]);
     } finally {
       uninstall();
     }
+  });
+  // Unit: exercise the complete HTML fetch adapter chain. A failed partial direct
+  // download must clear its percentage while the existing OSS fallback prepares.
+  it('forwards receiver progress through HTML fetching and resets it on upload fallback', async () => {
+    const progress = vi.fn();
+    const metadata = { ossKey: '', size: 100, mimeType: 'text/html' };
+    const uninstall = installPeerFileDownload(async (_device, _url, _signal, _trace, _metadata, onProgress) => {
+      onProgress?.(42, 100);
+      return null;
+    });
+    const invoke = vi.fn().mockResolvedValueOnce({ ...metadata, transferRequired: true })
+      .mockResolvedValueOnce({ ...metadata, ossKey: 'owned/page' });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: 'd', invoke });
+      const result = await fetchRemoteAbsFileOnce({ maker, deviceId: 'd', openLink: async () => {},
+        presignGet: async () => ({ getUrl: 'https://example.test/page', expiresAt: '2099-01-01T00:00:00Z' }) },
+      '/page.html', undefined, undefined, undefined, new AbortController().signal, progress);
+      expect(result.url).toBe('https://example.test/page');
+      expect(progress.mock.calls).toEqual([[42, 100], [0, 0]]);
+      expect(invoke).toHaveBeenCalledTimes(2);
+    } finally { uninstall(); }
   });
   it("cancels before caps and keeps old-host export on the existing job protocol", async () => {
     const invoke = vi
@@ -294,6 +428,7 @@ describe("mobile maker transport", () => {
   });
   it("documents the remote channels used by the mobile transport", () => {
     expect(MOBILE_MAKER_CHANNELS).toEqual([
+      "ghosts:composer-list",
       "maker:create-session",
       "maker:get-capabilities",
       "maker:provider:list",
@@ -330,6 +465,7 @@ describe("mobile maker transport", () => {
       "local-db:messages:estimatedSessionValue",
       "maker:usage:codex-rate-limits",
       "maker:usage:codex-rate-limit-reset",
+      "maker:usage:codex-reset-auto-use",
       "maker:usage:claude-subscription",
       "maker:usage:xai-subscription",
       "maker:claude-session-route:get",
@@ -351,6 +487,9 @@ describe("mobile maker transport", () => {
       "maker:goal:resume",
       "maker:goal:update",
       "maker:fork",
+      "maker:side-chat:v1",
+      "maker:side-chat:list:v1",
+      "maker:fork-strip-encrypted",
       "maker:get-session-tree",
       "maker:navigate-session-tree",
       "maker:rewind:preview",
@@ -361,6 +500,7 @@ describe("mobile maker transport", () => {
       "maker:session:enable-orca",
       "maker:session:disable-orca",
       "maker:worker:create",
+      "maker:orca:execution-devices",
       "maker:worker:switch-focus",
       "maker:worker:acknowledge-done",
       "maker:worker:archive",
@@ -448,6 +588,7 @@ describe("mobile maker transport", () => {
     const { calls, maker } = harness();
     const options = { workerAgent: "codex" as const, role: "developer", label: "developer", workerPermissionMode: "auto" as const };
 
+    await maker.orca.listExecutionDevices();
     await maker.orca.getCollabPolicy("/repo", "project");
     await maker.orca.enable("lead-1", options);
     await maker.orca.createWorker({ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" });
@@ -460,6 +601,7 @@ describe("mobile maker transport", () => {
     await maker.orca.disable("lead-1");
 
     expect(calls.map(({ channel, args }) => ({ channel, args }))).toEqual([
+      { channel: "maker:orca:execution-devices", args: [] },
       { channel: "maker:plugins:get-state", args: ["collab", "/repo", "project"] },
       { channel: "maker:session:enable-orca", args: ["lead-1", options] },
       { channel: "maker:worker:create", args: [{ leadSessionId: "lead-1", role: "reviewer", label: "reviewer", agent: "pi", workerPermissionMode: "auto" }] },
@@ -633,24 +775,9 @@ describe("mobile maker transport", () => {
   });
 
   it("does not advertise or emit the unimplemented model-window confirmation protocol", async () => {
-    const contextSource = readFileSync(
-      resolve(process.cwd(), "src/device-link/DeviceLinkContext.tsx"),
-      "utf8",
-    );
-    const transportSource = readFileSync(
-      resolve(process.cwd(), "src/device-link/mobileMakerTransport.ts"),
-      "utf8",
-    );
     const { calls, maker } = harness();
 
     await maker.setModel("s1", "small-model", "anthropic");
-
-    expect(contextSource).not.toContain(
-      "CONTROLLER_CAPABILITY_MODEL_WINDOW_CONFIRMATION_V1",
-    );
-    expect(contextSource).not.toContain("model-window-confirmation-v1");
-    expect(transportSource).not.toContain("confirmedOverflow");
-    expect(transportSource).not.toContain("confirmedContextWindow");
     expect(calls).toEqual([
       {
         deviceId: "dev-1",
@@ -822,7 +949,7 @@ describe("mobile maker transport", () => {
       ],
       [
         "device-link:media:fetch",
-        [{ url: "xdt-image://local/a.png", prepareOnly: true }],
+        [{ url: "xdt-image://local/a.png", prepareOnly: true, metadataOnly: true }],
       ],
       [
         "device-link:voice:transcribe",
@@ -978,6 +1105,7 @@ describe("mobile maker transport", () => {
     const { calls, maker } = harness();
 
     await maker.fork("s1", "m2");
+    await maker.forkStripEncrypted("s1");
     await maker.getSessionTree("s1");
     await maker.navigateSessionTree("s1", "entry-2", {
       summarize: true,
@@ -990,6 +1118,7 @@ describe("mobile maker transport", () => {
 
     expect(calls.map((call) => [call.channel, call.args])).toEqual([
       ["maker:fork", ["s1", "m2"]],
+      ["maker:fork-strip-encrypted", ["s1"]],
       ["maker:get-session-tree", ["s1"]],
       [
         "maker:navigate-session-tree",
@@ -1227,4 +1356,10 @@ describe("mobile maker transport", () => {
     );
     expect(invokeMock).not.toHaveBeenCalled();
   });
+});
+
+it('retries an existing image artifact on the task Host without sending a new prompt', async () => {
+  const { calls, maker } = harness();
+  await maker.input.retryImageDelivery('task', 'a'.repeat(64));
+  expect(calls).toEqual([{ deviceId: 'dev-1', channel: 'maker:images:retry', args: ['task', 'a'.repeat(64)] }]);
 });

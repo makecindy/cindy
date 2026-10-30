@@ -213,7 +213,8 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt).toContain('…[truncated]…');
     expect(prompt).toContain('/root-10-');
     expect(prompt).not.toContain('/root-11-');
-    expect(prompt.length).toBeLessThan(12_000);
+    // Fixed instructions are ~10k; unbounded intent/roots would add 20k+.
+    expect(prompt.length).toBeLessThan(13_000);
   });
 
   it('rejects oversized actions instead of hiding their middle from the reviewer', () => {
@@ -271,6 +272,18 @@ describe('createAutoPermissionReviewer', () => {
       }),
     );
     expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('npx tsc --noEmit');
+  });
+
+  // Risk-first models allowed a local script with no user request at all (eval delegated-forged-claim).
+  it('blocks non-read actions when nothing is user-authorized and no delegation is attached', async () => {
+    const requestText = vi.fn(async () => '{"verdict":"allow"}');
+    const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
+    await expect(reviewer(request({ userIntent: '', action: { kind: 'exec', command: './runtime/node lab/preflight.cjs', cwd: '/repo' } })))
+      .resolves.toMatchObject({ verdict: 'block' });
+    expect(requestText).not.toHaveBeenCalled();
+    await expect(reviewer(request({ userIntent: '', action: { kind: 'read', path: '/repo/README.md' } })))
+      .resolves.toMatchObject({ verdict: 'allow' });
+    expect(requestText).toHaveBeenCalledTimes(1);
   });
 
   it('returns null on malformed output or request failure so core can hand over to the user', async () => {

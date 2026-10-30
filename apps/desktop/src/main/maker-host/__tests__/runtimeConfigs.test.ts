@@ -155,6 +155,9 @@ it('never treats a retired independent Claude account as a connected subscriptio
     { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },
   ] }) }));
   vi.doMock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: readBuiltin }));
+  // 不读开发机真实的 ~/.claude/settings.json(用户显式 ENABLE_TOOL_SEARCH 会改写断言)。
+  const readOverride = vi.fn((): string | undefined => undefined);
+  vi.doMock('../claude-user-tool-search.js', () => ({ readUserToolSearchOverride: readOverride }));
   try {
     const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
     const flags = buildDesktopClaudeRuntimeConfig(() => 'http://localhost').behaviorFlags;
@@ -166,9 +169,18 @@ it('never treats a retired independent Claude account as a connected subscriptio
     expect(flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never))
       .toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1', ENABLE_TOOL_SEARCH: 'auto' });
     expect(readBuiltin).toHaveBeenCalledTimes(1);
+    // issue #7524:用户显式的 ENABLE_TOOL_SEARCH 经 runtime-configs 接线压过来源默认值,
+    // 且只对本机 spawn 生效;远端 spawn 不读本机配置。
+    readOverride.mockReturnValue('true');
+    const custom = { credentialMode: 'provider-oauth', sessionProviderId: 'openrouter-custom' };
+    expect(flags({ ...custom, spawnMode: 'local' } as never)).toMatchObject({ ENABLE_TOOL_SEARCH: 'true' });
+    readOverride.mockClear();
+    expect(flags({ ...custom, spawnMode: 'remote' } as never)).toMatchObject({ ENABLE_TOOL_SEARCH: 'false' });
+    expect(readOverride).not.toHaveBeenCalled();
   } finally {
     vi.doUnmock('../active-catalog.js');
     vi.doUnmock('../claude-native-auth.js');
+    vi.doUnmock('../claude-user-tool-search.js');
     vi.resetModules();
   }
 });

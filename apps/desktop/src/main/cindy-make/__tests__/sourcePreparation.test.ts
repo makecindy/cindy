@@ -17,10 +17,14 @@ import {
 } from '../toolchainEnvironment.js';
 import { runSourceGit } from '../sourceGit.js';
 import { runSourcePnpm } from '../sourcePnpm.js';
+import { hasPendingBuild, readPendingBuilds } from '../pendingBuild.js';
 import type { DoctorProbeResult } from '../doctor.js';
 
 vi.mock('../sourceGit.js', () => ({ runSourceGit: vi.fn() }));
-vi.mock('../sourcePnpm.js', () => ({ runSourcePnpm: vi.fn(async () => undefined) }));
+vi.mock('../sourcePnpm.js', async (load) => ({
+  ...(await load<typeof import('../sourcePnpm.js')>()),
+  runSourcePnpm: vi.fn(async () => undefined),
+}));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, writeFile: vi.fn(actual.writeFile) };
@@ -167,11 +171,15 @@ describe('Source and dependency preparation', () => {
       expect(checkout?.[2]).toBe(sourcePath);
       expect(gitCalls.some(([, args]) => args[0] === 'reset')).toBe(false);
       expect(runSourcePnpm).toHaveBeenCalledExactlyOnceWith(
+        // No `CINDY_*`/`XDT_*` generalization either: those prefixes carry real
+        // product secrets (`XDT_ELEVENLABS_API_KEY`), and a content `.npmrc`
+        // would expand them into a request to a host it chooses.
         {
-          CINDY_TEST_GIT: selectedGit,
-          CINDY_TEST_NODE: path.join(root, source === 'system' ? 'system' : 'tools', 'node'),
-          CINDY_TEST_PNPM: path.join(root, source === 'system' ? 'system' : 'tools', 'pnpm'),
-          CINDY_TEST_PYTHON: undefined,
+          npm_config_userconfig: os.devNull,
+          npm_config_globalconfig: os.devNull,
+          COREPACK_ENV_FILE: '0',
+          COREPACK_ENABLE_PROJECT_SPEC: '0',
+          COREPACK_ENABLE_UNSAFE_CUSTOM_URLS: '0',
         },
         [
           'fetch',
@@ -179,8 +187,10 @@ describe('Source and dependency preparation', () => {
           '--prefer-offline',
           '--prod=false',
           '--ignore-scripts',
+          '--ignore-pnpmfile',
           '--config.node-linker=isolated',
           '--config.enable-modules-dir=false',
+          '--config.strict-ssl=true',
         ],
         sourcePath,
         expect.any(AbortSignal),
@@ -205,6 +215,10 @@ describe('Source and dependency preparation', () => {
       expect(storage).not.toHaveBeenCalled();
       const commands = vi.mocked(runSourceGit).mock.calls.map(([, args]) => args[0]);
       expect(commands).toContain(existing ? 'checkout' : 'clone');
+      // The personal branch was just created from the official baseline, even
+      // when reusing a checkout that did not have a personal branch yet.
+      expect(readPendingBuilds(root)).toEqual([]);
+      expect(hasPendingBuild(root, { commit: 'a'.repeat(40), tree: '1'.repeat(40) })).toBe(false);
       expect(commands).toContain('fetch');
       if (existing) expect(commands).not.toContain('clone');
     },
@@ -229,6 +243,27 @@ describe('Source and dependency preparation', () => {
         return '';
       });
     });
+
+    it.each(['missing', 'corrupt'] as const)(
+      'does not initialize a %s ledger when reusing an existing personal branch',
+      async (state) => {
+        if (state === 'corrupt') await writeFile(path.join(root, 'pending-build.json'), 'broken');
+        const result = await prepareCindySource(
+          env,
+          root,
+          { channel: 'dev', version: '0.0.0' },
+          new AbortController().signal,
+        );
+        expect(result.status).toBe('ready');
+        expect(readPendingBuilds(root)).toBeUndefined();
+        expect(
+          hasPendingBuild(root, { commit: 'a'.repeat(40), tree: '1'.repeat(40) }),
+        ).toBeUndefined();
+        expect(vi.mocked(runSourceGit).mock.calls.some(([, args]) => args[0] === 'clone')).toBe(
+          false,
+        );
+      },
+    );
 
     it('warms the cache without installing baseline dependencies or running scripts', async () => {
       const progress = vi.fn();

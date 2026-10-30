@@ -46,10 +46,13 @@ export interface DeviceProvidersPayload {
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 const cache = new Map<string, DeviceProvidersPayload>();
+// Retained across a policy refresh failure; discarded on disconnect/owner
+// eviction. Otherwise a failed refresh loses the identity needed to retry it.
+const subscriptionFetchedAt = new Map<string, number>();
 const inflight = new Map<string, Promise<DeviceProvidersPayload>>();
 const deviceGen = new Map<string, number>();
 export type DeviceProvidersEvent =
-  | { status: 'loading' }
+  | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | ({ status: 'ready' } & DeviceProvidersPayload)
   | { status: 'error'; error: string; unsupported: boolean };
 const listeners = new Map<string, Set<(event: DeviceProvidersEvent) => void>>();
@@ -230,6 +233,9 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {
         cache.set(deviceId, payload);
+        if (deviceId.startsWith('share:') && payload.providers.some(provider => !!provider.subscriptionFastPolicy))
+          subscriptionFetchedAt.set(deviceId, Date.now());
+        else subscriptionFetchedAt.delete(deviceId);
         inflight.delete(deviceId);
         notifyDeviceProviders(deviceId, { status: 'ready', ...payload });
       }
@@ -298,7 +304,8 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       if (cancelled) return;
       if (event.status === 'loading') {
         retryGeneration = undefined;
-        // 保留上一份完整列表避免视觉跳变，但让模型选择逻辑等待同轮新快照。
+        // 配置刷新可保留显示快照；断链或账号切换必须立即清掉旧目录。
+        if (!event.retainDisplaySnapshot) setPayload(EMPTY_PAYLOAD);
         setOwnerDeviceId(deviceId);
         setLoading(true);
         setError(null);
@@ -402,14 +409,37 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return cache.get(deviceId) ?? null;
 }
 
+/** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
+export function hasSubscriptionShareCatalog(deviceId: string): boolean {
+  return subscriptionFetchedAt.has(deviceId);
+}
+
+export function isSubscriptionShareCatalogStale(deviceId: string, now = Date.now()): boolean {
+  return hasSubscriptionShareCatalog(deviceId)
+    && now - (subscriptionFetchedAt.get(deviceId) ?? 0) >= 60_000;
+}
+
 export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
   return (deviceGen.get(deviceId) ?? 0) === generation;
 }
 
-export function evictDeviceProviders(deviceId: string): number {
+export function evictDeviceProviders(
+  deviceId: string,
+  options?: { retainDisplaySnapshot?: boolean },
+): number {
   cache.delete(deviceId);
+  if (!options?.retainDisplaySnapshot) subscriptionFetchedAt.delete(deviceId);
   inflight.delete(deviceId);
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
-  notifyDeviceProviders(deviceId, { status: 'loading' });
+  notifyDeviceProviders(deviceId, {
+    status: 'loading',
+    ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
+  });
   return deviceGen.get(deviceId)!;
+}
+
+/** 账号边界：缓存、在途读取及挂载中的旧账号目录一起失效。 */
+export function evictAllDeviceProviders(): void {
+  const devices = new Set([...cache.keys(), ...inflight.keys(), ...listeners.keys(), ...deviceGen.keys()]);
+  for (const deviceId of devices) evictDeviceProviders(deviceId);
 }

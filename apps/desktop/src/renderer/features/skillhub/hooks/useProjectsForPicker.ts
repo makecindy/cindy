@@ -12,6 +12,8 @@ import { useMemo } from 'react';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
+import { useProvisionalDraftProjectTaskId } from '@/features/cc-agent/hooks/useProvisionalDraftProjectTaskId';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 export interface PickerProject {
   projectRoot: string;
@@ -19,16 +21,18 @@ export interface PickerProject {
 }
 
 export function useProjectsForPicker(): { projects: PickerProject[]; loading: boolean } {
+  const target = useSkillhubTarget();
   const { sessions, isLoading } = useCCSessions();
+  const provisionalDraftTaskId = useProvisionalDraftProjectTaskId();
 
   const projects = useMemo<PickerProject[]>(() => {
     if (isLoading) return [];
-    const { projects: grouped } = groupSessions(sessions);
+    const { projects: grouped } = groupSessions(sessions, { provisionalDraftTaskId });
     return grouped.map((p) => ({
       projectRoot: p.workingDir,
       displayName: p.displayName,
     }));
-  }, [sessions, isLoading]);
+  }, [sessions, isLoading, provisionalDraftTaskId]);
 
-  return { projects, loading: isLoading };
+  return target ? { projects: target.projects, loading: !target.state.bootstrapped } : { projects, loading: isLoading };
 }

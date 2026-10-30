@@ -24,7 +24,8 @@ describe('writable directory grant wiring', () => {
 
   it('uses the reserved local draft task id for picker scope and persisted session creation', () => {
     const draft = read('renderer/features/cc-agent/NewMakerDraftRoute.tsx');
-    expect(draft).toContain('const localDraftSessionIdRef = useRef(makeDraftSessionId())');
+    // An unsent task already opened from this draft keeps its id when the user comes back.
+    expect(draft).toContain('const localDraftSessionIdRef = useRef(provisionalDraftTaskIdForCurrentOwner() ?? makeDraftSessionId())');
     expect(draft).toContain('writableGrantScope={localDraftSessionIdRef.current}');
     expect(draft).toContain('const sessionId = localDraftSessionIdRef.current');
     expect(draft).toContain('goalSessionId = localDraftSessionIdRef.current');

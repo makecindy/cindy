@@ -1,7 +1,12 @@
+import type { PluginUsageTransaction, PluginUsageHandle } from '../../../../shared/pluginUsage.js';
 import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
+import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'chatCache.execute'
+  | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
+  | 'pluginUsage.execute'
   | 'taskTags.execute'
   | 'codex.importMessages'
   | 'claude.importMessages'
@@ -53,8 +58,13 @@ export type DbTxName =
   | 'bots.archiveLifecycle'
   | 'bots.deleteProfile'
   | 'bots.prepareProfileDeletion'
+  | 'bots.reconcileLanePermission'
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
+  | 'bots.createChannelLane'
+  | 'bots.createRoutineLane'
+  | 'bots.createThreadLane'
+  | 'bots.archiveChannelLanes'
   | 'botGroups.create'
   | 'botGroups.setMembers'
   | 'botGroups.delete'
@@ -137,6 +147,15 @@ export interface RewindCommitArgs {
    * 省略或 null 表示当时会话未被清空。
    */
   expectedClearedAt?: number | null;
+  /**
+   * Claude 目标之前没有可续接的回复：与软删同一事务清掉 sdk_session_id，并追加隐藏
+   * context_rebuild 标记(内容含交接文本)，下次发送开全新原生会话并注入保留下来的历史。
+   */
+  nativeContextReset?: {
+    markerId: string;
+    markerClientId: string;
+    markerContent: string;
+  };
   now: number;
 }
 
@@ -165,6 +184,7 @@ export interface ForkSessionArgs {
   /** 与 targetCreatedAt 同毫秒时按 SQLite 插入顺序截断；null/缺省表示整毫秒前缀。 */
   targetRowid?: number | null;
   newSession: {
+    source?: string;
     id: string;
     title: string;
     workingDir: string | null;
@@ -180,7 +200,7 @@ export interface ForkSessionArgs {
     contextTokens: number;
     contextWindow: number;
     contextWindowRuntime?: number | null;
-    fastMode: boolean | number;
+    fastMode: boolean | 'ultrafast' | number;
     clearedAt: number | null;
     pinnedAt: number | null;
     userSendAt: number | null;
@@ -261,6 +281,16 @@ export interface EmbeddingEnqueueArgs {
  * orcaTeamStore.addOrUpdateWorker 原同步事务逻辑。可选字段值为 undefined 表示
  * "保留 existing 行的当前值",与原 drizzle 写法语义一致。
  */
+export interface OrcaRemoteWorkerProxySessionSeed {
+  title: string;
+  agentKind: string;
+  model: string;
+  effort: string | null;
+  permissionMode: string;
+  fastMode: boolean | 'ultrafast';
+  agentDeviceId?: string | null;
+}
+
 export interface OrcaUpsertWorkerArgs {
   id: string;
   teamId: string;
@@ -271,6 +301,12 @@ export interface OrcaUpsertWorkerArgs {
   role?: string;
   focused?: boolean;
   idleSince?: number | null;
+  remoteExecution?: {
+    deviceId: string;
+    remoteSessionId: string;
+    /** 新建代理与 Worker 路由一起提交；已有代理的更新可省略。 */
+    proxySession?: OrcaRemoteWorkerProxySessionSeed;
+  };
   now: number;
 }
 
@@ -368,6 +404,11 @@ export interface SessionsSetTerminalStatusArgs {
   status: 'archived' | 'deleted';
 }
 
+export interface SessionsSetTerminalStatusResult extends Omit<SessionsSetStatusResultItem, 'status'> {
+  status: 'archived' | 'deleted';
+  deletedSideChats: Array<Omit<SessionsSetStatusResultItem, 'status'>>;
+}
+
 /** resume 停泊失败后的原子回落:清失效绑定并把边界改成全量交接。 */
 export interface SessionAgentSwitchFallbackArgs {
   sessionId: string;
@@ -392,7 +433,7 @@ export interface ContextRebuildArgs {
     model: string;
     providerId: string | null;
     effort: string | null;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
   };
 }
 
@@ -408,6 +449,8 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+  /** Host-only opening guard, evaluated atomically with the insert. */
+  requireNoUserMessage?: boolean;
   /** Host-only publication; stages belong to a connection-local TEMP table. */
   publication?: 'stage' | 'publish' | 'discard' | 'rollback';
 }
@@ -525,7 +568,7 @@ export interface SessionImportShareSessionRow {
   totalCostUsd: number;
   contextTokens: number;
   contextWindow: number;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   planModeEnabled: boolean;
   agentKind: string;
   /** Orca 角色标记:协同包导入时 lead='lead'、Worker='worker';普通导入缺省(NULL)。 */
@@ -638,6 +681,8 @@ export interface BotsCreateProfileArgs {
 
 export interface BotsUpdateProfileArgs {
   id: string;
+  /** A saved model choice supersedes automation restores in the same commit. */
+  clearScheduledModelBaseline?: boolean;
   /** Explicit settings changes also update the permanent chat in this transaction. */
   canonicalPermissionMode?: 'ask' | 'auto' | 'bypassPermissions';
   displayName?: string;
@@ -685,9 +730,10 @@ export interface BotsReplaceCanonicalSessionArgs {
     agentKind: string;
     remoteHostId: string | null;
     providerId: string | null;
+    agentDeviceId?: string | null;
     parentSessionId?: string | null;
     extraDirs: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     source: string;
     createdAt: number;
     updatedAt: number;
@@ -806,6 +852,38 @@ export interface BotGroupsCreateLaneArgs {
 export interface BotGroupsCreateLaneResult {
   sessionId: string;
   created: boolean;
+  /** Existing runtimes must follow a canonical permission repaired during creation. */
+  permissionRepairCanonicalSessionId?: string;
+}
+
+/** 伙伴接管的个人 IM 群 / 话题专线(`role = 'channel'`)。 */
+export interface BotsCreateChannelLaneArgs {
+  botId: string;
+  routeKey: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+/**
+ * 主人私聊里的话题(`role = 'thread'`)。根消息必须是这位伙伴当前主任务里可见的
+ * user / assistant 消息;`routeKey` 由调用方按 `botDmThreadRouteKey` 生成。
+ */
+export interface BotsCreateThreadLaneArgs {
+  botId: string;
+  routeKey: string;
+  rootSessionId: string;
+  rootClientId: string;
+  session: BotsReplaceCanonicalSessionArgs['session'];
+}
+
+/**
+ * 归档 IM 连接的伙伴专线: 精确 routeKey 或 routeKey 前缀(整条连接)二选一;
+ * exceptBotId 非空时保留该伙伴的专线(改绑时只收旧伙伴的)。
+ */
+export interface BotsArchiveChannelLanesArgs {
+  routeKey: string | null;
+  routeKeyPrefix: string | null;
+  exceptBotId: string | null;
+  now: number;
 }
 
 export interface BotGroupsCreateArgs {
@@ -972,10 +1050,11 @@ export interface ImRotateSessionArgs {
     model: string;
     effort: string;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
     agentKind: string;
     source: string;
     providerId: string | null;
+    agentDeviceId?: string | null;
     /** 跟随渠道默认的记录(JSON, 见 im/shared/channelDefaultRoute.ts)。 */
     imDefaultRoute?: string | null;
     imBotContextId: string;
@@ -1211,10 +1290,13 @@ export interface WechatStopAllArgs {
   bindingEpoch: string;
   now: number;
   errorCode: string;
+  /** Permanent companion deletion cancels pre-accepted work instead of replaying it. */
+  cancelPending?: boolean;
 }
 
 export interface WechatStopAllResult {
   requeued: number;
+  cancelled: number;
   interrupted: number;
   expired: number;
   repaired: number;
@@ -1305,7 +1387,18 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'deleteBefore'; analyzerVersion: string; recentSince: number }
   | { kind: 'promote'; analyzerVersion: string };
 
+export interface MediaSpendArgs {
+  day: string;
+  model: string;
+  amount: number;
+  currency: 'USD' | 'CNY';
+  sessionId?: string;
+  userClientId?: string;
+  now: number;
+}
+
 export type DbTxArgsByName = {
+  'usage.recordMediaSpend': MediaSpendArgs;
   'authorization.readProjection': { sessionId: string; leadId: string };
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -1330,6 +1423,8 @@ export type DbTxArgsByName = {
   'sessions.setTerminalStatus': SessionsSetTerminalStatusArgs;
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'pluginUsage.execute': PluginUsageTransaction;
+  'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
@@ -1358,8 +1453,13 @@ export type DbTxArgsByName = {
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
   'bots.deleteProfile': BotsDeleteProfileArgs;
   'bots.prepareProfileDeletion': { botId: string };
+  'bots.reconcileLanePermission': { sessionId: string };
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
+  'bots.createChannelLane': BotsCreateChannelLaneArgs;
+  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
+  'bots.createThreadLane': BotsCreateThreadLaneArgs;
+  'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
   'botGroups.setMembers': BotGroupsSetMembersArgs;
   'botGroups.delete': BotGroupsDeleteArgs;
@@ -1391,6 +1491,12 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'usage.recordMediaSpend': {
+    legacyUsd: number;
+    amount: number;
+    currency: 'USD' | 'CNY';
+    approximate: number;
+  } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
   'codex.importMessages': { changed: number };
   'claude.importMessages': { changed: number };
@@ -1412,9 +1518,11 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
-  'sessions.setTerminalStatus': SessionsSetStatusResultItem;
+  'sessions.setTerminalStatus': SessionsSetTerminalStatusResult;
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'pluginUsage.execute': PluginUsageHandle | null;
+  'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
     projectKey: string;
@@ -1447,8 +1555,13 @@ export type DbTxResultByName = {
   'bots.archiveLifecycle': { sessions: number };
   'bots.deleteProfile': { sessionIds: string[]; status: 'archived' | 'deleted' };
   'bots.prepareProfileDeletion': undefined;
+  'bots.reconcileLanePermission': { mode: string | null; changed: boolean; canonicalSessionId?: string };
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
+  'bots.createChannelLane': BotGroupsCreateLaneResult;
+  'bots.createRoutineLane': BotGroupsCreateLaneResult;
+  'bots.createThreadLane': BotGroupsCreateLaneResult;
+  'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;
   'botGroups.setMembers': BotGroupsSetMembersResult;
   'botGroups.delete': { archivedSessionIds: string[] };
