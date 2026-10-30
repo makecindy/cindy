@@ -59,8 +59,8 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => Object.fromEntries([
-  ...['accessibilityLabel', 'alignmentGuide', 'buttonStyle', 'contentShape', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'listRowInsets', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]),
-  ['shapes', { rectangle: () => ({}) }],
+  ...['accessibilityLabel', 'alignmentGuide', 'background', 'buttonBorderShape', 'buttonStyle', 'contentShape', 'controlSize', 'glassEffect', 'disabled', 'font', 'foregroundStyle', 'frame', 'lineLimit', 'listRowInsets', 'pickerStyle', 'tag', 'tint'].map(key => [key, (value: any) => ({ [key]: value })]),
+  ['shapes', { rectangle: () => ({}), circle: () => ({}), capsule: () => ({}) }],
 ]));
 import { CompanionCreateSheet, CompanionProfileSheet } from '@/session/CompanionProfileSheet';
 import { parseCompanionProfileData } from '@/session/companionProfileData';
