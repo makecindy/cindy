@@ -15,8 +15,9 @@ import {
   warnWindowsGitPathProbeFailure,
 } from './windows-git-path-powershell.js';
 
-// Test-only startup/teardown headroom around the unchanged 10s coordinator.
-const PATH_PROBE_TEST_PROCESS_TIMEOUT_MS = 30_000;
+// Test-only startup/teardown headroom around the positive case's 30s coordinator;
+// the deadline must cover the coordinator budget plus PowerShell cold start.
+const PATH_PROBE_TEST_PROCESS_TIMEOUT_MS = 60_000;
 
 describe('Windows Git PATH PowerShell probes', () => {
   it('locks the registry probe command and distinguishes missing keys from real failures', () => {
@@ -185,7 +186,11 @@ describe('Windows Git PATH PowerShell probes', () => {
 
         // Correctness needs startup headroom at BOTH timeout layers. Production
         // callers retain their default 1250ms child budget and 3000ms outer budget.
-        const output = runProbe(buildWindowsPathKindProbeScript(4, 10_000, 2, { operationTimeoutMs: 10_000 }));
+        // On a loaded CI shard a nested powershell.exe has taken >9.5s just to start
+        // (the coordinator's own startup and teardown are also outside its budget),
+        // so the positive case waits up to 30s per child while the outer deadline
+        // stays well above the coordinator budget at 60s.
+        const output = runProbe(buildWindowsPathKindProbeScript(4, 30_000, 2, { operationTimeoutMs: 30_000 }));
 
         expect(output).toContain(`D\t${Buffer.from(validCmd, 'utf16le').toString('base64')}`);
         expect(output).toContain(`F\t${Buffer.from(validGit, 'utf16le').toString('base64')}`);

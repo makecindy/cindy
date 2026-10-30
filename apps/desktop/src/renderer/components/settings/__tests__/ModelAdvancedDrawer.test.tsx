@@ -818,6 +818,147 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
   ).toBeNull();
 });
 
+// #6243：拦截文案指向的「支持图片输入」必须是真实存在的设置。自定义供应商上
+// 这行是三态声明（支持 / 不支持 / 未声明），写回该模型所属的每个引擎。
+it('saves the image-input declaration to every engine holding the model', async () => {
+  const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+  const previous = window.electronAPI;
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+  try {
+    const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+      pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{ id: 'glm-5.3', name: 'GLM-5.3', supportsImageInput: false }] },
+      codex: { baseUrl: 'https://chat.example.invalid/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'glm-5.3', name: 'GLM-5.3', supportsImageInput: false }] },
+    } }), connected: true } as ProviderView;
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'glm-5.3', name: 'GLM-5.3', avail: ['pi', 'codex'],
+      byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+      onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    // 当前值：库中显式声明的 false → 「不支持」。
+    const trigger = screen.getByRole('button', { name: 'settings.providers.custom.fields.modelSupportsImageInput' });
+    expect(trigger.textContent).toContain('settings.providers.models.advanced.unsupported');
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.supported' }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(config.runtimes.pi!.models[0]!.supportsImageInput).toBe(true);
+    expect(config.runtimes.codex!).toBeDefined();
+    expect(config.runtimes.codex!.models[0]!.supportsImageInput).toBe(true);
+    expect(update.mock.calls[0]![1]).toEqual({});
+    // 存回后重建：目录投影与编辑真值源都读到声明（发图拦截/原生请求体按它判定）。
+    const rebuilt = buildUserProvider(config);
+    expect(rebuilt.models.pi![0]!.supportsImageInput).toBe(true);
+    expect(rebuilt.models.pi![0]!.userModelConfig!.supportsImageInput).toBe(true);
+  } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+});
+
+it('drops the image-input declaration when set back to undeclared', async () => {
+  const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+  const previous = window.electronAPI;
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+  try {
+    const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: 'https://chat.example.invalid/v1',
+        models: [{ id: 'glm-5.3', name: 'GLM-5.3', supportsImageInput: false }] } } }), connected: true } as ProviderView;
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'glm-5.3', name: 'GLM-5.3', avail: ['pi'],
+      byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const trigger = screen.getByRole('button', { name: 'settings.providers.custom.fields.modelSupportsImageInput' });
+    expect(trigger.textContent).toContain('settings.providers.models.advanced.unsupported');
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.undeclared' }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(config.runtimes.pi!.models[0]!).not.toHaveProperty('supportsImageInput');
+    // 未声明 ≠ 不支持：重建后不携带能力字段，跟目录/名称推断走（缺省口径不变）。
+    expect(buildUserProvider(config).models.pi![0]!.supportsImageInput).toBeUndefined();
+  } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+});
+
+it('keeps built-in providers\' image input read-only', () => {
+  draw();
+  expect(screen.queryByRole('button', { name: 'settings.providers.custom.fields.modelSupportsImageInput' })).toBeNull();
+  expect(screen.getByText('settings.providers.models.advanced.imageInput')).toBeTruthy();
+});
+
+// #6243 回归：协议、图片/视频能力、图片输入三态三处都是「复制整份 config → 整份写回」，
+// 而 provider 快照异步刷新。快照回来前连改两项时，第二次请求必须从第一次写回的结果继续，
+// 否则会带着旧值把上一项撤销（主进程只串行、不合并请求体）。
+it('accumulates consecutive drawer saves instead of overwriting the earlier one', async () => {
+  const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+  const previous = window.electronAPI;
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+  try {
+    const built = buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: 'https://chat.example.invalid/v1',
+        models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] } } });
+    // 让 pi 走 openai-images，抽屉才会渲染「图片能力」下拉（另一个整份写回的入口）。
+    const builtRouting = (built as unknown as { routing?: Record<string, Record<string, unknown> | undefined> }).routing;
+    const source = { ...built, connected: true,
+      routing: { ...builtRouting, pi: { ...builtRouting?.pi, imageApi: 'openai-images' } } } as unknown as ProviderView;
+    // provider 快照在整个用例里保持同一个对象：模拟「刷新还没回来」的窗口。
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'glm-5.3', name: 'GLM-5.3', avail: ['pi'],
+      byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+
+    // 第一次：改「图片能力」→ generate（写 mode / modalities）。
+    const capability = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageCapability.label' });
+    fireEvent.keyDown(capability, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageCapability.generate' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const first = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(first.runtimes.pi!.models[0]!.mode).toBe('image_generation');
+
+    // 第二次：快照未刷新就改「支持图片输入」→ 不支持。必须带着第一次的 mode 一起落盘。
+    const trigger = screen.getByRole('button', { name: 'settings.providers.custom.fields.modelSupportsImageInput' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.unsupported' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    const second = update.mock.calls[1]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(second.runtimes.pi!.models[0]!.supportsImageInput).toBe(false);
+    // 关键断言：第一次改动没有被第二次的整份写回撤销。
+    expect(second.runtimes.pi!.models[0]!.mode).toBe('image_generation');
+  } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+});
+
+// 上一条的镜像：失败的保存不能把改动留在基线里。用户看到的是「保存失败」的 toast，
+// 后续无关的保存就不该再带着这次被判失败的改动一起提交。
+it('discards a failed drawer save so it cannot leak into the next save', async () => {
+  const update = vi.fn()
+    .mockResolvedValueOnce({ ok: false })
+    .mockResolvedValueOnce({ ok: true });
+  const previous = window.electronAPI;
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+  try {
+    const built = buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl: 'https://chat.example.invalid/v1',
+        models: [{ id: 'glm-5.3', name: 'GLM-5.3' }] } } });
+    const builtRouting = (built as unknown as { routing?: Record<string, Record<string, unknown> | undefined> }).routing;
+    const source = { ...built, connected: true,
+      routing: { ...builtRouting, pi: { ...builtRouting?.pi, imageApi: 'openai-images' } } } as unknown as ProviderView;
+    render(<ModelAdvancedDrawer provider={source} row={{ id: 'glm-5.3', name: 'GLM-5.3', avail: ['pi'],
+      byAgent: { pi: source.models.pi![0] } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+
+    // 第一次：改「图片能力」→ generate，但 IPC 判失败。
+    const capability = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageCapability.label' });
+    fireEvent.keyDown(capability, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageCapability.generate' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const failed = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(failed.runtimes.pi!.models[0]!.mode).toBe('image_generation');
+
+    // 第二次：改「支持图片输入」→ 不支持，这次成功。
+    const trigger = screen.getByRole('button', { name: 'settings.providers.custom.fields.modelSupportsImageInput' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.unsupported' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    const retried = update.mock.calls[1]![0] as Parameters<typeof buildUserProvider>[0];
+    expect(retried.runtimes.pi!.models[0]!.supportsImageInput).toBe(false);
+    // 关键断言：被判失败的那次改动没有随这次保存一起落盘。
+    expect(retried.runtimes.pi!.models[0]!.mode).not.toBe('image_generation');
+  } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+});
+
 // Component contract (unit): the real drawer names the charge, independently of its token unit.
 // Existing cases only name directions; one image quote and mixed/uncategorized variants cover fallback.
 it.each([

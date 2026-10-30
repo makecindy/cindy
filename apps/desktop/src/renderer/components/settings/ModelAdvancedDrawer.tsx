@@ -214,8 +214,43 @@ export function ModelAdvancedDrawer({
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
-  const [protocolSaving, setProtocolSaving] = useState(false);
-  const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
+  /**
+   * 抽屉里三处「复制整份 CustomProviderConfig → 整份写回」的修改（协议、图片/视频能力、
+   * 图片输入三态）共用一把锁：它们都以 `provider` prop 为基线，而 provider 快照是异步
+   * 刷新的。快照回来前再改一项，第二次请求会带着修改前的旧值把上一项撤销 —— 主进程只
+   * 保证串行、不会合并请求体，所以必须在发送侧串行并复用上一次写回的结果。
+   * ref 是同步的（同一 tick 内连点也能挡住），state 只用于渲染禁用态。
+   */
+  const [drawerSaving, setDrawerSaving] = useState(false);
+  const drawerSavingRef = useRef(false);
+  /** 上一次成功写回的 config 与它派生自的 provider 快照；快照换了对象就丢弃基线。 */
+  const pendingConfigRef = useRef<{ base: ProviderView; config: ReturnType<typeof providerViewToCustomProviderConfig> } | null>(null);
+  /**
+   * 抽屉内所有整份写回的统一出口：`mutate` 返回 false 表示这次改动无需落盘（直接放弃，
+   * 不占用锁）。锁在请求期间保持，成功后把本次写回的 config 记成下一次的基线，
+   * 这样快照还没回来时的连续修改会叠加而不是互相覆盖。
+   */
+  const saveProviderConfig = async (mutate: (config: ReturnType<typeof providerViewToCustomProviderConfig>) => boolean) => {
+    if (drawerSavingRef.current) return;
+    const pending = pendingConfigRef.current;
+    const baseline = pending && pending.base === provider ? pending.config : providerViewToCustomProviderConfig(provider);
+    /**
+     * 每次尝试都在基线的副本上改动：IPC 结果未知之前不能动缓存里的基线。
+     * 否则一次失败的协议/能力改动会留在 pendingConfigRef 里，被后续无关保存
+     * 一起提交 —— 用户看到的是「保存失败」，实际改动却被写进了下一次请求。
+     */
+    const config = structuredClone(baseline);
+    if (!mutate(config)) return;
+    drawerSavingRef.current = true;
+    setDrawerSaving(true);
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      // 失败时不动 pendingConfigRef：这次改动随副本一起丢弃。
+      if (!result.ok) { toast.error(t('settings.providers.custom.toast.saveFailed')); return; }
+      pendingConfigRef.current = { base: provider, config };
+    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { drawerSavingRef.current = false; setDrawerSaving(false); }
+  };
   const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
@@ -300,54 +335,45 @@ export function ModelAdvancedDrawer({
   const setImageCapability = async (value: string, kind: 'image' | 'video' = 'image') => {
     const agent = kind === 'image' ? imageAgent : videoAgent;
     const sourceModel = kind === 'image' ? imageModel : videoModel;
-    if (imageCapabilitySaving || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
-    if (!model) return;
-    if (value === 'default') {
-      delete model.mode;
-      delete model.modalities;
-    } else {
-      model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
-      model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
-    }
-    setImageCapabilitySaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setImageCapabilitySaving(false); }
+    if (drawerSavingRef.current || !agent || !sourceModel || !['default', 'generate', 'edit'].includes(value)) return;
+    await saveProviderConfig((config) => {
+      const model = config.runtimes[agent]?.models.find(item => item.id === sourceModel.id);
+      if (!model) return false;
+      if (value === 'default') {
+        delete model.mode;
+        delete model.modalities;
+      } else {
+        model.mode = kind === 'image' ? 'image_generation' : 'video_generation';
+        model.modalities = { input: value === 'edit' ? ['text', 'image'] : ['text'], output: [kind] };
+      }
+      return true;
+    });
   };
   const setModelApi = async (agent: AgentKind, api: string) => {
-    if (protocolSaving || !canEditProtocol || !row?.byAgent[agent]) return;
-    const config = providerViewToCustomProviderConfig(provider);
-    const runtime = config.runtimes[agent];
-    const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
-    if (!runtime || !model) return;
-    const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
-    if (api === 'auto' || choice) {
-      model.interfaceId = api;
-      delete model.api;
-      delete model.piApi;
-      delete model.route;
-    } else {
+    if (drawerSavingRef.current || !canEditProtocol || !row?.byAgent[agent]) return;
+    await saveProviderConfig((config) => {
+      const runtime = config.runtimes[agent];
+      const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
+      if (!runtime || !model) return false;
+      const choice = row.byAgent[agent]?.availableInterfaces?.find(item => item.profileId === api);
+      if (api === 'auto' || choice) {
+        model.interfaceId = api;
+        delete model.api;
+        delete model.piApi;
+        delete model.route;
+        return true;
+      }
       delete model.interfaceId;
       model.api = api as PiModelApi;
       if (agent === 'pi') model.piApi = api as PiModelApi;
       const wire = providerWireProtocolForApi(api);
-      if (!wire) return;
+      if (!wire) return false;
       model.route = {
         baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
         wireProtocol: wire,
       };
-    }
-    setProtocolSaving(true);
-    try {
-      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
-      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
-    }
-    catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
-    finally { setProtocolSaving(false); }
+      return true;
+    });
   };
 
 
@@ -413,6 +439,29 @@ export function ModelAdvancedDrawer({
   }
 
   const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
+  /** 三态声明的持久化真值：user 存储里的 supportsImageInput（缺省 = 未声明，跟随目录/名称推断）。 */
+  const imageInputDeclared = primaryModel.userModelConfig?.supportsImageInput;
+  const imageInputValue = imageInputDeclared === true ? 'supported' : imageInputDeclared === false ? 'unsupported' : 'undeclared';
+  /**
+   * 保存「支持图片输入」三态声明。写进该 id 存在的每个 runtime —— 同一模型常同时
+   * 挂在 pi/cc/codex 下，只写主引擎会让用户在另一个引擎的发图拦截继续读旧值。
+   * 置为 `undeclared` 时删除该键，恢复缺省口径（不猜、不写回默认）。
+   */
+  const setImageInput = async (value: string) => {
+    if (drawerSavingRef.current || !['supported', 'unsupported', 'undeclared'].includes(value)) return;
+    await saveProviderConfig((config) => {
+      let touched = false;
+      for (const runtime of Object.values(config.runtimes)) {
+        const model = runtime?.models.find((item) => item.id === primaryModel.id);
+        if (!model) continue;
+        if (value === 'supported') model.supportsImageInput = true;
+        else if (value === 'unsupported') model.supportsImageInput = false;
+        else delete model.supportsImageInput;
+        touched = true;
+      }
+      return touched;
+    });
+  };
   const vision = imageModel?.modalities
     ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
     : primaryModel.supportsImageInput !== undefined
@@ -636,7 +685,7 @@ export function ModelAdvancedDrawer({
                                   {canEditProtocol && (!model?.catalogPresetId || !!model.availableInterfaces?.length) && supported ? (
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
-                                        <button type="button" disabled={protocolSaving}
+                                        <button type="button" disabled={drawerSaving}
                                           aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
                                           className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                           {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -922,7 +971,7 @@ export function ModelAdvancedDrawer({
                         <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                              <button type="button" disabled={drawerSaving || !selectionAvailable || paymentRequired}
                                 aria-label={t('settings.providers.models.advanced.imageCapability.label')}
                                 className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                 {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -947,7 +996,7 @@ export function ModelAdvancedDrawer({
                         <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                              <button type="button" disabled={drawerSaving || !selectionAvailable || paymentRequired}
                                 aria-label={t('settings.providers.models.advanced.videoCapability.label')}
                                 className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
                                 {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
@@ -967,6 +1016,35 @@ export function ModelAdvancedDrawer({
                         </p>
                       </>
                     )}
+                    {canEditProtocol ? (
+                      <>
+                        {/* 用户自定义供应商：三态声明入口。拦截提示与这行的文案互相引用
+                            （PI_IMAGE_INPUT_UNSUPPORTED 指向的就是「支持图片输入」），
+                            设置必须真实存在才能自圆其说（#6243）。 */}
+                        <Row label={t('settings.providers.custom.fields.modelSupportsImageInput')}>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button type="button"
+                                disabled={drawerSaving || !selectionAvailable || paymentRequired}
+                                aria-label={t('settings.providers.custom.fields.modelSupportsImageInput')}
+                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
+                                {t(`settings.providers.models.advanced.${imageInputValue}`)} <ChevronDown size={12} className="inline" aria-hidden />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent className="z-[10003]" align="start">
+                              <DropdownMenuRadioGroup value={imageInputValue} onValueChange={value => void setImageInput(value)}>
+                                {(['supported', 'unsupported', 'undeclared'] as const).map(value => (
+                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.${value}`)}</DropdownMenuRadioItem>
+                                ))}
+                              </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </Row>
+                        <p className="text-12 leading-5 text-[var(--text-tertiary)]">
+                          {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
+                        </p>
+                      </>
+                    ) : (
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
                       {conversational && !isOrganizationManagedProvider(provider) ? (
                         <DropdownMenu>
@@ -1007,6 +1085,7 @@ export function ModelAdvancedDrawer({
                         />
                       </span>}
                     </Row>
+                    )}
                     {imageInputOverride.error && (
                       <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
                         {t('settings.providers.custom.toast.saveFailed')}

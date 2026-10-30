@@ -1087,6 +1087,67 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.models.codex?.[1]?.supportsImageInput).toBe(true);
   });
 
+  // #6243 的真实落点是「三态声明经 user 元数据层原样到目录层」。这里不再断言
+  // toCatalogModel 里那段 `=== true` 展开（它对 false 是不产生差异的空操作，
+  // 已实测三种输入形态下加与不加输出完全一致），改为锁定真正承载 false 的那条路径，
+  // 这样 runtimeUserModelMetadata / applyModelMetadata 任一环回退都会在此失败。
+  it("carries an explicit supportsImageInput declaration to the catalog through the user metadata layer, all three states (#6243)", () => {
+    const p = buildUserProvider({
+      id: "relay",
+      name: "Relay",
+      auth: { method: "apiKey" },
+      runtimes: {
+        pi: {
+          baseUrl: "https://chat.example/v1",
+          wireProtocol: "openai-chat",
+          models: [
+            { id: "glm-5.3", name: "GLM-5.3", supportsImageInput: false },
+            { id: "vision-model", name: "Vision", supportsImageInput: true },
+            { id: "auto", name: "Auto" },
+          ],
+        },
+      },
+    });
+    // 显式 false 必须到目录层：发图的本地拦截、原生请求体与徽标都按它判定，
+    // 丢成 undefined 会让用户在设置里声明的「不支持」失效（#6243 诉求 1）；缺省仍然不猜。
+    expect(p.models.pi?.[0]?.supportsImageInput).toBe(false);
+    expect(p.models.pi?.[1]?.supportsImageInput).toBe(true);
+    expect(p.models.pi?.[2]?.supportsImageInput).toBeUndefined();
+    // 原始三态在 userModelConfig 里始终可回读（编辑表单的真值源）。
+    expect(p.models.pi?.[0]?.userModelConfig?.supportsImageInput).toBe(false);
+    expect(p.models.pi?.[2]?.userModelConfig?.supportsImageInput).toBeUndefined();
+  });
+
+  // 目录侧的显式 false 还要能压过发现模态里的 image：这是「不支持」真正生效的地方，
+  // 单独锁住，避免只改元数据层却漏掉 mergeModelMetadata 的模态剔除。
+  it("lets an explicit supportsImageInput:false strip image from discovered modalities (#6243)", () => {
+    const p = buildUserProvider({
+      id: "relay",
+      name: "Relay",
+      auth: { method: "apiKey" },
+      runtimes: {
+        pi: {
+          baseUrl: "https://chat.example/v1",
+          wireProtocol: "openai-chat",
+          models: [
+            {
+              id: "glm-5.3",
+              name: "GLM-5.3",
+              supportsImageInput: false,
+              discoveredMetadata: {
+                contextWindow: 128_000,
+                modalities: { input: ["text", "image"], output: ["text"] },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(p.models.pi?.[0]?.supportsImageInput).toBe(false);
+    expect(p.models.pi?.[0]?.modalities?.input).toEqual(["text"]);
+    expect(p.models.pi?.[0]?.modalities?.input).not.toContain("image");
+  });
+
   it("does not export unverified CC/Codex efforts for managed Ollama", () => {
     const p = buildUserProvider({
       id: "cindy-local-ollama",

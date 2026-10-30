@@ -333,7 +333,10 @@ function toCatalogModel(
     group: `custom:${providerId}`,
     // 手填模型保持历史默认可见；刷新发现的模型可显式声明默认隐藏。
     defaultEnabled: m.defaultEnabled ?? true,
-    // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
+    // 图片能力必须由用户/预设明确声明；缺省不猜（防止 Pi 静默把截图降级成占位文本）。
+    // 只需在此保证 `true` 不被丢掉：显式 `false` 由下面的 `runtimeUserModelMetadata`
+    // 复制进 user 层，再经 `applyModelMetadata` 落到目录层，因此这里重复展开 `false`
+    // 不会改变任何输出（已实测三种输入形态输出完全一致），保留单一来源避免两处漂移。
     ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
     ...(supportsFastMode ? { supportsFastMode: true } : {}),
