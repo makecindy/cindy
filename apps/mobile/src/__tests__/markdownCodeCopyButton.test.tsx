@@ -71,6 +71,7 @@ it('copies the complete code once while pending, shows success, then restores th
   await render(code);
 
   expect(button().getAttribute('aria-label')).toBe('message.renderer.copyCode');
+  expect(button().textContent).toBe('');
   await act(async () => button().click());
   expect(button().getAttribute('aria-label')).toBe('message.renderer.copyStateCopying');
   await act(async () => button().click());
@@ -78,7 +79,7 @@ it('copies the complete code once while pending, shows success, then restores th
 
   await act(async () => { finish(); await Promise.resolve(); });
   expect(button().getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
-  expect(button().textContent).toBe('message.renderer.copyStateCopied');
+  expect(button().textContent).toBe('');
 
   await act(async () => { vi.advanceTimersByTime(1500); });
   expect(button().getAttribute('aria-label')).toBe('message.renderer.copyCode');
@@ -90,7 +91,7 @@ it('reports a failed write and allows copying again after the feedback resets', 
 
   await act(async () => button().click());
   expect(button().getAttribute('aria-label')).toBe('message.renderer.copyStateFailed');
-  expect(button().textContent).toBe('message.renderer.copyStateFailed');
+  expect(button().textContent).toBe('');
 
   await act(async () => { vi.advanceTimersByTime(1500); });
   await act(async () => button().click());
