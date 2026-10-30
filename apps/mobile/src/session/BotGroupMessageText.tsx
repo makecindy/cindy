@@ -143,7 +143,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   codeBlock: { backgroundColor: colors.chatCodeSurface, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.control, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   codeText: { color: colors.textPrimary, fontFamily: monoFont, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
-  tableScroll: { maxWidth: '100%' },
+  tableScroll: { maxWidth: '100%', flexGrow: 0 },
   table: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, overflow: 'hidden' },
   tableRow: { flexDirection: 'row' },

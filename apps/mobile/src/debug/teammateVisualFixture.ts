@@ -8,8 +8,8 @@ import {
   type RemoteCollectionListResponse,
   type RemoteResourceManifestResponse,
 } from '@cindy/device-link';
-import { UI_MOCK_ID_PREFIX } from '@cindy/maker-shared/ui-mock';
-import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
+import { UI_MOCK_ID_PREFIX, UI_MOCK_TASKS } from '@cindy/maker-shared/ui-mock';
+import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_MEMBER_LINK_REL, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 
 /**
  * `--mock` teammates (docs/dev-rules/ui-mock-data.md): the roster the teammate home and the task
@@ -54,6 +54,23 @@ const glanceTodo = {
   deadlineCandidate: null,
   suggestedDate: null, decision: null, history: [], action: null,
 };
+const COMPARISON_GROUP_ID = 'visual-comparison-group';
+const COMPARISON_GROUP_NAME = '界面对比演示群';
+
+function comparisonGroup(now: number) {
+  const task = UI_MOCK_TASKS.find(task => task.id === `${UI_MOCK_ID_PREFIX}rich-answer`)!;
+  const messages = task.messages.filter(message => message.role === 'user' || message.role === 'assistant')
+    .map((message, index) => ({ id: `visual-comparison-${index}`, sequence: index + 1, kind: 'message',
+      authorKind: message.role === 'user' ? 'user' : 'bot', isSelf: message.role === 'user',
+      authorBotId: message.role === 'user' ? null : 'cindy-default',
+      authorName: message.role === 'user' ? '我' : 'Cindy', content: message.text, createdAt: now - (3 - index) * MINUTE }));
+  return {
+    id: COMPARISON_GROUP_ID, name: COMPARISON_GROUP_NAME,
+    members: teammates.slice(0, 3).map(bot => ({ botId: bot.id, name: bot.name, status: 'active' })),
+    messages, plans: [], round: { status: 'idle', speakers: [], canContinue: false },
+    createdAt: now - 5 * MINUTE, updatedAt: now - MINUTE,
+  };
+}
 
 export function teammateVisualFixture(channel: string, args: unknown[], now = FIXTURE_NOW): unknown {
   if (channel === 'git-context:pr-refs:list') return args[0] === `${UI_MOCK_ID_PREFIX}rich-answer`
@@ -69,7 +86,9 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
-      actions: [{ id: 'open-create', label: 'New teammate' }] }],
+      actions: [{ id: 'open-create', label: 'New teammate' }] },
+      { id: BOT_GROUP_REMOTE_COLLECTION_ID, resourceKind: BOT_GROUP_REMOTE_RESOURCE_KIND,
+        title: '伙伴群聊', placement: 'home-scope', actions: [] }],
   } satisfies RemoteResourceManifestResponse;
   const request = args[0] as { collectionId?: string; ref?: { collectionId?: string; id?: string }; resourceRef?: { id?: string }; actionId?: string; query?: string; input?: { enabled?: boolean; operation?: string; op?: string; args?: { id?: string } } } | undefined;
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.id === 'todos:cindy-default') {
@@ -88,6 +107,19 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     if (request.input?.operation === 'restore') todoDeleted = false;
     return { effects: [], todo: glanceTodo };
   }
+  if (channel === REMOTE_RESOURCE_LIST_CHANNEL && request?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID) return {
+    collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, revision: 'visual-comparison-1',
+    items: [{ ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: COMPARISON_GROUP_ID },
+      display: { title: COMPARISON_GROUP_NAME, preview: '与 Cindy 单聊使用同一份示例，比较消息气泡和正文。', timestamp: now - MINUTE },
+      links: teammates.slice(0, 3).map(bot => ({ rel: BOT_GROUP_MEMBER_LINK_REL, label: bot.name,
+        target: { kind: 'resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: bot.id } } })), revision: 'visual-comparison-1' }],
+  };
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === COMPARISON_GROUP_ID) return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: COMPARISON_GROUP_ID },
+    revision: 'visual-comparison-1', display: { title: COMPARISON_GROUP_NAME }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: COMPARISON_GROUP_NAME, data: comparisonGroup(now) }],
+  };
   // Nine members from three accounts: the header shows a member count, not every name.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id === 'visual-crowded-group') return {

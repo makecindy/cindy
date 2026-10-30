@@ -372,6 +372,9 @@ async function visualMockInvoke<T = unknown>(
 
 export async function visualMockApiFetch<T>(path: string, options?: Omit<ApiFetchOptions, 'token'>): Promise<T> {
   await loadVisualRealDataSnapshot();
+  // The demo groups are served by the mock computer, with no cloud memberships.
+  if (path === '/v1/me') return { actor: { id: '00000000-0000-4000-8000-000000000001', kind: 'human' } } as T;
+  if (path.startsWith('/v1/conversations?') || path === '/v1/actors') return [] as T;
   if (path === '/api/device-link/devices') return { devices: visualMockDevices() } as T;
   if (path.startsWith('/api/device-link/devices/')) {
     const device = visualMockDevices().find((item) => path === `/api/device-link/devices/${encodeURIComponent(item.deviceId)}`);

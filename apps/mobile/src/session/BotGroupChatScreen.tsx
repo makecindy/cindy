@@ -86,6 +86,7 @@ import { CompanionEntering, CompanionFadeIn } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { companionMessageBubble } from './companionMessageAppearance';
 import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
@@ -754,7 +755,7 @@ function BotGroupTimelineItem({
         ? <BotGroupPlanCard plan={plan} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
           onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
-        : <>
+        : <View style={styles.botBubble} testID="botGroup.message.botBubble">
           {quoteDisplay ? <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} /> : null}
           {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.
               An author no longer in the group is unknown: its task may run on another computer, so it
@@ -767,7 +768,7 @@ function BotGroupTimelineItem({
           {message.attachments?.length ? <BotGroupMessageAttachments messageId={message.id} attachments={message.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
           {message.content.trim() ? <BotGroupMarkdownText content={message.content} authorKind={message.authorKind} /> : null}
           <BotGroupHandoffFiles files={message.files} />
-        </>}
+        </View>}
     </View>
   </View>;
 }
@@ -801,7 +802,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Full width so the bubble keeps its 86% cap and attachments their own size limits.
   userColumn: { flex: 1, minWidth: 0, alignItems: 'flex-end', gap: spacing.xs },
   // The 1:1 user bubble (MessageRenderer userBubble): 86% wide, padding 12, compact 8/12.
-  userBubble: { maxWidth: '86%', backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
+  userBubble: { maxWidth: '86%', backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 0,
     borderRadius: radius.container, padding: spacing.md },
   userBubbleCompact: { paddingVertical: spacing.sm },
   // The 1:1 reply geometry: avatar 28, 2pt down, 10 to the text.
@@ -810,6 +811,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   avatarSlot: { marginTop: 2 },
   avatarSpacer: { width: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   botColumn: { flex: 1, minWidth: 0, gap: spacing.xs },
+  botBubble: companionMessageBubble(colors),
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
 });
