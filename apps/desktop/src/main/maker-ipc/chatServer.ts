@@ -879,7 +879,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     if (keepCloudAvatar) {
       if (found.name === profile.displayName) return;
-      await api(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar: found.avatar ?? null, avatarSource: found.avatarSource ?? null });
+      await request(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar: found.avatar ?? null, avatarSource: found.avatarSource ?? null });
       found.name = profile.displayName;
       return;
     }

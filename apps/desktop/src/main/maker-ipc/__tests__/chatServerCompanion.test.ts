@@ -195,6 +195,34 @@ describe('Chat Server cloud companions', () => {
     expect(calls('/executions/claim')).toHaveLength(0);
   });
 
+  // PR #7919 / chat-work-polling.md: the fallback-avatar branch must honor the same
+  // background gate as ordinary profile writes. Existing avatar tests only covered success.
+  // Unit: two renamed fallback profiles; the first restriction must stop the second HTTP write.
+  it.each([401, 429])('stops fallback profile writes after a background %s', async status => {
+    const other = '20000000-0000-4000-8000-000000000002';
+    home = 'desk-1'; claimed = true;
+    fixture.capabilitiesJson = JSON.stringify({ cloudAvatarFallback: true });
+    fixture.refresh.mockResolvedValue(false);
+    fixture.profiles = [
+      { id: 'local-bot', displayName: 'Mia renamed', avatar: '🤖', status: 'active' },
+      { id: 'other-bot', displayName: 'Other renamed', avatar: '🤖', status: 'active' },
+    ];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/actors' && method === 'GET') return { body: [
+        { id: botActor, kind: 'bot', externalId: 'local-bot', name: 'Mia', avatar: 'https://cdn.example/mia.png', homeDeviceId: home },
+        { id: other, kind: 'bot', externalId: 'other-bot', name: 'Other', avatar: 'https://cdn.example/other.png', homeDeviceId: home },
+      ] };
+      if (route === `/actors/${botActor}/profile` && method === 'POST') return { status, body: {
+        error: { code: status === 401 ? 'TOKEN_EXPIRED' : 'RATE_LIMITED' },
+      } };
+      return respond(route, method, body);
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls(`/actors/${botActor}/profile`, 'POST')).toHaveLength(1);
+    expect(calls(`/actors/${other}/profile`, 'POST')).toHaveLength(0);
+    expect(calls('/executions/claim')).toHaveLength(0);
+  });
+
   it('gates installation discovery after another companion home was rate limited', async () => {
     const other = '20000000-0000-4000-8000-000000000002';
     host.installationId = () => 'this-install';
