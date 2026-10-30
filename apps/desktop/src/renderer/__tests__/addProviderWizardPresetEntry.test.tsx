@@ -1275,6 +1275,36 @@ it('keeps an explicit tenant path through online discovery, saving and runtime p
   expect(saved.runtimes.codex?.models[0].interfaceId).toBeUndefined();
 });
 
+it('preserves an explicit additional discovery path instead of replacing it with a profile route', async () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: 'discovery-tenant-chat-only', name: 'Discovery tenant Chat-only' };
+  delete preset.runtimes.codex;
+  delete preset.runtimes.pi;
+  const source = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,
+    modelsUrl: 'https://api.deepseek.com/tenant/acme/models', requestPath: '/tenant/acme/infer' };
+  preset.runtimes['claude-code']!.modelDiscovery = [source];
+  registry.models.push({ id: 'review/discovery-chat-only', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { modelsUrl?: string | null }) => ({ ok: true,
+    models: input.modelsUrl === source.modelsUrl ? [model] : [] }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(await screen.findByText(model.name));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const route = { baseUrl: source.baseUrl, wireProtocol: source.wireProtocol, requestPath: source.requestPath };
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)).toMatchObject({ route });
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBeUndefined();
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({ id: model.id, route });
+});
+
 it.each([false, true])('honors exact online declarations with different preset memberships, existing row=%s', async existingRow => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
   const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);

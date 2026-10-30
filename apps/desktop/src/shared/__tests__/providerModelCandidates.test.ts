@@ -46,6 +46,12 @@ describe('provider model candidates', () => {
         profileId: 'deepseek-openai-completions', ...(kind === 'unsupported-requirement' ? { requires: ['not-implemented'] } : {}),
       }] }] });
     expect(presetSupplementalModels(preset, 'claude-code', registry).some(model => model.id === id)).toBe(false);
+    const route = presetCandidateRoute(preset, 'claude-code');
+    const model = { id, name: 'Blocked fixture' };
+    expect(presetModelCandidate(preset, 'claude-code', model, registry,
+      { ...route, requestPath: '/tenant/messages' })).toBeUndefined();
+    expect(presetModelCandidate(preset, 'claude-code', model, registry, route,
+      { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat', requestPath: '/tenant/infer' })).toBeUndefined();
   });
 
   it('does not lend official transports to custom origins or explicit request paths', () => {

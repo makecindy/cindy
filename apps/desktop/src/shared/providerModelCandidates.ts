@@ -37,11 +37,15 @@ export function presetModelCandidate(
   requireDeclaration = false,
 ): ProviderRuntimeModelConfig | undefined {
   if (preset.runtimes[agent]?.models.some(candidate => candidate.id === model.id)) return model;
-  if (runtimeRoute.requestPath) return requireDeclaration ? undefined
-    : sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
   const entries = registry?.models.filter(entry => entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id)) ?? [];
   if (entries.some(entry => entry.status === 'retired' || entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id && route.interfaces?.length === 0))) return undefined;
+  const hasBindings = entries.some(entry => entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id && route.interfaces !== undefined));
   const choices = availableModelInterfaces(registry, preset.id, model.id, runtimeRoute.baseUrl, agent);
+  const explicitRoute = sourceRoute.requestPath ? sourceRoute : runtimeRoute.requestPath ? runtimeRoute : undefined;
+  if (explicitRoute) {
+    if ((requireDeclaration || hasBindings) && !choices.some(choice => choice.route.wireProtocol === explicitRoute.wireProtocol)) return undefined;
+    return sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
+  }
   const selected = choices.find(choice => sameRoute(choice.route, runtimeRoute))
     ?? choices.find(choice => sameRoute(choice.route, sourceRoute))
     ?? choices.find(choice => choice.preferred)
@@ -53,7 +57,7 @@ export function presetModelCandidate(
   }
   const hasProfiles = registry?.interfaceProfiles?.some(profile => profile.providerId === preset.id
     && [...profile.inputBaseUrls, profile.baseUrl].some(url => cleanUrl(url) === cleanUrl(runtimeRoute.baseUrl)));
-  if (hasProfiles || entries.some(entry => entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id && route.interfaces !== undefined))) return undefined;
+  if (hasProfiles || hasBindings) return undefined;
   if (requireDeclaration && !(isOpenRouterModelsUrl(preset.runtimes[agent]?.modelsUrl ?? '')
     && /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(runtimeRoute.baseUrl))) return undefined;
   return sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
