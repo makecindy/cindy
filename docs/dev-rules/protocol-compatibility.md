@@ -660,6 +660,8 @@ Desktop 收到终态后还会中止本机未完成的规划，沿原 lease 链�
 `GET /conversation-list-state` 获取状态，无需先读已无权限的群快照。启动及重连先取个人状态，
 只合入更新的修订；成功回包或本人 human actor scope 的 `conversation.list.changed` 才清理本地
 列表、选择与未读镜像，失败保留列表。手机同时订阅群和本人 human scope，代演不替换账号订阅。
+手机不运行伙伴：本人 scope 中只含 `work.available` 的批次直接 ACK，不重读列表或历史；混合批次照常刷新
+（[`chatServerSubscription.ts`](../../apps/mobile/src/chat/chatServerSubscription.ts)）。
 同账号并发全量同步共用一次请求；普通聊天刷新复用已同步状态与事件，启动、重连及手机主动刷新重新读取。
 同步失败不把缓存标记为已就绪。手机列表重新挂载时先纳入已有个人状态，直连离线也不恢复旧电脑回包。
 actor scope 遇到 RESET_REQUIRED 时，在在途读取完成后重新读取个人状态，再按服务端 head 续订；
