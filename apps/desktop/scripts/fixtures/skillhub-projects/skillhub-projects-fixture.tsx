@@ -1,6 +1,7 @@
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { LocalSkillhubStoreSync } from '../../../src/renderer/features/skillhub/SkillhubFeatureLayout';
 import { SkillhubHomeContent } from '../../../src/renderer/features/skillhub/SkillhubHomeView';
+import { InstallTargetPicker } from '../../../src/renderer/features/skillhub/components/InstallTargetPicker';
 
 void mountPage({
   route: '/skillhub/local?tab=local',
@@ -8,6 +9,10 @@ void mountPage({
     onAuthStateChange: subscription('authState'),
     skillhub: {
       onLocalStateChanged: subscription('skills'),
+      registry: { getByName: async () => ({
+        success: true,
+        manifest: { installs: { '//server/share/hf-parent/.agents/skills/add-feature': { version: '1.2.3' } } },
+      }) },
       // Each requested project supplies the same scenario Skill. The real
       // collector/store must collapse casing aliases before they reach this API.
       scan: async ({ projects }: { projects: Array<{ projectRoot: string; hash: string }> }) => ({
@@ -28,5 +33,8 @@ void mountPage({
       reconcileMineRegistry: forbid('skillhub.reconcileMineRegistry'),
     },
   },
-  render: () => <AppFrame header={false}><LocalSkillhubStoreSync /><SkillhubHomeContent embedded /></AppFrame>,
+  render: ({ data }) => <AppFrame header={false}>{data.picker
+    ? <InstallTargetPicker open skill={{ name: 'add-feature' }} onClose={() => {}} onInstallComplete={() => {}} />
+    : <><LocalSkillhubStoreSync /><SkillhubHomeContent embedded /></>}
+  </AppFrame>,
 });
