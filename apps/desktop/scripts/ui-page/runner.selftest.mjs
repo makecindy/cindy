@@ -217,3 +217,18 @@ test(
     assert.equal(leftoverRunners(), '');
   },
 );
+
+// UI integration tier: Kimi's quota warning uses the existing accessible-only
+// label. The audit must distinguish it from an actually clipped visible label.
+test('clipping audit ignores accessible-only text but retains visible clipping warnings', async () => {
+  const file = await entry('accessible-clipping', `mountPage({render:()=> <main>
+    <span className="sr-only">Accessible quota warning</span>
+    <span style={{display:'block',width:20,overflow:'hidden',whiteSpace:'nowrap'}}>Visible quota warning clipped</span>
+  </main>});`);
+  const result = await run(['--entry', file, '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  const warnings = report.variants.flatMap(variant => variant.warnings);
+  assert.ok(warnings.some(warning => warning.includes('Visible quota warning clipped')));
+  assert.ok(!warnings.some(warning => warning.includes('Accessible quota warning')));
+});

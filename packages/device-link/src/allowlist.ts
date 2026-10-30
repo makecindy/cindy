@@ -561,6 +561,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 前拦截、直读 usage reader,不进 ipcMain。列入 allowlist 作契约登记 + 老被控端
   // CHANNEL_NOT_ALLOWED 供控制端探测降级。
   'maker:usage:xai-subscription',
+  // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
+  // Old hosts reject the channel; callers never fall back to their local account.
+  'maker:usage:kimi-coding',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
   // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
   // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无

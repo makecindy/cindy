@@ -1,3 +1,5 @@
+import { parseKimiAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { kimiSource } from './collect.js';
 /**
  * Subscription accounts on the user's other computers, for the menu bar.
  *
@@ -78,7 +80,10 @@ async function readAccount(
 ): Promise<MenubarSubscriptionInput | null> {
   const kind = providerWeeklyQuotaSource(provider);
   let source: MenubarSubscriptionInput | null = null;
-  if (kind === 'codex') {
+  if (kind === 'kimi') {
+    const response = await deps.invoke(device.id, 'maker:usage:kimi-coding', [{ providerId: provider.id }]);
+    if (response.ok && isRecord(response.result)) source = kimiSource(provider, parseKimiAccountUsageResult(response.result), deps.nowMs);
+  } else if (kind === 'codex') {
     const payload = await readUsage(deps, device.id, 'maker:usage:account', ['codex'], provider.id, 'openai');
     source = payload ? codexSource(provider, payload as unknown as CodexAccountUsagePayload, deps.nowMs) : null;
   } else if (kind === 'claude') {

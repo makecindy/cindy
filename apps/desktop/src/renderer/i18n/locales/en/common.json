@@ -1,5 +1,25 @@
 {
   "providerAccountUsage": {
+    "kimi": {
+      "refresh": "Refresh quota",
+      "usage": "View Kimi Code usage",
+      "error": {
+        "no-credentials": "No Kimi Code credentials are available. Connect this provider first.",
+        "auth": "Kimi Code rejected the credentials. Check the connection and retry.",
+        "rate-limited": "Kimi Code is limiting quota queries. Retry later.",
+        "network": "Cindy cannot reach Kimi Code. Check the network and retry.",
+        "server": "Kimi Code cannot return quota right now. Retry later.",
+        "invalid-response": "Kimi Code returned unreadable quota data. Retry later.",
+        "throttled": "Quota was just refreshed. Retry a bit later.",
+        "unknown": "Cindy cannot load Kimi Code quota. Retry later.",
+        "updating": "The connection changed. Refresh to retrieve its quota."
+      },
+      "limit_5h": "5 Hours",
+      "limit_7d": "Weekly",
+      "limit_month_total": "Monthly Total",
+      "limit_month_code": "Monthly Coding",
+      "stale": "Showing the last available quota. The latest update failed."
+    },
     "openDashboard": "Open DeepSeek usage dashboard",
     "deepSeek": {
       "balanceLine": "Balance {{total}} (topped up {{toppedUp}} / granted {{granted}})",
@@ -1411,6 +1431,8 @@
       "minutes": "{{m}}m"
     },
     "window": {
+      "kimiMonthTotal": "Monthly Total",
+      "kimiMonthCode": "Monthly Coding",
       "session": "{{hours}}-hour",
       "week": "Weekly",
       "scoped": "{{model}} weekly"

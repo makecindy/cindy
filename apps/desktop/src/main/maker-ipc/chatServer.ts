@@ -39,7 +39,7 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 import { and, asc, eq, gt } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
-import { botGroups, botProfiles, botGroupMembers, botGroupMessages, botGroupPlans, botGroupPlanSteps, botSessionLinks } from '../localDb/schema.js';
+import { botGroups, botProfiles, botProfileVersions, botGroupMembers, botGroupMessages, botGroupPlans, botGroupPlanSteps, botSessionLinks } from '../localDb/schema.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
 import {
@@ -820,6 +820,28 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Only the confirmed home installation publishes (same predicate as claiming work).
     if (companionHome && (found.homeDeviceId !== selfDeviceId || !!companion?.isShadowed(profile.id)
       || !companion?.installConfirmed(profile.id))) return;
+    // A take-over that could not read the cloud image stores a default locally. Publishing that
+    // default would replace the address; a later real image is the first one allowed back up.
+    let keepCloudAvatar = false;
+    if (companionHome) {
+      // Reconciliation may have materialized a newer profile after registration
+      // read the roster. Read the avatar and its provenance from one DB snapshot.
+      const [saved] = await getDbClient().drizzle.select({ profile: botProfiles, capabilitiesJson: botProfileVersions.capabilitiesJson })
+        .from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+          eq(botProfileVersions.version, botProfiles.currentVersion))).where(eq(botProfiles.id, profile.id)).limit(1);
+      // Missing/unreadable profile data must not turn a stand-in into a cloud edit.
+      if (!saved) throw new Error('PROFILE_UNAVAILABLE');
+      profile = saved.profile;
+      if (profile.status !== 'active') return;
+      keepCloudAvatar = JSON.parse(saved.capabilitiesJson).cloudAvatarFallback === true;
+      if (!current()) throw new Error('OWNER_CHANGED');
+    }
+    if (keepCloudAvatar) {
+      if (found.name === profile.displayName) return;
+      await api(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar: found.avatar ?? null, avatarSource: found.avatarSource ?? null });
+      found.name = profile.displayName;
+      return;
+    }
     const source = profile.avatar?.startsWith('cindy-media://') ? createHash('sha256').update(profile.avatar).digest('hex') : null;
     let avatar = source && found.avatarSource === source ? found.avatar ?? null : profile.avatar || null;
     if (source && found.avatarSource !== source) {

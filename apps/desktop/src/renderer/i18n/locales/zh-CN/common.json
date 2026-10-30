@@ -1,5 +1,25 @@
 {
   "providerAccountUsage": {
+    "kimi": {
+      "refresh": "刷新配额",
+      "usage": "查看 Kimi Code 用量",
+      "error": {
+        "no-credentials": "没有可用的 Kimi Code 凭证，请先连接此供应商。",
+        "auth": "Kimi Code 拒绝了凭证，请检查连接后重试。",
+        "rate-limited": "Kimi Code 限制了配额查询频率，请稍后重试。",
+        "network": "Cindy 无法连接 Kimi Code，请检查网络后重试。",
+        "server": "Kimi Code 暂时无法返回配额，请稍后重试。",
+        "invalid-response": "Kimi Code 返回了无法识别的配额数据，请稍后重试。",
+        "throttled": "刚刚刷新过配额，请稍后重试。",
+        "unknown": "Cindy 无法加载 Kimi Code 配额，请稍后重试。",
+        "updating": "连接已变更，请刷新以获取配额。"
+      },
+      "limit_5h": "5 小时",
+      "limit_7d": "每周",
+      "limit_month_total": "每月总配额",
+      "limit_month_code": "每月编程配额",
+      "stale": "显示上次获取的配额，最新查询未完成"
+    },
     "openDashboard": "打开 DeepSeek 用量页",
     "deepSeek": {
       "balanceLine": "余额 {{total}}（充值 {{toppedUp}} / 赠送 {{granted}}）",
@@ -1392,6 +1412,8 @@
       "minutes": "{{m}}分"
     },
     "window": {
+      "kimiMonthTotal": "每月总配额",
+      "kimiMonthCode": "每月编程配额",
       "session": "{{hours}} 小时",
       "week": "本周",
       "scoped": "{{model}} 本周"

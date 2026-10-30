@@ -1,5 +1,25 @@
 {
   "providerAccountUsage": {
+    "kimi": {
+      "refresh": "クォータを更新",
+      "usage": "Kimi Code の使用量を表示",
+      "error": {
+        "no-credentials": "Kimi Code の認証情報がありません。先にこのプロバイダーを接続してください。",
+        "auth": "Kimi Code が認証情報を拒否しました。接続を確認して再試行してください。",
+        "rate-limited": "Kimi Code がクォータの照会を制限しています。後でもう一度お試しください。",
+        "network": "Kimi Code に接続できません。ネットワークを確認して再試行してください。",
+        "server": "Kimi Code のクォータを取得できません。後でもう一度お試しください。",
+        "invalid-response": "Kimi Code のクォータデータを読み取れません。後でもう一度お試しください。",
+        "throttled": "クォータは更新されたばかりです。少し待って再試行してください。",
+        "unknown": "Kimi Code のクォータを読み込めません。後でもう一度お試しください。",
+        "updating": "接続が変更されました。更新してクォータを取得してください。"
+      },
+      "limit_5h": "5 時間",
+      "limit_7d": "週間",
+      "limit_month_total": "月間合計",
+      "limit_month_code": "月間コーディング",
+      "stale": "前回取得したクォータを表示しています。最新の取得は完了していません。"
+    },
     "openDashboard": "DeepSeek の使用量ページを開く",
     "deepSeek": {
       "balanceLine": "残高 {{total}}（チャージ {{toppedUp}} / 付与 {{granted}}）",
@@ -1392,6 +1412,8 @@
       "minutes": "{{m}}分"
     },
     "window": {
+      "kimiMonthTotal": "月間合計",
+      "kimiMonthCode": "月間コーディング",
       "session": "{{hours}} 時間",
       "week": "今週",
       "scoped": "{{model}} 今週"
