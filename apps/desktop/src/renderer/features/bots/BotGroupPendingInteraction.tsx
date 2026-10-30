@@ -71,9 +71,17 @@ export function BotGroupPendingInteraction({
   if (light.pendingPermission) {
     return (
       <PermissionPrompt
+        // P1 security: 与任务页同一套防护 —— 按 requestId remount,让实例(连同它
+        // 冻结的 capturedRequestId 与键盘监听)随 A 卡一起销毁。若实例被复用,
+        // A 的迟到点击会带着 A 的身份落到 B 的按钮上。
+        key={light.pendingPermission.requestId}
         permission={light.pendingPermission}
         companion={bot}
-        onRespond={(result) => makerChatStore.respondToPermission(sessionId, result)}
+        // P1 security: 端到端转发身份。不传第三个参数时 store 会退回「当前队首」,
+        // 于是 A 结束后晋升的 B 会被 A 的迟到响应直接批准/拒绝。
+        onRespond={(result) =>
+          makerChatStore.respondToPermission(sessionId, result, result.requestId)
+        }
       />
     );
   }

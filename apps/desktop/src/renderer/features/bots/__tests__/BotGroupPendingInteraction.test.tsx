@@ -30,14 +30,21 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mocks.activity }));
 vi.mock('@/components/new-chat/PermissionPrompt', () => ({
+  // 替身按真实组件的行为转发被冻结的 requestId(取自 permission 属性),
+  // 这样才能验证「群专线把身份一路送到 store」这条链路,而不是只验证点击发生。
   PermissionPrompt: ({
     companion,
+    permission,
     onRespond,
   }: {
     companion: { name: string };
-    onRespond: (result: { behavior: string }) => void;
+    permission?: { requestId: string };
+    onRespond: (result: { behavior: string; requestId?: string }) => void;
   }) => (
-    <button type="button" onClick={() => onRespond({ behavior: 'allow' })}>
+    <button
+      type="button"
+      onClick={() => onRespond({ behavior: 'allow', requestId: permission?.requestId })}
+    >
       {`permission:${companion.name}`}
     </button>
   ),
@@ -80,7 +87,13 @@ describe('BotGroupPendingInteraction', () => {
     mocks.light = { ...EMPTY, pendingPermission: { requestId: 'r1', toolName: 'Bash', input: {} } };
     render(<BotGroupPendingInteraction sessionId="lane" bot={bot} />);
     fireEvent.click(screen.getByRole('button', { name: 'permission:咪咪' }));
-    expect(mocks.respondToPermission).toHaveBeenCalledWith('lane', { behavior: 'allow' });
+    // 群专线必须和任务页一样端到端转发身份:第二个参数带被冻结的 requestId,
+    // 第三个参数把它交给 store 做队首校验,否则 A 结束后晋升的 B 会被迟到响应误批。
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(
+      'lane',
+      expect.objectContaining({ behavior: 'allow', requestId: 'r1' }),
+      'r1',
+    );
   });
 
   it('reuses the question card for the lane', () => {

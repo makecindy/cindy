@@ -2093,7 +2093,7 @@ function CCAgentSessionContent({
       if (!sessionId || !ownsHardwareTaskActions) return false;
       if (action.commandId === 'approval.approve' || action.commandId === 'composer.submit') {
         if (pendingPermission) {
-          respondToPermission({ behavior: 'allow' });
+          respondToPermission({ behavior: 'allow', requestId: pendingPermission?.requestId });
           return true;
         }
         if (pendingPlanReview) {
@@ -2108,6 +2108,7 @@ function CCAgentSessionContent({
             behavior: 'deny',
             message: 'User denied',
             decisionClassification: 'user_reject',
+            requestId: pendingPermission?.requestId,
           });
           return true;
         }
@@ -5952,6 +5953,11 @@ function CCAgentSessionContent({
                   </>
                 ) : pendingPermission ? (
                   <PermissionPrompt
+                    // P1 security: remount per permission card so the instance
+                    // (and its frozen capturedRequestId / keyboard listeners)
+                    // dies with card A when FIFO promotes B. A reused instance
+                    // would carry A's stale identity onto B's buttons.
+                    key={pendingPermission.requestId}
                     permission={pendingPermission}
                     companion={botChatIdentity}
                     onRespond={respondToPermission}
