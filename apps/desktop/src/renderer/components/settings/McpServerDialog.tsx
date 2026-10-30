@@ -31,13 +31,16 @@ import {
   updateCustomMcpServer,
 } from '@/lib/customMcpServers';
 
+import type { McpSetupProposal } from '@/../shared/mcpSetup';
 import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../shared/customMcp';
 
 interface McpServerDialogProps {
   initial?: CustomMcpConfig;
+  proposal?: McpSetupProposal;
+  embedded?: boolean;
   /** 已占用的全部 MCP id;新建自动生成 id 时避让。 */
   existingIds?: string[];
-  onSaved: () => void;
+  onSaved: (serverId: string) => void;
   onClose: () => void;
 }
 
@@ -72,13 +75,13 @@ function uniqueId(name: string, existing: ReadonlySet<string>): string {
   return `${base}-${i}`;
 }
 
-export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpServerDialogProps) {
+export function McpServerDialog({ initial, proposal, embedded, existingIds, onSaved, onClose }: McpServerDialogProps) {
   const { t } = useTranslation();
   const editing = !!initial;
 
-  const [name, setName] = useState(initial?.name ?? '');
-  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? 'http');
-  const [url, setUrl] = useState(initial?.url ?? '');
+  const [name, setName] = useState(initial?.name ?? proposal?.name ?? '');
+  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? proposal?.transport ?? 'http');
+  const [url, setUrl] = useState(initial?.url ?? proposal?.url ?? '');
   const [token, setToken] = useState('');
   const [hasToken, setHasToken] = useState(false);
   const headerKeyRef = useRef(0);
@@ -166,7 +169,7 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
         await createCustomMcpServer(config, token);
         toast.success(t('settings.mcp.toast.created'));
       }
-      onSaved();
+      onSaved(configId);
     } catch (e) {
       const ipc = extractIpcError(e);
       toast.error(ipc?.message ?? t('settings.mcp.toast.saveFailed'));
@@ -192,44 +195,19 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
     ? t('settings.mcp.fields.tokenEditPlaceholder')
     : t('settings.mcp.fields.tokenPlaceholder');
 
-  return (
-    <Dialog.Root
-      open
-      onOpenChange={(open) => {
-        if (!open) close();
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
-        <Dialog.Content
-          className={cn(
-            'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
-            '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
-          )}
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            nameRef.current?.focus();
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
-          }}
-          onEscapeKeyDown={(event) => {
-            if (savingRef.current || event.isComposing || event.keyCode === 229)
-              event.preventDefault();
-          }}
-          onPointerDownOutside={(event) => event.preventDefault()}
-        >
+  const Title = embedded ? 'h3' : Dialog.Title;
+  const Description = embedded ? 'p' : Dialog.Description;
+  const content = <>
           <div className="flex shrink-0 items-center gap-2.5 p-4">
             <Sparkles size={20} className="shrink-0 text-[var(--settings-section-title)]" />
-            <Dialog.Title className="text-18 font-semibold text-[var(--settings-section-title)]">
+            <Title className="text-18 font-semibold text-[var(--settings-section-title)]">
               {editing ? t('settings.mcp.dialog.editTitle') : t('settings.mcp.dialog.createTitle')}
-            </Dialog.Title>
+            </Title>
           </div>
-          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4 pb-2 pt-1">
-            <Dialog.Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
+          <div className={cn("flex min-h-0 flex-col gap-4 px-4 pb-2 pt-1", !embedded && "overflow-y-auto")}>
+            <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
               {t('settings.mcp.dialog.desc')}
-            </Dialog.Description>
+            </Description>
             <FormField
               id={`${id}-name`}
               label={t('settings.mcp.fields.name')}
@@ -430,6 +408,43 @@ export function McpServerDialog({ initial, existingIds, onSaved, onClose }: McpS
               {t('settings.mcp.save')}
             </Button>
           </div>
+  </>;
+  if (embedded) return (
+    <section aria-label={t('settings.mcp.dialog.createTitle')}
+      className="w-full min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+      {content}
+    </section>
+  );
+
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
+        <Dialog.Content
+          className={cn(
+            'modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[88vh] w-[min(600px,calc(100vw-32px))] flex-col outline-none',
+            '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-[var(--focus-ring)]',
+          )}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            nameRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (savingRef.current || event.isComposing || event.keyCode === 229)
+              event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
+          {content}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

@@ -1,4 +1,6 @@
 import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
+import { McpSetupBridge } from './mcpSetupBridge.js';
+import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
@@ -241,6 +243,7 @@ import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox } from './botGroupOutboxStorage.js';
 import {
   activeOwnerScopeKey,
+  onAppSessionInvalidated,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
@@ -2177,6 +2180,7 @@ const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();
  * 但已经排期的 timer / scheduler takeover 仍然存在，不能因此漏清后原地复活。
  */
 function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
+  mcpSetupBridge.cleanupForSession(sessionId);
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   autoResumeBookkeeping.teardown(sessionId);
@@ -3392,6 +3396,20 @@ const issueConfirmBridge = new IssueConfirmBridge({
     desktopConfirmImNotifier(sessionId, '「提交 GitHub issue」的确认卡'),
 });
 
+const mcpSetupBridge = new McpSetupBridge({
+  broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
+});
+onAppSessionInvalidated(() => mcpSetupBridge.cleanupAll());
+
+export function requestMcpSetupForSession(
+  sessionId: string, sessionInstanceId: string, proposal: McpSetupProposal,
+) {
+  const owner = activeOwnerScopeKey();
+  return mcpSetupBridge.request(sessionId, proposal, () =>
+    !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner &&
+    getMakerIfReady()?.getSession(sessionId)?.instanceId === sessionInstanceId);
+}
+
 const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
@@ -3766,7 +3784,8 @@ type RecoverableInteractionSnapshot =
   | IssueConfirmInteractionSnapshot
   | RenameSessionsConfirmInteractionSnapshot
   | GhostGrantConfirmInteractionSnapshot
-  | InputHandoffSnapshot;
+  | InputHandoffSnapshot
+  | McpSetupRequest;
 
 type PendingInteractionSnapshotEntry = {
   request: RecoverableInteractionSnapshot;
@@ -3786,6 +3805,7 @@ function getPendingInteractionsForSession(sessionId: string): PendingInteraction
       out.push({ request: entry.request, persistId: entry.persistId });
   }
   out.push(
+    ...mcpSetupBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...issueConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...renameSessionsConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...taskActionConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
@@ -3871,6 +3891,7 @@ function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string)
 
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
   return (
+    mcpSetupBridge.has(requestId) ||
     issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId) ||
     renameSessionsConfirmBridge
       .pendingSnapshots()
@@ -4080,6 +4101,7 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
 }
 
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+  mcpSetupBridge.cleanupForSession(sessionId);
   cleanupPendingAgentInteractionsForSession(sessionId, reason);
   taskActionConfirmBridge.cleanupForSession(sessionId, reason === 'session_closed' ? 'session_closed' : 'session_aborted');
   // Desktop-only 确认只跟随真实会话终止/中止清理。权威 NO_ACTIVE_TURN 的
@@ -22702,6 +22724,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // agent interaction 没命中 → 可能是 issue 确认卡(kind='issue_confirm',
       // pending 在 issueConfirmBridge 自己的 map 里)或批量改名确认卡。
       // 三边都 miss 才告警。
+      if (mcpSetupBridge.has(requestId)) {
+        assertTrustedAppRendererEvent(event);
+        return { accepted: mcpSetupBridge.resolve(requestId, decision) };
+      }
       if (issueConfirmBridge.resolve(requestId, decision)) return { accepted: true };
       if (renameSessionsConfirmBridge.resolve(requestId, decision)) return { accepted: true };
       if (!sharedTask && taskActionConfirmBridge.resolveFromIpc(requestId, decision, {

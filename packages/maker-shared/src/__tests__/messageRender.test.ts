@@ -73,6 +73,89 @@ describe('message render shared model', () => {
     expect(continued.at(-1)).toMatchObject({ key: 'work-next-think', isStreaming: true });
   });
 
+  /**
+   * thinking 块在结束时才落库，所以一个跨过最终回答的块在消息数组里排在回答之后，尽管它
+   * 早已开始。它属于回答上方那段工作，不应当作回答之后的新一段，在回答下面多折出一个
+   * 「已工作 1s」。(实例：2026-10-30 定时巡检，10:00:39 回答之后紧跟 10:00:40 的 thinking)
+   */
+  function answeredTurnWithTailThinking(tailStart: string, answers = 1): FixtureMessage[] {
+    return [
+      message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),
+      message({
+        kind: 'thinking',
+        source: source('think1', { text: 'Checking', durationMs: 3000 }, 2),
+        body: 'Checking',
+      }),
+      {
+        ...message({
+          kind: 'tool',
+          source: source('read1', { toolName: 'Read', input: { file_path: '/repo/a.ts' } }, 5),
+          body: 'Read(/repo/a.ts)',
+          label: 'Read',
+        }),
+        settledAt: '2026-01-01T00:00:08.000Z',
+      },
+      // 多段最终回答:前一段是交付正文(不折叠),后一段是短收尾。
+      message({
+        kind: 'assistant',
+        source: source('final1', answers > 1 ? '# Report\n详情' : 'Done', 9),
+        body: answers > 1 ? '# Report\n详情' : 'Done',
+        turnCompleted: true,
+      }),
+      ...(answers > 1
+        ? [message({ kind: 'assistant', source: source('final2', 'Also done', 10), body: 'Also done', turnCompleted: true })]
+        : []),
+      message({
+        kind: 'thinking',
+        source: {
+          id: 'think2',
+          clientId: 'think2',
+          content: { text: 'Signing off', durationMs: 1200 },
+          createdAt: tailStart,
+        },
+        body: 'Signing off',
+      }),
+    ];
+  }
+
+  it('folds a thinking block persisted after the final answer back into its run', () => {
+    const items = buildMessageRenderItems(answeredTurnWithTailThinking('2026-01-01T00:00:08.700Z'));
+
+    expect(items.map((item) => item.key)).toEqual(['message-u1', 'work-think1', 'message-final1']);
+    const group = expectType(items[1], 'work_group');
+    expect(group.durationMs).toBe(8000);
+    expect(group.children.map((child) => child.key)).toEqual([
+      'thinking-think1',
+      'tools-read1',
+      'thinking-think2',
+    ]);
+  });
+
+  it.each(['2026-01-01T00:00:08.700Z', '2026-01-01T00:00:09.500Z'])(
+    'keeps the fold target across consecutive final answers (tail at %s)',
+    (tailStart) => {
+      const items = buildMessageRenderItems(answeredTurnWithTailThinking(tailStart, 2));
+
+      expect(items.map((item) => item.key)).toEqual([
+        'message-u1',
+        'work-think1',
+        'message-final1',
+        'message-final2',
+      ]);
+    },
+  );
+
+  it('keeps work that starts after the final answer in its own segment', () => {
+    const items = buildMessageRenderItems(answeredTurnWithTailThinking('2026-01-01T00:00:10.000Z'));
+
+    expect(items.map((item) => item.key)).toEqual([
+      'message-u1',
+      'work-think1',
+      'message-final1',
+      'work-think2',
+    ]);
+  });
+
   it('groups consecutive normalized tools before the final answer', () => {
     const items = buildMessageRenderItems([
       message({

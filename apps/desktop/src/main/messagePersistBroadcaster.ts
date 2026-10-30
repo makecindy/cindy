@@ -1668,7 +1668,9 @@ export function onThinkingEvent(
       role: 'thinking',
       content: { kind: 'thinking', text, durationMs, isRedacted: false, finishedAt },
       agentMeta: meta,
-      createdAt: finishedAt,
+      // 行在此刻才写入,但排序锚点用块的真实起点:按落库时刻排的话,一个跨过最终
+      // 回复的思考块会落到回复之后,渲染层就为它多折出一段「已工作」。
+      createdAt: finishedAt - Math.max(0, durationMs),
     }, releaseSnapshot);
     notePersistedMessage(sessionId, 'thinking', blockId);
   } else if (data.stage === 'redacted') {

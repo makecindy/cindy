@@ -2211,7 +2211,9 @@ describe('thinking persistence', () => {
     expect(getSessionThinkingSnapshots(SESSION)).toEqual([]);
   });
 
-  it('uses the final event timestamp instead of delayed write time', async () => {
+  it('anchors the row at the thinking start instead of the delayed write time', async () => {
+    // 块结束时才写入,但排序锚点必须是块的真实起点:按写入时刻排,一个跨过最终回复的
+    // 思考块会落到回复之后,渲染层就为它多折出一段「已工作」。
     const finishedAt = Date.parse('2026-06-20T09:10:00.000Z');
     const delayedWriteTime = Date.parse('2026-06-20T09:10:04.000Z');
     const nowSpy = vi.spyOn(Date, 'now');
@@ -2239,7 +2241,7 @@ describe('thinking persistence', () => {
           isRedacted: false,
           finishedAt,
         },
-        createdAt: finishedAt,
+        createdAt: finishedAt - 7_000,
       }),
       broadcastGuard(),
     );
