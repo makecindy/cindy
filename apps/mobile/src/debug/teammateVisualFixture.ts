@@ -17,6 +17,8 @@ import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REM
  */
 const TEAMMATES = 'teammates';
 export const VISUAL_TEAMMATE_SESSION_ID = 'visual-teammate-session';
+export const VISUAL_TEAMMATE_THREAD_ROOT_ID = 'visual-teammate-topic-root';
+export const visualTeammateThreads = new Map([[VISUAL_TEAMMATE_THREAD_ROOT_ID, { sessionId: 'visual-teammate-topic', replyCount: 2 }]]);
 const MINUTE = 60_000;
 const teammates: ReadonlyArray<{ id: string; name: string; preview: string; minutesAgo: number; avatar: RemoteCollectionItem['display']['avatar']; working?: boolean; phase?: string; following?: string[] }> = [
   { id: 'cindy-default', name: 'Cindy', preview: '登录页窄窗口的错位已经修好，截图放在任务里了。', minutesAgo: 2,
@@ -66,6 +68,22 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
       : bot?.id === 'visual-bot-lizi' ? [`${UI_MOCK_ID_PREFIX}english`, `${UI_MOCK_ID_PREFIX}archived`] : [];
     return { ok: true, delegations: ids.map(childSessionId => ({ requestingBotId: bot!.id, childSessionId })) };
   }
+  if (channel === 'local-db:bots:get' && teammates.some(bot => bot.id === args[0])) return {
+    id: args[0], canonicalSessionId: VISUAL_TEAMMATE_SESSION_ID, dmThreadsSupported: true,
+    sessions: [{ id: VISUAL_TEAMMATE_SESSION_ID, role: 'canonical', status: 'active' },
+      ...[...visualTeammateThreads].map(([rootClientId, thread]) => ({ id: thread.sessionId, role: 'thread', status: 'active',
+        threadRoot: { rootSessionId: VISUAL_TEAMMATE_SESSION_ID, rootClientId } }))],
+  };
+  if (channel === 'local-db:bots:dm-thread:list') return [...visualTeammateThreads].filter(([, thread]) => thread.replyCount).map(([rootClientId, thread]) => ({
+    ...thread, rootSessionId: VISUAL_TEAMMATE_SESSION_ID, rootClientId, lastReplyAt: now - MINUTE * 2, lastAssistantAt: now - MINUTE * 2, createdAt: now - MINUTE * 5,
+  }));
+  if (channel === 'local-db:bots:dm-thread:ensure') {
+    const root = (args[0] as { rootClientId: string }).rootClientId;
+    const previous = visualTeammateThreads.get(root);
+    const thread = previous ?? { sessionId: `visual-teammate-topic-${visualTeammateThreads.size}`, replyCount: 0 };
+    visualTeammateThreads.set(root, thread);
+    return { ok: true, sessionId: thread.sessionId, created: !previous };
+  }
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
@@ -88,6 +106,28 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     if (request.input?.operation === 'restore') todoDeleted = false;
     return { effects: [], todo: glanceTodo };
   }
+  // PR #7899: synthetic content for native partial selection and mention screenshots.
+  // Open /companions/groups/visual-group-text-selection?deviceId=cindy-visual-mock-mac in --mock.
+  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
+    && request.ref.id === 'visual-group-text-selection') return {
+    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+    revision: 'visual-1', display: { title: '文字选择 · 模拟数据' }, actions: [], links: [],
+    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '文字选择 · 模拟数据', data: {
+      id: request.ref.id, name: '文字选择 · 模拟数据',
+      members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }, { botId: 'visual-bot-dash', name: 'Dash', status: 'active' }],
+      messages: [
+        { id: 'selection-user', sequence: 1, kind: 'message', authorKind: 'user', authorName: '演示用户',
+          content: '@Cindy @Dash 请看这段示例，只选中需要的几个字再复制。', createdAt: now - MINUTE },
+        { id: 'selection-reply', sequence: 2, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+          content: [
+            '这是一段用于局部文字选择的长回复。长按正文，拖动两端手柄，只选中需要的几个字，再复制到输入框。其余文字应继续保留原来的排版。',
+            '', '下面是代码块，可以选择其中的一小段：', '',
+            '~~~typescript', 'const greeting = "Hello Cindy";', 'console.log(greeting);', '~~~', '',
+            '| 项目 | 说明 |', '| --- | --- |', '| 文字选择 | 只复制需要的几个字 |', '| 表格单元格 | 拖动手柄调整选区 |',
+          ].join('\n'), createdAt: now },
+      ], plans: [], createdAt: now, updatedAt: now,
+    } }],
+  };
   // Nine members from three accounts: the header shows a member count, not every name.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id === 'visual-crowded-group') return {

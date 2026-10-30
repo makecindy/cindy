@@ -5,6 +5,8 @@ vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMed
 vi.mock('../localDb/client/current.js', () => ({ getDbClient: vi.fn(() => ({ drizzle: {} })) }));
 vi.mock('../botTaskReplyResults.js', () => ({ readTaskResultsForReply: vi.fn(async () => []) }));
 import { readTaskResultsForReply } from '../botTaskReplyResults.js';
+vi.mock('../maker-host/codex-local-sessions.js', () => ({ importExternalCodexMessagesForSession: vi.fn(async () => undefined) }));
+import { importExternalCodexMessagesForSession } from '../maker-host/codex-local-sessions.js';
 /**
  * messagePersistBroadcaster.test.ts
  * ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ it('marks exact failed assistant items, including a live block, without rewritin
     }),
   }), expect.anything());
   expect(createMessage).toHaveBeenCalledWith(sessionId, expect.objectContaining({
-    content: 'Successful opening', agentMeta: null,
+    content: 'Successful opening', agentMeta: { agentMessageId: 'success' },
   }), expect.anything());
   expect(updateMessageContent).not.toHaveBeenCalled();
   expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(sessionId, first, expect.anything());
@@ -186,7 +188,106 @@ const SUMMARY = 'tool finished';
 
 // 落库走 writeChain microtask,断言前 flush 一个宏任务边界把队列排空。
 const flushWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// #8005 review, unit: late live persistence must reconcile an already imported
+// copy without another history read. An unresolved write must not trigger it.
+it.each(['current', 'owner-changed', 'cleared'] as const)('reconciles imported Codex replies after the live write commits without a list request (%s)', async (boundary) => {
+  const sessionId = 'codex-late-live';
+  clearSessionPersistState(sessionId);
+  noteSessionClearBoundary(sessionId, null);
+  noteSessionAgentKind(sessionId, 'codex');
+  let release!: () => void;
+  vi.mocked(createMessage).mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { release = resolve; });
+    return {} as never;
+  });
+  onAssistantTextEvent(sessionId, { agentMessageId: 'native-late', text: 'Done', isFinal: true }, null);
+  await Promise.resolve();
+  expect(importExternalCodexMessagesForSession).not.toHaveBeenCalled();
+  if (boundary === 'owner-changed') ownerScopeState.current = false;
+  if (boundary === 'cleared') noteSessionClearBoundary(sessionId, Date.now() + 1);
+  release();
+  await drainPersistQueue();
+  if (boundary === 'current') expect(importExternalCodexMessagesForSession).toHaveBeenCalledExactlyOnceWith(sessionId, { localWrite: [expect.any(String)] });
+  else expect(importExternalCodexMessagesForSession).not.toHaveBeenCalled();
+  noteSessionClearBoundary(sessionId, null);
+});
+
+// #8025 review: a slow import must not block another task's durable queue, and
+// replies arriving during that import should reconcile together after it.
+it('keeps slow Codex reconciliation outside the write queue and batches pending replies', async () => {
+  const sid = 'codex-batched-reconciliation';
+  clearSessionPersistState(sid);
+  noteSessionAgentKind(sid, 'codex');
+  let release!: () => void;
+  vi.mocked(importExternalCodexMessagesForSession).mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => { release = resolve; });
+  });
+  onAssistantTextEvent(sid, { agentMessageId: 'first', text: 'First', isFinal: true }, null);
+  await drainPersistQueue();
+  expect(importExternalCodexMessagesForSession).toHaveBeenCalledTimes(1);
+  onAssistantTextEvent(sid, { agentMessageId: 'second', text: 'Second', isFinal: true }, null);
+  onAssistantTextEvent(sid, { agentMessageId: 'third', text: 'Third', isFinal: true }, null);
+  onAssistantTextEvent('unrelated-task', { text: 'Unaffected', isFinal: true }, null);
+  await drainPersistQueue();
+  expect(createMessage).toHaveBeenCalledWith('unrelated-task', expect.objectContaining({ content: 'Unaffected' }), expect.anything());
+  expect(importExternalCodexMessagesForSession).toHaveBeenCalledTimes(1);
+  release();
+  await flushWrites();
+  expect(importExternalCodexMessagesForSession).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(importExternalCodexMessagesForSession).mock.calls[1]).toEqual([sid, { localWrite: [expect.any(String), expect.any(String)] }]);
+});
 const broadcastGuard = () => expect.objectContaining({ shouldBroadcast: expect.any(Function) });
+// #8025, unit: partial text persisted at a tool/interaction/idle boundary did
+// not trigger reconciliation after final calibration. Reconcile only after the
+// authoritative update commits; cleared/foreign/missing rows cannot enqueue it.
+it.each(['item', 'interaction', 'sealed', 'clear', 'owner', 'missing'] as const)(
+  'reconciles a calibrated Codex reply after its update commits (%s)', async (boundary) => {
+    const sid = 'codex-calibrated';
+    clearSessionPersistState(sid);
+    noteSessionClearBoundary(sid, null);
+    noteSessionAgentKind(sid, 'codex');
+    const agentMessageId = boundary === 'interaction' || boundary === 'sealed' ? undefined : 'native-item';
+    const meta = boundary === 'sealed' ? { uuid: 'sealed-calibration' } : null;
+    const persistId = onAssistantTextEvent(sid, { text: 'Partial', agentMessageId }, meta)!;
+    if (boundary === 'sealed') sealAssistantBlockForLateFinal(sid, null);
+    else {
+      flushAssistantBlock(sid);
+      if (boundary === 'interaction') onInteractionMessage(sid, {
+        kind: 'ask_user_question', requestId: 'calibration', questions: [{ question: 'Continue?' }],
+      });
+      else onToolUseEvent(sid, { toolUseId: 'calibration', toolName: 'exec', input: {} }, null);
+    }
+    await drainPersistQueue();
+    await flushWrites();
+    vi.mocked(importExternalCodexMessagesForSession).mockClear();
+    let release!: () => void;
+    let savedText = 'Partial';
+    vi.mocked(updateMessageContent).mockImplementationOnce(async (_sid, _id, text, _scope, options) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      if (boundary === 'missing' || options?.isCurrent && !options.isCurrent()) return null;
+      savedText = text as string;
+      return { clientId: persistId, createdAt: new Date().toISOString(), agentKind: 'codex' } as never;
+    });
+    vi.mocked(importExternalCodexMessagesForSession).mockImplementationOnce(async () => {
+      expect(savedText).toBe('Complete answer');
+    });
+    expect(onAssistantTextEvent(sid, {
+      text: 'Complete answer', isFinal: true, isFullText: true, agentMessageId,
+    }, meta)).toBe(persistId);
+    await Promise.resolve();
+    expect(importExternalCodexMessagesForSession).not.toHaveBeenCalled();
+    if (boundary === 'clear') noteSessionClearBoundary(sid, Date.now() + 1000);
+    if (boundary === 'owner') ownerScopeState.current = false;
+    release();
+    await drainPersistQueue();
+    await flushWrites();
+    if (['clear', 'owner', 'missing'].includes(boundary)) expect(importExternalCodexMessagesForSession).not.toHaveBeenCalled();
+    else expect(importExternalCodexMessagesForSession).toHaveBeenCalledExactlyOnceWith(sid, { localWrite: [persistId] });
+    vi.mocked(importExternalCodexMessagesForSession).mockReset();
+    noteSessionClearBoundary(sid, null);
+  },
+);
 const terminalSubagentObservation = (taskId: string, parentToolUseId?: string) => ({
   subagentObservation: {
     kind: 'terminal',
@@ -3621,11 +3722,13 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     expect(roles).toEqual(['assistant', 'error']);
   });
 
-  it('error 事件自带的 agentMeta 透传给 flush 边界与 error 行(rewind/fork 锚点不丢)', async () => {
+  it.each([undefined, 'native-item'])('error 事件自带的 agentMeta 透传给 flush 边界与 error 行(rewind/fork 锚点不丢, item=%s)', async (agentMessageId) => {
     // 失败轮只有 error 边界携带 SDK uuid 的场景:在飞 assistant 无自带 meta,
     // 会话级兜底也为空 —— 若不透传,assistant 行以 null meta 落库(greptile P1)。
     const boundaryMeta = { uuid: 'uuid-err-boundary', sdkSessionId: 'sdk-1' };
-    onAssistantTextEvent(SESSION, { text: '写到一半…', isFinal: false }, null);
+    // #8005: retaining a native item ID must not suppress the boundary's SDK
+    // metadata fallback. The prior no-ID fixture could not catch that loss.
+    onAssistantTextEvent(SESSION, { text: '写到一半…', isFinal: false, agentMessageId }, null);
     onTurnErrorEvent(SESSION, { message: 'turn 崩了' }, boundaryMeta as never);
 
     await flushWrites();
@@ -3634,7 +3737,7 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
       (c) => c[1] as { role: string; agentMeta?: unknown },
     );
     expect(bodies[0].role).toBe('assistant');
-    expect(bodies[0].agentMeta).toMatchObject({ uuid: 'uuid-err-boundary' });
+    expect(bodies[0].agentMeta).toEqual({ ...boundaryMeta, ...(agentMessageId ? { agentMessageId } : {}) });
     expect(bodies[1].role).toBe('error');
     expect(bodies[1].agentMeta).toMatchObject({ uuid: 'uuid-err-boundary' });
   });

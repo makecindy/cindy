@@ -592,6 +592,11 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // memory, prompts, configuration, or native UI/file mutations.
   'local-db:bots:list',
   'local-db:bots:get',
+  // Same-account opted-in controllers: private topic summaries and idempotent creation.
+  // Existing Bot/root ownership and permission inheritance apply; no sender, UI or shell use.
+  // Older hosts omit dmThreadsSupported; clients keep the canonical chat usable.
+  'local-db:bots:dm-thread:list',
+  'local-db:bots:dm-thread:ensure',
   // 伙伴自主跟进的工作台「一眼」：只读宿主内存状态表的投影（任务标题、等你的一句话摘要、
   // 分钟数、设备名），不含工作目录、提示词、工具入参或代输入值；handler 只放远程可见的伙伴。
   // 放行标准：① 只读 ② 同账号已授权控制端本就能经 maker:list-active / sessions:get-many 看到

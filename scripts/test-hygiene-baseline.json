@@ -311,7 +311,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts": {
-      "sourceReads": 2
+      "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1
@@ -344,9 +344,6 @@
       "sourceReads": 2
     },
     "apps/desktop/src/main/maker-ipc/__tests__/orcaTeamService.test.ts": {
-      "sourceReads": 1
-    },
-    "apps/desktop/src/main/maker-ipc/__tests__/orcaWorkerCreationService.test.ts": {
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/pluginTaskAuthorshipWiring.test.ts": {

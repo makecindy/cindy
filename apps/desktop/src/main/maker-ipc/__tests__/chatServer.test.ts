@@ -107,6 +107,17 @@ describe('Chat Server production connection', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
   const local = { dispose: vi.fn() } as unknown as BotGroupChatService;
   const deps = {} as BotGroupChatServiceDeps;
+  it('forwards interaction timing to local turns without connecting to the server', () => {
+    fixture.packaged = true;
+    fixture.urls = [];
+    const refreshPendingInteraction = vi.fn();
+    const service = withChatServer({ ...local, refreshPendingInteraction }, deps);
+    try {
+      service.refreshPendingInteraction('local-lane');
+      expect(refreshPendingInteraction).toHaveBeenCalledExactlyOnceWith('local-lane');
+      expect(fixture.urls).toEqual([]);
+    } finally { service.dispose(); }
+  });
   it('enables the installed application without reading a fixture', async () => {
     fixture.packaged = true;
     const service = withChatServer(local, deps);
@@ -212,6 +223,23 @@ describe('Chat Server result delivery and refresh', () => {
     downgraded = true;
     await expect(authorizeGroupTool('lane', 'local-bot', 'read-self')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
     expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
+  });
+
+  // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty
+  // answer must not stop the idle claim that is the only way AI reply work is discovered.
+  it('keeps claiming AI reply work when the server also offers read-only work discovery', async () => {
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, workAvailabilityVersion: 1 } } };
+      if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: true, pending: false })) } };
+      if (route === '/mask/executions/claim') {
+        const next = claimed ? null : { ...execution, mask_owner_id: selfId, mask_kind: 'reply',
+          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
+        claimed = true; return { body: { execution: next } };
+      }
+      return response(route);
+    });
+    await start();
+    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/availability')).toBe(false);
   });
 
   // Regression: the paired reply is a content projection, not a full Message with author.kind.
@@ -3390,6 +3418,7 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       claimed = true;
       const socket = await live();
+      await vi.advanceTimersByTimeAsync(100); // finish the immediate reconnect claim
       const claims = () => fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim').length;
       // The next poll is at 4s; the notice arrives just after the first one.
       vi.setSystemTime(Date.now());
@@ -3482,6 +3511,243 @@ describe('Chat Server result delivery and refresh', () => {
         changes: [{ type: 'execution.changed', entityId: execution.id, data: { status: 'queued', botId } }] }));
       await vi.advanceTimersByTimeAsync(110_000);
       expect(claims()).toBe(limited);
+    });
+
+    // Unit transport integration: discovery is read-only, while a durable owner
+    // hint for an unopened room may bypass an outstanding discovery response.
+    it('probes idle companions together and claims only the owner-notified companion while discovery is slow', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finish!: (value: unknown) => void;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1, workNotificationsVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return new Promise(resolve => { finish = resolve; });
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fixture.handle).toHaveBeenCalledWith('/executions/availability', 'POST', { botIds: [botId, otherBot] });
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim')).toHaveLength(0);
+      const socket = fixture.sockets[0]!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '17', changes: [
+        { type: 'work.available', data: { work: [{ botId, conversationId: roomId }] } },
+      ] }));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fixture.requests.filter(request => request.url.endsWith('/executions/claim')).slice(-1)[0]?.actor).toBe(botId);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim')).toHaveLength(1);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      finish({ body: { items: [botId, otherBot].map(botId => ({ botId, enabled: true, pending: false })) } });
+      await vi.advanceTimersByTimeAsync(2);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    });
+
+    // A disabled answer marks the registry stale. While re-registration keeps failing, that
+    // companion must not be probed every 2s from the obsolete list; its sibling keeps polling.
+    it('stops probing a companion reported disabled until the registry re-reads it', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      const base = fixture.handle.getMockImplementation()!;
+      let reads = 0, recovered = false;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return ++reads === 1 || recovered ? { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] } : { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: recovered || id !== botId, pending: false })) } };
+        return base(route, method, body);
+      });
+      const probes = () => fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability').map(([, , body]) => body.botIds as string[]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reads).toBeGreaterThan(1);
+      expect(probes().filter(ids => ids.includes(botId))).toHaveLength(1);
+      expect(probes().slice(1).some(ids => ids.includes(otherBot))).toBe(true);
+      // Re-enabled and re-read: the companion is polled again.
+      recovered = true;
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(probes().filter(ids => ids.includes(botId)).length).toBeGreaterThan(1);
+    });
+
+    it('dispatches an independently claimed companion while its discovered sibling claim is still unanswered', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      const base = fixture.handle.getMockImplementation()!;
+      let claims = 0;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: true })) } };
+        if (route === '/executions/claim' && ++claims === 1) return new Promise(() => {});
+        if (route === '/executions/claim') return { body: { execution: { ...execution, bot_id: otherBot } } };
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(claims).toBe(2);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/claim-batch' || route === '/executions/recover')).toBe(false);
+    });
+
+    it('checks the shared work gate again before an authenticated replay and later probes', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finishRefresh!: (ok: boolean) => void, claims = 0;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finishRefresh = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: true })) } };
+        if (route === '/executions/claim') return ++claims === 1
+          ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } }
+          : { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(claims).toBe(2);
+      // Admission restricts network work, not a still-current local registry.
+      expect(await service.chatServer!.ownedBots()).toMatchObject({ ok: true, bots: [{ actorId: botId }, { actorId: otherBot }] });
+      fixture.token = 'renewed-test-token'; finishRefresh(true);
+      await vi.advanceTimersByTimeAsync(110_000);
+      expect(claims).toBe(2);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability')).toHaveLength(1);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/me')).toHaveLength(1);
+      expect(deps.dispatch).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])('pauses sibling work during token renewal, then applies its outcome (%s)', async refreshed => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finishRefresh!: (ok: boolean) => void, claims = 0;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finishRefresh = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: false })) } };
+        if (route === '/executions/claim') return ++claims === 1
+          ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } } : { body: { execution: null } };
+        return base(route, method, body);
+      });
+      const socket = await live();
+      const wake = (botId: string) => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+        changes: [{ type: 'work.available', data: { work: [{ botId, conversationId: roomId }] } }] }));
+      wake(botId); await vi.advanceTimersByTimeAsync(250);
+      expect(claims).toBe(1);
+      const reads = fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability').length;
+      wake(otherBot); await vi.advanceTimersByTimeAsync(6000);
+      expect(claims).toBe(1);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability')).toHaveLength(reads);
+      if (refreshed) fixture.token = 'renewed-test-token';
+      finishRefresh(refreshed); await vi.advanceTimersByTimeAsync(2000);
+      if (refreshed) {
+        expect(claims).toBeGreaterThan(1);
+        const payloads = fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim').map(([, , body]) => body);
+        expect(payloads[1]).toEqual(payloads[0]); // existing authenticated replay, same single claim
+      } else expect(claims).toBe(1);
+    });
+
+    it.each([true, false])('keeps a newer unopened-room hint across an older busy scan (new hint map: %s)', async newMap => {
+      const otherRoom = '10000000-0000-4000-8000-000000000002';
+      const otherExecution = { ...execution, id: '40000000-0000-4000-8000-000000000002', conversation_id: otherRoom,
+        source_message_id: '50000000-0000-4000-8000-000000000002' };
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      const socket = await live();
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      let finish!: (value: unknown) => void, held = false;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (!held && route === `/conversations/${newMap ? roomId : otherRoom}/executions`) {
+          held = true; return new Promise(resolve => { finish = resolve; });
+        }
+        if (route === `/conversations/${otherRoom}/executions`) return { body: [{ ...otherExecution, status: 'queued' }] };
+        if (route === '/executions/claim' && body.executionId === otherExecution.id) return { body: { execution: otherExecution } };
+        if (route === `/conversations/${otherRoom}/messages/${otherExecution.source_message_id}`) return { body: {
+          id: otherExecution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' },
+          deleted: false, threadRootId: null, content: [{ type: 'text', text: 'Work in another room' }],
+        } };
+        if (route === `/conversations/${otherRoom}/snapshot`) return { body: { ...snapshotOf().body, room: room(otherRoom) } };
+        return base(route, method, body);
+      });
+      const wake = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '11',
+        changes: [{ type: 'work.available', data: { work: [{ botId, conversationId: otherRoom }] } }] }));
+      if (!newMap) wake();
+      await vi.advanceTimersByTimeAsync(newMap ? 12_000 : 250);
+      expect(held).toBe(true);
+      wake(); await vi.advanceTimersByTimeAsync(250);
+      finish({ body: [] }); await vi.advanceTimersByTimeAsync(10);
+      expect(fixture.handle).toHaveBeenCalledWith('/executions/claim', 'POST', expect.objectContaining({ executionId: otherExecution.id }));
+      expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([false, true])('opens a legacy group through foreground migration while auth renews (prior background deferral: %s)', async backgroundFirst => {
+      const source = '10000000-0000-4000-8000-000000000088';
+      service.dispose();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: source, name: 'Old group', members: [] }] })),
+        dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      // The restartable importer has its own real paging/receipt tests. This
+      // fixture isolates the real adapter's caller context and cached promise.
+      const migrator = await import('../chatServerMigration.js');
+      const imported = vi.spyOn(migrator, 'migrateLocalGroups').mockImplementation(async input => {
+        input.onRoom?.(source, roomId); return new Map([[source, roomId]]);
+      });
+      let expired = false, finish!: (ok: boolean) => void;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (expired && (route === '/me' || route === '/profile/refresh')) return { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+        if (route === '/conversations?limit=100') return { body: [] };
+        return base(route, method, body);
+      });
+      await service.chatServer!.ownedBots();
+      expired = true; signalBotAutonomyBotsChanged();
+      const refreshing = service.chatServer!.refreshProfile();
+      await vi.advanceTimersByTimeAsync(0);
+      try {
+        expect(fixture.refresh).toHaveBeenCalledOnce();
+        if (backgroundFirst) { expect((await service.listGroups()).ok).toBe(true); await vi.advanceTimersByTimeAsync(0); }
+        let settled = false;
+        const opened = service.getGroup(source).then(value => { settled = true; return value; });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        expired = false; fixture.token = 'renewed-test-token'; finish(true);
+        expect((await opened).ok).toBe(true);
+        expect(imported).toHaveBeenCalledOnce();
+        expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/snapshot`, 'GET', undefined);
+        expect((await service.getGroup(source)).ok).toBe(true);
+        expect(imported).toHaveBeenCalledOnce();
+      } finally {
+        expired = false; finish(true); await refreshing; imported.mockRestore();
+      }
+    });
+
+    it('resumes the owner cursor on reconnect and resets an ahead cursor without replaying registration on every connect', async () => {
+      const socket = await live();
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '42', changes: [] }));
+      await vi.advanceTimersByTimeAsync(0);
+      socket.emit('close');
+      await vi.advanceTimersByTimeAsync(500);
+      const next = fixture.sockets.at(-1)!;
+      Object.defineProperty(next, 'readyState', { value: 1 });
+      next.emit('message', JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(0);
+      const subscriptions = () => vi.mocked(next.send).mock.calls.map(([raw]) => JSON.parse(String(raw)))
+        .filter(frame => frame.type === 'subscribe' && frame.scope === `actor:${selfId}`);
+      expect(subscriptions()).toEqual([{ type: 'subscribe', scope: `actor:${selfId}`, after: '42' }]);
+      next.emit('message', JSON.stringify({ type: 'scope_error', scope: `actor:${selfId}`, error: { code: 'CURSOR_AHEAD' } }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subscriptions().at(-1)).toEqual({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' });
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/me')).toHaveLength(1);
     });
 
     it('claims for several owned companions at once', async () => {

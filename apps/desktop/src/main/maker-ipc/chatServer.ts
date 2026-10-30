@@ -1,3 +1,4 @@
+import { createChatWorkPolling, createWorkRequestGate, WorkRequestDeferred } from './chatWorkPolling.js';
 import { teammateChatActivity } from '@cindy/maker-shared/teammate-status';
 import { prepareChatReplyFiles } from './chatServerReplyFiles.js';
 import type { ChatUploadAttachment } from './chatServerMedia.js';
@@ -139,11 +140,8 @@ const THREAD_LIST_LIMIT = 50;
  */
 const CHANGE_COALESCE_MS = 150;
 /** A realtime notice of newly queued work claims it this soon instead of on the next 2s tick. */
-const CLAIM_TRIGGER_MS = 250;
 const ACTOR_REFRESH_MS = 60_000;
 const PROFILE_REFRESH_MS = 300_000;
-/** Room notices are hints, not a complete work feed: keep a bounded fallback for unopened rooms. */
-const IDLE_CLAIM_MAX_MS = 15_000;
 /** How often a busy companion's rooms are re-read for work queued in its other conversations. */
 const LANE_SWEEP_MS = 10_000;
 /** A room snapshot reused for a send while its realtime subscription reports no change since. */
@@ -339,6 +337,7 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
     retryPlan: (...args) => service().retryPlan(...args),
     editPlanStep: (...args) => service().editPlanStep(...args),
     settleLaneTurn: (...args) => service().settleLaneTurn(...args),
+    refreshPendingInteraction: local.refreshPendingInteraction,
     postCompanionTaskMessage: (...args) => service().postCompanionTaskMessage(...args),
     dispose: () => { active.dispose(); local.dispose(); },
   };
@@ -356,6 +355,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const displayHistory = chatLocalHistory(config.baseUrl, current);
   const sendJournal = chatSendJournal<SavedChatSend>(config.baseUrl, current);
   const executorId = `desktop:${randomUUID()}`;
+  const workError = (error: unknown) => error instanceof ChatResponseError ? { status: error.status, retryAt: error.retryAt } : {};
+  const workGate = createWorkRequestGate(workError);
   let actors: Actor[] = [];
   let selfId = '';
   const histories = new Map<string, ChatHistory>();
@@ -394,14 +395,22 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let selfDeviceId: string | null = null;
   let companionHome = false;
   let directRoomClaims = false;
+  let workAvailability = false;
+  let workNotifications = false;
+  // A cursor belongs to this runtime/account; reconnect must not replay every
+  // historical actor invalidation and repeatedly refresh /me and /actors.
+  let actorCursor = '0';
   let companion: CompanionCloudRuntime | undefined;
   let companionSelf: string | null = null;
   let actorsStale = false;
-  let claimWakeVersion = 0;
+  // Companions the server reported disabled are not polled from the cached registry again until
+  // /actors is re-read; a failing re-registration would otherwise repeat the probe every 2s.
+  const disabledUntilRead = new Set<string>();
+  let localProfilesRevision = 0, localProfilesRead = 0;
   const unsubscribeProfiles = subscribeBotProfilesChanged(() => {
     actorsStale = true;
-    claimWakeVersion++;
-    idleClaims.clear();
+    localProfilesRevision++;
+    workPolling.reset();
   });
   // Who reacted can change while counts stay the same. A realtime reaction change versions only its
   // message; a reset that skipped events versions the whole room (and makes per-message versions moot).
@@ -507,10 +516,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   /** Turns in progress by execution ID: one companion may answer in several conversations at once. */
   const running = new Map<string, Running>();
   /** Work announced as queued for a companion (execution ID → room), read when it is busy elsewhere. */
-  const queuedHints = new Map<string, Map<string, string>>();
+  // Each arrival has its own identity, including repeated hints for the same
+  // room. An older read may retire only the exact arrivals it observed.
+  type WorkHint = { roomId: string };
+  const queuedHints = new Map<string, Map<string, WorkHint>>();
   /** When each busy companion's own rooms are next re-read for work its realtime notices missed. */
   const laneSweeps = new Map<string, number>();
-  const idleClaims = new Map<string, { misses: number; next: number }>();
   const metadata = new Map<string, Promise<void>>();
   /**
    * Followed room scopes, each with the newest cursor this process has read or acked. It only
@@ -526,7 +537,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let reconnect: ReturnType<typeof setTimeout> | undefined;
   let reconnectDelay = 500;
   let refreshActors: Promise<void> | undefined;
-  let authRefreshPromise: Promise<boolean> | undefined;
+  let authRefresh: { promise: Promise<boolean>; background: boolean } | undefined;
   let authRefreshRetryAt = 0;
   const upgradedGroups = new Map<string, string>();
   /**
@@ -609,19 +620,30 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const hasLiveSubscription = (roomId: string) => connected && socket?.readyState === WebSocket.OPEN && rooms.has(roomId);
   // TLS for production; explicit loopback is only enabled by the isolated fixture.
   // Redirects are never followed and every retry remains in the captured account.
-  function refreshRejectedToken(token: string): Promise<boolean> {
+  function refreshRejectedToken(token: string, background = false): Promise<boolean> {
     if (!current()) return Promise.resolve(false);
+    // One refresh owns one admission barrier. Every waiter observes its release
+    // before replay, including late 401s after the token rotated but before refresh settled.
+    if (authRefresh) { authRefresh.background ||= background; return authRefresh.promise; }
     // A concurrent request may already have replaced this request's token.
     if (getAccessToken() !== token) return Promise.resolve(Boolean(getAccessToken()));
-    if (authRefreshPromise) return authRefreshPromise;
-    if (Date.now() < authRefreshRetryAt) return Promise.resolve(false);
+    if (Date.now() < authRefreshRetryAt) {
+      if (background) workGate.observe(new ChatResponseError('INVALID_TOKEN', 401));
+      return Promise.resolve(false);
+    }
     // Even a successful refresh cannot repair a persistent upstream 401.
     authRefreshRetryAt = Date.now() + CHAT_AUTH_RETRY_MS;
-    authRefreshPromise = refresh().finally(() => { authRefreshPromise = undefined; });
-    return authRefreshPromise;
+    const release = workGate.hold();
+    const attempt = { background, promise: Promise.resolve().then(() => refresh()) };
+    const failed = () => { if (attempt.background) workGate.observe(new ChatResponseError('INVALID_TOKEN', 401)); };
+    attempt.promise = attempt.promise.then(ok => { if (!ok) failed(); return ok; }, error => { failed(); throw error; })
+      .finally(() => { if (authRefresh === attempt) authRefresh = undefined; release(); });
+    authRefresh = attempt;
+    return attempt.promise;
   }
-  function api<T>(route: string, method = 'GET', data?: unknown, actorId?: string, retried = false, successStatus?: number): Promise<T> {
+  function api<T>(route: string, method = 'GET', data?: unknown, actorId?: string, retried = false, successStatus?: number, admit?: () => void): Promise<T> {
     if (!current()) return Promise.reject(new Error('OWNER_CHANGED'));
+    try { admit?.(); } catch (error) { return Promise.reject(error); }
     if (!config.baseUrl) return Promise.reject(new Error('CHAT_ENDPOINT_UNAVAILABLE'));
     const url = new URL(`${config.baseUrl}/v1${route}`);
     if (url.protocol !== 'https:' && (app.isPackaged || url.origin !== 'http://127.0.0.1:3018')) return Promise.reject(new Error('INVALID_CHAT_ENDPOINT'));
@@ -658,7 +680,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             }
             const code = typeof value?.error?.code === 'string' ? value.error.code : 'REQUEST_FAILED';
             if (res.statusCode === 401 && !retried && CHAT_REFRESHABLE_ERROR_CODES.has(code)) {
-              if (await refreshRejectedToken(token) && current()) { resolve(api<T>(route, method, data, actorId, true, successStatus)); return; }
+              if (await refreshRejectedToken(token, !!admit) && current()) {
+                resolve(api<T>(route, method, data, actorId, true, successStatus, admit)); return;
+              }
             }
             if (status >= 400) throw new ChatResponseError(code, status, retryAt, value?.error?.details);
             if (successStatus && status !== successStatus) throw new Error('CHAT_RESPONSE_INVALID');
@@ -670,6 +694,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       req.on('error', reject);
       req.end(data === undefined ? undefined : JSON.stringify(data));
     }).catch(error => {
+      if (admit) workGate.observe(error);
+      if (error instanceof WorkRequestDeferred) throw error;
       const routeTemplate = route.split('?')[0].split('/').map(part =>
         ['conversations','media','complete','messages','plans','members','snapshot','import','actors','me','executions'].includes(part) || !part ? part : ':id').join('/');
       const operation = data && typeof data === 'object' && 'operationId' in data ? data.operationId : null;
@@ -690,9 +716,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
   const upgradeErrors = new Map<string, string>();
-  const ensureUpgrade = () => upgrade ??= (async () => {
+  const runUpgrade = async (mode: 'background' | 'foreground'): Promise<Map<string, string>> => {
     upgradeRetryAt = Infinity;
-    await register();
+    await register(mode);
     const db = getDbClient().drizzle;
     let incomplete = false;
     await migrateLocalGroups({ api, current, selfId,
@@ -756,12 +782,27 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
     upgradeRetryAt = incomplete ? Date.now() + 60000 : Infinity;
     return upgradedGroups;
-  })().catch(error => { upgradeRetryAt = Date.now() + 60000; throw error; });
+  };
+  function ensureUpgrade(mode: 'background' | 'foreground'): Promise<Map<string, string>> {
+    const pending: Promise<Map<string, string>> = upgrade ??= runUpgrade(mode).catch(error => {
+      if (upgrade === pending) {
+        // No migration ran when registration was locally deferred. Do not cache
+        // that rejection as a failed import for a later foreground caller.
+        if (error instanceof WorkRequestDeferred) { upgrade = undefined; upgradeRetryAt = Date.now() + 2000; }
+        else upgradeRetryAt = Date.now() + 60000;
+      }
+      throw error;
+    });
+    return mode === 'background' ? pending : pending.catch(error => {
+      if (error instanceof WorkRequestDeferred) return ensureUpgrade('foreground');
+      throw error;
+    });
+  }
   const beginUpgrade = () => {
     if (Date.now() >= upgradeRetryAt) {
       upgradeRetryAt = Infinity;
       upgrade = undefined;
-      void ensureUpgrade().catch(() => undefined);
+      void ensureUpgrade('background').catch(() => undefined);
     }
   };
   async function localSources() {
@@ -791,7 +832,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (localRow && (await localSources()).some(group => group.id === groupId)) {
       // Registration identifies the receipt's actor/endpoint scope. Transient failure leaves delivery
       // retryable rather than permanently falling back to private chat before we know the route.
-      await register();
+      await register('foreground');
       if (upgradedGroups.has(groupId)) return upgradedGroups.get(groupId)!;
       const receipt = chatMigrationReceipts(config.baseUrl, selfId, current).read(groupId);
       if (!receipt) return null;
@@ -808,7 +849,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // A server room has no local row; only an existing local history may still need its upgrade.
     const [localRow] = await getDbClient().drizzle.select({ id: botGroups.id }).from(botGroups).where(eq(botGroups.id, groupId)).limit(1);
     if (localRow && (await localSources()).some(group => group.id === groupId)) {
-      await ensureUpgrade();
+      await ensureUpgrade('foreground');
       if (!upgradedGroups.has(groupId)) throw new Error('IMPORT_PENDING');
     }
     const room = upgradedGroups.get(groupId) ?? groupId;
@@ -816,7 +857,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return room;
   };
   /** Publish one companion's name and avatar to its actor (home copy only). */
-  async function publishActorProfile(profile: typeof profiles[number], found: Actor) {
+  async function publishActorProfile(profile: typeof profiles[number], found: Actor, request: typeof workApi) {
     // Only the confirmed home installation publishes (same predicate as claiming work).
     if (companionHome && (found.homeDeviceId !== selfDeviceId || !!companion?.isShadowed(profile.id)
       || !companion?.installConfirmed(profile.id))) return;
@@ -838,7 +879,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     if (keepCloudAvatar) {
       if (found.name === profile.displayName) return;
-      await api(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar: found.avatar ?? null, avatarSource: found.avatarSource ?? null });
+      await request(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar: found.avatar ?? null, avatarSource: found.avatarSource ?? null });
       found.name = profile.displayName;
       return;
     }
@@ -854,29 +895,41 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       avatar = uploaded.publicUrl;
     }
     if (found.name === profile.displayName && (found.avatar ?? null) === avatar && (found.avatarSource ?? null) === source) return;
-    await api(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar, avatarSource: source });
+    await request(`/actors/${found.id}/profile`, 'POST', { name: profile.displayName, avatar, avatarSource: source });
     Object.assign(found, { name: profile.displayName, avatar, avatarSource: source });
   }
   /**
    * Read and send paths use the registration they already have and refresh it in the background
    * (one-minute actor refresh, five-minute profile refresh and the auth backoff); only the
    * first registration of this account is awaited. Management paths that map local companions to
-   * actors still await `register()`.
+   * actors still await foreground registration.
    */
   function ensureRegistered(): Promise<void> {
-    if (!selfId) return register();
-    void register().catch(() => undefined);
+    if (!selfId) return register('foreground');
+    void register('background').catch(() => undefined);
     return Promise.resolve();
   }
   /** Changes to names, avatars or local companions alter every projection, including reused summaries. */
   let registryKey = '';
-  async function register() {
-    if (refreshActors) return refreshActors;
+  async function register(mode: 'background' | 'foreground'): Promise<void> {
+    if (refreshActors) return mode === 'background' ? refreshActors : refreshActors.catch(error => {
+      // A user action may share a passive refresh, but an unsent background
+      // request is not a failed user request. Continue in the action's channel.
+      if (error instanceof WorkRequestDeferred) return register('foreground');
+      throw error;
+    });
     if (selfId && Date.now() - registeredAt < ACTOR_REFRESH_MS && !actorsStale) return;
+    if (mode === 'background') {
+      workGate.check();
+      if (Date.now() < registrationRetryAt) throw new ChatResponseError('REGISTRATION_RETRY', 503, registrationRetryAt);
+    }
+    const request = mode === 'foreground' ? api : workApi;
     refreshActors = (async () => {
       actorsStale = false;
+      const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
-      const me = await api<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number } }>('/me'); selfId = me.actor.id;
+      localProfilesRead = profileRevision;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
@@ -884,6 +937,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
+      // The read-only probe covers ordinary and member-joined queues only. AI reply work and
+      // digests are found by the idle mask claim, so a server offering them keeps idle claims.
+      const probing = me.capabilities?.workAvailabilityVersion === 1 && !personalMask;
+      if (probing !== workAvailability) { workAvailability = probing; workPolling.reset(); }
+      workNotifications = me.capabilities?.workNotificationsVersion === 1;
+      if (!workNotifications) workPolling.shortenIdle();
       selfDeviceId = typeof me.deviceId === 'string' && me.deviceId ? me.deviceId : null;
       companionHome = !!deps.companionCloud && me.capabilities?.companionHome === true && !!selfDeviceId;
       // Work in a 1:1 room is only claimed by a copy that hands it to the companion's main task;
@@ -891,20 +950,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       directRoomClaims = companionHome && me.capabilities?.directRoomClaim === true;
       // Refresh from the issuing auth server, never overwrite with a stale device cache.
       if (Date.now() - profileRefreshedAt > PROFILE_REFRESH_MS) {
-        await api('/profile/refresh', 'POST').then(() => { profileRefreshedAt = Date.now(); }).catch(() => undefined);
+        await request('/profile/refresh', 'POST').then(() => { profileRefreshedAt = Date.now(); }).catch(() => undefined);
       }
-      actors = await api<Actor[]>('/actors');
+      // A report arriving while this read is in flight may postdate it and stays excluded.
+      const reread = [...disabledUntilRead];
+      actors = await request<Actor[]>('/actors');
+      for (const actorId of reread) disabledUntilRead.delete(actorId);
       for (const profile of profiles.filter(p => p.status === 'active')) {
         if (actors.some(a => a.kind === 'bot' && a.externalId === profile.id)) continue;
-        actors.push(await api<Actor>('/actors', 'POST', { operationId: randomUUID(), kind: 'bot', externalId: profile.id, name: profile.displayName }));
+        actors.push(await request<Actor>('/actors', 'POST', { operationId: randomUUID(), kind: 'bot', externalId: profile.id, name: profile.displayName }));
       }
       // Homes first: only the home's own copy may publish the companion's name and avatar.
-      await syncCompanionHomes();
+      await syncCompanionHomes(request);
       const failures = new Map<string, unknown>();
       for (const profile of profiles.filter(p => p.status === 'active')) {
         const found = actors.find(a => a.kind === 'bot' && a.externalId === profile.id);
         if (!found) continue;
-        try { await publishActorProfile(profile, found); } catch (error) {
+        try { await publishActorProfile(profile, found, request); } catch (error) {
           if (!current()) throw error;
           failures.set(profile.id, error);
           deps.log?.warn('Companion name / avatar not published', { actorId: found.id, ...chatErrorDiagnostic(error) });
@@ -912,6 +974,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       profileFailures = failures;
       registeredAt = Date.now();
+      registrationFailures = 0; registrationRetryAt = 0;
       const key = JSON.stringify([selfId, actors.map(a => [a.id, a.kind, a.externalId, a.name, a.avatar ?? null]),
         profiles.map(p => [p.id, p.status, p.displayName, p.avatar, p.avatarColor])]);
       if (key !== registryKey) {
@@ -925,12 +988,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A forced refresh consumes the stale flag before I/O. On failure, keep it
       // pending so a recent successful pass cannot defer recovery for a minute.
       actorsStale = true;
+      if (!(error instanceof WorkRequestDeferred)) {
+        registrationFailures++;
+        registrationRetryAt = Math.max(workGate.until, Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(registrationFailures - 1, 5)));
+      }
       throw error;
     }).finally(() => { refreshActors = undefined; });
     return refreshActors;
   }
   /** Claim empty homes for this computer and publish where every companion runs. */
-  async function syncCompanionHomes() {
+  async function syncCompanionHomes(request: typeof workApi) {
     const host = deps.companionCloud;
     if (!host || !current()) return;
     if (!companionHome || !selfDeviceId) {
@@ -941,7 +1008,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const self = selfDeviceId;
     if (companion && companionSelf !== self) { companion.dispose(); companion = undefined; }
     companionSelf = self;
-    companion ??= startCompanionCloud({ api, host, endpoint: config.baseUrl, humanActorId: selfId, selfDeviceId: self, current, log: deps.log,
+    companion ??= startCompanionCloud({ api, backgroundIdentity: { api: workApi, isDeferred: error => error instanceof WorkRequestDeferred },
+      host, endpoint: config.baseUrl, humanActorId: selfId, selfDeviceId: self, current, log: deps.log,
       transcript: deps.chatHistoryStore ? async (roomId, actorId, refresh) => {
         // Keep message-time ordering for imported history, but reuse covered pages after delta sync.
         const cache = history()!;
@@ -967,7 +1035,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       bots: () => actors.filter(a => a.kind === 'bot' && !a.disabled && a.homeDeviceId === self && localBot(a.id)?.status === 'active'
         && !companion?.isShadowed(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
       paused: botId => profiles.find(p => p.id === botId)?.status === 'paused',
-      actors: () => actors, refresh: refreshHomes, publish: publishHomes, syncProfile: syncActorProfiles,
+      actors: () => actors, refresh: () => refreshHomes('background'), refreshForeground: () => refreshHomes('foreground'),
+      publish: publishHomes, syncProfile: syncActorProfiles,
       // A copy that stops or starts being hidden changes who can follow tasks (the built-in follow-up routine).
       onShadowChanged: signalBotAutonomyBotsChanged,
       // The owner's attachments go with the conversation; other devices download them from the room.
@@ -977,7 +1046,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         return media.upload(room, source, files, author);
       }, download: (room, mediaId) => media.download(room, mediaId) } });
     const runtime = companion;
-    await registerCompanionHomes({ api, selfDeviceId: self, actors, log: deps.log,
+    await registerCompanionHomes({ api: request, selfDeviceId: self, actors, log: deps.log,
       botIds: profiles.filter(p => p.status === 'active').map(p => p.id), isDemoted: botId => runtime.state.isDemoted(botId) });
     if (!current()) return;
     runtime.reconcile(profiles.map(p => ({ id: p.id, status: p.status })));
@@ -1000,17 +1069,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     actorsStale = true;
     // A pass already in flight may have read the profiles before the latest edit.
     await refreshActors?.catch(() => undefined);
-    await register();
+    await register('foreground');
     const failure = profileFailures.get(botId);
     if (failure) throw failure;
   }
   /** Another device moved a companion: re-read actors now instead of after the throttle. */
-  async function refreshHomes() {
+  async function refreshHomes(mode: 'background' | 'foreground') {
     actorsStale = true;
     // A refresh already in flight may have read the previous actor list.
     await refreshActors?.catch(() => undefined);
     if (!actorsStale || !current()) return;
-    await register().catch(error => deps.log?.warn('Companion home refresh failed', chatErrorDiagnostic(error)));
+    await register(mode).then(() => triggerClaim(undefined, 'reconnect')).catch(error => deps.log?.warn('Companion home refresh failed', chatErrorDiagnostic(error)));
   }
   /**
    * Follow a room from a cursor whose state has already been read. A snapshot cursor skips
@@ -1039,8 +1108,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (event.type === 'ready') {
           notificationBaselines.clear();
           memberJoinedClaims = true;
-          claimWakeVersion++;
-          idleClaims.clear();
+          triggerClaim(undefined, 'reconnect');
           for (const cache of histories.values()) cache.reconnect();
           reconnectDelay = 500; connected = true;
           threads.reset();
@@ -1049,7 +1117,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           snapshotConnection += 1;
           snapshots.clear();
           for (const roomId of rooms.keys()) invalidate(roomId);
-          ws.send(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' }));
+          ws.send(JSON.stringify({ type: 'subscribe', scope: `actor:${selfId}`, after: actorCursor }));
           for (const [roomId, cursor] of rooms) ws.send(JSON.stringify({ type: 'subscribe', scope: `conversation:${roomId}`, after: cursor }));
           void syncPersonalList(true).then(() => { if (current() && socket === ws) { for (const roomId of rooms.keys()) {
             if (deps.onChatGroupAttention) void refreshGroupAttention(roomId);
@@ -1086,15 +1154,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 // Only companions this installation claims for: other notices would never be read.
                 const botActor = actors.find(a => a.id === value.data!.botId);
                 if (!botActor || !claimable(botActor)) continue;
-                const hints = queuedHints.get(value.data.botId) ?? new Map<string, string>();
-                hints.set(value.entityId, roomId);
+                const hints = queuedHints.get(value.data.botId) ?? new Map<string, WorkHint>();
+                hints.set(value.entityId, { roomId });
                 queuedHints.set(value.data.botId, hints);
               }
-              triggerClaim();
+              const targets = changes.filter(queuedForThisDevice).map(change => (change as { data?: { botId?: string } }).data?.botId);
+              triggerClaim(targets.every((value): value is string => typeof value === 'string') ? targets : undefined);
             }
           }
           else {
             for (const change of event.changes ?? []) {
+              if (change.type === 'work.available' && Array.isArray(change.data?.work)) {
+                const targets: string[] = [];
+                for (const hint of change.data.work) {
+                  if (!id.safeParse(hint?.botId).success || !id.safeParse(hint?.conversationId).success) continue;
+                  const bot = actors.find(actor => actor.id === hint.botId);
+                  if (!bot || !claimable(bot)) continue;
+                  const hints = queuedHints.get(bot.id) ?? new Map<string, WorkHint>();
+                  hints.set(`room:${hint.conversationId}`, { roomId: hint.conversationId });
+                  queuedHints.set(bot.id, hints);
+                  targets.push(bot.id);
+                }
+                if (targets.length) triggerClaim(targets);
+              }
               if (change.type === 'mask.changed' && typeof change.entityId === 'string') {
                 changed(change.entityId);
                 for (const run of running.values()) if (run.execution.mask_owner_id && run.execution.conversation_id === change.entityId) void checkLease(run);
@@ -1107,19 +1189,30 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 history()?.invalidate(change.entityId, true); changed(change.entityId);
               }
             }
-            if ((event.changes ?? []).some((change: { type?: unknown }) => change?.type === 'actor.changed')) void refreshHomes();
+            if ((event.changes ?? []).some((change: { type?: unknown }) => change?.type === 'actor.changed')) void refreshHomes('background');
             changed('');
+            actorCursor = event.cursor;
           }
           ws.send(JSON.stringify({ type: 'ack', scope: event.scope, cursor: event.cursor }));
         } else if (event.type === 'scope_error' && event.scope === `actor:${selfId}`) {
+          if (event.error?.code === 'CURSOR_AHEAD') {
+            actorCursor = '0'; workPolling.reset();
+            ws.send(JSON.stringify({ type: 'subscribe', scope: event.scope, after: actorCursor }));
+            return;
+          }
           const head = event.error?.details?.head;
           if (event.error?.code !== 'RESET_REQUIRED' || typeof head !== 'string' || !/^\d+$/.test(head)) { ws.close(); return; }
           void (async () => {
             if (supportsListRemoval) await personalList.resync(api);
             for (const cache of histories.values()) cache.reconnect();
+            // The skipped notices may include actor.changed (a home move): re-read actors and
+            // homes before claiming from the new head. A deferred refresh stays pending for the tick.
+            await refreshHomes('background');
             if (!current() || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
             for (const roomId of rooms.keys()) changed(roomId);
             changed('');
+            actorCursor = head;
+            triggerClaim(undefined, 'reconnect');
             ws.send(JSON.stringify({ type: 'subscribe', scope: event.scope, after: head }));
           })().catch(() => ws.close());
         } else if (event.type === 'scope_error' && event.scope.startsWith('conversation:')) {
@@ -1150,6 +1243,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     ws.on('close', () => {
       if (!current() || socket !== ws) return;
       connected = false;
+      // Already-scheduled connected waits must obey the disconnected fallback too.
+      workPolling.shortenIdle();
       for (const cache of histories.values()) cache.reconnect();
       reconnect = setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 15000);
@@ -2079,9 +2174,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return run.delivery;
   }
   /** Reads one message by ID; a message the reader can no longer see resolves to undefined. */
-  async function readMessage(roomId: string, messageId: string): Promise<Message | undefined> {
+  async function readMessage(roomId: string, messageId: string, work = false): Promise<Message | undefined> {
     try {
-      const message = await api<Message>(`/conversations/${roomId}/messages/${id.parse(messageId)}`);
+      const message = await (work ? workApi : api)<Message>(`/conversations/${roomId}/messages/${id.parse(messageId)}`);
       return message?.id === messageId && Array.isArray(message.content) ? message : undefined;
     } catch (error) {
       if (error instanceof ChatResponseError && [403, 404, 410].includes(error.status)) return undefined;
@@ -2096,6 +2191,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Until its conversation is known, this turn holds back the companion's other work.
     resolveLane(run);
     try {
+      const owned = actors.find(actor => actor.id === execution.bot_id);
+      if (!owned || !claimable(owned)) throw new Error('MEMBER_UNAVAILABLE');
       z.object({ access_mode: z.enum(['owner', 'chat', 'tools']), access_revision: z.number().int().positive() }).parse(execution);
       run.context = ordinaryExecution(execution) ? { kind: 'message' }
         : { kind: 'member.joined', trigger: memberJoinedTrigger.parse(execution.trigger) };
@@ -2408,20 +2505,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     changed(roomId);
   }
   let polling = false;
-  let pollRetryAt = 0;
-  let pollFailures = 0;
-  /** The same backoff for the two-second poll and realtime-triggered claims (auth recovery rules). */
-  function pollFailed(error: unknown) {
-    if (error instanceof ChatResponseError && (error.status === 401 || error.status === 429)) {
-      pollRetryAt = Math.max(Date.now() + CHAT_AUTH_RETRY_MS, error.retryAt ?? 0);
-    } else if (!(error instanceof ChatResponseError) || error.status >= 500) {
-      pollFailures += 1;
-      pollRetryAt = Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(pollFailures - 1, 5));
-    }
+  let registrationRetryAt = 0;
+  let registrationFailures = 0;
+  function workApi<T>(route: string, method = 'GET', data?: unknown, actorId?: string): Promise<T> {
+    return api<T>(route, method, data, actorId, false, undefined, workGate.check);
   }
-  const ownedActiveBot = (actorId: string) => actors.some(a => a.id === actorId && a.kind === 'bot' && localBot(a.id)?.status === 'active');
+  const ownedActiveBot = (actorId: string) => actors.some(a => a.id === actorId && a.kind === 'bot' && !a.disabled && localBot(a.id)?.status === 'active');
   /** A companion this installation runs: active here, homed on this computer, and not shadowed or unconfirmed. */
-  const claimable = (a: Actor) => a.kind === 'bot' && localBot(a.id)?.status === 'active'
+  const claimable = (a: Actor) => a.kind === 'bot' && !a.disabled && localBot(a.id)?.status === 'active'
     // Only the registered home runs a companion: skip while the home is elsewhere or not yet
     // registered (an unset home would let any copy of the owner claim it).
     && !(companionHome && a.homeDeviceId !== selfDeviceId)
@@ -2439,11 +2530,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * (bot-group-chat.md §3). A companion takes one turn at a time per conversation, while its turns in
    * different conversations run side by side, each in its own lane.
    */
-  async function executionLane(execution: Execution): Promise<string> {
+  async function executionLane(execution: Execution, work = false): Promise<string> {
     const room = execution.conversation_id;
     if (execution.plan_id) return `${room}:plan:${execution.plan_id}`;
     if (!ordinaryExecution(execution)) return `${room}:main`;
-    const source = await readMessage(room, execution.source_message_id);
+    const source = await readMessage(room, execution.source_message_id, work);
     return source?.threadRootId ? `${room}:thread:${source.threadRootId}` : `${room}:main`;
   }
   /** Reads a turn's conversation once at a time; a failed read is tried again on the next claim pass. */
@@ -2460,10 +2551,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function forgetRun(run: Running) {
     running.delete(run.execution.id);
     const botId = run.execution.bot_id;
-    idleClaims.delete(botId);
+    workPolling.wake([botId]);
     if (!runsOf(botId).length) return;
-    const hints = queuedHints.get(botId) ?? new Map<string, string>();
-    hints.set(`room:${run.execution.conversation_id}`, run.execution.conversation_id);
+    const hints = queuedHints.get(botId) ?? new Map<string, WorkHint>();
+    hints.set(`room:${run.execution.conversation_id}`, { roomId: run.execution.conversation_id });
     queuedHints.set(botId, hints);
   }
   /** Leases one execution: the oldest the server offers, or exactly `executionId`. */
@@ -2474,7 +2565,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const withEvents = memberJoinedClaims;
     try {
       if (personalMask && !executionId) {
-        const masked = await api<{execution: Execution | null; privateReportId?: string}>('/mask/executions/claim','POST',{operationId:randomUUID(),executorId,...(personalMaskTools ? {accessPolicyVersion:1} : {})},actorId);
+        const masked = await workApi<{execution: Execution | null; privateReportId?: string}>('/mask/executions/claim','POST',{operationId:randomUUID(),executorId,...(personalMaskTools ? {accessPolicyVersion:1} : {})},actorId);
         // Reconcile the last durable private report after a crash between server
         // completion and local import. Import is idempotent and retries on failure.
         const reportId = masked.privateReportId, bot = localBot(actorId);
@@ -2486,11 +2577,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         if (masked.execution) return masked.execution;
       }
-      return (await api<{ execution: Execution | null }>('/executions/claim', 'POST', { ...payload, ...(withEvents ? { memberJoinedVersion: 1 } : {}) }, actorId)).execution;
+      return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', { ...payload, ...(withEvents ? { memberJoinedVersion: 1 } : {}) }, actorId)).execution;
     } catch (error) {
       if (!withEvents || !(error instanceof ChatResponseError) || error.status !== 400 || error.message !== 'INVALID_INPUT') throw error;
       memberJoinedClaims = false;
-      return (await api<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
+      return (await workApi<{ execution: Execution | null }>('/executions/claim', 'POST', payload, actorId)).execution;
     }
   }
   /**
@@ -2498,34 +2589,43 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * one in the main timeline or another Thread, while turns in one conversation stay in order. The
    * server offers the oldest work first, so this names each execution it may take.
    */
-  async function claimBesideRuns(actorId: string, runs: Running[]) {
+  async function claimBesideRuns(actorId: string, runs: Running[], mayRequest: () => boolean = () => true) {
     const lanes = new Set(runs.map(run => run.lane));
-    const hints = queuedHints.get(actorId) ?? new Map<string, string>();
-    const rooms = new Set(hints.values());
+    const hints = queuedHints.get(actorId) ?? new Map<string, WorkHint>();
+    const rooms = new Set([...hints.values()].map(hint => hint.roomId));
     if (Date.now() >= (laneSweeps.get(actorId) ?? 0)) {
       laneSweeps.set(actorId, Date.now() + LANE_SWEEP_MS);
       for (const run of runs) rooms.add(run.execution.conversation_id);
     }
     for (const room of [...rooms].sort()) {
+      if (!mayRequest()) return;
+      const observed = [...hints].filter(([, hint]) => hint.roomId === room);
+      const retireHint = (key: string, hint: WorkHint) => { if (hints.get(key) === hint) hints.delete(key); };
       let rows: Execution[];
       try {
-        rows = await api<Execution[]>(`/conversations/${room}/executions`);
+        rows = await workApi<Execution[]>(`/conversations/${room}/executions`);
       } catch (error) {
         // Left or removed from the room: its notices can never be taken, and the next rooms still are.
         if (!(error instanceof ChatResponseError) || ![403, 404, 410].includes(error.status)) throw error;
-        for (const [executionId, hinted] of hints) if (hinted === room) hints.delete(executionId);
+        for (const [key, hint] of observed) retireHint(key, hint);
         continue;
       }
       const queued = rows.filter(row => row.bot_id === actorId && row.status === 'queued')
         .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id));
       // A notice is dropped once its work is no longer queued, or once it waits behind a turn in
       // its own conversation (that room is re-read anyway). A failed read or claim keeps it for the next pass.
-      for (const [executionId, hinted] of hints) if (hinted === room && !queued.some(row => row.id === executionId)) hints.delete(executionId);
+      // Convert a room hint to actual pending executions before dropping it.
+      // Temporary source/claim failures must retain those IDs for the next pass.
+      if (observed.some(([key]) => key === `room:${room}`))
+        for (const row of queued) if (!hints.has(row.id)) hints.set(row.id, { roomId: room });
+      for (const [key, hint] of observed) if (!queued.some(row => row.id === key)) retireHint(key, hint);
       for (const row of queued) {
+        if (!mayRequest()) return;
         let lane: string;
-        try { lane = await executionLane(row); } catch { continue; }
+        try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
         // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
+        if (!mayRequest()) return;
         const execution = await claim(actorId, row.id);
         if (!execution) continue;
         hints.delete(row.id);
@@ -2533,75 +2633,64 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         void runExecution(execution, lane);
       }
     }
-    if (!hints.size) queuedHints.delete(actorId);
+    if (!hints.size && queuedHints.get(actorId) === hints) queuedHints.delete(actorId);
   }
-  /** One claim pass per owned companion, all at once; the first failure in companion order is reported. */
-  async function claimOnce() {
-    const owned = actors.filter(claimable);
-    // A turn whose conversation is not yet known holds back the rest of its companion's work.
-    for (const actor of owned) for (const run of runsOf(actor.id)) resolveLane(run);
-    const ready = owned.filter(a => runsOf(a.id).every(run => run.lane));
-    settledValues(await settleBounded(ready, ready.length, async actor => {
+  const availabilityResponse = z.object({ items: z.array(z.object({ botId: id, pending: z.boolean(), enabled: z.boolean() })).max(128) });
+  const workPolling = createChatWorkPolling<Execution>({
+    current, gate: workGate, errorInfo: workError,
+    actors: () => (localProfilesRead === localProfilesRevision
+      ? actors.filter(actor => claimable(actor) && !disabledUntilRead.has(actor.id)) : []).map(actor => {
       const runs = runsOf(actor.id);
-      if (runs.length) { await claimBesideRuns(actor.id, runs); return; }
-      const idle = idleClaims.get(actor.id);
-      if (idle && Date.now() < idle.next) return;
-      // An idle companion takes the oldest work wherever it is. Notices of its other queued work stay,
-      // so that work starts beside this turn; with nothing left to take, they are stale.
-      laneSweeps.delete(actor.id);
-      const wakeVersion = claimWakeVersion;
-      const execution = await claim(actor.id);
-      if (!execution) {
-        queuedHints.delete(actor.id);
-        const misses = Math.min((idle?.misses ?? 0) + 1, 4);
-        // Positive jitter prevents installations started together from staying in lockstep.
-        if (wakeVersion === claimWakeVersion)
-          idleClaims.set(actor.id, { misses, next: Date.now() + Math.min(2000 * 2 ** (misses - 1), IDLE_CLAIM_MAX_MS) + Math.random() * 1000 });
-        return;
+      for (const run of runs) resolveLane(run);
+      return { id: actor.id, busy: runs.length > 0, ready: runs.every(run => run.lane) };
+    }),
+    canProbe: () => workAvailability,
+    longIdle: () => workNotifications && connected,
+    probe: async ids => {
+      try {
+        const response = availabilityResponse.safeParse(await workApi('/executions/availability', 'POST', { botIds: ids }));
+        if (!response.success || response.data.items.length !== ids.length
+          || new Set(response.data.items.map(item => item.botId)).size !== ids.length
+          || response.data.items.some(item => !ids.includes(item.botId))) throw new ChatResponseError('INVALID_WORK_AVAILABILITY', 502);
+        return response.data.items;
+      } catch (error) {
+        if (error instanceof ChatResponseError && error.status === 404) {
+          workAvailability = false; workPolling.reset();
+        }
+        throw error;
       }
-      idleClaims.delete(actor.id);
-      queuedHints.get(actor.id)?.delete(execution.id);
+    },
+    claim: actorId => claim(actorId),
+    scan: actorId => claimBesideRuns(actorId, runsOf(actorId), () => current() && Date.now() >= workGate.until),
+    accept: execution => {
+      laneSweeps.delete(execution.bot_id);
+      queuedHints.get(execution.bot_id)?.delete(execution.id);
       void runExecution(execution);
-    }));
-  }
-  // Claims never overlap: two claims for one companion could each lease work only one can run.
-  let claiming: Promise<void> | undefined;
-  let claimAgain = false;
-  function claimAll(): Promise<void> {
-    claiming ??= (async () => {
-      do { claimAgain = false; await claimOnce(); } while (claimAgain && current());
-    })().finally(() => { claiming = undefined; });
-    return claiming;
-  }
-  let claimTrigger: ReturnType<typeof setTimeout> | undefined;
-  /** A work notice bypasses idle backoff, but never the auth/rate-limit backoff. */
-  function triggerClaim() {
-    claimWakeVersion++;
-    idleClaims.clear();
-    if (claimTrigger || !current()) return;
-    claimTrigger = setTimeout(() => {
-      claimTrigger = undefined;
-      if (!current() || !selfId || Date.now() < pollRetryAt) return;
-      // A claim already in flight runs once more; a poll about to claim covers it.
-      if (polling || claiming) { claimAgain = true; return; }
-      void claimAll().catch(pollFailed);
-    }, CLAIM_TRIGGER_MS);
+    },
+    empty: actorId => { queuedHints.delete(actorId); },
+    disabled: actorId => { actorsStale = true; disabledUntilRead.add(actorId); },
+    failed: (error, phase) => {
+      if (error instanceof ChatResponseError && [403, 404].includes(error.status)) actorsStale = true;
+      deps.log?.warn('Chat work polling failed', { phase, ...chatErrorDiagnostic(error) });
+    },
+  });
+  function triggerClaim(botIds?: string[], reason?: string) {
+    if (reason === 'reconnect') workPolling.reset();
+    else workPolling.wake(botIds);
   }
   const timer = setInterval(() => {
-    if (!current() || polling || Date.now() < pollRetryAt) return;
+    if (!current()) return;
+    // Metadata refresh, discovery, and actor actions have separate lifetimes.
+    // A long room scan or an unavailable /me cannot hold another actor's reply.
+    workPolling.tick();
+    for (const run of running.values()) if (run.settlement) void deliverSettlement(run);
+    if (polling || Date.now() < Math.max(registrationRetryAt, workGate.until)) return;
     polling = true;
-    void (async () => {
-      for (const run of running.values()) if (run.settlement) void deliverSettlement(run);
-      await register();
+    void register('background').then(() => {
       beginUpgrade();
       if (!socket) connect();
-      if (claiming) claimAgain = true;
-      else await claimAll();
-    })().then(() => { pollFailures = 0; pollRetryAt = 0; }).catch(pollFailed).finally(() => {
-      polling = false;
-      // A realtime notice that arrived after this poll's claims still claims promptly.
-      if (claimAgain && !claiming) { claimAgain = false; triggerClaim(); }
-    });
+      workPolling.tick();
+    }).catch(() => undefined).finally(() => { polling = false; });
   }, 2000);
   const checking = new Set<Running>();
   const recheck = new Set<Running>();
@@ -2718,7 +2807,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const postedThreadRecipients = new Map<string, string[]>();
   const chatServer: ChatServerApi = {
     mask: input => result(async () => {
-      await register();
+      await register('foreground');
       if (!personalMask) throw new Error('UNSUPPORTED_OPERATION');
       const groupId = id.parse(input.groupId);
       const route = `/conversations/${groupId}/mask`;
@@ -2748,7 +2837,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       return {state};
     }),
     mentions: input => result(async () => {
-      await register();
+      await register('foreground');
       if (!personalMask) throw new Error('UNSUPPORTED_OPERATION');
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
@@ -2760,7 +2849,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           text:m.reply.content.map(block=>block.text ?? block.fallback ?? block.caption ?? '').join('\n')}} : {})}));
       return {mentions,hasMore:page.hasMore};
     }),
-    ownedBots: () => result(async () => { await register(); return { bots: actors.flatMap(a => { const bot = a.kind === 'bot' ? localBot(a.id) : undefined; return bot?.status === 'active' ? [{ actorId: a.id, botId: bot.id, name: a.name }] : []; }) }; }),
+    ownedBots: () => result(async () => { await register('foreground'); return { bots: actors.flatMap(a => { const bot = a.kind === 'bot' ? localBot(a.id) : undefined; return bot?.status === 'active' ? [{ actorId: a.id, botId: bot.id, name: a.name }] : []; }) }; }),
     refreshProfile: () => result(async () => {
       await api('/profile/refresh', 'POST'); profileRefreshedAt = Date.now();
       for (const roomId of rooms.keys()) changed(roomId);
@@ -3129,6 +3218,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const sendReceipts = new Map<string, Awaited<ReturnType<BotGroupChatService['sendMessage']>>>();
   return {
     chatServer,
+    refreshPendingInteraction: local.refreshPendingInteraction,
     listGroups: () => safe(async () => {
       await ensureRegistered(); await syncPersonalList(); beginUpgrade();
       const groups: BotGroupDetail[] = [];
@@ -3169,7 +3259,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
     }),
     createGroup: input => safe(async () => {
-      const i = groupInput.parse(input); await register(); beginUpgrade();
+      const i = groupInput.parse(input); await register('foreground'); beginUpgrade();
       const participants = i.botIds.map(botId => {
         const a = actors.find(a => a.kind === 'bot' && a.externalId === botId);
         if (!a) throw new Error('MEMBER_UNAVAILABLE'); return a.id;
@@ -3206,7 +3296,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       i.groupId = await resolveGroup(i.groupId);
       // Local only, so saved before any server read: a handoff deciding meanwhile must already see it.
       if (i.autoContinue !== undefined) workspaces().save(i.groupId, { projectDir: null, plans: {}, ...workspaces().read(i.groupId), autoContinue: i.autoContinue });
-      if (i.organizerBotId) await register();
+      if (i.organizerBotId) await register('foreground');
       const s = await groupSnapshot(i.groupId);
       let projectDir = i.projectDir;
       if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
@@ -3280,7 +3370,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // instead of moving to a different conversation (bot-group-chat.md §10).
         const roomId = await taskRoomFor(input.groupId);
         if (!roomId) return local.postCompanionTaskMessage(input);
-        await register();
+        await register('foreground');
         const actor = actors.find(a => a.kind === 'bot' && a.externalId === input.botId);
         if (!actor) return refused('BOT_UNAVAILABLE');
         const s = await snapshot(roomId);
@@ -3354,7 +3444,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     setMembers: input => safe(async () => {
       const i = z.object({ groupId: id, botIds: z.array(z.string()).max(6), addOnly: z.boolean().optional() }).parse(input);
-      const room = await resolveGroup(i.groupId); await register(); const s = await groupSnapshot(room);
+      const room = await resolveGroup(i.groupId); await register('foreground'); const s = await groupSnapshot(room);
       const selected = i.botIds.map(bot => actors.find(a => a.externalId === bot)?.id ?? id.parse(bot));
       for (const m of s.members.filter(m => !i.addOnly && m.kind === 'bot' && m.state === 'joined' && !selected.includes(m.id)))
         await api(`/conversations/${room}/members`, 'POST', { operationId: randomUUID(), actorId: m.id, action: 'remove' }, managementActor(s));
@@ -3386,7 +3476,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       chatNotifications?.dispose();
       for (const roomId of attentionGroups) clearGroupAttention(roomId);
       unsubscribeProfiles();
-      disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); clearTimeout(claimTrigger); socket?.close();
+      disposed = true; threads.dispose(); clearInterval(timer); clearInterval(heartbeat); clearTimeout(reconnect); workPolling.dispose(); socket?.close();
       companion?.dispose(); companion = undefined; deps.companionCloud?.homes.reset();
       for (const refresh of attachmentRefreshes.values()) clearTimeout(refresh);
       attachmentRefreshes.clear();

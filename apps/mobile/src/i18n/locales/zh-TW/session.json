@@ -566,6 +566,7 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多個工具呼叫之間來回循環，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "toolUseLoopDetectedRotationWithCount": "模型持續輪轉呼叫多個工具，Cindy 偵測到本輪已有 {{count}} 次呼叫後停止了本輪。可以傳送新訊息繼續。",
     "codexThreadLost": "Codex 鑑權模式已切換，當前任務無法繼續，請新建任務。",
+    "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
     "encryptedContentInvalid": "由於更換供應商導致加密不可用，本任務只能在原供應商下使用；請回到電腦端處理（可以用「從這裡開啟新任務」丟棄協議加密內容，在新任務裡繼續）。"
   },
   "row": {

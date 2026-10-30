@@ -1587,18 +1587,25 @@ describe('PluginMarketService migration and defaultInstall', () => {
   });
 
   it('takes bounded local snapshots instead of reading the ledger per market item', async () => {
-    const items = Array.from({ length: 50 }, (_, index) =>
-      summary({
-        id: `c${index.toString(36).padStart(24, '0')}`,
-        ghostId: `cindy-test-${index}`,
-      }),
-    );
-    const h = harness(items);
-    const read = vi.spyOn(h.ledger, 'read');
+    const ledgerReadsFor = async (count: number): Promise<number> => {
+      const items = Array.from({ length: count }, (_, index) =>
+        summary({
+          id: `c${index.toString(36).padStart(24, '0')}`,
+          ghostId: `cindy-test-${index}`,
+        }),
+      );
+      const h = harness(items);
+      const read = vi.spyOn(h.ledger, 'read');
+      await h.service.snapshot();
+      return read.mock.calls.length;
+    };
 
-    await h.service.snapshot();
-
-    expect(read.mock.calls.length).toBeLessThan(10);
+    // Maintenance stages each read the whole ledger a fixed number of times: the
+    // count must not grow with market items, and stays within the per-stage budget
+    // (one read added by the stale default-install opt-out repair stage).
+    const reads = await ledgerReadsFor(50);
+    expect(reads).toBe(await ledgerReadsFor(1));
+    expect(reads).toBeLessThan(11);
   });
 
   it('shows only public market plugins in account-free local mode', async () => {
@@ -4730,22 +4737,26 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.service.consumeRemovalNotice()).toBeNull();
   });
 
-  it('keeps a pre-existing opt-out intact after a successful purge', async () => {
-    // 退订只读的另一半(不清):早先手动卸载写过退订、之后又重新安装的用户,
-    // purge 成功后退订必须原样保留,穿越重新上架周期继续生效。
+  it('repairs a stale opt-out of a reinstalled Plugin before a purge and the purge writes none', async () => {
+    // 早先手动卸载写过退订、之后又从市场重新安装的用户已重新订阅：维护对账先清掉这条
+    // 「已安装 + 退订」，purge 本身对退订仍只读(不写也不清)，重新上架后按默认下发装回。
     const notice = removal();
     const h = harness([], [notice]);
-    runtime.ghosts = [ghostEntry(notice.ghostId)];
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-installed-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.ghosts = [{ ...ghostEntry(notice.ghostId), dir: installDir }];
     mockUninstallDropsGhost();
-    h.ledger.upsertInstallation(removalRecord());
+    const installedRecord = removalRecord({ manifestDigest: ghostManifestDigest(manifest()) });
+    h.ledger.upsertInstallation(installedRecord);
     h.ledger.markRemovedRecord(h.ledger.installationForGhost(notice.ghostId)!, 'user-1');
-    h.ledger.upsertInstallation(removalRecord());
+    h.ledger.upsertInstallation(installedRecord);
 
     await h.service.snapshot();
 
     expect(runtime.uninstall).toHaveBeenCalledTimes(1);
     expect(h.ledger.installationForGhost(notice.ghostId)?.installed).toBe(false);
-    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(true);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', notice.pluginId)).toBe(false);
     expect(h.service.consumeRemovalNotice()).toEqual({ count: 1, name: 'Test Plugin' });
   });
 
@@ -6487,7 +6498,10 @@ describe('PluginMarketService install consent', () => {
     );
   });
 
-  it('does not silently grow permissions after the user opted out of default install', async () => {
+  // Regression: older clients kept the uninstall opt-out after a market reinstall
+  // (and some wrote false opt-outs), so a default Plugin still in use held every
+  // permission-growing update. Maintenance repairs the installed route first.
+  it('repairs a stale opt-out on an installed default Plugin before its update', async () => {
     const { item, h } = upgradeFixture({ defaultInstall: true, nextCapabilities: ['notify', 'fs'] });
     h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
     h.ledger.upsertInstallation({
@@ -6500,11 +6514,93 @@ describe('PluginMarketService install consent', () => {
 
     const first = await h.service.snapshot();
 
-    expect(first.items[0]).toMatchObject({
-      installState: 'update-available',
-      updateRequiresConsent: true,
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+    expect(first.items[0]).toMatchObject({ installState: 'installed', version: '2.0.0' });
+    expect(first.items[0]?.updateRequiresConsent).not.toBe(true);
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ consent: { mode: 'exempt', reason: 'server-default-install' } }),
+    );
+  });
+
+  // The repair re-subscribes only an approved package whose bytes the record proves.
+  // An unapproved install or a digest-less legacy record (it matches any package)
+  // keeps its opt-out, so permission growth never lands silently.
+  it.each([
+    ['is not approved', { state: 'legacy-unapproved' } as GhostInstallApproval, true],
+    ['only has a digest-less legacy record', undefined, false],
+  ] as const)('keeps the opt-out when the installed default Plugin %s', async (_label, approval, digest) => {
+    const { item, h } = upgradeFixture({ defaultInstall: true, nextCapabilities: ['notify', 'fs'] });
+    if (approval) runtime.ghosts[0]!.approval = approval;
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    h.ledger.upsertInstallation({
+      ...recordForTest(item),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      ...(digest ? { manifestDigest: ghostManifestDigest(manifest(item.ghostId, '1.0.0')) } : {}),
     });
+
+    await h.service.snapshot();
+
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  // An explicit market reinstall re-subscribes the user: the opt-out written by the
+  // earlier uninstall is cleared with the install record, so a later permission-growing
+  // release of the same default Plugin updates silently instead of being held.
+  it('clears the opt-out on an explicit reinstall so later permission growth stays silent', async () => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-reinstall-'));
+    roots.push(installDir);
+    runtime.install.mockImplementation(async () => {
+      const installedManifest = runtime.inspectedManifest!;
+      fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(installedManifest));
+      const ghost = { manifest: installedManifest, dir: installDir, enabled: true };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+
+    await h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT);
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(false);
+
+    const next = { ...item, currentRelease: { ...item.currentRelease, id: 'release-2', version: '2.0.0' } };
+    const nextManifest = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
+    h.api.listAll.mockResolvedValue({ plugins: [next], removals: [], currentOrganization: null });
+    h.api.detail.mockImplementation(async () => {
+      runtime.inspectedManifest = nextManifest;
+      return { ...next, currentRelease: { ...next.currentRelease, manifest: nextManifest } };
+    });
+    const snapshot = await h.service.snapshot();
+
+    expect(snapshot.items[0]).toMatchObject({ installState: 'installed', version: '2.0.0' });
+    expect(runtime.install).toHaveBeenLastCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({ consent: { mode: 'exempt', reason: 'server-default-install' } }),
+    );
+  });
+
+  // Re-subscription is tied to a landed package: a declined confirmation or a failed
+  // placement leaves the uninstall opt-out (and the removed record) untouched.
+  it.each([
+    ['the user declines the confirmation', false, '[MUTATION_CANCELLED]'],
+    ['package placement fails', true, 'placement failed'],
+  ] as const)('keeps the opt-out when %s', async (_label, confirmed, error) => {
+    const item = summary({ defaultInstall: true });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item));
+    h.ledger.markRemovedRecord(h.ledger.installationForGhost(item.ghostId)!, 'user-1');
+    runtime.install.mockRejectedValue(new Error('placement failed'));
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item), {
+      consent: { prompt: async () => confirmed, initiator: 'user' },
+    })).rejects.toThrow(error);
+
+    expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
+    expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
   });
 
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {

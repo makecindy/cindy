@@ -220,6 +220,9 @@ identity.displayTemplate 时,`/oauth` 回查与连接结果里 account.label 给
   经 broker exchange 透传服务端),不吃 PKCE 的服务商显式 `"pkce": false`;
   设置页的 `/oauth/<key>/client` 自填通道返回 405(settingsHtml 不要再画
   client 输入区)。
+  `"tokenBroker": "feishu"` 的企业应用由服务端按企业配置:主机每次连接开始时向服务端
+  取企业当前的 App ID 与一次性授权事务,不用清单里的 `clientId`(可省略;旧版主机
+  仍按清单 `clientId` 连接)。
 - `brokerBounce`:双地址弹跳回调(随 tokenBroker,资格与 tokenBroker 相同)。部分
   服务商后台只收 https redirect、不收 http loopback——声明后报给服务商的
   redirect_uri 是「broker 服务的 https 弹跳路由」(主机用 broker 基地址 + `path`

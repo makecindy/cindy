@@ -1,20 +1,19 @@
 /**
  * deepLink: argv 解析 + URL 解析 + 新增的 --open-folder 解析单测。
  *
- * 只覆盖 pure function:dispatch / pending buffer 依赖 Electron app + BrowserWindow,
- * 端到端"点链接 / 右键唤起"需要 packaged build 手验,本单测不涵盖。
+ * 覆盖解析、pending buffer 与窗口聚焦策略；Electron 副作用使用内存替身。
+ * 实际 OS 焦点与端到端"点链接 / 右键唤起"需另做平台实跑。
  */
 
 import { describe, it, expect } from 'vitest';
-import { app, type BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { previewProviderImport } from '../provider-import/providerImport';
 
 // vitest 跑测试时不会真的初始化 Electron app, 单 import 需要 mock electron。
-// deepLink.ts 只在 registerDeepLinkProtocol / dispatchDeepLink 用到 app /
-// BrowserWindow, 本单测只测 pure parse function 不会触达,给个最小 mock 满足 import。
+// 聚焦策略测试通过这些替身观察是否产生窗口激活副作用。
 vi.mock('electron', () => ({
   app: { focus: vi.fn(), setAsDefaultProtocolClient: () => {} },
-  BrowserWindow: class {},
+  BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
 }));
 
 // logger 依赖 electron-log + app path, 在测试里要么 mock 要么吞日志。给个 noop logger。
@@ -196,6 +195,55 @@ describe('user-initiated main-window focus', () => {
 });
 
 describe('internal main-window navigation', () => {
+  // #913 / #500: workspace focus:true must navigate without taking the OS foreground.
+  // Existing tests cover explicit clicks, not background navigation or a hidden/loading main window.
+  // Production entry: openMainWindowSession; minimal input: focus:'if-active', no focused app window.
+  // tier: unit; Electron effects are injected, with native Windows acceptance run separately.
+  it.each([
+    { visible: true, minimized: false, loading: false },
+    { visible: false, minimized: false, loading: false },
+    { visible: true, minimized: true, loading: true },
+  ])('keeps background task navigation passive (%j)', ({ visible, minimized, loading }) => {
+    const win = {
+      isDestroyed: () => false, isVisible: () => visible, isMinimized: () => minimized,
+      show: vi.fn(), restore: vi.fn(), focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => loading, send: vi.fn() },
+    };
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null);
+    vi.mocked(app.focus).mockClear();
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      openMainWindowSession('background-task', { focus: 'if-active' });
+      const payload = { type: 'session', id: 'background-task' };
+      if (loading) expect(takePendingDeepLink()).toEqual(payload);
+      else expect(win.webContents.send).toHaveBeenCalledWith('deep-link:navigate', payload);
+      for (const effect of [win.show, win.restore, win.focus, win.moveTop, win.setAlwaysOnTop, app.focus]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
+    } finally {
+      takePendingDeepLink();
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('still brings the main task forward when Cindy already has an active window', () => {
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send: vi.fn() },
+    };
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(win as unknown as BrowserWindow);
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      openMainWindowSession('foreground-task', { focus: 'if-active' });
+      expect(win.focus).toHaveBeenCalledOnce();
+      expect(win.webContents.send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'foreground-task' });
+    } finally {
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null);
+      setDeepLinkMainWindow(null);
+    }
+  });
+
   it.each(['providers', 'remote-control'] as const)('focuses the main window and routes settings to %s', (tab) => {
     const send = vi.fn();
     const mainWindow = {

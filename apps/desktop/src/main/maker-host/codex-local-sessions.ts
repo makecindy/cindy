@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -34,6 +35,10 @@ import {
 } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
+import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
+import { broadcastMessageDeleted, broadcastMessageRow } from '../localDb/ipc/messages.js';
+import { messages } from '../localDb/schema.js';
+import { messageToCamel } from '../localDb/mapper.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -3972,10 +3977,13 @@ export async function classifyCodexHistoryOversized(
 
 /**
  * 为外部 Codex thread 创建的本地会话按需导入可读消息。
- * 源 rollout 文件未变化时直接短路；文件变化后按行号 upsert，刷新已导入行并追加新行。
+ * 文件未变化时短路；实时消息落库后只核对已导入的数据库副本，不重读 rollout。
  */
-export async function importExternalCodexMessagesForSession(sessionId: string): Promise<void> {
-  const session = await getDbClient().queryOne<{
+export async function importExternalCodexMessagesForSession(sessionId: string, opts?: { localWrite?: readonly string[] }): Promise<void> {
+  const db = getDbClient();
+  const cacheScope = getCurrentDbClientUserId();
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const session = await db.queryOne<{
     id: string;
     agentKind: string;
     sdkSessionId: string | null;
@@ -3991,34 +3999,30 @@ export async function importExternalCodexMessagesForSession(sessionId: string): 
   if (!session.id.startsWith(LOCAL_SESSION_ID_PREFIX)) return;
 
   const importClientIdPrefix = `codex-import:${session.sdkSessionId}:`;
-  const cacheScope = getCurrentDbClientUserId();
-  const cachedImportFile = codexMessageImportFileCache.get(sessionId);
-  if (cacheScope && cachedImportFile?.scope === cacheScope) {
-    const cachedStat = await statImportFile(cachedImportFile.path);
-    if (cachedStat && isCachedImportFileUnchanged(cachedImportFile, cachedStat)) return;
-    codexMessageImportFileCache.delete(sessionId);
-  } else if (cachedImportFile) {
-    codexMessageImportFileCache.delete(sessionId);
-  }
-
-  const rolloutPath = resolveRolloutPath(session.sdkSessionId);
-  const rolloutStat = rolloutPath ? await statImportFile(rolloutPath) : null;
-  if (!rolloutPath || !rolloutStat) {
-    log.debug('message import skipped: rollout path missing', {
-      sessionId,
-      threadId: session.sdkSessionId,
-    });
-    return;
-  }
-
-  const imported = await readCodexRolloutMessages(rolloutPath, session.id);
-  if (imported.length === 0) {
-    if (cacheScope) {
-      codexMessageImportFileCache.set(sessionId, { scope: cacheScope, path: rolloutPath, ...rolloutStat });
+  let imported: ImportedCodexMessage[];
+  let cacheEntry: ExternalImportFileCacheEntry | undefined;
+  if (opts?.localWrite) {
+    imported = await readImportedRepliesForLocalWrites(db, sessionId, importClientIdPrefix, opts.localWrite);
+  } else {
+    const cachedImportFile = codexMessageImportFileCache.get(sessionId);
+    if (cacheScope && cachedImportFile?.scope === cacheScope) {
+      const cachedStat = await statImportFile(cachedImportFile.path);
+      if (cachedStat && isCachedImportFileUnchanged(cachedImportFile, cachedStat)) return;
+      codexMessageImportFileCache.delete(sessionId);
+    } else if (cachedImportFile) {
+      codexMessageImportFileCache.delete(sessionId);
     }
+    const rolloutPath = resolveRolloutPath(session.sdkSessionId);
+    const rolloutStat = rolloutPath ? await statImportFile(rolloutPath) : null;
+    if (!rolloutPath || !rolloutStat) return;
+    imported = await readCodexRolloutMessages(rolloutPath, session.id);
+    if (cacheScope) cacheEntry = { scope: cacheScope, path: rolloutPath, ...rolloutStat };
+  }
+  if (imported.length === 0) {
+    if (cacheEntry) codexMessageImportFileCache.set(sessionId, cacheEntry);
     return;
   }
-  const { changed } = await getDbClient().tx('codex.importMessages', {
+  const { changed, hiddenClientIds, updatedLocalIds } = await db.tx('codex.importMessages', {
     sessionId,
     importClientIdPrefix,
     sdkSessionId: session.sdkSessionId,
@@ -4029,17 +4033,33 @@ export async function importExternalCodexMessagesForSession(sessionId: string): 
       text: row.text,
       content: row.content,
       createdAt: row.createdAt,
+      sourceCreatedAt: row.sourceCreatedAt,
+      phase: row.phase,
+      agentMessageId: row.agentMessageId,
     })),
   });
-  if (cacheScope) {
-    codexMessageImportFileCache.set(sessionId, { scope: cacheScope, path: rolloutPath, ...rolloutStat });
+  if (hiddenClientIds?.length) {
+    // Older viewers only read clientId. Publish every committed removal using
+    // the existing singleton payload, with the owner captured before any await.
+    for (const clientId of hiddenClientIds) {
+      broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
+    }
   }
+  if (updatedLocalIds?.length) {
+    const updated = await db.drizzle.select().from(messages).where(and(
+      eq(messages.sessionId, sessionId), inArray(messages.id, updatedLocalIds), isNull(messages.rewindAt),
+      sql`${messages.createdAt} > COALESCE((SELECT cleared_at FROM sessions WHERE id = ${sessionId}), -1)`,
+    ));
+    for (const row of updated) broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
+  }
+  if (cacheEntry) codexMessageImportFileCache.set(sessionId, cacheEntry);
   if (changed === 0) return;
   log.info('imported external Codex messages', {
     sessionId,
     threadId: session.sdkSessionId,
     count: changed,
   });
+  if (opts?.localWrite) return; // These import rows already contributed their PR references.
   // session-git-pr-context:导入消息不经 createMessage,在这里补 PR 链接提取
   // (fire-and-forget;upsert 幂等,重复导入刷新无副作用)。
   void recordPrRefsForImportedMessages(
@@ -4050,6 +4070,46 @@ export async function importExternalCodexMessagesForSession(sessionId: string): 
       createdAt: row.createdAt,
     })),
   ).catch(() => undefined);
+}
+
+/** Only return persisted import candidates near the new live rows or sharing a
+ * native item ID. Native ID candidates may be outside the legacy time window.
+ * File parsing/media hydration remains exclusive to history import reads. */
+async function readImportedRepliesForLocalWrites(
+  db: ReturnType<typeof getDbClient>, sessionId: string, prefix: string, clientIds: readonly string[],
+): Promise<ImportedCodexMessage[]> {
+  if (clientIds.length === 0) return [];
+  const rows = await db.query<{ clientId: string; content: string; createdAt: number; agentMeta: string | null }>(`
+    WITH local AS (
+      SELECT created_at, CASE WHEN json_valid(agent_meta) THEN json_extract(agent_meta, '$.agentMessageId') END AS itemId
+      FROM messages WHERE session_id = ? AND client_id IN (${clientIds.map(() => '?').join(',')})
+        AND role = 'assistant' AND rewind_at IS NULL
+        AND created_at > COALESCE((SELECT cleared_at FROM sessions WHERE id = ?), -1)
+    )
+    SELECT i.client_id AS clientId, i.content, i.created_at AS createdAt, i.agent_meta AS agentMeta
+    FROM messages i WHERE i.session_id = ? AND i.client_id LIKE ? AND i.role = 'assistant' AND i.rewind_at IS NULL
+      AND EXISTS (SELECT 1 FROM local l WHERE
+        ABS(i.created_at - CAST(SUBSTR(i.client_id, ?) AS INTEGER) - l.created_at) <= 300000
+        OR (l.itemId IS NOT NULL AND l.itemId != '' AND l.itemId =
+          CASE WHEN json_valid(i.agent_meta) THEN json_extract(i.agent_meta, '$.agentMessageId') END))
+    ORDER BY i.created_at, i.rowid
+  `, [sessionId, ...clientIds, sessionId, sessionId, `${prefix}%`, prefix.length + 1]);
+  const result: ImportedCodexMessage[] = [];
+  for (const row of rows) {
+    const lineNo = Number(row.clientId.slice(prefix.length));
+    if (!Number.isInteger(lineNo) || lineNo < 0) continue;
+    let content: unknown = row.content;
+    try { content = JSON.parse(row.content); } catch { /* Legacy plain text. */ }
+    if (typeof content !== 'string') continue;
+    let meta: Record<string, unknown> = {};
+    try { const value: unknown = JSON.parse(row.agentMeta ?? '{}'); if (isRecord(value)) meta = value; } catch { /* Legacy metadata. */ }
+    result.push({ lineNo, role: 'assistant', text: content, content, createdAt: row.createdAt,
+      sourceCreatedAt: row.createdAt - lineNo,
+      ...(meta.assistantPhase === 'commentary' || meta.assistantPhase === 'final_answer' ? { phase: meta.assistantPhase } : {}),
+      ...(typeof meta.agentMessageId === 'string' && meta.agentMessageId ? { agentMessageId: meta.agentMessageId } : {}),
+    });
+  }
+  return result;
 }
 
 async function discoverExternalCodexHomes(): Promise<string[]> {
@@ -5439,6 +5499,9 @@ interface ImportedCodexMessage {
   text: string;
   content: unknown;
   createdAt: number;
+  sourceCreatedAt?: number;
+  phase?: 'commentary' | 'final_answer';
+  agentMessageId?: string;
 }
 
 async function readCodexRolloutMessages(
@@ -5490,6 +5553,9 @@ export function parseCodexRolloutMessageLine(
     text,
     content: text,
     createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
+    sourceCreatedAt: timestampFromIso(stringValue(obj.timestamp)),
+    ...(payload.phase === 'commentary' || payload.phase === 'final_answer' ? { phase: payload.phase } : {}),
+    ...(typeof payload.id === 'string' && payload.id ? { agentMessageId: payload.id } : {}),
   };
 }
 
@@ -5531,6 +5597,9 @@ async function parseCodexRolloutMessageLineForImport(
     text,
     content: role === 'user' ? importedUserContent(text, images) : text,
     createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
+    sourceCreatedAt: timestampFromIso(stringValue(obj.timestamp)),
+    ...(payload.phase === 'commentary' || payload.phase === 'final_answer' ? { phase: payload.phase } : {}),
+    ...(typeof payload.id === 'string' && payload.id ? { agentMessageId: payload.id } : {}),
   };
 }
 

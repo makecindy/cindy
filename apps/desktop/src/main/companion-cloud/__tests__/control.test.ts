@@ -3,6 +3,7 @@ import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import { createCompanionHomeRegistry } from '../homes.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
+import type { CompanionApi } from '../types.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
 const ROOM = '10000000-0000-4000-8000-000000000001';
@@ -17,11 +18,13 @@ const MIA = { name: 'Mia', description: '', soul: '', systemPrompt: '', user: ''
 let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
-function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[];
+function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+  identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: () => Promise<Array<{ key: string; value: unknown }>>; syncProfile?: (botId: string) => Promise<void>;
   turnActive?: () => boolean; homeLink?: CompanionCloudHost['homeLink']; stopBotTurns?: CompanionCloudHost['stopBotTurns'];
-  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; savedState?: string }) {
+  canonicalSession?: CompanionCloudHost['canonicalSession']; paused?: (botId: string) => boolean; refreshForeground?: () => Promise<void>;
+  savedState?: string }) {
   const actors: CompanionRuntimeActor[] = [{ id: 'actor-1', kind: 'bot', externalId: 'bot_mia', name: 'Mia', avatar: null, homeDeviceId: options.home }];
   const { api, calls } = fakeApi(options.handler ?? ((route, method) => {
     // The home has uploaded the profile snapshot a take-over builds from.
@@ -49,9 +52,11 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     ...(options.homeLink ? { homeLink: options.homeLink } : {}),
     ...(options.stopBotTurns ? { stopBotTurns: options.stopBotTurns } : {}),
   };
-  runtime = startCompanionCloud({ api, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
+  runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
+    api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
+    host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: () => true,
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
-    actors: () => actors, refresh, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
+    actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
   return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged };
 }
@@ -77,6 +82,16 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
+    let restore = () => {};
+    const foreground = vi.fn(async () => { restore(); });
+    const t = setup({ home: 'laptop', refreshForeground: foreground });
+    const actor = t.actors.pop()!;
+    restore = () => { t.actors.push(actor); };
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+    expect(foreground).toHaveBeenCalledOnce();
+    expect(t.refresh).not.toHaveBeenCalled();
+  });
   it('moves the home with compare-and-set, then builds the local companion', async () => {
     const t = setup({ home: 'laptop' });
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
@@ -136,6 +151,43 @@ describe('take over', () => {
 });
 
 describe('reconcile', () => {
+  it.each([true, false])('distinguishes local identity deferral from a failed check and leaves rechecks due (%s)', async deferred => {
+    vi.useFakeTimers();
+    try {
+      const rejected = new Error('CHECK_NOT_COMPLETED');
+      let fail = false;
+      const background = fakeApi(() => {
+        if (fail) throw rejected;
+        return [{ key: 'companion.install.v1', revision: 1, value: { installationId: 'this-install', deviceId: 'desk' } }];
+      });
+      const t = setup({ home: 'desk', installationId: 'this-install', backgroundIdentityApi: background.api,
+        identityDeferred: error => deferred && error === rejected });
+      const locals = [{ id: 'bot_mia', status: 'active' }];
+      t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+      await vi.advanceTimersByTimeAsync(120_000);
+      fail = true; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(deferred);
+      fail = false; t.runtime.reconcile(locals); await vi.advanceTimersByTimeAsync(0);
+      expect(background.calls).toHaveLength(3);
+      expect(t.runtime.installConfirmed('bot_mia')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+  it.each(['install', 'arrival', 'retirement'] as const)('uses background identity admission for %s without blocking explicit user actions', async kind => {
+    vi.useFakeTimers();
+    try {
+      const background = vi.fn(async () => { throw new Error('BACKGROUND_DEFERRED'); });
+      const t = setup({ home: 'desk', installationId: kind === 'install' ? 'this-install' : undefined, backgroundIdentityApi: background });
+      if (kind === 'retirement') t.state.update('bot_mia', 'actor-1', entry => { entry.retirePending = true; });
+      t.runtime.reconcile(kind === 'arrival' ? [] : [{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(background).toHaveBeenCalledOnce();
+      expect(t.calls).toHaveLength(0);
+      // A user's explicit take-over retains its own API and full data restoration.
+      expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      expect(t.calls.some(call => call.route === '/preferences')).toBe(true);
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
   it('demotes a local copy whose home is another computer', () => {
     const t = setup({ home: 'laptop' });
     t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);

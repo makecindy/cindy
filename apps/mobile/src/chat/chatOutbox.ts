@@ -1,16 +1,33 @@
 import type { BotGroupMessageView, BotGroupQuoteView } from '@cindy/maker-shared/botGroupChat';
 import type { DurableOutboxRecord, DurableOutboxStore } from '@/session/durableOutbox';
 import { buildOutboxItem } from '@/session/sessionOutbox';
-import { chatAccessLost, type ChatSendInput, type createChatServerClient } from './chatServerClient';
+import { chatAccessLost, chatRejection, chatThreadMetadata, type ChatSendInput, type createChatServerClient } from './chatServerClient';
 import { cacheChatMessages, peekChatMessages } from './chatMessageCache';
 
 export async function enqueueChatMessage(store: DurableOutboxStore, accountId: string, roomId: string,
   input: ChatSendInput, after: number, quote?: BotGroupQuoteView, afterServerSequence?: string): Promise<void> {
   if (!accountId || store.getAccountId() !== accountId) throw new Error('OUTBOX_OWNER_CHANGED');
   await store.add({ version: 1, accountId, deviceId: '', createdAt: Date.now(), state: 'queued', uploads: [],
-    enqueueStarted: false, chat: { roomId, input, after, afterServerSequence, ...(quote ? { quote } : {}) },
+    enqueueStarted: false, chat: { roomId, input, after, afterServerSequence,
+      ...(input.alsoSendToMain && input.threadRootId ? { shareToMain: { state: 'pending' as const } } : {}), ...(quote ? { quote } : {}) },
     item: buildOutboxItem({ clientId: input.clientId, sessionId: roomId, text: input.text,
       permissionModeAtSend: 'default', readyAttachments: [...(input.attachments ?? [])], claimedUploads: [] }) });
+}
+
+/** Sharing an existing reply enters the same ledger already past the reply stage. */
+export async function enqueueChatShare(store: DurableOutboxStore, accountId: string, roomId: string, message: BotGroupMessageView) {
+  if (!accountId || store.getAccountId() !== accountId) throw new Error('OUTBOX_OWNER_CHANGED');
+  if (!message.threadRootId || message.deleted || message.kind !== 'message') throw new Error('SHARE_UNAVAILABLE');
+  const clientId = `thread-share:${message.id}`;
+  if (store.getSnapshot().some(row => row.chat?.roomId === roomId && (row.item.clientId === clientId || row.chat.messageId === message.id && !!row.chat.shareToMain))) return;
+  try { await store.add({ version: 1, accountId, deviceId: '', createdAt: Date.now(), state: 'confirming', uploads: [], enqueueStarted: true,
+    chat: { roomId, messageId: message.id, after: message.sequence, shareToMain: { state: 'pending' },
+      input: { clientId, text: message.content, mentions: { all: false, botIds: [] }, threadRootId: message.threadRootId } },
+    item: buildOutboxItem({ clientId, sessionId: roomId, text: message.content, permissionModeAtSend: 'default', readyAttachments: [], claimedUploads: [] }) }); }
+  catch (error) {
+    if (store.getAccountId() === accountId && store.getSnapshot().some(row => row.chat?.roomId === roomId && row.item.clientId === clientId)) return;
+    throw error;
+  }
 }
 
 export function pendingChatMessage(record: DurableOutboxRecord): BotGroupMessageView {
@@ -24,9 +41,10 @@ export function pendingChatMessage(record: DurableOutboxRecord): BotGroupMessage
 }
 
 /** Remove a receipt only after its canonical message is durable on this phone. */
-export async function settleChatOutbox(store: DurableOutboxStore, roomId: string, messageIds: ReadonlySet<string>) {
+export async function settleChatOutbox(store: DurableOutboxStore, roomId: string, messageIds: ReadonlySet<string>, sharedReplyIds: ReadonlySet<string> = new Set()) {
   for (const row of store.getSnapshot()) {
-    if (row.chat?.roomId === roomId && row.chat.messageId && messageIds.has(row.chat.messageId)) await store.remove(row);
+    if (row.chat?.roomId === roomId && row.chat.messageId && messageIds.has(row.chat.messageId)
+      && (!row.chat.shareToMain || row.chat.shareToMain.state === 'sent' && sharedReplyIds.has(row.chat.messageId))) await store.remove(row);
   }
 }
 
@@ -54,9 +72,13 @@ export function createChatOutboxDelivery(deps: {
       if (!deps.canRun() || !deps.current()) return;
       if (!row.chat || !current(row)) continue;
       const room = row.chat.roomId;
+      // A cross-device duplicate is already sent; retain its posted marker without polling for an unknown ID.
+      if (row.chat.shareToMain?.state === 'sent' && row.chat.shareToMain.messageId === null) continue;
       // A later rejection cannot disprove a previous POST whose outcome was lost.
       const previouslyStarted = row.enqueueStarted === true;
       if (blocked.has(room)) continue;
+      // A second-stage failure must not block unrelated replies in this room.
+      if (row.chat.messageId && row.chat.shareToMain && (row.suspended || ['failed', 'unavailable'].includes(row.chat.shareToMain.state))) continue;
       if (row.suspended || row.state === 'failed') { blocked.add(room); continue; }
       const guard = () => {
         if (!current(row) || !deps.canRun()) throw new Error('OUTBOX_OWNER_CHANGED');
@@ -69,13 +91,46 @@ export function createChatOutboxDelivery(deps: {
           blocked.add(room); await deps.accessLost(room); continue;
         }
         if (row.chat!.messageId) {
+          if (row.chat!.shareToMain?.state === 'pending') {
+            try {
+              const result = await client.shareToMain(room, row.chat!.messageId!, row.chat!.input.threadRootId!, {
+                body: row.chat!.shareToMain.body,
+                save: async body => {
+                  guard(); row = await store.update(row, { chat: { ...row.chat!, shareToMain: { state: 'pending', body } } }); guard();
+                },
+              });
+              guard(); row = await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!, state: 'sent', messageId: result.messageId, error: undefined } } }); guard();
+            } catch (error) {
+              if (!current(row) || !deps.current()) return;
+              if (chatAccessLost(error)) throw error;
+              const unavailable = error instanceof Error && error.message === 'SHARE_UNAVAILABLE';
+              await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!,
+                state: unavailable ? 'unavailable' : 'failed', error: unavailable ? 'SHARE_UNAVAILABLE' : 'THREAD_SHARE_FAILED' } } });
+              continue;
+            }
+          }
           const previous = peekChatMessages(room, row.chat!.input.threadRootId);
           const oldest = previous?.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) < BigInt(seq) ? message.seq : seq, undefined)
             ?? row.chat!.afterServerSequence;
           const [page, self, actors] = await Promise.all([client.load(room, oldest, row.chat!.input.threadRootId), client.me(), client.actors().catch(() => [])]);
           guard();
+          const sharedId = row.chat!.shareToMain?.state === 'sent' ? row.chat!.shareToMain.messageId : undefined;
+          if (sharedId && !page.snapshot.messages.some(message => message.id === sharedId)) {
+            try {
+              const shared = await client.message(room, sharedId);
+              guard();
+              page.snapshot = { ...page.snapshot, messages: [...page.snapshot.messages, shared] };
+            } catch (error) {
+              if (!chatRejection(error, 404, 'MESSAGE_NOT_FOUND')) throw error;
+              guard();
+              row = await store.update(row, { chat: { ...row.chat!, shareToMain: { ...row.chat!.shareToMain!,
+                state: 'unavailable', error: 'SHARE_UNAVAILABLE' } } });
+              guard();
+            }
+          }
           if (await cacheChatMessages(room, { version: 1, page, self, actors })) {
-            guard(); await settleChatOutbox(store, room, new Set(page.messages.map(message => message.id)));
+            guard(); await settleChatOutbox(store, room, new Set(page.messages.map(message => message.id)),
+              new Set(Object.entries(chatThreadMetadata(page, self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
           }
           continue;
         }
@@ -100,7 +155,9 @@ export function createChatOutboxDelivery(deps: {
       } catch (error) {
         if (!current(row) || !deps.current()) return;
         const status = (error as { status?: number })?.status;
-        const message = error instanceof Error ? error.message : 'CHAT_SEND_FAILED';
+        const message = row.chat?.messageId && row.chat.shareToMain
+          ? chatAccessLost(error) ? 'CONVERSATION_NOT_FOUND' : 'THREAD_SHARE_FAILED'
+          : error instanceof Error ? error.message : 'CHAT_SEND_FAILED';
         const refused = (status !== undefined && status >= 400 && status < 500 && ![401, 408, 429].includes(status))
           || ['MENTION_UNAVAILABLE', 'QUOTE_UNAVAILABLE'].includes(message);
         blocked.add(room);

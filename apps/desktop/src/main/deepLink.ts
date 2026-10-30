@@ -462,12 +462,12 @@ export function openMainWindowBillingTopUp(): void {
 }
 
 /**
- * 主进程内部发起的会话聚焦(workspace 槽 focus:true)。复用 deep link 的
- * 前台 + renderer dispatch 通道,行为与用户点 cindy://session/<id> 一致。
+ * 主进程内部发起的会话导航。用户点击默认拉回前台；后台插件用
+ * if-active，仅在 Cindy 已有聚焦窗口时提升主窗口，不打断其它应用。
  */
 export function openMainWindowSession(
   sessionId: string,
-  options?: { focus?: boolean; islandEntryId?: string; deviceId?: string; messageClientId?: string },
+  options?: { focus?: boolean | 'if-active'; islandEntryId?: string; deviceId?: string; messageClientId?: string },
 ): void {
   dispatchDeepLink(
     { type: 'session', id: sessionId,
@@ -475,7 +475,9 @@ export function openMainWindowSession(
       ...(options?.deviceId ? { deviceId: options.deviceId } : {}),
       ...(options?.messageClientId ? { messageClientId: options.messageClientId } : {}),
     },
-    options?.focus !== false,
+    options?.focus === 'if-active'
+      ? BrowserWindow.getFocusedWindow() !== null
+      : options?.focus !== false,
     captureDataOwnerBroadcastScope(),
   );
 }

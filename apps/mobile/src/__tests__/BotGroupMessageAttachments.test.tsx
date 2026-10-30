@@ -20,10 +20,19 @@ const imageEvents = vi.hoisted(() => new Map<string, { onLoad: (event: unknown) 
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('react-native', async () => {
   const React = await import('react');
-  const view = ({ children, testID, accessibilityLabel, onPress, style }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
+  const view = ({ children, testID, accessibilityLabel, onPress, onContextMenu, style }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress, onContextMenu, style: Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) }, children);
+  const pressable = ({ onLongPress, disabled, ...props }: any) => view({
+    ...props,
+    onPress: disabled ? undefined : props.onPress,
+    onContextMenu: (event: Event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!disabled) onLongPress?.();
+    },
+  });
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
-    View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
+    View: view, Text: view, Pressable: pressable, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
     Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
       timing: () => ({ start() {}, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
@@ -102,6 +111,7 @@ import { BotGroupMessageAttachments, botGroupAttachmentRuns } from '@/session/Bo
 import { AttachmentStrip } from '@/session/MessageRenderer';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -131,6 +141,27 @@ async function renderAttachment(messageId: string) {
 }
 
 describe('group image attachments outside LegendList (#5278)', () => {
+  it.each(['image', 'file'] as const)('opens the message menu from the %s attachment responder while preserving preview taps', async (kind) => {
+    const openMenu = vi.fn();
+    const openPreview = vi.fn();
+    host = document.createElement('div');
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(MessageContentLongPressContext.Provider, { value: openMenu },
+      createElement(AttachmentStrip, {
+        attachments: [{ kind, name: kind === 'image' ? 'picture.png' : 'brief.pdf', uri: kind === 'image' ? imageUrl : 'file:///brief.pdf', previewable: true }],
+        messageKey: 'menu-message', align: 'left', layout: buildMessageContentLayout({ screenWidth: 402 }),
+        usePreviewState: useState, onOpen: openPreview, onResolveRemoteMedia: resolveMedia,
+      }),
+    )));
+    const attachment = host.querySelector('[aria-label]') as HTMLElement;
+    expect(attachment).not.toBeNull();
+    act(() => attachment.click());
+    expect(openPreview).toHaveBeenCalledTimes(1);
+    act(() => attachment.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+    expect(openMenu).toHaveBeenCalledTimes(1);
+    expect(openPreview).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['displayed', 'error'] as const)('resets the real loading image after %s and ignores late events from the previous image', async (previousState) => {
     host = document.createElement('div');
     root = createRoot(host);
