@@ -1,13 +1,15 @@
 ---
-name: autofix
-description: Fix a GitHub pull request's failing checks, merge conflicts and review feedback, then keep following it in the background until it is merged or closed. Use when the user invokes /autofix or asks to fix or follow a PR, and right after you open a ready (non-draft) pull request in this task, without asking first.
+name: pr
+description: Carry a GitHub pull request from start to merge in any Git repository - start the work on a fresh branch, open the PR when the user wants it, fix failing checks, merge conflicts and review feedback, follow it in the background, and clean up after merge. Use when the user invokes /pr or gives a PR link, starts a feature or fix that will become a pull request, or asks to open, fix or follow a PR.
 ---
 
-# Autofix
+# PR
 
-Make the pull request mergeable without the user having to supervise it. The goal is a mergeable PR, not answering every comment: before each round ask "what still stands between this PR and mergeable?"
+Take a change from its first edit to a merged pull request without the user having to supervise. The goal is a mergeable PR, not answering every comment: before each round ask "what still stands between this PR and mergeable?"
 
 Reply in the user's language. Read the reference files only when this file points to them.
+
+**What wins:** the user's explicit instructions and saved preferences first, then the repository's own rules (AGENTS.md, CLAUDE.md, CONTRIBUTING, the PR template), then this Skill's defaults. This Skill adds no commit, test or PR rules of its own.
 
 `<skill-dir>` below is the directory containing this SKILL.md. Use it as shown, without resolving symlinks. If it contains `/.versions/<bundle>/`, replace that segment with `/.active/` so the background check survives Cindy updates. Quote every path.
 
@@ -17,18 +19,29 @@ Reply in the user's language. Read the reference files only when this file point
 - **Ask the user first** only for: product behaviour changes; security, permission or privacy boundaries; splitting the PR; adding new machinery that significantly raises complexity (concurrency, locks, caches, persistence, retries). Give your recommended option, the trade-off and the impact.
 - **Tell the user** (do not ask) when a problem stays stuck after repeated attempts; the check output names these cases.
 - Deleting machinery that grew during review, reverting, or shrinking back to the PR's original goal is technical convergence. It needs no confirmation and is not "splitting the PR".
-- Never approve, merge, enable auto-merge, re-enqueue a merge queue, or take a PR out of draft unless the user authorised it for this repository. Authorisation for one repository never carries to another.
+- Never push or open a pull request until the user asks for it or agrees. Never approve, merge, enable auto-merge, re-enqueue a merge queue, or take a PR out of draft unless the user authorised it for this repository. Authorisation for one repository never carries to another.
 - Never stash, reset, clean, revert or overwrite the user's uncommitted changes. Never force-push.
 - Public replies stay short, factual and traceable. Ask before posting anything that takes a product position, discloses sensitive material, or attaches screenshots.
+- Requires the GitHub CLI signed in (`gh auth status`) and Node.js. If either is missing, or the repository is not on GitHub, say exactly that; you can still do the local work.
 
-## 1. Target and checkout
+## 1. Start the work
 
-- Take the PR from the invocation (URL or number). Without one, use the PR you just opened, or the current branch's PR (`gh pr view --json url --jq .url`). Derive `owner/repo` from the URL or `origin`; never assume it.
-- Requires the GitHub CLI signed in (`gh auth status`) and Node.js. If either is missing, or the PR is not on GitHub, tell the user exactly that and stop.
-- Confirm the PR is open. If its head is a fork you cannot push to, say so and stop.
-- Work on the PR's head branch. If the current directory is a clean checkout of it, use it. Otherwise create a worktree next to the repository (`git worktree add --detach ../<repo-folder>-autofix-<number>`, then `gh pr checkout <number>` inside it) and fix its root with `git -C <path> rev-parse --show-toplevel`.
+For a change that will become a pull request (not for a question or a read-only investigation):
 
-## 2. A fix round
+- **Already isolated:** if the task already works in a worktree or feature branch for this change, keep using it. If it is behind the remote default branch, merge that in before continuing.
+- **Otherwise create a task worktree:** call `cindy_helper` → `create_task_worktree` (category `control`; pass `repo_dir` when the task directory is not the repository itself). Cindy creates a branch from the freshly fetched remote default branch, binds the worktree to this task and removes it when the task is archived. The task itself does not move: run every shell command from the returned `worktree_path`, use absolute paths inside it for edits, and re-read the repository's rules there (the main checkout may be older). Keep using that path after restarts and context compaction.
+- **Fallback** when the tool is unavailable or fails: fetch, then `git worktree add -b <branch> ../<repo-folder>-<slug> origin/<default-branch>` and work there.
+
+## 2. Open the pull request
+
+- When the work is done and verified and the user has not said whether to publish, it is usually right to ask in one short sentence. If they already asked you to open it, just do it.
+- Commit only related files, following the repository's rules. Push the branch, then `gh pr create` (ready for review unless the user wants a draft), filling the repository's PR template truthfully: what changed, how it was verified, risks.
+- Report the PR link in one line. Rename the task only when the user asks.
+- Then decide about following it (section 4).
+
+## 3. A fix round
+
+To take over an existing PR, use the link or number given, or the current branch's PR (`gh pr view --json url --jq .url`). Derive `owner/repo` from the URL or `origin`; never assume it. Confirm the PR is open; if its head is a fork you cannot push to, say so and stop. Work on its head branch: if the current directory is a clean checkout of it, use it; otherwise create a task worktree as in section 1 and run `gh pr checkout <number>` inside it.
 
 1. Get facts, do not reconstruct them from memory or flat `gh` output:
    `node "<skill-dir>/scripts/pr-snapshot.mjs" <PR_URL>`. Use its `verdict` and `blockers[]`. If the snapshot fails or is truncated, never claim the PR is clean.
@@ -37,7 +50,7 @@ Reply in the user's language. Read the reference files only when this file point
 4. **Wait for the round to be complete.** After a push, if a bot reviewer that reviewed earlier commits has not yet reviewed the new head, end the round with `--defer 15` (at most once per push; see `references/review-convergence.md` §5). Then fix everything from the round together.
 5. **CI:** read `gh pr checks` and `gh run view <run-id> --log-failed`. Failures unrelated to this PR (they also fail on the base branch) are baseline problems: do not mix fixes for them into this PR. Re-run only a confirmed flake, once (`gh run rerun <run-id> --failed`); a second failure is real.
 6. **Conflicts or a stale base:** merge the base branch into the PR branch (`git fetch origin <base>`, `git merge origin/<base>`), resolve, test. Do not rebase a shared PR branch.
-7. Verify with the narrowest tests, lint and type checks that cover the change. Follow the repository's own rules for commits, tests and PRs (for example AGENTS.md, CLAUDE.md, CONTRIBUTING, the PR template); this Skill adds none of its own. Stage only related files.
+7. Verify with the narrowest tests, lint and type checks that cover the change, following the repository's rules. Stage only related files.
 8. **One push per round.** Check the PR is still open, then `git push` once with all of this round's commits; confirm with `gh pr view --json commits` that they landed. Every extra intermediate push makes every bot review an intermediate state again.
 9. Reply in each thread you handled (what changed, which commit) before resolving it: `gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=<thread-id>`. Where the reviewer is mistaken or the comment is stale, reply with evidence and resolve; do not distort the product to please a comment.
 10. Re-run the snapshot to confirm: active and outdated unresolved threads are both zero, checks are green or pending on the new head.
@@ -48,16 +61,16 @@ Hard convergence lines (the check output repeats them with the current round num
 - **Checkpoint:** when a previous fix missed the symmetric half of a path, or the same predicate appears for the third time, stop and do the checkpoint in `references/review-convergence.md` §2 before the next fix.
 - **Round 5** with new serious findings: the checkpoint is mandatory. **Round 10:** convergence mode, batch whole families and keep going (it is not a stop condition), and tell the user the round count, the failure families and the chosen path once.
 
-## 3. Start following
+## 4. Following in the background
 
-After the first round (and right after you open a ready PR yourself), create one background follow-up bound to this task. Do not ask; the user invoking `/autofix` or asking you to open the PR is the authorisation. Skip this for draft PRs unless the user asked you to follow the draft.
+**When to follow:** when the user asked you to (including `/pr <link>`), or when their saved preference says to follow PRs automatically. Otherwise, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked.
 
 Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`). First `schedule_list` without a status filter and look for a schedule whose prompt or `preRunHook.command` contains this exact PR URL (host, owner/repo and number). If one exists, keep it; do not create a second. Otherwise call `schedule_create`, filling only the placeholders:
 
 ```json
 {
-  "name": "Autofix #<number>",
-  "prompt": "Follow <PR_URL> with the autofix Skill (background round). Checkout: <worktree path> (branch <branch>).",
+  "name": "PR #<number>",
+  "prompt": "Follow <PR_URL> with the pr Skill (background round). Checkout: <worktree path> (branch <branch>).",
   "cronExpr": "*/10 * * * *",
   "intervalMs": 600000,
   "timezone": "<the user's IANA time zone>",
@@ -76,31 +89,31 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 - Add a line to the prompt only for facts specific to this PR that cannot be derived (for example a reviewer the user named). General procedure lives in this Skill, not in the prompt.
 - The hook is a check that ships with Cindy: mount it directly, never generate one with `schedule_set_pre_run_hook` or copy the script. Do not pass `workingDir`, `model` or `effort`.
 - `notify` values are JSON booleans. On `INVALID_ARGS`, fix the arguments once from the returned schema; if it fails again, report it.
-- A returned id is not proof. Read it back with `schedule_get` and confirm it appears in `schedule_list`. Report the outcome to the user: following started (with the schedule id) or not, and why.
+- A returned id is not proof. Read it back with `schedule_get` and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following").
 - Leave `cronExpr` and `intervalMs` alone afterwards. The check paces itself: it looks at GitHub less often the longer the PR stays quiet and returns to every 10 minutes as soon as anything changes. How the check decides is described in `references/follow-up.md`.
 
-## 4. Background round
+## 5. Background round
 
 The schedule wakes this task only when the check found something worth a look. Each round:
 
 1. Run `node "<skill-dir>/scripts/pr-snapshot.mjs" <PR_URL>` and `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --last-result --json`. Act on both; the `detail` carries the reason, the round number and any convergence instructions, which you must follow.
 2. Do the work:
-   - **Technical work** (`NEEDS_WORK`, review threads, CI, conflicts, base sync): a fix round (section 2). Never just `--ack` with unresolved technical blockers.
+   - **Technical work** (`NEEDS_WORK`, review threads, CI, conflicts, base sync): a fix round (section 3). Never just `--ack` with unresolved technical blockers.
    - **Ready, approved, or only waiting for review, approval or merge:** nothing to fix. The first time the PR becomes ready, tell the user once; afterwards stay silent. Waiting for approval or merge is not a decision for the user.
    - **Draft:** fix technical problems that do not change what is being discussed; tell the user once what the draft is waiting for, then `--defer 240`.
    - **`silence-guard`:** a periodic look at what the check cannot see. Decide whether to merge in the base, re-run, close or nudge, rather than staying silent just because nothing changed.
-   - **Merged or closed:** report it in one line, then `schedule_delete` this schedule (delete, never pause), then clean up (section 5).
+   - **Merged or closed:** report it in one line, then `schedule_delete` this schedule (delete, never pause), then clean up (section 6).
 3. Finish every round with `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --ack`, or `--defer <minutes>` (which implies `--ack`) only in these cases: waiting for a user decision (240, after asking), blocked on something you cannot move (240, say what you are waiting for), or waiting for this push's bot reviewers (15, at most once per push).
 
 **Notifications.** The schedule runs silently. Call `schedule_notify_current_run` (then write one short message) only when the user should know now: the PR became ready to merge for the first time, it was merged or closed, you need their decision, or the check reports a problem stuck for several backoff cycles. Never notify to say nothing changed, and never nag about pending approval or merge.
 
 If the user asks to stop, delete the schedule.
 
-## 5. Cleanup after merge or close
+## 6. Cleanup after merge or close
 
 Run `node "<skill-dir>/scripts/pr-cleanup-plan.mjs" <PR_URL> --worktree <checkout> --fetch` from the primary checkout and follow its read-only plan:
 
 - Only remove a worktree or local branch the plan says is safe (`canCleanupLocal`). Never delete remote branches or long-lived branches.
-- `cindy_managed_worktree`: the worktree belongs to a Cindy task; Cindy removes it when that task is archived. Leave it.
+- `cindy_managed_worktree`: the worktree belongs to a Cindy task (including one made by `create_task_worktree`); Cindy removes it when that task is archived. Leave it.
 - A dirty target worktree: list what is uncommitted and let the user decide; never stash or force-delete it.
 - Closed without merging: ask the user before removing anything.

@@ -1,3 +1,3 @@
 interface:
   display_name: "PR"
-  short_description: "Fix a PR and keep following it until it is merged"
+  short_description: "Start, open and follow a pull request until it is merged"

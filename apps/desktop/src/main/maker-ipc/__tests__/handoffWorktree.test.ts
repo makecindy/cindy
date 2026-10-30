@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WorktreeMeta } from '../../worktree/types.js';
 import {
   prepareHandoffWorktree,
+  prepareTaskWorktree,
   resolveHandoffBaseRepo,
   shouldRecycleHandoffWorktreeOnFailure,
   type HandoffWorktreeDeps,
@@ -241,5 +242,66 @@ describe('shouldRecycleHandoffWorktreeOnFailure', () => {
 
   it('session 已建成 → 绝不回收(workingDir/DB 都指着它,删了产生孤儿会话;随 session close 生命周期回收)', () => {
     expect(shouldRecycleHandoffWorktreeOnFailure(true)).toBe(false);
+  });
+});
+
+// create_task_worktree:给已有任务自己绑定托管 worktree(不搬任务、不重启)。
+// 生产入口 prepareTaskWorktree;可观察结果是绑定到调用方 session 的 worktree 与错误码。
+describe('prepareTaskWorktree', () => {
+  const caller = { workingDir: BASE, status: 'active', source: 'desktop' };
+
+  it('binds a new worktree to the calling task, branched from the fresh remote default', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: true, meta: { sessionId: 'task-1' } });
+    expect(resolveFreshSource).toHaveBeenCalledWith(BASE, 'main');
+    expect(deps.createWorktree).toHaveBeenCalledWith({
+      sessionId: 'task-1',
+      baseRepo: BASE,
+      name: 'fresh-name',
+      sourceBranch: 'refs/remotes/origin/main',
+    });
+  });
+
+  it('returns the existing binding instead of creating a second worktree', async () => {
+    const deps = makeDeps({ getForSession: vi.fn(() => meta({ sessionId: 'task-1' })) });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: false, meta: { path: WT } });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['archived task', { caller: { ...caller, status: 'archived' } }, 'PRECONDITION_FAILED'],
+    ['read-only review task', { caller: { ...caller, source: 'review' } }, 'PRECONDITION_FAILED'],
+    ['relative repo_dir', { caller, repoDir: 'repo' }, 'INVALID_ARGS'],
+    ['no directory to branch from', { caller: { ...caller, workingDir: null } }, 'INVALID_ARGS'],
+  ] as const)('rejects %s without touching git', async (_label, input, errorCode) => {
+    const deps = makeDeps();
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', ...input });
+    expect(res).toMatchObject({ ok: false, errorCode });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it('branches from repo_dir when the task directory is not the repository', async () => {
+    const repo = path.resolve('/workspace/repo');
+    const deps = makeDeps({
+      detectCwd: vi.fn(async () => ({ isGitRepo: true, isInsideWorktree: false, gitInstalled: true, repoRoot: repo })),
+    });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller: { ...caller, workingDir: path.resolve('/workspace') },
+      repoDir: repo,
+    });
+    expect(res.ok).toBe(true);
+    expect(deps.detectCwd).toHaveBeenCalledWith(repo);
+  });
+
+  it('reports a directory that is not a git repository as WORKTREE_UNAVAILABLE', async () => {
+    const deps = makeDeps({
+      detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true, repoRoot: null })),
+    });
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
   });
 });
