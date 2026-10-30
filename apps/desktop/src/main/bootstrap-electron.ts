@@ -1052,6 +1052,7 @@ import {
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
+import { isLinuxNativeWayland, presentMainWindow } from './mainWindowPresentation.js';
 import {
   applyLinuxMainWindowCloseBehavior,
   createCloseBehaviorPromptFallbackController,
@@ -3723,9 +3724,15 @@ function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean)
 function focusMainWindow(): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
-  if (!win.isVisible()) win.show();
-  if (win.isMinimized()) win.restore();
-  win.focus();
+  // 重新映射只是让合成器把主窗口重新摆到前台，不算用户收起主窗口；资源占用窗口保持原样。
+  resourceUsageWindowController.whileOwnerRemaps(() =>
+    presentMainWindow(win, {
+      nativeWayland: isLinuxNativeWayland(
+        process.platform,
+        app.commandLine.getSwitchValue('ozone-platform'),
+      ),
+    }),
+  );
   // macOS 上从其它前台应用 (如 OAuth 授权后的浏览器) 手里拿回焦点,单靠
   // win.focus() 不可靠;所有调用方都是用户显式"要回到 app"的场景,steal 语义一致。
   if (process.platform === 'darwin') app.focus({ steal: true });

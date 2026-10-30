@@ -298,6 +298,17 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 不阻止主窗口使用。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
 单测不能替代 Omarchy/Hyprland、GNOME 或 KDE 的实机验收。
 
+原生 Wayland（Ozone `wayland`）下，xdg-shell 没有取消最小化的请求，Electron 托盘也不接收
+AppIndicator 提供的激活令牌，合成器（Dock、快捷键）执行的最小化还不会通知 Electron。
+因此 `focusMainWindow`（托盘「打开 Cindy」、托盘激活、second-instance、activate）对已最小化
+或未聚焦的主窗口先 `restore()` 再 `hide()` + `show()` 重新映射，代价是位置由合成器重新摆放；
+窗口已在前台时不重新映射。重新映射期间主窗口发出的 `hide` 不会把已打开的资源占用窗口一并收起
+（`ResourceUsageWindowController.whileOwnerRemaps`）。后端判定读 `app.commandLine` 的
+`ozone-platform`：Electron 42 会把默认 `--ozone-platform-hint=auto` 解析出的后端写回这个开关，
+不带任何参数在 Wayland 会话启动也读到 `wayland`，显式 `--ozone-platform=x11`（XWayland）读到
+`x11`。升级 Electron 后需重新核对这一点。实现见 `main/mainWindowPresentation.ts`，回归见
+`main/__tests__/mainWindowPresentation.test.ts` 与 `resource-usage-window/__tests__/controller.test.ts`（#6240）。
+
 ## Windows 窗口恢复实验
 
 Windows 偶发黑屏/灰屏的后台节流对照实验见
