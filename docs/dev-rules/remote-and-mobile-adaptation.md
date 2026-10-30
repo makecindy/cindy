@@ -225,7 +225,10 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 
 正常退出先经 device-link 同步 quit 回调走 `dropAllControllers('shutdown') → abortAll('app-quit')`；
 `host.dispose()` 来自 Maker 重置，不是常规退出必经路径。两条入口共用闲置／忙碌判断，重叠时等待
-首次收尾再回收。新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
+首次收尾再回收。`dispose()` 返回同一份清理完成 Promise，包含正在启动的任务与巡检已开始的删除；
+服务重建后先等待前一 host 的清理，再派发新请求，等待期间再次重建的旧入口不再接单。
+这只约束本进程 Maker 重置后的 host 交接，不重连共享链路、不改变线上协议。
+新版主动断开（`user` / `toggle-off`）发 `controller-disconnected`，控制端映射为
 既有 `user-revoked`，不自动续跑或让供应商组换电脑；中转也不发换电脑凭证。旧版 `aborted` 无法
 区分退出和主动断开：兼容旧版退出意味着旧版一键断开可能连回一次，关闭远程控制则被权限门拒绝。
 

@@ -66,8 +66,8 @@ export class PluginTaskError extends Error {
     this.name = 'PluginTaskError';
   }
 }
-/** Bounds legacy receipts before parsing; oversized authority never becomes a missing plan. */
-export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; settledLabels?: string[]; route?: PluginTaskRoute; [key: string]: unknown } {
+/** Bounds stored batch metadata before parsing; existing receipt fields remain intact. */
+export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; route?: PluginTaskRoute; [key: string]: unknown } {
   if (typeof payload !== 'string' || payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS)
     throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
   const data = JSON.parse(payload);
@@ -76,38 +76,6 @@ export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginT
   return data;
 }
 
-/**
- * true = 给定 label 中被已登记计划的**未结算**条目引用。
- * 计划整体不可变，且 label 是 Worker 归属与委派自动授权的寻址键；
- * 活动计划引用到的 label 不允许改名，否则 releaseWorker 与自动授权都会找不到条目。
- */
-export function isTeamPlanLabelLocked(
-  plan: PluginTeamPlan | undefined,
-  settledLabels: readonly string[] | undefined,
-  labels: ReadonlyArray<string | null>,
-): boolean {
-  if (!plan) return false;
-  const settled = new Set(settledLabels ?? []);
-  const locked = new Set(
-    plan.items.filter((item) => !settled.has(item.label)).map((item) => item.label),
-  );
-  return labels.some((label) => label !== null && locked.has(label));
-}
-
-/**
- * 收据级计划锁：只有当插件仍安装（pluginInstalled，任务归属未被卸载撤销）时才锁定 label。
- * 插件卸载后，原插件任务按普通 Orca 任务继续使用，releaseWorker 已不可用，
- * 保留的收据不得继续禁止改名；停用 / 未批准可恢复，重新启用后计划仍会继续，故仍锁定。
- */
-export function isTeamPlanLabelLockedByReceipt(
-  receipt: Pick<PluginTaskReceipt, 'payload' | 'operation'> | undefined,
-  pluginInstalled: boolean,
-  labels: ReadonlyArray<string | null>,
-): boolean {
-  if (!receipt || receipt.operation !== 'create' || !pluginInstalled) return false;
-  const data = readPluginTaskPlanReceipt(receipt.payload);
-  return isTeamPlanLabelLocked(data.teamPlan, data.settledLabels, labels);
-}
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
@@ -457,13 +425,6 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       deps.assertAuthorized(pluginId);
       await save(row,{...data,teamPlan:plan});
       return {ok:true};
-    }),
-    settleWorkerLabel: (pluginId: string, taskId: string, label: string) => exclusive(async () => {
-      await ownTask(pluginId,taskId);
-      const row = (await deps.store.get(taskId))!;
-      const data = readPluginTaskPlanReceipt(row.payload);
-      if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
-      await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
     }),
     assertDispatch,
     setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }) => exclusive(async () => {

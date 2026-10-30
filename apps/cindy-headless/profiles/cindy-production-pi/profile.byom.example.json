@@ -5,7 +5,7 @@
   "changedDimensions": ["modelRoute", "nativeProviders"],
   "agentBackend": "pi",
   "agentBinaryPath": "/opt/cindy-headless/bin/pi/pi",
-  "agentBinaryVersion": "1.0.2",
+  "agentBinaryVersion": "1.4.0",
   "supportedModelIds": ["qwen3-coder"],
   "model": {
     "provider": "local-openai",

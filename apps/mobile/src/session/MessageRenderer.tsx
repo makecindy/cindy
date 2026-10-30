@@ -9,6 +9,7 @@ import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
+import { MessageContentLongPressContext } from './messageContentLongPress';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
@@ -16,7 +17,9 @@ import type { ErrorDiagnosisSource } from './errorDiagnosisPrompt';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
@@ -564,6 +567,7 @@ interface MessageActions {
   onRetryImageDelivery?: (imageId: string) => Promise<void>;
   companion?: boolean;
   companionQuoteActions?: CompanionQuoteActions;
+  companionThreads?: CompanionThreads;
   onCompanionReadThrough?: (at: number) => void;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
@@ -642,6 +646,8 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionQuote,
+  companionThreads,
+  conversationHeader,
   companionWorkingLabel,
   onOpenCompanionSettings,
   companionAvatar,
@@ -707,6 +713,8 @@ export function MessageRenderer({
   companion?: boolean;
   /** Companion private chats only; ordinary tasks keep their existing message actions. */
   companionQuote?: CompanionQuoteOptions;
+  companionThreads?: CompanionThreads;
+  conversationHeader?: ReactNode;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
   companionAvatar?: ReactNode;
@@ -1714,6 +1722,7 @@ export function MessageRenderer({
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionQuoteActions,
+    companionThreads,
     companionWorkingLabel,
   onOpenCompanionSettings,
     companionAvatar,
@@ -1758,6 +1767,7 @@ export function MessageRenderer({
   }), [
     companion,
     companionQuoteActions,
+    companionThreads,
     companionWorkingLabel,
   onOpenCompanionSettings,
     companionAvatar,
@@ -2762,7 +2772,7 @@ export function MessageRenderer({
         // 内容形态下会与布局结算互相触发,形成无限 onScroll 风暴把 JS 线程打满——表现为
         // 冷开会话消息区空白、无 loading、返回键无响应,只能杀 App(2026-07 模拟器逐项
         // 二分实锤,3.3.2 / 3.3.3 均复现)。
-        alignItemsAtEnd
+        alignItemsAtEnd={!conversationHeader}
         maintainScrollAtEnd={false}
         // iOS uses LegendList/RN's atomic data/size anchoring while reading history. Android history
         // prepends temporarily disable the whole prop because RN exposes one native switch: leaving
@@ -2772,6 +2782,7 @@ export function MessageRenderer({
           : { data: anchorVisibleRowsOnDataChange, size: true }}
         contentContainerStyle={[
           styles.messages,
+          conversationHeader ? styles.messagesWithRoot : undefined,
           { paddingBottom: bottomPadding, paddingTop: topPadding },
           viewportLayout.wideViewport && styles.messagesWide,
           viewportLayout.wideViewport && { maxWidth: viewportLayout.contentMaxWidth },
@@ -2779,8 +2790,9 @@ export function MessageRenderer({
         ListEmptyComponent={syncingWhileEmpty
           ? <SyncingMessages />
           : <EmptyMessages testID={emptyTestID} copy={emptyMessage} />}
-        ListHeaderComponent={
-          loadEarlierAction.visible ? (
+        ListHeaderComponent={<>
+          {conversationHeader}
+          {loadEarlierAction.visible ? (
             <MessageListActionButton
               accessibilityLabel={loadEarlierAction.accessibilityLabel}
               disabled={loadEarlierAction.disabled}
@@ -2790,8 +2802,8 @@ export function MessageRenderer({
             >
               <Text style={styles.loadEarlierText}>{loadEarlierAction.label}</Text>
             </MessageListActionButton>
-          ) : null
-        }
+          ) : null}
+        </>}
         ListFooterComponent={queueFooter ? <>{queueFooter}</> : null}
         onLayout={handleListLayout}
         onMetricsChange={handleListMetricsChange}
@@ -3577,7 +3589,9 @@ function MessageBubble({
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
-  const hasActions = actionBar.items.length > 0 || canShare;
+  const threadEligible = actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
+    && !!companionReplyQuoteFor(item.message);
+  const hasActions = actionBar.items.length > 0 || canShare || !!threadEligible;
   const reserveActionSlot = !shareSelectionActive
     && !actions.companion
     && isStreamingAssistant
@@ -3992,6 +4006,9 @@ function MessageBubble({
             }) : undefined} /> : null}
         </ErrorNotice>
       ) : bubbleShown ? bubble : null}
+      {threadEligible && actions.companionThreads ? <View style={styles.companionThreadSummary}>
+        <CompanionThreadSummary message={item.message} topics={actions.companionThreads} />
+      </View> : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
           onOpenSettings={actions.onOpenCompanionSettings} />
@@ -4018,6 +4035,7 @@ function MessageBubble({
       {hasActions && actions.companion ? <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[
+          ...(threadEligible ? [{ id: 'thread', title: t(actions.companionThreads?.threads.has(clientId) ? 'groupChat.thread.open' : 'groupChat.thread.create'), image: 'bubble.left.and.bubble.right', disabled: actions.companionThreads?.busy }] : []),
           ...(canCopy ? [{ id: 'copy', title: copyActionLabel(copyState), image: 'doc.on.doc', disabled: copyState === 'copying' }] : []),
           ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
           // Desktop's teammate action bar omits fork and per-turn cost/tokens: the Bot owns its one timeline.
@@ -4027,7 +4045,8 @@ function MessageBubble({
         onAction={id => {
           // Reply quotes what can be quoted; other rows (errors, system cards) keep inserting their link.
           const quote = id === 'add-to-chat' && companionQuote ? companionReplyQuoteFor(item.message) : null;
-          if (quote) companionQuote?.onQuote(quote);
+          if (id === 'thread') actions.companionThreads?.open(item.message);
+          else if (quote) companionQuote?.onQuote(quote);
           else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
@@ -7163,6 +7182,7 @@ function MessageContentOpenButton({
 }) {
   const styles = useThemedStyles(makeStyles);
   const interactionDisabled = disabled || !onPress;
+  const onLongPress = useContext(MessageContentLongPressContext);
   if (presentationOnly) return <View style={style} testID={testID}>{children}</View>;
   return (
     <Pressable
@@ -7171,6 +7191,8 @@ function MessageContentOpenButton({
       accessibilityState={{ disabled: interactionDisabled }}
       disabled={interactionDisabled}
       onPress={interactionDisabled ? undefined : onPress}
+      onLongPress={interactionDisabled ? undefined : onLongPress}
+      delayLongPress={350}
       style={({ pressed }) => [
         style,
         pressed && styles.pressed,
@@ -8649,6 +8671,7 @@ function headingSizeStyle(
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageFrame: { flex: 1, minHeight: 0 },
   messageList: { flex: 1 },
+  messagesWithRoot: { justifyContent: 'flex-start' },
   messages: {
     flexGrow: 1,
     // Anchor a short conversation to the bottom (just above the composer) like a normal chat,
@@ -8716,23 +8739,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     maxWidth: '100%',
   },
+  companionThreadSummary: { maxWidth: '100%', marginTop: -2 },
   userMessageItem: {
     alignItems: 'flex-end',
   },
   agentMessageItem: {
     alignItems: 'stretch',
   },
-  bubble: {
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.xs,
-    padding: spacing.md,
-  },
-  bubbleCompact: {
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
+  bubble: messageBubbleBase,
+  bubbleCompact: compactMessageBubble,
   bubbleRich: {
     gap: spacing.sm,
   },
@@ -8751,14 +8766,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     marginTop: spacing.sm,
     textAlign: 'center',
   },
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    maxWidth: '86%',
-    minWidth: 0,
-    overflow: 'hidden',
-  },
+  userBubble: userMessageBubble(colors),
   agentBubble: {
     alignSelf: 'stretch',
     backgroundColor: colors.surface,

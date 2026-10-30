@@ -582,6 +582,165 @@ it('reads Cindy preset identity without inferring from names and retains known I
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
 });
 
+// D2 root-deletion regression (unit): production load used to classify every 404
+// as room access loss. Existing cache-reopen coverage only has a successful root.
+// Minimal input: an authorized reply page followed by a missing root lookup.
+it.each([false, true])('keeps authorized thread replies when the root is missing (stored=%s)', async stored => {
+  const reply = { ...message(21), threadRootId: id(20) };
+  const request = vi.fn().mockImplementation(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.startsWith('/changes?')) return { cursor: snapshot().cursor, changes: [], hasMore: false };
+    if (path.endsWith(`/messages/${id(20)}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?')) return [reply];
+    return [];
+  });
+  let saved: ChatHistoryState | undefined;
+  const history = createChatHistory({ api: request, current: () => true, newGeneration: () => 'topic',
+    store: { read: async () => saved, write: async (_, state) => { saved = state ?? undefined; } } });
+  const client = createChatServerClient(request, undefined, stored ? async () => history : undefined);
+  const page = await client.load(id(1), undefined, id(20));
+  expect(page.threadRootId).toBe(id(20));
+  expect(chatGroupView(page, id(11)).messages.map(m => m.id)).toEqual([id(21)]);
+});
+
+it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVERSATION_NOT_FOUND' }])(
+  'does not turn root lookup access failure $code into readable thread content', async error => {
+    const request = vi.fn().mockImplementation(async (path: string) => {
+      if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith(`/messages/${id(20)}`)) throw error;
+      if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
+      return [];
+    });
+    await expect(createChatServerClient(request).load(id(1), undefined, id(20))).rejects.toEqual(error);
+  });
+
+// PC parity, unit: actual HTTP client/projection. Earlier tests never exercised
+// root summaries, explicit following, or trustworthy thread-share source resolution.
+it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
+  const root = { ...message(20), replyCount: 17 };
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
+  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
+  const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
+  const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
+    threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
+  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
+  expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
+    .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
+});
+
+it('changes explicit following without advancing the existing read cursor', async () => {
+  const request = vi.fn(async (path: string, _method?: string, body?: any) => path.endsWith('/snapshot')
+    ? { ...snapshot(), reads: [{ thread_key: id(20), read_seq: '9007199254740993' }] } : { following: body.following });
+  const client = createChatServerClient(request as any);
+  await expect(client.followThread(id(1), id(20), true, 'follow-op')).resolves.toEqual({ following: true });
+  expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/read`, 'POST', {
+    operationId: 'follow-op', threadRootId: id(20), readSeq: '9007199254740993', following: true,
+  });
+});
+
+it('persists a self-directed share body before posting and retries identical bytes after source edits', async () => {
+  let stored: any;
+  let edited = false;
+  const bodies: any[] = [];
+  const request = vi.fn(async (path: string, method?: string, body?: any) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/members')) return snapshot().members;
+    if (path.endsWith(`/messages/${id(21)}`)) return { ...message(21), threadRootId: id(20), content: [{ type: 'text', text: edited ? 'changed' : '@bot original' }] };
+    if (method === 'POST') { expect(stored).toEqual(body); bodies.push(body); if (!edited) throw new Error('lost response'); return { id: id(22) }; }
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  const save = async (body: any) => { stored = body; };
+  await expect(client.shareToMain(id(1), id(21), id(20), { save })).rejects.toThrow('lost response');
+  edited = true;
+  await expect(client.shareToMain(id(1), id(21), id(20), { body: stored, save })).resolves.toEqual({ messageId: id(22), alreadyShared: false });
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(bodies[0]).toMatchObject({ operationId: `thread-share:${id(21)}`, mentions: [id(11)], content: [{ data: { messageId: id(21), threadRootId: id(20) } }] });
+});
+
+// #7847 review, unit: an old share can be the only visible reference to its thread.
+// Earlier hydration tests kept a recent reply in the snapshot and missed this case.
+it('hydrates the root and latest replies for an old share outside the snapshot', async () => {
+  const root = { ...message(20), replyCount: 17 };
+  const source = { ...message(21), threadRootId: root.id };
+  const latest = { ...message(29), threadRootId: root.id, createdAt: '2026-10-29T12:00:00Z' };
+  const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: source.id, threadRootId: root.id }, fallback: '' }] };
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith(`/messages/${root.id}`)) return root;
+    if (path.endsWith(`/messages/${source.id}`)) return source;
+    if (path.includes(`threadRootId=${root.id}`)) return [latest, source];
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const page = { snapshot: { ...snapshot(), messages: Array.from({ length: 100 }, (_, i) => message(100 + i)) }, messages: [share], before: null };
+  const view = chatGroupView(await createChatServerClient(request as any).hydrateThreads(id(1), page), id(11));
+  expect(view.messages[0].threadShare).toMatchObject({ status: 'available', replyCount: 17,
+    threadPreview: { replies: [{ id: source.id }, { id: latest.id, createdAt: Date.parse(latest.createdAt) }] } });
+});
+
+it('resolves an off-window root and retries a failed source on its bounded deadline without leaking fallback', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-28T00:00:00Z'));
+  try {
+    const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+      data: { messageId: id(21), threadRootId: id(20) }, fallback: 'private old text' }] };
+    const reply = { ...message(22), threadRootId: id(20) };
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith(`/messages/${id(20)}`)) return { ...message(20), replyCount: 17 };
+      throw new Error('offline');
+    });
+    const client = createChatServerClient(request as any);
+    const page = { snapshot: { ...snapshot(), messages: [reply, share], reads: [] }, messages: [share], before: null };
+    expect(chatGroupView(page, id(11)).messages[0]?.threadShare?.status).toBe('loading');
+    const hydrated = await client.hydrateThreads(id(1), page);
+    expect(chatGroupView(hydrated, id(11)).messages[0]?.threadShare?.replyCount).toBe(17);
+    expect(hydrated.threadRetryAt).toBe(Date.now() + 30000);
+    expect(chatGroupView(hydrated, id(11)).messages[0]).toMatchObject({ content: '', threadShare: { status: 'loading', content: '' } });
+    const sourceCalls = () => request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(21)}`)).length;
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(1);
+    vi.setSystemTime(Date.now() + 30000);
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(2);
+    client.invalidateHistory(id(1), true); await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(3);
+    expect(chatRoomRow(room(), page.snapshot, id(11)).item.display.preview).not.toContain('private old text');
+  } finally { vi.useRealTimers(); }
+});
+
+it('projects real cached read fields through load, not only a hand-built UI fixture', async () => {
+  const root = { ...message(20), replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }] };
+  const reply = { ...message(21), threadRootId: root.id };
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), messages: [reply, root], reads: [{ thread_key: root.id, read_seq: '0', following: true }] };
+    if (path.includes('/messages?')) return [root];
+    return [];
+  });
+  const history = createChatHistory({ api: request as any, current: () => true, newGeneration: () => 'projection', store: { read: async () => undefined, write: async () => {} } });
+  const client = createChatServerClient(request as any, undefined, async () => history);
+  const view = chatGroupView(await client.load(id(1)), id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }], threadUnread: { count: 1 }, threadPreview: { replies: [{ id: reply.id }] } });
+});
+
+it.each([403, 404, 410])('treats source %s as terminal unavailability without posting', async status => {
+  const request = vi.fn().mockRejectedValue({ status });
+  await expect(createChatServerClient(request).shareToMain(id(1), id(21), id(20))).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls.every(call => call[1] !== 'POST')).toBe(true);
+});
+
+
+// A persisted post must not be replayed into a different root or wake other actors.
+it.each(['root', 'mentions'])('rejects a mismatched persisted share %s before POST', async changed => {
+  const { buildBotGroupThreadShareCard } = await import('@cindy/maker-shared/botGroupChat');
+  const body = { operationId: `thread-share:${id(21)}`, mentions: [changed === 'mentions' ? id(10) : id(11)], content: [
+    buildBotGroupThreadShareCard({ messageId: id(21), threadRootId: changed === 'root' ? id(99) : id(20), authorName: 'Author', text: 'Reply' }),
+  ] };
+  const request = vi.fn(async () => ({ actor: { id: id(11), kind: 'human' } }));
+  await expect(createChatServerClient(request as any).shareToMain(id(1), id(21), id(20), { body, save: async () => {} })).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls).toEqual([['/me']]);
+});
+
 // Personal delegation is a separate server contract: viewing/AI output never consumes human unread (unit).
 describe('personal mask transport', () => {
   it('does not call unsupported mask endpoints on an older server', async () => {

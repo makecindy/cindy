@@ -29,15 +29,18 @@ export interface CompanionWriteFence {
 /** Local profile, Bot Home and Session operations, all through the existing services. */
 export interface CompanionMaterializeHost {
   readProfile: (botId: string) => Promise<CompanionLocalProfile | null>;
-  /** The cloud avatar must be restored (an image that cannot be downloaded fails the call). */
+  /**
+   * The cloud avatar is restored when its bytes are still available. A temporary download failure
+   * rejects; a permanent one stores the default avatar together with durable local-only provenance.
+   */
   createProfile: (input: {
     id: string; name: string; description: string; identitySource: string; userContextSource: string; avatar: string | null;
     /** The preset the companion was made from (the cloud profile's `templateId`). */
     templateId?: string;
   }, fence: CompanionWriteFence) => Promise<void>;
   /**
-   * Also makes the profile active again. Undefined fields stay unchanged; a cloud avatar replaces
-   * the local one (failing like createProfile), since the home publishes its avatar back.
+   * Also makes the profile active again. Undefined fields stay unchanged; a restored cloud avatar
+   * replaces the local one. A permanent download failure persists the default with local-only provenance.
    */
   updateProfile: (input: {
     id: string; name: string; description?: string; identitySource?: string; userContextSource?: string; avatar: string | null;
@@ -306,6 +309,7 @@ export async function materializeCompanion(input: {
     delete entry.demoted;
     // The next take-over (after this copy hands the companion away again) backs it up anew.
     delete entry.backedUp;
+
   });
   return { created: !local, inserted, rebuild, notices, ...(backup !== undefined ? { backup } : {}) };
 }

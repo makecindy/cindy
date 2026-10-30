@@ -1,5 +1,25 @@
 {
   "providerAccountUsage": {
+    "kimi": {
+      "refresh": "Refresh quota",
+      "usage": "View Kimi Code usage",
+      "error": {
+        "no-credentials": "No Kimi Code credentials are available. Connect this provider first.",
+        "auth": "Kimi Code rejected the credentials. Check the connection and retry.",
+        "rate-limited": "Kimi Code is limiting quota queries. Retry later.",
+        "network": "Cindy cannot reach Kimi Code. Check the network and retry.",
+        "server": "Kimi Code cannot return quota right now. Retry later.",
+        "invalid-response": "Kimi Code returned unreadable quota data. Retry later.",
+        "throttled": "Quota was just refreshed. Retry a bit later.",
+        "unknown": "Cindy cannot load Kimi Code quota. Retry later.",
+        "updating": "The connection changed. Refresh to retrieve its quota."
+      },
+      "limit_5h": "5 Hours",
+      "limit_7d": "Weekly",
+      "limit_month_total": "Monthly Total",
+      "limit_month_code": "Monthly Coding",
+      "stale": "Showing the last available quota. The latest update failed."
+    },
     "openDashboard": "Open DeepSeek usage dashboard",
     "deepSeek": {
       "balanceLine": "Balance {{total}} (topped up {{toppedUp}} / granted {{granted}})",
@@ -905,7 +925,10 @@
     }
   },
   "regionScreenshot": {
-    "editor": { "fitWidth": "Fit width", "loading": "Loading image…" },
+    "editor": {
+      "fitWidth": "Fit width",
+      "loading": "Loading image…"
+    },
     "moveToolbar": "Move toolbar left or right",
     "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · C: copy color · Esc: exit",
     "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · R: last area · C: copy color · Esc: exit",
@@ -1035,7 +1058,7 @@
   },
   "privacyExit": {
     "status": "This computer is being remotely controlled through Cindy",
-    "hint": "Click or press any key to disconnect…",
+    "hint": "To show this screen, turn off Computer privacy screen under Security on the device controlling it. Or click or press any key on this computer, then choose Disconnect.",
     "title": "Disconnect remote desktop?",
     "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
     "cancel": "Keep connected",
@@ -1411,6 +1434,8 @@
       "minutes": "{{m}}m"
     },
     "window": {
+      "kimiMonthTotal": "Monthly Total",
+      "kimiMonthCode": "Monthly Coding",
       "session": "{{hours}}-hour",
       "week": "Weekly",
       "scoped": "{{model}} weekly"
@@ -3320,8 +3345,12 @@
         "modelsPending": "{{name}} is configured, but models could not be fetched. Retry in provider settings.",
         "busyWarning": "This change requires reloading the local Codex service and may interrupt {{count}} running sessions. Continue?",
         "close": "Close provider import",
-        "loadFailed": "This provider import link is invalid or has expired.",
-        "confirmFailed": "The provider could not be imported. Check the link or endpoint and try again.",
+        "fromFile": "Import from file",
+        "fileTooLarge": "The file exceeds 4 MiB. Reduce its size and try again.",
+        "fileInvalid": "This file is not a valid provider import configuration. Check the JSON format and configuration fields.",
+        "fileReadFailed": "The file could not be imported. Select it again and retry.",
+        "loadFailed": "This provider import is no longer valid. Open the link or select the file again.",
+        "confirmFailed": "The provider could not be imported. Check the configuration or endpoint and try again.",
         "oauthFailed": "The provider was added, but authorization did not finish. Try authorization again.",
         "done": "{{name}} was imported",
         "oauthDone": "{{name}} was added and authorized",
@@ -3345,6 +3374,47 @@
           "create": "A new local provider will be created as {{name}}.",
           "update": "The existing provider {{name}} will be updated.",
           "replace-key": "The locally stored API Key for {{name}} will be replaced."
+        },
+        "fileGuideDescription": "Cindy-format UTF-8 JSON files, up to 4 MiB.",
+        "fileGuideSteps": "Use the example to fill in the provider name, endpoint URL, API key and model details.",
+        "fileGuidePrivacy": "The example contains no real key. Keep files with your key private.",
+        "selectJsonFile": "Choose JSON file",
+        "downloadExample": "Download example",
+        "showFormat": "View format guide",
+        "hideFormat": "Collapse format guide",
+        "formatStructure": "The file contains one JSON object, without Base64, an import link or an extra wrapper. The fields below describe a custom API Key provider. Field names are case-sensitive; JSON does not allow comments.",
+        "formatIdentity": "Required. Set kind to \"custom\" and name to the provider name you want to display.",
+        "formatAuth": "Required. In this example, set method to \"apiKey\" and replace apiKey with the key from your provider.",
+        "formatEndpoint": "Required for each endpoint. protocol accepts \"openai-chat\", \"openai-responses\", \"anthropic-messages\" and \"google-generative-ai\". Set baseUrl to the full HTTP(S) endpoint URL; HTTPS is recommended.",
+        "formatTargets": "Optional engine array: \"claude-code\", \"codex\" or \"pi\". Omit it to match engines by protocol, or specify engines explicitly. Claude Code also supports OpenAI and Google protocols. The example enables only Pi.",
+        "formatModels": "Optional. Use model ID strings or objects with id (name is optional). Omit the list or leave it empty to fetch models after confirmation. A nonempty list skips automatic fetching.",
+        "formatMetadata": "Optional model fields: group is the model group, contextWindow is the context length, and maxOutputTokens is the output limit (both in tokens). Example numbers are illustrative; use the model’s actual capabilities.",
+        "formatEffort": "Optional model fields: efforts lists supported effort levels; defaultEffort selects one of them as the default. Remove both fields if unsure.",
+        "formatLimits": "Up to 8 endpoints per provider and 10,000 models per endpoint, within the 4 MiB file limit.",
+        "exampleTitle": "JSON example (same as the download)",
+        "fileGuidePrepare": "Prepare Your File",
+        "fileGuideReview": "Preview and Confirm",
+        "fileGuideReviewHint": "Import one or more providers. Review the file first; nothing is saved until you confirm.",
+        "formatConversion": "Convert exports from other clients to this format first.",
+        "downloadBatchExample": "Download Batch Example",
+        "formatBatch": "For a batch, use { \"providers\": [config1, config2] } with the single-provider structure below for each entry. Maximum 50 entries and 4 MiB total. Built-in key slots and explicit ids must not repeat. If any entry has an invalid structure, no import drafts are created for the file.",
+        "batchTitle": "Import Providers ({{count}})",
+        "batchNote": "Select providers to import together. Review individually to update an existing connection or authorize. Saved entries are kept if another entry fails.",
+        "batchImport": "Import Selected ({{count}})",
+        "batchProgress": "{{count}} of {{total}} added or updated",
+        "batchItem": "Configuration {{index}}",
+        "batchReviewOne": "Review Individually",
+        "batchStatus": {
+          "loading": "Loading preview…",
+          "ready": "Ready to import",
+          "saving": "Importing…",
+          "saved": "Imported",
+          "modelsPending": "Imported; retry model discovery in provider settings",
+          "failed": "Import failed; retry or review individually",
+          "manual": "Individual confirmation or authorization required",
+          "invalid": "Preview unavailable; check the configuration or select the file again",
+          "skipped": "Skipped; select the file again to import this entry",
+          "authorizationPending": "Connection added; complete authorization in provider settings"
         }
       },
       "order": {
@@ -7401,11 +7471,11 @@
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
         "agentTasksRequest": "Review task permission",
         "agentTasks": "Can create and manage its own Cindy tasks",
-        "agentTasksDetail": "Can send messages, read results and stop its own executions. Tasks remain visible to you. Uses this plugin’s AI settings and may incur model charges; does not grant access to other tasks.",
+        "agentTasksDetail": "The plugin can message, read results from, and stop its own tasks. Tasks remain visible to you, use the plugin’s AI settings, and may incur model charges. Agents in those tasks can use connected tools, including access to other tasks and account data, subject to task permissions and account ownership.",
         "agentDelegation": "Can delegate scoped tasks to companions",
         "agentDelegationDetail": "Companions may perform the delegated task under Auto review. Does not impersonate the owner or change companion permissions.",
         "agentTargets": "Can send messages to projects, existing tasks and companions",
-        "agentTargetsDetail": "Can view local project directories and task and companion names and IDs, create tasks in projects, and send text and images to existing tasks and companions. May trigger AI execution and model charges; does not grant access to other tasks’ history, settings or stop controls.",
+        "agentTargetsDetail": "Can view local project directories and task and companion names and IDs, create tasks in projects, and send text and images to existing tasks and companions. May trigger AI execution and model charges. This delivery API itself cannot read other tasks’ history, change their settings, or stop them.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8047,7 +8117,6 @@
         "versionContent": "Version content",
         "loadMoreVersions": "Load more versions",
         "notSubmitted": "Not submitted for review",
-        "submitVersion": "Submit {{version}} for review",
         "publishingVersion": "Version for Review · {{version}}",
         "refreshSummary": "Refresh publishing summary",
         "versionConsumedHint": "Once a submission is accepted for review, its version number cannot be reused, even after cancellation or rejection.",
@@ -12757,6 +12826,7 @@
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
       "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
       "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task.",
+      "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
       "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again.",
       "attachmentAccessDeniedTitle": "Cindy cannot read the source attachment; the message was not sent.",
       "attachmentAccessDeniedRecovery": "Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
@@ -13824,6 +13894,20 @@
       }
     },
     "draft": {
+      "directoryRecovery": {
+        "required": "Some linked folders need authorization. Reselect all {{count}} linked folders",
+        "changed": "A linked folder has changed. Check the folders, then reselect all {{count}} linked folders",
+        "unavailable": "A linked folder is unavailable. Check the folder or system permissions, or return to editing and remove it",
+        "selecting": "Reselecting folder {{index}}/{{count}}: {{directory}}",
+        "cancelled": "Folder selection cancelled. Your prompt and linked folders are preserved",
+        "mismatch": "The selected folder differs from the original. Your folder list is unchanged",
+        "failed": "Could not complete folder selection. Your prompt and linked folders are preserved",
+        "ready": "Folders reselected. Send the task again",
+        "readyGoal": "Folders reselected. Create the goal again",
+        "reselect": "Reselect Folders",
+        "cancel": "Cancel Folder Selection",
+        "edit": "Return to Editing"
+      },
       "createSessionFailed": "Failed to create session, please retry",
       "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
       "localWorktreeCleanupPending": "The previous local worktree session is still awaiting cleanup. Try again after cleanup finishes.",
@@ -18432,10 +18516,5 @@
     "groupHint": "When off, all tasks routed through this group use standard speed, including Ultrafast.",
     "pending": "Some computers have not confirmed the setting. Keep them connected and update group computers that do not support this setting.",
     "saveFailed": "The setting may be saved, but some running tasks have not confirmed standard speed. Check the connection and retry."
-  },
-  "attachmentAccessConfirmation": {
-    "title": "Confirm Attachment Access",
-    "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
-    "button": "Use Original File"
   }
 }

@@ -1,8 +1,7 @@
 ## 4.11 发起 Agent 新回合(agent 能力)
 
-这个能力让你的 `main.js` 把一段文字作为**普通用户消息**交给 Cindy Agent，适合
-“用户在插件卡片上点继续，然后 Agent 接着做”的流程。它不是系统提示词，也不会
-修改该会话里其它插件或 Agent 的长期规则。
+`main.js` 可把文字作为**普通用户消息**交给 Cindy Agent，支持用户点卡片后让 Agent 继续。
+消息不进入系统提示词，也不修改该会话里其它插件或 Agent 的长期规则。
 
 最安全、也是默认的用法，是消费 `card-action` 事件里的真实用户点击票：
 
@@ -56,7 +55,7 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 `sessionId` 当作任意跨会话控制口。
 
-### 4.11.1 旧版任务接口:让 Agent 替你干活并取回结果(errand)
+## 4.11.1 旧版任务接口:让 Agent 替你干活并取回结果(errand)
 
 `agent.run` 用于用户已关联任务的交互；旧版 `errand` 接口提供结果查询适配：
 任务在宿主按 sessionKey 关联的普通任务里运行,Agent 的最终回复文字交回**你**手里继续用。
@@ -119,7 +118,7 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
   超时有 `'TIMEOUT'`(任务可能仍在会话里继续,提示用户打开会话查看)。
 - 这个能力必然产生模型费用且耗时分钟级:能用快问快答(§4.0.2)解决的,不要派活。
 
-### 4.11.2 请用户新建一条自动化(agent.schedule 加档)
+## 4.11.2 请用户新建一条自动化(agent.schedule 加档)
 
 **这是"让插件里的内容自己保持新鲜"的正路。** 你的插件自己跑不了业务逻辑——沙箱只在
 被唤起时活着,也没有定时器。要做出「每小时帮我看一眼,有事就点亮插件入口」这种效果,
@@ -193,7 +192,7 @@ const r = await cindy.agent.requestSchedule({
 什么时候**不该**用它:一次性的事，用快问快答(§4.0.2)或普通任务接口
 (§4.11.3)。这个加档是给"长期定期刷新"用的,每条任务都会反复产生模型费用。
 
-### 4.11.3 新建任务与继续任务（普通 Session）
+## 4.11.3 新建任务与继续任务（普通 Session）
 
 先按业务选择：
 - 当前 Agent 已在处理你的工具：返回数据让它继续，不新建任务。
@@ -272,19 +271,11 @@ text 与 context 合计不超过 64000；tasks.send 的 text 上限仍为 32768�
 原有 `cindy.tasks` 的归属限制不变。先调用 `capabilities()` 获取实际支持操作。当前仅支持本插件创建的本机普通任务：
 `models`、`create`、`get`、`setModel`、`list`、`send`、`getRun`、`listRuns`、`readMessages`、`cancel`、`setHidden`、`archive`。
 `archive({taskId})` 归档自有的空闲任务（忙时 `TASK_BUSY`），用户可恢复，没有删除接口；按视频等开新任务的插件，切换时归档上一条。
-可对自有任务调用 `startTeam({taskId})` 启用 Orca 主任务，并用 `getTeam({taskId})` 读取实际协同状态。协调主任务需经用户授权 Auto，Worker 自动沿用 Auto。
-这些任务及其 Worker 不提供 `cindy_helper` 的账号级历史或跨任务控制能力，`cindy_memory.session_search` 也拒绝历史检索；协调使用独立 Orca 工具，结果由插件通过 `readMessages/getTeam` 读取。旧 errand/workspace 不因来源标记受到限制；明确卸载撤销归属后，调用方已无正在执行的输入或已接受新真人输入时，保留的用户任务恢复普通 helper 与历史检索能力；仍执行旧插件输入时继续受限，自动回报和插件输入重试不构成真人接管。这不恢复插件控制权，也不保证停止已接受执行，不构成通用执行沙箱。
-在首次派发前调用 `setTeamPlan({taskId,plan:{concurrency,task,items}})`，每项包含
-`label, workingDir, route, task`。可选 `task` 是插件提供的工作范围（每段最多 8000 字符），
-不是用户原话。Host 核对已批准启用的插件、自有主任务、真实 Worker 归属、模型和目录后，
-将范围单独交给 Auto 审阅。进入 Host 审批的动作逐次核验用户限制、撤权和只读设置。
-首版保留 Codex 原生 Auto；其常规工作区动作可能直接执行，不保证每个动作都经过 Host 范围审批。
-卸载会撤销插件后续 API 控制，但不保证停止已派发的原生工作；需要停止时请使用任务停止入口。
-计划须在首次派发或创建 Worker 前登记，之后不可改写（包括补填 task）；需要不同范围时创建新任务。
-缺少该字段的存量计划继续可读，但 Host 不允许插件任务自动授权或普通 MCP 快捷放行，不会从 Agent 消息推导额外授权；进入 Host 的 Ask/acceptEdits 动作仍可沿原流程逐次确认。
-计划不授予目录权限。Worker 仅可使用宿主任务目录及解析后仍在其中的子目录、启用卡片时的插件配置目录或用户亲选的确切目录；Library 绑定不自动变成 Agent 工作根。宿主在登记和创建时均复核。
-插件自有主任务不支持用 `execution_device_id` 新建跨设备 Worker；本机目录授权不代表已授权另一台电脑的同名目录，登记团队计划也不改变此限制。
-这描述准入检查，不是持续的 OS 目录隔离保证。首版用于可信本地工作区；同权限进程在检查后恶意置换目录对象仍可能改变实际 cwd，不提供此类对抗性沙箱。
+可对自有任务调用 `startTeam({taskId})` 启用 Orca 主任务，并用 `getTeam({taskId})` 读取实际协同状态。通过此插件 API 启用团队需经用户授权 Auto；开启团队不创建 Worker，也不改写全局 Worker 权限偏好，后续 Worker 使用普通 Orca 创建权限流程。
+插件直接调用的 `cindy.tasks` 仍只能管理本插件创建的任务；这些任务及其 Worker 中的 Agent 则按普通任务权限使用 `cindy_helper`、`cindy_memory` 等已连接工具，包括账号级历史、跨任务操作和个人插件投稿。协调仍可使用独立 Orca 工具，插件通过 `readMessages/getTeam` 读取自己的结果。任务创建来源不参与 Agent 工具授权；插件消息标签不额外收窄任务权限，原本要求用户当场输入的操作仍按通用规则判断。卸载撤销归属后，插件不能继续管理旧任务；保留任务中的 Agent 仍按任务权限工作。撤销不保证停止已接受执行，也不构成通用执行沙箱。
+若插件需要记录批次，可在首次派发前调用 `setTeamPlan({taskId,plan:{concurrency,task,items}})`；每项包含 `label, workingDir, route, task`。`task` 是插件自己的说明，不是用户原话，也不会改变 Agent 的 Auto 审阅或工具权限。计划登记后不可改写。`releaseWorker({taskId,workerId,completedAt})` 按 Worker ID 和成功完成凭据归档自有团队中的空闲 Worker，改名不影响释放；插件按 Worker ID 保存自己的结果和批次进度。没有计划的任务及 Worker 照常使用普通任务权限。
+
+插件直接调用 `cindy.tasks` 时仍需当前插件批准和自有任务归属。Agent 使用公共 Orca 工具创建、调度或管理 Worker 时，按普通任务的账号、权限档、团队成员关系和操作凭证检查；任务创建来源、插件输入标签、插件计划与卸载状态不额外设限。Worker 目录、模型和运行位置沿普通 Orca 规则，目录不是持续的 OS 隔离保证。
 
 `models()` 返回统一目录可选项的完整 route、efforts 和 supportsFastMode。用户明确选择后将 route 原样传给 create，或用 `setModel({taskId, expectedRevision, route})` 修改已有自有任务。运行中按普通任务的安全边界切换，不修改应用默认。两方法使用前检查 capabilities.operations。
 当 `capabilities().pluginDefaultModel === true` 时，持续复用任务的插件可在每次新输入前调用
@@ -299,7 +290,7 @@ text 与 context 合计不超过 64000；tasks.send 的 text 上限仍为 32768�
 **后台任务（可选，需声明 `hiddenTasks`）**。任务默认可见。只有身份卡写了
 `"agent": { "tasks": true, "hiddenTasks": true }`（详情页与安装/更新确认中单列一项权限），
 插件才能把**自己创建的**任务放到后台：不进任务列表、会话搜索、未结束提示、新任务通知与灵动岛，
-手机任务列表同样不显示。它不改变任务权限、模型或执行方式，也不授予其它任务的访问权。
+手机任务列表同样不显示。它不改变任务权限、模型或执行方式，也不扩大插件直接调用 `cindy.tasks` 的任务范围。
 未声明时 `create({hidden:true})` 与 `setHidden` 返回 `PERMISSION_DENIED`；
 `capabilities().hiddenTasks` 表示当前插件是否已声明。用户始终可以在插件详情页「后台任务」
 看到这些任务、打开查看，或「显示到任务列表」接手；插件被卸载时它们会自动恢复显示。
@@ -320,7 +311,7 @@ await cindy.tasks.setHidden({ taskId: bg.taskId, hidden: false });
 // requestWriteAccess({taskId, mode: 'auto'}) 请求宿主原生确认，不能替用户确认。
 // 拒绝或失败后，同一账号代际/安装修订/任务在当前宿主进程不再自动弹窗（更换 mode 也不重置）。
 // 用户可从本机任务权限菜单“重新确认插件写权限”恢复原请求；插件不能清除拒绝记录。
-// 省略 mode 保留 acceptEdits；Auto 插件主任务的 Worker 使用 Auto，不改全局权限。
+// 省略 mode 保留 acceptEdits；通过 cindy.tasks.startTeam 创建的 Worker 使用 Auto，不改全局权限。
 
 const task = await cindy.tasks.create({ requestKey: 'experiment-1-create', title: 'My evaluation' });
 const run = await cindy.tasks.send({ taskId: task.taskId, expectedRevision: task.revision,

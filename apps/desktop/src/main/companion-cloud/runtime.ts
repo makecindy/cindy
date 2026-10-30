@@ -173,6 +173,9 @@ export function isCompanionTransferTarget(device: DeviceLinkDeviceView): boolean
 
 export function startCompanionCloud(input: {
   api: CompanionApi;
+  /** A local admission delay is not a failed ownership check. Keep this
+   * distinction with the transport; data sync and explicit actions keep api. */
+  backgroundIdentity?: { api: CompanionApi; isDeferred: (error: unknown) => boolean };
   host: CompanionCloudHost;
   endpoint: string;
   humanActorId: string;
@@ -186,8 +189,10 @@ export function startCompanionCloud(input: {
   paused?: (botId: string) => boolean;
   /** The account's actors as last read by register(). */
   actors?: () => CompanionRuntimeActor[];
-  /** Re-read actors now (forced register). */
+  /** Re-read actors for passive reconciliation (forced register). */
   refresh?: () => Promise<void>;
+  /** Explicit actions refresh through their own channel, not passive admission. */
+  refreshForeground?: () => Promise<void>;
   /** Publish the registry snapshot after a local home change. */
   publish?: () => void;
   /** The set of hidden local copies changed (a copy was demoted or taken over): what depends on it re-reads. */
@@ -202,6 +207,8 @@ export function startCompanionCloud(input: {
   /** Run a first pass shortly after start (default). Harnesses drive passes explicitly. */
   initialKick?: boolean;
 }): CompanionCloudRuntime {
+  const backgroundIdentityApi = input.backgroundIdentity?.api ?? input.api;
+  const refreshForeground = input.refreshForeground ?? input.refresh;
   const state = input.host.openState(input.endpoint, input.humanActorId, input.current);
   const uploader = createCompanionUploader({ api: input.api, state, readValues: input.host.readValues, log: input.log,
     confirmHome: async (_botId, actorId) => {
@@ -350,12 +357,12 @@ export function startCompanionCloud(input: {
         } });
       for (const actor of from) actor.disabled = true;
       input.log?.info?.('Copies of Cindy merged', { actorId: keepActor.id, merged: summary.merged, messages: summary.messages });
-      await input.refresh?.().catch(() => undefined);
+      await refreshForeground?.().catch(() => undefined);
       publish(); mirrors.kick(keepBotId); uploads.kick(keepBotId);
       return { ok: true, ...summary };
     } catch (error) {
       input.log?.warn('Merging copies of Cindy will need another try', { code: errorCode(error) });
-      await input.refresh?.().catch(() => undefined);
+      await refreshForeground?.().catch(() => undefined);
       publish();
       // A copy that got busy (or could not send) right before retiring: say why, as before the merge.
       const settled = (error as { companionResult?: CompanionCloudActionResult } | null)?.companionResult;
@@ -389,9 +396,9 @@ export function startCompanionCloud(input: {
    * `handed` (automatic take-over) also replaces another computer's record, never another
    * installation's claim on this computer; `takeover` (the user's explicit take-over) replaces any.
    */
-  async function claimInstall(actor: CompanionRuntimeActor, mode: 'check' | 'handed' | 'takeover'): Promise<InstallOwner> {
+  async function claimInstall(actor: CompanionRuntimeActor, mode: 'check' | 'handed' | 'takeover', api: CompanionApi): Promise<InstallOwner> {
     if (!installId) return 'mine';
-    const rows = await input.api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id);
+    const rows = await api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id);
     const row = (Array.isArray(rows) ? rows : []).find(candidate => candidate.key === COMPANION_INSTALL_KEY);
     const record = row?.value && typeof row.value === 'object' ? row.value as { installationId?: unknown; deviceId?: unknown } : {};
     const current = record.installationId;
@@ -400,7 +407,7 @@ export function startCompanionCloud(input: {
     // A hand-over is completed by the take-over (which overwrites), never by this check.
     if ((owner === 'other' && (mode === 'takeover' || typeof current !== 'string')) || (owner === 'handed' && mode !== 'check')) {
       try {
-        await input.api('/preferences', 'POST', { operationId: `cinstall:${actor.id}:${installId}:${row?.revision ?? 0}`,
+        await api('/preferences', 'POST', { operationId: `cinstall:${actor.id}:${installId}:${row?.revision ?? 0}`,
           key: COMPANION_INSTALL_KEY, expectedRevision: row?.revision ?? 0,
           value: { installationId: installId, ...(input.selfDeviceId ? { deviceId: input.selfDeviceId } : {}) } }, actor.id);
         owner = 'mine';
@@ -417,13 +424,21 @@ export function startCompanionCloud(input: {
     if (!installId) return;
     const known = installs.get(actor.externalId);
     if (known && Date.now() - known.checkedAt < INSTALL_RECHECK_MS) return;
-    installs.set(actor.externalId, { owner: known?.owner ?? 'pending', checkedAt: Date.now() });
-    void claimInstall(actor, 'check').then(owner => {
+    const checking = { owner: known?.owner ?? 'pending' as const, checkedAt: Date.now() };
+    installs.set(actor.externalId, checking);
+    void claimInstall(actor, 'check', backgroundIdentityApi).then(owner => {
       // Handed here before this computer ever saw the move: take the existing copy over.
       if (owner === 'handed' && input.host.materializer) scheduleAuto(actor);
       if (owner !== known?.owner) { publish(); uploads.kick(actor.externalId); mirrors.kick(actor.externalId); }
     }, error => {
-      installs.delete(actor.externalId);
+      const deferred = input.backgroundIdentity?.isDeferred(error) === true;
+      if (installs.get(actor.externalId) === checking) {
+        // An unsent check cannot revoke a previous confirmation or refresh its
+        // age. Leave it due for the next reconcile; never confirm an unknown install.
+        if (deferred && known) installs.set(actor.externalId, known);
+        else installs.delete(actor.externalId);
+      }
+      if (deferred) return;
       input.log?.warn('Companion installation check will retry', { actorId: actor.id, code: errorCode(error) });
     });
   }
@@ -444,10 +459,10 @@ export function startCompanionCloud(input: {
     demoteNow(actor);
     // Confirm the home with the server before un-demoting: a stale actor cache must not
     // resurrect a copy whose companion has already moved on.
-    void input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId })
+    void backgroundIdentityApi(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId })
       .then(async () => {
         // Automatic: never take the companion from the other installation on this computer.
-        if (await claimInstall(actor, 'handed') !== 'mine') throw new Error('INSTALL_CLAIM_LOST');
+        if (await claimInstall(actor, 'handed', backgroundIdentityApi) !== 'mine') throw new Error('INSTALL_CLAIM_LOST');
         return materialize(actor);
       }).then(result => {
       autoRetryAt.delete(botId);
@@ -461,29 +476,31 @@ export function startCompanionCloud(input: {
   }
 
   /** Retire only from the installation that may run it: another Cindy on this computer may own it. */
-  async function retireOwned(actor: CompanionRuntimeActor) {
+  async function retireOwned(actor: CompanionRuntimeActor, mode: 'foreground' | 'background') {
+    const api = mode === 'background' ? backgroundIdentityApi : input.api;
     let owner = installOwner(actor.externalId);
     // Not confirmed yet (pending, failed, or just handed here): claim it the way the automatic
     // take-over does, so only one installation on this computer can win; a failure retries later.
-    if (owner !== 'mine' && owner !== 'other') owner = await claimInstall(actor, 'handed');
+    if (owner !== 'mine' && owner !== 'other') owner = await claimInstall(actor, 'handed', api);
     if (owner !== 'mine') {
       state.update(actor.externalId, actor.id, entry => { delete entry.retirePending; });
       return;
     }
-    await retireActor(actor);
+    await retireActor(actor, mode);
   }
 
-  async function retireActor(actor: CompanionRuntimeActor) {
+  async function retireActor(actor: CompanionRuntimeActor, mode: 'foreground' | 'background') {
+    const api = mode === 'background' ? backgroundIdentityApi : input.api;
     // Compare-and-set on the home: if another computer took the companion over meanwhile, this
     // was only a copy, and deleting it never retires the companion itself.
     try {
-      await input.api(`/actors/${actor.id}`, 'PATCH', { disabled: true, homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
+      await api(`/actors/${actor.id}`, 'PATCH', { disabled: true, homeDeviceId: input.selfDeviceId, expectedHomeDeviceId: input.selfDeviceId });
     } catch (error) {
       const conflict = chatRejection(error, 409, 'HOME_DEVICE_CONFLICT');
       if (!conflict) throw error;
       actor.homeDeviceId = typeof conflict.homeDeviceId === 'string' ? conflict.homeDeviceId : null;
       state.update(actor.externalId, actor.id, entry => { delete entry.retirePending; });
-      void input.refresh?.().catch(() => undefined);
+      void (mode === 'background' ? input.refresh : refreshForeground)?.().catch(() => undefined);
       publish();
       return;
     }
@@ -583,7 +600,7 @@ export function startCompanionCloud(input: {
       await input.api(`/actors/${actor.id}`, 'PATCH', { homeDeviceId: targetDeviceId, expectedHomeDeviceId: input.selfDeviceId });
     } catch (error) {
       const failure = actionFailure(error);
-      if (!failure.ok && failure.code === 'HOME_CONFLICT') await input.refresh?.().catch(() => undefined);
+      if (!failure.ok && failure.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
       return failure;
     }
     actor.homeDeviceId = targetDeviceId;
@@ -628,7 +645,7 @@ export function startCompanionCloud(input: {
         } else if (entry?.retirePending) {
           if (Date.now() >= (autoRetryAt.get(`retire:${botId}`) ?? 0)) {
             autoRetryAt.set(`retire:${botId}`, Date.now() + AUTO_RETRY_MS);
-            void retireOwned(actor).catch(error => input.log?.warn('Companion retire will retry', { actorId: actor.id, code: errorCode(error) }));
+            void retireOwned(actor, 'background').catch(error => input.log?.warn('Companion retire will retry', { actorId: actor.id, code: errorCode(error) }));
           }
           continue;
         }
@@ -652,7 +669,7 @@ export function startCompanionCloud(input: {
       if (!self || !live() || !input.host.materializer) return { ok: false, code: 'NOT_ENABLED' };
       let actor = actorOf(botId);
       if (!actor) {
-        try { await input.refresh?.(); } catch (error) { return actionFailure(error); }
+        try { await refreshForeground?.(); } catch (error) { return actionFailure(error); }
         actor = actorOf(botId);
       }
       if (!actor) return { ok: false, code: 'FAILED' };
@@ -670,7 +687,7 @@ export function startCompanionCloud(input: {
         const failure = actionFailure(error);
         if (!failure.ok && failure.code === 'HOME_CONFLICT') {
           actor.homeDeviceId = failure.homeDeviceId ?? null;
-          await input.refresh?.().catch(() => undefined);
+          await refreshForeground?.().catch(() => undefined);
           publish();
         }
         return failure;
@@ -679,7 +696,7 @@ export function startCompanionCloud(input: {
       try {
         // Taking over from this installation also takes it from another install on the same device.
         demoteNow(actor);
-        if (await claimInstall(actor, 'takeover') !== 'mine') return { ok: false, code: 'FAILED' };
+        if (await claimInstall(actor, 'takeover', input.api) !== 'mine') return { ok: false, code: 'FAILED' };
         await materialize(actor);
       } catch (error) {
         input.log?.warn('Companion take-over could not finish locally', { actorId: actor.id, code: errorCode(error) });
@@ -756,12 +773,12 @@ export function startCompanionCloud(input: {
       try { result = await input.host.homeLink!.handOver(choices.homeDeviceId!, botId, targetDeviceId, options); }
       catch (error) {
         // A lost answer may still have moved it: show where it runs now.
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         publish();
         return actionFailure(error, 'OFFLINE');
       }
       // Moved here: re-read homes now so the automatic take-over starts without waiting for the push.
-      if (result.ok || result.code === 'HOME_CONFLICT') await input.refresh?.().catch(() => undefined);
+      if (result.ok || result.code === 'HOME_CONFLICT') await refreshForeground?.().catch(() => undefined);
       publish();
       return result;
     },
@@ -821,11 +838,11 @@ export function startCompanionCloud(input: {
       if (version < REMOTE_HAND_OVER_VERSION) return { ok: false, code: 'HOME_OUTDATED' };
       try {
         const result = await link.merge(keep.homeDeviceId, keepBotId, fromBotIds);
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         publish();
         return result;
       } catch (error) {
-        await input.refresh?.().catch(() => undefined);
+        await refreshForeground?.().catch(() => undefined);
         return actionFailure(error, 'OFFLINE') as CompanionMergeResult;
       }
     },
@@ -870,7 +887,7 @@ export function startCompanionCloud(input: {
       }
       if (actor.homeDeviceId !== self) return;
       state.update(botId, actor.id, entry => { entry.retirePending = true; });
-      await retireOwned(actor);
+      await retireOwned(actor, 'foreground');
     },
 
     isShadowed: botId => state.isDemoted(botId) || installOwner(botId) === 'other',

@@ -10,7 +10,8 @@ import {
   type ScheduledModelSelection,
   type ScheduledModelSelectionLease,
 } from '../maker-ipc/scheduledModelSelection';
-import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { CONTINUE_AFTER_APP_EXIT_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+import { withScheduleLock } from './scheduleLock';
 import {
   routinePermissionSnapshot,
   settledRoutinePermissionMismatch,
@@ -499,6 +500,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
 
+  /** Keep the normal completion/cancellation path while enqueueing the user's
+   * already prepared Continue input (same clientId and device provenance). */
+  async fireManualContinuation(
+    schedule: Schedule,
+    ctx: FireContext,
+    enqueuePrompt: SchedulerQueueDeps['enqueuePrompt'],
+  ): Promise<FireResult> {
+    if (!this.deps.schedulerQueue) throw new Error('scheduler queue bridge not ready');
+    return withScheduleLock(schedule.id, ctx.signal, () => this.fire(schedule, ctx, enqueuePrompt));
+  }
+
   /** scheduler-host/index.ts 在 startScheduler 内调一次，让 runner 反向 pause schedule */
   attachScheduler(scheduler: Scheduler): void {
     this.scheduler = scheduler;
@@ -790,14 +802,26 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * finally 保证所有路径都收尾。头注释第 6 条「send 后不要立刻 closeSession」说的是
    * 事件流进行中不能关;这里在 run 终态(done/error 已收)之后关,不冲突。
    */
-  async fire(schedule: Schedule, ctx: FireContext): Promise<FireResult> {
+  async fire(schedule: Schedule, ctx: FireContext, enqueuePrompt?: SchedulerQueueDeps['enqueuePrompt']): Promise<FireResult> {
+    if (ctx.resumeSessionId) {
+      // The original precheck may now say "nothing to do" because the agent
+      // already applied effects. Resume its transcript, never replay that gate
+      // or create a replacement task/worktree. Keep the task's current route.
+      schedule = {
+        ...schedule, targetSessionId: ctx.resumeSessionId,
+        persistentSession: false, useWorktree: false, preRunHook: undefined,
+        prompt: CONTINUE_AFTER_APP_EXIT_PROMPT,
+        model: undefined, providerId: undefined, effort: undefined,
+        fastMode: undefined, modelAgentKind: undefined,
+      };
+    }
     const holder: EphemeralSessionHolder = {};
     const closeQuietOutput = hidesScheduledTranscript(schedule)
       ? beginQuietScheduledOutput(schedule.id, ctx.runId)
       : undefined;
     try {
       throwIfFireAborted(ctx.signal, 'runner entry');
-      return await this.fireInner(schedule, ctx, holder);
+      return await this.fireInner(schedule, ctx, holder, enqueuePrompt);
     } finally {
       closeQuietOutput?.();
       holder.releaseAgentSwitchLock?.();
@@ -837,6 +861,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     ctx: FireContext,
     holder: EphemeralSessionHolder,
+    enqueuePrompt?: SchedulerQueueDeps['enqueuePrompt'],
   ): Promise<FireResult> {
     const waitingSessionId = await this.deps.findUsageLimitWait?.(schedule.id);
     throwIfFireAborted(ctx.signal, 'quota wait check');
@@ -1165,7 +1190,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             effort: meta?.effort,
             fastMode: meta?.fastMode,
             providerId: row?.providerId ?? null,
-          });
+          }, { enqueuePrompt });
         }
         if (!resolvedSelection && hasScheduledModelOverride(schedule)) {
           await this.deps.prepareModelPreferences?.(sessionId, true);
@@ -1870,6 +1895,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         },
         {
           sessionAlreadyBound: true,
+          enqueuePrompt,
           onAccepted: !isHeartbeat
             ? () => {
                 try {
@@ -2409,7 +2435,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       resolvedSelection?: ScheduledModelSelection;
       providerId: string | null;
     },
-    options?: { sessionAlreadyBound?: boolean; onAccepted?: () => void },
+    options?: { sessionAlreadyBound?: boolean; onAccepted?: () => void; enqueuePrompt?: SchedulerQueueDeps['enqueuePrompt'] },
   ): Promise<FireResult> {
     const headlessTurn = {
       closed: false,
@@ -2454,7 +2480,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       providerId: string | null;
     },
     markHeadlessTurnDispatched: () => void,
-    options?: { sessionAlreadyBound?: boolean; onAccepted?: () => void },
+    options?: { sessionAlreadyBound?: boolean; onAccepted?: () => void; enqueuePrompt?: SchedulerQueueDeps['enqueuePrompt'] },
   ): Promise<FireResult> {
     const sq = this.deps.schedulerQueue;
     if (!sq) throw new Error('fireHeartbeatViaQueue requires schedulerQueue dep');
@@ -2574,7 +2600,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
     };
 
-    const enqueueResult = await sq.enqueuePrompt({
+    const enqueuePrompt = options?.enqueuePrompt ?? sq.enqueuePrompt.bind(sq);
+    const enqueueResult = await enqueuePrompt({
       sessionId,
       text: promptToSend,
       inheritTargetPlanMode: true,

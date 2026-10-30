@@ -308,7 +308,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     detail: [
       '旧 lizi_art 的 image_generate / video_generate 等工具已不再提供。现在统一走 cindy 网关的 media 工具:list_models 查当前账号可用的生图 / 视频模型(能力 image.generate / image.edit / video.generate / video.image_to_video),prepare → request 发起生成,异步任务按 recommended_poll_after_ms 调 poll。',
       '可用模型取决于当前账号的模型权限,不要猜模型名;prepare 返回的 invocation_id 是一次性付费令牌,超时或结果未知时不要自动重提以免重复扣费。',
-      '结果是 cindy-media:// / xdt-image:// / xdt-video:// 受管地址,在回复里直接嵌入展示一次即可,手机端也能看;把已有截图或本地图片发给用户用 import_image。用户问存储位置时才用 resolve_local_path。',
+      '结果是 cindy-media:// / xdt-image:// / xdt-video:// 受管地址,在回复里直接嵌入展示一次即可,手机端也能看;把已有截图或本地图片发给用户用 import_image。图片完成后最多附两张模型预览,其余当前任务图片可用 inspect 查看。需要查看、抽帧或分析媒体时可主动用 resolve_local_path 按当前权限取得 Host 本机路径,再自行选择工具;无需用户先问存储位置,也不要把 Host 路径当作 SSH 工作区路径。',
     ].join(' '),
   },
   {

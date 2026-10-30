@@ -183,6 +183,20 @@ test('captures exact viewports and overviews in a hidden Electron window', async
   assert.equal(summary.cleanup.scratchRemoved, true);
 });
 
+// #7395 extended UI regression: the idle editor installs a 900x400 CDP
+// override. The next theme must return to its declared native 900x700 viewport.
+// The existing viewport test never resizes within a scenario. Electron tier.
+test('a scenario viewport resize does not leak into the next theme', async () => {
+  const { code, stdout } = await run([
+    '--page', 'region-capture', '--case', 'idle', '--theme', 'all', '--json',
+  ]);
+  const summary = JSON.parse(stdout);
+  assert.equal(code, 0, JSON.stringify(summary.variants.map((v) => v.errors)));
+  assert.equal(summary.variants.length, 2);
+  assert.ok(summary.variants.every((v) => v.status === 'passed'));
+  assert.equal(summary.cleanup.runtimeClosed, true);
+});
+
 test('a page that never mounts fails at the timeout and leaves no runtime behind', async () => {
   const file = await entry('stuck', `export {};\n`);
   const started = Date.now();
@@ -217,3 +231,18 @@ test(
     assert.equal(leftoverRunners(), '');
   },
 );
+
+// UI integration tier: Kimi's quota warning uses the existing accessible-only
+// label. The audit must distinguish it from an actually clipped visible label.
+test('clipping audit ignores accessible-only text but retains visible clipping warnings', async () => {
+  const file = await entry('accessible-clipping', `mountPage({render:()=> <main>
+    <span className="sr-only">Accessible quota warning</span>
+    <span style={{display:'block',width:20,overflow:'hidden',whiteSpace:'nowrap'}}>Visible quota warning clipped</span>
+  </main>});`);
+  const result = await run(['--entry', file, '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  const warnings = report.variants.flatMap(variant => variant.warnings);
+  assert.ok(warnings.some(warning => warning.includes('Visible quota warning clipped')));
+  assert.ok(!warnings.some(warning => warning.includes('Accessible quota warning')));
+});

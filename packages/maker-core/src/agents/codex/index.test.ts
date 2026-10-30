@@ -11637,7 +11637,7 @@ describe('CodexAgent MCP thread context hooks', () => {
             (event) =>
               event.type === 'error' &&
               (event.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
-              (event.data as { reason?: string }).reason === 'context-overflow',
+              (event.data as { reason?: string }).reason === 'remote-compact-encrypted-content',
           ),
         ).toBe(true);
       });

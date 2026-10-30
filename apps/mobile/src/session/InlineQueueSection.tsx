@@ -87,12 +87,13 @@ export function InlineQueueSection({
   // Keep token-based retries on their existing path; hidden continuation uses
   // the same exclusions as the persisted-tail continuation action.
   const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '')
-    && (!!projection.errorRetryText || describeNonRetryableAgentError(projection.error ?? '') === null);
+    && (!!projection.errorRetryText || describeNonRetryableAgentError(projection.error ?? '', projection.errorReason) === null);
   const retryDisabledReason = errorDisabledReason
     || (!projection.errorRetryText && !onContinueAfterError ? t('message.queue.noRetryContent') : null);
   const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
+    projection.error ?? '',
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)

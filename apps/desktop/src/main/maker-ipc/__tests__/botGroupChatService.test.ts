@@ -38,6 +38,9 @@ import {
   type PlanDecisionInput,
 } from '../botGroupDivision.js';
 import type { BotGroupAttachment, BotGroupDetail } from '../../../shared/botGroupChat.js';
+import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
+import { installDesktopInteractionHandler, installInteractionLifecycleObserver, requestHostInteraction } from '../interactionRouter.js';
+import { GhostSetupInteractionBridge, type GhostSetupInteractionSnapshot } from '../../cindy-brain/ghostSetupInteractionBridge.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -550,6 +553,7 @@ describe('botGroupChatService', () => {
     expect(waiting.ok && waiting.group.round.speakers.map((speaker) => speaker.botId)).toEqual(['mimi']);
     expect(waiting.ok && waiting.group.teammateActivity).toEqual({ phase: 'needs-interaction' });
     pending = false;
+    harness.service.refreshPendingInteraction('lane-mimi');
     await vi.advanceTimersByTimeAsync(1_100);
     const group = await waitForIdle(harness, groupId);
     expect(harness.abortLane).toHaveBeenCalledWith('lane-mimi');
@@ -705,6 +709,230 @@ async function proposePlan(harness: Harness, groupId: string, text = '帮我给�
   const group = await waitForIdle(harness, groupId);
   return openPlan(group);
 }
+
+describe('botGroupChatService active running budget', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.sqlite = createDatabase();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    h.sqlite?.close();
+  });
+
+  async function start(kind: 'member' | 'step', timeoutMs?: number, initiallyPending = false, overrides: Partial<BotGroupChatServiceDeps> = {}) {
+    const pending = new Set(initiallyPending ? ['initial'] : []);
+    const harness = createHarness(() => null, {
+      hasPendingInteraction: () => pending.size > 0,
+      ...(timeoutMs === undefined ? {} : { memberTurnTimeoutMs: timeoutMs, stepTurnTimeoutMs: timeoutMs }),
+      ...(kind === 'step' ? { decidePlan: async () => THREE_STEPS, workDir: fakeWorkDir() } : {}),
+      ...overrides,
+    });
+    const groupId = await createGroup(harness);
+    if (kind === 'step') {
+      await harness.service.sendMessage({ groupId, text: '做一个介绍页', mentions: NONE, clientId: 'budget-plan' });
+      await vi.advanceTimersByTimeAsync(0);
+      const plan = openPlan(await detailOf(harness, groupId));
+      await harness.service.startPlan({ groupId, planId: plan.id });
+    } else {
+      await harness.service.sendMessage({ groupId, text: '在吗', mentions: { all: false, botIds: ['mimi'] }, clientId: 'budget-member' });
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.dispatches).toHaveLength(1);
+    const sessionId = harness.dispatches[0].sessionId;
+    const change = async (requestId: string, waiting: boolean) => {
+      if (waiting) pending.add(requestId); else pending.delete(requestId);
+      harness.service.refreshPendingInteraction(sessionId);
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { ...harness, groupId, sessionId, change };
+  }
+
+  it('pauses only the waiting member in a parallel round', async () => {
+    const pending = new Set<string>();
+    const harness = createHarness(() => null, {
+      memberTurnTimeoutMs: 1_000,
+      hasPendingInteraction: sessionId => pending.has(sessionId),
+    });
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '在吗', mentions: NONE, clientId: 'parallel-budget' });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(harness.dispatches).toHaveLength(3);
+    pending.add('lane-mimi');
+    harness.service.refreshPendingInteraction('lane-mimi');
+    await vi.advanceTimersByTimeAsync(800);
+    expect(harness.abortLane.mock.calls.map(([id]) => id).sort()).toEqual(['lane-abu', 'lane-xiaoman']);
+    pending.clear();
+    harness.service.refreshPendingInteraction('lane-mimi');
+    await vi.advanceTimersByTimeAsync(599);
+    expect(harness.abortLane).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.abortLane).toHaveBeenCalledTimes(3);
+    expect(harness.abortLane).toHaveBeenLastCalledWith('lane-mimi');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe.each(['member', 'step'] as const)('%s', (kind) => {
+    it.each([[400, 800, 600], [900, 800, 100], [400, 200, 600]])(
+      'runs %ims, waits %ims, then has exactly %ims left', async (run, wait, remaining) => {
+        const harness = await start(kind, 1_000);
+        await vi.advanceTimersByTimeAsync(run);
+        await harness.change('approval', true);
+        await vi.advanceTimersByTimeAsync(wait);
+        expect(harness.abortLane).not.toHaveBeenCalled();
+        await harness.change('approval', false);
+        await vi.advanceTimersByTimeAsync(remaining - 1);
+        expect(harness.abortLane).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+        const group = await detailOf(harness, harness.groupId);
+        expect(group.messages.find(message => message.kind === 'notice'))
+          .toMatchObject({ noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT' });
+        expect(vi.getTimerCount()).toBe(0);
+      },
+    );
+
+    it('keeps the existing default limit without an interaction', async () => {
+      const harness = await start(kind);
+      const limit = 2 * 60 * 60_000;
+      await vi.advanceTimersByTimeAsync(limit - 1);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('waits for all overlapping interactions without replenishing the budget', async () => {
+      const harness = await start(kind, 1_000);
+      await vi.advanceTimersByTimeAsync(400);
+      await harness.change('permission', true);
+      await vi.advanceTimersByTimeAsync(300);
+      await harness.change('question', true);
+      await harness.change('permission', false);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await harness.change('question', false);
+      await vi.advanceTimersByTimeAsync(200);
+      await harness.change('plan-review', true);
+      await vi.advanceTimersByTimeAsync(1_500);
+      await harness.change('plan-review', false);
+      await vi.advanceTimersByTimeAsync(399);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('starts paused when dispatch returns with an interaction already pending', async () => {
+      const harness = await start(kind, 1_000, true);
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await harness.change('initial', false);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+    });
+
+    it('observes router permission, question and plan waits after Desktop pending registration', async () => {
+      const pending = new Map<string, () => void>();
+      const harness = await start(kind, 1_000, false, { hasPendingInteraction: () => pending.size > 0 });
+      const session = { id: harness.sessionId, setInteractionListener: vi.fn() };
+      const existingStart = vi.fn();
+      const existingEnd = vi.fn();
+      installDesktopInteractionHandler(session, request => new Promise<InteractionDecision>(resolve => {
+        pending.set(request.requestId, () => {
+          pending.delete(request.requestId);
+          resolve(request.kind === 'ask_user_question'
+            ? { kind: 'ask_user_question', answers: {} }
+            : { kind: request.kind, behavior: 'allow' });
+        });
+      }));
+      installInteractionLifecycleObserver(session, {
+        onStart: (request, route) => {
+          // Matches register: the router calls this before the Desktop handler adds pending.
+          harness.service.refreshPendingInteraction(session.id);
+          existingStart(request, route);
+        },
+        onEnd: (request, route) => {
+          harness.service.refreshPendingInteraction(session.id);
+          existingEnd(request, route);
+        },
+      });
+      await vi.advanceTimersByTimeAsync(400);
+      const requests: InteractionRequest[] = [
+        { kind: 'permission', requestId: 'permission', toolName: 'Bash', input: { command: 'pwd' } },
+        { kind: 'ask_user_question', requestId: 'question', questions: [] },
+        { kind: 'plan_review', requestId: 'plan', plan: 'plan' },
+      ];
+      const results = requests.map(request => requestHostInteraction(session, request, new AbortController().signal));
+      await vi.advanceTimersByTimeAsync(800);
+      pending.get('permission')!();
+      pending.get('question')!();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      pending.get('plan')!();
+      await Promise.all(results);
+      expect(existingStart).toHaveBeenCalledTimes(3);
+      expect(existingEnd).toHaveBeenCalledTimes(3);
+      expect(session.setInteractionListener).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(599);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(session.id);
+    });
+
+    it('counts plugin setup waits, but resumes before the terminal card is dismissed', async () => {
+      let harness: Awaited<ReturnType<typeof start>>;
+      const bridge = new GhostSetupInteractionBridge({
+        broadcast: (_channel, payload) => harness.service.refreshPendingInteraction((payload as { sessionId: string }).sessionId),
+      });
+      harness = await start(kind, 1_000, false, {
+        hasPendingInteraction: sessionId => bridge.pendingSnapshots(sessionId).length > 0,
+      });
+      const snapshot: GhostSetupInteractionSnapshot = {
+        kind: 'plugin_setup', requestId: 'setup', revision: 1,
+        ghost: { id: 'test-plugin', name: 'Test' }, steps: [],
+      };
+      await vi.advanceTimersByTimeAsync(400);
+      bridge.open(harness.sessionId, snapshot, () => undefined);
+      await vi.advanceTimersByTimeAsync(800);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      // The coordinator broadcasts terminal before complete; its delayed close is only UI grace.
+      bridge.update({ ...snapshot, revision: 2, terminal: true });
+      bridge.complete(snapshot.requestId);
+      await vi.advanceTimersByTimeAsync(599);
+      expect(harness.abortLane).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.abortLane).toHaveBeenCalledExactlyOnceWith(harness.sessionId);
+      bridge.close(snapshot.requestId, 'done');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(['done', 'error', 'stop', 'dispose'] as const)('cleans up a paused budget on %s', async (ending) => {
+      const harness = await start(kind, 1_000);
+      await vi.advanceTimersByTimeAsync(400);
+      await harness.change('approval', true);
+      if (ending === 'stop') await harness.service.stopRound(harness.groupId);
+      else if (ending === 'dispose') harness.service.dispose();
+      else await harness.service.settleLaneTurn({
+        sessionId: harness.sessionId,
+        activeInputClientId: harness.dispatches[0].clientId,
+        outcome: ending,
+        resultText: ending === 'done' ? '完成' : '',
+        // Session watchdogs still terminate a turn while its group budget is paused.
+        ...(ending === 'error' ? { failureCode: 'RUNTIME_TIMEOUT' as const } : {}),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      const aborted = harness.abortLane.mock.calls.length;
+      await harness.change('approval', false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.abortLane).toHaveBeenCalledTimes(aborted);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+});
 
 describe('botGroupChatService 分工', () => {
   beforeEach(() => {

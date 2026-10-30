@@ -6,8 +6,8 @@
  *    换取只限分享的凭证；
  *  - 对方区域的服务地址只取自内置的对方区域清单，链接里的地址只用来比对；
  *  - 凭证只在内存里，过期或重启后用新名片重新换取；
- *  - 只有本账号确实在对方区域发过申请或加入过分享时，才会联系对方区域(本机记一个不含凭证的标记)，
- *    不会在每次启动时把身份发到另一个区域；
+ *  - 分享属于账号：每台已登录电脑都自动向对方官方区域核验已有分享，不依赖本机加入记录；
+ *    本机标记只保留兼容记录，不决定账号是否有分享；
  *  - 远程 Agent 经第二条 relay 连接(对方区域，`ProviderShareGuest` 认证)访问分享者电脑。
  * 对方区域关闭跨区开关时，接口返回 PROVIDER_SHARE_CROSS_REGION_DISABLED，同区域分享不受影响。
  */
@@ -52,6 +52,8 @@ const WS_PATH = '/api/device-link/ws';
 /** 凭证 24 小时过期；提前一小时轮换。 */
 const CREDENTIAL_REFRESH_MARGIN_MS = 60 * 60_000;
 const SESSION_REFRESH_MS = 12 * 60 * 60_000;
+/** 尚无分享时也定期发现账号在其它电脑新接受的分享，不建立空 relay。 */
+const EMPTY_DISCOVERY_MS = 5 * 60_000;
 const ONLINE_WAIT_MS = 8_000;
 const MARKER_FILE = 'provider-share-regions.json';
 const GROUP_RECOVERY_INTERVAL_MS = 30_000;
@@ -138,7 +140,7 @@ function writeMarker(account: string, region: Region, present: boolean, confirme
 async function writeMarkerFile(file: string, account: string, region: Region, present: boolean, confirmedEmpty: boolean, isCurrent: () => boolean): Promise<void> {
   if (!isCurrent()) return;
   const markers = readMarkers('accounts', file);
-  // 服务端确认的空名单只供本地收藏清理，绝不授予跨区联网能力。新申请使旧结论失效。
+  // 空名单保留旧版本的收藏清理兼容记录；新申请使旧结论失效。
   const emptyAccounts = readMarkers('emptyAccounts', file);
   const emptyRegions = new Set(emptyAccounts[account] ?? []);
   if (confirmedEmpty && !present) emptyRegions.add(region);
@@ -347,8 +349,9 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
 function scheduleRefresh(rt: Runtime, state: RegionState): void {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
-  if (!current(rt) || state.shares.length === 0) return;
-  state.timer = setTimeout(() => { void refreshRegion(rt, state.region); }, SESSION_REFRESH_MS);
+  if (!current(rt)) return;
+  state.timer = setTimeout(() => { void refreshRegion(rt, state.region); },
+    state.shares.length > 0 ? SESSION_REFRESH_MS : EMPTY_DISCOVERY_MS);
   (state.timer as { unref?: () => void }).unref?.();
 }
 
@@ -433,19 +436,12 @@ export function startProviderShareCrossRegion(events: CrossRegionEvents, options
   stopProviderShareCrossRegion();
   userDataDir = options.userDataDir;
   const account = accountKey();
-  if (!account) return;
+  if (!account || !getAuthState().isAuthenticated) return;
   const rt: Runtime = { events, account, regions: new Map(), stopped: false, groupRecovery: null, nextGroupRecoveryAt: 0 };
   runtime = rt;
-  const activeRegions = readMarkers()[account] ?? [];
-  // 清理失败或未完成就退出时，下次只恢复本地空名单，不向对方区域发送身份。
-  for (const region of readMarkers('emptyAccounts')[account] ?? []) {
-    if (region === peerRegion() && !activeRegions.includes(region)) rt.regions.set(region, initialRegionState(region, true));
-  }
-  // 只联系标记过的区域(本账号在那里发过申请或加入过分享)。
-  for (const region of activeRegions) {
-    if (region !== peerRegion()) continue;
-    void refreshRegion(rt, region);
-  }
+  // 接受分享的是账号；另一台电脑的本地标记和旧空名单都不能决定本机的账号成员关系。
+  // 与本区独立加载，只让官方服务确认已有授权，不发起新的分享申请。
+  void refreshRegion(rt, peerRegion());
 }
 
 export function stopProviderShareCrossRegion(): void {
@@ -493,7 +489,7 @@ export function restoreCrossRegionReceivedForRemoteGroup(shareIds: readonly stri
   return run;
 }
 
-/** Missing shares are not removed until an enabled region has answered successfully. */
+/** Missing shares are not removed until account discovery has answered successfully. */
 export async function waitForCrossRegionReceived(): Promise<boolean> {
   const rt = runtime;
   if (!rt) return true;
@@ -505,28 +501,26 @@ export async function waitForCrossRegionReceived(): Promise<boolean> {
 }
 
 export function getCrossRegionReceived(): ProviderShareReceived[] {
-  return runtime ? [...runtime.regions.values()].flatMap((state) => state.shares) : [];
+  return runtime && current(runtime) ? [...runtime.regions.values()].flatMap((state) => state.shares) : [];
 }
 
-/** 收藏不能恢复已撤销的跨区联网资格；已确认空名单由启动路径在本地恢复。 */
+/** 收藏读取只复用账号发现，不增加查询或越过失败退避。 */
 export function ensureCrossRegionReceivedForFavorites(regions: readonly Region[]): void {
   const rt = runtime;
   const region = peerRegion();
   if (!rt || !current(rt) || !regions.includes(region)) return;
-  if (!readMarkers()[rt.account]?.includes(region)) return;
   const state = rt.regions.get(region);
   if (!state?.loaded && !state?.refreshing && !state?.timer) void refreshRegion(rt, region);
 }
 
 /**
- * 对方区域里本账号可能有的分享都已确认：标记过的对方区域(本账号在那里申请或加入过分享)名单都已成功返回。
- * 没有标记的区域本来就没有分享。运行时没起来或已换账号时为 false(说不准)。
+ * 本账号在对方区域的名单已由服务端确认；本机没有标记不能证明账号没有分享。
+ * 运行时没起来或已换账号时为 false(说不准)。
  */
 export function isCrossRegionReceivedComplete(): boolean {
   const rt = runtime;
   if (!rt || !current(rt)) return false;
-  const marked = (readMarkers()[rt.account] ?? []).filter((region) => region === peerRegion());
-  return marked.every((region) => rt.regions.get(region)?.loaded === true);
+  return rt.regions.get(peerRegion())?.loaded === true;
 }
 
 /** 只确认已成功返回名单的区域，失败区域不能阻塞其它区域的收藏。 */
@@ -535,15 +529,13 @@ export function getConfirmedCrossRegionReceivedRegions(): Region[] {
   return rt && current(rt) ? [...rt.regions.values()].filter((state) => state.loaded).map((state) => state.region) : [];
 }
 
-/** 被启用的跨区标记对应的首次分享列表是否已完成。 */
+/** 本账号的首次跨区分享查询是否已完成。 */
 export function isCrossRegionReceivedReady(): boolean {
   const rt = runtime;
   // 未启动跨区 runtime 时，当前进程没有跨区分享需要等待。
   if (!rt) return true;
   if (!current(rt)) return false;
-  const region = peerRegion();
-  if (!readMarkers()[rt.account]?.includes(region)) return true;
-  return rt.regions.get(region)?.loaded === true;
+  return isCrossRegionReceivedComplete();
 }
 
 function stateForShare(shareId: string): RegionState | null {

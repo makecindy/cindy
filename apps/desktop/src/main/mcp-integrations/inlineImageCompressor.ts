@@ -51,6 +51,41 @@ const LADDER: ReadonlyArray<{ maxEdgePx: number; webpQuality: number }> = [
 
 const TIMEOUT_MS = 5_000;
 
+/** Managed previews decode the bounded source once; later quality steps use
+ * only its small thumbnail. Base64 is produced by the caller after fitting.
+ */
+export async function prepareInlineImagePreview(
+  buffer: Buffer,
+  mime: string,
+  opts: { targetBytes: number },
+): Promise<{ buffer: Buffer; mime: string } | null> {
+  const sharp = loadSharp();
+  if (!sharp) return null;
+  try {
+    const image = sharp(buffer, { failOn: 'warning', limitInputPixels: 16_777_216 });
+    if (buffer.byteLength <= opts.targetBytes) {
+      await image.resize(1, 1).raw().toBuffer();
+      return { buffer, mime };
+    }
+    const first = LADDER[0];
+    const thumbnail = await image
+      .rotate()
+      .resize({
+        width: first.maxEdgePx,
+        height: first.maxEdgePx,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: first.webpQuality })
+      .toBuffer();
+    if (thumbnail.byteLength <= opts.targetBytes) return { buffer: thumbnail, mime: 'image/webp' };
+    const smaller = await compressInlineImage(thumbnail, 'image/webp', opts);
+    return smaller && smaller.buffer.byteLength <= opts.targetBytes ? smaller : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Decode untrusted plugin images even when their bytes already fit inline. */
 export async function isDecodableInlineImage(buffer: Buffer): Promise<boolean> {
   const sharp = loadSharp();

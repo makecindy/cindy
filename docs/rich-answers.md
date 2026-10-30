@@ -6,7 +6,7 @@
 
 文本型 Harness 复用现有累积文本事件，以 `cindy-ui` 围栏承载逐行操作。每一完整操作行即可提交，无需等围栏或回答完成。普通 Markdown 仍用现有正文组件。用户消息、引用内嵌示例与文件预览不启用组件解释。
 
-共享解析器保存稳定节点：create、append、patch、move、remove。节点按 id 更新；输入、勾选和选择值与模型默认值分开。模型的常见笔误就近挽救成可读节点：打到容器上的 append 落入该容器的隐式 markdown 子节点，裸字符串 props 与内联 children 转成正式子节点；无法挽救的内容才计入未能显示。Markdown、图片、视频、公式和 Mermaid 沿用现有文件来源与预览边界。布局仅接受组件属性，不执行模型 HTML、CSS 或 JavaScript。数值表达式只支持有界的算术/选择树；按钮默认修改本地状态，也可声明显式提交一条用户消息。
+共享解析器保存稳定节点：create、append、patch、move、remove。节点按 id 更新；节点 id 只在同一个 `cindy-ui` 块内有效——parent、patch、remove、move 只能命中该块里已创建的节点，同一条消息里的其他 `cindy-ui` 块以及之前消息里的块都命中不了；需要修改已发送的卡片时整块重发。输入、勾选和选择值与模型默认值分开。模型的常见笔误就近挽救成可读节点：打到容器上的 append 落入该容器的隐式 markdown 子节点，裸字符串 props 与内联 children 转成正式子节点；无法挽救的内容才计入未能显示。Markdown、图片、视频、公式和 Mermaid 沿用现有文件来源与预览边界。布局仅接受组件属性，不执行模型 HTML、CSS 或 JavaScript。数值表达式只支持有界的算术/选择树；按钮默认修改本地状态，也可声明显式提交一条用户消息。
 
 Desktop 使用原生 React 组件；Mobile 使用原生 View/Text 与既有媒体组件，不新增原生依赖或 runtime fingerprint。浅深主题取各端语义 token，窄屏按可用宽度换行。
 
