@@ -278,3 +278,42 @@ it('routes trusted script follow-ups through durable authorization restoration, 
   expect(await send({ dispatcherSessionId: 'caller', message: 'new task', [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
     .toMatchObject({ autoReviewUserText: { kind: 'agent-request' } });
 });
+
+// #7170: execute the real host wrapper and create-title statement. A verified
+// companion envelope must not replace the raw first-line title or its spacing.
+it.each([
+  { targetSessionId: undefined, title: undefined, firstLine: 'Inspect the failing check', expectedTitle: 'Inspect the failing check' },
+  { targetSessionId: undefined, title: '  Explicit title  ', firstLine: 'Inspect the failing check', expectedTitle: 'Explicit title' },
+  { targetSessionId: undefined, title: '   ', firstLine: 'Inspect the failing check', expectedTitle: 'Inspect the failing check' },
+  { targetSessionId: undefined, title: undefined, firstLine: '', expectedTitle: '' },
+  { targetSessionId: undefined, title: undefined, firstLine: '  Keep spaces  ', expectedTitle: '  Keep spaces  ' },
+  { targetSessionId: undefined, title: undefined, firstLine: 'A'.repeat(61), expectedTitle: 'A'.repeat(60) },
+  { title: undefined, firstLine: 'Reply to parent', targetSessionId: 'parent', expectedTitle: undefined },
+])('preserves create-title and source receipt through companion wrapping: %j', async ({ targetSessionId, title, firstLine, expectedTitle }) => {
+  const start = source.indexOf('    sendToSession: async (params) => {');
+  const end = source.indexOf('    enableOrca: enableOrcaInternal,', start);
+  const titleStart = source.indexOf('        const newTitle =');
+  const createTitle = new Function('params', compile(`const { title, message } = params;
+    ${source.slice(titleStart, source.indexOf(';', titleStart) + 1)}
+    return newTitle;`));
+  const originalMessage = `${firstLine}\nReport the cause without publishing.`;
+  const originalWords = 'Only inspect. Do not change or publish anything.';
+  const wrapped = await captureAgentRequest('companion', originalMessage,
+    { clientId: 'owner-input', authoredText: originalWords }, async () => [], true, true);
+  const send = new Function(
+    'captureDataOwnerBroadcastScope', 'classifySessionMessagePurpose', 'isDataOwnerBroadcastScopeCurrent',
+    'sendToSessionInternal', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'coordinationInput', 'captureSessionAgentRequest',
+    compile(`return ({ ${source.slice(start, end)} }).sendToSession;`),
+  )(() => 'owner', async () => ({ coordination: null, delegatedContinuation: false }), () => true,
+    async (params: { targetSessionId?: string; title?: string; message: string }) => ({
+      ...params, createdTitle: params.targetSessionId ? undefined : createTitle(params),
+    }), AUTO_REVIEW_DELEGATED_CONTINUATION,
+    () => { throw new Error('not coordination'); }, async () => wrapped);
+  const result = await send({ dispatcherSessionId: 'companion', targetSessionId, title, message: originalMessage });
+  expect(result.createdTitle).toBe(expectedTitle);
+  expect(result.title).toBe(title);
+  expect(result.message).toBe(wrapped.message);
+  expect(result.message).not.toBe(originalMessage);
+  expect(result.autoReviewUserText).toEqual(wrapped.autoReviewUserText);
+  expect(result.autoReviewUserText.request.userText).toBe(originalWords);
+});
