@@ -15716,6 +15716,9 @@
       },
       "pluginCreator": {
         "description": "Cindy 플러그인을 생성, 수정, 디버깅, 패키징하고 요청에 따라 게시합니다."
+      },
+      "pr": {
+        "description": "최신 코드에서 작업을 시작해 GitHub PR을 올리고, 병합될 때까지 CI와 리뷰 피드백을 백그라운드에서 수정합니다."
       }
     },
     "common": {

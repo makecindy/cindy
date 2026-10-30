@@ -2,17 +2,20 @@ import {
   CINDY_LEARN_NAME,
   CINDY_SKILL_CREATOR_NAME,
   CINDY_PLUGIN_CREATOR_NAME,
+  CINDY_PR_NAME,
   isCindyBuiltInSkillMetadata,
 } from '../../../../shared/cindyBuiltInSkills';
 
 export const SKILL_CREATOR_DESCRIPTION_KEY = 'skillhub.builtIn.skillCreator.description' as const;
 export const LEARN_DESCRIPTION_KEY = 'skillhub.builtIn.learn.description' as const;
 export const PLUGIN_CREATOR_DESCRIPTION_KEY = 'skillhub.builtIn.pluginCreator.description' as const;
+export const PR_DESCRIPTION_KEY = 'skillhub.builtIn.pr.description' as const;
 
 const BUILT_IN_SKILL_ORDER = new Map([
   [CINDY_SKILL_CREATOR_NAME, 0],
   [CINDY_LEARN_NAME, 1],
   [CINDY_PLUGIN_CREATOR_NAME, 2],
+  [CINDY_PR_NAME, 3],
 ]);
 
 /**
@@ -26,11 +29,17 @@ export function builtInSkillDescriptionKey(
     description?: string;
     scope?: string;
   },
-): typeof SKILL_CREATOR_DESCRIPTION_KEY | typeof LEARN_DESCRIPTION_KEY | typeof PLUGIN_CREATOR_DESCRIPTION_KEY | undefined {
+):
+  | typeof SKILL_CREATOR_DESCRIPTION_KEY
+  | typeof LEARN_DESCRIPTION_KEY
+  | typeof PLUGIN_CREATOR_DESCRIPTION_KEY
+  | typeof PR_DESCRIPTION_KEY
+  | undefined {
   if (!isCindyBuiltInSkillMetadata(skill)) return undefined;
   if (skill.name === CINDY_SKILL_CREATOR_NAME) return SKILL_CREATOR_DESCRIPTION_KEY;
   if (skill.name === CINDY_LEARN_NAME) return LEARN_DESCRIPTION_KEY;
   if (skill.name === CINDY_PLUGIN_CREATOR_NAME) return PLUGIN_CREATOR_DESCRIPTION_KEY;
+  if (skill.name === CINDY_PR_NAME) return PR_DESCRIPTION_KEY;
   return undefined;
 }
 

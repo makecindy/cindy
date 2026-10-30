@@ -15716,6 +15716,9 @@
       },
       "pluginCreator": {
         "description": "建立、修改、偵錯與打包 Cindy 插件，也可按需發佈。"
+      },
+      "pr": {
+        "description": "在最新程式碼上開工、發 GitHub PR，並在背景修復 CI 與審查意見，直到合併。"
       }
     },
     "common": {

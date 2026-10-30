@@ -8,7 +8,7 @@ vi.mock('electron', () => ({ app: { getPath: () => root } }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 beforeAll(async () => {
   const bundledRoot = path.join(root, 'bundled');
-  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator']) {
+  for (const name of ['cindy-skill-creator', 'learn', 'cindy-plugin-creator', 'pr']) {
     fs.mkdirSync(path.join(bundledRoot, name), { recursive: true });
     fs.writeFileSync(path.join(bundledRoot, name, 'SKILL.md'), `# ${name}\n`);
   }

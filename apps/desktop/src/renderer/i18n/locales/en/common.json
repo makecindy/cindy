@@ -15772,6 +15772,9 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
+      },
+      "pr": {
+        "description": "Start work on a fresh branch, open a GitHub pull request, then fix CI and review feedback in the background until it is merged."
       }
     },
     "common": {
