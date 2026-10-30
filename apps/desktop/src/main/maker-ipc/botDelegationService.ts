@@ -216,14 +216,9 @@ export interface BotDelegationServiceDeps {
   /**
    * A task started from a group lives in that group (bot-group-chat.md §10): its card,
    * confirmations and result are posted there as the teammate's own messages. A definite
-   * refusal (not retryable) falls back to the owner's private chat so no result is lost.
+   * refusal preserves the result in the task and never redirects to another conversation.
    */
   postGroupTaskMessage?: (input: BotGroupTaskPostInput) => Promise<BotGroupTaskPostResult>;
-  /**
-   * Whether a group can carry a teammate's own task messages (a Chat Server room). An old
-   * local-only group cannot: its task's confirmations and result go to the owner's private chat.
-   */
-  groupHasTaskChannel?: (groupId: string) => Promise<boolean>;
   now?: () => number;
   createId?: () => string;
   maxActiveChildren?: number;
@@ -1021,6 +1016,20 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    * 主任务。完成信号属于 Bot 本人，不属于损坏的旧任务。两者都不在（Bot 已
    * 暂停/归档）时只延后模型唤醒；每次执行的结果回执仍写入冻结的父任务。
    */
+  const persistDeliveryFailure = async (
+    row: Pick<DelegationRow, 'id' | 'childSessionId' | 'runSequence'> & { resultSummary?: string | null }, errorCode: string,
+  ): Promise<void> => {
+    await getDbClient().drizzle.update(botDelegations).set({
+      permissionSnapshotJson: sql`json_set(${botDelegations.permissionSnapshotJson}, '$.completionDeliveryError', ${errorCode})`,
+    }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence)));
+    if (!row.childSessionId) return;
+    await persistTimelineMessage({ sessionId: row.childSessionId,
+      clientId: `task-delivery-failed:${row.id}:${row.runSequence}`, role: 'assistant',
+      content: [row.resultSummary, t('bots.collab.deliveryFailed')].filter(Boolean).join('\n\n'),
+      agentMeta: { assistantPhase: 'final_answer', turnCompleted: true },
+    });
+  };
+
   const deliverCompletion = async (params: {
     id: string;
     runSequence: number;
@@ -1092,11 +1101,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       // A deleted parent's FK may have been cleared after this completion
       // snapshot was taken. Recheck existence on every retry, then use the
       // replacement canonical task if the original history is gone.
-      const originalParent = params.parentSessionId ? await getDbClient().drizzle
+      const frozenTarget = parseRecord(completionSnapshot).completionTarget as { parentSessionId?: string } | undefined;
+      const originalSessionId = frozenTarget?.parentSessionId ?? params.parentSessionId;
+      const originalParent = originalSessionId ? await getDbClient().drizzle
         .select({ id: sessions.id }).from(sessions)
-        .where(eq(sessions.id, params.parentSessionId)).get() : undefined;
+        .where(eq(sessions.id, originalSessionId)).get() : undefined;
+      const privateChat = !groupHomeOf(completionSnapshot) && !parseRecord(completionSnapshot).threadOriginRoute;
       const initialReceiptSessionId = originalParent?.id
-        ?? await requesterLiveSessionId(params.requestingBotId, null);
+        ?? (privateChat ? await requesterLiveSessionId(params.requestingBotId, null) : params.childSessionId);
       if (!initialReceiptSessionId) {
         if (!(await holdCompletionForStoppedRequester(params))) scheduleCompletionRetry(params, attempt);
         return false;
@@ -1145,7 +1157,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         if (existing) return true;
         // The parent may have been physically removed after the first write.
         // Rehome the immutable receipt before accepting its completion wake-up.
-        const replacement = await requesterLiveSessionId(params.requestingBotId, null);
+        const replacement = privateChat ? await requesterLiveSessionId(params.requestingBotId, null) : params.childSessionId;
         if (!replacement) return false;
         receiptSessionId = replacement;
         await persistResultReceipt(replacement);
@@ -1157,7 +1169,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return false;
       }
       // A group task reports back in its group as the teammate's own message; the lane that
-      // started it is never woken. Only a definite refusal falls back to the owner's main chat.
+      // started it is never woken. A refusal preserves the result and never changes the destination.
       const home = groupHomeOf(completionSnapshot);
       if (home) {
         await afterGroupTaskStart(params);
@@ -1175,7 +1187,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           }
           const [marked] = await getDbClient().drizzle
             .update(botDelegations)
-            .set({ completionDeliveredAt: now(), updatedAt: now() })
+            .set({ completionDeliveredAt: now(), updatedAt: now(),
+              permissionSnapshotJson: sql`json_remove(${botDelegations.permissionSnapshotJson}, '$.completionDeliveryError')` })
             .where(and(
               eq(botDelegations.id, params.id),
               eq(botDelegations.runSequence, params.runSequence),
@@ -1194,30 +1207,21 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           return !!marked;
         }
         if (posted.retryable) {
+          await persistDeliveryFailure(params, posted.errorCode);
           scheduleCompletionRetry(params, attempt);
           return false;
         }
-        log.warn('group refused the task result; delivering to the owner private chat instead', {
-          delegationId: params.id, groupId: home.groupId, errorCode: posted.errorCode,
-        });
+        await persistDeliveryFailure(params, posted.errorCode);
+        clearCompletionRetryTimer(params.id);
+        return false;
       }
-      // A group task falling back to the owner chat may find none (deleted, or never created):
-      // restore it here, the one place that needs it, rather than when the task starts.
-      const targetSessionId = await requesterLiveSessionId(params.requestingBotId, home ? null : params.parentSessionId)
-        ?? (home ? await restoredRequesterSessionId(params.requestingBotId) : null);
-      if (!targetSessionId && await holdCompletionForStoppedRequester(params)) return false;
-      if (home && targetSessionId && targetSessionId !== receiptSessionId) {
-        // The owner reads the result where the wake-up lands, not in the hidden lane.
-        receiptSessionId = targetSessionId;
-        await persistResultReceipt(targetSessionId);
-      }
-      if (!targetSessionId) {
-        log.warn('defer Bot delegation wake-up: requester has no live task', {
-          delegationId: params.id,
-          requestingBotId: params.requestingBotId,
-          parentSessionId: params.parentSessionId,
-        });
-        scheduleCompletionRetry(params, attempt);
+      // Completion routing is the creation snapshot, not the current follower/canonical task.
+      const targetSessionId = privateChat
+        ? await requesterLiveSessionId(params.requestingBotId, params.parentSessionId) : originalSessionId;
+      if (!targetSessionId && privateChat && await holdCompletionForStoppedRequester(params)) return false;
+      if (!targetSessionId || await requesterLiveSessionId(params.requestingBotId, targetSessionId) !== targetSessionId) {
+        await persistDeliveryFailure(params, 'ORIGIN_UNAVAILABLE');
+        clearCompletionRetryTimer(params.id);
         return false;
       }
       const dispatched = await deps.dispatch({
@@ -1242,14 +1246,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       // The target may have been deleted while dispatch was accepting the
       // hidden message. A rehomed receipt alone does not wake its replacement.
       // Leave this run pending so the stable completion ID is dispatched there.
-      const currentTargetSessionId = await requesterLiveSessionId(params.requestingBotId, home ? null : params.parentSessionId);
+      const currentTargetSessionId = await requesterLiveSessionId(params.requestingBotId, targetSessionId);
       if (currentTargetSessionId !== targetSessionId) {
         scheduleCompletionRetry(params, attempt);
         return false;
       }
       const [marked] = await getDbClient().drizzle
         .update(botDelegations)
-        .set({ completionDeliveredAt: now(), updatedAt: now() })
+        .set({ completionDeliveredAt: now(), updatedAt: now(),
+              permissionSnapshotJson: sql`json_remove(${botDelegations.permissionSnapshotJson}, '$.completionDeliveryError')` })
         .where(and(
           eq(botDelegations.id, params.id),
           eq(botDelegations.runSequence, params.runSequence),
@@ -2789,8 +2794,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     });
     if (!started.ok) return started;
     const groupId = caller.role === 'group' ? /^group:([^:]+)/.exec(caller.routeKey ?? '')?.[1] ?? null : null;
-    const completionDestination = groupId === null ? null
-      : await deps.groupHasTaskChannel?.(groupId).catch(() => true) === false ? 'private' as const : 'group' as const;
+    const completionDestination = groupId === null ? null : 'group' as const;
     return {
       ok: true,
       delegationId: started.delegationId,
@@ -3337,7 +3341,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const nextPlan: BotDelegationPlanSnapshot = {
       ...oldPlan,
       createdAt: reopenedAt,
-      completionTarget: { parentSessionId: callerSessionId },
+      completionTarget: oldPlan.completionTarget,
       limits: { ...oldPlan.limits, deadlineAt },
     };
     const previousInput = readSessionTaskInput(row);
@@ -4388,20 +4392,20 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       runSequence: number; execution: DelegationExecutionReceipt; outcome: string;
     } | undefined;
     if (options) {
-      if (row.requestingBotId !== options.pendingForBotId) return false;
+      // A new follower must not redirect a result owned by its creation receipt.
       if (row.status === 'completed' && terminal?.runSequence === row.runSequence
         && terminal.outcome === 'done' && isSameSessionExecution(terminal.execution, execution)) return true;
       // A later run may already have replaced taskTerminal. Reuse the frozen
       // result in the original/current parent, not a new execution's live state.
       const [bot] = await getDbClient().drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId })
-        .from(botProfiles).where(eq(botProfiles.id, options.pendingForBotId)).limit(1);
-      const parents = [...new Set([row.parentSessionId, bot?.canonicalSessionId].filter((id): id is string => !!id))];
+        .from(botProfiles).where(eq(botProfiles.id, row.requestingBotId)).limit(1);
+      const parents = [...new Set([row.parentSessionId, row.childSessionId, bot?.canonicalSessionId].filter((id): id is string => !!id))];
       if (!parents.length) return false;
       const receipt = await getDbClient().drizzle.select({ id: messages.id }).from(messages).where(and(
         inArray(messages.sessionId, parents),
         sql`json_extract(${messages.agentMeta}, '$.botCollaboration.role') = 'delegation-result'`,
         sql`json_extract(${messages.agentMeta}, '$.botCollaboration.delegationId') = ${row.id}`,
-        sql`json_extract(${messages.agentMeta}, '$.botCollaboration.fromBotId') = ${options.pendingForBotId}`,
+        sql`json_extract(${messages.agentMeta}, '$.botCollaboration.fromBotId') = ${row.requestingBotId}`,
         sql`json_extract(${messages.agentMeta}, '$.botCollaboration.childSessionId') = ${childSessionId}`,
         sql`json_extract(${messages.agentMeta}, '$.botCollaboration.result.status') = 'completed'`,
         sql`json_extract(${messages.agentMeta}, '$.botCollaboration.result.execution.instanceId') = ${execution.instanceId}`,

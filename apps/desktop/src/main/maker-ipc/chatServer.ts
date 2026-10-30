@@ -340,7 +340,6 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
     editPlanStep: (...args) => service().editPlanStep(...args),
     settleLaneTurn: (...args) => service().settleLaneTurn(...args),
     postCompanionTaskMessage: (...args) => service().postCompanionTaskMessage(...args),
-    hasCompanionTaskChannel: (...args) => service().hasCompanionTaskChannel(...args),
     dispose: () => { active.dispose(); local.dispose(); },
   };
 }
@@ -3249,16 +3248,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     // A teammate's own message about an independent task it started from this group
     // (bot-group-chat.md §10): posted outside any execution, as that teammate, never as the owner.
-    /** A server room (or an old local group already upgraded to one) carries task messages. */
-    hasCompanionTaskChannel: async (groupId: string): Promise<boolean> => (await taskRoomFor(groupId)) !== null,
     postCompanionTaskMessage: async (input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> => {
       const refused = (errorCode: string): BotGroupTaskPostResult => ({ ok: false, errorCode, retryable: false });
       try {
         if (!current()) return refused('OWNER_CHANGED');
         // An old local-only group has a UUID too: it is told from a server room by its local
         // history row and upgrade mapping, never by id shape. Such a group cannot carry a
-        // teammate's own message, so the local service refuses for good and the result falls
-        // back to the owner's private chat instead of retrying forever (bot-group-chat.md §10).
+        // teammate's own message, so the result stays in its task with a delivery failure
+        // instead of moving to a different conversation (bot-group-chat.md §10).
         const roomId = await taskRoomFor(input.groupId);
         if (!roomId) return local.postCompanionTaskMessage(input);
         await register();
@@ -3266,8 +3263,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (!actor) return refused('BOT_UNAVAILABLE');
         const s = await snapshot(roomId);
         if (s.room.archived || !s.members.some(m => m.id === actor.id && m.state === 'joined')) return refused('MEMBER_UNAVAILABLE');
-        const frozen = await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
-          { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, async () => {
+        const prepare = async (): Promise<BotGroupTaskPostSnapshot> => {
             const produced: BotGroupAttachment[] = [];
             const fs = await import('node:fs/promises');
             for (const file of input.files ?? []) {
@@ -3303,7 +3299,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             // A task started in a Thread reports into that Thread (bot-group-chat.md §10).
             const where = input.threadRootId ? { threadRootId: id.parse(input.threadRootId) } : {};
             const messages: BotGroupTaskPostSnapshot['messages'] = [{
-              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), input.card, ...firstFiles], mentions: [], ...where,
+              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), ...(input.card ? [input.card] : []), ...firstFiles], mentions: [], ...where,
             }];
             for (const [index, text] of rest.entries()) messages.push({
               operationId: `${input.clientId}:${index + 2}`, content: [{ type: 'text', text }], mentions: [], ...where,
@@ -3312,7 +3308,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               operationId: `${input.clientId}:files:${index + 2}`, content: files, mentions: [], ...where,
             });
             return { actorId: actor.id, messages };
-          });
+          };
+        const frozen = input.preparePost ? await input.preparePost(prepare, { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId })
+          : input.card ? await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
+            { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, prepare)
+          : (() => { throw new Error('TASK_DELIVERY_ORIGIN_MISSING'); })();
+        if (!current()) return refused('OWNER_CHANGED');
         // Persist every part before the first POST. Retries (including after restart) use the
         // same card, localized fallback, text and media references even if their sources change.
         let messageId = '';
@@ -3325,7 +3326,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       } catch (error) {
         deps.log?.warn('Chat task message post failed', { groupId: input.groupId, ...chatErrorDiagnostic(error) });
         return { ok: false, errorCode: error instanceof Error ? error.message : 'REQUEST_FAILED',
-          retryable: !(error instanceof ChatResponseError) || retryableResponse(error) };
+          retryable: !(error instanceof Error && error.message === 'TASK_DELIVERY_SCOPE_CHANGED')
+            && (!(error instanceof ChatResponseError) || retryableResponse(error)) };
       }
     },
     setMembers: input => safe(async () => {

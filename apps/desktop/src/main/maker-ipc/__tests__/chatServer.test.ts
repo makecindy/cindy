@@ -1387,6 +1387,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(posts.every(([, , body]) => (body as { threadRootId?: string }).threadRootId === rootId)).toBe(true);
     });
 
+    // Unit: the generic creation entry has no delegation card; its outbox still freezes
+    // every wire part and receives the authenticated destination used for the actual POST.
+    it('posts a generic task result into its original Thread through its own durable outbox', async () => {
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      const rootId = '90000000-0000-4000-8000-0000000000aa';
+      fixture.handle.mockImplementation((route, method) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
+        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000002' } };
+        return response(route);
+      });
+      const preparePost = vi.fn(async (prepare: () => Promise<import('../botGroupTaskPostSnapshot').BotGroupTaskPostSnapshot>) => prepare());
+      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'generic-result',
+        text: 'Finished', threadRootId: rootId, preparePost })).toMatchObject({ ok: true });
+      expect(preparePost).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ roomId, selfId, clientId: 'generic-result' }));
+      const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.[2]).toMatchObject({ threadRootId: rootId, content: [{ type: 'text', text: 'Finished' }] });
+    });
+
     it('leaves out one file this computer cannot send and still posts the result with the others', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       const files = await deliveryFiles(3);
@@ -1517,7 +1536,7 @@ describe('Chat Server result delivery and refresh', () => {
       } finally { legacy.dispose(); }
     });
 
-    it.each(['channel', 'started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
+    it.each(['started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
       const target = '10000000-0000-4000-8000-000000000099';
       migration.read.mockReturnValue({ roomId: target, sequence: 12, version: 2 });
       const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
@@ -1530,8 +1549,7 @@ describe('Chat Server result delivery and refresh', () => {
       });
       try {
         // A fresh service has an empty in-memory map; no timer/list read has started its migration.
-        if (state === 'channel') expect(await legacy.hasCompanionTaskChannel(roomId)).toBe(true);
-        else {
+        {
           expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: `task-restart:${state}`,
             text: '', card: { ...taskCard, data: { ...taskCard.data, state } } })).toEqual({ ok: true, messageId: 'posted-task' });
           expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${target}/messages`))?.actor).toBe(botId);

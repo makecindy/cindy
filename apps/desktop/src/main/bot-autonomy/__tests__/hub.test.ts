@@ -42,7 +42,7 @@ beforeEach(() => {
   h.scope = 'a'; h.scheduler = 'sched'; h.ready = true;
   h.handled.mockReset().mockResolvedValue(false);
   h.reportDelivery.mockReset().mockReturnValue(true);
-  configureBotAutonomyHost({ isCompletionHandledByTeammate: h.handled, readSessionExecution: () => ({ instanceId: 'live', generation: 2 }) });
+  configureBotAutonomyHost({ isCompletionHandledByTeammate: h.handled, readSessionExecution: () => ({ instanceId: 'live', generation: 2 }), hasTaskDeliveryOrigin: undefined, noteTaskDelivery: undefined });
   h.refreshRemote.mockReset().mockResolvedValue(undefined);
   h.glance.mockReset().mockReturnValue({
     botId: 'sched', scope: 'all', waiting: [], working: [], lastSweepAt: 0, doneToday: 0, offlineDevices: [],
@@ -201,4 +201,18 @@ it('keeps a final delivery dispatch valid across identical refreshes but revokes
     await watch.refreshFollowers();
     expect(batch?.canDispatch()).toBe(false);
   } finally { watch.stop(); }
+});
+
+// Unit: generic creation's origin must remain usable after restart, including without a follower.
+it('loads the original destination independently of follower ownership before accepting final delivery', async () => {
+  const hasOrigin = vi.fn(async () => true);
+  const note = vi.fn(() => true);
+  configureBotAutonomyHost({ hasTaskDeliveryOrigin: hasOrigin, noteTaskDelivery: note });
+  expect(await readTaskDeliveryNote('delegated')).toContain('report_task_delivery');
+  expect(hasOrigin).toHaveBeenCalledWith('delegated');
+  h.scheduler = null;
+  h.reportDelivery.mockReturnValue(false);
+  expect(await readTaskDeliveryNote('unfollowed')).toContain('report_task_delivery');
+  expect(reportTaskDelivery('unfollowed', true, 'live')).toEqual({ ok: true });
+  expect(note).toHaveBeenCalledWith('unfollowed', { instanceId: 'live', generation: 2 }, true);
 });

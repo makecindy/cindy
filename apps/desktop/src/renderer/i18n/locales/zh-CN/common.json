@@ -10195,6 +10195,7 @@
       "backToBot": "回到 {{name}}"
     },
     "collab": {
+      "deliveryFailed": "结果未能送达原对话，已保存在本任务中",
       "backgroundTask": "后台任务",
       "trackedTask": "独立运行并自动回传结果",
       "stopTask": "停止任务",

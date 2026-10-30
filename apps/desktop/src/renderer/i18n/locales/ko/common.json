@@ -10195,6 +10195,7 @@
       "backToBot": "{{name}}(으)로 돌아가기"
     },
     "collab": {
+      "deliveryFailed": "원래 채팅에 결과를 전달하지 못했습니다. 결과는 이 세션에 저장되어 있습니다.",
       "backgroundTask": "백그라운드 작업",
       "trackedTask": "독립적으로 실행하고 결과를 자동 반환",
       "stopTask": "작업 중지",

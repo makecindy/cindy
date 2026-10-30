@@ -10230,6 +10230,7 @@
       "backToBot": "Back to {{name}}"
     },
     "collab": {
+      "deliveryFailed": "The result could not be delivered to the original chat. It is saved in this session.",
       "backgroundTask": "Background task",
       "trackedTask": "Runs independently and returns its result",
       "stopTask": "Stop task",
