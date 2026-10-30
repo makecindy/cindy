@@ -1092,6 +1092,77 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
+  // 测试价值：生产入口 callComputerDriverTool 必须在 cua-driver 0.38 的闭合 schema 下
+  // 跳过无法表达的旧光标装饰，同时继续派发用户动作。#6979；旧测试只覆盖开放 schema。
+  // 最小失败输入是只声明新运动字段且缺少旧 style 工具的 tools/list；unit tier，无真实驱动。
+  it('skips incompatible optional cursor setup before dispatching the requested action', async () => {
+    mcpListToolsMock.mockResolvedValueOnce({
+      tools: [
+        ...COMPUTER_TOOLS.map((tool) => ({
+          name: tool.name,
+          inputSchema: { type: 'object', additionalProperties: true },
+        })),
+        {
+          name: 'set_agent_cursor_motion',
+          inputSchema: {
+            type: 'object',
+            properties: { arc_flow: {}, style: {}, timing: {} },
+            additionalProperties: false,
+          },
+        },
+        { name: 'end_session', inputSchema: { type: 'object', additionalProperties: true } },
+      ],
+    });
+    mcpCallToolMock.mockResolvedValueOnce({
+      content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }],
+    });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-cursor-v038' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual(['click']);
+  });
+
+  it('dispatches only cursor fields advertised by a closed driver schema', async () => {
+    mcpListToolsMock.mockResolvedValueOnce({
+      tools: [
+        ...COMPUTER_TOOLS.map((tool) => ({
+          name: tool.name,
+          inputSchema: { type: 'object', additionalProperties: true },
+        })),
+        {
+          name: 'set_agent_cursor_motion',
+          inputSchema: {
+            type: 'object',
+            properties: { cursor_color: {} },
+            additionalProperties: false,
+          },
+        },
+        { name: 'end_session', inputSchema: { type: 'object', additionalProperties: true } },
+      ],
+    });
+    mcpCallToolMock
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true}' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: '{"ok":true,"clicked":true}' }] });
+
+    await expect(callComputerDriverTool('click', {
+      pid: 123,
+      window_id: 7,
+      x: 10,
+      y: 20,
+    }, { sessionId: 'session-cursor-partial' })).resolves.toEqual({ ok: true, clicked: true });
+
+    expect(mcpCallToolMock.mock.calls.map((call) => call[0]?.name)).toEqual([
+      'set_agent_cursor_motion',
+      'click',
+    ]);
+    expect(mcpCallToolMock.mock.calls[0]?.[0]?.arguments).toEqual({ cursor_color: '#DF0C27' });
+  });
+
   it('names the run after its first goal and ignores later step descriptions', async () => {
     mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
     await callComputerDriverTool('list_windows', { session_goal: '提交报销申请' }, { sessionId: 'goal-a' });

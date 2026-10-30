@@ -1,6 +1,8 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 interface CindyHtmlPreviewModule {
+  appHostAvailable?: boolean;
+  startApp?(root: string, entry: string, token: string, csp: string, files: string[][]): Promise<string>;
   start(root: string, entry: string, token: string, csp: string, files: string[][]): Promise<string>;
   startOnDemand?(root: string, entry: string, token: string, csp: string): Promise<string>;
   resolveRequest?(token: string, id: string, filename: string, mime: string, status: number): Promise<boolean>;

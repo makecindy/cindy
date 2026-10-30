@@ -18,10 +18,50 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
   'maker:session-background-activity',
   'maker:session-background-tasks:list',
+  // Next-prompt suggestion after a turn completes: a model request the host answers in
+  // ~2 s. Nobody waits on it, so it must not hold a foreground slot while the user sends.
+  'maker:predict-prompt',
+  // 打字时的 Agent 预热是尽力而为的提示，排在用户正在等待的请求之后。
+  'maker:session:prewarm',
 ]);
 
 export function isBackgroundInvoke(channel: string): boolean {
   return BACKGROUND_INVOKE_CHANNELS.has(channel);
+}
+
+/**
+ * Writes the person is actively waiting on: sending, steering or stopping a turn and
+ * answering an interaction. Every relay round trip costs ~0.5 s, so one of these queued
+ * behind a dozen history/list reads is exactly the slowness users feel. Both ends grant
+ * them a small admission allowance beyond the ordinary limits (InvokeScheduler on the
+ * controller, dispatch admission on the host); nothing here changes authorization,
+ * retries or timeouts, and a listed channel still needs its allowlist entry.
+ * Queue-management edits (reorder, expand, rename) stay foreground: the UI applies them
+ * optimistically and nobody waits on their round trip.
+ */
+const INTERACTIVE_INVOKE_CHANNELS = new Set([
+  'maker:send',
+  'maker:abort-session',
+  'maker:input:enqueue',
+  'maker:input:steer',
+  'maker:input:stop',
+  'maker:input:resume',
+  'maker:input:retry-last-error',
+  'maker:input:remove',
+  'maker:resolve-interaction',
+  'maker:agent-task:stop',
+]);
+
+export function isInteractiveInvoke(channel: string): boolean {
+  return INTERACTIVE_INVOKE_CHANNELS.has(channel);
+}
+
+export type InvokePriority = 'interactive' | 'foreground' | 'background';
+
+/** A caller's background hint never demotes an interactive write. */
+export function resolveInvokePriority(channel: string, backgroundHint?: boolean): InvokePriority {
+  if (isInteractiveInvoke(channel)) return 'interactive';
+  return (backgroundHint ?? isBackgroundInvoke(channel)) ? 'background' : 'foreground';
 }
 
 /** Control traffic must not wait behind business operations to maintain a link/lease. */
@@ -92,6 +132,9 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   'file-browser:remote-op': 30_000,
   'maker:create-session': 30_000,
   'maker:fork': 30_000,
+  // Readable-history recovery also loads history, may start Codex, and copies messages.
+  // Keep the normal fork window; a timeout does not cancel the host-side operation.
+  'maker:fork-strip-encrypted': 30_000,
   'maker:get-context-usage': 30_000,
   'maker:goal:resume': 30_000,
   'maker:goal:set': 30_000,
@@ -111,12 +154,19 @@ export const MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
 
 export const MOBILE_SCHEDULE_CHANNEL_TIMEOUT_MS = 40_000;
 
+export const BOT_GROUP_SEND_TIMEOUT_MS = 180_000;
+// MCP Apps Host bounds loading at 90s (connection + discovery + HTML). Leave
+// room for response delivery without changing other MCP App operation budgets.
+export const MCP_APP_OPEN_TIMEOUT_MS = 120_000;
+
 /**
  * Every action-specific desktop budget `resolveRemoteInvokeTimeoutMs` can return beyond
  * INVOKE_TIMEOUT_OVERRIDES_MS. Hosts size their global orphan/outbox ceilings from both,
  * so a host never gives up before the controller stops waiting.
  */
 export const ACTION_INVOKE_TIMEOUTS_MS: readonly number[] = [
+  BOT_GROUP_SEND_TIMEOUT_MS,
+  MCP_APP_OPEN_TIMEOUT_MS,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
   TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
 ];
@@ -126,6 +176,13 @@ export function resolveRemoteInvokeTimeoutMs(
   args?: unknown[],
   platform: 'desktop' | 'mobile' = 'desktop',
 ): number | undefined {
+  const appRequest = args?.[1] as { op?: unknown } | undefined;
+  if (channel === 'maker:mcp-apps:v1' && appRequest?.op === 'open') return MCP_APP_OPEN_TIMEOUT_MS;
+  // Group sends can materialize phone attachments, upload media and then submit the message.
+  // Only this action gets the larger window; a timeout still means an unconfirmed result.
+  const groupRequest = args?.[0] as { collectionId?: unknown; actionId?: unknown } | undefined;
+  if (channel === 'maker:remote-resources:invoke' && groupRequest?.collectionId === 'bot-groups' && groupRequest.actionId === 'send')
+    return BOT_GROUP_SEND_TIMEOUT_MS;
   if (channel === TASK_MIGRATION_CHANNEL) {
     const request = args?.[0];
     const action = request && typeof request === 'object' && 'action' in request ? request.action : undefined;

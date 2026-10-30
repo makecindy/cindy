@@ -32,6 +32,8 @@ export interface ComposerAttachmentTrayProps {
   onPreview: (attachmentId: string) => void;
   /** 乐观上传中的本机附件(图片=缩略卡,文件=chip,均带转圈;失败态带重试)。 */
   pendingUploads?: readonly PendingLocalAttachmentUpload[];
+  /** Screen owns the viewer so keyboard blur cannot unmount it with this tray. */
+  onPreviewPending: (localId: string) => void;
   /** X 一个上传中的附件(取消上传)。 */
   onRemovePending?: (localId: string) => void;
   /** 重试一个失败态的上传卡。 */
@@ -53,6 +55,7 @@ export function ComposerAttachmentTray({
   onRemove,
   onPreview,
   pendingUploads = [],
+  onPreviewPending,
   onRemovePending,
   onRetryPending,
   pastePlaceholderCount = 0,
@@ -128,7 +131,9 @@ export function ComposerAttachmentTray({
       {pendingUploads.map((pending) => (pending.kind === 'image' ? (
         <View key={pending.localId} style={styles.thumbCard} testID={`${testIDPrefix}.attachmentPendingThumb`}>
           <View style={styles.thumbPressable}>
-            <Image contentFit="cover" source={{ uri: pending.previewUri }} style={styles.thumbImage} transition={0} />
+            {pending.previewUri ? (
+              <Image contentFit="cover" source={{ uri: pending.previewUri }} style={styles.thumbImage} transition={0} />
+            ) : null}
             {pending.failed ? (
               // 失败态:遮罩变为可点的「重试」——弱网下让用户原地重试,不用重新找图。
               <Pressable
@@ -138,13 +143,20 @@ export function ComposerAttachmentTray({
                 style={({ pressed }) => [styles.thumbBusyOverlay, pressed && styles.pressed]}
                 testID={`${testIDPrefix}.attachmentPendingRetryButton`}
               >
-                <RefreshCw color={colors.ctaText} size={iconSize.md} strokeWidth={iconStroke.bold} />
+                <RefreshCw color={colors.swipeActionText} size={iconSize.md} strokeWidth={iconStroke.bold} />
                 <Text style={styles.thumbFailedText}>{t('composer.attachments.retry')}</Text>
               </Pressable>
             ) : (
-              <View style={styles.thumbBusyOverlay}>
-                <ActivityIndicator color={colors.ctaText} size="small" />
-              </View>
+              <Pressable
+                accessibilityLabel={t('composer.attachments.viewImage', { name: pending.name })}
+                accessibilityRole="button"
+                disabled={!pending.previewUri}
+                onPress={() => onPreviewPending(pending.localId)}
+                style={({ pressed }) => [styles.thumbBusyOverlay, pressed && styles.pressed]}
+                testID={`${testIDPrefix}.attachmentPendingPreviewButton`}
+              >
+                <ActivityIndicator color={colors.swipeActionText} size="small" />
+              </Pressable>
             )}
           </View>
           <Pressable
@@ -308,7 +320,8 @@ function makeTrayStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceChip,
       justifyContent: 'center' as const,
     },
-    // 上传中遮罩:深色 scrim 让缩略图「在但未就绪」,转圈用 ctaText(浅色主题为白)。
+    // 上传中遮罩:深色 scrim 让缩略图「在但未就绪」。scrim 两种模式都是深色,转圈用恒白
+    // swipeActionText;ctaText 在深色模式反相为近黑,压在深 scrim 上看不见。
     thumbBusyOverlay: {
       alignItems: 'center' as const,
       backgroundColor: colors.overlay,
@@ -320,9 +333,9 @@ function makeTrayStyles(colors: ThemeColors) {
       right: 0,
       top: 0,
     },
-    // 失败态遮罩上的「重试」文字(与转圈同用 ctaText,深 scrim 上跨主题可读)。
+    // 失败态遮罩上的「重试」文字(与转圈同用恒白 swipeActionText)。
     thumbFailedText: {
-      color: colors.ctaText,
+      color: colors.swipeActionText,
       fontSize: typeScale.micro,
       lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
@@ -411,9 +424,9 @@ function makeTrayStyles(colors: ThemeColors) {
       right: 0,
       top: 0,
     },
-    // 与 thumbBusyOverlay 同精神:深色 scrim 上用 ctaText(浅色主题为白)。
+    // 与 thumbBusyOverlay 同精神:深色 scrim 上用恒白 swipeActionText。
     collapsedBadgeOverlayText: {
-      color: colors.ctaText,
+      color: colors.swipeActionText,
       fontSize: typeScale.micro,
       lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,

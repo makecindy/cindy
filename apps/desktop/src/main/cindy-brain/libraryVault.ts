@@ -498,7 +498,7 @@ export class LibraryVault {
   /* ── 打开与状态 ─────────────────────────────────────────────────── */
 
   /**
-   * 打开(幂等):建目录骨架 → 清理超龄 staging 残渣 → 读/建 meta → 读/扫
+   * 打开(幂等):建目录骨架 → 读/建 meta → 清理超龄 staging 残渣 → 读/扫
    * 用量账本。meta 存在但读不出/不合法 → unavailable(corrupt),**不重建**。
    */
   async open(): Promise<LibraryResult<{ state: LibraryState; reason: string | null; usedBytes: number; fileCount: number }>> {
@@ -540,6 +540,9 @@ export class LibraryVault {
               ghostId: dirSeg,
             });
             if (existing.ok) {
+              if (this.deps.ghostId && existing.meta.ghostId !== this.deps.ghostId) {
+                return this.customRootUnavailable('binding-moved');
+              }
               this.meta = existing.meta;
               if (existing.usage) customUsage = existing.usage;
             } else if (existing.code === 'MISSING') {
@@ -599,7 +602,6 @@ export class LibraryVault {
         return { ok: true as const, state: this.state, reason: this.unavailableReason, usedBytes: 0, fileCount: 0 };
       }
       const customOpen = (this.deps.locationKind ?? 'default') === 'custom';
-      if (!customOpen) await this.sweepStaleTmp();
 
       // meta:已存在必须可解析(不可用 ≠ 空);不存在则首建。custom 首次 open 用 held-fd 已写的 meta,不再 path 写。
       if (!this.meta) {
@@ -609,6 +611,7 @@ export class LibraryVault {
         if (
           typeof parsed !== 'object' || parsed === null || parsed.version !== 1 ||
           typeof parsed.ghostId !== 'string' || typeof parsed.createdAt !== 'number'
+          || (this.deps.ghostId !== undefined && parsed.ghostId !== this.deps.ghostId)
         ) {
           throw new Error('malformed meta');
         }
@@ -633,6 +636,8 @@ export class LibraryVault {
         }
       }
       }
+
+      if (!customOpen) await this.sweepStaleTmp();
 
       // 用量:合法账本只读复用;坏/缺才 scan。custom 首次 open 不 persist/unlink。
       let ledger: UsageLedger | null = customUsage;

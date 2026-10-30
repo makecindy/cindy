@@ -43,7 +43,7 @@ export interface AgentResourceSettings {
    * 超出的命令在启动前排队等待。0 = 不限(默认,历史行为)。
    */
   maxConcurrentCommands: number;
-  /** agent 进程(claude / codex 及其子进程)的调度优先级档位。 */
+  /** agent 进程(claude / codex / pi 及其子进程)的调度优先级档位。 */
   processPriority: AgentProcessPriority;
   /**
    * 是否向 agent 进程注入工具链限核 env(VITEST_MAX_FORKS / MAKEFLAGS 等),

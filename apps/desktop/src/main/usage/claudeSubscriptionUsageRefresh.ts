@@ -41,7 +41,7 @@ const DEFAULT_BACKOFF_MAX_MS = 30 * 60_000;
 
 export interface ClaudeSubscriptionUsageReader {
   /** cached-first 读(IPC handler 用):立即返回缓存快照,后台按节流刷新。 */
-  read(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  read(options?: { fresh?: boolean }): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   /** 显式触发一次后台刷新(turn-done 钩子用),同样吃节流 / 退避。 */
   triggerRefresh(): void;
   /**
@@ -106,9 +106,9 @@ export function createClaudeSubscriptionUsageReader(
     if (inFlight) {
       // 飞行中的请求属于另一个账号:旧结果会被丢弃,收尾后按当时的账号补一次。
       if (inFlightAccount !== account) {
-        return inFlight.finally(() => {
+        return inFlight.then(() => {
           const current = readAccountSafe();
-          if (current !== null) void refreshFor(current);
+          if (current !== null) return refreshFor(current);
         });
       }
       return inFlight;
@@ -148,20 +148,25 @@ export function createClaudeSubscriptionUsageReader(
   }
 
   return {
-    async read(): Promise<ClaudeSubscriptionUsageSnapshot | null> {
+    async read(options): Promise<ClaudeSubscriptionUsageSnapshot | null> {
       const account = readAccountSafe();
       if (account === null) return null;
       const cached = await deps.readCachedSnapshot();
       // 读缓存期间换号:按旧账号做的归属判断已失效,既不返回(可能是旧账号的余量)也不清理
       // (新账号的快照可能刚写入)。新账号的余量随登录态同步 / 刷新广播。
       if (readAccountSafe() !== account) return null;
-      if (belongsToOtherAccount(cached, account)) {
+      const otherAccount = belongsToOtherAccount(cached, account);
+      if (otherAccount) {
         await clearSnapshotSafe();
-        void refreshFor(account);
-        return null;
+      }
+      if (readAccountSafe() !== account) return null;
+      if (options?.fresh) {
+        await refreshFor(account);
+        const refreshed = await deps.readCachedSnapshot();
+        return readAccountSafe() === account && !belongsToOtherAccount(refreshed, account) ? refreshed : null;
       }
       void refreshFor(account);
-      return cached;
+      return otherAccount ? null : cached;
     },
 
     triggerRefresh(): void {

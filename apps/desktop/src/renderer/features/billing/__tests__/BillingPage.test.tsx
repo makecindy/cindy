@@ -2,16 +2,30 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
 
-const i18n = {
-  language: 'en',
-  resolvedLanguage: 'en' as string | undefined,
-};
+import en from '../../../i18n/locales/en/common.json';
+import ja from '../../../i18n/locales/ja/common.json';
+import ko from '../../../i18n/locales/ko/common.json';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
+import zhTW from '../../../i18n/locales/zh-TW/common.json';
+
+const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+
+const i18n = createInstance();
+void i18n.init({
+  lng: 'en',
+  initAsync: false,
+  interpolation: { escapeValue: false },
+  resources: Object.fromEntries(
+    Object.entries(invoiceLocales).map(([locale, resource]) => [locale, { translation: resource }]),
+  ),
+});
 
 const uiMocks = vi.hoisted(() => ({
   clipboardWriteText: vi.fn(),
@@ -63,23 +77,15 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'billing.providers.stripe': 'stripe',
       };
       if (providerLabels[key]) return providerLabels[key];
-      if (key === 'billing.orders.invoice.emailBody') {
-        return [
-          'Hello,',
-          '',
-          'I would like to request an invoice for the following order:',
-          '',
-          '────────────────────',
-          `Order ID: ${params?.orderId ?? ''}`,
-          'Application: Cindy',
-          'Payment method: Scan to pay',
-          'Invoice amount: CN¥33.00',
-          'Invoice title: ',
-          'Contact person: ',
-          'Phone number: ',
-          'Email: ',
-          '────────────────────',
-        ].join('\n');
+      if (
+        [
+          'billing.orders.invoice.personalInvoicePolicy',
+          'billing.orders.invoice.invoiceTitleHint',
+          'billing.orders.invoice.emailSubject',
+          'billing.orders.invoice.emailBody',
+        ].includes(key)
+      ) {
+        return i18n.t(key, params);
       }
       return params ? `${key}:${JSON.stringify(params)}` : key;
     },
@@ -129,7 +135,8 @@ vi.mock('qrcode', () => ({
 import { BillingPage } from '../BillingPage';
 import * as QRCode from 'qrcode';
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en');
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText: uiMocks.clipboardWriteText },
@@ -158,8 +165,6 @@ async function selectSubscriptionManagementAction(action: string) {
 
 describe('BillingPage remote catalog rendering', () => {
   beforeEach(() => {
-    i18n.language = 'en';
-    i18n.resolvedLanguage = 'en';
     Object.assign(checkout.state, {
       open: false,
       kind: null,
@@ -3315,6 +3320,68 @@ describe('BillingPage order history', () => {
     expect(mailBody).toContain('\n\n');
     expect(mailBody).toContain('Invoice title: ');
   });
+
+  it.each(Object.entries(invoiceLocales))(
+    'shows the policy in the dialog and places title instructions beside the email field for %s',
+    async (locale, resources) => {
+      await i18n.changeLanguage(locale);
+      install([order({ orderId: 'o-company-reimbursement' })]);
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal
+        .mockResolvedValueOnce({ success: false })
+        .mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+      const policy = resources.billing.orders.invoice.personalInvoicePolicy.replace(
+        /<\/?strong>/g,
+        '',
+      );
+      if (locale === 'zh-CN') {
+        expect(policy).toBe(
+          'Cindy 个人版充值默认开具个人抬头发票，抬头可填写姓名或“个人”。如需开具企业抬头发票用于公司报销，请提供加盖公司公章的报销说明，并在说明中注明开票抬头。',
+        );
+      }
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+      const dialog = await screen.findByRole('alertdialog');
+      const policyParagraph = within(dialog).getByText(
+        (_, element) => element?.tagName === 'P' && element.textContent === policy,
+      );
+      expect(policyParagraph.querySelectorAll('strong')).toHaveLength(2);
+      if (locale === 'zh-CN') {
+        expect(
+          Array.from(policyParagraph.querySelectorAll('strong'), (node) => node.textContent),
+        ).toEqual(['个人抬头发票', '加盖公司公章的报销说明']);
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      const body = mailto.searchParams.get('body');
+      const { fields, invoiceTitleHint } = resources.billing.orders.invoice;
+      expect(body).toContain(`\n${invoiceTitleHint}\n\n`);
+      expect(body).not.toContain(policy);
+      const titlePosition = body!.indexOf(fields.invoiceTitle);
+      const hintPosition = body!.indexOf(invoiceTitleHint);
+      expect(titlePosition).toBeGreaterThan(body!.indexOf('o-company-reimbursement'));
+      expect(hintPosition).toBeGreaterThan(titlePosition);
+      expect(hintPosition).toBeLessThan(body!.indexOf(fields.contact));
+      if (locale === 'zh-CN') {
+        expect(body).toContain(
+          '发票抬头：\n填写说明：个人抬头请填写姓名或“个人”；如需企业抬头用于公司报销，请随邮件附上加盖公司公章、注明开票抬头的报销说明。',
+        );
+      }
+      expect(body).toContain('o-company-reimbursement');
+      expect(body).not.toContain('{{');
+      expect(body).not.toContain('<strong>');
+      expect(gmail.searchParams.get('body')).toBe(body);
+      const subject = mailto.searchParams.get('subject');
+      expect(subject).toContain('o-company-reimbursement');
+      expect(subject).not.toContain('{{');
+      expect(gmail.searchParams.get('su')).toBe(subject);
+    },
+  );
 
   it('opens a prefilled Gmail compose page when the mail app cannot be opened', async () => {
     install([order({ orderId: 'o-gmail-fallback' })]);

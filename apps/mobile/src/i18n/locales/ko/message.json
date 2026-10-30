@@ -9,12 +9,17 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "로컬 앱 “{{name}}”에서 전송",
+    "sourceLocalAppId": "앱 ID: {{id}}",
+    "failedSamplingAttempt": "완료되지 않은 답변입니다. 내용은 참고용으로만 확인해 주세요.",
     "moreActions": "추가 메시지 작업",
+    "reply": "답장",
     "newMessagesToBottom": "새 메시지, 맨 아래로 이동",
     "jumpToBottom": "맨 아래로 이동",
     "openForkOrigin": "분기 원본 메시지 열기",
     "viewForkOrigin": "분기 원본 보기",
     "emptyMessages": "메시지가 없습니다",
+    "historyNotCached": "이 휴대폰에 저장된 기록이 없습니다. 컴퓨터에 연결하면 동기화됩니다.",
     "syncing": "동기화 중",
     "copyLinkHint": "탭하여 메시지 링크 복사",
     "sentTime": "보낸 시간 {{time}}",
@@ -66,6 +71,7 @@
     "copyStateCopied": "복사됨",
     "copyStateFailed": "복사 실패",
     "copyStateCopy": "복사",
+    "copyCode": "코드 복사",
     "thinkingHidden": "생각 내용 숨김",
     "thinkingDone": "생각 {{duration}}",
     "thinkingActive": "생각 중 {{elapsed}}",
@@ -100,11 +106,13 @@
     "subagentSummary": "하위 에이전트 요약",
     "agentSwitchLabel": "{{from}}에서 {{to}}(으)로 전환됨",
     "agentSwitchViewHandoff": "{{label}}, 인계 내용 보기",
+    "sessionFallbackPill": "요약으로 이어감",
     "sessionResumedPill": "원래 세션을 재개함",
     "handoffContentDesc": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
     "handoffContentDescEnglishSource": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
     "openDiagramDetail": "다이어그램 세부 정보 열기",
-    "sessionChipFallback": "세션 {{id}}",
+    "sessionChipFallback": "세션",
+    "messageChipFallback": "인용한 메시지",
     "imageFallbackTitle": "이미지",
     "mermaidExportFailedTitle": "내보내기 실패",
     "mermaidRenderIncompleteBody": "다이어그램이 아직 완전히 렌더링되지 않았거나 내보내기에 실패했습니다. 나중에 다시 시도하세요.",
@@ -167,7 +175,9 @@
     "diffEditCount": "{{n}}개 편집",
     "groupSentNamed": "그룹 「{{name}}」에서 보냄",
     "groupSent": "그룹에서 보냄",
-    "sourceGroupId": "그룹 ID: {{id}}"
+    "sourceGroupId": "그룹 ID: {{id}}",
+    "selectText": "텍스트 선택",
+    "you": "나"
   },
   "actions": {
     "attachmentsPrefix": "첨부파일: {{names}}",
@@ -178,6 +188,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "원본 이미지를 불러올 수 없습니다",
+    "retryOriginal": "원본 이미지 다시 불러오기",
+    "loadingOriginal": "원본 이미지 불러오는 중…",
     "sourceMissing": "이 컴퓨터에 원본 이미지가 없습니다. 원본 파일을 다시 가져오세요.",
     "deviceOffline": "컴퓨터가 연결되지 않았습니다. 다시 연결한 후 시도하세요.",
     "cancelAnnotation": "주석 취소",
@@ -225,6 +238,10 @@
     "cancel": "취소",
     "edit": "편집",
     "steer": "끼어들기",
+    "steerQueued": "아직 전달되지 않았습니다. 메시지는 대기열에 남아 있습니다.",
+    "moveUp": "한 칸 앞으로",
+    "moveDown": "한 칸 뒤로",
+    "cancelSend": "전송 취소",
     "collapseQueued": "대기 중인 메시지 접기",
     "expandRemainingQueued": "남은 {{n}}개의 대기 중인 메시지 펼치기",
     "collapse": "접기",
@@ -233,7 +250,15 @@
     "sendingMessage": "전송 중인 메시지:{{text}}",
     "uploadingAttachments": "첨부파일 업로드 중 {{uploaded}}/{{total}}",
     "delete": "삭제",
-    "retry": "재시도"
+    "retry": "재시도",
+    "notSent": "전송 안 됨",
+    "imagesNotUploaded_one": "이미지 {{count}}장을 올리지 못했어요",
+    "imagesNotUploaded_other": "이미지 {{count}}장을 올리지 못했어요",
+    "waitingForComputer": "컴퓨터가 연결되면 전송",
+    "waitingForNetwork": "네트워크가 돌아오면 전송",
+    "queued": "대기 중",
+    "retryImage": "이 이미지 다시 올리기",
+    "waitingMessage": "전송 대기 중인 메시지:{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -260,12 +285,25 @@
       "usageReset": "사용량이 복구되어 자동으로 계속했습니다",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "다른 컴퓨터로 전환하는 중…",
       "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회",
       "detail": {
         "reason": "중단 원인",
         "attempt": "이번 재시도 {{attempt}}/{{total}}",
         "sessionTotal": "이 세션에서 재연결 {{count}}회"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}}이(가) 사용량 한도에 도달해 {{to}}에서 이어서 진행했습니다",
+        "auth": "{{from}}의 로그인이 만료되어 {{to}}에서 이어서 진행했습니다",
+        "unavailable": "{{from}}에 연결할 수 없어 {{to}}에서 이어서 진행했습니다",
+        "overload": "{{from}}의 서비스가 혼잡해 {{to}}에서 이어서 진행했습니다",
+        "failed": "{{from}}에서 문제가 생겨 {{to}}에서 이어서 진행했습니다"
+      },
+      "agentReconnect": {
+        "named": "{{computer}}에 다시 연결되어 이어서 진행했습니다",
+        "unnamed": "원래 컴퓨터에 다시 연결되어 이어서 진행했습니다"
+      },
+      "groupSwitch": "다른 컴퓨터로 자동 전환해 이어서 진행했습니다"
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",
@@ -274,6 +312,7 @@
     "agentSwitchLocation": "Agent 실행 위치가 {{device}}(으)로 변경됨",
     "agentSwitchLocationThisComputer": "Agent 실행 위치가 이 컴퓨터로 돌아옴",
     "agentSwitchLocationOtherComputer": "Agent 실행 위치가 다른 컴퓨터로 변경됨",
+    "agentSwitchLocationQuotaRebalance": "이 계정의 할당량을 먼저 쓰기 위해",
     "learnStarted": "스킬 학습을 시작했습니다",
     "learnStartedBody": "증류는 데스크톱 백그라운드에서 진행됩니다. 완료되면 데스크톱에서 스킬 초안을 확인하고 검토하세요.",
     "learnFailed": "스킬 학습을 시작하지 못했습니다",
@@ -374,5 +413,15 @@
     "memory": "기억했어요: {{title}}",
     "skillCreated": "스킬 생성: {{title}}",
     "skillUpdated": "스킬 업데이트: {{title}}"
+  },
+  "richAnswer": {
+    "send": "메시지 보내기",
+    "sending": "보내는 중…",
+    "sent": "제출됨",
+    "sendFailed": "메시지가 제출되지 않았습니다. 입력한 내용은 유지됩니다.",
+    "playVideo": "동영상 재생",
+    "openVideoSource": "원본 동영상 열기",
+    "calculationUnavailable": "이 값을 계산할 수 없습니다.",
+    "incomplete": "일부 내용을 표시하지 못했습니다."
   }
 }

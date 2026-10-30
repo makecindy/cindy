@@ -463,7 +463,7 @@
       "surface-chip": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-surface-chip}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-chip-alt": {
         "$type": "color",
@@ -473,17 +473,17 @@
       "surface-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-surface-hover}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-hover-soft": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-surface-hover-soft}",
-        "$description": "柔和 hover/代码块底"
+        "$description": "墨水 白 4%: 柔和悬停(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-hover-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-surface-hover-hsl}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-on-card": {
         "$type": "color",
@@ -510,6 +510,18 @@
         "$value": "{reference.themes.cindy-dark.value-switch-thumb-light}",
         "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名"
       },
+      "fast-toggle-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-track-off}",
+        "$description": "Fast/思考小开关的关闭轨道跟随开关关闭轨道:文字改墨水后不再借用禁用文字色,两类开关关闭态一致并保住 3:1(2026-10-22 用户裁决随附)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "switch-track-off",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
       "status-badge-fg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-status-badge-fg}",
@@ -518,27 +530,27 @@
       "border-default": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-border-default}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-default-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-border-default-hsl}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-shadcn-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-border-shadcn-hsl}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-transparent-mixed": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-border-transparent-mixed}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-primary}",
-        "$description": "直映: 正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-on-dark": {
         "$type": "color",
@@ -548,7 +560,7 @@
       "text-primary-emphasis": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-primary-emphasis}",
-        "$description": "强调正文"
+        "$description": "墨水 白 100%: 强调文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-inv": {
         "$type": "color",
@@ -558,57 +570,57 @@
       "text-primary-body-strong": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-primary-body-strong}",
-        "$description": "直映: 正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-primary-hsl}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-secondary}",
-        "$description": "直映: 二级信息; U2 例外"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary-cross": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-secondary-cross}",
-        "$description": "直映: 二级信息; U2 例外"
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary-mid": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-secondary-mid}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-tertiary}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-stone": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-tertiary-stone}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-mid": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-tertiary-mid}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-tertiary-hsl}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-disabled": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-disabled}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-disabled-tertiary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-disabled-tertiary}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "accent-cta-bg": {
         "$type": "color",
@@ -643,22 +655,22 @@
       "accent": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-accent}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "agent-actions-rail": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-agent-actions-rail}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-checkbox-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-ask-checkbox-border}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-header-chip-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-ask-header-chip-bg}",
-        "$description": "菜单 hover/提问卡纸片档"
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-send-disabled-bg": {
         "$type": "color",
@@ -673,7 +685,7 @@
       "ask-option-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-ask-option-hover}",
-        "$description": "禁用底/option hover 档"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "background": {
         "$type": "color",
@@ -693,17 +705,41 @@
       "chat-input-chip-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-chat-input-chip-border}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "chat-input-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-chat-input-text}",
-        "$description": "正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-placeholder-subtle": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
+        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-placeholder",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "thinking-body-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-secondary}",
+        "$description": "思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-secondary",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
       },
       "color-primary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-color-primary}",
-        "$description": "正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "caret-accent": {
         "$type": "color",
@@ -728,7 +764,7 @@
       "confirm-btn-secondary-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-confirm-btn-secondary-border}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "confirm-btn-secondary-hover": {
         "$type": "color",
@@ -738,22 +774,22 @@
       "confirm-btn-secondary-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-confirm-btn-secondary-text}",
-        "$description": "正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "confirm-title": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-confirm-title}",
-        "$description": "正文"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "file-chip-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-file-chip-bg}",
-        "$description": "文件纸片"
+        "$description": "墨水 白 13%: 加深底(2026-10-22 用户裁决,取代实色灰)"
       },
       "file-remove-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-file-remove-bg}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "info-700": {
         "$type": "color",
@@ -763,12 +799,12 @@
       "model-trigger-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-model-trigger-hover}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "model-item-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-model-item-hover}",
-        "$description": "下拉行 hover: 抬亮到面板之上(沿革见 2026-07 注)"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "msg-link": {
         "$type": "color",
@@ -778,7 +814,7 @@
       "msg-scrollbar-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-msg-scrollbar-hover}",
-        "$description": "弱档"
+        "$description": "墨水 白 13%: 加深底(2026-10-22 用户裁决,取代实色灰)"
       },
       "msg-user-bg": {
         "$type": "color",
@@ -788,12 +824,12 @@
       "muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-muted}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "muted-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-muted-foreground}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "perm-auto-selected-text": {
         "$type": "color",
@@ -828,17 +864,17 @@
       "perm-item-selected-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-perm-item-selected-bg}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "plan-outline-active-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-plan-outline-active-bg}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "plan-toolbar-btn-hover-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-plan-toolbar-btn-hover-bg}",
-        "$description": "禁用底/option hover 档"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "popover": {
         "$type": "color",
@@ -853,12 +889,12 @@
       "search-match-fg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-search-match-fg}",
-        "$description": "search fg"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "secondary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-secondary}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-btn-primary-text": {
         "$type": "color",
@@ -868,12 +904,12 @@
       "settings-btn-secondary-hover-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-settings-btn-secondary-hover-bg}",
-        "$description": "hover/chip"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
-        "$description": "三级转中性(等亮度,2026-08-13)"
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",
@@ -888,12 +924,12 @@
       "settings-menu-bg-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-settings-menu-bg-hover}",
-        "$description": "菜单 hover/提问卡纸片档"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-menu-bg-selected": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-settings-menu-bg-selected}",
-        "$description": "卡片锚定: 比卡片 #1F1F1F 亮一档(压在设置卡上的选中态)"
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-source-link": {
         "$type": "color",
@@ -908,17 +944,17 @@
       "sidebar-action-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-action-icon}",
-        "$description": "E1D 侧栏层级:二级暗灰 #6F6F6F(时间戳/RemoteProjectIcon)"
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "cmd-palette-item-meta": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-cmd-palette-item-meta}",
-        "$description": "E1D 侧栏层级:二级暗灰(分组标签/meta)"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-item-active-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-item-active-foreground}",
-        "$description": "反相深字(浅钮上)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "sidebar-item-active-border": {
         "$type": "color",
@@ -928,7 +964,7 @@
       "sidebar-item-active": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-item-active}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊 #EEEEEE 浅底(同 accent-cta-bg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "splash-bg": {
         "$type": "color",
@@ -938,7 +974,7 @@
       "splash-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-splash-text}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "splash-text-destructive": {
         "$type": "color",
@@ -948,12 +984,12 @@
       "splash-text-muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-splash-text-muted}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-titlebar-icon}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "tooltip-bg": {
         "$type": "color",
@@ -988,7 +1024,7 @@
       "accent-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-accent-foreground}",
-        "$description": "裁决: accent 成对中性前景"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "panel-bg": {
         "$type": "color",
@@ -1013,27 +1049,27 @@
       "foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-foreground}",
-        "$description": "alias closure 直接值"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "input": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-input}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "secondary-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-secondary-foreground}",
-        "$description": "alias closure"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "popover-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-popover-foreground}",
-        "$description": "alias closure"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar": {
         "$type": "color",
@@ -1043,17 +1079,17 @@
       "titlebar-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-titlebar-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-button-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-titlebar-button-hover}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-control-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-titlebar-control-hover}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar": {
         "$type": "color",
@@ -1063,7 +1099,7 @@
       "sidebar-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-item-hover": {
         "$type": "color",
@@ -1083,7 +1119,7 @@
       "sidebar-muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-muted}",
-        "$description": "E1D 侧栏层级:二级暗灰 #6F6F6F(行首图标普通态)"
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-translucent-main": {
         "$type": "color",
@@ -1103,7 +1139,7 @@
       "composer-pill-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-composer-pill-icon}",
-        "$description": "E2 composer pill 图标(dark)"
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "send-btn-bg": {
         "$type": "color",
@@ -1148,17 +1184,17 @@
       "create-agent-control-bg-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-control-bg-hover}",
-        "$description": "禁用底/option hover 档"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-bg-pressed": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-control-bg-pressed}",
-        "$description": "弱档"
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-control-border}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-bg": {
         "$type": "color",
@@ -1168,12 +1204,12 @@
       "create-agent-quick-card-bg-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-bg-hover}",
-        "$description": "文件纸片"
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-border}",
-        "$description": "边框"
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-icon-bg": {
         "$type": "color",
@@ -1193,7 +1229,7 @@
       "create-agent-send-disabled-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-create-agent-send-disabled-icon}",
-        "$description": "禁用图标"
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-send-icon": {
         "$type": "color",
@@ -1229,23 +1265,28 @@
       },
       "create-agent-control-icon": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-create-agent-control-icon}"
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-icon}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-text": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-create-agent-control-text}"
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-icon": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-icon}"
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-icon}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-text": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-text}"
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-segment-inactive-text": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-create-agent-segment-inactive-text}"
+        "$value": "{reference.themes.cindy-dark.value-create-agent-segment-inactive-text}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-integration-avatar-border": {
         "$type": "color",
@@ -1253,11 +1294,13 @@
       },
       "sidebar-list-muted": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-sidebar-list-muted}"
+        "$value": "{reference.themes.cindy-dark.value-sidebar-list-muted}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-nav-text": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-sidebar-nav-text}"
+        "$value": "{reference.themes.cindy-dark.value-sidebar-nav-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-user-card-bg-hover": {
         "$type": "color",
@@ -1269,7 +1312,8 @@
       },
       "sidebar-user-card-text": {
         "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-text}"
+        "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "slider-track": {
         "$type": "color",
@@ -1332,7 +1376,7 @@
       "surface-chip": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-surface-chip}",
-        "$description": "阶梯: hover/chip(压暗于页底)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-chip-alt": {
         "$type": "color",
@@ -1342,17 +1386,17 @@
       "surface-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-surface-hover}",
-        "$description": "阶梯: hover/chip(压暗于页底)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-hover-soft": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-surface-hover-soft}",
-        "$description": "阶梯: 柔和 hover"
+        "$description": "墨水 黑 3.5%: 柔和悬停(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-hover-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-surface-hover-hsl}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-on-card": {
         "$type": "color",
@@ -1362,7 +1406,7 @@
       "switch-track-off": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-switch-track-off}",
-        "$description": "关闭态轨道:值与依据见决策表(用户调参 2026-08-05)"
+        "$description": "关闭态轨道: 悬停底加深后由 #888888 加深到 #808080,压在悬停行上保住 3:1(2026-10-22 用户裁决)"
       },
       "switch-track-on": {
         "$type": "color",
@@ -1393,6 +1437,18 @@
           }
         }
       },
+      "fast-toggle-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-switch-track-off}",
+        "$description": "Fast/思考小开关的关闭轨道跟随开关关闭轨道:文字改墨水后不再借用禁用文字色,两类开关关闭态一致并保住 3:1(2026-10-22 用户裁决随附)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "switch-track-off",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
       "status-badge-fg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-status-badge-fg}",
@@ -1401,17 +1457,17 @@
       "border-default": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-border-default}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-default-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-border-default-hsl}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-shadcn-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-border-shadcn-hsl}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "border-transparent-mixed": {
         "$type": "color",
@@ -1421,7 +1477,7 @@
       "text-primary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-primary}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-on-dark": {
         "$type": "color",
@@ -1431,7 +1487,7 @@
       "text-primary-emphasis": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-primary-emphasis}",
-        "$description": "强调正文: 最深档(用户定 #0C0C0C,2026-08-12)"
+        "$description": "墨水 黑 95%: 强调文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-inv": {
         "$type": "color",
@@ -1441,57 +1497,57 @@
       "text-primary-body-strong": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-primary-body-strong}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-primary-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-primary-hsl}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-secondary}",
-        "$description": "二级: 暖灰,>=3.0 下限(2026-08 改版,取代 U2 原值)"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary-cross": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-secondary-cross}",
-        "$description": "二级同档(原更淡档并入 3.0 地板)"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-secondary-mid": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-secondary-mid}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-tertiary}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-stone": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-tertiary-stone}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-mid": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-tertiary-mid}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-tertiary-hsl": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-tertiary-hsl}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-disabled": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-disabled}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-disabled-tertiary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-disabled-tertiary}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "accent-cta-bg": {
         "$type": "color",
@@ -1526,17 +1582,17 @@
       "accent": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-accent}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "agent-actions-rail": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-agent-actions-rail}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-checkbox-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-ask-checkbox-border}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-option-list-bg": {
         "$type": "color",
@@ -1561,17 +1617,41 @@
       "chat-input-chip-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-chat-input-chip-border}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "chat-input-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-chat-input-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-placeholder-subtle": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-placeholder}",
+        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-placeholder",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "thinking-body-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-secondary}",
+        "$description": "思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-secondary",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
       },
       "color-primary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-color-primary}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "caret-accent": {
         "$type": "color",
@@ -1596,7 +1676,7 @@
       "confirm-btn-secondary-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-confirm-btn-secondary-border}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "confirm-btn-secondary-hover": {
         "$type": "color",
@@ -1606,22 +1686,22 @@
       "confirm-btn-secondary-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-confirm-btn-secondary-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "confirm-title": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-confirm-title}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "file-chip-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-file-chip-bg}",
-        "$description": "阶梯: 弱档"
+        "$description": "墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)"
       },
       "file-remove-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-file-remove-bg}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "info-700": {
         "$type": "color",
@@ -1631,12 +1711,12 @@
       "model-trigger-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-model-trigger-hover}",
-        "$description": "阶梯: hover/chip(压暗于页底)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "model-item-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-model-item-hover}",
-        "$description": "下拉行 hover: 锚定弹层面板(比面板暗 ~12%),勿改回页底锚定"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "msg-link": {
         "$type": "color",
@@ -1646,7 +1726,7 @@
       "msg-scrollbar-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-msg-scrollbar-hover}",
-        "$description": "阶梯: 弱档"
+        "$description": "墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)"
       },
       "msg-user-bg": {
         "$type": "color",
@@ -1656,12 +1736,12 @@
       "muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-muted}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "muted-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-muted-foreground}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "perm-auto-selected-text": {
         "$type": "color",
@@ -1696,17 +1776,17 @@
       "perm-item-selected-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-perm-item-selected-bg}",
-        "$description": "卡片锚定: 权限弹层选中行(2026-08-14)"
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "plan-outline-active-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-plan-outline-active-bg}",
-        "$description": "卡片锚定: 计划大纲激活行(2026-08-14)"
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "plan-toolbar-btn-hover-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-plan-toolbar-btn-hover-bg}",
-        "$description": "阶梯: 菜单 hover"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "popover": {
         "$type": "color",
@@ -1721,12 +1801,12 @@
       "search-match-fg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-search-match-fg}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "secondary": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-secondary}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-btn-primary-text": {
         "$type": "color",
@@ -1736,12 +1816,12 @@
       "settings-btn-secondary-hover-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-settings-btn-secondary-hover-bg}",
-        "$description": "卡片锚定: 设置卡上的次级按钮 hover(2026-08-14)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "text-placeholder": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-text-placeholder}",
-        "$description": "三级: 等亮度暖化"
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-integration-avatar-bg": {
         "$type": "color",
@@ -1756,12 +1836,12 @@
       "settings-menu-bg-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-settings-menu-bg-hover}",
-        "$description": "阶梯: 菜单 hover"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-menu-bg-selected": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-settings-menu-bg-selected}",
-        "$description": "卡片锚定: 比卡片暗 ~6%(压在弹层上的选中态,2026-08-14)"
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "settings-source-link": {
         "$type": "color",
@@ -1776,17 +1856,17 @@
       "sidebar-action-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-action-icon}",
-        "$description": "侧栏灰字: 同上"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "cmd-palette-item-meta": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-cmd-palette-item-meta}",
-        "$description": "二级同档(同上)"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-item-active-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-item-active-foreground}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊,light 深底浅字(同 accent-pure-cta-fg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "sidebar-item-active-border": {
         "$type": "color",
@@ -1796,7 +1876,7 @@
       "sidebar-item-active": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-item-active}",
-        "$description": "用户二次改稿 2026-07-20:反相胶囊 #3C3F43 深底(同 accent-cta-bg)"
+        "$description": "Soft selected pill with same-polarity readable foreground."
       },
       "splash-bg": {
         "$type": "color",
@@ -1806,7 +1886,7 @@
       "splash-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-splash-text}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "splash-text-destructive": {
         "$type": "color",
@@ -1816,12 +1896,12 @@
       "splash-text-muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-splash-text-muted}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-titlebar-icon}",
-        "$description": "三级 -> HSL"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "tooltip-bg": {
         "$type": "color",
@@ -1856,7 +1936,7 @@
       "accent-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-accent-foreground}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "panel-bg": {
         "$type": "color",
@@ -1881,27 +1961,27 @@
       "foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-foreground}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "input": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-input}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "secondary-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-secondary-foreground}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "popover-foreground": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-popover-foreground}",
-        "$description": "正文 -> HSL"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar": {
         "$type": "color",
@@ -1911,17 +1991,17 @@
       "titlebar-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-titlebar-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-button-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-titlebar-button-hover}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "titlebar-control-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-titlebar-control-hover}",
-        "$description": "hover -> HSL"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar": {
         "$type": "color",
@@ -1931,7 +2011,7 @@
       "sidebar-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-border}",
-        "$description": "边框 -> HSL"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-item-hover": {
         "$type": "color",
@@ -1951,7 +2031,7 @@
       "sidebar-muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-muted}",
-        "$description": "侧栏灰字: 同上"
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "surface-translucent-main": {
         "$type": "color",
@@ -1971,7 +2051,7 @@
       "composer-pill-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-composer-pill-icon}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "send-btn-bg": {
         "$type": "color",
@@ -2006,17 +2086,17 @@
       "ask-badge-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-ask-badge-bg}",
-        "$description": "卡片锚定: 提问卡序号角标(2026-08-14)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-header-chip-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-ask-header-chip-bg}",
-        "$description": "卡片锚定: 压在提问卡上(2026-08-14)"
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
       },
       "cmd-palette-item-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-cmd-palette-item-hover}",
-        "$description": "卡片锚定: 命令面板行 hover(2026-08-14)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-bg": {
         "$type": "color",
@@ -2026,17 +2106,17 @@
       "create-agent-control-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-control-border}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-control-icon}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-control-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-control-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-bg": {
         "$type": "color",
@@ -2046,17 +2126,17 @@
       "create-agent-quick-card-bg-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-bg-hover}",
-        "$description": "卡片锚定: 快捷卡 hover(2026-08-14)"
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-border": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-border}",
-        "$description": "直映: 边框(冷转暖)"
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-icon}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-quick-card-icon-bg": {
         "$type": "color",
@@ -2066,12 +2146,12 @@
       "create-agent-quick-card-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-segment-inactive-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-segment-inactive-text}",
-        "$description": "未激活态: WCAG 豁免档,勿并入二级"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "create-agent-segment-track-bg": {
         "$type": "color",
@@ -2086,7 +2166,7 @@
       "create-agent-send-disabled-icon": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-create-agent-send-disabled-icon}",
-        "$description": "禁用态: WCAG 豁免档"
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "md-table-bg": {
         "$type": "color",
@@ -2101,12 +2181,12 @@
       "sidebar-list-muted": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-list-muted}",
-        "$description": "侧栏灰字: 暖化+压深至 >=3.0(2026-08-13)"
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-nav-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-nav-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "sidebar-user-card-bg-hover": {
         "$type": "color",
@@ -2121,7 +2201,7 @@
       "sidebar-user-card-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-sidebar-user-card-text}",
-        "$description": "正文: 近黑中性(2026-08 文字阶梯)"
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
       "ask-option-hover": {
         "$type": "color",

@@ -8,15 +8,28 @@
  *   - 默认路由(providerId=null)的远程会话:不做本机启发式猜测,维持占位显示。
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUI, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { ReactElement } from 'react';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+function render(ui: ReactElement) {
+  return renderUI(ui, { wrapper: ConfirmDialogProvider });
+}
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
+import type { ProviderView } from '@cindy/model-providers';
+
+type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
+  name?: string;
+  auth?: { native: string };
+};
 
 const mocks = vi.hoisted(() => ({
-  localProviders: [] as Array<{ id: string; auth: { native: string } }>,
-  deviceProviders: [] as Array<{ id: string; auth: { native: string } }>,
+  localProviders: [] as TestProvider[],
+  deviceProviders: [] as TestProvider[],
   remoteProviderIds: [] as Array<string | undefined>,
   localClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   remoteClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
@@ -285,6 +298,8 @@ describe('TodaySpendChip device-link remote sessions', () => {
 
   it('默认路由远程会话路由观察值为 gateway 时按网关形态渲染被控端配额镜像', () => {
     mocks.remoteRoute = 'gateway';
+    mocks.localProviders = [{ id: 'xd', name: 'Cindy AI · 个人' }];
+    mocks.deviceProviders = [{ id: 'xd', name: 'Cindy AI · 心动' }];
     mocks.remoteClaudeQuota = {
       spend: 120,
       maxBudget: 3000,
@@ -297,9 +312,26 @@ describe('TodaySpendChip device-link remote sessions', () => {
     // 网关形态主 chip 显示今日额度(月度进 tooltip),数据来自被控端 LiteLLM 镜像。
     expect(container.textContent).toContain('今日');
     expect(container.textContent).not.toContain('剩余 ');
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.usageTitle' }));
+    expect(screen.getByText('Cindy AI · 心动')).toBeTruthy();
+    expect(screen.queryByText('Cindy AI · 个人')).toBeNull();
   });
 
   it('远程 codex 会话按订阅形态渲染被控端账号窗口(组合 payload 选桶)', () => {
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        auth: { native: 'codex' },
+        openAiAccount: { source: 'oauth', identity: 'local@example.com' },
+      },
+    ];
+    mocks.deviceProviders = [
+      {
+        id: 'openai',
+        auth: { native: 'codex' },
+        openAiAccount: { source: 'oauth', identity: 'remote@example.com' },
+      },
+    ];
     mocks.remoteCodexPayload = {
       source: 'codex-app-server',
       limitId: 'codex',
@@ -329,6 +361,10 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(container.textContent).toContain('7天 剩余 66%');
     expect(mocks.remoteCodexDeviceIds).toContain('device-abc');
+    fireEvent.mouseEnter(screen.getByRole('button'));
+    act(() => vi.advanceTimersByTime(300));
+    expect(screen.getByText('remote@example.com')).toBeTruthy();
+    expect(screen.queryByText('local@example.com')).toBeNull();
   });
 
   it('窗口刚重置时倒计时以窗口长度封顶,不显示「8天」', () => {

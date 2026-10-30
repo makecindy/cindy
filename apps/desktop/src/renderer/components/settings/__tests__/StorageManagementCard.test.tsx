@@ -135,6 +135,32 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('StorageManagementCard fixed cache directories', () => {
+  it('scans only remote image copies and requires confirmation before clearing that scope', async () => {
+    const api = window.electronAPI.cindyMediaStorage;
+    vi.mocked(api.scan).mockResolvedValue({
+      success: true, zeroRef: { count: 0, bytes: 0, hashes: [], protectedCount: 0 },
+      cache: { totalBytes: 12, count: 1, limitBytes: 0, excessBytes: 12,
+        evictable: [{ hash: 'cached-image', ext: '.png', bytes: 12 }] },
+      tmpFileCount: 0, deadDirs: [],
+    });
+    vi.mocked(api.cleanup).mockResolvedValue({
+      freedBytes: 12, zeroRef: { deleted: 0, skipped: 0, freedBytes: 0 },
+      cacheEvicted: { deleted: 1, skipped: 0, freedBytes: 12 },
+      deadDirs: { removed: [], skipped: [], freedBytes: 0 }, tmpFilesRemoved: 0,
+    });
+    render(<StorageManagementCard />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.about.storage.remoteMediaClearButton' }));
+    await screen.findByRole('alertdialog');
+    expect(api.scan).toHaveBeenCalledWith({ scope: 'remote-media', draftUrls: [] });
+    expect(api.cleanup).not.toHaveBeenCalled();
+    const buttons = screen.getAllByRole('button', { name: 'settings.about.storage.remoteMediaClearButton' });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(api.cleanup).toHaveBeenCalledWith({
+      scope: 'remote-media', draftUrls: [], evictCacheHashes: ['cached-image'],
+      zeroRefHashes: [], deadDirNames: [], cleanTmpFiles: false,
+    }));
+  });
+
   it('renders both directory actions without scanning either directory', async () => {
     render(<StorageManagementCard />);
 

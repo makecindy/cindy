@@ -54,6 +54,7 @@ import {
   filterPrStatusQueriesForRefs,
   PrStatusService,
   type PrStatusQuery,
+  type PrStatusResult,
   type PrRemoteState,
 } from './prStatusService.js';
 
@@ -327,6 +328,17 @@ export function registerGitContextIpc(): void {
     }
     return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
   });
+}
+
+/**
+ * 任务摘要（get_task_digest）用：本机任务最近提到的几个 PR 的远端状态。与 PR_STATUS
+ * 同一服务与缓存；服务未就绪或任务没有 PR 时返回空数组。只读本机已记录的 PR 引用。
+ */
+export async function readSessionPrStatuses(sessionId: string, limit = 3): Promise<PrStatusResult[]> {
+  if (!prStatusService) return [];
+  const refs = (await listPrRefs(sessionId)).slice(0, limit);
+  if (refs.length === 0) return [];
+  return prStatusService.getStatuses(refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })));
 }
 
 /** 应用退出时清理 watcher 订阅。 */

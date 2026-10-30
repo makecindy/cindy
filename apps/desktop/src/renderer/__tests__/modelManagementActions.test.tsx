@@ -13,7 +13,7 @@ import {
 const writeFailure = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({ toast: { error: writeFailure } }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { price?: string }) => values?.price ? `${key} ${values.price}` : key, i18n: { resolvedLanguage: 'en' } }) }));
 vi.mock('../components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn() }),
 }));

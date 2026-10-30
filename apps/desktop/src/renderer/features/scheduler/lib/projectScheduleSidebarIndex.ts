@@ -23,7 +23,11 @@ export function projectScheduleSidebarIndex(
     if (isRunUnread) unreadRunIds.push(run.runId);
     let latestFailedRun = existing?.latestFailedRun;
     if (activeFailures.has(run.runId)) {
-      const candidate = { runId: run.runId, firedAt: run.firedAt ?? 0, scheduleId: run.scheduleId, failureKind: run.failureKind };
+      const candidate = {
+        runId: run.runId, firedAt: run.firedAt ?? 0, scheduleId: run.scheduleId,
+        failureKind: run.failureKind,
+        errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+      };
       if (!latestFailedRun || compareFailedScheduleRuns(candidate, latestFailedRun) > 0)
         latestFailedRun = candidate;
     }

@@ -1,3 +1,4 @@
+import type { ModelDisplayPricing } from './modelDisplayPricing.js';
 import type { BaseModel, ModelMetadata } from "./modelMetadataLayers.js";
 import type { LocalModelCatalog } from "./localModelCatalog.js";
 /**
@@ -57,6 +58,7 @@ export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 export const MODEL_REGISTRY_V3_SCHEMA_VERSION = 3 as const;
 export const MODEL_REGISTRY_V4_SCHEMA_VERSION = 4 as const;
 export const MODEL_REGISTRY_V5_SCHEMA_VERSION = 5 as const;
+export const MODEL_REGISTRY_V6_SCHEMA_VERSION = 6 as const;
 export const MODEL_NATIVE_APIS = [
   "anthropic-messages",
   "openai-responses",
@@ -114,7 +116,35 @@ export interface ModelReferencePriceGroup {
   prices: ModelReferencePrice[];
 }
 
+/** V6 product-scoped transport. No credentials or executable transforms. */
+export interface ModelInterfaceProfile {
+  id: string;
+  providerId: string;
+  api: string;
+  baseUrl: string;
+  inputBaseUrls: string[];
+  /** Proven legacy generated APIs repaired to the declared preferred interface. */
+  legacyApis?: string[];
+  requestPath?: string;
+  /** Absent: every member; present: exact wire IDs only. */
+  modelIds?: string[];
+  defaultFor?: ModelAgent[];
+  defaults?: ModelMetadata;
+  compatibility?: string[];
+  requires?: string[];
+  retired?: boolean;
+}
+export interface ModelInterfaceBinding {
+  profileId: string;
+  wireModelId?: string;
+  defaults?: ModelMetadata;
+  compatibility?: string[];
+  requires?: string[];
+  retired?: boolean;
+}
 export interface ModelRegistryRoute {
+  interfaces?: ModelInterfaceBinding[];
+  preferredInterfaces?: Partial<Record<ModelAgent, string[]>>;
   /** V5: explicitly selects a tariff on the entry's public model. */
   referencePriceGroup?: string;
   defaults?: ModelMetadata;
@@ -177,6 +207,8 @@ export interface ModelRegistryEntry
   newSessionDefault?: ModelAccessV2Agent[];
   /** V3: model's canonical API, independent of any harness. Null explicitly means unverified. */
   nativeApi?: ModelNativeApi | null;
+  /** V6: independent manufacturer declarations, never derived from interfaces. */
+  nativeApis?: ModelNativeApi[] | null;
 }
 
 export interface ModelNativeApiRule {
@@ -195,7 +227,9 @@ export interface ModelRegistry extends ModelRegistryBase {
     | typeof MODEL_REGISTRY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_V3_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION
-    | typeof MODEL_REGISTRY_V5_SCHEMA_VERSION;
+    | typeof MODEL_REGISTRY_V5_SCHEMA_VERSION
+    | typeof MODEL_REGISTRY_V6_SCHEMA_VERSION;
+  interfaceProfiles?: ModelInterfaceProfile[];
   baseModels?: BaseModel[];
   localModels?: LocalModelCatalog;
   models: ModelRegistryEntry[];
@@ -273,6 +307,7 @@ interface ModelCatalogAgentOverride extends Omit<
 }
 
 interface ModelCatalogEntryBase extends ModelPricing {
+  displayPricing?: ModelDisplayPricing;
   id: string;
   mode?: string;
   /** Optional for compatibility with older Model Access responses. */

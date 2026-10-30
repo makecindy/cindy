@@ -18,6 +18,7 @@ const read = (relative: string): string =>
   readFileSync(resolve(__dirname, relative), 'utf8').replace(/\r\n/g, '\n');
 
 const draftRouteSource = read('../features/cc-agent/NewMakerDraftRoute.tsx');
+const remoteDraftHooksSource = read('../features/cc-agent/useRemoteDraftDefaults.ts');
 const chatInputSource = read('../components/new-chat/ChatInput.tsx');
 
 describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => {
@@ -38,7 +39,7 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
     expect(agentBlock).toContain('(!effectiveDeviceLinkDeviceId || deviceLinkRemoteAgentSupported)');
   });
 
-  it('候选电脑去掉被控电脑本身,不并入本机收到的分享;不支持时不传', () => {
+  it('候选电脑去掉被控电脑本身,并入同账号可用分享;不支持时不传', () => {
     const start = draftRouteSource.indexOf('const remoteAgentDevices = useMemo(() => {');
     expect(start).toBeGreaterThan(0);
     const branchEnd = draftRouteSource.indexOf(': undefined;', start);
@@ -46,7 +47,8 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
     expect(controlledBranch).toContain('if (effectiveDeviceLinkDeviceId) {');
     expect(controlledBranch).toContain('selectControlledTaskAgentDevices({');
     expect(controlledBranch).toContain('controlledDeviceId: effectiveDeviceLinkDeviceId,');
-    expect(controlledBranch).not.toContain('providerShareDevices');
+    expect(controlledBranch).toContain('shareDevices: providerShareDevices,');
+    expect(draftRouteSource).toContain('useProviderShareAgentDevices([effectiveAgentDeviceId], effectiveDeviceLinkDeviceId)');
   });
 
   it('选了另一台电脑时模型目录跟着那台', () => {
@@ -65,7 +67,7 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
     const invoke = draftRouteSource.indexOf("'maker:apply-new-maker-draft-pref'", push);
     expect(guard).toBeGreaterThan(push);
     expect(invoke).toBeGreaterThan(guard);
-    expect(draftRouteSource).toContain('if (capabilities && !effectiveAgentDeviceId) {');
+    expect(remoteDraftHooksSource).toContain('if (capabilities && !effectiveAgentDeviceId) {');
   });
 
   it('权限在被控电脑上生效:换 Agent 所在电脑沿用被控电脑草稿的权限档,被夹掉时也不掺本机偏好', () => {

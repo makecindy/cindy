@@ -186,6 +186,35 @@ describe('deleteZeroRefBlobs(安全删除顺序)', () => {
 });
 
 describe('scanCache / evictCacheBlobs(cache 瘦身)', () => {
+  it('counts the global cache budget while only evicting remote-file exclusive copies', async () => {
+    const other = await seedBlob('foreign-cache', { isCache: true });
+    const shared = await seedBlob('shared-cache', { isCache: true });
+    const own = await seedBlob('own-cache', { isCache: true });
+    const live = await seedBlob('live-cache', { isCache: true });
+    const pinned = await seedBlob('pinned-file');
+    for (const entry of [shared, own, live, pinned]) await ledger.addRef({
+      hash: entry.hash, refKind: 'integration-cache', refId: `remote:${entry.hash}`,
+      originId: 'remote-file',
+    }, db);
+    for (const entry of [other, shared]) await ledger.addRef({
+      hash: entry.hash, refKind: 'integration-cache', refId: `other:${entry.hash}`,
+      originId: 'other',
+    }, db);
+    const total = other.bytes + shared.bytes + own.bytes + live.bytes;
+    const params = { live: new Set([live.hash]), integration: 'remote-file' };
+    const under = await recycler.scanCache({ ...params, limitBytes: total }, db);
+    expect(under).toMatchObject({ totalBytes: total, count: 4, excessBytes: 0, evictable: [] });
+    const over = await recycler.scanCache({ ...params, limitBytes: total - own.bytes }, db);
+    expect(over).toMatchObject({ totalBytes: total, count: 4, excessBytes: own.bytes });
+    expect(over.evictable.map(entry => entry.hash)).toEqual([own.hash]);
+    await recycler.evictCacheBlobs({ ...params, hashes: over.evictable.map(entry => entry.hash) }, db);
+    expect((await recycler.scanCache({ ...params, limitBytes: total - own.bytes }, db)).excessBytes).toBe(0);
+    // If protected/other caches alone exceed the budget, do not widen deletion authority.
+    expect((await recycler.scanCache({ ...params, limitBytes: 0 }, db)).evictable).toEqual([]);
+    for (const entry of [other, shared, live, pinned])
+      expect(fs.existsSync(blobPath(entry.hash, entry.ext))).toBe(true);
+  });
+
   it('超限时按 LRU 头部凑够超限量;未超限不出候选', async () => {
     const a = await seedBlob('cache-a', { isCache: true });
     const b = await seedBlob('cache-b', { isCache: true });
@@ -276,4 +305,27 @@ describe('cleanupTmpFiles(.tmp 残留)', () => {
     expect(fs.existsSync(oldTmp)).toBe(false);
     expect(fs.existsSync(newTmp)).toBe(true);
   });
+});
+
+it('scopes automatic remote-file cleanup to its own unpinned cache, rechecking new borrowers at deletion', async () => {
+  const own = await seedBlob('remote-only', { isCache: true });
+  const shared = await seedBlob('shared-cache', { isCache: true });
+  const pinned = await seedBlob('chat-attachment', { isCache: false });
+  for (const entry of [own, shared, pinned]) await ledger.addRef({
+    hash: entry.hash, refKind: 'integration-cache', refId: `remote-file:${entry.hash}`,
+    originKind: 'integration', originId: 'remote-file',
+  }, db);
+  await ledger.addRef({ hash: shared.hash, refKind: 'integration-cache', refId: 'feishu:key',
+    originKind: 'integration', originId: 'feishu' }, db);
+  const scan = await recycler.scanCache({ live: new Set(), integration: 'remote-file', limitBytes: 0 }, db);
+  expect(scan.evictable.map(entry => entry.hash)).toEqual([own.hash]);
+  // A new borrower after scanning must also be protected by the DELETE predicate.
+  await ledger.addRef({ hash: own.hash, refKind: 'integration-cache', refId: 'other:key',
+    originKind: 'integration', originId: 'other' }, db);
+  const result = await recycler.evictCacheBlobs({ hashes: [own.hash, shared.hash, pinned.hash],
+    live: new Set(), integration: 'remote-file' }, db);
+  expect(result.deleted).toBe(0);
+  for (const entry of [own, shared, pinned]) expect(fs.existsSync(blobPath(entry.hash, entry.ext))).toBe(true);
+  await ledger.removeRefs({ refKind: 'integration-cache', refId: 'other:key' }, db);
+  expect((await recycler.evictCacheBlobs({ hashes: [own.hash], live: new Set(), integration: 'remote-file' }, db)).deleted).toBe(1);
 });

@@ -1,10 +1,15 @@
 {
   "site": "producthunt.com",
-  "auth": "只读无需登录(公开 Atom feed)",
+  "auth": "鉴权以具体命令为准：public。需要登录的命令复用当前浏览器会话。",
   "entry": {
-    "latest": "https://www.producthunt.com/feed",
-    "byCategory": "https://www.producthunt.com/feed?category=<slug>"
+    "home": "https://www.producthunt.com"
   },
-  "recipes": ["producthunt-feed"],
-  "notes": "Product Hunt 的稳定免登录读接口是官方 Atom feed:https://www.producthunt.com/feed,加 ?category=<slug> 可按分类过滤(常用 slug:ai-agents、ai-chatbots、developer-tools、productivity、design-creative、no-code-platforms、vibe-coding)。producthunt-feed 配方拉的是全部最新发布(无入参);要按分类筛,直接 navigate 到带 category 的 feed URL 再 extract body。返回是 Atom XML 文本(不是 JSON),每个产品在 <entry> 里:<title> 产品名、<content> 里 HTML 含 tagline(去标签后取首段)、<author><name> 提交者、<published> 发布时间(ISO,取前 10 位是日期)、<link href> 产品页 URL。Product Hunt 按太平洋时区出榜,feed 里最新日期那批就是『今日发布』。注意:带票数(votes)的热榜和分类最佳榜只在首页/分类页 DOM 渲染,没有公开 JSON,需要 DOM 抓取,本配方不覆盖。"
+  "recipes": [
+    "producthunt-feed"
+  ],
+  "notes": "兼容入口 producthunt-feed 现执行内置 producthunt/posts，原参数名保留；结果采用新版适配器的结构化输出。可用 opencli:<站点>/<命令> 调用完整目录，siteguide 查询参数默认值、类型及 read/write 分类。网站可能变更或要求登录、验证；有 Cookie 不保证绕过风控。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

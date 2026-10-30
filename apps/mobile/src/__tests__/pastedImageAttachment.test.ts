@@ -88,7 +88,8 @@ describe('粘贴接线源码断言(防重构掉线)', () => {
       const source = read(page);
       // 粘贴已迁入 useMobileLocalAttachments 乐观管线,页面经 hook 解构别名接线。
       expect(source, page).toContain('addPastedImages: addPastedImageAttachments');
-      expect(source, page).toContain('onPasteImages={(uris) => void addPastedImageAttachments(uris)}');
+      // 已有任务的页面在粘贴时还会顺带预热 Agent,所以只锁住最终交给 hook 的那一步。
+      expect(source, page).toMatch(/onPasteImages=\{\(uris\) => [\s\S]{0,80}?void addPastedImageAttachments\(uris\)/);
     }
   });
 

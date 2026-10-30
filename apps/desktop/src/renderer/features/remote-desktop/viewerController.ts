@@ -22,6 +22,12 @@ import {
 } from '@cindy/device-link';
 import { mountRemoteDesktopViewer } from '@cindy/maker-shared/remote-desktop-viewer';
 import { extractIpcError } from '@/utils/ipcError';
+import { createLogger } from '@/lib/logger';
+import {
+  DesktopHeartbeatHistory,
+  desktopDiagnosticCode,
+  desktopDiagnosticId,
+} from '../../../shared/remoteDesktopDiagnostics';
 import type {
   RemoteDesktopViewerApi,
   RemoteViewerState,
@@ -37,6 +43,9 @@ import {
 } from '../../../shared/remoteDesktopViewer';
 
 type Size = { width: number; height: number };
+const log = createLogger('remote-desktop:viewer');
+type FailureSource =
+  'connection-timeout' | 'connect' | 'heartbeat' | 'frame' | 'media' | 'input-overflow' | 'input';
 
 export interface ViewerSnapshot {
   target: RemoteViewerState['target'];
@@ -60,6 +69,8 @@ export interface ViewerSnapshot {
   credentialNotice: string | null;
   /** The picture was fitted to this window; restore and same-ratio sizes apply. */
   fittedDisplay: Size | null;
+  /** 代输入 window view: the one window shown (only it can be clicked or typed into). */
+  window?: { app: string; title?: string } | null;
 }
 
 const sameAspect = (display: Size, width: number, height: number) =>
@@ -68,6 +79,10 @@ const sameAspect = (display: Size, width: number, height: number) =>
 /** macOS reports native fullscreen transitions as a brief hide/show; only a
  * viewer that stays hidden pauses the host's video. Showing resumes at once. */
 const HIDDEN_VIDEO_PAUSE_MS = 1500;
+/** A paste shortcut waits at most this long for the local clipboard to reach the computer. */
+const CLIPBOARD_PASTE_WAIT_MS = 1000;
+/** A copy shortcut pulls the computer's clipboard after it has had time to change. */
+const CLIPBOARD_COPY_DELAY_MS = 200;
 
 function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   // Match Mobile: system consent has its own two-minute host deadline.
@@ -129,10 +144,21 @@ export class DesktopViewerController {
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
   private frameBusy: string | null = null;
   private heartbeatBusy: string | null = null;
+  private heartbeats = new DesktopHeartbeatHistory();
+  private lastRequestFailure: {
+    at: number;
+    operation: RemoteDesktopRequest['op'];
+    code: string;
+  } | null = null;
   private streaming = false;
   private clipboardQueue: Promise<void> = Promise.resolve();
   private clipboardQueued = 0;
   private clipboardRevision = 0;
+  /** The sync pass a paste shortcut is waiting on; later pastes share it. */
+  private pasteSync: Promise<void> | null = null;
+  /** Serial of the latest paste wait: only it may open the picture's gate. */
+  private pasteWait = 0;
+  private copyTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingSettings = false;
   private offers = new Set<import('@cindy/device-link').RemoteDesktopLease>();
   private mediaChanging = false;
@@ -248,7 +274,7 @@ export class DesktopViewerController {
     } else if (this.connectionTimer === null) {
       // Transient failures and media fallback must not renew the total budget.
       this.connectionTimer = setTimeout(() => {
-        this.fail(new Error('DESKTOP_CONNECTION_TIMEOUT'));
+        this.fail(new Error('DESKTOP_CONNECTION_TIMEOUT'), 'connection-timeout');
       }, budget);
     }
     if (!this.disposed) this.changed(this.state);
@@ -305,6 +331,7 @@ export class DesktopViewerController {
   ): Promise<T> => {
     beforeSend?.();
     const scope = this.scope;
+    const epoch = this.epoch;
     if (!scope.active || this.disposed) throw new Error('DESKTOP_STOPPED');
     try {
       return (await this.api.request(
@@ -313,7 +340,14 @@ export class DesktopViewerController {
         request.op === 'offer' || request.op === 'ice' ? this.media.attemptId : undefined,
       )) as T;
     } catch (error) {
-      throw new Error(extractIpcError(error)?.message ?? 'DESKTOP_UNAVAILABLE');
+      const message = extractIpcError(error)?.message ?? 'DESKTOP_UNAVAILABLE';
+      if (epoch === this.epoch)
+        this.lastRequestFailure = {
+          at: Date.now(),
+          operation: request.op,
+          code: desktopDiagnosticCode(message),
+        };
+      throw new Error(message);
     }
   };
   private updateScope(scope: RemoteViewerState): void {
@@ -356,10 +390,16 @@ export class DesktopViewerController {
         if (this.scope === scope && !this.disposed) void this.connect();
       })();
   }
-  private cancel(preserveFrame = false): void {
+  private cancel(preserveFrame = false, preserveLease = false): void {
     this.epoch++;
+    this.heartbeats = new DesktopHeartbeatHistory();
+    this.lastRequestFailure = null;
     if (this.settingsTimer) clearTimeout(this.settingsTimer);
     this.settingsTimer = null;
+    // A paste waiting on the old session must not open the next session's gate.
+    this.pasteSync = null;
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+    this.copyTimer = null;
     this.pendingSettings = false;
     this.mediaChanging = false;
     this.offers.clear();
@@ -374,7 +414,7 @@ export class DesktopViewerController {
     this.abandonChannelRequests();
     this.media.reset();
     this.runtime?.receive({ type: 'releaseInput' });
-    void this.session.stop().catch(() => {});
+    void this.session.stop(false, preserveLease).catch(() => {});
     this.runtime?.receive({ type: 'stop', preserveFrame });
     this.publish({
       controlling: false,
@@ -402,6 +442,7 @@ export class DesktopViewerController {
         displayId: this.state.displayId || undefined,
         resume,
         takeover,
+        ...(this.scope.target?.handoff ? { handoff: this.scope.target.handoff } : {}),
         // Desktop always operates; a host with `autoControl` grants it with the lease.
         control: true,
         isCurrent: () => this.epoch === epoch && !this.disposed && this.scope.active,
@@ -411,7 +452,12 @@ export class DesktopViewerController {
         },
       });
       if (epoch !== this.epoch) return;
-      this.publish({ caps, displayId: lease.display.id, status: 'connecting' });
+      this.publish({
+        caps,
+        displayId: lease.display.id,
+        status: 'connecting',
+        window: lease.window ?? null,
+      });
       this.runtime.receive({
         type: 'init',
         epoch: lease.lease,
@@ -421,6 +467,8 @@ export class DesktopViewerController {
         trickleIce: caps.trickleIce === true,
         audio: caps.systemAudio && this.state.settings.audio,
         macKeyboard: typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin',
+        // Only the controlled computer's own copy/paste modifier is a clipboard shortcut.
+        clipboardModifier: caps.platform === 'darwin' ? 'meta' : 'control',
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
       if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
@@ -430,19 +478,47 @@ export class DesktopViewerController {
         this.applySettings();
       } else await this.acquireControl();
     } catch (error) {
-      if (epoch === this.epoch) this.fail(error);
+      if (epoch === this.epoch) this.fail(error, 'connect');
     } finally {
       if (epoch === this.epoch) this.opening = false;
     }
   }
-  private fail(error: unknown): void {
+  private fail(error: unknown, source: FailureSource): void {
     const code = error instanceof Error ? error.message : '';
+    const lease = this.session.lease?.lease;
+    const diagnostic = {
+      at: Date.now(),
+      source,
+      code: desktopDiagnosticCode(code),
+      generation: this.scope.generation,
+      active: this.scope.active,
+      ready: this.state.ready,
+      streaming: this.streaming,
+      hidden: this.hidden,
+      transport: this.state.transport,
+      latencyMs: this.state.latency,
+      controlling: this.session.lease?.controlling ?? false,
+      heartbeatPending: !!lease && this.heartbeatBusy === lease,
+      heartbeats: this.heartbeats.snapshot(),
+      lastRequestFailure: this.lastRequestFailure,
+    };
+    // Capture before cancel resets the session. Hashing never delays recovery.
+    void (lease ? desktopDiagnosticId(lease) : Promise.resolve(null))
+      .catch(() => null)
+      .then((session) => log.debug('viewer failure', { ...diagnostic, session }))
+      .catch(() => {});
     const blocked =
       remoteDesktopFailureKey(code) ??
       (/DESKTOP_(VIEW_ONLY|INPUT_(BUSY|UNSUPPORTED|UNAVAILABLE|TIMEOUT))/.test(code)
         ? 'controlUnavailable'
         : null);
-    this.cancel(true);
+    this.cancel(
+      true,
+      !blocked &&
+        this.state.caps?.idleLock === true &&
+        this.state.caps.automaticReconnect === true &&
+        this.state.preferences.idleTimeoutMinutes > 0,
+    );
     this.publish({ status: 'reconnecting', error: blocked });
     this.retryAt = Date.now() + this.retryDelay;
     this.retryDelay = Math.min(15000, this.retryDelay * 2);
@@ -479,6 +555,14 @@ export class DesktopViewerController {
       this.state.ready && !this.state.controlPending && this.session.lease?.controlling === true;
     if (controlling === this.state.controlling) return;
     this.clipboardRevision++;
+    if (!controlling) {
+      // Main retires the sync of a lost control generation (a display switch
+      // with auto-control drops and regains control without a reconnect); a
+      // paste after control returns must start its own pass, not wait on it.
+      this.pasteSync = null;
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = null;
+    }
     this.publish({ controlling });
     this.runtime.receive({ type: 'control', enabled: controlling });
     if (controlling) void this.applyRememberedResolution();
@@ -955,17 +1039,22 @@ export class DesktopViewerController {
     const leaseId = this.session.lease.lease;
     if (this.heartbeatBusy === leaseId) return;
     this.heartbeatBusy = leaseId;
+    const sample = this.heartbeats.add({ requestedAt: Date.now() });
     const epoch = this.epoch;
     try {
       const result = await this.session.heartbeat();
+      sample.settledAt = Date.now();
+      sample.result = result.controlling ? 'controlling' : 'view-only';
       if (epoch === this.epoch) {
         if (!result.controlling && !this.opening && !this.state.controlPending)
-          this.fail(new Error('DESKTOP_VIEW_ONLY'));
+          this.fail(new Error('DESKTOP_VIEW_ONLY'), 'heartbeat');
         else this.syncControl();
       }
     } catch (error) {
+      sample.settledAt = Date.now();
+      sample.result = desktopDiagnosticCode(error);
       if (epoch === this.epoch && !(error instanceof Error && error.message === 'INVOKE_TIMEOUT'))
-        this.fail(error);
+        this.fail(error, 'heartbeat');
     } finally {
       if (this.heartbeatBusy === leaseId) this.heartbeatBusy = null;
     }
@@ -1011,7 +1100,7 @@ export class DesktopViewerController {
         });
       }
     } catch (error) {
-      if (this.session.lease === lease) this.fail(error);
+      if (this.session.lease === lease) this.fail(error, 'frame');
     } finally {
       if (this.frameBusy === lease.lease) this.frameBusy = null;
     }
@@ -1021,7 +1110,7 @@ export class DesktopViewerController {
     if (!lease || message.epoch !== lease.lease || this.disposed) return;
     if (['iceConfig', 'offer', 'ice'].includes(String(message.type))) {
       void this.media.handle(message).catch((error) => {
-        if (this.session.lease === lease) this.fail(error);
+        if (this.session.lease === lease) this.fail(error, 'media');
       });
       return;
     }
@@ -1101,7 +1190,11 @@ export class DesktopViewerController {
         break;
       }
       case 'inputOverflow':
-        this.fail(new Error('DESKTOP_INPUT_UNAVAILABLE'));
+        this.fail(new Error('DESKTOP_INPUT_UNAVAILABLE'), 'input-overflow');
+        break;
+      case 'clipboardIntent':
+        if (message.action === 'paste' || message.action === 'copy')
+          this.clipboardIntent(message.action);
         break;
       case 'input':
         if (
@@ -1122,13 +1215,67 @@ export class DesktopViewerController {
               this.session.lease === lease &&
               !(error instanceof Error && error.message === 'INVOKE_TIMEOUT')
             )
-              this.fail(error);
+              this.fail(error, 'input');
           })
           .finally(() => {
             if (this.session.lease === lease)
               this.runtime.receive({ type: 'ack', epoch: lease.lease, sequence: message.sequence });
           });
         break;
+    }
+  }
+  /**
+   * A clipboard shortcut typed into the picture. Paste holds the keys (the
+   * picture gates its queue) until the local clipboard has been pushed, at
+   * most CLIPBOARD_PASTE_WAIT_MS; copy pulls the computer's clipboard shortly
+   * after. Neither waits for the regular poll. One push serves every paste
+   * made while it is in flight, and only the latest paste's wait opens the
+   * gate (the picture re-arms it per paste): an earlier paste's deadline must
+   * not open it, and a second request would only get the pending pass's
+   * snapshot from Main at once.
+   */
+  private clipboardIntent(action: 'copy' | 'paste'): void {
+    const wanted =
+      this.state.preferences.clipboardSync && this.state.controlling && !!this.api.clipboardSync;
+    if (action === 'copy') {
+      if (!wanted) return;
+      if (this.copyTimer) clearTimeout(this.copyTimer);
+      this.copyTimer = setTimeout(() => {
+        this.copyTimer = null;
+        void this.syncClipboard();
+      }, CLIPBOARD_COPY_DELAY_MS);
+      return;
+    }
+    const epoch = this.epoch,
+      wait = ++this.pasteWait;
+    const release = () => {
+      // The picture resets its gate itself when a session ends or changes.
+      if (!this.disposed && epoch === this.epoch && wait === this.pasteWait)
+        this.runtime.receive({ type: 'inputGate' });
+    };
+    if (!wanted) {
+      release();
+      return;
+    }
+    if (!this.pasteSync) {
+      const pending: Promise<void> = this.syncClipboard().finally(() => {
+        if (this.pasteSync === pending) this.pasteSync = null;
+      });
+      this.pasteSync = pending;
+    }
+    void Promise.race([
+      this.pasteSync,
+      new Promise<void>((resolve) => setTimeout(resolve, CLIPBOARD_PASTE_WAIT_MS)),
+    ]).then(release, release);
+  }
+  private async syncClipboard(): Promise<void> {
+    if (!this.state.ready || this.state.closing || !this.api.clipboardSync) return;
+    const epoch = this.epoch;
+    try {
+      const safety = await this.api.clipboardSync(this.scope.generation);
+      if (epoch === this.epoch && !this.disposed) this.publish({ safety });
+    } catch {
+      /* Connection state owns disconnected/retired generations. */
     }
   }
   private present(status: string): void {
@@ -1150,6 +1297,8 @@ export class DesktopViewerController {
     this.disposed = true;
     if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
     this.hiddenTimer = null;
+    if (this.copyTimer) clearTimeout(this.copyTimer);
+    this.copyTimer = null;
     if (this.connectionTimer !== null) clearTimeout(this.connectionTimer);
     this.connectionTimer = null;
     for (const t of this.timers) clearInterval(t);

@@ -38,7 +38,17 @@ export function isStreamingTextOnlyUpdate(
     !sameFieldsExcept(before, after, 'content')
   )
     return false;
-  for (let index = 0; index < last; index++) if (previous[index] !== next[index]) return false;
+  // HistoryView normalizes live rows into fresh objects. Equal shallow fields
+  // still describe the same immutable row; any metadata/content change rebuilds.
+  for (let index = 0; index < last; index++) {
+    const beforeRow = previous[index];
+    const afterRow = next[index];
+    if (
+      beforeRow !== afterRow &&
+      (beforeRow.content !== afterRow.content || !sameFieldsExcept(beforeRow, afterRow, 'content'))
+    )
+      return false;
+  }
   return true;
 }
 
@@ -79,13 +89,18 @@ export function createRenderItemMetadataProjection() {
 /** A view owns this projection; no session data survives its unmount. */
 export function createStreamingMessageProjection() {
   let previous:
-    | { messages: ChatMessage[]; dependencies: readonly unknown[]; result: MessageRenderProjection }
+    | {
+        messages: readonly ChatMessage[];
+        dependencies: readonly unknown[];
+        result: MessageRenderProjection;
+      }
     | undefined;
   return (
-    messages: ChatMessage[],
+    messages: readonly ChatMessage[],
     dependencies: readonly unknown[],
     build: () => MessageRenderProjection,
     allowTextReuse = true,
+    alreadyGrouped = false,
   ): MessageRenderProjection => {
     let result: MessageRenderProjection | undefined;
     if (
@@ -99,12 +114,25 @@ export function createStreamingMessageProjection() {
         const before = previous.messages[previous.messages.length - 1];
         const after = messages[messages.length - 1];
         const index = previous.result.items.findIndex(
-          (item) => item.type === 'message' && item.message === before,
+          (item) =>
+            item.type === 'message' &&
+            (item.message === before ||
+              (item.message.clientId === before.clientId &&
+                item.message.role === 'assistant' &&
+                item.message.content === before.content &&
+                item.message.isStreaming === true &&
+                !isCompletedAssistantMessage(item.message))),
         );
         // Hidden/subagent rows and special projections must still go through the full builder.
-        if (index >= 0) {
+        if (index >= 0 && (!alreadyGrouped || index === previous.result.items.length - 1)) {
           const items = previous.result.items.slice();
-          items[index] = { type: 'message', key: items[index].key, message: after };
+          const item = items[index] as Extract<RenderItem, { type: 'message' }>;
+          // A history row owns ordering metadata (notably createdAt). Live
+          // normalization may have a provisional timestamp: update only text.
+          items[index] = {
+            ...item,
+            message: item.message === before ? after : { ...item.message, content: after.content },
+          };
           result = { items, singleResultMap: previous.result.singleResultMap };
         }
       }

@@ -8,7 +8,6 @@ import { Spinner } from '@/components/ui/spinner';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { isResourceUsageWindow } from '@/lib/resourceUsageWindow';
 import type {
   LinuxCloseBehavior,
@@ -62,7 +61,6 @@ export function WindowControls({
       (window.electronAPI.platform !== 'win32' && window.electronAPI.platform !== 'linux') ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow() ||
       isResourceUsageWindow()
     )
       return;
@@ -183,7 +181,6 @@ export function WindowControls({
     if (
       isSecondaryWindow() ||
       isSidebarWindow() ||
-      isGhostPanelWindow() ||
       isResourceUsageWindow()
     ) {
       window.electronAPI.windowClose();

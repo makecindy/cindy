@@ -81,7 +81,7 @@ export function RetiredFeatureDetail({
               <Button variant="cta" loading={busy} disabled={busy} onClick={onReplace}>
                 {t(
                   `${base}.${replacement ? (replacement.enabled ? 'open' : 'enable') : 'install'}`,
-                  { name: descriptor.replacement.name },
+                  { name: t(`${descriptor.copyKey}.replacementName`) },
                 )}
               </Button>
               {!replacement && (

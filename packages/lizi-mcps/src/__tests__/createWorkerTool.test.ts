@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
-import { registerCreateWorkerTool } from '../xdt-helper/create_worker.js';
+import { registerCreateWorkerTool, type CreateWorkerDeps } from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;
@@ -18,7 +18,7 @@ function parse(result: XdtHelperToolResult) {
 }
 
 function setup() {
-  const createWorker = vi.fn(async () => ({
+  const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async () => ({
     ok: true as const,
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
@@ -50,6 +50,25 @@ function setupWorkerSession() {
 }
 
 describe('create_worker tool', () => {
+  // PR2: the public tool must preserve a new worktree request and return actual spawn facts.
+  // Existing directory tests only cover an explicit existing path. Unit, real registry schema.
+  it.each([{}, { source_branch: 'release' }])('passes new_worktree %j and returns the actual directory and owned checkout', async (request) => {
+    const registry = new XdtHelperToolRegistry();
+    const createWorker = vi.fn(async () => ({ ok: true as const, workerId: 'worker', workerSessionId: 'session',
+      workingDir: '/repo/.cindy-worktrees/new/apps/web', worktree: { path: '/repo/.cindy-worktrees/new', branch: 'cindy/new' } }));
+    registerCreateWorkerTool(registry, { sessionId: 'lead', createWorker });
+    const result = parse(await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'worker', new_worktree: request }));
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({worktree: request.source_branch === undefined ? {} : { sourceBranch: request.source_branch }}));
+    expect(result).toMatchObject({working_dir: '/repo/.cindy-worktrees/new/apps/web', worktree: {path: '/repo/.cindy-worktrees/new', branch: 'cindy/new'}});
+  });
+
+  it.each([null, true, {source_branch: ''}, {source_branch: '-unsafe'}, {source_branch: 'bad\nbranch'}, {unknown: true}])('rejects malformed new_worktree %j before host creation', async new_worktree => {
+    const {registry, createWorker} = setup();
+    const result = await registry.call('create_worker', {role: 'developer', agent: 'codex', label: 'worker', new_worktree});
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
   it('forwards the explicit working_dir to the host', async () => {
     const { registry, createWorker } = setup();
     const result = await registry.call('create_worker', {
@@ -59,10 +78,96 @@ describe('create_worker tool', () => {
     expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/tmp/candidate with spaces ' }));
   });
 
+  it('forwards the Worker Agent location ("local" = the task computer, omitted = same as the Lead)', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'remote', agent_device_id: 'share:s1' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: 'share:s1' }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'local', agent_device_id: 'local' });
+    expect(createWorker).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: null }));
+    await registry.call('create_worker', { role: 'developer', agent: 'codex', label: 'lead' });
+    expect((createWorker.mock.calls.at(-1) as unknown[])[0]).not.toHaveProperty('agentDeviceId');
+  });
+
   it('rejects an empty explicit directory instead of silently inheriting', async () => {
     const { registry, createWorker } = setup();
     const result = await registry.call('create_worker', {
       role: 'developer', agent: 'codex', label: 'worker', working_dir: '  ',
+    });
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('forwards initial_task images to the host and omits them when absent', async () => {
+    const { registry, createWorker } = setup();
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review the screenshots', images: ['/tmp/a.png'],
+    });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTask: 'review the screenshots',
+      initialTaskImages: ['/tmp/a.png'],
+    }));
+
+    await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker2', initial_task: 'text only',
+    });
+    expect(vi.mocked(createWorker).mock.calls[1]?.[0]).not.toHaveProperty('initialTaskImages');
+  });
+
+  it('flattens a one-level-nested images array instead of failing schema validation', async () => {
+    // 模型常见误传是多套一层([[/a.png],[/b.png]]); 接口要自愈而不是报参数错。
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review', images: [['/tmp/a.png'], ['/tmp/b.png']],
+    });
+    expect(result.isError).toBeFalsy();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTaskImages: ['/tmp/a.png', '/tmp/b.png'],
+    }));
+  });
+
+  it('unwraps the XML-style {item:[...]} wrapper instead of failing schema validation', async () => {
+    // 实测形态: 模型/兼容层把数组参数输出成 {item:[...]}(TapTap 会话 5 连败的元凶)。
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review',
+      images: { item: ['cindy-media://blobs/a.png', 'cindy-media://blobs/b.png'] },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTaskImages: ['cindy-media://blobs/a.png', 'cindy-media://blobs/b.png'],
+    }));
+  });
+
+  it('wraps a single-element-collapsed {item:string} and bare string into an array', async () => {
+    // 实测形态: 单图时 <item> 单实例被兼容层折叠成标量 —— scout 单图 4 连拒的根因。
+    const { registry, createWorker } = setup();
+    const wrapped = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'w1',
+      initial_task: 'review', images: { item: 'cindy-media://blobs/a.png' },
+    });
+    expect(wrapped.isError).toBeFalsy();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      initialTaskImages: ['cindy-media://blobs/a.png'],
+    }));
+
+    const bare = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'w2',
+      initial_task: 'review', images: 'cindy-media://blobs/a.png',
+    });
+    expect(bare.isError).toBeFalsy();
+    expect(vi.mocked(createWorker).mock.calls[1]?.[0]).toMatchObject({
+      initialTaskImages: ['cindy-media://blobs/a.png'],
+    });
+  });
+
+  it('still rejects non-string image entries after flattening', async () => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker',
+      initial_task: 'review', images: [{ uri: '/tmp/a.png' }],
     });
     expect(result.isError).toBe(true);
     expect(createWorker).not.toHaveBeenCalled();

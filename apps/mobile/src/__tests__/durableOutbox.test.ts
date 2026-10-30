@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { accountVaultKey } from '@cindy/auth-client';
 import { cancelledCreationDraft, outboxCreationRetryIdentity } from '../session/cancelledCreationDraft';
+import { cindyMakeOutboxPolicy } from '../session/cindyMakeOutboxPolicy';
 import {
   createDurableOutbox,
   isDurableOutboxUnsent,
@@ -190,7 +191,179 @@ async function setup(storage = disk()) {
   };
 }
 
+describe('disabled Cindy Make outbox recovery', () => {
+  it.each(['cindy-make', 'cindy-make-merge'])('cleans upgraded %s records before contacting a legacy host', async (source) => {
+    const { store, storage, deps } = await setup();
+    await store.add(message());
+    const restarted = createDurableOutbox(storage);
+    await restarted.activate('alice');
+    const readSession = vi.fn(async () => ({ id: 'session-a', source }));
+    const delivery = createDurableOutboxDelivery({ ...deps, store: restarted,
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => ({ id: 'session-a', source }), readSession, isCurrent: () => true,
+      }),
+    });
+    await delivery.run();
+    delivery.wake();
+    await delivery.run();
+    expect(readSession).not.toHaveBeenCalled();
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.prepare).not.toHaveBeenCalled();
+    expect(deps.upload).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ cleanupOutcome: 'cancelled' }), true);
+    const coldStart = createDurableOutbox(storage);
+    await coldStart.activate('alice');
+    expect(coldStart.getSnapshot()).toEqual([]);
+  });
+
+  it.each(['cindy-make', 'cindy-make-merge'])('reads missing metadata before discarding a legacy %s task', async (source) => {
+    const { store, deps } = await setup();
+    await store.add(message());
+    const readSession = vi.fn(async () => ({ id: 'session-a', source }));
+    await createDurableOutboxDelivery({ ...deps,
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => undefined, readSession, isCurrent: () => true,
+      }),
+    }).run();
+    expect(readSession).toHaveBeenCalledOnce();
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(store.getSnapshot()).toEqual([]);
+  });
+
+  it.each(['offline', 'missing', 'mismatch'])('retains an unknown record on %s and resumes ordinary delivery after recovery', async (failure) => {
+    const { store, storage, deps } = await setup();
+    await store.add(message());
+    const readSession = vi.fn<() => Promise<{ id: string; source?: string } | null>>()
+      .mockResolvedValue({ id: 'session-a', source: 'cc' });
+    if (failure === 'offline') readSession.mockRejectedValueOnce(new Error('offline'));
+    else readSession.mockResolvedValueOnce(failure === 'missing' ? null : { id: 'another', source: 'cc' });
+    const delivery = createDurableOutboxDelivery({ ...deps,
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => undefined, readSession, isCurrent: () => true,
+      }),
+    });
+    await delivery.run();
+    expect(store.getSnapshot()).toEqual([message()]);
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    const coldStart = createDurableOutbox(storage);
+    await coldStart.activate('alice');
+    expect(coldStart.getSnapshot()).toEqual([message()]);
+    delivery.wake();
+    await delivery.run();
+    expect(deps.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('does not delete uploads possibly owned by a legacy host or block another task', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), state: 'confirming', enqueueStarted: true, sendAtMs: 1 });
+    await store.add(message('id-2', 'ordinary'));
+    await createDurableOutboxDelivery({ ...deps,
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => ({ id: record.item.sessionId, source: record.item.sessionId === 'ordinary' ? 'cc' : 'cindy-make' }),
+        readSession: async () => null, isCurrent: () => true,
+      }),
+    }).run();
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ cleanupOutcome: 'accepted' }), false);
+    expect(deps.enqueue).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ item: expect.objectContaining({ sessionId: 'ordinary' }) }));
+    expect(store.getSnapshot().every(record => record.item.sessionId === 'ordinary')).toBe(true);
+  });
+
+  it('keeps a disabled terminal record retryable after local cleanup fails', async () => {
+    const { store, storage, deps } = await setup();
+    await store.add(message());
+    deps.cleanup.mockRejectedValueOnce(new Error('files unavailable'));
+    const delivery = createDurableOutboxDelivery({ ...deps, sessionPolicy: async () => 'discard' });
+    await delivery.run();
+    const coldStart = createDurableOutbox(storage);
+    await coldStart.activate('alice');
+    expect(coldStart.getSnapshot()[0]).toMatchObject({ cleanupOutcome: 'cancelled' });
+    await createDurableOutboxDelivery({ ...deps, store: coldStart, sessionPolicy: async () => 'discard' }).run();
+    expect(coldStart.getSnapshot()).toEqual([]);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not consume a record after the owner changes during metadata lookup', async () => {
+    const { store, deps, deactivate } = await setup();
+    await store.add(message());
+    await createDurableOutboxDelivery({ ...deps,
+      sessionPolicy: (record) => cindyMakeOutboxPolicy(record, {
+        knownSession: () => undefined,
+        readSession: async () => { deactivate(); return { id: 'session-a', source: 'cindy-make' }; },
+        isCurrent: deps.isCurrent,
+      }),
+    }).run();
+    expect(store.getSnapshot()).toEqual([message()]);
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+});
+
 describe("durable mobile outbox ownership", () => {
+  it.each([
+    Object.assign(new Error('Message 不存在'), { code: 'NOT_FOUND' }),
+    new Error('[NOT_FOUND] Message 不存在'),
+  ])('waits for host receipts when pending history is missing (%s)', async (error) => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true, error: '[NOT_FOUND] Message 不存在' });
+    deps.projection.mockResolvedValue(projection('id-1', 'pending'));
+    deps.history.mockRejectedValue(error);
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' });
+    expect(store.getSnapshot()[0].error).toBeUndefined();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+
+    // Withdrawal can overtake the history lookup. Only the next host receipt
+    // proves removal; missing history alone must never delete or resend the row.
+    deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.history).toHaveBeenCalledOnce();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a legacy send uncertain when its history is not found', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state: 'confirming', prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    deps.projection.mockResolvedValue({ ...projection(), inputDeliveryVersion: undefined });
+    deps.history.mockRejectedValue(new Error('[NOT_FOUND] Message 不存在'));
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+  });
+
+  it('settles cleared legacy records without a saved boundary from the host receipt', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.projection.mockResolvedValue({ ...projection('id-1', 'removed'), clearBoundaryMs: 123 });
+    await runner.run();
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(deps.history).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.anything(), false);
+  });
+
+  it('still reports other history lookup failures', async () => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.projection.mockResolvedValue(projection('id-1', 'pending'));
+    deps.history.mockRejectedValue(new Error('permission denied'));
+    await runner.run();
+    expect(store.getSnapshot()[0].error).toBe('offline');
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
   it.each([
     [false, false, undefined, true],
     [true, false, 1, true],
@@ -705,12 +878,87 @@ describe("app-owned delivery and reconciliation", () => {
     expect(deps.enqueue).toHaveBeenCalledTimes(1);
     expect(deps.enqueue.mock.calls[0]?.[0].prepared?.clientId).toBe("id-1");
     expect(store.getSnapshot()[0]?.state).toBe("host-owned");
+    expect(store.getSnapshot()[0]?.clearBoundaryMs).toBeNull();
+    expect(deps.enqueue.mock.calls[0]?.[0].clearBoundaryMs).toBeNull();
     runner.wake();
     deps.projection.mockResolvedValue(projection("id-1", "accepted"));
     deps.history.mockResolvedValue(true);
     await runner.run();
     expect(store.getSnapshot()).toEqual([]);
     expect(deps.cleanup).toHaveBeenCalledOnce();
+  });
+  it.each([true, false])('retains a confirmed send across restart until history is cached (durable host=%s)', async (durable) => {
+    const first = await setup();
+    await first.store.add({ ...message(), state: durable ? 'host-owned' : 'confirming',
+      retrySafe: durable, prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    first.deps.history.mockResolvedValue(true);
+    first.deps.projection.mockResolvedValue(durable ? projection('id-1', 'accepted')
+      : { pendingQueue: [] } as unknown as DeliveryProjection);
+    const cacheHistory = vi.fn(async () => false);
+    await createDurableOutboxDelivery({ ...first.deps, cacheHistory }).run();
+    expect(first.deps.cleanup).not.toHaveBeenCalled();
+    expect(first.store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    expect(first.store.getSnapshot()[0]?.historyConfirmed).toBe(true);
+    const restarted = await setup(first.storage);
+    expect(restarted.store.getSnapshot()[0]?.item.text).toBe('keep this message');
+    restarted.deps.history.mockResolvedValue(true);
+    restarted.deps.projection.mockResolvedValue(durable ? projection('id-1', 'accepted')
+      : { pendingQueue: [] } as unknown as DeliveryProjection);
+    const saved = deferred<boolean>();
+    const cacheRestoredHistory = vi.fn(() => saved.promise);
+    const run = createDurableOutboxDelivery({ ...restarted.deps, cacheHistory: cacheRestoredHistory }).run();
+    await vi.waitFor(() => expect(cacheRestoredHistory).toHaveBeenCalled());
+    expect(restarted.store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    saved.resolve(true);
+    await run;
+    expect(restarted.store.getSnapshot()).toEqual([]);
+    expect(restarted.deps.enqueue).not.toHaveBeenCalled();
+    expect(restarted.deps.cleanup).toHaveBeenCalledOnce();
+  });
+  // Unit regression: a recovered host-owned record plus confirmed local history
+  // must retire its pending bubble even when projection/history RPCs are unavailable.
+  // Existing restart cases returned those RPCs before checking the local cache.
+  it('releases an already cached host-owned send before contacting the host', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.projection.mockRejectedValue(new Error('offline'));
+    await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => true }).run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.cleanup).toHaveBeenCalledOnce();
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.history).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+  it.each(['unconfirmed', 'cancelling'] as const)('does not bypass remote reconciliation for a %s send', async (kind) => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), state: kind === 'cancelling' ? 'host-owned' : 'confirming',
+      retrySafe: true, cancelRequested: kind === 'cancelling' });
+    deps.projection.mockRejectedValue(new Error('offline'));
+    const cacheHistory = vi.fn(async () => true);
+    await createDurableOutboxDelivery({ ...deps, cacheHistory }).run();
+    expect(store.getSnapshot()).toHaveLength(1);
+    expect(cacheHistory).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    expect(deps.projection).toHaveBeenCalledOnce();
+  });
+  it('does not block later legacy sends while the first confirmed row awaits caching', async () => {
+    const { store, deps } = await setup();
+    await store.add({ ...message(), state: 'host-owned', historyConfirmed: true, retrySafe: false,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    await store.add(message('id-2'));
+    deps.projection.mockResolvedValue({ pendingQueue: [] } as unknown as DeliveryProjection);
+    deps.history.mockResolvedValue(true);
+    await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => false }).run();
+    expect(deps.enqueue.mock.calls.map(([record]) => record.item.clientId)).toEqual(['id-2']);
+    expect(store.getSnapshot().find(record => record.item.clientId === 'id-1')?.historyConfirmed).toBe(true);
+  });
+  it('does not release a send if its owner changes while history is being cached', async () => {
+    const { store, deps, deactivate } = await setup();
+    await store.add({ ...message(), state: 'host-owned', retrySafe: true });
+    deps.history.mockResolvedValue(true);
+    await createDurableOutboxDelivery({ ...deps, cacheHistory: async () => { deactivate(); return true; } }).run();
+    expect(store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    expect(deps.cleanup).not.toHaveBeenCalled();
   });
   it("restarts after a lost receipt, finds durable host ownership, and never enqueues twice", async () => {
     const first = await setup();
@@ -928,6 +1176,23 @@ describe("app-owned delivery and reconciliation", () => {
     expect(deps.discardUploads).toHaveBeenCalledWith(expect.anything(), [old]);
     expect(store.getSnapshot()[0]?.item.attachmentSlots[1]).toEqual(unchanged);
   });
+  it('records the slot whose upload failed, even when uploads run out of slot order, and clears it once that slot lands', async () => {
+    const { store, deps, runner } = await setup();
+    const uploads = [
+      { slot: 1, fileName: 'b.png', name: 'b.png', kind: 'image' as const, size: 1 },
+      { slot: 0, fileName: 'a.png', name: 'a.png', kind: 'image' as const, size: 1 },
+    ];
+    await store.add({ ...message(), uploads, item: { ...message().item, attachmentSlots: [null, null] } });
+    const retryable = vi.fn(() => false);
+    const failing = createDurableOutboxDelivery({ ...deps, retryable });
+    deps.upload.mockRejectedValueOnce(new Error('upload failed'));
+    await failing.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', failedUploadSlot: 1 });
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    await store.update(store.getSnapshot()[0]!, { state: 'queued', error: undefined });
+    await runner.run();
+    expect(store.getSnapshot()[0]?.failedUploadSlot).toBeUndefined();
+  });
   it("persists the first creation message as the FIFO barrier across restart", async () => {
     const first = await setup();
     await first.store.add({ ...message("first"), suspended: true });
@@ -948,4 +1213,105 @@ describe("app-owned delivery and reconciliation", () => {
       second.deps.enqueue.mock.calls.map(([r]) => r.item.clientId),
     ).toEqual(["first", "follow-up"]);
   });
+});
+
+it('persists companion identity across restart and refuses a changed resource before starting enqueue', async () => {
+  const { store, storage, deps } = await setup();
+  const resourceRef = { collectionId: 'teammates', kind: 'bot', id: 'writer' };
+  await store.add({ ...message(), resourceRef });
+  const restarted = createDurableOutbox(storage); await restarted.activate('alice');
+  expect(restarted.getSnapshot()[0].resourceRef).toEqual(resourceRef);
+  const beforeEnqueue = vi.fn(async () => { throw new Error('ACCESS_REVOKED'); });
+  const guarded = createDurableOutboxDelivery({ ...deps, store: restarted, beforeEnqueue, retryable: () => false });
+  await guarded.run();
+  expect(beforeEnqueue).toHaveBeenCalledTimes(1); expect(deps.enqueue).not.toHaveBeenCalled();
+  expect(restarted.getSnapshot()[0]).toMatchObject({ state: 'failed', enqueueStarted: false, resourceRef });
+  expect(restarted.getSnapshot()[0].item.clientId).toBe('id-1');
+});
+
+it('does not drop the resource gate when its persisted identity is corrupt', async () => {
+  const storage = disk();
+  const store = createDurableOutbox(storage); await store.activate('alice');
+  await store.add(message());
+  const [key, raw] = [...storage.data.entries()][0];
+  storage.data.set(key, JSON.stringify({ ...JSON.parse(raw), resourceRef: null }));
+  const restarted = createDurableOutbox(storage); await restarted.activate('alice');
+  expect(restarted.getSnapshot()).toEqual([]);
+  expect(storage.data.has(key)).toBe(true);
+});
+
+it('cancels an enqueue if its page-independent resource check spans an account or foreground change', async () => {
+  const { store, deps, deactivate } = await setup(); await store.add(message());
+  const check = deferred<void>();
+  const beforeEnqueue = vi.fn(() => check.promise);
+  const guarded = createDurableOutboxDelivery({ ...deps, beforeEnqueue });
+  const run = guarded.run();
+  for (let n = 0; n < 40 && !beforeEnqueue.mock.calls.length; n++) await Promise.resolve();
+  expect(beforeEnqueue).toHaveBeenCalledTimes(1);
+  deactivate(); check.resolve(); await run;
+  expect(deps.enqueue).not.toHaveBeenCalled(); expect(store.getSnapshot()[0].enqueueStarted).toBe(false);
+});
+
+describe('known projection first send', () => {
+  const known = (): DeliveryProjection =>
+    ({ pendingQueue: [], inputDeliveryVersion: 1, clearBoundaryMs: 5 }) as unknown as DeliveryProjection;
+
+  it('makes the enqueue the only round trip for a never-sent message', async () => {
+    const { store, deps } = await setup();
+    await store.add(message());
+    await createDurableOutboxDelivery({ ...deps, knownProjection: known }).run();
+    expect(deps.projection).not.toHaveBeenCalled();
+    expect(deps.enqueue).toHaveBeenCalledOnce();
+    expect(store.getSnapshot()[0]).toMatchObject({
+      state: 'host-owned', clearBoundaryMs: 5, retrySafe: true, prepared: { durableDelivery: true },
+    });
+  });
+
+  it('asks the host once after it refuses a stale known clear boundary', async () => {
+    const { store, deps } = await setup();
+    await store.add(message());
+    const cleared = new Error('REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=5; currentClearBoundaryMs=9');
+    deps.enqueue.mockRejectedValueOnce(cleared);
+    deps.projection.mockResolvedValue({ ...projection('id-1'), clearBoundaryMs: 9 } as DeliveryProjection);
+    const knownProjection = vi.fn(known);
+    await createDurableOutboxDelivery({
+      ...deps, knownProjection, staleClearBoundary: (error) => error === cleared,
+    }).run();
+    await vi.waitFor(() => expect(deps.enqueue).toHaveBeenCalledTimes(2));
+    expect(knownProjection).toHaveBeenCalledOnce();
+    expect(deps.projection).toHaveBeenCalledOnce();
+    expect(deps.enqueue.mock.calls[1]?.[0]).toMatchObject({ clearBoundaryMs: 9, enqueueStarted: true });
+    await vi.waitFor(() => expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned' }));
+  });
+});
+
+it('starts a newly added message while another task is still being delivered', async () => {
+  const { store, deps, runner } = await setup();
+  await store.add(message('slow', 'session-a'));
+  const slow = deferred<DeliveryProjection>();
+  deps.enqueue.mockImplementationOnce(() => slow.promise);
+  const first = runner.run();
+  await vi.waitFor(() => expect(deps.enqueue).toHaveBeenCalledOnce());
+  await store.add(message('fresh', 'session-b'));
+  await runner.run();
+  expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['slow', 'fresh']);
+  slow.resolve(projection('slow'));
+  await first;
+});
+
+it('frees each delivery slot as soon as that delivery settles, not when its whole batch does', async () => {
+  const { store, deps, runner } = await setup();
+  await store.add(message('slow', 'session-a'));
+  await store.add(message('fast', 'session-b'));
+  const slow = deferred<DeliveryProjection>();
+  deps.enqueue.mockImplementation((r: DurableOutboxRecord) =>
+    r.item.clientId === 'slow' ? slow.promise : Promise.resolve(projection(r.item.clientId)));
+  const batch = runner.run();
+  await vi.waitFor(() => expect(store.getSnapshot().find((r) => r.item.clientId === 'fast')?.state).toBe('host-owned'));
+  await store.add(message('third', 'session-c'));
+  await runner.run();
+  await vi.waitFor(() =>
+    expect(deps.enqueue.mock.calls.map(([r]) => r.item.clientId)).toContain('third'));
+  slow.resolve(projection('slow'));
+  await batch;
 });

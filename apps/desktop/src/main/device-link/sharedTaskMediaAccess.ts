@@ -5,11 +5,12 @@ import { sessionCanRead } from '../cindy-media/ledger.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDbClient } from '../localDb/client/current.js';
 import type { SharedTaskPeerCapture } from './sharedTaskDispatch.js';
+import { sharedTaskReferencesFile } from './sharedTaskFileReferences.js';
 
 function deny(): never { throw new Error('[PERMISSION_DENIED] Media does not belong to this shared task'); }
 
 /** Run before any local read/SSH transfer, and recheck membership after awaits. */
-export async function assertSharedTaskMedia(url: string, capture: SharedTaskPeerCapture): Promise<string | undefined> {
+export async function assertSharedTaskMedia(url: string, capture: SharedTaskPeerCapture): Promise<string | { file: string } | undefined> {
   if (!capture.isCurrent() || !capture.authorize('attachment.read')) deny();
   const sessionId = capture.author.sessionId;
   const blob = parseBlobUrl(url);
@@ -48,6 +49,12 @@ export async function assertSharedTaskMedia(url: string, capture: SharedTaskPeer
   if (!requested || !path.isAbsolute(requested)) deny();
   const [file, root] = await Promise.all([realpath(requested), realpath(snapshot.workingDir)]);
   const relative = path.relative(root, file);
-  if (relative.startsWith('..') || path.isAbsolute(relative) || !capture.isCurrent()) deny();
+  if (!capture.isCurrent()) deny();
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (!await sharedTaskReferencesFile(requested, snapshot.workingDir, capture) || !capture.isCurrent()) deny();
+    // Grant exactly this canonical file, never its containing directory. The
+    // materializer checks it again after resolving the path before reading.
+    return { file };
+  }
   return root;
 }

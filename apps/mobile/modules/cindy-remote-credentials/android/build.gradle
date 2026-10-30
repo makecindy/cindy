@@ -10,6 +10,7 @@ android {
     minSdkVersion 24
     versionCode 1
     versionName '0.1.0'
+    consumerProguardFiles 'consumer-rules.pro'
   }
   sourceSets.main.assets.srcDirs += '../../../../../packages/remote-credentials-native/Sources/CindyRemoteCredentials/Resources'
 }

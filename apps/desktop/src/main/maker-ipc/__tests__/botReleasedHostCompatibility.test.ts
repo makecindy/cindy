@@ -113,7 +113,7 @@ function oldHost() {
   }).createMakerSendTransaction(deps);
   const guardedSend = released('sendToAgentAccepted', {}, {
     sendToAgentAcceptedUnlocked: transaction.sendToAgentAccepted,
-    assertReviewExternalInputAllowed: async () => {}, reconcileBotModelRoute: async () => {},
+    syncBotLanePermission: async () => {}, assertReviewExternalInputAllowed: async () => {}, reconcileBotModelRoute: async () => {},
     maker: { getSession: () => engine }, refreshBotCapabilityEpochBeforeSend: async () => {},
     withSendToSessionLock: async (_id: string, run: () => unknown) => run(),
     getDbClient: () => ({ drizzle: db }), sessions, botProfiles, botSessionLinks, eq: orm.eq,
@@ -167,8 +167,9 @@ describe('published 0.1.85 host compatibility', () => {
     expect(await h.transport.send(h.input, () => {})).toMatchObject({ ok: true, accepted: true, delivered: true, transport: 'remote-conversation' });
     expect(h.engine.send).toHaveBeenCalledTimes(1);
     const text = h.engine.send.mock.calls[0][0] as string;
-    expect(text).toContain('not a new instruction or permission grant from the user');
+    expect(text).toContain('[Teammate message relayed through the authorized remote conversation]');
     expect(text).toContain('new-device::new-bot');
+    expect(text.endsWith(h.input.message)).toBe(true);
     const saved = h.sqlite.prepare('SELECT * FROM messages').get() as any;
     expect(saved.client_id).toBe('teammate-bridge:unique-test-id');
     expect(JSON.parse(saved.content)).toBe(text);

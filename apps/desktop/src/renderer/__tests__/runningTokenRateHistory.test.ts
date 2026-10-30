@@ -4,8 +4,10 @@ import {
   emptyRateHistory,
   loadCachedRateHistory,
   recordRunningTokenRate,
+  recordTokenSpeed,
   saveCachedRateHistory,
 } from '@/features/cc-agent/lib/runningTokenRateHistory';
+import { readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 
 const input = { startedAt: 1, outputTokens: 0, generationDurationMs: 0, generationReliable: true };
 const begin = () => recordRunningTokenRate(emptyRateHistory(null), input);
@@ -94,7 +96,7 @@ describe('running speed history', () => {
     expect(next.samples.at(-1)?.rate).toBe(50);
   });
 
-  it('bounds samples and excludes evicted samples from the observed peak', () => {
+  it('bounds chart samples without losing the turn peak', () => {
     let history = recordRunningTokenRate(begin(), {
       ...input,
       outputTokens: 1000,
@@ -108,7 +110,7 @@ describe('running speed history', () => {
       });
     }
     expect(history.samples).toHaveLength(60);
-    expect(history.peak).toBe(1);
+    expect(history.peak).toBe(1000);
     expect(history.samples[0].durationMs).toBe(141000);
   });
 });
@@ -321,4 +323,66 @@ it('re-establishes the same report after reliability returns and preserves compl
   });
   expect(next.latestRate).toBe(50);
   expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000]);
+});
+
+describe('host token speed (Pi extension algorithm)', () => {
+  const speed = (rate: number, elapsedMs: number, streaming = true) => ({
+    rate,
+    average: rate,
+    tokens: Math.round((rate * elapsedMs) / 1000),
+    elapsedMs,
+    streaming,
+  });
+
+  it('shows the host rate as the latest speed and charts one point per second of generation', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: speed(80, 300), now: 10 });
+    expect(history.latestRate).toBe(80);
+    expect(history.samples).toEqual([]);
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(90, 1200), now: 20 });
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(95, 1500), now: 30 });
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([1200]);
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(70, 2300), now: 40 });
+    expect(history.samples.map((sample) => sample.rate)).toEqual([90, 70]);
+    expect(history.peak).toBe(95);
+    expect(history.latestRate).toBe(70);
+  });
+
+  it('keeps the latest speed when the final average arrives, and continues the axis next turn', () => {
+    let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: speed(100, 1500) });
+    history = recordTokenSpeed(history, { startedAt: 1, speed: speed(60, 2000, false) });
+    expect(history.latestRate).toBe(100);
+    expect(history.samples).toHaveLength(1);
+    history = recordTokenSpeed(history, { startedAt: 2, speed: speed(50, 1100) });
+    expect(history.samples.map((sample) => sample.durationMs)).toEqual([1500, 2600]);
+  });
+
+  it('has no current speed until the host has a reading, instead of showing 0 tok/s', () => {
+    const first = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: speed(0, 400) });
+    expect(first.latestRate).toBeNull();
+    const measured = recordTokenSpeed(first, { startedAt: 1, speed: speed(50, 900) });
+    expect(measured.latestRate).toBe(50);
+    expect(recordTokenSpeed(measured, { startedAt: 2, speed: speed(0, 100) }).latestRate).toBeNull();
+  });
+
+  it('restores the host peak after reconnect and resets it with a new product turn', () => {
+    const snapshot = readTokenSpeedSnapshot({ ...speed(37.7, 10_000), peak: 100 })!;
+    let history = recordTokenSpeed(emptyRateHistory(null), { startedAt: 1, speed: snapshot });
+    expect(history.peak).toBe(100);
+    for (let i = 2; i <= 70; i++) {
+      history = recordTokenSpeed(history, { startedAt: 1, speed: speed(37.7, i * 10_000) });
+    }
+    expect(history.samples).toHaveLength(60);
+    expect(history.peak).toBe(100);
+    saveCachedRateHistory('continuation-peak', history);
+    history = recordTokenSpeed(loadCachedRateHistory('continuation-peak')!, { startedAt: 2, speed: speed(20, 1_000) });
+    expect(history.peak).toBe(20);
+    clearRateHistoryCache();
+  });
+
+  it('accepts only well-formed host snapshots', () => {
+    expect(readTokenSpeedSnapshot(speed(10, 1000))).toEqual(speed(10, 1000));
+    expect(readTokenSpeedSnapshot({ rate: 10 })).toBeUndefined();
+    expect(readTokenSpeedSnapshot({ ...speed(10, 1000), rate: Number.NaN })).toBeUndefined();
+    expect(readTokenSpeedSnapshot(null)).toBeUndefined();
+  });
 });

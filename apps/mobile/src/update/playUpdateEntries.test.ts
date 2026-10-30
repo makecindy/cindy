@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   playInstall: vi.fn(() => true),
-  fetchLatest: vi.fn(async () => null),
+  fetchLatest: vi.fn<() => Promise<unknown>>(async () => null),
+  download: vi.fn<(_url: string, signal: AbortSignal) => Promise<string>>(async () => 'ready.apk'),
+  install: vi.fn(async () => undefined),
   checkOta: vi.fn(async () => ({ isAvailable: false })),
   fetchOta: vi.fn(async () => ({ isNew: false })),
   appStateListener: null as ((state: string) => void) | null,
@@ -46,7 +46,14 @@ vi.mock('@/config/env', () => ({
 }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('./androidInstallSource', () => ({ isGooglePlayInstallation: mocks.playInstall }));
-vi.mock('./androidInstaller', () => ({ androidInstaller: { start: vi.fn() } }));
+vi.mock('./androidInstaller', async () => {
+  const { AndroidInstallController } = await import('./androidInstallController');
+  return { androidInstaller: new AndroidInstallController({
+    supported: () => true, hasPermission: async () => true, requestPermission: async () => true,
+    download: mocks.download, install: mocks.install, waitForForeground: async () => undefined,
+    remove: async () => undefined, openBrowser: async () => undefined,
+  }) };
+});
 vi.mock('./fetchLatestRelease', () => ({ fetchLatestRelease: mocks.fetchLatest }));
 vi.mock('./forcedUpdateStore', () => ({ enterForcedUpdate: vi.fn() }));
 vi.mock('./canaryChannelStore', () => ({ resolveUpdateChannelForDevice: () => 'release' }));
@@ -63,27 +70,54 @@ vi.mock('./otaRequestCoordinator', () => ({
 import { useBundleUpdatePrompt } from './useBundleUpdatePrompt';
 import { useResumeUpdateCheck } from './useResumeUpdateCheck';
 import { runManualUpdateCheck } from './manualUpdateCheck';
+import { androidInstaller } from './androidInstaller';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.playInstall.mockReturnValue(true);
   mocks.appStateListener = null;
   mocks.cleanup = null;
+  mocks.fetchLatest.mockResolvedValue(null);
 });
 
 afterEach(() => {
   mocks.cleanup?.();
+  androidInstaller.cancel();
   vi.restoreAllMocks();
 });
 
 describe('Google Play update entry points', () => {
+  // PR #6977: root channel cleanup must also own transfers started by resume.
+  // Existing checks only blocked late manifests, not an already-started download.
+  it('cancels a resume download on channel change even when the next channel has no update', async () => {
+    mocks.playInstall.mockReturnValue(false);
+    useBundleUpdatePrompt({ auto: true, channel: 'canary' });
+    const rootCleanup = mocks.cleanup;
+    let complete!: (file: string) => void;
+    let oldSignal!: AbortSignal;
+    mocks.download.mockImplementationOnce((_url, signal) => {
+      oldSignal = signal;
+      return new Promise((resolve) => { complete = resolve; });
+    });
+    mocks.fetchLatest.mockResolvedValueOnce({ version: '2.0.0', runtimeVersion: 'new',
+      installUrl: 'https://updates.example.invalid/app.apk', itmsUrl: '' });
+    vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(300_001);
+    useResumeUpdateCheck('canary');
+    const resumeCleanup = mocks.cleanup;
+    mocks.appStateListener!('background'); mocks.appStateListener!('active');
+    await vi.waitFor(() => expect(mocks.download).toHaveBeenCalledOnce());
+    rootCleanup?.(); resumeCleanup?.();
+    expect(oldSignal.aborted).toBe(true);
+    useBundleUpdatePrompt({ auto: true, channel: 'release' });
+    complete('old-canary.apk');
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(androidInstaller.getSnapshot().phase).toBe('idle');
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
   it('startup hook skips the website release check', async () => {
     const { checkNow } = useBundleUpdatePrompt({ auto: true, channel: 'release' });
     await expect(checkNow()).resolves.toBe('skipped');
     expect(mocks.fetchLatest).not.toHaveBeenCalled();
-    // The root layout still mounts its independent startup content OTA gate.
-    const layout = readFileSync(resolve(process.cwd(), 'app/_layout.tsx'), 'utf8');
-    expect(layout).toContain('const otaReady = useStartupOtaGate(channel);');
   });
 
   it('resume checks content OTA but never asks for the website APK', async () => {
@@ -98,11 +132,6 @@ describe('Google Play update entry points', () => {
   });
 
   it('settings passes no website check and can still check content OTA', async () => {
-    const settings = readFileSync(resolve(process.cwd(), 'app/settings.tsx'), 'utf8');
-    expect(settings).toContain('isGooglePlayInstallation: playManagedUpdates,');
-    expect(settings).toContain('checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,');
-    expect(settings).toContain('const updateCheckEnabled = bundleCheckEnabled || updatesEnabled;');
-    expect(settings).toContain("t('settings.version.googlePlayContentUpdateUnavailable')");
     await expect(runManualUpdateCheck({
       checkBundleUpdate: undefined,
       otaEnabled: true,

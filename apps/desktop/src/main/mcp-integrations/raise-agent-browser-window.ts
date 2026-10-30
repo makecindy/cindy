@@ -8,10 +8,9 @@ type RuntimeCall = Pick<BrowserControlRuntime, 'call'>;
 /**
  * Bring the headed automation Chrome to the front after `start`.
  *
- * `start` already creates Chrome's initial tab. Cold-start `GET /tabs` returns
- * `{ running: false, tabs: [] }` until CDP is reachable, so an empty list is
- * "not ready yet", not "missing window". Opening `about:blank` after the poll
- * races that first tab (MAINTAINING pit #5).
+ * Normal automation starts headed Chrome without a startup window so agent-only
+ * reads cannot steal focus. This user-initiated path waits for CDP readiness,
+ * creates one foreground tab when needed, and then focuses it.
  */
 export async function raiseAgentBrowserWindow(
   runtime: RuntimeCall,
@@ -19,8 +18,24 @@ export async function raiseAgentBrowserWindow(
 ): Promise<void> {
   const sleep = options?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   for (let attempt = 0; attempt < FOCUS_ATTEMPTS; attempt += 1) {
-    const targetId = await firstTabId(runtime);
-    if (targetId) {
+    const state = await readTabState(runtime);
+    if (state.targetId) {
+      await runtime.call({ action: 'focus', targetId: state.targetId });
+      return;
+    }
+    if (state.running) {
+      const opened = await runtime.call({
+        action: 'open',
+        url: 'about:blank',
+        background: false,
+      });
+      if (!opened.ok) {
+        throw new Error(opened.message ?? 'Failed to open the Agent browser login tab');
+      }
+      const targetId = tabIdFromData(opened.data);
+      if (!targetId) {
+        throw new Error('Agent browser login tab opened without a target ID');
+      }
       await runtime.call({ action: 'focus', targetId });
       return;
     }
@@ -30,10 +45,25 @@ export async function raiseAgentBrowserWindow(
   }
 }
 
-export async function firstTabId(runtime: RuntimeCall): Promise<string | undefined> {
+async function readTabState(
+  runtime: RuntimeCall,
+): Promise<{ running: boolean; targetId?: string }> {
   const tabsRes = await runtime.call({ action: 'tabs' });
-  const tabs = (tabsRes.data as { tabs?: Array<{ targetId?: string; suggestedTargetId?: string }> } | undefined)
-    ?.tabs;
+  const data = tabsRes.data as
+    | {
+        running?: boolean;
+        tabs?: Array<{ targetId?: string; suggestedTargetId?: string }>;
+      }
+    | undefined;
+  const tabs = data?.tabs;
   const first = Array.isArray(tabs) ? tabs[0] : undefined;
-  return first?.suggestedTargetId ?? first?.targetId;
+  return {
+    running: data?.running === true,
+    targetId: first?.suggestedTargetId ?? first?.targetId,
+  };
+}
+
+function tabIdFromData(data: unknown): string | undefined {
+  const tab = data as { targetId?: string; suggestedTargetId?: string } | undefined;
+  return tab?.suggestedTargetId ?? tab?.targetId;
 }

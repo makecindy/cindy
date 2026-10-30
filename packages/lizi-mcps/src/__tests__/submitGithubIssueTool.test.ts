@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
@@ -66,6 +67,7 @@ describe('submit_github_issue tool', () => {
   it('澄清流程交给 agent 判断,并与自动附加的当前任务环境区分', () => {
     const { registry } = setup();
     const tool = registry.get('submit_github_issue');
+    const bodySchema = tool?.inputShape.body as z.ZodType | undefined;
     expect(tool?.description).toContain('缺什么问什么');
     expect(tool?.description).toContain('不要套固定问卷或章节清单');
     expect(tool?.description).toContain('普通建议不必按缺陷来问');
@@ -76,15 +78,15 @@ describe('submit_github_issue tool', () => {
     expect(tool?.description).toContain('本工具不能把对话里的图片传到 GitHub');
     expect(tool?.description).toContain('禁止写「已提供截图」');
     expect(tool?.description).toContain('不要写仓库路径、实现方案、验收清单');
-    expect(tool?.inputShape.body.description).toContain('按这条反馈本身组织');
-    expect(tool?.inputShape.body.description).not.toContain('bug 优先用');
-    expect(tool?.inputShape.body.description).toContain('禁止声称截图已附');
-    expect(tool?.inputShape.body.description).toContain('提交时的任务环境');
-    expect(tool?.inputShape.body.description).toContain('实际故障');
-    expect(tool?.inputShape.body.description).toContain(
+    expect(bodySchema?.description).toContain('按这条反馈本身组织');
+    expect(bodySchema?.description).not.toContain('bug 优先用');
+    expect(bodySchema?.description).toContain('禁止声称截图已附');
+    expect(bodySchema?.description).toContain('提交时的任务环境');
+    expect(bodySchema?.description).toContain('实际故障');
+    expect(bodySchema?.description).toContain(
       '不要复制系统自动附加的当前任务快照',
     );
-    expect(tool?.inputShape.body.description).not.toMatch(
+    expect(bodySchema?.description).not.toMatch(
       /不要写环境信息\(客户端版本 \/ 版本区域 \/ OS \/ Harness \/ 模型 ID/,
     );
   });

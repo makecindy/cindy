@@ -12,3 +12,12 @@ export function isPiImageInputUnsupportedError(value: unknown): boolean {
     code === PI_IMAGE_INPUT_UNSUPPORTED_CODE || message.includes(PI_IMAGE_INPUT_UNSUPPORTED_MARKER)
   );
 }
+
+/** The existing Pi prompt RPC expiry signal, shared by native recovery and group settlement. */
+export function isPiPromptRpcTimeoutError(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(
+    value => typeof value === 'string' && /pi rpc timeout after \d+ms: prompt\b/i.test(value),
+  );
+}

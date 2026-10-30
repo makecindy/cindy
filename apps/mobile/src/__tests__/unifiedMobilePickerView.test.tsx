@@ -49,8 +49,12 @@ vi.mock('@/components/AppText', async () => {
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 40, bottom: 20 }) }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('lucide-react-native', () => ({
-  ...Object.fromEntries(['Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown'].map(key => [key, () => null])),
+  ...Object.fromEntries(['Brain', 'SlidersHorizontal', 'Check', 'Zap', 'LayoutGrid', 'Search', 'X', 'ChevronDown', 'ChevronRight', 'ChevronsUpDown', 'CircleAlert'].map(key => [key, () => null])),
   Star: ({ fill, color }: any) => createElement('span', { 'data-star-fill': fill, 'data-star-color': color }),
+}));
+vi.mock('react-native-svg', () => ({
+  default: ({ children, ...props }: any) => createElement('svg', props, children),
+  Path: (props: any) => createElement('path', props),
 }));
 vi.mock('@expo/ui/swift-ui', async () => {
   const { useRef } = await import('react');
@@ -65,8 +69,10 @@ vi.mock('@expo/ui/swift-ui', async () => {
   };
 });
 vi.mock('@expo/ui/swift-ui/modifiers', () => ({...Object.fromEntries(
-  ['accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
-), shapes:{rectangle:()=>({})}}));
+  ['containerRelativeFrame', 'onGeometryChange'].map(key => [key, (value: any) => ({ [key]: value })]),
+), ...Object.fromEntries(
+  ['background', 'fixedSize', 'accessibilityElement', 'accessibilityHidden', 'opacity', 'scrollDisabled', 'scrollContentBackground', 'presentationDetents', 'presentationDragIndicator', 'interactiveDismissDisabled', 'contentShape', 'accessibilityLabel', 'buttonStyle', 'disabled', 'font', 'foregroundStyle', 'frame', 'pickerStyle', 'progressViewStyle', 'tint', 'tag', 'padding', 'autocorrectionDisabled', 'textInputAutocapitalization', 'lineLimit'].map(key => [key, (value: any) => ({ [key]: value })]),
+), shapes:{rectangle:()=>({}), roundedRectangle:(value: any)=>value}}));
 vi.mock('@expo/ui', () => ({Host:({children}:any)=>children}));
 vi.mock('@/session/ComposerSheet', () => import('@/session/ComposerSheet.ios'));
 vi.mock('@/session/ComposerNativeSection', () => ({ ComposerNativeSection: ({ children, title }: any) => createElement('div', null, title, children) }));

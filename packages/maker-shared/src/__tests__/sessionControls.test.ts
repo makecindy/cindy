@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isCodexBucketStale,
   nextCodexBucketStaleAtMs,
   resolveCodexBucketTable,
   selectCodexUsageForModel,
@@ -88,11 +89,11 @@ describe('summarizeCodexRateLimitReset', () => {
     });
   });
 
-  it('does not offer reset before exhaustion and leaves offer expiry to desktop', () => {
+  it('allows manual reset before exhaustion and leaves offer expiry to desktop', () => {
     expect(summarizeCodexRateLimitReset({
       ...base,
       rateLimits: { primary: { usedPercent: 99.9 } },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
     expect(summarizeCodexRateLimitReset({
       ...base,
       resetOffer: { ...base.resetOffer, validUntil: NOW_MS },
@@ -111,7 +112,7 @@ describe('summarizeCodexRateLimitReset', () => {
         primary: { usedPercent: 100 },
         rateLimitReachedType: 'workspace_owner_credits_depleted',
       },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
   });
 
   it('omits the reset count when credit availability was not returned', () => {
@@ -317,6 +318,34 @@ describe('generic bucket alias priority', () => {
     expect(nextCodexBucketStaleAtMs(null, NOW)).toBeNull();
     expect(nextCodexBucketStaleAtMs({}, NOW)).toBeNull();
   });
+
+  it('keeps the transition armed at the exact stale instant', () => {
+    const resetsAt = Math.floor(NOW / 1000);
+    const staleAt = resetsAt * 1000 + 24 * 60 * 60 * 1000;
+    const promo = {
+      limitId: 'codex_bengalfox',
+      limitName: 'GPT-5.3-Codex-Spark',
+      primary: { usedPercent: 100, resetsAt },
+    };
+    // 陈旧判据是严格 `<`: staleAt 这一毫秒仍有效, staleAt + 1 才陈旧。
+    expect(isCodexBucketStale(promo, staleAt)).toBe(false);
+    expect(isCodexBucketStale(promo, staleAt + 1)).toBe(true);
+    // 定时器正是在返回的那一刻回调, 因此这里仍须给出 staleAt, 否则面板不再重选。
+    expect(nextCodexBucketStaleAtMs({ codex_bengalfox: promo }, staleAt)).toBe(staleAt);
+    expect(nextCodexBucketStaleAtMs({ codex_bengalfox: promo }, staleAt + 1)).toBeNull();
+    // 选桶同理: staleAt 这一毫秒仍能选中 promo, 再下一毫秒才被排除 —— 否则这条断言
+    // 只是因为桶表匹配不到模型而恒为 null, 证明不了过期桶被排除。
+    expect(selectCodexUsageForModel({
+      byLimitId: { codex_bengalfox: promo },
+      modelId: 'gpt-5.3-codex-spark',
+      nowMs: staleAt,
+    })).toBe(promo);
+    expect(selectCodexUsageForModel({
+      byLimitId: { codex_bengalfox: promo },
+      modelId: 'gpt-5.3-codex-spark',
+      nowMs: staleAt + 1,
+    })).toBeNull();
+  });
 });
 
 describe('overlapping bucket names', () => {
@@ -381,3 +410,4 @@ describe('resolveCodexBucketTable (selector / timer must agree)', () => {
     expect(resolveCodexBucketTable({ byLimitId: [], appServerBuckets: 'nope' })).toBeNull();
   });
 });
+

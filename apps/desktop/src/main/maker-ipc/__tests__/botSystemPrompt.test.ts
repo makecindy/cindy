@@ -50,10 +50,14 @@ describe('稳定层:能力必须写进提示词', () => {
     main.capabilities.sessionControlEnabled = true;
     const stable = buildBotStableTier(main);
     expect(stable).toContain('你能看、能管主人的任务');
-    expect(stable).toContain('沿用当前任务的权限档与用户授权');
+    // The prompt states the same principal boundary the host gate enforces.
+    expect(stable).toContain('同意后继续本次调用');
+    expect(stable).not.toContain('NEEDS_OWNER_REQUEST');
+    expect(stable).toContain('照常走当前任务的权限档');
     expect(stable).not.toContain('OWNER_TURN_REQUIRED');
     expect(stable).not.toContain('TASK_OUT_OF_SCOPE');
-    expect(stable).toContain('add_workbench_project');
+    expect(stable).toContain('set_workbench_task_responsibility');
+    expect(stable).not.toContain('add_workbench_project');
     expect(stable).not.toContain('你能建普通自动化');
     main.capabilities.automationEnabled = true;
     expect(buildBotStableTier(main)).toContain('schedule_create');
@@ -121,7 +125,9 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('你记得住事');
     expect(all).toContain('第一次明确说出一条稳定偏好');
     expect(all).toContain('save_teammate_skill');
-    expect(all).toContain('第一次验证完就');
+    // 2026-10-23 主人裁决：对话中只在主人明确要求时新建技能，其余交给夜间学习。
+    expect(all).toContain('用户明确要你把一套做法记成技能时');
+    expect(all).not.toContain('第一次验证完就');
     expect(all).toContain('开后台任务，也可以给伙伴发消息');
     expect(all).toContain('start_session_task');
     expect(all).toContain('check_session_task');
@@ -129,7 +135,10 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('stop_session_task');
     expect(all).toContain('send_to_agent');
     expect(all).toContain('不启动任务');
-    expect(all).toContain('编码实施和中大型工作必须用 `start_session_task`');
+    expect(all).toContain('优先在当前对话完成能清楚收口的工作');
+    expect(all).toContain('用户明确要求独立任务');
+    expect(all).toContain('隔离工作区、并行交付或独立跟踪');
+    expect(all).not.toContain('编码实施和中大型工作');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
     expect(all).not.toContain('action=notify');
@@ -141,6 +150,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_teammate_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
+    expect(none).not.toContain('start_session_task');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {

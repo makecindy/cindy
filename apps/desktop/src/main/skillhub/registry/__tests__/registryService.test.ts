@@ -420,3 +420,23 @@ describe('并发安全', () => {
     expect(Object.keys(manifest.installs)).toHaveLength(installCount);
   });
 });
+
+describe('read-only scan listing', () => {
+  it('lists backup metadata without probing install paths or restoring/writing manifests', async () => {
+    const installPath = path.join(userDataDir, 'unresponsive-volume', '.agents', 'skills', 'offline');
+    const entry = makeEntry({ catalogScope: 'market', catalogScopeMigrated: true });
+    fs.mkdirSync(path.dirname(backupManifestPath('offline')), { recursive: true });
+    fs.writeFileSync(backupManifestPath('offline'), JSON.stringify({
+      schemaVersion: 1, skillName: 'offline', installs: { [installPath]: entry },
+    }));
+    const access = vi.spyOn(fs.promises, 'access');
+    const write = vi.spyOn(fs.promises, 'writeFile');
+    try {
+      const listed = await listAllInstalls({ readOnly: true });
+      expect(listed).toEqual([{ skillName: 'offline', installPath, entry }]);
+      expect(access).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(fs.existsSync(manifestPath('offline'))).toBe(false);
+    } finally { access.mockRestore(); write.mockRestore(); }
+  });
+});

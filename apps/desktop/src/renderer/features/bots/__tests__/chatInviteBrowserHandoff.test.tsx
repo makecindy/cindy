@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
-import { ChatInviteHost, requestChatInvite } from '../ChatInviteHost';
+import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '../ChatInviteHost';
 import { handleIncomingDeepLink, setDeepLinkMainWindow, takePendingDeepLink } from '../../../../main/deepLink';
 
 vi.mock('electron', () => ({ app: { focus: vi.fn() }, BrowserWindow: class {} }));
@@ -51,9 +51,11 @@ it.each(['darwin', 'win32', 'linux'].flatMap(platform => [false, true].map(alrea
     () => false,
   );
   const acceptInvite = vi.fn();
-  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: { acceptInvite } } } });
+  const previewInvite = vi.fn(() => new Promise(() => undefined));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: { acceptInvite, previewInvite } } } });
   const receive = (payload: { type: string; token?: string }) => {
     if (payload.type === 'chat-invite' && payload.token) requestChatInvite(payload.token);
+    if (payload.type === 'chat-invite-malformed') reportMalformedChatInvite();
   };
   const pull = () => drainPendingDeepLinks(async () => takePendingDeepLink(), receive);
   const connect = () => bridge.onDeepLinkNavigate(() => void pull());
@@ -86,11 +88,37 @@ it.each(['darwin', 'win32', 'linux'].flatMap(platform => [false, true].map(alrea
   }
   render(<MemoryRouter><ChatInviteHost /></MemoryRouter>);
   expect(screen.getAllByRole('dialog')).toHaveLength(1);
-  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(anchor.href);
+  expect(previewInvite).toHaveBeenCalledExactlyOnceWith({ link: anchor.href });
   expect(acceptInvite).not.toHaveBeenCalled();
   expect(takePendingDeepLink()).toBeNull();
   // Malformed events must not be forwarded by preload.
   listener?.({ type: 'chat-invite', token: '../bad-token' });
+  fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+it('turns a truncated clicked invitation into an explicit notice through preload and the pending queue', async () => {
+  let listener: ((payload: unknown) => void) | undefined;
+  const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', `${compiled}; return bridge;`)(
+    (callback: (payload: unknown) => void) => { listener = callback; return () => { listener = undefined; }; },
+    () => false,
+  );
+  const previewInvite = vi.fn();
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { chatServer: { previewInvite } } } });
+  const pull = () => drainPendingDeepLinks(async () => takePendingDeepLink(), (payload: { type: string }) => {
+    if (payload.type === 'chat-invite-malformed') reportMalformedChatInvite();
+  });
+  const win = { isDestroyed: () => false, isMinimized: () => false, isVisible: () => true,
+    setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
+    webContents: { isLoading: () => false, send: (_channel: string, payload: unknown) => listener?.(payload) },
+  } as unknown as BrowserWindow;
+  setDeepLinkMainWindow(win);
+  bridge.onDeepLinkNavigate(() => void pull());
+  await act(async () => { handleIncomingDeepLink(`cindy://chat-invite/${'truncated'.padEnd(30, 'a')}`, 'open-url'); });
+  render(<MemoryRouter><ChatInviteHost /></MemoryRouter>);
+  expect(screen.getByRole('alert').textContent).toBe('bots.groupChat.server.malformedInvite');
+  expect(previewInvite).not.toHaveBeenCalled();
+  expect(takePendingDeepLink()).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
   expect(screen.queryByRole('dialog')).toBeNull();
 });

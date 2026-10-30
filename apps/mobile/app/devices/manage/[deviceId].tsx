@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ErrorNotice';
 import { Host, List, ListItem, Text as NativeText } from '@expo/ui';
 import { List as SwiftUIList } from '@expo/ui/swift-ui';
 import { scrollContentBackground } from '@expo/ui/swift-ui/modifiers';
@@ -110,10 +111,7 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
         <ActivityIndicator color={colors.textSecondary} style={styles.loading} />
       ) : null}
       {manager.error ? (
-        <View style={styles.errorBlock}>
-          <Text accessibilityRole="alert" style={styles.errorText}>
-            {manager.error}
-          </Text>
+        <ErrorNotice accessibilityRole="alert" style={styles.errorBlock} message={manager.error}>
           <MainWindowActionButton
             action={{
               busy: manager.loading,
@@ -123,7 +121,7 @@ function DeviceInformationContent({ deviceId }: { deviceId: string }) {
             }}
             style={styles.retryButton}
           />
-        </View>
+        </ErrorNotice>
       ) : null}
       {!device && !manager.loading && !manager.error ? (
         <Text style={styles.notFound}>
@@ -190,7 +188,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   host: { backgroundColor: colors.surface, flex: 1 },
   headerButton: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44 },
   loading: { paddingVertical: spacing.lg },
-  errorBlock: { alignItems: 'flex-start', gap: spacing.md, padding: spacing.lg },
+  errorBlock: { marginHorizontal: spacing.lg, marginBottom: spacing.md },
   // 报错说明:13/18 errorText(黑白系)。
   errorText: { color: colors.errorText, fontSize: typeScale.footnote, fontWeight: fontWeight.regular, lineHeight: lineHeight.caption },
   retryButton: { alignSelf: 'flex-start' },

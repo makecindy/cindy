@@ -81,9 +81,9 @@ describe('ChatInput session switch focus contract', () => {
     expect(sessionViewSource).toContain(
       'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
-    expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
+    expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}');
     expect(sessionViewSource).toContain(
-      'ownsHardwareComposerActions={ownsHardwareTaskActions}',
+      'ownsHardwareComposerActions={ownsHardwareTaskActions && !voiceModeOpen}',
     );
     expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
     expect(sessionViewSource).toContain(
@@ -173,10 +173,10 @@ describe('ChatInput session switch focus contract', () => {
       'const handleComposerSuggestionSelect = useCallback(',
     );
 
-    expect(pluginPageSource).toContain('pendingGhostId: ghost.manifest.id');
+    expect(pluginPageSource).toContain('pendingGhostId: installedGhostStoragePart(ghost)');
     expect(pluginPageSource.match(/focusAtEnd: true/g)).toHaveLength(1);
     expect(
-      chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, installedGhosts\)/g),
+      chatInputSource.match(/placeGhostAtComposerStart\(editor, ghost, ghostsForCommand\)/g),
     ).toHaveLength(1);
     expect(
       chatInputSource.match(
@@ -187,7 +187,8 @@ describe('ChatInput session switch focus contract', () => {
 
     expect(capabilitySelectionBlock).toContain("selectedItem.type === 'plugin-command'");
     expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
-    expect(capabilitySelectionBlock).toContain('composerGhostsRef.current.find(');
+    expect(capabilitySelectionBlock).toContain('findInstalledGhostByInstanceId(');
+    expect(capabilitySelectionBlock).toContain('composerGhostsRef.current,');
     expect(capabilitySelectionBlock).toContain(
       'placeGhostAtComposerStart(editor, ghost, composerGhostsRef.current);',
     );
@@ -208,7 +209,7 @@ describe('ChatInput session switch focus contract', () => {
       'worktreeCreationStore.clear(newSession.id);',
     );
 
-    expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandWord)');
+    expect(chatInputSource).toContain('findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)');
     expect(chatInputSource).toContain('onAccepted: markRecentPluginUsage');
     expect(successfulSendBlock).toContain('markRecentPluginUsage();');
     // 本机首条 / worktree 首条 / 远程普通首条直接发送 / 远程视图交接 四处受理点。
@@ -250,7 +251,7 @@ describe('ChatInput session switch focus contract', () => {
     );
     expect(unlockAfterClear).not.toContain('setSendDispatchInFlight(false);');
     expect(chatInputSource).toContain(
-      'disabled || (sendDispatchInFlight && !allowTypeDuringSend)',
+      'disabled || waitingForFolders || (sendDispatchInFlight && !allowTypeDuringSend)',
     );
     expect(chatInputSource).toContain('sendDispatchInFlight ||');
     expect(chatInputSource).toContain('setSendDispatchInFlight(nextSendInFlight);');

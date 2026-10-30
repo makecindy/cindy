@@ -1,4 +1,4 @@
-import type { PreRunHookConfig } from "./types.js";
+import type { AgentKind, PreRunHookConfig, Schedule } from "./types.js";
 import { nextRun } from "./engine/cron.js";
 
 /** Sources describe events, independently of the connector transporting them. */
@@ -36,6 +36,25 @@ export type RoutineTrigger =
       }>;
     };
 
+/** Host-owned rules: per-teammate follow-up, the owner-enabled daily todo check, and nightly learning. */
+export type RoutineBuiltin = "follow-up" | "todo-check" | "nightly-learning";
+
+/** Stable error prefix for attempts to delete or rewrite a host-owned routine. */
+export const BUILTIN_ROUTINE_ERROR = "BUILTIN_ROUTINE";
+
+/** A routine's explicit choice; null/absence follows its companion's choice. */
+export interface RoutineModel {
+  agentKind: AgentKind;
+  agentDeviceId?: string | null;
+  model: string;
+  providerId?: string | null;
+  effort?: Schedule['effort'];
+  fastMode?: Schedule['fastMode'];
+}
+
+/** How a routine carries context from one trigger to the next. */
+export type RoutineSessionMode = "persistent" | "fresh";
+
 /** A single standing instruction, with OR-combined time and event triggers. */
 export interface Routine {
   /** Derived by the engine, never accepted as configuration. */
@@ -50,6 +69,21 @@ export interface Routine {
   silentWhenIdle?: boolean;
   /** null explicitly removes the check; omission preserves it on older clients. */
   preRunHook?: PreRunHookConfig | null;
+  /** Omission preserves saved settings when an older client edits a rule. */
+  modelOverride?: RoutineModel | null;
+  /** Omission keeps the legacy persistent routine lane. */
+  sessionMode?: RoutineSessionMode;
+  /**
+   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」，以及主人在近况里打开的「每天查待办」）。由宿主模板生成，不接受用户/模型
+   * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
+   * state 版本不变。
+   */
+  builtin?: RoutineBuiltin;
+  /**
+   * 内置规则的宿主模板版本（可选，只由 ensureBuiltin 写）。版本变化时 ensure 一定重写规则；
+   * 旧数据缺省视为与任何显式版本不同，下次 ensure 补写。
+   */
+  builtinVersion?: number;
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -57,7 +91,8 @@ export interface Routine {
 
 export type RoutineInput = Pick<
   Routine,
-  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook"
+  "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "modelOverride"
+  | "sessionMode"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -154,9 +189,33 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     preRunHook = { command: string(hook.command, 32_000),
       ...(hook.timeoutMs === undefined ? {} : { timeoutMs: Number(hook.timeoutMs) }) };
   }
+  let modelOverride: RoutineModel | null | undefined;
+  if (input.modelOverride === null) modelOverride = null;
+  else if (input.modelOverride !== undefined) {
+    const model = record(input.modelOverride);
+    if (!['claude-code', 'codex', 'pi'].includes(String(model.agentKind))) throw new Error('Invalid routine agent');
+    if (model.effort !== undefined && !['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(String(model.effort))) throw new Error('Invalid routine effort');
+    if (model.fastMode !== undefined && typeof model.fastMode !== 'boolean' && model.fastMode !== 'ultrafast') throw new Error('Invalid routine fast mode');
+    modelOverride = {
+      agentKind: model.agentKind as AgentKind,
+      model: string(model.model, 512),
+      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null ? null : string(model.agentDeviceId, 512) }),
+      ...(model.providerId === undefined ? {} : { providerId: model.providerId === null ? null : string(model.providerId, 512) }),
+      ...(model.effort === undefined ? {} : { effort: model.effort as RoutineModel['effort'] }),
+      ...(model.fastMode === undefined ? {} : { fastMode: model.fastMode as RoutineModel['fastMode'] }),
+    };
+  }
+  let sessionMode: RoutineSessionMode | undefined;
+  if (input.sessionMode !== undefined) {
+    if (input.sessionMode !== "persistent" && input.sessionMode !== "fresh")
+      throw new Error("Invalid routine session mode");
+    sessionMode = input.sessionMode;
+  }
   return {
+    ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
     ...(preRunHook === undefined ? {} : { preRunHook }),
+    ...(sessionMode === undefined ? {} : { sessionMode }),
     name: string(input.name, 200),
     prompt: string(input.prompt, 100_000),
     enabled: input.enabled,

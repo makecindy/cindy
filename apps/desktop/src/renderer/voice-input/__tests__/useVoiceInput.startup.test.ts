@@ -18,7 +18,9 @@ const mocks = vi.hoisted(() => ({
   startEngine: vi.fn<() => Promise<void>>(),
   stopEngine: vi.fn(),
   drainEngine: vi.fn(),
-  engines: [] as Array<{ emit: (chunk: PcmChunk) => void }>,
+  engines: [] as Array<{ emit: (chunk: PcmChunk) => void; keepAlive: boolean }>,
+  prepareMicrophone: vi.fn(),
+  releasePreparation: vi.fn(),
   promptExpired: vi.fn(),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: mocks.translate }) }));
@@ -49,8 +51,11 @@ vi.mock('../audioContextPool', () => ({
 vi.mock('../WebMicAudioEngine', () => ({
   WebMicAudioEngine: class {
     emit = (_chunk: PcmChunk) => {};
-    constructor() {
+    constructor(readonly options: { keepAlive: boolean }) {
       mocks.engines.push(this);
+    }
+    get keepAlive() {
+      return this.options.keepAlive;
     }
     onPcm16k(callback: (chunk: PcmChunk) => void) {
       this.emit = callback;
@@ -74,9 +79,14 @@ vi.mock('../WebMicAudioEngine', () => ({
   disposeKeepAliveVoiceInputMicrophone: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputBenchmarkFixture: vi.fn().mockResolvedValue(undefined),
   prewarmVoiceInputMicrophoneWithAutomaticFallback: vi.fn().mockResolvedValue(undefined),
+  prepareVoiceInputMicrophone: mocks.prepareMicrophone,
 }));
 
 import { useVoiceInput } from '../useVoiceInput';
+import {
+  createComposerLongPressVoiceGesture,
+  COMPOSER_LONG_PRESS_VOICE_INPUT_MS,
+} from '../composerLongPressGesture';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -150,6 +160,8 @@ beforeEach(() => {
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.releasePreparation.mockReset();
+  mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
 afterEach(() => {
   cleanup();
@@ -158,6 +170,70 @@ afterEach(() => {
 });
 
 describe('local voice capture independent of startup checks and cloud', () => {
+  it('keeps an authorized microphone closed through a short composer click', async () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.api.prewarm.mockClear();
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => h.result.current.state,
+      prepare: () => h.result.current.prepare(),
+      start: () => h.result.current.start(),
+      stop: () => h.result.current.stop(),
+    });
+    gesture.press({ x: 0, y: 0 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+    });
+    gesture.release();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS);
+    });
+    expect(h.api.prewarm).not.toHaveBeenCalled();
+    // Opening even an authorized device can switch Bluetooth headphones to call audio.
+    expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+    expect(mocks.startEngine).not.toHaveBeenCalled();
+    expect(h.api.muteSystemAudio).not.toHaveBeenCalled();
+    expect(h.result.current.state).toBe('idle');
+    expect(h.api.start).not.toHaveBeenCalled();
+    expect(mocks.engines).toHaveLength(0);
+    gesture.dispose();
+  });
+
+  it('opens the microphone only after the composer hold threshold', async () => {
+    const h = mount();
+    h.api.getMicrophonePermissionCached.mockReturnValue({ ok: true, status: 'granted' });
+    h.api.prewarm.mockClear();
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => h.result.current.state,
+      prepare: () => h.result.current.prepare(),
+      start: () => h.result.current.start(),
+      stop: () => h.result.current.stop(),
+    });
+    gesture.press({ x: 0, y: 0 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPOSER_LONG_PRESS_VOICE_INPUT_MS - 1);
+    });
+    expect(h.api.prewarm).not.toHaveBeenCalled();
+    expect(mocks.prepareMicrophone).not.toHaveBeenCalled();
+    expect(mocks.startEngine).not.toHaveBeenCalled();
+    expect(h.api.start).not.toHaveBeenCalled();
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      h.connection.resolve({ ok: true, runId: 'held-composer' });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(h.api.prewarm).toHaveBeenCalledOnce();
+    expect(mocks.startEngine).toHaveBeenCalledOnce();
+    expect(mocks.engines[0].keepAlive).toBe(false);
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => {
+      gesture.release();
+    });
+    expect(mocks.stopEngine).toHaveBeenCalled();
+    expect(h.result.current.state).toBe('done');
+    gesture.dispose();
+  });
+
   it('ends before the microphone produces its first frame and closes the late microphone', async () => {
     const h = mount();
     const device = deferred<void>();

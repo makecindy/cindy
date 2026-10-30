@@ -42,6 +42,16 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
       agentKind: 'codex',
       model: 'codex/gpt-5.5',
     });
+    expect(decodeCatalogPin(encodeCatalogPin('custom-1', 'claude-code', 'qwen3:8b'))).toEqual({
+      providerId: 'custom-1',
+      agentKind: 'claude-code',
+      model: 'qwen3:8b',
+    });
+    expect(decodeCatalogPin(encodeCatalogPin('opencode-go', 'pi', 'step-5-preview-free'))).toEqual({
+      providerId: 'opencode-go',
+      agentKind: 'pi',
+      model: 'step-5-preview-free',
+    });
     expect(decodeCatalogPin('cat:custom-1:claude-code:qwen3:8b')).toEqual({
       providerId: 'custom-1',
       agentKind: 'claude-code',
@@ -68,8 +78,8 @@ describe('encodeCatalogPin / decodeCatalogPin', () => {
       'cat:xd:codex',
       'cat::codex:m',
       'cat:xd::m',
-      'cat:xd:pi:m',
       'cat:xd:codex:',
+      'cat:xd:unknown-agent:m',
     ]) {
       expect(decodeCatalogPin(bad), bad).toBeNull();
     }
@@ -82,7 +92,7 @@ describe('buildTextOneshotPinOptions', () => {
       catalogOf(
         provider({
           id: 'xd',
-          name: 'Cindy Gateway',
+          name: 'Cindy AI · 心动',
           models: { codex: [chat('codex/gpt-5.5', { name: 'GPT 5.5 折扣' })] },
         }),
         provider({
@@ -99,8 +109,8 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options).toEqual([
       {
         id: 'cat:xd:codex:codex/gpt-5.5',
-        label: 'Codex · GPT 5.5 折扣 · Cindy AI',
-        group: 'Cindy AI',
+        label: 'Codex · GPT 5.5 折扣 · Cindy AI · 心动',
+        group: 'Cindy AI · 心动',
         providerId: 'xd',
         agentKind: 'codex',
         modelId: 'codex/gpt-5.5',
@@ -194,24 +204,31 @@ describe('buildTextOneshotPinOptions', () => {
     ]);
   });
 
-  it('pi-only 供应商与缺 routing 的 agent 不进清单', () => {
+  it('pi 档:缺 routing 不进清单;声明完整的 pi runtime 声明即出线(含 anthropic-messages)', () => {
     const options = buildTextOneshotPinOptions(
       catalogOf(
         provider({ id: 'pi-prov', agents: ['pi'], models: { pi: [chat('pi-m')] as never } }),
         provider({
-          id: 'half',
+          id: 'pi-full',
           source: 'user',
-          agents: ['codex', 'claude-code'],
-          routing: { codex: { upstream: 'https://up.example.com', authStrategy: 'api-key-header' } },
-          models: {
-            codex: [chat('gpt-m-codex', { group: 'custom:half' })],
-            'claude-code': [chat('m-cc', { group: 'custom:half' })],
-          },
+          agents: ['pi'],
+          routing: { pi: { upstream: 'https://up.example.com/v1', authStrategy: 'api-key-header', wireProtocol: 'openai-chat' } },
+          models: { pi: [chat('pi-m', { group: 'custom:pi-full' })] },
+        }),
+        provider({
+          id: 'pi-anthropic',
+          source: 'user',
+          agents: ['pi'],
+          routing: { pi: { upstream: 'https://up.example.com', authStrategy: 'api-key-header', wireProtocol: 'anthropic-messages' } },
+          models: { pi: [chat('pi-m2', { group: 'custom:pi-anthropic' })] },
         }),
       ),
       undefined,
     );
-    expect(options.map((o) => o.id)).toEqual(['cat:half:codex:gpt-m-codex']);
+    expect(options.map((o) => [o.id, o.agentSuffix])).toEqual([
+      ['cat:pi-full:pi:pi-m', 'Pi'],
+      ['cat:pi-anthropic:pi:pi-m2', 'Pi'],
+    ]);
   });
 
   it('自定义供应商:routing 禁用 / 鉴权策略不支持 / 缺上游 → 排除;结构完整 → 收', () => {
@@ -250,9 +267,10 @@ describe('buildTextOneshotPinOptions', () => {
   });
 
   it('自定义供应商 wire 与执行侧出线不一致的组合不进清单', () => {
-    // 执行侧:claude-code 恒发 anthropic-messages;codex 发不出 anthropic-messages
-    // (会被静默当 responses)。配置错线的组合钉上恒失败,清单提前过滤。
-    const custom = (id: string, agentKind: 'codex' | 'claude-code', wireProtocol?: string) =>
+    // 执行侧:claude-code 恒发 anthropic-messages;pi 的出线跟随声明(声明的
+    // 协议都发得出);codex 发不出 anthropic-messages(会被静默当 responses);
+    // google-generative-ai 执行路直接拒绝。错线/拒线组合钉上恒失败,清单提前过滤。
+    const custom = (id: string, agentKind: 'codex' | 'claude-code' | 'pi', wireProtocol?: string) =>
       provider({
         id,
         source: 'user',
@@ -273,6 +291,11 @@ describe('buildTextOneshotPinOptions', () => {
         custom('cx-chat', 'codex', 'openai-chat'),
         custom('cx-anthropic', 'codex', 'anthropic-messages'),
         custom('cx-default', 'codex'),
+        custom('cx-google', 'codex', 'google-generative-ai'),
+        custom('pi-chat', 'pi', 'openai-chat'),
+        custom('pi-anthropic', 'pi', 'anthropic-messages'),
+        custom('pi-google', 'pi', 'google-generative-ai'),
+        custom('pi-default', 'pi'),
       ),
       undefined,
     );
@@ -280,6 +303,9 @@ describe('buildTextOneshotPinOptions', () => {
       'cat:cc-anthropic:claude-code:m',
       'cat:cx-chat:codex:m',
       'cat:cx-default:codex:m',
+      'cat:pi-chat:pi:m',
+      'cat:pi-anthropic:pi:m',
+      'cat:pi-default:pi:m',
     ]);
   });
 

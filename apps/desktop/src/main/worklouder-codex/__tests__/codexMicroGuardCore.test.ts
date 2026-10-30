@@ -11,25 +11,12 @@ import {
   parseLaunchEnvironmentNodeOptions,
   removeNodeOption,
   restoreNodeOptions,
-  type GuardCommandResult,
-  type GuardCommandRunner,
+  stripLegacyGuardNodeOptions,
 } from '../codexMicroGuardCore.js';
 
+import { GuardEnvironmentRunner, seedLegacyGuard } from './guardRecoveryFixture';
+
 const roots: string[] = [];
-const LEASE_ID = '11111111-1111-4111-8111-111111111111';
-
-class FakeRunner implements GuardCommandRunner {
-  readonly commands: string[][] = [];
-
-  constructor(private readonly responses: GuardCommandResult[]) {}
-
-  async run(arguments_: readonly string[]): Promise<GuardCommandResult> {
-    this.commands.push([...arguments_]);
-    const response = this.responses.shift();
-    if (!response) throw new Error('unexpected launchctl command');
-    return response;
-  }
-}
 
 function temporaryStore(): CodexMicroGuardStore {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-guard-'));
@@ -41,10 +28,6 @@ function printed(nodeOptions?: string): string {
   return `gui/501 = {\n\ttype = login\n\tenvironment = {\n\t\tPATH => /bin\n${
     nodeOptions === undefined ? '' : `\t\tNODE_OPTIONS =>${nodeOptions ? ` ${nodeOptions}` : ''}\n`
   }\t}\n\tservices = {\n\t\t  900 - application.example\n\t}\n}\n`;
-}
-
-function result(stdout = '', status = 0): GuardCommandResult {
-  return { status, stdout, stderr: '' };
 }
 
 afterEach(() => {
@@ -120,122 +103,261 @@ describe('Codex Micro guard launchctl parsing', () => {
   });
 });
 
-describe('Codex Micro guard store and manager', () => {
-  it('writes private files and rejects a symlinked support directory', () => {
+describe('paused Codex Micro guard recovery', () => {
+  function fixture(original: string | null = '--trace-warnings') {
+    const store = temporaryStore();
+    const token = seedLegacyGuard(store, original);
+    const runner = new GuardEnvironmentRunner(original ? original + ' ' + token : token);
+    const environment = { NODE_OPTIONS: runner.nodeOptions! };
+    const manager = new CodexMicroGuardManager(store, runner, 'gui/501', environment);
+    return { store, token, runner, environment, manager };
+  }
+
+  it('clears an active legacy lease, retains its hook, and preserves external options exactly', async () => {
+    const original = '  --title="two  spaces"  ';
+    const { store, runner, manager, environment } = fixture(original);
+    await manager.recover();
+    expect(runner.nodeOptions).toBe(original);
+    expect(environment.NODE_OPTIONS).toBe(original);
+    expect(store.isFresh()).toBe(false);
+    expect(store.readState()).toBeNull();
+    expect(fs.readFileSync(store.hookPath, 'utf8')).toBe('// retained legacy hook\n');
+    expect(fs.existsSync(store.receiptPath)).toBe(false);
+    const mutations = runner.commands.filter(([command]) => command !== 'print');
+    expect(mutations).toEqual([['setenv', 'NODE_OPTIONS', original]]);
+    await manager.recover();
+    expect(runner.commands.filter(([command]) => command !== 'print')).toEqual(mutations);
+  });
+
+  it.each([null, ''])('restores an original %j environment distinctly', async (original) => {
+    const { runner, manager } = fixture(original);
+    await manager.recover();
+    expect(runner.nodeOptions).toBe(original);
+  });
+
+  it.each([
+    { original: null, profileCount: 2 },
+    { original: '', profileCount: 2 },
+    { original: null, profileCount: 3 },
+    { original: '', profileCount: 3 },
+  ])(
+    'restores original $original distinctly through $profileCount sequential profile snapshots',
+    async ({ original, profileCount }) => {
+      const { store, runner, manager } = fixture(original);
+      const stores = [store];
+      for (let profileIndex = 1; profileIndex < profileCount; profileIndex += 1) {
+        const nextStore = new CodexMicroGuardStore(
+          path.join(path.dirname(store.supportPath), profileIndex.toString(16).padStart(12, '0')),
+        );
+        const nextToken = seedLegacyGuard(nextStore, runner.nodeOptions);
+        runner.nodeOptions = mergeNodeOptions(runner.nodeOptions, nextToken);
+        stores.push(nextStore);
+      }
+
+      await manager.recover();
+
+      expect(runner.nodeOptions).toBe(original);
+      const expectedMutations =
+        original === null ? [['unsetenv', 'NODE_OPTIONS']] : [['setenv', 'NODE_OPTIONS', '']];
+      expect(runner.commands.filter(([command]) => command !== 'print')).toEqual(expectedMutations);
+      for (const profileStore of stores) {
+        expect(profileStore.isFresh()).toBe(false);
+        expect(profileStore.readState()).toBeNull();
+        expect(fs.existsSync(profileStore.hookPath)).toBe(true);
+      }
+      await manager.recover();
+      expect(runner.nodeOptions).toBe(original);
+      expect(runner.commands.filter(([command]) => command !== 'print')).toEqual(expectedMutations);
+    },
+  );
+
+  it('does not infer an empty original from an unrelated profile snapshot', async () => {
+    const { store, runner, manager } = fixture(null);
+    const unrelated = new CodexMicroGuardStore(
+      path.join(path.dirname(store.supportPath), 'aaaaaaaaaaaa'),
+    );
+    seedLegacyGuard(unrelated, '');
+
+    await manager.recover();
+
+    expect(runner.nodeOptions).toBeNull();
+    expect(runner.commands.filter(([command]) => command !== 'print')).toEqual([
+      ['unsetenv', 'NODE_OPTIONS'],
+    ]);
+  });
+
+  it('terminates a cyclic snapshot chain without inventing an empty original', async () => {
+    const { store, token, runner, manager } = fixture(null);
+    const second = new CodexMicroGuardStore(
+      path.join(path.dirname(store.supportPath), 'aaaaaaaaaaaa'),
+    );
+    const secondToken = seedLegacyGuard(second, token);
+    runner.nodeOptions = mergeNodeOptions(token, secondToken);
+    store.writeState({
+      version: 1,
+      originalNodeOptions: runner.nodeOptions,
+      installedNodeOptions: token,
+    });
+
+    await manager.recover();
+
+    expect(runner.nodeOptions).toBeNull();
+    expect(store.readState()).toBeNull();
+    expect(second.readState()).toBeNull();
+  });
+
+  it('removes all profiles and duplicate arguments without restoring another profile from a snapshot', async () => {
+    const { store, token, runner, manager } = fixture(null);
+    const second = new CodexMicroGuardStore(
+      path.join(path.dirname(store.supportPath), 'aaaaaaaaaaaa'),
+    );
+    const secondToken = seedLegacyGuard(second, token);
+    runner.nodeOptions = token + ' ' + secondToken + ' ' + token + ' --inspect=9229';
+    await manager.recover();
+    expect(runner.nodeOptions).toBe('--inspect=9229');
+    expect(second.isFresh()).toBe(false);
+    expect(second.readState()).toBeNull();
+    expect(fs.existsSync(second.hookPath)).toBe(true);
+  });
+
+  it('cleans known preload paths even when a profile or its recovery state has disappeared', async () => {
+    const { store, token, runner, manager } = fixture();
+    store.removeState();
+    const missing = path.join(path.dirname(store.supportPath), 'bbbbbbbbbbbb', 'guard-hook.cjs');
+    runner.nodeOptions = '--require=' + missing + ' ' + token;
+    await manager.recover();
+    expect(runner.nodeOptions).toBeNull();
+    expect(fs.existsSync(path.dirname(missing))).toBe(false);
+  });
+
+  it('cleans a corrupt recovery snapshot without using its contents', async () => {
+    const { store, runner, manager } = fixture();
+    fs.writeFileSync(store.statePath, 'broken');
+    await manager.recover();
+    expect(runner.nodeOptions).toBe('--trace-warnings');
+    expect(store.readState()).toBeNull();
+  });
+
+  it('keeps options added after activation', async () => {
+    const { runner, manager } = fixture();
+    runner.nodeOptions += ' --inspect=9229';
+    await manager.recover();
+    expect(runner.nodeOptions).toBe('--trace-warnings --inspect=9229');
+  });
+
+  it('stops interception and keeps recovery evidence after a failed write, then retries', async () => {
+    const { store, runner, manager, environment } = fixture();
+    runner.failNextMutation = true;
+    await expect(manager.recover()).rejects.toThrow('launchctl command failed');
+    expect(store.isFresh()).toBe(false);
+    expect(store.readState()).not.toBeNull();
+    expect(environment.NODE_OPTIONS).toBe('--trace-warnings');
+    await manager.recover();
+    expect(runner.nodeOptions).toBe('--trace-warnings');
+    expect(store.readState()).toBeNull();
+  });
+
+  it('does not report cleanup complete when launchctl still contains the preload', async () => {
+    const { store, runner, manager } = fixture();
+    runner.ignoreMutations = true;
+    await expect(manager.recover()).rejects.toThrow('remains in the launch environment');
+    expect(store.readState()).not.toBeNull();
+  });
+
+  it('still clears the GUI environment if the inherited options cannot be safely parsed', async () => {
+    const { runner, manager, environment } = fixture();
+    environment.NODE_OPTIONS = '--title="unfinished';
+    await expect(manager.recover()).rejects.toThrow('inherited environment');
+    expect(runner.nodeOptions).toBe('--trace-warnings');
+    expect(environment.NODE_OPTIONS).toBe('--title="unfinished');
+  });
+
+  it('does not mutate an unverified launchctl snapshot', async () => {
+    const { store, runner, manager } = fixture();
+    runner.invalidSnapshot = true;
+    await expect(manager.recover()).rejects.toThrow('snapshot is invalid');
+    expect(runner.commands).toEqual([['print', 'gui/501']]);
+    expect(store.isFresh()).toBe(false);
+  });
+
+  it('serializes concurrent cleanup from different profiles without losing unrelated options', async () => {
+    const { store, runner, manager } = fixture();
+    const second = new CodexMicroGuardStore(
+      path.join(path.dirname(store.supportPath), 'cccccccccccc'),
+    );
+    runner.nodeOptions += ' ' + seedLegacyGuard(second, runner.nodeOptions);
+    const other = new CodexMicroGuardManager(second, runner, 'gui/501', {});
+    await Promise.all([manager.recover(), other.recover()]);
+    expect(runner.nodeOptions).toBe('--trace-warnings');
+    expect(runner.commands.filter(([command]) => command === 'setenv')).toHaveLength(1);
+  });
+
+  it('clears the preload but does not follow a symlinked profile or erase the target files', async () => {
+    const { store, runner, manager } = fixture();
+    const outside = path.join(path.dirname(store.supportPath), 'unrelated');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'enabled'), 'keep');
+    const linked = path.join(path.dirname(store.supportPath), 'dddddddddddd');
+    fs.symlinkSync(outside, linked, process.platform === 'win32' ? 'junction' : 'dir');
+    runner.nodeOptions += ' --require=' + path.join(linked, 'guard-hook.cjs');
+    await expect(manager.recover()).rejects.toThrow('legacy files could not be deactivated');
+    expect(runner.nodeOptions).toBe('--trace-warnings');
+    expect(fs.readFileSync(path.join(outside, 'enabled'), 'utf8')).toBe('keep');
+  });
+
+  it('writes private state and rejects a symlinked support root', async () => {
     const store = temporaryStore();
     store.writeState({ version: 1, originalNodeOptions: null, installedNodeOptions: 'x' });
     if (process.platform !== 'win32') {
       expect(fs.statSync(store.supportPath).mode & 0o777).toBe(0o700);
       expect(fs.statSync(store.statePath).mode & 0o777).toBe(0o600);
     }
-
-    const linkedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-guard-link-'));
-    roots.push(linkedRoot);
-    fs.mkdirSync(path.join(linkedRoot, 'real'));
-    fs.symlinkSync(
-      path.join(linkedRoot, 'real'),
-      path.join(linkedRoot, 'support'),
-      process.platform === 'win32' ? 'junction' : 'dir',
-    );
-    expect(() => new CodexMicroGuardStore(path.join(linkedRoot, 'support')).prepare()).toThrow(
-      'unsafe',
-    );
-  });
-
-  it('rejects an expired lease heartbeat and safely reclaims stale leases', async () => {
-    const store = temporaryStore();
-    const staleLease = '22222222-2222-4222-8222-222222222222';
+    const outside = temporaryStore();
+    outside.prepare();
+    const linked = path.join(path.dirname(store.supportPath), 'linked');
+    fs.symlinkSync(outside.supportPath, linked, process.platform === 'win32' ? 'junction' : 'dir');
     const manager = new CodexMicroGuardManager(
-      store,
-      new FakeRunner([]),
+      new CodexMicroGuardStore(path.join(linked, 'aaaaaaaaaaaa')),
+      new GuardEnvironmentRunner(null),
       'gui/501',
-      staleLease,
+      {},
     );
-    store.registerLease(staleLease, 100_000);
-
-    await expect(manager.refreshHeartbeat(115_001)).rejects.toThrow(
-      'lease is no longer fresh',
-    );
-    expect(store.releaseLease(LEASE_ID, 115_001)).toBe(false);
-    expect(
-      fs.existsSync(path.join(store.supportPath, `lease-${staleLease}.json`)),
-    ).toBe(false);
+    await expect(manager.recover()).rejects.toThrow('unsafe');
+    expect(fs.readdirSync(outside.supportPath)).toEqual([]);
   });
+});
 
-  it('enables from a verified snapshot and restores the original value', async () => {
-    const store = temporaryStore();
-    const runner = new FakeRunner([
-      result(printed('--trace-warnings')),
-      result(),
-      result(printed(`--trace-warnings --require=${store.hookPath}`)),
-      result(),
-    ]);
-    const manager = new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID);
+describe('legacy preload argument boundaries', () => {
+  const root = path.join(os.tmpdir(), 'CindyCodexMicroGuard');
+  const hook = path.join(root, 'aaaaaaaaaaaa', 'guard-hook.cjs');
+  // Quoted NODE_OPTIONS strings escape Windows separators just as Node expects.
+  const quotedHook = JSON.stringify(hook);
+  const strip = (value: string | null) => stripLegacyGuardNodeOptions(value, root, hook);
 
-    await manager.enable('// hook\n', 100_000);
-    expect(store.isFresh(100_000)).toBe(true);
-    expect(store.readState()).toEqual({
-      version: 1,
-      originalNodeOptions: '--trace-warnings',
-      installedNodeOptions: `--trace-warnings ${manager.token}`,
-    });
-    expect(runner.commands.slice(0, 2)).toEqual([
-      ['print', 'gui/501'],
-      ['setenv', 'NODE_OPTIONS', `--trace-warnings ${manager.token}`],
-    ]);
-
-    await manager.disable(100_000);
-    expect(runner.commands.at(-1)).toEqual(['setenv', 'NODE_OPTIONS', '--trace-warnings']);
-    expect(store.readState()).toBeNull();
-    expect(store.isFresh(100_000)).toBe(false);
-  });
-
-  it('preserves NODE_OPTIONS changes made after activation', async () => {
-    const store = temporaryStore();
-    const token = `--require=${store.hookPath}`;
-    store.writeState({
-      version: 1,
-      originalNodeOptions: '--trace-warnings',
-      installedNodeOptions: `--trace-warnings ${token}`,
-    });
-    store.markEnabled();
-    store.writeHeartbeat(100_000);
-    const runner = new FakeRunner([
-      result(printed(`--trace-warnings ${token} --inspect=9229`)),
-      result(),
-    ]);
-    await new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID).disable();
-    expect(runner.commands.at(-1)).toEqual([
-      'setenv',
-      'NODE_OPTIONS',
+  it.each([
+    '--require=' + hook,
+    '--require=' + quotedHook,
+    '--require ' + quotedHook,
+    '-r ' + quotedHook,
+  ])('removes a real preload argument: %s', (argument) => {
+    expect(strip('--trace-warnings ' + argument + ' --inspect=9229')).toBe(
       '--trace-warnings --inspect=9229',
-    ]);
-  });
-
-  it('rolls markers and recovery state back when launchctl activation fails', async () => {
-    const store = temporaryStore();
-    const runner = new FakeRunner([result(printed()), result('', 9)]);
-    const manager = new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID);
-
-    await expect(manager.enable('// hook\n')).rejects.toThrow(
-      'launchctl command failed',
     );
-    expect(store.readState()).toBeNull();
-    expect(store.isFresh()).toBe(false);
+    expect(strip(argument)).toBeNull();
   });
 
-  it('deactivates the hook but keeps recovery state when restoration fails', async () => {
-    const store = temporaryStore();
-    const token = `--require=${store.hookPath}`;
-    store.writeState({ version: 1, originalNodeOptions: null, installedNodeOptions: token });
-    store.markEnabled();
-    store.writeHeartbeat();
-    const runner = new FakeRunner([result(printed(token)), result('', 7)]);
+  it('preserves similarly named files, other scripts, and quoted option values', () => {
+    const lookalike = '--require=' + hook + '.backup';
+    const elsewhere = '--require=' + path.join(os.tmpdir(), 'other', 'guard-hook.cjs');
+    const embedded = '--title=' + JSON.stringify('literal --require=' + hook + ' text');
+    const value = lookalike + ' ' + elsewhere + ' ' + embedded;
+    expect(strip(value)).toBe(value);
+    expect(strip(value + ' --require=' + hook)).toBe(value);
+  });
 
-    await expect(
-      new CodexMicroGuardManager(store, runner, 'gui/501', LEASE_ID).disable(),
-    ).rejects.toThrow();
-    expect(store.isFresh()).toBe(false);
-    expect(store.readState()).not.toBeNull();
+  it('keeps absence and empty values unchanged and rejects malformed quotes', () => {
+    expect(strip(null)).toBeNull();
+    expect(strip('')).toBe('');
+    expect(() => strip('--title="unfinished')).toThrow('cannot safely parse');
   });
 });

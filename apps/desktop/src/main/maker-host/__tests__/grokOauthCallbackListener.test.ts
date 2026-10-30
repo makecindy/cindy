@@ -10,7 +10,7 @@
  *   - 首个终态结果落定后,重试回调不得覆盖 pendingRes / 登录结果。
  */
 
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
@@ -60,6 +60,18 @@ function send(
     );
     req.on('error', reject);
     req.end();
+  });
+}
+
+/** 在 waitForCode 注册同步 handler 后观察真实请求,await 恢复时 handler 已处理完毕。 */
+function nextCallbackRequest(listener: CallbackListener): Promise<{
+  request: IncomingMessage;
+  response: ServerResponse;
+}> {
+  // 仅测试观察底层 HTTP 事件,不为同步测试新增生产 API。
+  const { server } = listener as unknown as { server: Server };
+  return new Promise((resolve) => {
+    server.once('request', (request, response) => resolve({ request, response }));
   });
 }
 
@@ -211,10 +223,14 @@ describe('CallbackListener(xAI loopback 回调)', () => {
 
     // token 交换进行中,页面重试 fetch —— 不能提前拿到 200(交换随后可能失败),
     // 必须与首个连接一起等 succeed()/fail() 收口。
+    const retryReceived = nextCallbackRequest(listener);
     const retry = send('GET', '/callback?code=first&state=state-5', {
       origin: XAI_ORIGIN,
     });
-    await expectStillPending(retry);
+    const { request, response } = await retryReceived;
+    expect(request.method).toBe('GET');
+    expect(request.url).toBe('/callback?code=first&state=state-5');
+    expect(response.writableEnded).toBe(false);
 
     // exchange 挂起窗口内 state 不匹配的请求立即 400 拒绝,不得入 pending 挂起
     // (否则不知道 state 的本机进程可囤积任意多连接)。
@@ -249,10 +265,14 @@ describe('CallbackListener(xAI loopback 回调)', () => {
       origin: XAI_ORIGIN,
     });
     await expect(codePromise).resolves.toBe('bad');
+    const retryReceived = nextCallbackRequest(listener);
     const retry = send('GET', '/callback?code=bad&state=state-5b', {
       origin: XAI_ORIGIN,
     });
-    await expectStillPending(retry);
+    const { request, response } = await retryReceived;
+    expect(request.method).toBe('GET');
+    expect(request.url).toBe('/callback?code=bad&state=state-5b');
+    expect(response.writableEnded).toBe(false);
 
     listener.fail('exchange exploded');
     const [first, second] = await Promise.all([firstGet, retry]);

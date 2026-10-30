@@ -5,7 +5,8 @@ import { ScriptTarget, transpileModule } from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { companionEnvironmentKey } from '../bot-import/environment.js';
 import { isRendererAccessibleSafeStorageKey, isCustomProviderRuntimeKeyStorageKey,
-  customProviderSecretStorageKey, customMcpSecretStorageKey, providerOAuthStorageKey } from '../../shared/providerSecrets.js';
+  customProviderSecretStorageKey, customMcpSecretStorageKey, providerOAuthStorageKey,
+  MCP_APP_REVISION_KEY_STORAGE_KEY } from '../../shared/providerSecrets.js';
 
 // Execute the production registrations with fake Electron dependencies, without
 // launching Desktop or reproducing the IPC handlers in a test implementation.
@@ -59,10 +60,11 @@ describe('generic safeStorage companion boundary', () => {
     // writes/deletes must not corrupt either old or chunked environment files.
     const original = Buffer.from('fixture:{"env":{"KEY":"fixture-private-token"}}').toString('base64');
     fs.writeFileSync(file, original);
-    for (const variant of [key, key.toUpperCase(), 'bot_environment_future_format', 'bot_environment_']) {
+    for (const variant of [key, key.toUpperCase(), 'bot_environment_future_format', 'bot_environment_',
+      MCP_APP_REVISION_KEY_STORAGE_KEY, MCP_APP_REVISION_KEY_STORAGE_KEY.toUpperCase()]) {
       expect(await api.invoke(String(operation), variant, 'replacement')).toEqual(result);
     }
-    expect(api.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(4);
+    expect(api.assertTrustedAppRendererEvent).toHaveBeenCalledTimes(6);
     expect(api.resolveOwnerScopedSecretStorageKey).not.toHaveBeenCalled();
     expect(api.safeStorage.isEncryptionAvailable).not.toHaveBeenCalled();
     expect(api.safeStorage.decryptString).not.toHaveBeenCalled();

@@ -20,13 +20,11 @@ import {
 export function ShareSelectionBar({
   busy,
   count,
-  screenshotTriggered = false,
   onCancel,
   onShare,
 }: {
   busy?: boolean;
   count: number;
-  screenshotTriggered?: boolean;
   onCancel(): void;
   onShare(): void;
 }) {
@@ -54,9 +52,7 @@ export function ShareSelectionBar({
     </HomeHeaderGlassButton>
   );
   const countLabel = (
-    <View
-      style={[styles.count, screenshotTriggered && styles.screenshotSafeCount]}
-    >
+    <View style={styles.count}>
       <Text ellipsizeMode="tail" numberOfLines={1} style={styles.titleText}>
         {t("session.shareImage.title")}
       </Text>
@@ -155,9 +151,6 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: typeScale.caption,
       lineHeight: lineHeight.caption,
       marginTop: spacing.xs,
-    },
-    screenshotSafeCount: {
-      paddingLeft: spacing.xl,
     },
     shareButton: {
       alignItems: "center",

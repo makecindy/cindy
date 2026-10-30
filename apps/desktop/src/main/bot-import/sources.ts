@@ -10,6 +10,7 @@ import { discoverImportSkills } from './skills.js';
 import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
 import { CompanionImportError, object, string, type ImportItem, type ImportSnapshot, type ImportSource } from './types.js';
+import type { CompanionImportBotPlatform } from '@cindy/maker-shared/companion-import';
 
 export interface SourceReaderDeps {
   home: string;
@@ -149,10 +150,15 @@ function scalarEnv(value: unknown): Record<string, string> {
     /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(entry[0]) && !['__proto__', 'prototype', 'constructor'].includes(entry[0]) && typeof entry[1] === 'string'));
 }
 
-async function connections(items: ImportItem[], source: ImportSource, values: Record<string, unknown>, deps: SourceReaderDeps, budget: ImportReadBudget, readText = optionalText) {
+async function sourceEnvironment(source: ImportSource, values: Record<string, unknown>, budget: ImportReadBudget, readText = optionalText): Promise<Record<string, string>> {
   const dotenv = parseEnv(await readText(source.root, path.join(source.root, '.env'), budget) ?? '');
   const envConfig = object(values.env);
-  const env = { ...dotenv, ...scalarEnv(envConfig), ...scalarEnv(envConfig.vars) };
+  return { ...dotenv, ...scalarEnv(envConfig), ...scalarEnv(envConfig.vars) };
+}
+
+/** `bots`: messaging bots become their own category for controllers that can show it; otherwise legacy connections. */
+async function connections(items: ImportItem[], source: ImportSource, values: Record<string, unknown>, deps: SourceReaderDeps, budget: ImportReadBudget, readText = optionalText, bots = false) {
+  const env = await sourceEnvironment(source, values, budget, readText);
   for (const [name, value] of Object.entries(env)) {
     items.push({ view: { id: entryId('env', name), category: 'connections', name, selected: true }, env: { [name]: value } });
   }
@@ -182,18 +188,8 @@ async function connections(items: ImportItem[], source: ImportSource, values: Re
       mcp: { name, enabled, ...(command ? { command, args: Array.isArray(record.args) ? record.args.map(string) : [], cwd, transport: 'stdio' as const } : { url, transport: record.transport === 'sse' ? 'sse' as const : 'http' as const }),
         env: scalarEnv(record.env), headers: scalarEnvHeaders(record.headers) } });
   }
-  const telegram = object(object(values.channels).telegram);
-  const accounts = Object.keys(object(telegram.accounts)).length ? object(telegram.accounts) : { default: telegram };
-  for (const [account, raw] of Object.entries(accounts)) {
-    const settings = object(raw);
-    let token = string(settings.botToken) || (source.kind === 'hermes' && env.TELEGRAM_BOT_TOKEN ? '${TELEGRAM_BOT_TOKEN}' : '');
-    const references = [...token.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(match => match[1]!);
-    if (!token && typeof settings.tokenFile === 'string') {
-      const file = sourcePath(deps.home, settings.tokenFile, source.root);
-      token = (await readText(path.dirname(file), file, budget))?.trim() ?? '';
-    }
-    if (token) items.push({ view: { id: entryId('telegram', account), name: `Telegram · ${account}`, category: 'connections', selected: true, dependsOn: references.map(key => entryId('env', key)) }, envDependencies: { names: references, entries: [] }, credential: { format: 'telegram', value: { token, account } } });
-  }
+  if (bots) pushBotItems(items, await sourceBots(source, values, env, deps, budget, readText), env);
+  else await legacyImBots(items, source, values, env, deps, budget, readText);
   // Keep native auth metadata without exposing its contents or inventing a refresh protocol.
   // API keys have a direct environment equivalent; provider OAuth needs its native refresh adapter.
   const authFiles = source.kind === 'hermes' ? ['auth.json'] : [`agents/${source.agentId}/agent/auth-profiles.json`];
@@ -216,8 +212,309 @@ async function connections(items: ImportItem[], source: ImportSource, values: Re
   }
 }
 
+/** Telegram / Discord as `connections` for controllers without the bots category; no source stop. */
+async function legacyImBots(items: ImportItem[], source: ImportSource, values: Record<string, unknown>, env: Record<string, string>, deps: SourceReaderDeps, budget: ImportReadBudget, readText = optionalText) {
+  const channels = object(values.channels);
+  const ownerAllowFrom = listOf(object(values.commands).ownerAllowFrom);
+  const telegram = object(channels.telegram);
+  const accounts = Object.keys(object(telegram.accounts)).length ? object(telegram.accounts) : { default: telegram };
+  for (const [account, raw] of Object.entries(accounts)) {
+    const settings = object(raw);
+    let token = string(settings.botToken) || (source.kind === 'hermes' && env.TELEGRAM_BOT_TOKEN ? '${TELEGRAM_BOT_TOKEN}' : '');
+    const references = [...token.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(match => match[1]!);
+    if (!token && typeof settings.tokenFile === 'string') {
+      const file = sourcePath(deps.home, settings.tokenFile, source.root);
+      token = (await readText(path.dirname(file), file, budget))?.trim() ?? '';
+    }
+    // Owner: Hermes TELEGRAM_ALLOWED_USERS; OpenClaw commands.ownerAllowFrom (telegram:<id>), then the
+    // account's effective allowFrom (an omitted account list inherits channels.telegram.allowFrom).
+    const ownerUserId = source.kind === 'hermes'
+      ? singleUserId(listOf(env.TELEGRAM_ALLOWED_USERS), [], TELEGRAM_USER_ID)
+      : singleUserId(ownerAllowFrom.filter(entry => /^telegram:/i.test(String(entry))), ['telegram:'], TELEGRAM_USER_ID)
+        ?? singleUserId(listOf(settings.allowFrom ?? telegram.allowFrom), ['telegram:', 'tg:'], TELEGRAM_USER_ID);
+    if (token) items.push({ view: { id: entryId('telegram', account), name: `Telegram · ${account}`, category: 'connections', selected: true, dependsOn: references.map(key => entryId('env', key)) }, envDependencies: { names: references, entries: [] }, credential: { format: 'telegram', value: { token, account, ...(ownerUserId ? { ownerUserId } : {}) } } });
+  }
+  // Discord: OpenClaw channels.discord[.accounts.*].token (plain string or env SecretRef; DISCORD_BOT_TOKEN
+  // is the default-account fallback once a channels.discord block exists); Hermes DISCORD_BOT_TOKEN.
+  const discord = object(channels.discord);
+  const discordAccounts = Object.keys(object(discord.accounts)).length ? object(discord.accounts) : { default: discord };
+  for (const [account, raw] of Object.entries(discordAccounts)) {
+    const settings = object(raw);
+    let token = secretReference(settings.token);
+    if (!token && account === 'default' && env.DISCORD_BOT_TOKEN
+      && (source.kind === 'hermes' || Object.hasOwn(channels, 'discord'))) token = '${DISCORD_BOT_TOKEN}';
+    if (!token) continue;
+    const references = [...token.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(match => match[1]!);
+    // Owner: Hermes DISCORD_ALLOWED_USERS; OpenClaw commands.ownerAllowFrom (discord:<id>), then the
+    // first set of allowFrom / legacy dm.allowFrom on the account, then on channels.discord.
+    const inherited = [settings.allowFrom, object(settings.dm).allowFrom, discord.allowFrom, object(discord.dm).allowFrom].find(value => value !== undefined);
+    const ownerUserId = source.kind === 'hermes'
+      ? singleUserId(listOf(env.DISCORD_ALLOWED_USERS), [], DISCORD_USER_ID)
+      : singleUserId(ownerAllowFrom.filter(entry => /^discord:/i.test(String(entry))), ['discord:'], DISCORD_USER_ID)
+        ?? singleUserId(listOf(inherited), ['discord:', 'user:'], DISCORD_USER_ID);
+    items.push({ view: { id: entryId('discord', account), name: `Discord · ${account}`, category: 'connections', selected: true, dependsOn: references.map(key => entryId('env', key)) }, envDependencies: { names: references, entries: [] }, credential: { format: 'discord', value: { token, account, ...(ownerUserId ? { ownerUserId } : {}) } } });
+  }
+}
+
+const TELEGRAM_USER_ID = /^\d{4,20}$/;
+const DISCORD_USER_ID = /^\d{17,20}$/;
+
+/** Allowlists are arrays in OpenClaw config and comma-separated strings in Hermes env. */
+function listOf(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return value.split(',');
+  return [];
+}
+
+/** Only a single explicit user ID is an owner. Wildcards, access groups and multi-user lists are not guessed. */
+function singleUserId(entries: unknown[], prefixes: string[], pattern: RegExp): string | undefined {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    let value = typeof entry === 'number' && Number.isSafeInteger(entry) ? String(entry) : typeof entry === 'string' ? entry.trim() : '';
+    const prefix = prefixes.find(candidate => value.toLowerCase().startsWith(candidate));
+    if (prefix) value = value.slice(prefix.length);
+    if (pattern.test(value)) ids.add(value);
+  }
+  return ids.size === 1 ? [...ids][0] : undefined;
+}
+
+/** A plain token, or an OpenClaw env SecretRef kept as a source reference until selection. */
+function secretReference(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  const ref = object(value);
+  return ref.source === 'env' && typeof ref.id === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(ref.id) ? `\${${ref.id}}` : '';
+}
+
 function scalarEnvHeaders(value: unknown): Record<string, string> {
   return Object.fromEntries(Object.entries(object(value)).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const BOT_OWNER_ALTERNATIVES = 5;
+const PLAIN_USER_ID = /^[A-Za-z0-9][A-Za-z0-9_@.:-]{0,127}$/;
+
+interface SourceBot {
+  platform: CompanionImportBotPlatform;
+  account: string;
+  name: string;
+  /** Platform credential fields; values may still be `${VAR}` source references. */
+  credential: Record<string, string>;
+  service?: 'feishu' | 'lark';
+  enabled: boolean;
+  enabledPath: string[];
+  owner?: string;
+  /** Allowed users when no single owner is evident. */
+  ownerCandidates?: string[];
+  /** Other agents also route through this bot: stopping it affects them, so it is not preselected. */
+  shared?: boolean;
+}
+
+/** Distinct IDs only; wildcards, access groups and malformed entries are never owners. */
+function userIds(entries: unknown[], prefixes: string[], pattern: RegExp): string[] {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    let value = typeof entry === 'number' && Number.isSafeInteger(entry) ? String(entry) : typeof entry === 'string' ? entry.trim() : '';
+    const prefix = prefixes.find(candidate => value.toLowerCase().startsWith(candidate));
+    if (prefix) value = value.slice(prefix.length);
+    if (pattern.test(value)) ids.add(value);
+  }
+  return [...ids];
+}
+
+/** Single allowed user; else the allowed user that is the home chat; else the only allowed admin. */
+function inferOwner(allowed: string[], home = '', admins: string[] = []): Pick<SourceBot, 'owner' | 'ownerCandidates'> {
+  if (allowed.length === 1) return { owner: allowed[0] };
+  if (home && allowed.includes(home)) return { owner: home };
+  const allowedAdmins = admins.filter(id => allowed.includes(id));
+  if (allowedAdmins.length === 1) return { owner: allowedAdmins[0] };
+  return { ownerCandidates: allowed };
+}
+
+function sourceDisabled(value: unknown): boolean {
+  return value === false || typeof value === 'string' && /^(?:false|no|off|0)$/i.test(value.trim());
+}
+
+function sourceBotName(source: ImportSource, account: string, ...names: unknown[]): string {
+  const name = names.map(value => string(value).trim()).find(Boolean);
+  if (name) return name;
+  if (account !== 'default') return account;
+  return source.kind === 'hermes' && source.agentId === 'default' && source.name === 'default' ? 'Hermes' : source.name;
+}
+
+function hermesBots(source: ImportSource, values: Record<string, unknown>, env: Record<string, string>): SourceBot[] {
+  const platforms = object(values.platforms);
+  // Env wins over platforms.<name>.extra, as in Hermes' own env bridge.
+  const value = (variable: string, fallback: unknown) => env[variable] ? `\${${variable}}` : secretReference(fallback);
+  const bots: SourceBot[] = [];
+  for (const platform of ['telegram', 'discord', 'feishu', 'wecom', 'dingtalk'] as const) {
+    const block = object(platforms[platform]);
+    const extra = object(block.extra);
+    const enabled = !sourceDisabled(block.enabled);
+    const enabledPath = ['platforms', platform, 'enabled'];
+    const allowed = (pattern: RegExp) => userIds(listOf(env[`${platform.toUpperCase()}_ALLOWED_USERS`]), [], pattern);
+    if (platform === 'telegram' || platform === 'discord') {
+      const token = value(`${platform.toUpperCase()}_BOT_TOKEN`, block.token);
+      if (!token) continue;
+      const users = allowed(platform === 'telegram' ? TELEGRAM_USER_ID : DISCORD_USER_ID);
+      const home = platform === 'telegram' ? string(env.TELEGRAM_HOME_CHANNEL) || string(values.TELEGRAM_HOME_CHANNEL)
+        || string(object(block.home_channel).chat_id) || string(block.home_channel) : '';
+      const admins = platform === 'telegram' ? userIds([...listOf(extra.group_allow_admin_from), ...listOf(extra.admins)], [], TELEGRAM_USER_ID) : [];
+      bots.push({ platform, account: 'default', name: sourceBotName(source, 'default', block.name, extra.bot_name), credential: { token },
+        enabled, enabledPath, ...(platform === 'telegram' ? inferOwner(users, home.trim(), admins) : inferOwner(users)) });
+      continue;
+    }
+    const fields: Record<string, string> = platform === 'feishu' ? { appId: value('FEISHU_APP_ID', extra.app_id), appSecret: value('FEISHU_APP_SECRET', extra.app_secret) }
+      : platform === 'wecom' ? { wecomBotId: value('WECOM_BOT_ID', extra.bot_id), secret: value('WECOM_SECRET', extra.secret) }
+        : { appKey: value('DINGTALK_CLIENT_ID', extra.client_id), appSecret: value('DINGTALK_CLIENT_SECRET', extra.client_secret) };
+    if (Object.values(fields).some(field => !field)) continue;
+    const domain = string(env.FEISHU_DOMAIN) || string(extra.domain);
+    // Feishu: open_id admins; WeCom / DingTalk: explicit allowed users.
+    const owners = platform === 'feishu' ? userIds(listOf(extra.admins), [], /^ou_[A-Za-z0-9_-]{1,128}$/) : allowed(PLAIN_USER_ID);
+    bots.push({ platform, account: 'default', name: sourceBotName(source, 'default', platform === 'feishu' ? env.FEISHU_BOT_NAME : '', extra.bot_name, block.name),
+      credential: fields, ...(platform === 'feishu' ? { service: /lark/i.test(domain) ? 'lark' as const : 'feishu' as const } : {}),
+      enabled, enabledPath, ...inferOwner(owners) });
+  }
+  return bots;
+}
+
+/** OpenClaw route bindings: the agent a bot account delivers to, and whether other agents share it. */
+function openclawRoute(values: Record<string, unknown>, platform: string, account: string, defaultAccount: string, groups: unknown): { agent: string; shared: boolean } {
+  const rows = agentRows(values);
+  const fallback = string((rows.find(row => row.default === true) ?? rows[0])?.id) || 'main';
+  const bindings = (Array.isArray(values.bindings) ? values.bindings : []).map(object)
+    .filter(binding => (binding.type ?? 'route') === 'route' && string(object(binding.match).channel).toLowerCase() === platform)
+    .filter(binding => {
+      const id = object(binding.match).accountId;
+      // An omitted accountId matches only the default account; "*" matches every account.
+      return id === '*' || (id === undefined ? account === defaultAccount : String(id) === account);
+    });
+  const wide = bindings.filter(binding => Object.keys(object(binding.match)).every(key => key === 'channel' || key === 'accountId'));
+  const exact = wide.find(binding => object(binding.match).accountId !== '*') ?? wide.find(binding => object(binding.match).accountId === '*');
+  const agent = string(exact?.agentId) || fallback;
+  const routed = Object.values(object(groups)).flatMap(group => [object(group).agentId, ...Object.values(object(object(group).topics)).map(topic => object(topic).agentId)]);
+  return { agent, shared: bindings.some(binding => string(binding.agentId) !== agent) || routed.some(id => typeof id === 'string' && id !== agent) };
+}
+
+async function openclawBots(source: ImportSource, values: Record<string, unknown>, env: Record<string, string>, deps: SourceReaderDeps, budget: ImportReadBudget, readText = optionalText, allAgents = false): Promise<SourceBot[]> {
+  const channels = object(values.channels);
+  const ownerAllowFrom = listOf(object(values.commands).ownerAllowFrom);
+  const bots: SourceBot[] = [];
+  for (const platform of ['telegram', 'discord', 'feishu'] as const) {
+    if (!Object.hasOwn(channels, platform)) continue;
+    const channel = object(channels[platform]);
+    const configured = object(channel.accounts);
+    const multi = Object.keys(configured).length > 0;
+    const defaultAccount = string(channel.defaultAccount) || 'default';
+    const { accounts: _accounts, defaultAccount: _default, ...base } = channel;
+    for (const account of multi ? Object.keys(configured) : ['default']) {
+      // Same inheritance as OpenClaw: authored account fields override channel defaults.
+      const own = multi ? object(configured[account]) : {};
+      const merged = { ...base, ...own };
+      const route = openclawRoute(values, platform, account, defaultAccount, merged.groups);
+      if (!allAgents && route.agent !== source.agentId) continue;
+      const enabled = !sourceDisabled(channel.enabled) && !sourceDisabled(merged.enabled);
+      const enabledPath = multi ? ['channels', platform, 'accounts', account, 'enabled'] : ['channels', platform, 'enabled'];
+      const name = sourceBotName(source, account, merged.name);
+      const prefixed = (prefix: string, pattern: RegExp) => userIds(ownerAllowFrom.filter(entry => String(entry).toLowerCase().startsWith(`${prefix}:`)), [`${prefix}:`], pattern);
+      if (platform === 'feishu') {
+        const appId = secretReference(merged.appId), appSecret = secretReference(merged.appSecret);
+        if (!appId || !appSecret) continue;
+        const domain = string(merged.domain);
+        const pattern = /^ou_[A-Za-z0-9_-]{1,128}$/;
+        const owners = prefixed('feishu', pattern);
+        const allowed = owners.length ? owners : userIds(listOf(merged.allowFrom), ['feishu:', 'lark:'], pattern);
+        bots.push({ platform, account, name, credential: { appId, appSecret }, service: domain === 'lark' || /larksuite/i.test(domain) ? 'lark' : 'feishu',
+          enabled, enabledPath, shared: route.shared, ...inferOwner(allowed) });
+        continue;
+      }
+      let token = platform === 'telegram' ? '' : secretReference(merged.token);
+      // Telegram: account tokenFile / botToken, then the channel's (OpenClaw's own resolution order).
+      if (platform === 'telegram') for (const [tokenFile, value] of [[own.tokenFile, own.botToken], [channel.tokenFile, channel.botToken]]) {
+        if (typeof tokenFile === 'string' && tokenFile.trim()) {
+          const file = sourcePath(deps.home, tokenFile, source.root);
+          token = (await readText(path.dirname(file), file, budget))?.trim() ?? '';
+        }
+        token ||= secretReference(value);
+        if (token) break;
+      }
+      const variable = `${platform.toUpperCase()}_BOT_TOKEN`;
+      if (!token && account === 'default' && env[variable]) token = `\${${variable}}`;
+      if (!token) continue;
+      const pattern = platform === 'telegram' ? TELEGRAM_USER_ID : DISCORD_USER_ID;
+      const owners = prefixed(platform, pattern);
+      const allowFrom = platform === 'telegram' ? merged.allowFrom
+        : [own.allowFrom, object(own.dm).allowFrom, channel.allowFrom, object(channel.dm).allowFrom].find(entry => entry !== undefined);
+      const allowed = owners.length ? owners : userIds(listOf(allowFrom), platform === 'telegram' ? ['telegram:', 'tg:'] : ['discord:', 'user:'], pattern);
+      bots.push({ platform, account, name, credential: { token }, enabled, enabledPath, shared: route.shared, ...inferOwner(allowed) });
+    }
+  }
+  return bots;
+}
+
+/** WeCom / DingTalk on OpenClaw are external plugins with no published config shape; they are not guessed. */
+async function sourceBots(source: ImportSource, values: Record<string, unknown>, env: Record<string, string>, deps: SourceReaderDeps, budget: ImportReadBudget, readText = optionalText, allAgents = false): Promise<SourceBot[]> {
+  return source.kind === 'hermes' ? hermesBots(source, values, env) : openclawBots(source, values, env, deps, budget, readText, allAgents);
+}
+
+/**
+ * One entry per bot; an ambiguous owner offers up to five exclusive alternatives, none preselected.
+ * Every platform needs a known owner: the companion would otherwise adopt whoever messages it first.
+ * A bot carries its own credential: references the source environment defines are resolved here,
+ * so importing the bot never also requires selecting its token under connections.
+ */
+function pushBotItems(items: ImportItem[], bots: SourceBot[], env: Record<string, string> = {}) {
+  for (const original of bots) {
+    const credential = Object.fromEntries(Object.entries(original.credential).map(([field, value]) =>
+      [field, value.replace(REFERENCE, (match, name: string) => Object.hasOwn(env, name) ? env[name]! : match)]));
+    const bot = { ...original, credential };
+    const references = [...new Set(Object.values(bot.credential).flatMap(value => [...value.matchAll(REFERENCE)].map(match => match[1]!)))];
+    const selected = bot.enabled && !bot.shared;
+    const item = (id: string, owner: string | undefined, view: Partial<ImportItem['view']> = {}): ImportItem => ({
+      view: { id, category: 'bots', platform: bot.platform, name: bot.name, selected, ...(bot.enabled ? {} : { enabled: false }),
+        dependsOn: references.map(key => entryId('env', key)), ...(owner ? { owner } : {}), ...view },
+      envDependencies: { names: references, entries: [] },
+      credential: { format: bot.platform, value: { ...bot.credential, account: bot.account, ...(bot.service ? { service: bot.service } : {}), ...(owner ? { ownerUserId: owner } : {}) } },
+      bot: { platform: bot.platform, account: bot.account, enabledPath: bot.enabledPath },
+    });
+    const id = entryId(bot.platform, bot.account);
+    const candidates = bot.owner ? [] : bot.ownerCandidates ?? [];
+    if (bot.owner) items.push(item(id, bot.owner));
+    else if (candidates.length > 1 && candidates.length <= BOT_OWNER_ALTERNATIVES) {
+      const ids = candidates.map(owner => entryId(bot.platform, `${bot.account}\0owner:${owner}`));
+      candidates.forEach((owner, index) => items.push(item(ids[index]!, owner, { selected: false, exclusiveWith: ids.filter((_id, other) => other !== index) })));
+    } else items.push(item(id, undefined, { issues: ['IMPORT_IM_BOT_OWNER_MISSING'] }));
+  }
+}
+
+const BOT_IDENTITY_FIELDS = ['token', 'appId', 'wecomBotId', 'appKey'] as const;
+
+/** The platform identity (token / app ID / bot ID) of one bot credential. */
+export function importBotIdentity(credential: unknown): string {
+  const value = object(credential);
+  return BOT_IDENTITY_FIELDS.map(field => string(value[field])).find(Boolean) ?? '';
+}
+
+/** The bot's current identity in its source, re-read with the source's own environment; '' when it is gone or routed elsewhere. */
+export async function readImportSourceBotIdentity(source: ImportSource, bot: NonNullable<ImportItem['bot']>, deps: SourceReaderDeps): Promise<string> {
+  const budget = createImportBudget();
+  const values = await config(path.dirname(source.configFile), source.configFile, budget);
+  const env = await sourceEnvironment(source, values, budget);
+  const found = (await sourceBots(source, values, env, deps, budget))
+    .find(candidate => candidate.platform === bot.platform && candidate.account === bot.account);
+  if (!found) return '';
+  return importBotIdentity(Object.fromEntries(Object.entries(found.credential).map(([field, value]) =>
+    [field, value.replace(REFERENCE, (match, name: string) => Object.hasOwn(env, name) ? env[name]! : match)])));
+}
+
+/** Current source switch for one imported bot, re-read from its native config. */
+export async function readImportSourceBot(source: ImportSource, bot: NonNullable<ImportItem['bot']>): Promise<{ enabled: boolean; present: boolean; value?: unknown }> {
+  const values = await config(path.dirname(source.configFile), source.configFile, createImportBudget());
+  let parent: Record<string, unknown> = values;
+  for (const key of bot.enabledPath.slice(0, -1)) parent = object(parent[key]);
+  const key = bot.enabledPath.at(-1)!;
+  const present = Object.hasOwn(parent, key);
+  const channelOff = source.kind === 'openclaw' && sourceDisabled(object(object(values.channels)[bot.platform]).enabled);
+  return { enabled: !channelOff && !(present && sourceDisabled(parent[key])), present, ...(present ? { value: parent[key] } : {}) };
 }
 
 function sourceConfiguration(items: ImportItem[], source: ImportSource, values: Record<string, unknown>) {
@@ -253,6 +550,9 @@ export function createImportSourceReader(deps: SourceReaderDeps, budget = create
           ? { credential: { format: 'source-tools', value: { apiKey: settings.apiKey } } } : {}) });
     }
     await connections(items, source, values, deps, budget, readText);
+    // Mask every bot credential, including bots routed to other agents and platforms the legacy path skips.
+    const env = await sourceEnvironment(source, values, budget, readText);
+    pushBotItems(items, await sourceBots(source, values, env, deps, budget, readText, true), env);
     sourceConfiguration(items, source, values);
     return previewImportRedactions(items);
   };
@@ -260,7 +560,7 @@ export function createImportSourceReader(deps: SourceReaderDeps, budget = create
 }
 
 /** Snapshot immutable bytes once, then give the client only a safe selection projection. */
-export async function inspectImportSource(source: ImportSource, deps: SourceReaderDeps, budget = createImportBudget()): Promise<ImportSnapshot> {
+export async function inspectImportSource(source: ImportSource, deps: SourceReaderDeps, budget = createImportBudget(), options: { bots?: boolean } = {}): Promise<ImportSnapshot> {
   const values = await config(path.dirname(source.configFile), source.configFile, budget);
   const items: ImportItem[] = [];
   const workspace = source.workspace;
@@ -328,7 +628,7 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
     item.envDependencies = { names: Object.keys(item.env), entries: [] };
     delete item.env;
   }
-  await connections(items, source, values, deps, budget);
+  await connections(items, source, values, deps, budget, optionalText, options.bots === true);
   if (source.kind === 'hermes' && (await directories(source.root)).includes('scripts')) {
     for (const file of await readImportTree(path.join(source.root, 'scripts'), undefined, budget)) items.push({ view: { id: entryId('script', file.name), category: 'connections', name: `scripts/${file.name}`, selected: true }, asset: { name: `scripts/${file.name}`, bytes: file.bytes, executable: file.executable } });
   }

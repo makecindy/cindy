@@ -19,6 +19,7 @@ import { useSyncExternalStore } from 'react';
 
 let devices: DeviceLinkDeviceView[] | null = null;
 const subs = new Set<() => void>();
+const removalSubs = new Set<(deviceId: string) => void>();
 let started = false;
 const DEVICE_LIST_RETRY_BASE_MS = 2_000;
 const DEVICE_LIST_RETRY_MAX_MS = 30_000;
@@ -231,6 +232,24 @@ export function renameDeviceLinkDevice(deviceId: string, name: string): void {
   if (next === devices) return; // 引用未变 = 无需改动
   devices = next as DeviceLinkDeviceView[];
   subs.forEach((fn) => fn());
+}
+
+/** Apply confirmed deletion even for an already-offline device; its presence
+ * snapshot may not otherwise trigger a directory refresh. */
+export function removeDeviceLinkDevice(deviceId: string): void {
+  loadGeneration += 1;
+  removalSubs.forEach(fn => fn(deviceId));
+  if (devices?.some(device => device.deviceId === deviceId)) {
+    devices = devices.filter(device => device.deviceId !== deviceId);
+    subs.forEach(fn => fn());
+  }
+  refreshImpl?.();
+}
+
+/** Confirmed deletion must also invalidate mirrors, even before a shard exists. */
+export function subscribeDeviceLinkDeviceRemoval(fn: (deviceId: string) => void): () => void {
+  removalSubs.add(fn);
+  return () => { removalSubs.delete(fn); };
 }
 
 function ensureStarted(): void {

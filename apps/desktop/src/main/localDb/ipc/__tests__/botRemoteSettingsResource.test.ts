@@ -204,3 +204,14 @@ it('rejects task model submissions that discard the harness identity', async () 
     taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
   expect(f.deps.update).not.toHaveBeenCalled();
 });
+
+it('keeps pending profile fields read-only while models remain available, including after welcome failure', async () => {
+  const f = fixture();
+  Object.assign(f.source, { invitation: { stage: 'failed' } });
+  const resource = await f.get();
+  expect(resource.actions?.find(action => action.id === actionId(resource, 'profile'))?.disabled).toBe(true);
+  expect(resource.actions?.find(action => action.id === actionId(resource, 'models'))?.disabled).not.toBe(true);
+  Object.assign(f.source, { invitation: { stage: 'avatar' } });
+  const portraitRetry = await f.get();
+  expect(portraitRetry.actions?.find(action => action.id === actionId(portraitRetry, 'profile'))?.disabled).not.toBe(true);
+});

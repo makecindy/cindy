@@ -92,6 +92,31 @@ afterEach(() => {
 });
 
 describe("SessionResourceCards failure presentation", () => {
+  it("shows read-only sync and PR status without workflow controls", () => {
+    render(
+      state({
+        resources: [
+          {
+            ...card,
+            display: { title: "Cindy Make" },
+            blocks: [
+              {
+                id: "personal-status",
+                primitive: "markdown",
+                fallbackMarkdown: "Cindy Make\n\nSynced\n\nSubmitted #42",
+              },
+            ],
+            actions: [],
+          },
+        ],
+      }),
+    );
+    expect(host.textContent).toContain("Synced");
+    expect(host.textContent).toContain("Submitted #42");
+    expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector("progress")).toBeNull();
+  });
+
   it("renders nothing when the first manifest read fails", () => {
     render(state({ failed: true, fresh: false }));
     expect(host.textContent).toBe("");

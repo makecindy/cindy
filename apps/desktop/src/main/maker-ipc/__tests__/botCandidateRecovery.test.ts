@@ -58,6 +58,26 @@ describe('Bot candidate recovery', () => {
     }
   });
 
+  it.each([undefined, 'unknown'])('recovers a text-only session limit with SDK tag %s', async (sdkError) => {
+    const signals = { sdkError, message: "You've hit your session limit · resets 9:30pm (Asia/Shanghai)" };
+    const ordinary = harness(false);
+    expect(ordinary.isResumableTurnErrorCandidate(signals, ordinary.item)).toBe(false);
+    const h = harness();
+    expect(h.isResumableTurnErrorCandidate(signals, h.item)).toBe(true);
+    expect(h.onResumableTurnError('s', signals, h.item)).not.toBeNull();
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledWith('s', 1, 1, true, expect.any(Function));
+    expect(h.resume).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { reason: 'user_denied' }, { reason: 'context_overflow' },
+    { sdkError: 'invalid_request' },
+    { message: "You've hit your session limit: budget_exceeded" },
+  ])('preserves explicit failures despite session-limit text %j', (override) => {
+    expect(isBotCandidateUnavailable({ message: "You've hit your session limit", ...override })).toBe(false);
+  });
+
   it.each(['switched', 'exhausted'])('routes a statusless server error through Bot fallback (%s)', async (outcome) => {
     const h = harness();
     const signals = { sdkError: 'server_error', message: 'Internal server error' };

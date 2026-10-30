@@ -1,3 +1,6 @@
+import { registerVoiceConversationIpc } from '../voice-conversation/index.js';
+import { hasVoiceConversationLease } from '../voice-conversation/lease.js';
+import { VOICE_CONVERSATION_ACTIVE_MESSAGE } from '../../shared/voiceInputErrors.js';
 import { app, ipcMain, shell, systemPreferences, type WebContents } from 'electron';
 import fs from 'node:fs/promises';
 
@@ -38,6 +41,7 @@ import {
   desktopCodexAuthAdapter,
   readOwnerScopedXdGatewayKey,
 } from '../maker-host/auth-adapters.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import {
   activeOwnerScopeKey,
   getActiveAppSession,
@@ -155,6 +159,7 @@ import {
   type VoiceInputConnectionTestResult,
 } from '../../shared/voiceInputConnectionTest.js';
 import { runSerializedVoiceInputConnectionTest } from './voiceInputConnectionTest.js';
+import { getSpeakerFilterService, registerVoiceSpeakerFilterIpc } from './speaker/index.js';
 
 const log = createLogger('voice-input');
 let customAsrCredentialRevision = 0;
@@ -1759,12 +1764,16 @@ async function createVoiceInputProvider(
       }
       const { proxyApiKey, proxyBaseUrl } = readLiteLlmProxyConfig();
       if (!proxyApiKey || !proxyBaseUrl) throw new Error(profile.missingCredentialMessage);
-      return new RealtimeAsrWebSocketProvider(buildRealtimeAsrProviderOptions(
-        profile,
-        sourceLanguage,
-        () => Promise.resolve(proxyApiKey),
-        proxyBaseUrl,
-      ));
+      return new RealtimeAsrWebSocketProvider({
+        ...buildRealtimeAsrProviderOptions(
+          profile,
+          sourceLanguage,
+          () => Promise.resolve(proxyApiKey),
+          proxyBaseUrl,
+        ),
+        // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
+        onAuthorizationRejected: reportCindyGatewayKeyRejected,
+      });
     }
     throw new Error(`Unsupported realtime ASR provider ${provider}.`);
   }
@@ -1797,6 +1806,8 @@ async function createVoiceInputProvider(
         sourceLanguage,
         missingCredentialMessage: profile.missingCredentialMessage,
         errorFallbackMessage: profile.errorFallbackMessage,
+        // 这条直连网关的 WebSocket 携带 Cindy AI Key;握手 401 时上报 Key 失效。
+        onAuthorizationRejected: reportCindyGatewayKeyRejected,
       });
     }
     throw new Error(`Unsupported native ASR protocol ${nativeConfig.protocolProfile}.`);
@@ -1876,6 +1887,39 @@ export async function transcribeVoiceInputAudioFile(
  */
 export function registerVoiceInputIpc(): void {
   registerVoiceInputDataStoreIpc();
+  registerVoiceSpeakerFilterIpc();
+  let pendingDictationStarts = 0;
+  registerVoiceConversationIpc({
+    getSettings: () => voiceInputDataStore.getSettings(),
+    // Reuse dictation's opt-in setting, local enrollment and strictness. A new
+    // microphone run (including unmute) reads current settings; ASR rotation
+    // keeps the same gate. No separate companion voiceprint or audio storage.
+    createAudioGate: () => getSpeakerFilterService().createGate(voiceInputDataStore.getSettings()),
+    updateSettings: patch => voiceInputDataStore.updateSettings(patch),
+    hasDictation: () => activeByWebContentsId.size > 0 || pendingDictationStarts > 0 || systemAudioMuteGuard.hasPendingOrActiveMute,
+    createProvider: async () => {
+      const owner = activeOwnerScopeKey();
+      const snapshot = getEffectiveAuxiliaryModelChainSnapshot();
+      assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+      const language = resolveAsrLanguageHint(voiceInputDataStore.getSettings().language);
+      const managed = !isVoiceInputByokMode();
+      const chain = (await resolveStartableAsrChain()).filter(
+        (kind) => getVoiceInputAsrProfile(kind).mode !== 'batch-http',
+      );
+      assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+      if (!chain.length || (managed && !isCindyVoiceServiceReady())) throw new Error('ASR unavailable');
+      // A fresh managed connection for each rotation; never cross into BYOK implicitly.
+      const context = managed ? new CindyVoiceRunContext(language, undefined) : undefined;
+      return new FallbackAsrProvider(chain.map((kind) => ({
+        kind,
+        create: () => {
+          assertVoiceInputOwnerScopeCurrent(owner, snapshot);
+          if (!context && isAsrProfileRouteDisabled(getVoiceInputAsrProfile(kind))) throw new Error('ASR disabled');
+          return createVoiceInputProvider(kind, language, context);
+        },
+      })), { hedgeDelayMs: context ? null : undefined, sharedAccountRateLimit: Boolean(context) });
+    },
+  });
   if (!appRestoreRegistered) {
     appRestoreRegistered = true;
     app.once('before-quit', () => {
@@ -2066,6 +2110,7 @@ export function registerVoiceInputIpc(): void {
   );
 
   ipcMain.handle('voice-input:mute-system-audio', async (event): Promise<VoiceInputActionResult> => {
+    if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
     try {
       await systemAudioMuteGuard.mute(event.sender.id);
       return { ok: true };
@@ -2087,7 +2132,7 @@ export function registerVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+  const startVoiceInput = async (event: Electron.IpcMainInvokeEvent, payload: StartPayload | undefined): Promise<StartResult> => {
     // Bind this run to the owner that initiated it before any cancellation,
     // readiness, or credential await. A later account switch must fail closed
     // at the final refiner dispatch instead of using the new owner's route.
@@ -2342,9 +2387,12 @@ export function registerVoiceInputIpc(): void {
       if (runId) emit({ type: 'timeline', runId, event: timelineEvent });
     });
 
+    // "Recognize my voice": undefined unless enabled, enrolled and the models are on disk.
+    const audioGate = getSpeakerFilterService().createGate(voiceInputDataStore.getSettings());
     const controller = new VoiceInputController({
       asr: provider,
       refiner,
+      audioGate,
       pauseRefinementEnabled: true,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
@@ -2430,6 +2478,7 @@ export function registerVoiceInputIpc(): void {
         refiner: refiner ? effectiveRefinerProfile?.model : undefined,
         refinerProvider: refiner ? effectiveRefinerProfile?.id : undefined,
         refinerChain: refiner ? readyRefinerProfiles.map((profile) => profile.id) : undefined,
+        speakerFilter: Boolean(audioGate),
         refinementEnabled: Boolean(refiner),
         refinementRequested: shouldRefine,
         refinementContext: refiner ? summarizeRefinementContext(refinementContext) : undefined,
@@ -2447,6 +2496,13 @@ export function registerVoiceInputIpc(): void {
           : message,
       };
     }
+  };
+  ipcMain.handle('voice-input:start', async (event, payload: StartPayload | undefined): Promise<StartResult> => {
+    if (hasVoiceConversationLease()) return { ok: false, error: VOICE_CONVERSATION_ACTIVE_MESSAGE };
+    // Reserve before the first await, including readiness/auth and provider connection.
+    pendingDictationStarts++;
+    try { return await startVoiceInput(event, payload); }
+    finally { pendingDictationStarts--; }
   });
 
   ipcMain.on('voice-input:audio', (event, payload: AudioPayload | undefined) => {

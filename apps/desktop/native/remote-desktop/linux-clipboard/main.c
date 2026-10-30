@@ -10,6 +10,10 @@
 #include <unistd.h>
 #include <wayland-client.h>
 
+/* Keep in step with Desktop clipboardLimits.ts and the transport JSON bound. */
+#define IMAGE_BYTES (16 * 1024 * 1024)
+#define PAYLOAD_BYTES (32 * 1024 * 1024)
+
 /* One portable clipboard offer, supplied through stdin, never argv or a file.
  * No observation of clipboard contents. The compositor requests only offered
  * MIME types; replacement or parent EOF destroys the in-memory offer. */
@@ -102,7 +106,7 @@ static int decode(const char *text, size_t size, unsigned char **out,
                   size_t *length) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  if (size % 4 || size > 11184812)
+  if (size % 4 || size > ((IMAGE_BYTES + 2) / 3) * 4)
     return -1;
   unsigned char *bytes = malloc(size / 4 * 3 + 1);
   if (!bytes)
@@ -131,7 +135,7 @@ static int decode(const char *text, size_t size, unsigned char **out,
   }
   *out = bytes;
   *length = n;
-  return n <= 8388608 ? 0 : -1;
+  return n <= IMAGE_BYTES ? 0 : -1;
 }
 static int payload(const char *line) {
   struct json_tokener *tok = json_tokener_new_ex(8);
@@ -187,7 +191,7 @@ static int payload(const char *line) {
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
   alarm(5);
-  char *line = malloc(16000002);
+  char *line = malloc(PAYLOAD_BYTES + 2);
   if (!line)
     return 1;
   int status = 1;
@@ -195,7 +199,7 @@ int main(int argc, char **argv) {
   struct wl_registry *registry = NULL;
   struct zwlr_data_control_device_v1 *device = NULL;
   struct zwlr_data_control_source_v1 *source = NULL;
-  if (!fgets(line, 16000002, stdin) || !strchr(line, '\n') || payload(line))
+  if (!fgets(line, PAYLOAD_BYTES + 2, stdin) || !strchr(line, '\n') || payload(line))
     goto done;
   if (argc == 2 && !strcmp(argv[1], "--check")) {
     status = 0;

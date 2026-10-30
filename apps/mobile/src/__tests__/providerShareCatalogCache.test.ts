@@ -88,7 +88,9 @@ describe('provider share catalog parsing', () => {
       ['share:share-1', 'active', 'catalog'],
       ['share:paused', 'paused', null],
     ]);
-    expect(entries[0]).toMatchObject({ deviceName: "Magi's Mac Mini", ownerName: 'Magi', providerId: 'anthropic' });
+    expect(entries[0]).toMatchObject({ providerLabel: 'Anthropic', ownerName: 'Magi', providerId: 'anthropic' });
+    // 分享者的电脑名不带进手机的分享条目(provider-sharing.md §6)。
+    expect(entries[0]).not.toHaveProperty('deviceName');
     expect(parseProviderShareCatalogs({ nope: true })).toEqual([]);
   });
 });

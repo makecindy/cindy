@@ -1,16 +1,54 @@
 {
   "id": "pixiv-search",
-  "match": ["pixiv.net", "www.pixiv.net"],
-  "description": "在 Pixiv 按关键词/标签搜索插画(标题/作者/作品id/页数/收藏数/标签/链接)。先落到 pixiv.net 域,再在页面内同源 fetch Ajax 搜索接口(带登录 cookie)。Pixiv 搜索接口需要登录,未登录会抛错提示。query 是搜索关键词或标签。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.pixiv.net" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "illusts",
-      "fn": "async () => { const w = encodeURIComponent('{{query|js}}'); const r = await fetch('/ajax/search/illustrations/' + w + '?word=' + w + '&order=date_d&mode=all&p=1&s_mode=s_tag_full&type=illust_and_ugoira', { credentials: 'include' }); if (r.status === 401 || r.status === 403) throw new Error('Pixiv 需要登录,请在持久浏览器里登录 pixiv.net 后重试'); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('Pixiv 返回非 JSON(未登录或被风控),请在持久浏览器里登录 pixiv.net 后重试'); } const arr = (d && d.body && d.body.illust && Array.isArray(d.body.illust.data)) ? d.body.illust.data : []; return arr.filter(x => x.id).map(x => ({ title: x.title || '', author: x.userName || '', illust_id: x.id, pages: x.pageCount || 1, bookmarks: x.bookmarkCount || 0, tags: (x.tags || []).slice(0, 5).join(', '), url: 'https://www.pixiv.net/artworks/' + x.id })); }"
-    }
+  "match": [
+    "pixiv.net",
+    "www.pixiv.net"
   ],
-  "output": "{{illusts}}"
+  "description": "Search Pixiv illustrations by keyword",
+  "access": "read",
+  "adapter": "pixiv/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword or tag"
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of results"
+    },
+    "order": {
+      "required": false,
+      "type": "str",
+      "default": "date_d",
+      "description": "Sort order",
+      "choices": [
+        "date_d",
+        "date",
+        "popular_d",
+        "popular_male_d",
+        "popular_female_d"
+      ]
+    },
+    "mode": {
+      "required": false,
+      "type": "str",
+      "default": "all",
+      "description": "Search mode",
+      "choices": [
+        "all",
+        "safe",
+        "r18"
+      ]
+    },
+    "page": {
+      "required": false,
+      "type": "int",
+      "default": 1,
+      "description": "Page number"
+    }
+  },
+  "steps": []
 }

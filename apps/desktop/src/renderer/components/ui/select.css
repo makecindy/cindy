@@ -1,0 +1,22 @@
+.cindy-select-content {
+  box-shadow: var(--shadow-menu);
+  transform-origin: var(--radix-select-content-transform-origin);
+}
+
+/* Radix prevents the trigger's native mousedown, then restores focus by script.
+   Chromium may inherit a previous keyboard ring even after a mouse dismissal.
+   Keep focus in place; only suppress that inherited ring until keyboard input or blur. */
+.cindy-select-trigger[data-pointer-focus]:focus-visible {
+  box-shadow: none;
+}
+
+.cindy-select-content[data-state='closed'] {
+  /* Radix's dismissable layer writes an inline pointer-events value. */
+  pointer-events: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cindy-select-content[data-state] {
+    animation: none;
+  }
+}

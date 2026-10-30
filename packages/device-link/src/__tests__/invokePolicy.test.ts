@@ -8,6 +8,34 @@ import {
 } from '../index.js';
 
 describe('remote invoke policy boundaries', () => {
+  it.each(['desktop', 'mobile'] as const)('budgets MCP App loading on %s without replaying any operation', (platform) => {
+    const channel = 'maker:mcp-apps:v1';
+    expect(resolveRemoteInvokeTimeoutMs(channel, ['task', { op: 'open' }], platform)).toBe(120_000);
+    for (const op of ['poll', 'message', 'cancel-open', 'teardown'])
+      expect(resolveRemoteInvokeTimeoutMs(channel, ['task', { op }], platform)).toBeUndefined();
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+    expect(canCoalesceRemoteListing({ channel, args: ['task', { op: 'open' }] })).toBe(false);
+  });
+  it('keeps mobile history recovery within the fork budget without retrying writes', () => {
+    const channel = 'maker:fork-strip-encrypted';
+    expect(resolveRemoteInvokeTimeoutMs(channel, ['source'], 'mobile')).toBe(30_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, ['source'], 'desktop')).toBeUndefined();
+    expect(resolveRemoteInvokeTimeoutMs('maker:list-active', [], 'mobile')).toBeUndefined();
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+    expect(canCoalesceRemoteListing({ channel, args: ['source'] })).toBe(false);
+  });
+
+  it.each(['desktop', 'mobile'] as const)('waits for group sends only on %s without replaying writes', (platform) => {
+    const channel = 'maker:remote-resources:invoke';
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'bot-groups', actionId: 'send' }], platform)).toBe(180_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'bot-groups', actionId: 'update' }], platform)).not.toBe(180_000);
+    expect(resolveRemoteInvokeTimeoutMs(channel, [{ collectionId: 'teammates', actionId: 'send' }], platform)).not.toBe(180_000);
+    expect(isPeerResetRetryableReadChannel(channel)).toBe(false);
+    expect(isCompletedInvokeRetryableReadChannel(channel)).toBe(false);
+  });
+
   it('gives predictions the host budget on both controllers without automatic link retries', () => {
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'mobile')).toBe(45_000);
     expect(resolveRemoteInvokeTimeoutMs('maker:predict-prompt', [], 'desktop')).toBe(45_000);

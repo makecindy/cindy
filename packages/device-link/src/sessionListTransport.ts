@@ -90,3 +90,77 @@ export function decodeSessionTagCatalog(
     return { ...rest, tags: resolved };
   });
 }
+
+// These payloads contain host-owned settings. Never walk messages, tool results or content.
+const speedChannels = /^(?:local-db:(?:sessions|bots):|maker:(?:list-active$|get-new-maker-defaults$|new-maker-draft:changed$|model-favorites:|schedule:|session-model-pref:|session-sync$))/;
+const speedContainers = new Set([
+  'sessions', 'session', 'items', 'value', 'patch', 'state', 'runtime',
+  'runtimeBaseline', 'runtimeEffective', 'pendingMutation', 'profile',
+  'effectiveProfile', 'baseline', 'modelChain', 'modelChainOverride', 'modelOverride', 'favorites',
+  'capabilities', 'claudeCode', 'codex', 'pi',
+]);
+
+/** Additive wire projection: old clients keep a boolean, new clients restore the exact tier. */
+export function encodeModelSpeedPayload(channel: string | undefined, value: unknown): unknown {
+  return channel && speedChannels.test(channel) ? mapModelSpeed(value, false) : value;
+}
+export function decodeModelSpeedPayload(channel: string | undefined, value: unknown): unknown {
+  return channel && speedChannels.test(channel) ? mapModelSpeed(value, true) : value;
+}
+function mapModelSpeed(value: unknown, decode: boolean, depth = 0): unknown {
+  if (depth > 16) return value;
+  if (Array.isArray(value)) {
+    const next = value.map(item => mapModelSpeed(item, decode, depth + 1));
+    return next.some((item, i) => item !== value[i]) ? next : value;
+  }
+  if (!record(value)) return value;
+  let next = value;
+  const write = (key: string, field: unknown) => {
+    if (next === value) next = { ...value };
+    next[key] = field;
+  };
+  for (const key of ['fastMode', 'fast'] as const) {
+    const tier = `${key}Tier`;
+    if (decode ? value[key] === true && value[tier] === 'ultrafast' : value[key] === 'ultrafast') {
+      write(key, decode ? 'ultrafast' : true);
+      if (decode) delete next[tier];
+      else write(tier, 'ultrafast');
+    }
+  }
+  for (const key of ['fastModeByModel', 'fastByModel'] as const) {
+    const values = value[key];
+    if (!record(values)) continue;
+    const tierKey = `${key}Tiers`;
+    const tiers = record(value[tierKey]) ? value[tierKey] : {};
+    const mapped = { ...values };
+    const mappedTiers = { ...tiers };
+    let changed = false;
+    for (const [model, speed] of Object.entries(values)) {
+      if (decode ? speed === true && tiers[model] === 'ultrafast' : speed === 'ultrafast') {
+        mapped[model] = decode ? 'ultrafast' : true;
+        if (decode) delete mappedTiers[model];
+        else mappedTiers[model] = 'ultrafast';
+        changed = true;
+      }
+    }
+    if (changed) {
+      write(key, mapped);
+      if (Object.keys(mappedTiers).length) write(tierKey, mappedTiers);
+      else delete next[tierKey];
+    }
+  }
+  const memory = value.providerModelMemory;
+  if (record(memory)) {
+    const slots = Object.fromEntries(Object.entries(memory)
+      .map(([key, slot]) => [key, mapModelSpeed(slot, decode, depth + 1)]));
+    if (Object.keys(slots).some(key => slots[key] !== memory[key])) {
+      write('providerModelMemory', slots);
+    }
+  }
+  for (const key of speedContainers) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    const child = mapModelSpeed(value[key], decode, depth + 1);
+    if (child !== value[key]) write(key, child);
+  }
+  return next;
+}

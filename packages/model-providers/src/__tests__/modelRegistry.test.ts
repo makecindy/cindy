@@ -161,6 +161,33 @@ describe("model registry", () => {
     ).toBe("invalid-incoming");
   });
 
+  it("treats a nativeApiRules edit at the same updatedAt as a conflict", () => {
+    if (!registry) throw new Error("missing bundled registry");
+    const current = {
+      ...registry,
+      updatedAt: "2026-10-03T12:00:00.000Z",
+      nativeApiRules: [],
+    };
+    const changed = {
+      ...current,
+      nativeApiRules: [
+        {
+          providerId: "xd",
+          modelIdPrefix: "openai-codex/gpt-",
+          nativeApi: "openai-responses" as const,
+        },
+      ],
+    };
+
+    expect(compareModelRegistryRevisions(changed, current)).toBe("conflict");
+    expect(
+      compareModelRegistryRevisions(
+        { ...changed, updatedAt: "2026-10-09T06:00:00.000Z" },
+        current,
+      ),
+    ).toBe("newer");
+  });
+
   it("resolves exact provider/runtime routes without claiming availability", () => {
     expect(
       findModelRegistryRoute(

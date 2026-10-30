@@ -42,9 +42,9 @@ import {
 import { sessionsStore } from '@/lib/sessionsStore';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setRecentModelsOwner } from '@/state/recentModels';
 import { setProviderModelMemoryOwner } from '@/state/providerModelMemory';
 import { setAgentDeviceModelMemoryOwner } from '@/state/agentDeviceModelMemory';
 import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
@@ -57,6 +57,7 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { invalidateRemoteCatalogSnapshots } from '@/lib/remoteCatalogSnapshot';
 import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
@@ -144,6 +145,7 @@ function publishDataOwnerGeneration(
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
     resetTaskTagCatalogCache();
+    invalidateRemoteCatalogSnapshots();
   }
   // The pre-commit fence may already publish null. A committed owner change
   // must still close sessions even when that published owner stays null.
@@ -179,6 +181,9 @@ export function AuthProvider({
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
   const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
+  // Main rejects superseded credentials; this also prevents late IPC responses
+  // from repainting a login page the user has already left.
+  const loginOperationRef = useRef(0);
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -352,6 +357,8 @@ export function AuthProvider({
       // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
       setModelEnginePrefsOwner(state.dataOwnerId);
       setModelFavoritesOwner(state.dataOwnerId);
+      // 「最近使用」与收藏同分区:多账号不串流水。
+      setRecentModelsOwner(state.dataOwnerId);
       // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
       setFavoriteAnchorMemoryOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
@@ -451,7 +458,7 @@ export function AuthProvider({
   useEffect(() => {
     if (!isAuthenticated || !accountDeletionRestored) return;
     setAccountDeletionRestored(false);
-    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) return;
+    if (isSecondaryWindow() || isSidebarWindow()) return;
     let disposed = false;
     void authServiceRef
       .current!.consumeAccountDeletionRestoredNotice()
@@ -504,22 +511,30 @@ export function AuthProvider({
   }, [confirm, enableSessionExpiredPrompt, t]);
 
   const loadLoginState = useCallback(async (): Promise<DesktopLoginActionResult> => {
+    const operation = ++loginOperationRef.current;
     // preparing 只允许在 load 进行中出现。settle / throw / 30s 超时都必须落到
     // identifier 或既有 error 步,避免 AUTH_FLOW_SUPERSEDED + state=null 或 IPC
     // 挂起把「正在连接登录服务」变成永不结束。
     const result = await awaitDesktopLoginStateLoad(() => authServiceRef.current!.getLoginState());
+    if (operation !== loginOperationRef.current) {
+      return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: null };
+    }
     setLoginState(presentLoginResult(result));
     return result;
   }, []);
 
   const dispatchLoginAction = useCallback(
     async (action: DesktopLoginAction): Promise<DesktopLoginActionResult> => {
+      const operation = ++loginOperationRef.current;
       // Main keeps the browser request open until its loopback callback arrives,
       // so project the waiting screen immediately to expose the cancel action.
       if (action.type === 'start-browser') {
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      if (operation !== loginOperationRef.current) {
+        return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: null };
+      }
       // Org discovery can auto-start a sole SSO browser flow below. Persist at
       // the successful discovery boundary so a later browser cancel/timeout
       // does not erase a valid organization from local history.
@@ -544,6 +559,9 @@ export function AuthProvider({
           // global 开启 captcha 后不带 token 发码直接吃 400。
           const captchaGate = getLoginEmailCaptchaGate();
           const captchaToken = captchaGate ? await captchaGate() : undefined;
+          if (operation !== loginOperationRef.current) {
+            return { success: false, code: 'AUTH_FLOW_SUPERSEDED', state: null };
+          }
           if (captchaToken === null) {
             // 用户取消挑战：停在 method-choice，个人行可再次发起（会重新过闸）
             setLoginState(presentLoginResult(result));
@@ -580,22 +598,39 @@ export function AuthProvider({
   );
 
   const beginAddAccount = useCallback(async () => {
+    const operation = ++loginOperationRef.current;
     const result = await authServiceRef.current!.beginAddAccount();
+    if (operation !== loginOperationRef.current) {
+      return { success: false as const, code: 'AUTH_FLOW_SUPERSEDED', state: null };
+    }
     setLoginState(presentLoginResult(result));
     return result;
   }, []);
 
   const cancelAddAccount = useCallback(async () => {
+    const operation = ++loginOperationRef.current;
     await authServiceRef.current!.cancelAddAccount();
-    setLoginState(null);
+    if (operation === loginOperationRef.current) setLoginState(null);
   }, []);
 
   const enterLocalMode = useCallback(async () => {
+    const operation = ++loginOperationRef.current;
     // 本地模式也是一次 dataOwnerId 切换。必须走 applyIncomingState,不能自己拼半套
     // setter:漏接草稿 / prompt / 模型可见性 / 记忆分区会让跳过登录进主界面后仍读写
     // signed-out 槽(2026-08-21 #3201 Codex P1)。
-    const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
-    applyIncomingState(state);
+    try {
+      const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
+      applyIncomingState(state);
+    } catch (error) {
+      // The abandoned provider load can no longer settle preparing. Preserve any
+      // usable form or newer operation, otherwise expose the existing retry screen.
+      if (operation === loginOperationRef.current) {
+        setLoginState((current) => current ?? {
+          step: 'error', code: 'AUTH_REQUEST_FAILED', recoverTo: 'identifier',
+        });
+      }
+      throw error;
+    }
   }, [applyIncomingState, runDataOwnerBoundary]);
 
   const exitLocalMode = useCallback(async () => {
@@ -718,6 +753,11 @@ export function AuthProvider({
  */
 export function useOptionalAuthDeviceId(): string | null {
   return useContext(AuthContext)?.deviceId ?? null;
+}
+
+/** 当前登录的账号(昵称、头像)；不在 AuthProvider 内或未登录时为 null。只读展示用途，不抛错。 */
+export function useOptionalAuthUser(): User | null {
+  return useContext(AuthContext)?.user ?? null;
 }
 
 export function useAuth(): AuthContextValue {

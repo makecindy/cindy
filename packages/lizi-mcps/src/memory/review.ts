@@ -5,7 +5,7 @@
  * 不自动执行 delete/consolidate — 让调用方 LLM 在 turn 内决定 + 走标准 tool,
  * 保留可观测性 (跟 Claude Code Auto Dream 同思路, 但不开后台 cron)。
  *
- * 内部走 manager.runReview 跑一次 host 端 oneShot (默认 claude haiku, 最便宜)。
+ * 内部走 manager.runReview 跑一次 host 端一次性调用(走设置里的辅助模型)。
  * 大概几秒钟返回一段 markdown 建议。
  */
 
@@ -20,7 +20,7 @@ export function registerMemoryReviewTool(registry: MemoryToolRegistry, deps: Mem
     description:
       '让 LLM 自审当前 workdir 的所有 memory, 输出 ≤200 字建议: 哪些可合并 / 删除 / 矛盾。' +
       ' 不自动执行 — 调用方 LLM 拿到建议后自行决定调 memory_delete / memory_consolidate。' +
-      ' 用 host 端 haiku 跑, 几秒钟返回。',
+      ' 用设置的辅助模型跑, 几秒钟返回。',
     inputShape: {},
     handler: async () =>
       // 必须走 withStore: list/search/write 已按解析后的 scope 开 store。

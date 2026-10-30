@@ -12,6 +12,7 @@
  */
 
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
+import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -42,7 +43,12 @@ import {
   renderTextPermissionModeResult,
   resolvePermissionMode,
 } from './permissionModeControl';
-import { isBotCommandAvailableOnChannel, tokenizeBotCommand } from './botCommands';
+import {
+  COMPANION_MANAGED_COMMAND_FALLBACK,
+  isBotCommandAvailableOnChannel,
+  isCompanionManagedCommand,
+  tokenizeBotCommand,
+} from './botCommands';
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -213,6 +219,13 @@ export function createSlashHandlers(
       return true;
     }
 
+    // 连接已交给伙伴: 模型 / 权限 / 工作目录归伙伴设置管, 不在渠道里改伙伴任务的配置
+    // (伙伴的 Home 工作区与模型链是伙伴的正本)。每个渠道都拦, 不看文案包有没有这条提示。
+    if (isCompanionManagedCommand(cmd) && turnRunner.companionBotIdFor?.(ctx.botContextId)) {
+      await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+      return true;
+    }
+
     switch (cmd) {
       case '/help':
         await safeSendText(ctx, ui.slash.help);
@@ -253,6 +266,31 @@ export function createSlashHandlers(
         if (threadScoped && threadUi) {
           await safeSendText(ctx, threadUi.newDeprecated);
           return true;
+        }
+        // 连接已交给伙伴: 群 / 话题换一条新专线; 主人私聊不轮换伙伴主任务。
+        // 伙伴当前解析不出时('unbound')走下面原有的 `/new`, 与消息路由的回落一致。
+        // `/ctr` 接管中仍按原有 `/new` 处理(它会顺带结束接管)。
+        if (
+          turnRunner.rotateCompanionLane &&
+          !bindingStore.get({ channel, botContextId: ctx.botContextId, userId: ctx.userId })
+        ) {
+          let companionNew: 'unbound' | 'owner-dm' | 'rotated';
+          try {
+            companionNew = await turnRunner.rotateCompanionLane(ctx.botContextId, ctx.userId);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`/new companion lane rotation failed: ${msg}`);
+            await safeSendText(ctx, ui.agent.sendInternalError(msg));
+            return true;
+          }
+          if (companionNew === 'owner-dm') {
+            await safeSendText(ctx, ui.slash.companionDmNew ?? ui.slash.new);
+            return true;
+          }
+          if (companionNew === 'rotated') {
+            await safeSendText(ctx, ui.slash.companionLaneNew ?? ui.slash.new);
+            return true;
+          }
         }
         const prepared = await repo.prepareNewSession(ctx.botContextId, ctx.userId);
         const auth = await turnRunner.getAuthStatusForRoute?.(prepared);
@@ -333,8 +371,10 @@ export function createSlashHandlers(
         // 保证 IM 列表与应用内逐模型一致。currentProviderId 优先取会话持久化的 providerId。
         const agentKind = row.agentKind;
         const currentProviderId = getSessionProvider(row.id) ?? row.providerId;
-        const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
-        await waitForModelVisibilityMirror();
+        const providers = row.agentDeviceId
+          ? await readDeviceProviderViews((await import('../../device-link')).remoteBackgroundInvoke, row.agentDeviceId)
+          : await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        if (!row.agentDeviceId) await waitForModelVisibilityMirror();
         const connected = connectedProvidersForAgent(providers, agentKind);
         const sections = buildProviderSections({
           providers: connected,
@@ -345,7 +385,7 @@ export function createSlashHandlers(
             const provider = connected.find((p) => p.id === pid);
             const model = provider ? getModel(provider, mid, agentKind) : undefined;
             return isModelVisible(
-              getModelVisibilityOverride(agentKind, pid, mid),
+              row.agentDeviceId ? undefined : getModelVisibilityOverride(agentKind, pid, mid),
               model?.defaultEnabled,
             );
           },
@@ -554,10 +594,23 @@ export function createSlashHandlers(
           botContextId: ctx.botContextId,
           userId: ctx.userId,
         });
+        // 连接已交给伙伴(且没在 /ctr 接管中): 报伙伴那条任务(主任务 / 本群专线)实际在用
+        // 的配置。渠道自己的确定性会话行在这条连接上根本不会跑, 它的默认值(设置页 IM
+        // 新会话默认)会让用户以为伙伴用的是另一个模型。
+        const companionBound = !attachedSessionId && !!turnRunner.companionBotIdFor?.(ctx.botContextId);
+        const companionRow = companionBound
+          ? await turnRunner.peekCompanionRouteTarget?.(ctx.botContextId, ctx.userId)
+          : null;
+        if (companionBound && !companionRow) {
+          // 伙伴暂停 / 任务还没建起来: 没有一份能如实报的配置, 指回伙伴设置。
+          await safeSendText(ctx, ui.slash.companionManagedCommand ?? COMPANION_MANAGED_COMMAND_FALLBACK);
+          return true;
+        }
         // 只读查询必须走只读路径: resolveRouteTarget 没有现成会话时会**建**一条,
         // 而它内部的 findActiveSession 还会把软删行翻回 active 并广播 —— 问一句
         // 「我现在什么配置」不该凭空造出任务, 更不该把用户已删的会话拉回列表。
         const row =
+          companionRow ??
           (attachedSessionId ? await repo.peekSessionById(attachedSessionId) : null) ??
           (await repo.peekSession(ctx.botContextId, ctx.userId));
         // 还没有会话行时报的必须是**下一条消息真正会用的**那份配置。静态
@@ -574,7 +627,7 @@ export function createSlashHandlers(
         );
         await safeSendText(
           ctx,
-          render({
+          ((companionRow && ui.slash.settingsCompanion) || render)({
             workspace,
             agent: effective.agentKind,
             model: effective.model,

@@ -89,7 +89,7 @@ describe('cindy_feishu_bot channel routing note', () => {
       '正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制',
     );
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('xdt-file:///绝对路径');
-    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('cindy-media://… 或 xdt-image://…');
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('本机图片绝对路径或 cindy-media://…');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('不要解释或复述这些格式要求');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('X (Twitter)');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('公开回帖');

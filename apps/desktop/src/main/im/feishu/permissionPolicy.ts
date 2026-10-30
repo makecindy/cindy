@@ -1,6 +1,6 @@
 import type { TurnPermissionPolicy } from '@cindy/maker-core';
 
-import { channelForceConfirmMutatingToolCall } from '../shared/channelToolPolicy';
+import { channelForceConfirmMutatingToolCall, channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 
 /**
  * 飞书群轮次的 per-turn 收紧。
@@ -15,13 +15,21 @@ import { channelForceConfirmMutatingToolCall } from '../shared/channelToolPolicy
  * 这里按「非只读即确认」收口。
  *
  * 会话权限档为 acceptEdits/bypassPermissions 时 maker 拒跑本策略(fail-closed)。
+ *
+ * `scope: 'destructive'` 是伙伴自有 bot 用的口径: 与 Telegram 同一份破坏性 / 不透明写
+ * 词表, 两个平台对同一个伙伴的行为一致。
  */
-export function createFeishuGroupTurnPermissionPolicy(taskId: string, isOwner?: boolean): TurnPermissionPolicy {
+export function createFeishuGroupTurnPermissionPolicy(
+  taskId: string,
+  isOwner?: boolean,
+  scope: 'mutating' | 'destructive' = 'mutating',
+): TurnPermissionPolicy {
   return {
     origin: { kind: 'im', channel: 'feishu', taskId },
     autoReviewContext: { requesterAuthority: isOwner === true ? 'owner' : isOwner === false ? 'guest' : 'unknown', source: 'group' },
     confirmationSurface: 'channel',
     confirmationTimeoutMs: 30 * 60 * 1_000,
-    forceConfirmToolCall: channelForceConfirmMutatingToolCall,
+    forceConfirmToolCall:
+      scope === 'destructive' ? channelForceConfirmToolCall : channelForceConfirmMutatingToolCall,
   };
 }

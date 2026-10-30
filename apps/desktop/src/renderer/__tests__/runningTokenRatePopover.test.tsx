@@ -172,6 +172,7 @@ it.each(['Escape', 'close'] as const)(
     expect(screen.getByRole('dialog')).toBeTruthy();
     fireEvent.pointerLeave(trigger);
     fireEvent.pointerMove(trigger, { pointerType: 'mouse' });
+    // real-wait: the popover dismissal uses the production 550ms hover grace period.
     await act(() => new Promise((resolve) => setTimeout(resolve, 550)));
     expect(screen.queryByRole('tooltip')).toBeNull();
     if (dismissal === 'Escape') {

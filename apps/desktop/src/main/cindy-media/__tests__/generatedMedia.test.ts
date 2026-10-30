@@ -164,6 +164,38 @@ describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑
     deps.ingestBuffer.mockClear();
   });
 
+  // #6412: the prior path-only/data-URL-only cases missed their combined shape.
+  // unit: production materializer must return a managed result without touching a foreign path.
+  it.each(['base64', 'data-url'])('uses valid %s bytes before an unreadable remote path', async (encoding) => {
+    deps.ingestFromPath.mockRejectedValueOnce(new Error('MEDIA_SOURCE_MISSING'));
+    const source = encoding === 'base64'
+      ? { data: PNG_BYTES.toString('base64') }
+      : { url: `data:image/jpeg;base64,${PNG_BYTES.toString('base64')}` };
+    const saved = await generatedMedia.materializeGeneratedImage({
+      ...source, path: '/other-computer/image.png', pathOrigin: 'remote-agent',
+    }, deps);
+    expect(saved?.url).toBe(`cindy-media://blobs/${'c'.repeat(64)}.png`);
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+    expect(deps.ingestBuffer).toHaveBeenCalledWith({ buffer: PNG_BYTES, mimeType: 'image/png' });
+    deps.ingestFromPath.mockReset();
+    deps.ingestFromPath.mockImplementation(async ({ originalName }) => ({
+      url: `cindy-media://blobs/${'b'.repeat(64)}.png`, filename: originalName ?? 'x.png',
+    }));
+  });
+
+  it('never reads a remote path on this Host, even if a local namesake exists', async () => {
+    await expect(generatedMedia.materializeGeneratedImage({
+      path: '/tmp/actual.png', pathOrigin: 'remote-agent',
+    }, deps)).rejects.toThrow('REMOTE_SOURCE_REQUIRED');
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+  });
+
+  it.each(['not an image', '%%%'])('rejects invalid image bytes without falling back to a path', async (data) => {
+    await expect(generatedMedia.materializeGeneratedImage({ data, path: '/tmp/actual.png' }, deps))
+      .rejects.toThrow('INVALID_IMAGE');
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+  });
+
   it('托管地址核验后复用，不重复入仓', async () => {
     const legacy = await generatedMedia.materializeGeneratedImage(
       { url: 'xdt-image://sess-1/pic.png' },

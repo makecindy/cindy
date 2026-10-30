@@ -77,6 +77,20 @@ function provider(
 }
 
 describe('checkImRouteAuth', () => {
+  it('checks the shared provider without requiring this computer to have its credentials', async () => {
+    const remote = provider({ id: 'openai', strategy: 'oauth-passthrough' });
+    const d = deps({ checkRemoteRoute: vi.fn(async () => ({ provider: remote })) });
+    await expect(checkImRouteAuthDetailed(row({ providerId: 'openai', agentDeviceId: 'share:a' }), undefined, d))
+      .resolves.toMatchObject({ ok: true, providerId: 'openai', providerLabel: 'openai' });
+    expect(d.listProviders).not.toHaveBeenCalled();
+    expect(d.getAgentAuthState).not.toHaveBeenCalled();
+  });
+  it('does not use a local credential when the sharing is unavailable', async () => {
+    const d = deps({ readXdGatewayApiKey: () => 'local-key', checkRemoteRoute: vi.fn(async () => { throw new Error('paused'); }) });
+    await expect(checkImRouteAuth(row({ providerId: 'xd', agentDeviceId: 'share:a' }), undefined, d))
+      .resolves.toMatchObject({ ok: false, missing: 'provider-disconnected' });
+    expect(d.listProviders).not.toHaveBeenCalled();
+  });
   it.each([
     ['Discord', discordUi],
     ['Feishu', feishuUi],

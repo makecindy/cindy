@@ -27,6 +27,8 @@ import * as recycler from './recycler';
 import * as legacyDeadDirs from './legacyDeadDirs';
 import type { FixedDirectoryStats } from './fixedDirectory';
 import type { LiveHashSources } from './recycler';
+import { getDbClient } from '../localDb/client/current';
+import { beginRemoteMediaCacheCleanup, captureRemoteMediaOwner, REMOTE_MEDIA_INTEGRATION } from '../device-link/remoteMediaPersistentCache';
 
 const log = createLogger('cindy-media-storage-ipc');
 
@@ -54,12 +56,14 @@ export interface StorageIpcDeps {
   clearChatAttachmentsDir?: () => Promise<void>;
   getLegacyImagesDirStats?: () => Promise<FixedDirectoryStats>;
   getChatAttachmentsDirStats?: () => Promise<FixedDirectoryStats>;
+  clearRemoteMediaMemory?: () => void;
 }
 
 export interface StorageStatsResult {
   success: boolean;
   error?: string;
   blobs: ledger.MediaStorageStats;
+  remoteMedia?: FixedDirectoryStats;
   legacy: { bytes: number; fileCount: number };
   fixedCaches: {
     legacyImages: FixedDirectoryStats;
@@ -69,6 +73,7 @@ export interface StorageStatsResult {
 }
 
 export interface StorageScanParams {
+  scope?: 'remote-media';
   /** renderer 收集的全部会话草稿附件 URL(活引用暂存区 (1))。 */
   draftUrls: string[];
 }
@@ -83,6 +88,7 @@ export interface StorageScanResult {
 }
 
 export interface StorageCleanupParams {
+  scope?: 'remote-media';
   draftUrls: string[];
   /** scan 给出、用户确认的零引用候选指纹。 */
   zeroRefHashes: string[];
@@ -202,15 +208,17 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
 
     async stats(): Promise<StorageStatsResult> {
       try {
-        const [blobs, deadDirs, legacyImages, chatAttachments] = await Promise.all([
+        const [blobs, deadDirs, legacyImages, chatAttachments, remoteMedia] = await Promise.all([
           ledger.getStorageStats(deps.db),
           legacyDeadDirs.scanDeadDirs(deps.legacyRootDir),
           deps.getLegacyImagesDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
           deps.getChatAttachmentsDirStats?.() ?? Promise.resolve({ bytes: 0, fileCount: 0 }),
+          ledger.listCacheBlobsByLru(deps.db, REMOTE_MEDIA_INTEGRATION),
         ]);
         return {
           success: true,
           blobs,
+          remoteMedia: { bytes: remoteMedia.reduce((sum, row) => sum + row.bytes, 0), fileCount: remoteMedia.length },
           legacy: { bytes: 0, fileCount: 0 },
           fixedCaches: { legacyImages, chatAttachments },
           deadDirs,
@@ -234,6 +242,15 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
 
     async scan(params: StorageScanParams): Promise<StorageScanResult> {
       try {
+        if (params?.scope === 'remote-media') {
+          const assertCurrent = captureRemoteMediaOwner();
+          const db = deps.db ?? getDbClient().drizzle;
+          const live = await collectLive(deps, params.draftUrls ?? []);
+          assertCurrent();
+          const cache = await recycler.scanCache({ live, limitBytes: 0, integration: REMOTE_MEDIA_INTEGRATION }, db);
+          assertCurrent();
+          return { success: true, zeroRef: EMPTY_ZERO_REF, cache, tmpFileCount: 0, deadDirs: [] };
+        }
         const live = await collectLive(deps, params?.draftUrls ?? []);
         const [zeroRef, cache, staleTmp, deadDirs] = await Promise.all([
           recycler.scanZeroRef({ live }, deps.db),
@@ -276,6 +293,28 @@ export function createStorageIpcHandlers(deps: StorageIpcDeps) {
         throwIpcError('INVALID_PARAMS', 'cindy-media storage cleanup: params required');
       }
       try {
+        if (params.scope === 'remote-media') {
+          const assertCurrent = captureRemoteMediaOwner();
+          const db = deps.db ?? getDbClient().drizzle;
+          const finishCleanup = beginRemoteMediaCacheCleanup();
+          try {
+            deps.clearRemoteMediaMemory?.();
+            const live = await collectLive(deps, params.draftUrls ?? []);
+            assertCurrent();
+            const cacheEvicted = await recycler.evictCacheBlobs({
+              hashes: params.evictCacheHashes ?? [], live,
+              integration: REMOTE_MEDIA_INTEGRATION, assertStillValid: assertCurrent,
+            }, db);
+            assertCurrent();
+            return { zeroRef: { deleted: 0, freedBytes: 0, skipped: 0 }, cacheEvicted,
+              deadDirs: { removed: [], skipped: [], freedBytes: 0 }, tmpFilesRemoved: 0,
+              freedBytes: cacheEvicted.freedBytes };
+          } finally {
+            // Release this cleanup's fence and invalidate old projections even on failure.
+            finishCleanup();
+            deps.clearRemoteMediaMemory?.();
+          }
+        }
         // 执行时重新取证:扫描→确认之间用户可能又粘了图/发了排队消息。
         const live = await collectLive(deps, params.draftUrls ?? []);
         const zeroRef = await recycler.deleteZeroRefBlobs(

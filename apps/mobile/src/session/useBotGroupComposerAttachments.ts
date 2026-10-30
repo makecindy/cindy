@@ -4,6 +4,7 @@
  * 与任务输入框同一条本机附件管线：`useMobileLocalAttachments` 负责相册 / 拍照 / 文件 /
  * 粘贴的拉起与乐观上传（传 deviceId，能直传时直传给这台电脑），这里只持有已上传的附件、
  * 托盘缩略图与「最近照片」的勾选映射，写法对照会话页与新建页。
+ * 服务器直连群注入 upload，复用选择/预处理/托盘而不创建电脑中转对象。
  *
  * - 附件只在发出成功后才离开托盘（电脑取走上传后自己回收中转对象）；发失败原样保留，
  *   重发沿用同一条消息。
@@ -21,10 +22,11 @@ import { buildMobileImageAttachmentCandidate } from './mobileImageAttachment';
 import { isComposerPastedImageUri } from './pastedImageAttachment';
 import type { RemoteSerializedAttachment } from './types';
 import { resolveContextSheetMediaAssetForUpload, type ContextSheetMediaAsset } from './useContextSheetMediaAssets';
-import { useMobileLocalAttachments } from './useMobileLocalAttachments';
+import { useMobileLocalAttachments, type UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachments';
 
-export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
+export function useBotGroupComposerAttachments({ deviceId, upload, onPicked }: {
   deviceId: string;
+  upload?: UseMobileLocalAttachmentsOptions['upload'];
   /** A picker returned (or a recent photo was tapped): close the sheet and go back to typing. */
   onPicked(): void;
 }) {
@@ -47,6 +49,7 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
 
   const local = useMobileLocalAttachments({
     deviceId,
+    upload,
     getAccessToken: () => getAccessTokenRef.current(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (attachment, candidate) => {
@@ -188,6 +191,7 @@ export function useBotGroupComposerAttachments({ deviceId, onPicked }: {
     removePendingUpload: local.removePendingUpload,
     retryPendingUpload: local.retryPendingUpload,
     waitForPendingUploads: local.waitForPendingUploads,
+    getUploadedAttachmentId: local.getUploadedAttachmentId,
     clearSent,
     holdForSend,
     armMediaTap,

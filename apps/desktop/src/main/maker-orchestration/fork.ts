@@ -14,6 +14,14 @@ import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
+import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
+import { remoteBackgroundInvoke } from '../device-link/index.js';
+import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
+import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
+import { parseProviderSharePeer } from '@cindy/device-link';
+import {
+  authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
+} from '../remote-agent/controller/providerShareTaskLocation.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -23,6 +31,7 @@ import { getMaker } from '../maker-host/index.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
@@ -45,6 +54,40 @@ export type ForkErrorCode =
   | 'UNSUPPORTED_HISTORY';
 
 const STRIP_FORK_TITLE_PREFIX = '[Fork·已剥离]';
+
+export async function listSideChats(sourceSessionId: string): Promise<Array<{ id: string }>> {
+  return getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(and(
+    eq(sessions.parentSessionId, sourceSessionId), eq(sessions.source, 'side-chat'),
+    or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
+  )).orderBy(asc(sessions.createdAt));
+}
+
+/** Snapshot completed history without waiting for or stopping the parent turn. */
+export async function createSideChat(sourceSessionId: string): Promise<Session> {
+  const db = getDbClient().drizzle;
+  const [source] = await db.select().from(sessions).where(eq(sessions.id, sourceSessionId)).limit(1);
+  if (!source || source.status !== 'active') {
+    throw forkError('SOURCE_NOT_FOUND', 'Source task is unavailable');
+  }
+  if (source.source === 'side-chat' || source.source === 'review' || source.source === 'bot') {
+    throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
+  }
+  const inFlight = (source.activeTurnStartedAt ?? 0) > (source.lastTurnEndedAt ?? 0);
+  const completedBefore = source.lastTurnEndedAt
+    ? source.lastTurnEndedAt + 1
+    : inFlight ? source.activeTurnStartedAt : undefined;
+  // Fork the last completed reply through the next user boundary. Later user
+  // rows may be steers; a queued turn's question may also predate its start.
+  const [anchor] = await db.select({ clientId: messages.clientId }).from(messages).where(and(
+    eq(messages.sessionId, sourceSessionId),
+    eq(messages.role, 'assistant'),
+    isNull(messages.rewindAt),
+    source.clearedAt === null ? undefined : gt(messages.createdAt, source.clearedAt),
+    completedBefore ? lt(messages.createdAt, completedBefore) : undefined,
+  )).orderBy(desc(messages.createdAt), desc(messageRowid)).limit(1);
+  if (!anchor?.clientId) throw forkError('NO_PRIOR_ASSISTANT', 'Wait for the first completed reply');
+  return forkSessionAtMessage(sourceSessionId, anchor.clientId, { sideChat: true });
+}
 
 function forkError(code: ForkErrorCode, message: string): Error {
   const err = new Error(message);
@@ -74,6 +117,7 @@ interface MessagePosition {
 
 interface ForkNativeSource {
   agentKind: DbAgentKind;
+  agentDeviceId: string | null;
   sdkSessionId: string | null;
   model: string;
   providerId: string | null;
@@ -81,7 +125,7 @@ interface ForkNativeSource {
   nextSwitch: MessagePosition | null;
   /** false = 原生会话已因同引擎换窗失效，只复制可见历史，首次发送走交接。 */
   reuseVendorSession: boolean;
-  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  rebuildReason?: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }
 
 interface ForkTimelineMessage {
@@ -98,6 +142,7 @@ interface ForkTimelineMessage {
 
 interface ParsedAgentSwitchBoundary {
   fromAgentKind: DbAgentKind;
+  fromAgentDeviceId?: string | null;
   toAgentKind?: DbAgentKind;
   fromModel: string | null;
   fromProviderId?: string | null;
@@ -162,7 +207,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
     .filter(
@@ -183,7 +228,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
     fromLabel: label,
     toLabel: label,
     sessionId: opts.sessionId,
-    reason: opts.reason,
+    // fork 出的新任务不知道原来隔了多久,空闲间隔边界按「换了干净原生会话」的通用口径交接。
+    reason: opts.reason === 'idle-gap' ? 'native-session-recovery' : opts.reason,
   });
   await commitContextRebuild(opts.sessionId, handoff, {
     reason: opts.reason,
@@ -207,7 +253,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
 }
 
 interface ParsedContextRebuildBoundary {
-  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
+  reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
   sourceAgentKind?: DbAgentKind;
   sourceModel?: string | null;
   sourceProviderId?: string | null;
@@ -220,7 +266,8 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
       parsed.reason !== 'context-overflow' &&
       parsed.reason !== 'model-window-switch' &&
       parsed.reason !== 'pi-prompt-timeout' &&
-      parsed.reason !== 'native-session-recovery'
+      parsed.reason !== 'native-session-recovery' &&
+      parsed.reason !== 'idle-gap'
     ) {
       return null;
     }
@@ -246,7 +293,7 @@ function parseContextRebuildBoundary(content: string): ParsedContextRebuildBound
 
 function parseContextRebuildReason(
   content: string,
-): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | null {
+): 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap' | null {
   return parseContextRebuildBoundary(content)?.reason ?? null;
 }
 
@@ -265,6 +312,9 @@ function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | 
         : undefined;
     return {
       fromAgentKind: parsed.fromAgentKind,
+      ...(Object.hasOwn(parsed, 'fromAgentDeviceId')
+        ? { fromAgentDeviceId: typeof parsed.fromAgentDeviceId === 'string' ? parsed.fromAgentDeviceId : null }
+        : {}),
       toAgentKind,
       fromModel: typeof parsed.fromModel === 'string' ? parsed.fromModel : null,
       ...(Object.hasOwn(parsed, 'fromProviderId')
@@ -335,6 +385,7 @@ async function resolveForkNativeSource(
   sourceSessionId: string,
   source: {
     agentKind: string;
+    agentDeviceId?: string | null;
     sdkSessionId: string | null;
     model: string;
     providerId: string | null;
@@ -380,6 +431,12 @@ async function resolveForkNativeSource(
       LIMIT 1`,
     positionParams,
   );
+  const parsedNextSwitch = nextSwitch ? parseAgentSwitchBoundary(nextSwitch.content) : null;
+  // Device ownership belongs to the historical segment, even when a rebuild
+  // invalidated its native session. Explicit null means local; legacy records
+  // without the field retain the current task's device.
+  const agentDeviceId = parsedNextSwitch && Object.hasOwn(parsedNextSwitch, 'fromAgentDeviceId')
+    ? parsedNextSwitch.fromAgentDeviceId ?? null : source.agentDeviceId ?? null;
   if (
     nextSwitch &&
     (!invalidated ||
@@ -388,7 +445,7 @@ async function resolveForkNativeSource(
         { createdAt: invalidated.created_at, rowid: invalidated.rowid },
       ))
   ) {
-    const parsed = parseAgentSwitchBoundary(nextSwitch.content);
+    const parsed = parsedNextSwitch;
     if (!parsed?.fromSdkSessionId) {
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
     }
@@ -425,6 +482,7 @@ async function resolveForkNativeSource(
     }
     return {
       agentKind: parsed.fromAgentKind,
+      agentDeviceId,
       sdkSessionId: parsed.fromSdkSessionId,
       model,
       providerId,
@@ -436,6 +494,7 @@ async function resolveForkNativeSource(
     if (rebuildBoundary?.sourceAgentKind) {
       return {
         agentKind: rebuildBoundary.sourceAgentKind,
+        agentDeviceId,
         sdkSessionId: null,
         model: rebuildBoundary.sourceModel ?? source.model,
         providerId: Object.hasOwn(rebuildBoundary, 'sourceProviderId')
@@ -454,6 +513,7 @@ async function resolveForkNativeSource(
     }
     return {
       agentKind: normalizeDbAgentKind(source.agentKind),
+      agentDeviceId,
       sdkSessionId: null,
       model: source.model,
       providerId: source.providerId,
@@ -467,6 +527,7 @@ async function resolveForkNativeSource(
   }
   return {
     agentKind: normalizeDbAgentKind(source.agentKind),
+    agentDeviceId,
     sdkSessionId: source.sdkSessionId,
     model: source.model,
     providerId: source.providerId,
@@ -771,6 +832,7 @@ function collectClaudeToolParentUuids(
 export async function forkSessionAtMessage(
   sourceSessionId: string,
   messageClientId: string,
+  options: { sideChat?: boolean } = {},
 ): Promise<Session> {
   const db = getDbClient().drizzle;
 
@@ -784,16 +846,14 @@ export async function forkSessionAtMessage(
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
 
+  assertCindyMakeSessionAvailable(source.source);
+
   // 轮 26 发现 5 防御深度:远端会话 fork 由 SDK 层拒绝(pi forkSdkSession 抛
   // NotSupportedError remoteFork;cc/codex 由 daemon 远端执行)。host 层显式
   // 守卫兜底 —— 若未来某 agent 的 SDK 守卫漏掉,这里阻止 DB 写入产生
   // 「remoteHostId 丢失的本地化僵尸会话」(轮 26 HIGH-1 同源)。
   if (source.remoteHostId) {
     throw forkError('REMOTE_NOT_SUPPORTED', '远端会话暂不支持在本地 fork');
-  }
-  // Agent 在另一台电脑运行的任务：Agent 会话记录在那台，本机无法从中分叉。
-  if (source.agentDeviceId) {
-    throw forkError('REMOTE_NOT_SUPPORTED', '这个任务的 Agent 在另一台电脑运行，暂不支持分叉');
   }
 
   // 2. 读 target message + rowid —— 同毫秒边界必须按真实插入顺序判断。
@@ -898,7 +958,7 @@ export async function forkSessionAtMessage(
     forkSource.agentKind,
   );
   if (!usesTailTurnFork && forkSource.sdkSessionId) {
-    claudeAnchorIndex = await loadClaudeTranscriptAnchorIndex({
+    claudeAnchorIndex = forkSource.agentDeviceId ? null : await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
     }).catch(() => null);
@@ -929,6 +989,7 @@ export async function forkSessionAtMessage(
   // 4. 调 SDK forkSession (事务外)。fresh Claude 首条 user 特例没有合法的 prior
   // assistant 锚点：保留 pending handoff、让新会话首次发送时 lazy-create 即可。
   const newTitle = source.title.startsWith('[Fork') ? source.title : `[Fork] ${source.title}`;
+  const newSessionId = createBusinessSessionId();
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
@@ -942,25 +1003,56 @@ export async function forkSessionAtMessage(
     (usesTailTurnFork || assistantUuid)
   ) {
     const agentKind = dbToMakerAgentKind(forkSource.agentKind);
-    const forkResult = await getMaker()
-      .forkSdkSession(agentKind, {
-        sourceSdkSessionId: forkSource.sdkSessionId,
-        ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
-        upToMessageId: assistantUuid,
-        ...(lastTurnId ? { lastTurnId } : {}),
-        ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),
-        ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
-        title: newTitle,
-        workingDir: source.workingDir ?? undefined,
-        // Pi 的 fork 守卫判定源 session 是否远端(用 DB 的 remoteHostId, 不用
-        // agent 实例字段 —— R4 竞态 #1)。
-        remoteHostId: source.remoteHostId ?? null,
-      })
+    const sourceSdkSessionId = forkSource.sdkSessionId;
+    const forkOptions = {
+      sourceSdkSessionId,
+      ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
+      upToMessageId: assistantUuid,
+      ...(lastTurnId ? { lastTurnId } : {}),
+      ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),
+      ...(tailTurnsToDrop !== undefined ? { tailTurnsToDrop } : {}),
+      title: newTitle,
+      workingDir: source.workingDir ?? undefined,
+      // Pi 的 fork 守卫判定源 session 是否远端(用 DB 的 remoteHostId, 不用
+      // agent 实例字段 —— R4 竞态 #1)。
+      remoteHostId: source.remoteHostId ?? null,
+    };
+    const forkRemote = async () => {
+      const ownerRoute = forkSource.agentDeviceId!;
+      const location = await authorizeSharedTaskHistory(ownerRoute, sourceSessionId, agentKind, forkSource.model);
+      let childGeneration: string | undefined;
+      if (location.direct) {
+        const deviceId = parseProviderSharePeer(location.target)?.deviceId;
+        if (!deviceId) throw new Error('[REMOTE_AGENT_INVALID] invalid shared history executor');
+        const child = await authorizeSharedTaskExecutor(ownerRoute, newSessionId, agentKind, forkSource.model, deviceId, true);
+        childGeneration = child.generation;
+      }
+      try {
+        return await forkRemoteAgentSession(remoteAgentInvoker(location.target, remoteBackgroundInvoke), {
+          sourceSdkSessionId,
+          upToMessageId: assistantUuid,
+          lastTurnId,
+          tailTurnsToDrop,
+          forkAtTimestampMs,
+          sourceSessionId,
+          newSessionId,
+          agentKind,
+          model: forkSource.model,
+          providerId: forkSource.providerId,
+        });
+      } catch (error) {
+        if (location.direct) await releaseSharedTaskAuthorization(ownerRoute, newSessionId, childGeneration).catch(() => undefined);
+        throw error;
+      }
+    };
+    const forkResult = await (forkSource.agentDeviceId
+      ? forkRemote()
+      : getMaker().forkSdkSession(agentKind, forkOptions))
       .catch((err: unknown) => {
         // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
         // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
         // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
-        if (!isCodex) throw err;
+        if (!isCodex || forkSource.agentDeviceId) throw err;
         if (isCodexHistoryRecoveryRequired(err) && (sourceMessages.length > 0 || target.role === 'user')) {
           // 首条 user 之前的空前缀也是合法 fork；其它错误不得变成丢上下文的新任务。
           needsHistoryRecovery = true;
@@ -983,7 +1075,6 @@ export async function forkSessionAtMessage(
 
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
-  const newSessionId = createBusinessSessionId();
 
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
   const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
@@ -1000,6 +1091,14 @@ export async function forkSessionAtMessage(
   const toolParentUuids = usesTailTurnFork
     ? []
     : collectClaudeToolParentUuids(sourceMessages, claudeAnchorIndex);
+  // 6. 任务级窗口档位随 fork 继承（同一任务意图）；启动时仍会按新路由重新收敛，
+  // 所以跨 agent / 跨模型的 fork 不会残留超出目标上限的值。它是偏好文件里的条目，
+  // 不是会话列，所以不在上面的行插入里。
+  //
+  // 写在事务**之前**：写失败时调用方拿到的失败与「任务还没建出来」是一致的
+  // （否则 DB 已提交、调用方却认为整体失败，会留下一个“报了错但存在”的任务）；
+  // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
+  const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
   try {
     await getDbClient().tx('fork.session', {
       sourceSessionId,
@@ -1008,6 +1107,7 @@ export async function forkSessionAtMessage(
       targetRowid: copyBoundary.rowid,
       newSession: {
         id: newSessionId,
+        ...(options.sideChat ? { source: 'side-chat' as const } : {}),
         title: newTitle,
         workingDir: source.workingDir,
         model: forkSource.model,
@@ -1033,6 +1133,7 @@ export async function forkSessionAtMessage(
         // 轮 26 HIGH-1:远端会话 fork 必须继承 remoteHostId —— 缺失会落成
         // NULL, 子会话被下游当成本地会话处理(本地 transport/MCP 全错)。
         remoteHostId: source.remoteHostId ?? null,
+        agentDeviceId: forkSource.agentDeviceId,
         codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
         parentSessionId: source.id,
         forkedAtMessageId: messageClientId,
@@ -1054,6 +1155,7 @@ export async function forkSessionAtMessage(
     // 轮 40-w4-t13 HIGH:SDK 侧已创建新 session file(forkSdkSession), DB 事务
     // 失败时该文件成孤儿 —— 调用方收到失败, 但孤儿累积不可达。至少记录
     // 可恢复线索(sdkSessionId), 供诊断/清理; 错误照常上抛。
+    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
     if (newSdkSessionId) {
       console.error(
         `[fork] SDK session ${newSdkSessionId} created but DB transaction failed — orphan session file left behind`,
@@ -1063,7 +1165,7 @@ export async function forkSessionAtMessage(
     throw err;
   }
 
-  // 6. 返回 mapper 转过的新 session（含 messageCount）
+  // 7. 返回 mapper 转过的新 session（含 messageCount）
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {
     throw new Error('Fork session 创建后查询失败');
@@ -1092,6 +1194,9 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
+
+  assertCindyMakeSessionAvailable(source.source);
+
   // 先校验"类型"再校验"运行状态":non-codex 会话(可能 sdkSessionId 也为空)应拿到
   // 更准确的 NOT_CODEX_SESSION 而不是 SOURCE_NEVER_RAN。
   if (source.agentKind !== 'codex') {
@@ -1196,42 +1301,50 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
   }) : undefined;
-  await getDbClient().tx('fork.session', {
-    sourceSessionId,
-    sourceClearedAt: source.clearedAt,
-    targetCreatedAt: copyBeforeCreatedAt,
-    targetRowid: null,
-    newSession: {
-      id: newSessionId,
-      title: newTitle,
-      workingDir: source.workingDir,
-      model: source.model,
-      // 同 forkSessionAtMessage:providerId 必须继承,防止凭证形态漂移。
-      providerId: source.providerId,
-      effort: source.effort,
-      permissionMode: source.permissionMode,
-      status: 'active',
-      sdkSessionId: newSdkSessionId,
-      totalTokenUsage: 0,
-      totalCostUsd: 0,
-      contextTokens: 0,
-      contextWindow: 0,
-      fastMode: source.fastMode,
-      clearedAt: null,
-      pinnedAt: null,
-      userSendAt: now,
-      agentKind: source.agentKind,
-      workspaceKind: source.workspaceKind,
-      codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
-      parentSessionId: source.id,
-      forkedAtMessageId: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    uuidMap: Array.from(uuidMap.entries()),
-    newMessageIds,
-    recoveryMarker,
-  });
+  // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，
+  // 与普通 fork 一样先写后提交：写失败时任务还没建出来，事务失败则撤掉条目。
+  const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
+  try {
+    await getDbClient().tx('fork.session', {
+      sourceSessionId,
+      sourceClearedAt: source.clearedAt,
+      targetCreatedAt: copyBeforeCreatedAt,
+      targetRowid: null,
+      newSession: {
+        id: newSessionId,
+        title: newTitle,
+        workingDir: source.workingDir,
+        model: source.model,
+        // 同 forkSessionAtMessage:providerId 必须继承,防止凭证形态漂移。
+        providerId: source.providerId,
+        effort: source.effort,
+        permissionMode: source.permissionMode,
+        status: 'active',
+        sdkSessionId: newSdkSessionId,
+        totalTokenUsage: 0,
+        totalCostUsd: 0,
+        contextTokens: 0,
+        contextWindow: 0,
+        fastMode: source.fastMode,
+        clearedAt: null,
+        pinnedAt: null,
+        userSendAt: now,
+        agentKind: source.agentKind,
+        workspaceKind: source.workspaceKind,
+        codexHistoryHasProductPrompt: source.codexHistoryHasProductPrompt,
+        parentSessionId: source.id,
+        forkedAtMessageId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      uuidMap: Array.from(uuidMap.entries()),
+      newMessageIds,
+      recoveryMarker,
+    });
+  } catch (err) {
+    if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
+    throw err;
+  }
 
   const [row] = await db.select().from(sessions).where(eq(sessions.id, newSessionId));
   if (!row) {

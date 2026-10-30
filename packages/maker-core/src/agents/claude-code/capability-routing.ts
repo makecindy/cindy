@@ -21,6 +21,8 @@ import { ORCA_NESTED_REPORT_DENIAL_REASON } from '../shared/orca-report-policy.j
 const CLAUDE_CODE_HARNESS_ID = 'claude-code';
 export const ORCA_SEND_TO_LEAD_TOOL_NAME = 'mcp__orca_worker_bridge__send_to_lead';
 export const CLAUDE_ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+export const CINDY_ASYNC_QUESTION_TOOL_NAME = 'mcp__cindy_helper__ask_user_question_async';
+const USER_QUESTION_TOOLS = [CLAUDE_ASK_USER_QUESTION_TOOL_NAME, CINDY_ASYNC_QUESTION_TOOL_NAME];
 export const CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON =
   'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.';
 
@@ -48,7 +50,7 @@ export function buildClaudeAskUserQuestionCallerProvenanceHooks(): Partial<Recor
   const guardTool: HookCallback = async (input) => {
     if (input.hook_event_name !== 'PreToolUse') return { continue: true };
     const pre = input as PreToolUseHookInput;
-    if (pre.tool_name !== CLAUDE_ASK_USER_QUESTION_TOOL_NAME) return { continue: true };
+    if (!USER_QUESTION_TOOLS.includes(pre.tool_name)) return { continue: true };
     if (typeof pre.agent_id !== 'string' || pre.agent_id.length === 0) return { continue: true };
     return {
       continue: true,
@@ -59,23 +61,25 @@ export function buildClaudeAskUserQuestionCallerProvenanceHooks(): Partial<Recor
       },
     };
   };
-  return { PreToolUse: [{ matcher: CLAUDE_ASK_USER_QUESTION_TOOL_NAME, hooks: [guardTool] }] };
+  return { PreToolUse: USER_QUESTION_TOOLS.map((matcher) => ({ matcher, hooks: [guardTool] })) };
 }
 
 function isClaudeSkillDirective(directive: CapabilityRouteOverride): boolean {
   return (
     directive.source.surface === 'skill' &&
-    directive.source.harness === CLAUDE_CODE_HARNESS_ID &&
-    (directive.source.kind === 'harness-builtin' ||
-      directive.source.kind === 'harness-plugin')
+    isClaudeCapabilityRouteEnforced(directive)
   );
 }
 
 /**
  * Translate host routing policy into Claude Code's native per-skill listing
  * controls. `user-invocable-only` removes a skill from implicit model context
- * while preserving exact `/name` invocation. User and project skills are never
- * overridden here, even if a host policy accidentally names one.
+ * while preserving exact `/name` invocation.
+ *
+ * Claude matches `skillOverrides` by name only and cannot tell a harness Skill
+ * from a user or project Skill of the same name. Host policy therefore names
+ * only harness-specific Skills (namespaced plugin Skills or vendor-specific
+ * built-in names), never generic names such as `design`.
  */
 export function buildClaudeSkillOverrides(
   policy: CapabilityRoutingPolicy | undefined,
@@ -100,6 +104,76 @@ export function buildClaudeSkillOverrides(
   return overrides;
 }
 
+/**
+ * Whether this adapter turns a host route into a Claude Code control. The
+ * builders below select routes through this same predicate, so the route
+ * support check cannot drift from what is actually applied.
+ */
+export function isClaudeCapabilityRouteEnforced(
+  directive: CapabilityRouteOverride,
+): boolean {
+  if (
+    !isHarnessOwnedCapabilitySource(directive.source) ||
+    directive.source.harness !== CLAUDE_CODE_HARNESS_ID
+  ) {
+    return false;
+  }
+  switch (directive.source.surface) {
+    case 'skill':
+      return true;
+    case 'mcp':
+      return directive.invocation !== 'auto';
+    case 'tool':
+      // Claude can only remove a built-in tool outright; plugin tools are MCP.
+      return (
+        directive.source.kind === 'harness-builtin' &&
+        directive.invocation === 'disabled'
+      );
+    default:
+      return false;
+  }
+}
+
+function isDisabledClaudeSource(
+  directive: CapabilityRouteOverride,
+  surface: 'tool' | 'mcp',
+): boolean {
+  return (
+    isClaudeCapabilityRouteEnforced(directive) &&
+    directive.source.surface === surface &&
+    directive.invocation === 'disabled'
+  );
+}
+
+/**
+ * Disabled Claude built-in tools, passed as SDK `disallowedTools`. Claude Code
+ * drops a disallowed tool and its description from the model-facing list.
+ */
+export function buildClaudeDisallowedTools(
+  policy: CapabilityRoutingPolicy | undefined,
+): string[] {
+  return (policy?.overrides ?? [])
+    .filter((directive) => isDisabledClaudeSource(directive, 'tool'))
+    .map((directive) => directive.source.id);
+}
+
+/**
+ * Disabled MCP servers, passed as flag-settings `deniedMcpServers`. Denying
+ * only the server's tools would leave its server instructions in the prompt;
+ * a denied server is never connected. Claude merges this list with the user's
+ * own deny list instead of replacing it.
+ *
+ * Like `skillOverrides`, the deny matches by server name only, so host policy
+ * names only harness-specific servers such as `claude.ai ` account connectors.
+ */
+export function buildClaudeDeniedMcpServers(
+  policy: CapabilityRoutingPolicy | undefined,
+): Array<{ serverName: string }> {
+  return (policy?.overrides ?? [])
+    .filter((directive) => isDisabledClaudeSource(directive, 'mcp'))
+    .map((directive) => ({ serverName: directive.source.id }));
+}
+
 export interface ClaudeRemoteToolGuard {
   toolNamePrefix: string;
   sourceServerId: string;
@@ -120,12 +194,12 @@ export function buildClaudeRemoteOrcaCallerGuards(isOrcaWorker: boolean): Claude
 
 /** JSON-safe remote equivalent of the native subagent user-input guard. */
 export function buildClaudeRemoteRootOnlyToolGuards(): ClaudeRemoteToolGuard[] {
-  return [{
-    toolNamePrefix: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
-    sourceServerId: 'claude-code',
-    invocation: 'root-only',
+  return USER_QUESTION_TOOLS.map((toolNamePrefix) => ({
+    toolNamePrefix,
+    sourceServerId: toolNamePrefix === CLAUDE_ASK_USER_QUESTION_TOOL_NAME ? 'claude-code' : 'cindy_helper',
+    invocation: 'root-only' as const,
     denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
-  }];
+  }));
 }
 
 /**
@@ -142,10 +216,8 @@ export function buildClaudeRemoteToolGuards(
   if (!policy) return [];
   return policy.overrides.flatMap((directive) => {
     if (
-      !isHarnessOwnedCapabilitySource(directive.source) ||
-      directive.source.harness !== CLAUDE_CODE_HARNESS_ID ||
       directive.source.surface !== 'mcp' ||
-      directive.invocation === 'auto'
+      !isClaudeCapabilityRouteEnforced(directive)
     ) {
       return [];
     }
@@ -179,10 +251,8 @@ export function buildClaudeLocalToolGuardHooks(
   if (
     !policy?.overrides.some(
       (directive) =>
-        isHarnessOwnedCapabilitySource(directive.source) &&
-        directive.source.harness === CLAUDE_CODE_HARNESS_ID &&
         directive.source.surface === 'mcp' &&
-        directive.invocation !== 'auto',
+        isClaudeCapabilityRouteEnforced(directive),
     )
   ) {
     return {};

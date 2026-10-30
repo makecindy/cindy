@@ -1,5 +1,8 @@
+import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
+import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
+  PI_CACHE_RECOVERY_EXPECTATION,
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -16,7 +19,8 @@ import {
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
-import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId, type WorkdirDiagnosticLogger } from '../workdirDiagnostics.js';
 
 import {
@@ -26,6 +30,7 @@ import {
   toDesktopSessionDispatchOutcome,
 } from '../maker-host/send-outcome.js';
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
+import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { routinePermissionSnapshot } from '../maker-host/routinePermission.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -41,8 +46,10 @@ import {
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
+import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
+import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
   directoryGrantsForRuntime,
@@ -52,8 +59,11 @@ import {
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, currentAutoReviewResourceIntent, readAutoReviewUserText, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
+import { mcpAppModelContext } from '../mcp-apps/runtime.js';
+import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
 type CreateOpts = MakerSessionCreateOpts;
 
@@ -177,7 +187,7 @@ export function stampTrustedDesktopQueuedOrigin(
   // Keep the complete input until the shared atomic history budget is applied.
   // Pre-compacting a revocation would leave older grants beside an omission marker.
   if (ordinary) explicitUserItem.autoReviewUserText =
-    readAutoReviewUserText(item.persistedContent) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
+    readAutoReviewUserText(item.persistedContent, item.text) ?? currentAutoReviewResourceIntent(item.persistedContent, item.text);
   if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem;
   const receipt: TrustedDesktopPiCommandSnapshot = {
     version: 1,
@@ -215,6 +225,7 @@ export function stampTrustedDeviceLinkQueuedOrigin(
   delete stamped.sourceDevice;
   delete stamped.sourcePlugin;
   delete stamped.agentOmitsTriggerPrefix;
+  delete stamped.botTaskCoordination;
   if (deviceLinkInvoke && sourceDevice) stamped.sourceDevice = { ...sourceDevice };
   return stamped;
 }
@@ -243,6 +254,9 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 }
 
 type MakerSendOptions = {
+  readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
+  /** Main-only live card guard, never serialized to queue history or provider options. */
+  readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
   retryUserClientId?: string;
   toolsDisabled?: boolean;
@@ -290,6 +304,8 @@ type MakerSendOptions = {
    */
   sourceDevice?: MessageSourceDevice;
   persistUserMessage?: {
+    [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
+    botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     /** 插件来源(只写入 agentMeta.sourcePlugin 并生成 `[消息来源]`,不传给 maker-core)。 */
     sourcePlugin?: unknown;
@@ -376,6 +392,8 @@ export interface MakerSendTransactionDeps {
   /** The same clear/rewind-filtered transcript used for native context handoffs. */
   readAutoReviewHistory?(sessionId: string): Promise<AutoReviewHistoryMessage[]>;
   readScheduledPermissions?(sessionId: string): Promise<{ permissionMode: unknown; planModeEnabled: unknown } | null>;
+  /** Scheduler-only final route check, after asynchronous send preparation. */
+  assertScheduledDispatchRoute?(sessionId: string): Promise<void>;
   ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
@@ -390,11 +408,24 @@ export interface MakerSendTransactionDeps {
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   isPersistedWorktreeFallback?(workingDir: string): boolean;
   /**
-   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
-   * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
-   * 快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
+   * 纯文件系统探测(不做 recovery / mkdir / 广播)。判断 DB 里的 working_dir 是否
+   * **真实存在** —— 会话移动后 runtime cwd 与 DB 漂移时,只有确认 DB 目录真实存在
+   * 才重建 runtime,不能把不存在的目录"恢复"成空文件夹。
+   */
+  statDirectory(dir: string): Promise<{ isDirectory(): boolean }>;
+  /**
+   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create 把它当唯一
+   * 真源直接采纳；rehydrate 只在 caller 传入的 workingDir 校验失败时用它兜底——
+   * 输入队列崩溃快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
    */
   readSessionWorkingDirFromDb(sessionId: string): Promise<string | null>;
+  /**
+   * 区分「没有这一行」与「行在但 working_dir 被显式清空」：DB 返回空目录时,
+   * lazy-create 用它判断能不能沿用 caller 快照（行在=DB 说这个会话没有目录）。
+   */
+  readSessionWorkingDirState?(
+    sessionId: string,
+  ): Promise<{ exists: boolean; workingDir: string | null }>;
   isOrcaMcpHydrated(sessionId: string): boolean;
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
@@ -459,7 +490,7 @@ export interface MakerSendTransactionDeps {
   /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
   linkPiUserEntry?(sessionId: string, clientId: string, piEntryId: string): Promise<boolean | void>;
   readPiUserEntry?(sessionId: string, clientId: string): Promise<string | undefined>;
-  beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchDirectUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
@@ -486,14 +517,20 @@ export interface MakerSendTransactionDeps {
    * session-agent-switch:turn 运行中登记的切换意图在**发送时刻**执行(先于
    * getSession——apply 会 close 旧引擎,随后本事务按 DB 新值 lazy-create 新引擎,
    * 交接注入走下面的 pending handoff 通道)。apply 内部自查 turn 空闲,仍在跑则
-   * 保留意图本次不动。undefined = 不启用(测试最小 harness)。
+   * 保留意图本次不动。undefined = 不启用(测试最小 harness)。`signal` 是这次发送的取消信号：
+   * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
-  applyPendingAgentSwitch?(sessionId: string): Promise<void>;
+  applyPendingAgentSwitch?(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }): Promise<void>;
+  onModelDispatched?(sessionId: string, clientId: string): void;
   /**
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
   prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /** Retire external ownership before selecting a runtime or applying a route. */
+  prepareExternalInput?(sessionId: string): Promise<void>;
+  /** Restore durable task status before route changes or native session resume. */
+  restoreArchivedSessionForSend?(sessionId: string): Promise<void>;
   /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
@@ -504,6 +541,14 @@ export interface MakerSendTransactionDeps {
   peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
   consumeWorkingDirectoryRecoveryNote?(sessionId: string, note: string): void;
+  /**
+   * 伙伴工作记忆刷新(botWorkingMemory):原生自动压缩之后的下一次发送前置一次账本,
+   * 只进 wire payload;交接首条(pending handoff)已含账本时不重复。
+   * 返回 null = 没有待刷新;`note` 为 null = 有标记但该会话没有账本(仍要消费)。
+   * accepted 后只消费当时读到的 `generation`:发送在途时再来一次压缩边界,新一代留给下次。
+   */
+  peekWorkingMemoryRefresh?(sessionId: string): Promise<{ generation: number; note: string | null } | null>;
+  consumeWorkingMemoryRefresh?(sessionId: string, generation: number): void;
   /**
    * 计划对账:会话里若有待处理计划,返回一段只进 wire payload 的指示文本。
    * sealedTurnId 只用于已完成计划的一次性保护,跨过 accepted 后才消费。
@@ -536,10 +581,31 @@ export interface MakerSendTransactionDeps {
    */
   readHostDeviceIdentity?(): MessageSourceHostDevice;
   /**
-   * 个人版制作任务(sessions.source='cindy-make')判定,由 host 按持久化来源现读。
-   * 命中时每轮把任务说明追加到 wire 用户消息(不落库、不显示),见 cindy-make/taskNote.ts。
+   * Host-owned task source, read from persistence. Scoped task instructions go only
+   * into the wire message; the composer and saved user text remain unchanged.
    */
-  isCindyMakeSession?(sessionId: string): Promise<boolean>;
+  readTaskSource?(sessionId: string): Promise<string | null>;
+  /**
+   * 伙伴私聊引用回复的 `[引用说明]`:按落库内容里的 `replyQuote` 从库里重读原消息;没有引用时为 null。
+   * 逐条都要带(陈述的是「本条」引用了什么),不进 wireNoteMemory 去重。
+   */
+  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<string | null>;
+  /**
+   * 私聊话题的 `[话题说明]`(话题开在主对话的哪条消息上);不是私聊话题时为 null。
+   * 与 `[客户端说明]` 同层,只进 wire 消息。
+   */
+  readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
+  /**
+   * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
+   * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
+   * 缺省(未注入)= 每轮全发,行为与旧版一致。
+   */
+  planRepeatableWireNotes?(
+    sessionId: string,
+    notes: RepeatableWireNotes,
+    opts: { force: boolean },
+  ): WireNotePlan;
   log: MakerSendTransactionLog;
   workdirDiagnostics?: WorkdirDiagnosticLogger;
 }
@@ -551,6 +617,13 @@ export interface MakerSendTransaction {
     createOpts?: unknown,
     sendOpts?: unknown,
   ): Promise<DesktopMakerSendResult>;
+  /**
+   * Start the Agent runtime the next send would otherwise start lazily, using
+   * the same bootstrap path. `createOpts` must already be reconciled with the
+   * task row. Returns false when a runtime already exists or startup failed;
+   * the next send then follows its normal path.
+   */
+  prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
 }
 
 type ResolveSessionResult =
@@ -558,6 +631,8 @@ type ResolveSessionResult =
   | { kind: 'failure'; result: DesktopMakerSendResult };
 
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
+  [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
+  botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
   clientId: string;
@@ -571,7 +646,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
-  onPersisted?: () => void | Promise<void>;
+  onPersisted?: (signal?: AbortSignal) => void | Promise<void>;
   onPersistFailed?: () => void;
   expectedClearBoundaryMs?: number | null;
   expectedInputGeneration?: number;
@@ -580,6 +655,8 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   if (!persist || typeof persist.clientId !== 'string') return null;
   const sourcePlugin = readWireSourcePlugin(persist.sourcePlugin);
   return {
+    ...(persist[FORWARDED_REQUEST_RECEIPT] && typeof persist[FORWARDED_REQUEST_RECEIPT] === 'object' ? { [FORWARDED_REQUEST_RECEIPT]: persist[FORWARDED_REQUEST_RECEIPT] } : {}),
+    ...(persist.botTaskCoordination ? { botTaskCoordination: persist.botTaskCoordination } : {}),
     ...(persist.sharedTaskAuthor ? { sharedTaskAuthor: persist.sharedTaskAuthor } : {}),
     ...(sourcePlugin ? { sourcePlugin } : {}),
     clientId: persist.clientId,
@@ -608,7 +685,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
       ? { onPersisting: persist.onPersisting as () => void }
       : {}),
     ...(typeof persist.onPersisted === 'function'
-      ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
+      ? { onPersisted: persist.onPersisted as (signal?: AbortSignal) => void | Promise<void> }
       : {}),
     ...(typeof persist.onPersistFailed === 'function'
       ? { onPersistFailed: persist.onPersistFailed as () => void }
@@ -711,15 +788,27 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   /**
-   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是
-   * 缓存的陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,
-   * 回放时仍内嵌老路径,2026-07-20 实报)——校验失败时读 DB 行的 working_dir
-   * 重试,通过则就地采纳进 createOpts(后续 bootstrap 用新 cwd spawn)。
+   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是缓存的
+   * 陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,回放时仍内嵌老
+   * 路径,2026-07-20 实报;用户把任务移动到别的项目后,排队/重试项里内嵌的还是旧
+   * 目录,2026-09-13 实报)。两条调用路径的权威不同:
+   *   - lazy-create(preferDbWorkingDir=true):没有活 runtime,DB 行是唯一真源 ——
+   *     快照与 DB 不一致时**无条件**采纳 DB 值再校验。只在旧目录缺失时才回退不够:
+   *     用户移动到别的项目后旧目录通常还在,校验会通过,新 runtime 就在旧 cwd 启动,
+   *     与「移动时关闭 runtime、下一次 send 以新目录 lazy resume」的契约矛盾。
+   *   - rehydrate(默认):调用方(recovery / orca)已显式决定目标目录(可能是
+   *     workingDirectoryRecovery 选定的 fallback),DB 只在 caller 目录不可用时兜底,
+   *     不能无条件改回 DB。
+   * 采纳是 fail-closed 的:lazy-create 采纳 DB 值后,caller 快照不再作为回退腿 ——
+   * DB 目录不可用时走 checkWorkDirExists 的恢复流程(worktree restore / recovery
+   * fallback / 必要时 mkdir 普通目录),都失败才报 WORKDIR_MISSING,不允许因为
+   * "caller 快照里那个目录还在"就把会话留在旧 cwd。
    * 存在兜底候选时首检静默,避免"先弹错误横幅再静默成功"的假错误。
    */
   async function ensureWorkDirWithDbFallback(
     sessionId: string,
     createOpts: CreateOpts,
+    opts?: { preferDbWorkingDir?: boolean },
   ): Promise<boolean> {
     const dbDir = await deps.readSessionWorkingDirFromDb(sessionId).catch((error) => {
       deps.workdirDiagnostics?.warn('workdir DB lookup failed', {
@@ -728,6 +817,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return null;
     });
+    if (
+      opts?.preferDbWorkingDir &&
+      !dbDir &&
+      !createOpts.remoteHostId &&
+      createOpts.workingDir &&
+      deps.readSessionWorkingDirState
+    ) {
+      // DB 行存在但 working_dir 已被清空：DB 明确说这个会话没有目录，排队/重试快照
+      // 里的旧目录不能把它复活 —— 否则又是「库里没有目录、runtime 却在旧项目里跑」。
+      // 行不存在（首次 lazy-create）时才沿用 caller 快照。
+      const state = await deps.readSessionWorkingDirState(sessionId).catch(() => null);
+      if (state?.exists) {
+        deps.log.warn('send: lazy-create dropped stale caller workingDir because DB row has none', {
+          sessionId,
+          staleWorkingDir: createOpts.workingDir,
+        });
+        return false;
+      }
+    }
     // A queued runtime cwd may be a recovery directory from a previous process.
     // Start from the durable binding so the new process retries Git restoration
     // and, if still unavailable, supplies a fresh recovery note. In-process
@@ -736,6 +844,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       deps.isPersistedWorktreeFallback?.(createOpts.workingDir)) {
       if (!dbDir) return false;
       createOpts.workingDir = dbDir;
+    }
+    if (opts?.preferDbWorkingDir && dbDir && dbDir !== createOpts.workingDir) {
+      const adopted = createOpts.remoteHostId
+        ? dbDir
+        : deps.resolveRecoveredWorkingDir?.(sessionId, dbDir) ?? dbDir;
+      if (adopted !== createOpts.workingDir) {
+        deps.log.info('send: lazy-create adopted DB working_dir over stale caller snapshot', {
+          sessionId,
+          staleWorkingDir: createOpts.workingDir,
+          workingDir: adopted,
+        });
+        createOpts.workingDir = adopted;
+      }
     }
     const fallbackDir = dbDir && dbDir !== createOpts.workingDir ? dbDir : null;
     if (fallbackDir) deps.workdirDiagnostics?.info('workdir DB fallback candidate', {
@@ -779,6 +900,36 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     createOpts.workingDir = createOpts.remoteHostId ? fallbackDir :
       deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir;
     return true;
+  }
+
+  /**
+   * 持久化 working_dir 是否真实可用。普通目录用纯 stat(不做 recovery / mkdir / 广播);
+   * 托管 worktree 用 send 侧同一套就绪判定 —— "目录存在"不等于 ready(git worktree add
+   * 后快照 apply 未完成、上一轮 apply 冲突会故意留目录并阻塞),普通 stat 会把这种目录
+   * 当可用,先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。就绪检查只做 worktree
+   * restore / liveness,不会为普通目录 mkdir。
+   * 已被 workingDirectoryRecovery 接管的目录(resolve 返回 fallback)一律不算 ——
+   * session 的文件在 fallback 里,继续留在那里才符合恢复语义。
+   */
+  async function isUsablePersistedWorkingDir(
+    sessionId: string,
+    workingDir: string,
+    agentKind: AgentKind,
+    remoteHostId: string | null | undefined,
+  ): Promise<boolean> {
+    const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    if (resolved !== workingDir) return false;
+    const normalized = normalizeWorkingDirForStorage(workingDir) ?? workingDir;
+    if (getManagedWorktreeBasePath(normalized) !== null) {
+      return deps.checkWorkDirExists(sessionId, workingDir, agentKind, remoteHostId, {
+        suppressMissingBroadcast: true,
+      });
+    }
+    try {
+      return (await deps.statDirectory(workingDir)).isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   async function rehydrateActiveSession(
@@ -850,6 +1001,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return { kind: 'session', session };
     } catch (err) {
+      // Let the input coordinator own verified group quota waits; generic host
+      // failure results would erase the structured reset time before it sees it.
+      if (err instanceof ProviderGroupUsageLimitError) throw err;
       if (isCredentialModeSwitchBusyError(err)) {
         // 不映射成 SESSION_RUNNING:那会命中输入协调器的静默无限重试(250ms 一次),
         // 用户看到消息永远排队(2026-07-03 实报)。CREDENTIAL_SWITCH_BUSY 由协调器
@@ -898,7 +1052,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     sessionId: string,
     createOpts: CreateOpts,
   ): Promise<ResolveSessionResult> {
-    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts);
+    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
+      preferDbWorkingDir: true,
+    });
     if (!okLazy) {
       return {
         kind: 'failure',
@@ -931,6 +1087,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return { kind: 'session', session: lazySess };
     } catch (err) {
+      // Same boundary as rehydrate: preserve the branded error and its reset data.
+      if (err instanceof ProviderGroupUsageLimitError) throw err;
       if (isCredentialModeSwitchBusyError(err)) {
         // 不映射成 SESSION_RUNNING:那会命中输入协调器的静默无限重试(250ms 一次),
         // 用户看到消息永远排队(2026-07-03 实报)。CREDENTIAL_SWITCH_BUSY 由协调器
@@ -970,6 +1128,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
+    async prewarmSession(sessionId, createOpts) {
+      if (deps.getSession(sessionId)) return false;
+      const lazy = await lazyCreateSession(sessionId, createOpts);
+      return lazy.kind === 'session';
+    },
     async sendToAgentAccepted(
       sessionId,
       message,
@@ -977,12 +1140,38 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
       const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      if (!requestedSendOpts.signal?.aborted) {
+        await deps.restoreArchivedSessionForSend?.(sessionId);
+      }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
-      await deps.applyPendingAgentSwitch?.(sessionId);
+      const sendOrigin = requestedSendOpts.persistUserMessage?.origin ?? requestedSendOpts.origin;
+      const scheduled = !!sendOrigin && typeof sendOrigin === 'object' &&
+        (sendOrigin as { kind?: unknown }).kind === 'scheduler';
+      const rawClientId = requestedSendOpts.persistUserMessage?.clientId;
+      const clientId = typeof rawClientId === 'string' ? rawClientId : undefined;
+      await deps.applyPendingAgentSwitch?.(
+        sessionId,
+        requestedSendOpts.signal || scheduled || clientId ? {
+          ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
+          ...(scheduled ? { scheduled: true } : {}),
+          ...(clientId ? { clientId } : {}),
+        } : undefined,
+      );
+      // 发送前的准备期间就被停止(如供应商组正在等原电脑恢复)：不再打开会话、不再派发，与 Session 在派发前
+      // 收到取消是同一个结果，由调用方按「派发前取消」收尾。
+      if (requestedSendOpts.signal?.aborted) {
+        return toCompatibleMakerSendResult(
+          toDesktopSessionDispatchOutcome(
+            { accepted: false, reason: 'cancelled-before-dispatch' },
+            { source: 'maker-ipc', context: `SEND/${sessionId}/before-session` },
+          ),
+        );
+      }
       await deps.prepareUnhealthySession?.(sessionId);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
@@ -999,9 +1188,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
-        // Startup migration or a directory relocation may repair SQLite while a
-        // live SDK still owns the old cwd. Only use that persisted replacement;
-        // recreating an arbitrary project as an empty folder would lose its context.
+        // SQLite 里的 working_dir 才是持久真源(启动迁移 / 目录重定位 / 用户移动
+        // 会话都会改写它),而活 SDK 可能仍占着旧 cwd。漂移时按下面的规则切到持久
+        // 目录:普通目录必须**真实存在**(纯 stat,绝不为它 mkdir 空文件夹 —— 那会丢
+        // 掉活 runtime 的上下文);托管 worktree 必须**就绪**(走 send 侧的 restore /
+        // liveness 判定,可能补齐/恢复 worktree,但不会丢已有代码与快照)。被
+        // workingDirectoryRecovery 的 fallback 接管的目录一律不迁移。
         const dbDir = !sess.remoteHostId
           ? await deps.readSessionWorkingDirFromDb(sessionId).catch((error) => {
               deps.workdirDiagnostics?.warn('workdir DB lookup failed', {
@@ -1024,15 +1216,44 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           sess.remoteHostId,
           ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
+        // 会话移动(移动到项目 / worktree 变更)后旧 runtime 可能仍然活着 —— cc 的
+        // 转录迁移 close 是 best-effort,close 失败时移动照常完成。此时 DB 的
+        // working_dir 才是任务现在的目录:它**真实存在**(托管 worktree 则要求就绪)
+        // 且与 runtime cwd 不一致时,关闭旧 runtime 并按 DB 目录重建;不能等旧目录
+        // 消失 —— 旧目录通常还在(2026-09-13 实报:移动后消息仍在旧目录执行)。
+        // 仅拼写差异(分隔符 / 尾斜杠 / Windows 大小写)不算漂移,不重建。
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
         const recoveredDir = !sess.remoteHostId
           ? deps.resolveRecoveredWorkingDir?.(sessionId, sess.workDir) ?? sess.workDir
           : sess.workDir;
-        const needsCwdRefresh = ok && !sess.remoteHostId && (
+        // recovery 语义优先:live 目录已被 fallback 接管(或带 note)时按 fallback
+        // 重建,不做 DB 迁移 —— 那批文件在 fallback 里,不能把 session 拉回 DB 路径。
+        // 此时也不探测 DB 目录:结果用不上,而托管 worktree 的就绪探测可能触发一次
+        // 真实的 worktree restore。
+        const liveDirNeedsRecovery =
           recoveredDir !== sess.workDir ||
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
-          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir)));
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
+        // 判漂移比的是「会话现在到底在哪个目录」:DB 值被 workingDirectoryRecovery
+        // 接管时文件在 fallback 里,resolve 出来的才是它,而 live 已经就在 fallback
+        // 里就不算漂移 —— 否则恢复中的会话会被下面的「目录不可用」判成不能发消息。
+        const persistedDir = fallbackDir && !sess.remoteHostId
+          ? deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir
+          : null;
+        const persistedDirDrifted =
+          !!persistedDir && !workingDirEquals(persistedDir, sess.workDir);
+        const persistedDirReady =
+          ok && !liveDirNeedsRecovery && persistedDirDrifted
+            ? await isUsablePersistedWorkingDir(
+                sessionId,
+                fallbackDir!,
+                sess.agentKind,
+                sess.remoteHostId,
+              )
+            : false;
+        const needsCwdRefresh = ok && !sess.remoteHostId &&
+          (liveDirNeedsRecovery || persistedDirReady);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           deps.workdirDiagnostics?.info('workdir runtime refresh requested', {
             ...workdirDiagnosticContext(sessionId, sess.workDir),
@@ -1048,7 +1269,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ...supplied,
             ...preferences,
             id: sessionId,
-            workingDir: needsCwdRefresh ? recoveredDir : fallbackDir!,
+            workingDir: needsCwdRefresh
+              ? (liveDirNeedsRecovery ? recoveredDir : fallbackDir!)
+              : fallbackDir!,
             agentKind: sess.agentKind,
             remoteHostId: sess.remoteHostId ?? undefined,
           });
@@ -1064,6 +1287,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           if (recovered.kind === 'failure') return recovered.result;
           sess = recovered.session;
         } else if (!ok) {
+          return toCompatibleMakerSendResult(
+            createHostSendFailure(
+              'WORKDIR_MISSING',
+              `working directory is missing for session ${sessionId}`,
+            ),
+          );
+        } else if (persistedDirDrifted) {
+          // 会话已经被移到别的目录(DB 是权威),但那个目录当前不可用,而旧 runtime 还活
+          // 着:绝不能在旧 cwd 里执行 —— UI 显示新项目、消息却改旧项目,正是本 PR 要消灭的
+          // 半移动(2026-09-13 实报的同一类问题)。明确失败,由用户把目录找回来、或再移动
+          // 一次会话后重发;这条分支也覆盖「托管 worktree 尚未就绪」与「DB 目录已被
+          // recovery 接管但 live 不在 fallback」——两者都不能拿旧目录顶替。
+          deps.log.warn('send: persisted working dir unavailable, refusing to send in the live cwd', {
+            sessionId,
+            liveWorkingDir: sess.workDir,
+            persistedWorkingDir: fallbackDir,
+          });
+          deps.workdirDiagnostics?.warn('workdir send refused: persisted directory unavailable', {
+            ...workdirDiagnosticContext(sessionId, fallbackDir!),
+            source: 'live',
+            liveDirectoryRef: workdirDiagnosticId(sess.workDir),
+          });
           return toCompatibleMakerSendResult(
             createHostSendFailure(
               'WORKDIR_MISSING',
@@ -1199,9 +1444,17 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, workdirRecoveryNote)
         : normalized;
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      const withHandoff = pendingHandoff
-        ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
+      // 原生压缩后的账本刷新:交接首条已含账本时不重复(但同样在 accepted 后消费当时那一代)。
+      const workingMemoryRefresh = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? ((await deps.peekWorkingMemoryRefresh?.(sessionId).catch(() => null)) ?? null)
+        : null;
+      const workingMemoryRefreshNote = !pendingHandoff ? workingMemoryRefresh?.note ?? null : null;
+      const withWorkingMemoryRefresh = workingMemoryRefreshNote
+        ? prependNoteToWireUserMessage(withRecoveryNote as HandoffWireMessage, workingMemoryRefreshNote)
         : withRecoveryNote;
+      const withHandoff = pendingHandoff
+        ? prependHandoffToUserMessage(withWorkingMemoryRefresh as HandoffWireMessage, pendingHandoff)
+        : withWorkingMemoryRefresh;
       // 计划对账:旧的未收口计划让 agent 顺手交代(更新/修订/清掉)。位置在交接段
       // 之前——两段各自带"以下是用户的新消息"式结束标记,对账在外层不破坏交接正文。
       // 只对"用户真的开口"的普通新轮次注入,判定用白名单而非枚举内部来源
@@ -1293,6 +1546,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               origin: soForReconcile.persistUserMessage?.origin,
               sourcePlugin: soForReconcile.persistUserMessage?.sourcePlugin,
               sharedTaskAuthor: soForReconcile.persistUserMessage?.sharedTaskAuthor,
+              autoReviewUserText: soForReconcile.persistUserMessage?.[FORWARDED_REQUEST_RECEIPT],
             },
             {
               visibleText: reconcilePersistText,
@@ -1300,9 +1554,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             },
           )
         : null;
-      const withSourceNote = messageSourceNote
-        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, messageSourceNote)
+      const replyQuoteNote = isOrdinaryUserTurn
+        ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
+        : null;
+      const withReplyQuoteNote = replyQuoteNote
+        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)
         : withGoalInactiveNote;
+      const withSourceNote = messageSourceNote
+        ? prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)
+        : withReplyQuoteNote;
       // 客户端说明(远程设备):同样只进 wire payload,落库/显示内容(persistUserMessage.content)
       // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
       // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
@@ -1311,31 +1571,73 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // context 盖章);没有设备信息时沿用旧的手机判据(直连走 deps 注入的 async context,
       // 排队走 so.fromMobileClient)。
       const sourceDevice = readWireSourceDevice(so.sourceDevice);
-      const mobileClientNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const allowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind);
+      const mobileClientNote = allowsEnvironmentNotes
         ? buildClientEnvironmentNote({
             device: sourceDevice,
             host: sourceDevice ? deps.readHostDeviceIdentity?.() : undefined,
             legacyMobile: deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true,
           })
         : null;
-      const withMobileNote = mobileClientNote
-        ? prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, mobileClientNote)
-        : withSourceNote;
       // 个人版制作任务说明:与手机说明同层、同占位规则(原生命令必须留在消息开头)。
+      const taskSource = await deps.readTaskSource?.(sessionId);
       const cindyMakeNote =
-        (await deps.isCindyMakeSession?.(sessionId).catch(() => false)) === true &&
-        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        taskSource === 'cindy-make' &&
+        allowsEnvironmentNotes
           ? buildCindyMakeTaskNote()
           : null;
-      const withCindyMakeNote = cindyMakeNote
-        ? prependNoteToWireUserMessage(withMobileNote as HandoffWireMessage, cindyMakeNote)
-        : withMobileNote;
-      const uiLanguageNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+      const uiLanguageNote = allowsEnvironmentNotes
         ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
         : null;
-      const outgoing = uiLanguageNote
-        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, uiLanguageNote)
+      // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
+      // (原生上下文刚重建)整体重发;只有引擎接受后才记为已发送。斜杠命令轮次本来就不带
+      // 说明,也不改写记忆——它不代表模型已经看过新的环境。
+      const botThreadNote = allowsEnvironmentNotes
+        ? ((await deps.readBotThreadNote?.(sessionId).catch(() => null)) ?? null)
+        : null;
+      const repeatableNotes: RepeatableWireNotes = {
+        'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
+          ? SIDE_CHAT_CONTEXT : null,
+        'bot-thread': botThreadNote,
+        'task-delivery': allowsEnvironmentNotes ? await deps.readTaskDeliveryNote?.(sessionId) ?? null : null,
+        'client-environment': mobileClientNote,
+        'cindy-make': cindyMakeNote,
+        'ui-language': uiLanguageNote,
+      };
+      const wireNotePlan = allowsEnvironmentNotes
+        ? (deps.planRepeatableWireNotes?.(sessionId, repeatableNotes, { force: pendingHandoff !== null }) ?? null)
+        : null;
+      const plannedNotes = wireNotePlan?.notes ?? repeatableNotes;
+      const withMobileNote = plannedNotes['client-environment']
+        ? prependNoteToWireUserMessage(withSourceNote as HandoffWireMessage, plannedNotes['client-environment'])
+        : withSourceNote;
+      const withCindyMakeNote = plannedNotes['cindy-make']
+        ? prependNoteToWireUserMessage(withMobileNote as HandoffWireMessage, plannedNotes['cindy-make'])
+        : withMobileNote;
+      let outgoing = plannedNotes['ui-language']
+        ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, plannedNotes['ui-language'])
         : withCindyMakeNote;
+      if (plannedNotes['side-chat']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
+      }
+      if (plannedNotes['task-delivery']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['task-delivery']);
+      }
+      if (plannedNotes['bot-thread']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
+      }
+      const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        ? await mcpAppModelContext(sessionId)
+        : undefined;
+      if (appContext?.text) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);
+      }
+      const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
+        ? async () => {
+            await so[MCP_APP_MESSAGE_GUARD]?.();
+            await appContext?.assertCurrent();
+          }
+        : undefined;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const trustedDesktopQueueReceipt = readTrustedDesktopQueueReceipt(persistUserMessage);
@@ -1378,16 +1680,22 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           throwIpcError('PRECONDITION_FAILED', 'Scheduled task modes changed before vendor dispatch');
         }
       };
-      const resolveScheduledIntent = so.origin?.kind === 'scheduler' ? async () => {
+      const scheduledOrigin = so.origin?.kind === 'scheduler' ? so.origin : undefined;
+      const resolveScheduledIntent = scheduledOrigin ? async () => {
+        // A queued teammate routine is reviewed against its own instruction, exactly as
+        // when it dispatches directly; never against unrelated main-task chat.
+        const routineIntent = teammateRoutineReviewIntent(scheduledOrigin.scheduleId, reconcilePersistText);
         let history: AutoReviewHistoryMessage[] = [];
-        try {
-          history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
-        } catch {
-          deps.log.warn('auto-review continuation history unavailable', { sessionId });
+        if (routineIntent === undefined) {
+          try {
+            history = await deps.readAutoReviewHistory?.(sessionId) ?? [];
+          } catch {
+            deps.log.warn('auto-review continuation history unavailable', { sessionId });
+          }
         }
         latestScheduledModes = await deps.readScheduledPermissions?.(sessionId) ?? null;
         assertScheduledModes();
-        return restoreAutoReviewUserIntent(history);
+        return routineIntent ?? restoreAutoReviewUserIntent(history);
       } : undefined;
       if (resolveScheduledIntent) restoredAutoReviewIntent = undefined;
       if (!resolveScheduledIntent && restoredAutoReviewIntent === undefined && so[AUTO_REVIEW_DELEGATED_CONTINUATION]
@@ -1490,10 +1798,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let userPromptPreviewSessionId: string | null = null;
       let userPromptPreviewClientId: string | null = null;
       try {
-        if (directPreDispatchHook) {
-          await directPreDispatchHook(sessionId);
-          directPreDispatchHookStarted = true;
-        }
         let cindyLearnInvocation: CindyLearnInvocationGrant | null = null;
         // Every Cindy harness consumes this exact-path pin at its provider
         // boundary: Codex sends a structured Skill item, Pi validates the live
@@ -1525,9 +1829,37 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         const retryTranscriptUserEntryId = sess.agentKind === 'pi' && so.retryUserClientId
           ? await deps.readPiUserEntry?.(sessionId, so.retryUserClientId)
           : undefined;
-        const sendResult = await sess.send(outgoing as never, {
+        // Automatic cache replay replaces the native user entry without adding
+        // another Cindy row. Keep later manual Retry attached to the active entry.
+        const transcriptUserClientId = persistUserMessage?.clientId
+          ?? (so[PI_CACHE_RECOVERY_EXPECTATION] ? so.retryUserClientId : undefined);
+        // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
+        const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
+          persistUserMessage?.origin,
+          persistUserMessage?.botTaskCoordination !== undefined,
+        ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
-          ...(resolveScheduledIntent ? { resolveAutoReviewUserIntent: resolveScheduledIntent } : {}),
+          ...(assertAppCurrent
+            ? {
+                beforeProviderStart: assertAppCurrent,
+                resolveAutoReviewUserIntent: async () => {
+                  const intent = resolveScheduledIntent
+                    ? await resolveScheduledIntent()
+                    : restoredAutoReviewIntent ?? (so[MCP_APP_MESSAGE_GUARD]
+                      ? restoreAutoReviewUserIntent([])
+                      : undefined);
+                  // Session awaits this existing authorization hook after all
+                  // preparation (including vision), immediately before dispatch.
+                  if (scheduledOrigin) await deps.assertScheduledDispatchRoute?.(sessionId);
+                  await assertAppCurrent();
+                  return intent;
+                },
+              }
+            : resolveScheduledIntent ? { resolveAutoReviewUserIntent: async () => {
+                const intent = await resolveScheduledIntent();
+                await deps.assertScheduledDispatchRoute?.(sessionId);
+                return intent;
+              } } : {}),
           [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
           ...(so[AUTO_REVIEW_DELEGATED_CONTINUATION] ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const } : {}),
           ...(so[INHERITED_CAPABILITY_SELECTION] !== undefined
@@ -1551,6 +1883,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(so.toolsDisabled === true ? { toolsDisabled: true } : {}),
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
+          [PI_CACHE_RECOVERY_EXPECTATION]: so[PI_CACHE_RECOVERY_EXPECTATION],
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
@@ -1565,20 +1898,20 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ? { planMode: (createOpts as { planMode: boolean }).planMode }
             : {}),
           ...(sess.agentKind === 'pi' &&
-          persistUserMessage &&
+          transcriptUserClientId &&
           deps.linkPiUserEntry
             ? {
                 onTranscriptUserEntry: async (piEntryId: string) => {
                   try {
                     const linked = await deps.linkPiUserEntry?.(
                       sessionId,
-                      persistUserMessage.clientId,
+                      transcriptUserClientId,
                       piEntryId,
                     );
                     if (linked === false) {
                       deps.log.warn('send: Pi transcript entry target row missing', {
                         sessionId,
-                        clientId: persistUserMessage.clientId,
+                        clientId: transcriptUserClientId,
                         piEntryId,
                       });
                     }
@@ -1587,7 +1920,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                     // 把发送结果翻成 rejected，避免 UI 重发同一条消息。
                     deps.log.warn('send: Pi transcript entry link failed (non-fatal)', {
                       sessionId,
-                      clientId: persistUserMessage.clientId,
+                      clientId: transcriptUserClientId,
                       piEntryId,
                       err: err instanceof Error ? err.message : String(err),
                     });
@@ -1596,14 +1929,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               }
             : {}),
           onAccepted: persistUserMessage
-            ? async () => {
+            ? async (signal) => {
                 persistUserMessage.onPersisting?.();
-                deps.previewUserPrompt?.(sess, persistUserMessage.content, {
-                  source: 'maker_send:onPersisting',
-                  clientId: persistUserMessage.clientId,
-                });
-                userPromptPreviewSessionId = sessionId;
-                userPromptPreviewClientId = persistUserMessage.clientId;
+                if (!persistUserMessage.botTaskCoordination) {
+                  deps.previewUserPrompt?.(sess, persistUserMessage.content, {
+                    source: 'maker_send:onPersisting',
+                    clientId: persistUserMessage.clientId,
+                  });
+                  userPromptPreviewSessionId = sessionId;
+                  userPromptPreviewClientId = persistUserMessage.clientId;
+                }
                 try {
                   await deps.createDbMessage(
                     sessionId,
@@ -1612,12 +1947,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                       role: 'user',
                       content: persistUserMessage.content,
                       agentMeta: {
+                        ...(persistUserMessage.botTaskCoordination ? { botTaskCoordinationInput: persistUserMessage.botTaskCoordination } : {}),
                         ...(persistUserMessage.sharedTaskAuthor ? { sharedTaskAuthor: persistUserMessage.sharedTaskAuthor } : {}),
                         // 来源标签数据(只用于归属展示,不是权限判据)。
                         ...(sourceDevice ? { sourceDevice } : {}),
                         ...(persistUserMessage.sourcePlugin ? { sourcePlugin: persistUserMessage.sourcePlugin } : {}),
                         uuid: so.messageUuid,
-                        ...(so.origin?.kind === 'scheduler'
+                        ...(persistUserMessage[FORWARDED_REQUEST_RECEIPT]
+                          ? { autoReviewUserText: persistUserMessage[FORWARDED_REQUEST_RECEIPT] }
+                          : so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }
                           : so[AUTO_REVIEW_DELEGATED_CONTINUATION]
                             ? { autoReviewUserText: { kind: 'delegated-continuation' } }
@@ -1670,9 +2008,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 await rewindPersistedUserMessageAfterClearIfStale();
                 // onPersisted 里可能挂着排队 orca 消息的 accepted 副作用(置 running /
                 // autoBridgePending), 必须 await 完再放行 turn(同直发路径语义)。
-                await persistUserMessage.onPersisted?.();
+                await persistUserMessage.onPersisted?.(signal);
               }
-            : undefined,
+            : directPreDispatchHook ? async (signal) => {
+                await directPreDispatchHook(sessionId, signal);
+                directPreDispatchHookStarted = true;
+              } : undefined,
           onDispatching: () => {
             if (resolveScheduledIntent) assertScheduledModes();
             if (persistUserMessage?.shouldBroadcast && !persistUserMessage.shouldBroadcast()) {
@@ -1682,6 +2023,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
             deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            if (persistUserMessage?.clientId) {
+              deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
+            }
             dispatchProductTurn?.();
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(
@@ -1690,9 +2034,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
               );
             }
           },
-        });
+        }));
         sendAccepted = sendResult.accepted;
         if (sendAccepted) {
+          appContext?.consume();
           cleanupAfterAcceptance?.();
           await cleanupAcceptedNonPersistedMaterialization();
         } else {
@@ -1715,8 +2060,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           // 只有跨过不可逆 dispatch 边界才消费;未派发保留 pending 下次重试。
           deps.consumePendingHandoff?.(sessionId);
         }
+        // 环境说明同样只在引擎接受后记为已发送;被拒 / 抛错时下次照常重发。
+        if (sendResult.accepted) wireNotePlan?.commit();
         if (workdirRecoveryNote && sendResult.accepted) {
           deps.consumeWorkingDirectoryRecoveryNote?.(sessionId, workdirRecoveryNote);
+        }
+        // 只消费构造本次说明时读到的那一代;交接首条已带账本时同样消费。发送期间新来的
+        // 压缩边界代次不同,留给下一次发送。
+        if (workingMemoryRefresh && sendResult.accepted) {
+          deps.consumeWorkingMemoryRefresh?.(sessionId, workingMemoryRefresh.generation);
         }
         if (planReconcile?.sealedTurnId && sendResult.accepted) {
           try {

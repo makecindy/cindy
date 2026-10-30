@@ -11,6 +11,8 @@
  * 问题,留在 footer 最自然。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
+import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
@@ -25,8 +27,9 @@ import { Text } from '@/components/AppText';
 import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
+import type { ErrorDiagnosisSource } from '@/session/errorDiagnosisPrompt';
 import { inputProjectionErrorI18nKey } from '@/session/inputProjectionError';
-import { localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
+import { describeNonRetryableAgentError, localizeAgentError, localizeUnclassifiedAgentError, requiresAgentErrorConfigurationChange } from '@/session/agentErrorI18n';
 import {
   fontWeight,
   iconSize,
@@ -39,26 +42,34 @@ import {
 import { radius, spacing, typeScale } from '@/theme/tokens';
 
 export interface InlineQueueSectionProps {
+  onRecoverHistory?: () => void;
   projection: InputProjection;
   sessionSource?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
   onResume(): void;
   onRetryError(): void;
+  /** 无重发记录时，沿用隐藏续跑指令；有记录仍优先按原记录重试。 */
+  onContinueAfterError?(): void;
   onClearError(): void;
   /** 取消账号限额重置后的自动继续(只在投影带 usageLimitWait 时出现)。 */
   onCancelUsageLimitWait?(): void;
+  /** 展开详情后的「诊断」：上层带着错误与出错任务去新任务里排查。 */
+  onDiagnose?(error: ErrorDiagnosisSource): void;
 }
 
 export function InlineQueueSection({
+  onRecoverHistory,
   projection,
   sessionSource,
   busy,
   readOnlyReason,
   onResume,
   onRetryError,
+  onContinueAfterError,
   onClearError,
   onCancelUsageLimitWait,
+  onDiagnose,
 }: InlineQueueSectionProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -73,9 +84,12 @@ export function InlineQueueSection({
   const controlsDisabled = busy || !!readOnlyReason;
   const errorDisabledReason = readOnlyReason
     || (busy ? t('message.queuePresentation.row.busy') : null);
-  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '');
+  // Keep token-based retries on their existing path; hidden continuation uses
+  // the same exclusions as the persisted-tail continuation action.
+  const retryable = !requiresAgentErrorConfigurationChange(projection.error ?? '')
+    && (!!projection.errorRetryText || describeNonRetryableAgentError(projection.error ?? '') === null);
   const retryDisabledReason = errorDisabledReason
-    || (!projection.errorRetryText ? t('message.queue.noRetryContent') : null);
+    || (!projection.errorRetryText && !onContinueAfterError ? t('message.queue.noRetryContent') : null);
   const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
@@ -97,28 +111,35 @@ export function InlineQueueSection({
   return (
     <View style={styles.container} testID="queue.inline.section">
       {projection.error ? (
-        <View style={styles.errorBox} testID="queue.inline.error">
-          {/* 稳定错误 marker 按当前显示端语言翻译；其它错误保留 auth 引导，否则使用本地化摘要。 */}
-          <Text style={styles.errorText}>{projectionError}</Text>
-          <AgentErrorDetails message={projection.error} />
-          <View style={styles.errorActions}>
-            {retryable ? <ActionPill
-              busy={busy}
+        <ErrorNotice
+          message={projectionError ?? ''}
+          testID="queue.inline.error"
+          description={onRecoverHistory ? t('session.tail.readableHistoryRecoveryDescription') : undefined}
+          onDismiss={onClearError}
+          dismissLabel={t('session.tail.dismissNotice')}
+          dismissTestID="queue.inline.clearErrorButton"
+          dismissDisabled={!!errorDisabledReason}
+          dismissBusy={busy}
+          dismissHint={errorDisabledReason ?? undefined}
+        >
+          <AgentErrorDetails message={projection.error} onDiagnose={onDiagnose
+            ? () => onDiagnose({
+              message: projectionError ?? '',
+              details: projection.error ?? '',
+              reason: projection.errorReason,
+            })
+            : undefined} actions={<>
+            {retryable ? <ErrorNoticeAction
+              primary
               disabled={!!retryDisabledReason}
-              disabledReason={retryDisabledReason}
+              busy={busy}
+              hint={retryDisabledReason ?? undefined}
               label={t('message.queue.retrySend')}
-              onPress={onRetryError}
+              onPress={projection.errorRetryText ? onRetryError : (onContinueAfterError ?? onRetryError)}
               testID="queue.inline.retryButton"
             /> : null}
-            <ActionPill
-              busy={busy}
-              disabled={!!errorDisabledReason}
-              disabledReason={errorDisabledReason}
-              label={t('message.queue.clearError')}
-              onPress={onClearError}
-              testID="queue.inline.clearErrorButton"
-            />
-          </View>
+            {onRecoverHistory ? <ReadableHistoryRecovery onRecover={onRecoverHistory} busy={busy} disabled={controlsDisabled} /> : null}
+          </>} />
           {retryable && retryDisabledReason ? (
             <Text style={styles.disabledHint} testID="queue.inline.errorDisabledReason">
               {retryDisabledReason}
@@ -142,7 +163,7 @@ export function InlineQueueSection({
               ) : null}
             </View>
           ) : null}
-        </View>
+        </ErrorNotice>
       ) : null}
 
       {projection.credentialSwitchWait ? (
@@ -264,61 +285,67 @@ function QueueTouchButton({
   );
 }
 
-const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  container: { gap: spacing.sm, paddingTop: spacing.sm, width: '100%' },
-  banner: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  bannerText: {
-    color: colors.textSecondary,
-    flex: 1,
-    fontSize: typeScale.footnote,
-    lineHeight: lineHeight.caption,
-    minWidth: 0,
-  },
-  resumePill: {
-    alignItems: 'center',
-    backgroundColor: colors.cta,
-    borderRadius: radius.pill,
-    flexDirection: 'row',
-    gap: 4,
-    justifyContent: 'center',
-    minHeight: 30,
-    paddingHorizontal: spacing.md,
-  },
-  resumePillText: { color: colors.ctaText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
-  errorBox: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.sm,
-    padding: spacing.md,
-  },
-  errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  disabledHint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  actionPill: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 6,
-    justifyContent: 'center',
-    minHeight: 36,
-    paddingHorizontal: spacing.md,
-  },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
-  pressed: { opacity: 0.72 },
-  disabled: { opacity: 0.42 },
-});
+const makeStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: { gap: spacing.sm, paddingTop: spacing.sm, width: '100%' },
+    banner: {
+      alignItems: 'center',
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.container,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+    },
+    bannerText: {
+      color: colors.textSecondary,
+      flex: 1,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      minWidth: 0,
+    },
+    resumePill: {
+      alignItems: 'center',
+      backgroundColor: colors.cta,
+      borderRadius: radius.pill,
+      flexDirection: 'row',
+      gap: 4,
+      justifyContent: 'center',
+      minHeight: 30,
+      paddingHorizontal: spacing.md,
+    },
+    resumePillText: {
+      color: colors.ctaText,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.medium,
+    },
+    disabledHint: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+    },
+    errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+    actionPill: {
+      alignItems: 'center',
+      backgroundColor: colors.surfaceElevated,
+      borderColor: colors.border,
+      borderRadius: radius.pill,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      gap: 6,
+      justifyContent: 'center',
+      minHeight: 36,
+      paddingHorizontal: spacing.md,
+    },
+    actionPillText: {
+      color: colors.textPrimary,
+      fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.medium,
+    },
+    pressed: { opacity: 0.72 },
+    disabled: { opacity: 0.42 },
+  });

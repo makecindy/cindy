@@ -54,6 +54,8 @@ import {
   withStableOwnerBoundaryMutation,
 } from '../authBoundaryQuarantine.js';
 
+import { removeGhostSkillLinksForRoots } from '../cindy-brain/skillSlot.js';
+
 function readPersistedState(): unknown {
   return JSON.parse(
     fs.readFileSync(
@@ -171,6 +173,66 @@ describe('Ghost skill projection boundary state', () => {
       'lock is busy or unavailable',
     );
     expect(shared).not.toHaveBeenCalled();
+  });
+
+  it('commits the account and revokes private links while unrelated shared roots are busy', async () => {
+    const root = path.join(pathMock.userDataDir, 'owner-a');
+    const privateDir = path.join(root, 'agent-skills', 'skills');
+    const snapshot = path.join(root, 'snapshot');
+    fs.mkdirSync(privateDir, { recursive: true });
+    fs.mkdirSync(snapshot);
+    fs.symlinkSync(snapshot, path.join(privateDir, 'plugin'), 'junction');
+    lockMock.busyPaths.add(__testing.sharedSkillRootsLockPath());
+    const commit = vi.fn(async () => 'signed-in');
+
+    await expect(withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: null,
+      nextOwnerId: 'owner-b',
+      prepareTransition: async () => {
+        const cleanup = await removeGhostSkillLinksForRoots(
+          [root], pathMock.homeDir, [privateDir], withSharedSkillRootsLock,
+        );
+        if (cleanup.blockers.length) throw new Error('cleanup blocked');
+      },
+      commit,
+    })).resolves.toBe('signed-in');
+
+    expect(commit).toHaveBeenCalledOnce();
+    expect(fs.existsSync(path.join(privateDir, 'plugin'))).toBe(false);
+    expect(fs.existsSync(snapshot)).toBe(true);
+    expect(isGhostSkillProjectionBoundaryStableForOwner('owner-b')).toBe(true);
+    expect(lockMock.acquired).toEqual([__testing.lockPath()]);
+  });
+
+  it('keeps the account quarantined until real legacy shared links can be revoked', async () => {
+    const root = path.join(pathMock.userDataDir, 'owner-a');
+    const sharedDir = path.join(pathMock.homeDir, '.agents', 'skills');
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(sharedDir, { recursive: true });
+    const link = path.join(sharedDir, 'legacy-plugin');
+    fs.symlinkSync(root, link, 'junction');
+    lockMock.busyPaths.add(__testing.sharedSkillRootsLockPath());
+    const commit = vi.fn(async () => 'signed-in');
+    const transition = () => withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: null,
+      nextOwnerId: 'owner-b',
+      prepareTransition: async () => {
+        const cleanup = await removeGhostSkillLinksForRoots(
+          [root], pathMock.homeDir, [], withSharedSkillRootsLock,
+        );
+        if (cleanup.blockers.length) throw new Error('cleanup blocked');
+      },
+      commit,
+    });
+
+    await expect(transition()).rejects.toThrow('lock is busy or unavailable');
+    expect(commit).not.toHaveBeenCalled();
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(isGhostSkillProjectionBoundaryStableForOwner('owner-b')).toBe(false);
+    lockMock.busyPaths.clear();
+    await expect(transition()).resolves.toBe('signed-in');
+    expect(fs.existsSync(link)).toBe(false);
+    expect(isGhostSkillProjectionBoundaryStableForOwner('owner-b')).toBe(true);
   });
 
   it('accepts only versioned stable and pending records', () => {

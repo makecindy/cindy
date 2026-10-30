@@ -44,6 +44,13 @@ async function loadModule() {
 }
 
 describe('agentDeviceModelMemory', () => {
+  it('retains Ultrafast when a later effort write reloads persisted remote preferences', async () => {
+    const memory = await loadModule();
+    memory.setAgentDeviceModelFast('dev-a', 'codex', 'openai', 'gpt-6-astra', 'ultrafast');
+    memory.setAgentDeviceModelEffort('dev-a', 'codex', 'openai', 'gpt-6-astra', 'high');
+    expect(memory.getAgentDeviceModelFast('dev-a', 'codex', 'openai', 'gpt-6-astra')).toBe('ultrafast');
+  });
+
   it('记下的档位 / Fast 跨重启保留', async () => {
     const before = await loadModule();
     before.setAgentDeviceModelEffort('dev-a', 'claude-code', 'anthropic', 'claude-opus-5', 'xhigh');

@@ -1,17 +1,19 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const scopeMocks = vi.hoisted(() => ({
   owner: 'cloud-a',
+  dir: '',
   join: null as unknown as (...parts: string[]) => string,
   claimLegacy: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => '/tmp/xdt-maker-test'),
+    getPath: vi.fn(() => scopeMocks.dir),
   },
 }));
 
@@ -26,7 +28,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 
 vi.mock('../ownerScopedStorage.js', () => ({
   ownerScopedImUserDataPath: (...parts: string[]) =>
-    scopeMocks.join('/tmp/xdt-maker-test', 'owners', scopeMocks.owner, ...parts),
+    scopeMocks.join(scopeMocks.dir, 'owners', scopeMocks.owner, ...parts),
   claimLegacyImPath: scopeMocks.claimLegacy,
 }));
 
@@ -42,12 +44,32 @@ import {
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
 
-const settingsDir = '/tmp/xdt-maker-test';
+const settingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-defaults-'));
 const settingsFile = () =>
   path.join(settingsDir, 'owners', scopeMocks.owner, 'im-default-settings.json');
 
 describe('im default settings store', () => {
+  it('keeps automatic defaults sparse and retains explicit old-model overrides until reset', () => {
+    writeImDefaultSettingsPatch({ groupPermissionMode: 'bypassPermissions' }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents['claude-code'].model).toBe('');
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')).channels.feishu).toEqual({ groupPermissionMode: 'bypassPermissions' });
+    const manual = { providerId: 'openai', model: 'old-but-explicit', effort: 'high' as const };
+    writeImDefaultSettingsPatch({ agentKind: 'codex', agents: { codex: manual } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex).toEqual(manual);
+    writeImDefaultSettingsPatch({ agentKind: IM_DEFAULT_SETTINGS.agentKind, agents: IM_DEFAULT_SETTINGS.agents }, 'feishu');
+    expect(readImDefaultSettings('feishu').groupPermissionMode).toBe('bypassPermissions');
+    expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')).channels.feishu).toEqual({ groupPermissionMode: 'bypassPermissions' });
+  });
+  it('persists the shared location per channel and can switch back to local', () => {
+    const route = { ...IM_DEFAULT_SETTINGS.agents.codex, providerId: 'openai', agentDeviceId: 'share:alice' };
+    writeImDefaultSettingsPatch({ agentKind: 'codex', agents: { codex: route } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex).toEqual(route);
+    expect(readImDefaultSettings('telegram').agents.codex.agentDeviceId).toBeUndefined();
+    writeImDefaultSettingsPatch({ agents: { codex: { ...route, agentDeviceId: null } } }, 'feishu');
+    expect(readImDefaultSettings('feishu').agents.codex.agentDeviceId).toBeUndefined();
+  });
   beforeEach(() => {
+    scopeMocks.dir = settingsDir;
     scopeMocks.join = path.join;
     scopeMocks.owner = 'cloud-a';
     scopeMocks.claimLegacy.mockReset();
@@ -186,7 +208,7 @@ describe('im default settings store', () => {
       // legacy root mirror 是 resolved 满射快照(global 才做 diff),pi 槽为系统默认。
       pi: {
         providerId: null,
-        model: 'claude-sonnet-5',
+        model: '',
         effort: 'high',
       },
     });

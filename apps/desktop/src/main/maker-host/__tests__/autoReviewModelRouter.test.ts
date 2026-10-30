@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getAutoReviewDelegateHardCeilingMs } from '@cindy/maker-core';
 
 import type { UtilityTextResult } from '../../../shared/utilityTextResult.js';
-import { DEDICATED_AUTO_REVIEW_CANDIDATES } from '../../utility-model/oneShotCandidates.js';
+import { DEDICATED_AUTO_REVIEW_CANDIDATES, type AutoReviewAuxiliaryFallback } from '../../utility-model/oneShotCandidates.js';
 import {
   AUTO_REVIEW_CANDIDATE_TIMEOUT_MS,
   AUTO_REVIEW_CHAIN_TIMEOUT_MS,
+  AUTO_REVIEW_AUXILIARY_TIMEOUT_MS,
+  AUTO_REVIEW_TOTAL_TIMEOUT_MS,
+  AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
   createAutoReviewModelRouter,
 } from '../auto-review-model-router.js';
 
@@ -55,6 +59,113 @@ afterEach(() => {
 });
 
 describe('dedicated Auto-review candidate policy', () => {
+  it('keeps both routing phases inside the host and core deadlines', () => {
+    expect(AUTO_REVIEW_TOTAL_TIMEOUT_MS).toBe(AUTO_REVIEW_CHAIN_TIMEOUT_MS + AUTO_REVIEW_AUXILIARY_TIMEOUT_MS);
+    expect(AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS).toBeGreaterThan(AUTO_REVIEW_TOTAL_TIMEOUT_MS);
+    expect(AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS).toBeLessThan(getAutoReviewDelegateHardCeilingMs());
+  });
+
+  it('preserves dedicated review when reading auxiliary settings fails', async () => {
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      createAuxiliaryFallback: () => { throw new Error('settings unavailable'); },
+      requestCandidate: async (_prompt, candidate) => succeeded(candidate, '{"verdict":"allow"}'),
+    });
+    await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
+  });
+
+  it('uses the captured custom fallback only after all dedicated candidates fail', async () => {
+    const calls: string[] = [];
+    const fallback = vi.fn(async (_prompt, opts) => {
+      calls.push('custom');
+      expect(opts.validateResponse('not json')).toBe(false);
+      expect(opts.validateResponse('{"verdict":"ask"}')).toBe(true);
+      return succeeded(DEDICATED_AUTO_REVIEW_CANDIDATES[0], '{"verdict":"allow"}');
+    });
+    const capture = vi.fn(() => {
+      calls.push('capture');
+      return fallback;
+    });
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      createAuxiliaryFallback: capture,
+      requestCandidate: async (_prompt, candidate) => {
+        calls.push(candidate.id);
+        return failed(candidate, 'http_error', 402);
+      },
+    });
+
+    await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
+    expect(calls).toEqual(['capture', 'cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'custom']);
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['allow', 'block', 'ask'])('stops on a valid dedicated %s decision', async (verdict) => {
+    const fallback = vi.fn();
+    const requestCandidate = vi.fn(async (_prompt, candidate) => succeeded(candidate, JSON.stringify({ verdict })));
+    const route = createAutoReviewModelRouter({
+      logger: logger(), requestCandidate, createAuxiliaryFallback: () => fallback,
+    });
+
+    await expect(route('classify')).resolves.toBe(JSON.stringify({ verdict }));
+    expect(requestCandidate).toHaveBeenCalledTimes(1);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it.each(['malformed', 'throws', 'unavailable'])('returns unavailable when the custom fallback %s', async (failure) => {
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      requestCandidate: async (_prompt, candidate) => failed(candidate, 'http_error', 402),
+      createAuxiliaryFallback: () => async () => {
+        if (failure === 'throws') throw new Error('private credential detail');
+        if (failure === 'unavailable') return { ok: false, reason: 'no_candidate', attempts: [] };
+        return succeeded(DEDICATED_AUTO_REVIEW_CANDIDATES[0], 'not a decision');
+      },
+    });
+    await expect(route('classify')).resolves.toBeNull();
+  });
+
+  it('reserves a full auxiliary budget after the dedicated phase exhausts its deadline', async () => {
+    vi.useFakeTimers();
+    const fallback = vi.fn<AutoReviewAuxiliaryFallback>(() => new Promise<UtilityTextResult>(() => undefined));
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      candidates: Array.from({ length: 8 }, () => DEDICATED_AUTO_REVIEW_CANDIDATES[0]),
+      requestCandidate: () => new Promise<UtilityTextResult>(() => undefined),
+      createAuxiliaryFallback: () => fallback,
+    });
+    const pending = route('classify');
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
+    expect(fallback).toHaveBeenCalledTimes(1);
+    const signal = fallback.mock.calls[0]![1].signal!;
+    await vi.advanceTimersByTimeAsync(AUTO_REVIEW_AUXILIARY_TIMEOUT_MS - 1);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toBeNull();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('cancels an auxiliary request even if it ignores its abort signal', async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const fallbackStarted = new Promise<void>((resolve) => { started = resolve; });
+    let signal!: AbortSignal;
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      requestCandidate: async (_prompt, candidate) => failed(candidate, 'http_error', 402),
+      createAuxiliaryFallback: () => async (_prompt, opts) => {
+        signal = opts.signal!;
+        started();
+        return new Promise<UtilityTextResult>(() => undefined);
+      },
+    });
+    const pending = route('classify', controller.signal);
+    await fallbackStarted;
+    controller.abort();
+    await expect(pending).resolves.toBeNull();
+    expect(signal.aborted).toBe(true);
+  });
+
   it('budgets exactly one full timeout per candidate plus a small margin', () => {
     expect(AUTO_REVIEW_CHAIN_TIMEOUT_MS).toBe(
       DEDICATED_AUTO_REVIEW_CANDIDATES.length * AUTO_REVIEW_CANDIDATE_TIMEOUT_MS + 4_000,
@@ -67,8 +178,8 @@ describe('dedicated Auto-review candidate policy', () => {
       candidate.model,
     ])).toEqual([
       ['xd', 'cindy/auto-review'],
-      ['openai', 'gpt-5.4-nano'],
-      ['openai', 'gpt-5.6-luna'],
+      ['openai', 'codex-auto-review'],
+      ['openai', 'gpt-6-luna'],
     ]);
     // Claude 订阅只供内置 Claude Code CLI 使用,不作为 Cindy 直连审阅的候选。
     expect(JSON.stringify(DEDICATED_AUTO_REVIEW_CANDIDATES)).not.toMatch(
@@ -84,7 +195,7 @@ describe('dedicated Auto-review candidate policy', () => {
       switch (candidate.id) {
         case 'cindy-gateway':
           return succeeded(candidate, 'not json');
-        case 'chatgpt-nano':
+        case 'chatgpt-auto-review':
           return failed(candidate, 'http_error', 400);
         case 'chatgpt-luna':
           // 首次空响应在原位重试一次,重试成功即收口。
@@ -102,7 +213,7 @@ describe('dedicated Auto-review candidate policy', () => {
     );
     expect(calls).toEqual([
       'cindy-gateway',
-      'chatgpt-nano',
+      'chatgpt-auto-review',
       'chatgpt-luna',
       'chatgpt-luna',
     ]);
@@ -140,7 +251,7 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(12_000);
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review']);
   });
 
   it('retries a timed-out gateway after unavailable fallbacks skip instantly', async () => {
@@ -163,7 +274,7 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'cindy-gateway']);
     expect(log.warn).toHaveBeenCalledWith('auto-review model candidate failed', expect.objectContaining({
       candidateId: 'cindy-gateway',
       reason: 'timeout',
@@ -176,7 +287,7 @@ describe('dedicated Auto-review candidate policy', () => {
     const calls: string[] = [];
     const requestCandidate = vi.fn((_prompt, candidate) => {
       calls.push(candidate.id);
-      if (candidate.id === 'chatgpt-nano') {
+      if (candidate.id === 'chatgpt-auto-review') {
         return Promise.resolve<UtilityTextResult>({ ok: false, reason: 'no_candidate', attempts: [] });
       }
       if (candidate.id === 'cindy-gateway' && calls.length > 1) {
@@ -192,7 +303,7 @@ describe('dedicated Auto-review candidate policy', () => {
 
     await expect(pending).resolves.toBe('{"verdict":"allow"}');
     // luna 不得原位重试插到已排队的网关重试前面。
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna', 'cindy-gateway']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna', 'cindy-gateway']);
   });
 
   it('does not retry a timed-out candidate without a full timeout left', async () => {
@@ -209,12 +320,12 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
     await expect(pending).resolves.toBeNull();
-    expect(calls).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna']);
     // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 deferred。
     const skipped = log.warn.mock.calls
       .filter(([message]) => message === 'auto-review model candidate retry skipped')
       .map(([, fields]) => fields.candidateId);
-    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-nano', 'chatgpt-luna']);
+    expect(skipped).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna']);
   });
 
   it('aborts the in-flight request at the total deadline without starting another chain', async () => {

@@ -161,6 +161,8 @@ export interface RefreshFetchResult<T> {
   ok: boolean;
   status: number;
   data: T;
+  /** Local deadline derived from a rate-limit response's Retry-After header. */
+  retryAt?: number;
 }
 
 /** 每次失败时回传给调用方的诊断信息(供日志)。 */

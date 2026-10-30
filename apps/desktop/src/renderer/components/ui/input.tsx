@@ -217,6 +217,8 @@ export interface TextareaProps extends Omit<
 > {
   value: string;
   onChange: (v: string) => void;
+  /** 转交组件内的 DOM textarea，例如读取光标位置做 @ 候选。 */
+  textareaRef?: Ref<HTMLTextAreaElement>;
   surface?: InputSurface;
   error?: boolean;
 }
@@ -225,6 +227,7 @@ export interface TextareaProps extends Omit<
 export function Textarea({
   value,
   onChange,
+  textareaRef,
   onBlur,
   placeholder,
   surface = 'elevated',
@@ -236,6 +239,7 @@ export function Textarea({
 }: TextareaProps) {
   return (
     <textarea
+      ref={textareaRef}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}

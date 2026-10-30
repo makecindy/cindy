@@ -147,3 +147,11 @@ it('drops the previous rate when a new local turn starts during the terminal lin
   ).toBe('waiting');
   expect(report({ outputTokens: 40, generationDurationMs: 1000 })).toBe('40');
 });
+
+it('keeps the recent speed separate from the calibrated final average', () => {
+  expect(report({ tokenSpeed: { rate: 50, average: 40, tokens: 80, elapsedMs: 2000, streaming: true } })).toBe('50');
+  expect(report({ startedAt: null, tokenSpeed: { rate: 100, average: 100, tokens: 300, elapsedMs: 3000, streaming: false } })).toBe('50');
+  // A final report is not new evidence of recent throughput.
+  act(() => vi.advanceTimersByTime(60_000));
+  expect(report()).toBe('waiting');
+});

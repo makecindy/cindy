@@ -52,9 +52,13 @@ async function readShareImageFile(
   if (!file.exists || file.size <= 0 || file.size > MAX_IMAGE_BYTES)
     return null;
   // Android's encoded-image size reader accepts file:// but rejects data:.
-  const size = await readWithShareImageCancellation(() => Image.getSize(uri), signal);
+  const size = await readWithShareImageCancellation(
+    () => Image.getSize(uri),
+    signal,
+  );
   if (!canRead()) return null;
-  const dataUri = embeddedUri ?? `data:${mimeType};base64,${await file.base64()}`;
+  const dataUri =
+    embeddedUri ?? `data:${mimeType};base64,${await file.base64()}`;
   return canRead() ? { uri: dataUri, ...size } : null;
 }
 
@@ -69,7 +73,10 @@ async function readShareImageDataUri(
   if (!header) {
     // iOS can size other data-image encodings. Preserve that existing support;
     // an unsupported native format still follows the usual placeholder path.
-    const size = await readWithShareImageCancellation(() => Image.getSize(uri), signal);
+    const size = await readWithShareImageCancellation(
+      () => Image.getSize(uri),
+      signal,
+    );
     return canRead() ? { uri, ...size } : null;
   }
   if (uri.length === header[0].length) return null;
@@ -97,7 +104,9 @@ async function readShareImageDataUri(
       });
       // Cancellation cannot stop this native write. Clean up again if a late
       // completion recreates the file after the immediate finally cleanup.
-      const cleanupLateWrite = () => { if (signal.aborted) cleanup(); };
+      const cleanupLateWrite = () => {
+        if (signal.aborted) cleanup();
+      };
       void write.then(cleanupLateWrite, cleanupLateWrite);
       return write;
     }, signal);
@@ -152,8 +161,11 @@ async function loadShareImage(
     // Only download objects whose size the controlled desktop resolver knows.
     // Arbitrary HTTP sources have no trusted pre-transfer bound: keep alt text.
     if (/^https?:\/\//i.test(uri)) {
-      return withDownloadedRemoteMediaFile(uri, mimeType, MAX_IMAGE_BYTES, (file) =>
-        readShareImageFile(file.uri, mimeType, canRead, signal),
+      return withDownloadedRemoteMediaFile(
+        uri,
+        mimeType,
+        MAX_IMAGE_BYTES,
+        (file) => readShareImageFile(file.uri, mimeType, canRead, signal),
       );
     }
   }
@@ -181,19 +193,28 @@ interface ShareImageJob {
 export function useConversationShareImages(
   messages: readonly ConversationShareMessage[],
   resolve: ResolveRemoteMediaFn,
-  { workdir, remoteHostId, sessionId }: ConversationShareImageContext,
+  {
+    workdir,
+    remoteHostId,
+    sessionId,
+    snapshotRichValues,
+  }: ConversationShareImageContext,
 ) {
   const [job, setJob] = useState<ShareImageJob | null>(null);
   const prepare = useCallback(() => {
     return new Promise<readonly ConversationShareMessage[]>((finish) => {
       setJob({
-        sourceMessages: messages,
+        sourceMessages: messages.map((message) =>
+          message.kind === "assistant" && snapshotRichValues
+            ? { ...message, richValues: snapshotRichValues(message) }
+            : message,
+        ),
         resolve,
         context: { workdir, remoteHostId, sessionId },
         finish,
       });
     });
-  }, [messages, resolve, workdir, remoteHostId, sessionId]);
+  }, [messages, resolve, workdir, remoteHostId, sessionId, snapshotRichValues]);
   const cancel = useCallback(() => setJob(null), []);
   const selectionKey = JSON.stringify(
     messages.map((message) => message.clientId),

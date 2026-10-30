@@ -1,3 +1,4 @@
+import { teammateGroupActivity } from '@cindy/maker-shared/teammate-status';
 /**
  * Bot group chat for controllers (phones) through the Remote Resource protocol
  * (docs/product-rules/bot-group-chat.md §8, docs/dev-rules/remote-and-mobile-adaptation.md).
@@ -8,6 +9,7 @@
  */
 
 import path from 'node:path';
+import { chatGroupFailure } from './chatServerErrors.js';
 
 import { inArray } from 'drizzle-orm';
 import type {
@@ -38,13 +40,17 @@ import {
   BOT_GROUP_MEMBER_LINK_REL,
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
+  type ChatMaskAction,
   type BotGroupDetail,
   type BotGroupFailure,
+  type BotGroupMessageView,
   type BotGroupRemoteActionId,
   type BotGroupRemoteChatData,
   type BotGroupSummary,
+  type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
+import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -103,6 +109,20 @@ const COPY = {
     ja: '{name}さんがグループに参加しました',
     ko: '{name} 님이 그룹에 참여했습니다',
   },
+  sharedReplyYou: {
+    en: 'You shared a thread reply',
+    'zh-CN': '你贴回了一条话题回复',
+    'zh-TW': '你貼回了一則話題回覆',
+    ja: 'スレッドの返信を共有しました',
+    ko: '스레드 답글을 공유했습니다',
+  },
+  sharedReply: {
+    en: '{name} shared a thread reply',
+    'zh-CN': '{name} 贴回了一条话题回复',
+    'zh-TW': '{name} 貼回了一則話題回覆',
+    ja: '{name} がスレッドの返信を共有しました',
+    ko: '{name} 님이 스레드 답글을 공유했습니다',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -137,6 +157,11 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
   if (!last) return undefined;
   if (last.authorKind === 'system' && last.noticeCode === 'member-joined')
     return localized(COPY.memberJoined, { name: last.authorName });
+  // A share names who posted it; the card's own text is never quoted here.
+  if (last.threadShare) {
+    return last.authorKind === 'user' && last.isSelf !== false
+      ? localized(COPY.sharedReplyYou) : localized(COPY.sharedReply, { name: last.authorName.trim() });
+  }
   return last.authorKind === 'bot' && last.authorName
     ? localized(COPY.lastMessage, { name: last.authorName, text: last.preview })
     : last.preview;
@@ -149,9 +174,10 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
     ref: groupRef(group.id),
     display: {
       title: group.name,
+      teammateActivity: teammateGroupActivity(group),
       subtitle: group.members.map((member) => member.name).join('、'),
       ...(preview ? { preview } : {}),
-      timestamp: group.lastMessage?.createdAt ?? group.updatedAt,
+      timestamp: botGroupActivityAt(group),
       lastReplyAt: group.lastReplyAt,
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
     },
@@ -164,6 +190,7 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       label: member.name,
     })),
     revision: JSON.stringify([
+      teammateGroupActivity(group).phase,
       group.updatedAt,
       group.name,
       group.members.map((member) => [member.botId, member.name, member.status]),
@@ -176,6 +203,15 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
   };
 }
 
+function withoutPaths(attachments: BotGroupMessageView['attachments']): BotGroupMessageView['attachments'] {
+  return attachments.map((attachment) => ({ ...attachment, path: null }));
+}
+
+/** A shared reply carries its own attachments, downloaded to this computer. */
+function shareWithoutPaths(share: BotGroupThreadShareView): BotGroupThreadShareView {
+  return share.attachments.length > 0 ? { ...share, attachments: withoutPaths(share.attachments) } : share;
+}
+
 /** Host paths stay on the computer; the phone gets the folder name and attachment names only. */
 export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteChatData {
   return {
@@ -183,10 +219,18 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     projectDir: null,
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
     plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
-    messages: detail.messages.map((message) => (message.attachments.length > 0
-      ? { ...message, attachments: message.attachments.map((attachment) => ({ ...attachment, path: null })) }
-      : message)),
+    // Older phones consume message views only; derive from this read's state here.
+    messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => {
+      const view = message.attachments.length > 0 ? { ...message, attachments: withoutPaths(message.attachments) } : message;
+      return view.threadShare ? { ...view, threadShare: shareWithoutPaths(view.threadShare) } : view;
+    }),
+    ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
+      .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    supportsReadReceipts: detail.serverBacked === true,
+    supportsPersonalMask: detail.serverBacked === true,
+    supportsMemberRemoval: detail.serverBacked === true,
+    supportsSettingsManagement: detail.serverBacked === true,
   };
 }
 
@@ -281,7 +325,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
       const scope = captureDataOwnerBroadcastScope();
       const result = await requireService().listGroups();
       if (!result.ok) refuse(result);
-      const groups = await visibleGroups(result.groups);
+      const groups = await visibleGroups(result.groups.filter(group => !group.archived));
       if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
       const query = request.query?.trim().toLocaleLowerCase() ?? '';
       const matched = query
@@ -347,11 +391,40 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         ? request.resourceRef.id
         : null;
       if (!groupId) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+      // Personal state is authorized by the account's historical membership, even after leave.
+      if (actionId === 'hide') {
+        const server = ownerService().chatServer;
+        if (!server) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'LIFECYCLE_UNAVAILABLE');
+        const hidden = await server.manage({ groupId, action: { type: 'hide' } });
+        if (!hidden.ok) refuse(chatGroupFailure(new Error(hidden.errorCode)));
+        return { result: { listState: hidden.listState }, effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+      }
       // Every action re-checks that the phone may still see this group, and any teammate it names.
-      await readVisibleGroup(groupId);
-      if (actionId === 'update' && typeof input.organizerBotId === 'string') await assertBotsVisible([input.organizerBotId]);
-      if (actionId === 'set-members') await assertBotsVisible(botIdsInput());
-      if (actionId === 'plan-edit' && typeof input.botId === 'string') await assertBotsVisible([input.botId]);
+      const visibleGroup = await readVisibleGroup(groupId);
+      // New controllers bind a write to the snapshot they edited. Older controllers
+      // retain their existing actions; the server remains the final permission owner.
+      if (visibleGroup.serverBacked && input.expectedRevision !== undefined) {
+        if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision !== visibleGroup.revision)
+          throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PRECONDITION_FAILED');
+      }
+      if (actionId === 'add-member') {
+        if (!visibleGroup.serverBacked || typeof input.botId !== 'string')
+          throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+        await assertBotsVisible([input.botId]);
+      }
+      const candidateId = actionId === 'update' ? input.organizerBotId : actionId === 'plan-edit' ? input.botId : undefined;
+      if (typeof candidateId === 'string') {
+        const member = visibleGroup.members.find(member => member.botId === candidateId);
+        if (visibleGroup.serverBacked) {
+          if (!member || member.actorKind !== 'bot' || member.status !== 'active')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'MEMBER_UNAVAILABLE');
+        } else await assertBotsVisible([candidateId]);
+      }
+      if (actionId === 'set-members') {
+        // Preserve server humans and foreign companions; only newly added IDs need local visibility.
+        const currentMemberIds = new Set(visibleGroup.members.map(member => member.botId));
+        await assertBotsVisible(botIdsInput().filter(botId => !currentMemberIds.has(botId)));
+      }
       const current = ownerService();
       const planInput = { groupId, planId: input.planId };
       let result: { ok: true } | BotGroupFailure;
@@ -363,9 +436,31 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
             mentions: input.mentions,
             clientId: input.clientId,
             division: input.division === true,
+            ...(input.quote !== undefined ? { quote: input.quote } : {}),
             ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
           }, { controllerDeviceId: context.controllerDeviceId });
           break;
+        case 'mask':
+        case 'mask-mentions': {
+          if (!visibleGroup.serverBacked || !current.chatServer?.mask || !current.chatServer.mentions)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          // The ordinary account-scoped API validates the complete input and keeps
+          // the mask owner separate from the group's administrator.
+          const receipt = actionId === 'mask'
+            ? await current.chatServer.mask({ groupId, action: input.action as ChatMaskAction | undefined, operationId: input.operationId as string | undefined })
+            : await current.chatServer.mentions({ groupId, before: input.before as string | undefined,
+              readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined });
+          if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
+          ownerService();
+          return { result: receipt, effects: [] };
+        }
+        case 'read': {
+          if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'read', messageId: input.messageId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [] };
+        }
         case 'continue':
           result = await current.continueRound(groupId);
           break;
@@ -378,13 +473,45 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
+          if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;
           result = await current.updateGroup(patch);
+          break;
+        }
+        case 'remove-member': {
+          const member = visibleGroup.members.find(member => member.actorId === input.actorId);
+          if (!visibleGroup.serverBacked || !current.chatServer || !member?.actorId)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'NOT_FOUND');
+          const removed = await current.chatServer.manage({ groupId, action: { type: 'member', action: 'remove', actorId: member.actorId } });
+          if (!removed.ok) refuse(chatGroupFailure(new Error(removed.errorCode)));
+          result = { ok: true };
           break;
         }
         case 'set-members':
           result = await current.setMembers({ groupId, botIds: botIdsInput() });
           break;
+        case 'add-member':
+          result = await current.setMembers({ groupId, botIds: [input.botId as string], addOnly: true });
+          break;
+        case 'dissolve':
+        case 'leave': {
+          if (!visibleGroup.serverBacked || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'LIFECYCLE_UNAVAILABLE');
+          const self = visibleGroup.members.find(member => member.isSelf);
+          if (actionId === 'leave' && !self?.actorId) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'NOT_FOUND');
+          const receipt = await current.chatServer.manage({ groupId, action: actionId === 'dissolve'
+            ? { type: 'dissolve', expectedRevision: input.expectedRevision as number }
+            : { type: 'member', action: 'leave', actorId: self!.actorId! } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
         case 'delete':
+          if (visibleGroup.serverBacked && input.expectedRevision !== undefined) {
+            if (!current.chatServer || !visibleGroup.members.some(member => member.isOwned && member.role === 'owner'))
+              throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PERMISSION_DENIED');
+            const archived = await current.chatServer.manage({ groupId, action: { type: 'archive', archived: true, expectedRevision: visibleGroup.revision! } });
+            if (!archived.ok) refuse(chatGroupFailure(new Error(archived.errorCode)));
+            return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+          }
           result = await current.deleteGroup(groupId);
           if (!result.ok) refuse(result);
           return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };

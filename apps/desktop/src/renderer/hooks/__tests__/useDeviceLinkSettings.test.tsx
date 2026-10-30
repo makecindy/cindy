@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useDeviceLinkSettings } from '../useDeviceLinkSettings';
 
 const translate = vi.hoisted(() => (key: string) => key);
+const effects = vi.hoisted(() => ({ removeDevice: vi.fn(), success: vi.fn(), error: vi.fn() }));
+vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { removeDevice: effects.removeDevice } }));
+vi.mock('@/lib/toast', () => ({ toast: { success: effects.success, error: effects.error } }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate }),
@@ -91,6 +94,28 @@ describe('useDeviceLinkSettings ownership state', () => {
 
     expect(result.current.standby).toBe(true);
     expect(result.current.controlledBy).toEqual([{ deviceId: 'mac', name: 'MacBook' }]);
+    unmount();
+  });
+});
+
+
+describe('useDeviceLinkSettings deletion', () => {
+  it.each(['refused', 'wrong-device', 'error', 'deleted'] as const)('clears cached remote sessions only on confirmed success: %s', async outcome => {
+    const deleteDevice = outcome === 'error' ? vi.fn().mockRejectedValue(new Error('offline'))
+      : vi.fn().mockResolvedValue({ deviceId: outcome === 'wrong-device' ? 'other' : 'target', deleted: outcome !== 'refused' });
+    const api = { deleteDevice };
+    (window as unknown as { electronAPI: { deviceLink: typeof api } }).electronAPI = { deviceLink: api };
+    const { result, unmount } = renderHook(() => useDeviceLinkSettings(false));
+    let deleted = false;
+    await act(async () => { deleted = await result.current.remove('target'); });
+    expect(deleted).toBe(outcome === 'deleted');
+    if (deleted) {
+      expect(effects.removeDevice).toHaveBeenCalledWith('target');
+      expect(effects.success).toHaveBeenCalledWith('settings.devices.toast.deleted');
+    } else {
+      expect(effects.removeDevice).not.toHaveBeenCalled();
+      expect(effects.error).toHaveBeenCalledWith('settings.devices.toast.deleteFailed');
+    }
     unmount();
   });
 });

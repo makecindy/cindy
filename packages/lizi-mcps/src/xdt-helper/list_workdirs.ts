@@ -22,7 +22,7 @@ import { encodeCursor, decodeCursor } from './_history_cursor.js';
 import { resolveHistoryScope } from './_history_scope.js';
 
 const DESCRIPTION = [
-  `列出 ${BRAND_NAME} 本地数据库里所有出现过的工作目录(workdir), 以及每个 workdir 下`,
+  `列出 ${BRAND_NAME} 本机数据库里出现过的工作目录(workdir), 以及每个 workdir 下`,
   '的 session 总数 / 首次活动时间 / 最后活动时间 / 涉及的 agent 类型(cc / codex)。',
   '',
   '【何时调用】用户想"看看我都在哪些项目里聊过 / 我的工作目录全集是什么 / 哪个',

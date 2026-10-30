@@ -19,10 +19,10 @@ export function resolvePushAppVariant(region: 'cn' | 'global' | 'dev'): PushAppV
 
 export interface PushTokenRegistrationBody {
   token: string;
-  platform: 'ios';
-  provider: 'apns';
+  platform: 'ios' | 'android';
+  provider: 'apns' | 'fcm';
   appVariant: PushAppVariant;
-  apnsEnv: 'prod' | 'sandbox';
+  apnsEnv?: 'prod' | 'sandbox';
 }
 
 /**
@@ -34,16 +34,17 @@ export function buildPushTokenRegistrationBody(opts: {
   token: string;
   region: 'cn' | 'global' | 'dev';
   isDevBuild: boolean;
+  platform?: 'ios' | 'android';
 }): PushTokenRegistrationBody | null {
   const appVariant = resolvePushAppVariant(opts.region);
   const token = opts.token.trim();
   if (!token) return null;
   return {
     token,
-    platform: 'ios',
-    provider: 'apns',
+    platform: opts.platform ?? 'ios',
+    provider: opts.platform === 'android' ? 'fcm' : 'apns',
     appVariant,
-    apnsEnv: opts.isDevBuild ? 'sandbox' : 'prod',
+    ...(opts.platform === 'android' ? {} : { apnsEnv: opts.isDevBuild ? 'sandbox' as const : 'prod' as const }),
   };
 }
 
@@ -68,7 +69,7 @@ function decodedDeepLinkId(value: string): string | null {
 
 /**
  * 分工一步停下时的群聊提醒(bot-group-chat.md §8.3):`/companions/groups/<groupId>?deviceId=<id>`。
- * 形状逐项校验:群 id 必须是规范编码的单段路径,查询串只能有一个非空的 deviceId,不带片段;
+ * 云端群消息可不带电脑，但必须带规范消息 ID；旧分工通知继续接受 deviceId。
  * 通过后按规范形式重建,绝不原样转发。
  */
 function parseBotGroupDeepLink(deepLink: string): string | null {
@@ -79,10 +80,19 @@ function parseBotGroupDeepLink(deepLink: string): string | null {
   if (!groupId || encodeURIComponent(groupId) !== encodedGroupId) return null;
   const params = new URLSearchParams(query);
   const keys = [...params.keys()];
-  if (keys.length !== 1 || keys[0] !== 'deviceId') return null;
+  if (new Set(keys).size !== keys.length || keys.some(key => !['deviceId', 'messageId', 'threadRootId'].includes(key))) return null;
   const deviceId = params.get('deviceId') ?? '';
-  if (!deviceId || deviceId.length > MAX_DEEP_LINK_ID_CHARS || hasControlCharacter(deviceId)) return null;
-  return `/companions/groups/${encodeURIComponent(groupId)}?deviceId=${encodeURIComponent(deviceId)}`;
+  const messageId = params.get('messageId');
+  const threadRootId = params.get('threadRootId');
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if ((!deviceId && (!messageId || !uuid.test(groupId))) || (params.has('deviceId') && !deviceId)
+    || deviceId.length > MAX_DEEP_LINK_ID_CHARS || hasControlCharacter(deviceId)
+    || (messageId !== null && !uuid.test(messageId)) || (threadRootId !== null && (!messageId || !uuid.test(threadRootId)))) return null;
+  const clean = new URLSearchParams();
+  if (deviceId) clean.set('deviceId', deviceId);
+  if (messageId) clean.set('messageId', messageId);
+  if (threadRootId) clean.set('threadRootId', threadRootId);
+  return `/companions/groups/${encodeURIComponent(groupId)}?${clean}`;
 }
 
 /**

@@ -139,6 +139,10 @@ export interface ThemeColors {
   statusAccent: string;
   /** 房主皇冠标识金色；与 Desktop --warning-fg 对齐，Light / Dark 均保持醒目。 */
   warningFg: string;
+  /** 账号额度条预警填充（剩余不足 30%）；仅额度图形使用，双模式同值。 */
+  quotaBarWarn: string;
+  /** 账号额度条紧张填充（剩余不超过 10%）；仅额度图形使用，双模式同值。 */
+  quotaBarCrit: string;
   /** 会话状态点 — 等待用户回复/选择(TapTap 蓝,对齐桌面 --card-status-awaiting 与灵动岛 needs-interaction) */
   statusAwaiting: string;
   /**
@@ -156,6 +160,11 @@ export interface ThemeColors {
    * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
+  /**
+   * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
+   * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
+   */
+  prMerged: string;
   /**
    * 错误说明文案的黑白系前景 —— **刻意跟随 textPrimary,不是红色**(黑白反色设计里成段
    * 错误文案不点红,错误语义由文案与上下文承担;"error" 是历史命名)。勿用于按钮文字
@@ -184,9 +193,11 @@ export interface ThemeColors {
   homeListFabBorder: string;
   /** 会话行右滑「置顶/取消置顶」按钮底色(Heart Orange,与 statusAccent 同值但语义独立) */
   swipeActionPin: string;
+  /** 右滑已读:沿用灵动岛青绿色语义,加深底色保证白色单勾的对比度。 */
+  swipeActionRead: string;
   /** 会话行左滑「选项」按钮底色(iOS systemGray 感的中性灰) */
   swipeActionNeutral: string;
-  /** 会话行左滑「归档」按钮底色(iOS 系统蓝;不用 statusAwaiting 青——其上白字对比不足) */
+  /** 会话行左滑「归档」按钮底色:保留手机版原有蓝色,与灵动岛归档对齐 */
   swipeActionArchive: string;
   /** swipe 按钮上的文字/图标色:两个主题都是白(按钮底色恒为深色系,不能用会反相的 ctaText) */
   swipeActionText: string;
@@ -457,11 +468,14 @@ export const lightColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#D91F37',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ac3535',
@@ -475,6 +489,7 @@ export const lightColors: ThemeColors = {
   homeListFab: '#0F0F0F',
   homeListFabBorder: 'transparent',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#8e8e93',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
@@ -547,11 +562,14 @@ export const darkColors: ThemeColors = {
   statusRecording: '#D91F37',
   statusAccent: '#EA6B17',
   warningFg: '#F3A115',
+  quotaBarWarn: '#F3A115',
+  quotaBarCrit: '#D91F37',
   statusAwaiting: '#19D2C1',
   statusError: '#D91F37',
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
   sharedTaskConfirmBackground: '#ec9898',
@@ -562,6 +580,7 @@ export const darkColors: ThemeColors = {
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',
   swipeActionPin: '#EA6B17',
+  swipeActionRead: '#008579',
   swipeActionNeutral: '#636366',
   swipeActionArchive: '#3b82f6',
   swipeActionText: '#fbfbfa',
@@ -840,5 +859,11 @@ export const navigationChrome = {
       scrim: 'rgba(0, 0, 0, 0.35)',
       selected: 'rgba(255, 255, 255, 0.18)',
     },
+  },
+  // Regular glass over arbitrary page content (in-app browser): a theme tint keeps the
+  // material in the app's polarity instead of adapting to the page behind it.
+  pageTint: {
+    light: '#FFFFFCB3',
+    dark: '#1E1E1EB3',
   },
 } as const;

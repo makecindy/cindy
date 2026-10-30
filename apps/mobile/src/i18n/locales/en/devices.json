@@ -8,9 +8,10 @@
     "notFound": "This device is no longer in your account.",
     "deleteDevice": "Delete device",
     "deleteTitle": "Delete {{name}}?",
-    "deleteMessage": "Remove this device from your device list. This does not delete files on the computer.",
+    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
     "deleteFailed": "Could not delete the device.",
-    "deleteOnline": "This device is online. Take it offline before deleting it.",
+    "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
+    "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
     "currentlyOnline": "Currently online",
     "availableSection": "Online",
     "offlineSection": "Offline",
@@ -62,7 +63,7 @@
       "filterMeta": "{{available}} available",
       "filterMetaWithUnavailable": "{{available}} available · {{unavailable}} need attention",
       "showUnavailableReason": "Expand a device to see why it is unavailable",
-      "emptyCopy": "Sign in to the same account on your computer, then enable “Allow same-account devices to control this computer” under Remote Control in Settings.",
+      "emptyCopy": "Sign in to the same account on your computer, then enable “Allow same-account devices to control this computer” under Settings → Remote Connection.",
       "emptyTitle": "No computers to show yet",
       "hideUnavailableA11y": "Hide unavailable computers",
       "showUnavailableA11y": "Show unavailable computers",
@@ -241,6 +242,11 @@
     }
   },
   "list": {
+    "projectActions": {
+      "newTask": "New task",
+      "allTasks": "All tasks",
+      "search": "Search"
+    },
     "taskSuggestions": {
       "connected": "Computer connected",
       "title": "Away from your computer?\nYou can still get started.",
@@ -312,6 +318,7 @@
       "openMenu": "Open menu",
       "closeMenu": "Close menu",
       "openDisplaySettings": "Open display settings",
+      "openDisplaySettingsWithStatus": "Open display settings (showing: {{status}})",
       "openSearch": "Search",
       "openSettings": "Open settings",
       "syncing": "Syncing",
@@ -324,6 +331,7 @@
       "openAutomationLatest": "Open the latest session of automation {{title}}",
       "automationTask": "Automation {{title}}",
       "openConversation": "Open session {{title}}",
+      "followedBy": ", looked after by {{names}}",
       "collapse": "Collapse {{title}}",
       "expand": "Expand {{title}}",
       "taskError": "Task failed",
@@ -331,7 +339,9 @@
       "doneUnread": "Completed, unread",
       "running": "Running",
       "close": "Close",
-      "cancelRename": "Cancel rename"
+      "cancelRename": "Cancel rename",
+      "createdBy": "Created by {{name}}",
+      "ownedBy": "Belongs to {{name}}"
     },
     "accounts": {
       "title": "Switch account",
@@ -342,13 +352,7 @@
       "switchConfirm": "Continue"
     },
     "menu": {
-      "groupByProject": "Group by Project",
-      "groupDialogue": "Group chats together",
-      "sortByTime": "By time",
-      "sortByPriority": "Priority",
-      "statusActive": "Active",
-      "statusArchived": "Archived",
-      "statusAll": "All",
+      "groupDialogue": "Chat",
       "dialogueFolder": "Chat",
       "search": "Search",
       "settings": "Settings",
@@ -356,14 +360,70 @@
       "displaySettings": "Display settings",
       "groupHeading": "Group",
       "sortHeading": "Task sort",
-      "projectOrderHeading": "Project order",
-      "projectOrderActivity": "By recent activity",
-      "projectOrderManual": "Manual",
+      "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
-      "statusHeading": "Status",
+      "statusHeading": "Task status",
       "showDeviceTasks": "Show tasks",
       "openDevice": "Open",
-      "renameDevice": "Rename"
+      "renameDevice": "Rename",
+      "groupProject": "Project",
+      "sortBy": {
+        "priority": "Priority",
+        "recency": "Recent Activity",
+        "created": "Creation Time"
+      },
+      "sortByPriorityTip": "Waiting on you first, then unread, then running, then by time",
+      "projectOrder": {
+        "activity": "Follow tasks",
+        "custom": "Manual"
+      },
+      "status": {
+        "active": "Active",
+        "archived": "Archived",
+        "all": "All"
+      },
+      "filterHeading": "Filters",
+      "filterSummaryActive": "{{count}} active",
+      "filterReset": "Reset filters",
+      "filterAll": "All",
+      "filterProjectsHeading": "Projects",
+      "filterAllProjects": "All projects",
+      "filterSelectedProjects": "{{count}} selected",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "All",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Last activity",
+      "filterLastActivity": {
+        "1d": "1d",
+        "3d": "3d",
+        "7d": "7d",
+        "30d": "30d",
+        "all": "All"
+      },
+      "showCollapsedTeammateAvatars": "Show avatars when collapsed",
+      "displayHeading": "Display",
+      "view": {
+        "text": "Text",
+        "list": "List"
+      },
+      "taskInfoHeading": "Task info",
+      "taskInfo": {
+        "time": "Time",
+        "pr": "PR status",
+        "tokens": "Tokens",
+        "cost": "Cost"
+      },
+      "summaryNone": "None",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
+      "filterTeammatesHeading": "Teammates",
+      "filterAnySource": "All",
+      "filterHideAllTeammates": "Hide all",
+      "filterSelectedTeammates": "{{count}} selected"
     },
     "search": {
       "placeholder": "Search titles or content…",
@@ -537,9 +597,12 @@
     "viewAllRuns": "View all {{count}} runs"
   },
   "companions": {
+    "section": {
+      "showAll": "Show all",
+      "showAllA11y": "Show all {{count}}",
+      "showLess": "Show less"
+    },
     "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
-    "taskAttentionCount": "Tasks needing attention: {{count}}",
-    "unreadChatCount": "Unread chats: {{count}}",
     "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",
@@ -578,19 +641,13 @@
       "unknown": "Unknown status"
     },
     "title": "Teammates",
-    "tasks": "Sessions",
     "search": "Search Teammates",
-    "emptyTitle": "No Teammates Yet",
-    "emptyCopy": "Create a teammate in Cindy on your computer.",
-    "noResults": "No Matching Teammates",
     "startChat": "Start the conversation",
-    "preferenceSaveFailed": "Couldn’t save your view preference. Try switching views again.",
     "automation": {
       "unsavedTitle": "Discard Changes?",
       "unsavedBody": "Your changes haven’t been saved.",
       "discard": "Discard Changes"
     },
-    "openNavigation": "Open navigation",
     "openProfile": "View {{name}}'s profile",
     "switchCompanion": "Switch teammate",
     "activity": {
@@ -637,11 +694,16 @@
     "errorDetails": "Error details",
     "createTeammate": "New teammate",
     "createMenu": "New",
-    "searchWithGroups": "Search teammates and groups",
     "awaiting": "Needs your OK",
-    "emptyCopyCreate": "Teammates remember what you talked about and can get things done on your computer.",
     "taskResult": "Task result",
-    "collapseResult": "Hide result"
+    "collapseResult": "Hide result",
+    "avatarStatus": {
+      "awaiting": "Needs your confirmation",
+      "error": "Needs attention",
+      "running": "Working",
+      "done": "Completed",
+      "unread": "Unread"
+    }
   },
   "companionProfile": {
     "avatar": "Avatar",
@@ -709,7 +771,22 @@
     "portraitNumber": "Portrait {{number}}",
     "uploadAvatar": "Upload Avatar",
     "avatarFailed": "Could not open this image. Try another.",
-    "nameTaken": "That name is already in use. Choose another."
+    "nameTaken": "That name is already in use. Choose another.",
+    "home": "Main Computer",
+    "chat": "Chat",
+    "showReplyTarget": "Show which message a reply answers",
+    "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Applies to all teammates. Older replies don’t show this.",
+    "channels": "Messaging platforms",
+    "channelsEmpty": "No messaging platforms connected",
+    "channelTasksEmpty": "No tasks yet",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
   },
   "companionImport": {
     "title": "Import a teammate",
@@ -768,6 +845,91 @@
     "setupDeferred": "Continue sign-in and verification in the teammate chat.",
     "automationInvalid": "The automation definition could not be converted; it was not created.",
     "itemFailed": "This item is unfinished. Retry or view import details.",
-    "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available."
+    "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available.",
+    "imBotOwnerMissing": "No owner user ID was found. Finish connecting this bot on the teammate’s Messaging platforms page.",
+    "imBotGatewayRunning": "The original gateway is still using this bot. Stop it, then connect the bot on Messaging platforms.",
+    "imBotInUse": "This bot is already connected on this computer, in Settings → IM bots or on another teammate.",
+    "imBotConnectFailed": "Couldn’t connect this bot. Try again on the teammate’s Messaging platforms page.",
+    "imBotSourceStopUnconfirmed": "The original bot hasn’t stopped yet, so it wasn’t handed to the teammate. You can connect it later on the teammate’s Messaging platforms page.",
+    "imBotSourceChanged": "The original bot changed after the preview, so it wasn’t stopped. Reload the preview and import again.",
+    "bots": "Messaging bots",
+    "botsNote": "After import, these bots stop in {{source}} and the teammate takes them over.",
+    "sourceDisabled": "Already off",
+    "botOwner": "Owner ID {{id}}"
+  },
+  "glance": {
+    "open": "{{name}} at a glance",
+    "dueUnseen": "A todo is due",
+    "computers": "Computers",
+    "runningHere": "Running here",
+    "online": "Online",
+    "offline": "Offline",
+    "current": "Current",
+    "offlineCount_one": "{{count}} offline",
+    "offlineCount_other": "{{count}} offline",
+    "todos": "Todos",
+    "showMore": "Show more",
+    "showLess": "Show less",
+    "doneCount_one": "{{count}} done",
+    "doneCount_other": "{{count}} done",
+    "delete": "Delete",
+    "deleted": "Deleted. It won't be added again.",
+    "undo": "Undo",
+    "undoFailed": "Couldn't undo. Try again.",
+    "deleteFailed": "Couldn't delete. Try again.",
+    "check": "Check for me",
+    "checkMeta": "Look for new todos in connected mail and chats",
+    "checkPrompt": "Check my connected sources, like mail and messages, for anything new I need to handle, and add it to my todos.",
+    "dailyCheck": "Check every day",
+    "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
+    "recentTasks": "Recent tasks",
+    "unread": "Unread result",
+    "stopDailyCheck": "Stop daily checking",
+    "openFailed": "Couldn’t open this link",
+    "dailyCheckFailed": "Couldn't save. Try again.",
+    "loadFailed": "Couldn't load todos",
+    "outputs": "Outputs",
+    "outputMeta": "{{time}} · {{task}}",
+    "source": {
+      "conversation": "You asked",
+      "mail": "From email",
+      "feishu": "From Feishu",
+      "github": "From GitHub",
+      "community": "From the community",
+      "task": "From a task"
+    }
+  },
+  "cloudCompanion": {
+    "homeOffline": "Main computer “{{device}}” is offline",
+    "switchAction": "Continue on another computer",
+    "composerHint": "Main computer is offline. Switch to another computer to continue.",
+    "readOnlyNote": "This conversation is saved in the cloud and is read only.",
+    "empty": "No conversation in the cloud yet.",
+    "loadFailed": "Can’t load the cloud conversation right now.",
+    "loadOlder": "Load earlier messages",
+    "noTargets": "No other computer is available. Open Cindy on another computer, sign in to the same account, and turn on “Allow same-account devices to control this computer”, then try again.",
+    "devicesFailed": "Can’t load your computers right now. Try again later.",
+    "preparing": "Getting ready on “{{device}}”…",
+    "preparingHint": "That computer takes over the teammate from its cloud profile and opens it when ready.",
+    "timeout": "“{{device}}” isn’t ready yet. Make sure Cindy is open and online on that computer, then try again.",
+    "conflict": "{{name}} has already moved to “{{device}}”.",
+    "switchFailed": "Can’t change the main computer right now. Try again later.",
+    "unknownDevice": "another computer",
+    "runsOn": "Runs on “{{device}}”",
+    "homeTitle": "Main Computer",
+    "moveTo": "Move to “{{device}}”",
+    "moveTitle": "Run {{name}} on “{{device}}”?",
+    "moveDescription": "From now on {{name}} runs on “{{device}}”, and the chat history comes along. Working directories, connections and local files stay on the computer they are on.",
+    "moveAction": "Move to “{{device}}”",
+    "moving": "Moving {{name}} to “{{device}}”…",
+    "busyTitle": "{{name}} is still replying",
+    "busyDescription": "Move it to “{{device}}” once this reply finishes, or stop the reply and move it now.",
+    "busyWait": "Move When Done",
+    "busyStop": "Stop and Move",
+    "transferBusy": "{{name}} is still working on a reply. Move it after the reply finishes",
+    "switchConflict": "{{name}}’s main computer has already changed, so it wasn’t moved",
+    "homeOutdated": "The main computer “{{device}}” runs an older Cindy. Update it, or change the main computer there",
+    "homeUnreachable": "Can’t reach “{{device}}”. It must be online with “Allow same-account devices to control this machine” turned on",
+    "sendUnreachable": "Your message hasn’t reached the main computer “{{device}}”; it may be offline. You can continue on another computer."
   }
 }

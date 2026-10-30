@@ -146,7 +146,7 @@ export function BotGroupPlanCard({
     : plan.status === 'dismissed' ? 'groupChat.plan.dismissed'
       : plan.status === 'stopped' ? 'groupChat.plan.stopped' : null;
   const busy = pending !== null;
-  const candidates = members.filter(isActiveBotGroupMember);
+  const candidates = members.filter(member => isActiveBotGroupMember(member) && (!member.actorKind || member.actorKind === 'bot'));
   const steps = plan.steps.length;
   const done = plan.steps.filter((step) => step.status === 'done').length;
   const progress = plan.status === 'proposed' ? t('groupChat.plan.awaitingStart')
@@ -211,7 +211,7 @@ export function BotGroupPlanCard({
     </View>
     {actionable ? <>
       {/* Two sentences: Chinese and Japanese run them together, other languages need a space. */}
-      <Text style={styles.note}>{[t('groupChat.plan.pauseNote'), t('groupChat.plan.editHint')].join(/^(zh|ja)/.test(i18n.language) ? '' : ' ')}</Text>
+      <Text style={styles.note}>{[t(plan.autoContinue ? 'groupChat.plan.autoNote' : 'groupChat.plan.pauseNote'), t('groupChat.plan.editHint')].join(/^(zh|ja)/.test(i18n.language) ? '' : ' ')}</Text>
       <CompanionCardActions>
         <CompanionCardButton label={t('groupChat.plan.dismiss')} busy={pending === 'dismiss'} disabled={busy || !online}
           onPress={onDismiss} testID="botGroup.plan.dismiss" />

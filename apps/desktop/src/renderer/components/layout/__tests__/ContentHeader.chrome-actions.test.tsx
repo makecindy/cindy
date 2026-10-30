@@ -53,4 +53,42 @@ describe('ContentHeader rail ChromeActions hit hole', () => {
 
     expect(screen.queryByTestId('content-header-rail-chrome-actions-hit-hole')).toBeNull();
   });
+
+  it('carves exactly the part of the cluster that a narrow sidebar cannot cover', () => {
+    render(
+      <FeatureSidebarSlotProvider isCollapsed>
+        <ContentHeader
+          sidebarVisible
+          showCollapsedActions={false}
+          isSidebarRail={false}
+          // 侧栏可拖到 180:比簇右缘(mac 非全屏 78 + 124 = 202)窄,超出的一段要补挖。
+          sidebarWidth={180}
+          rightSidebarAvailable={false}
+          hidden={false}
+        />
+      </FeatureSidebarSlotProvider>,
+    );
+
+    const hitHole = screen.getByTestId('content-header-rail-chrome-actions-hit-hole');
+    expect(hitHole.style.width).toBe(
+      `${CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth - 180}px`,
+    );
+  });
+
+  it('leaves the header drag area alone when the sidebar covers the whole cluster', () => {
+    render(
+      <FeatureSidebarSlotProvider isCollapsed>
+        <ContentHeader
+          sidebarVisible
+          showCollapsedActions={false}
+          isSidebarRail={false}
+          sidebarWidth={260}
+          rightSidebarAvailable={false}
+          hidden={false}
+        />
+      </FeatureSidebarSlotProvider>,
+    );
+
+    expect(screen.queryByTestId('content-header-rail-chrome-actions-hit-hole')).toBeNull();
+  });
 });

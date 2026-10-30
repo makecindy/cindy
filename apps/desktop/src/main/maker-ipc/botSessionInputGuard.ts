@@ -19,3 +19,17 @@ export function botSessionInputBlockReason(
   }
   return null;
 }
+
+export const SHADOWED_COMPANION_INPUT_MESSAGE =
+  'This teammate now runs on its main computer; continue it there or take it over on this computer';
+
+/**
+ * A demoted copy's companion runs on another computer (cloud-companions.md §3): its main
+ * and routine tasks never start a turn here, whichever send path (renderer, internal, queue drain) asks.
+ */
+export function isShadowedCompanionSession(
+  link: { role?: string | null; botId?: string | null } | null | undefined,
+  isShadowed: (botId: string) => boolean,
+): boolean {
+  return (link?.role === 'canonical' || link?.role === 'routine') && !!link.botId && isShadowed(link.botId);
+}

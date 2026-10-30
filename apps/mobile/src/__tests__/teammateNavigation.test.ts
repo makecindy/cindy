@@ -24,47 +24,73 @@ describe('account-scoped home navigation overrides', () => {
     expect(await readHomeNavigationPreferences('account-a')).toEqual({});
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
   });
+  // Unit: old collapsed records do not acquire an explicit avatar override; explicit false survives account switches.
+  // No prior test covered an independently persisted avatar setting.
+  it('keeps explicit avatar choices per account without inferring them from an old collapsed state', async () => {
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
+    expect((await readHomeNavigationPreferences('account-a')).showCollapsedTeammateAvatars).toBeUndefined();
+    await Promise.all([
+      saveHomeNavigationPreferences('account-a', { showCollapsedTeammateAvatars: true }),
+      saveHomeNavigationPreferences('account-b', { showCollapsedTeammateAvatars: false }),
+    ]);
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true, showCollapsedTeammateAvatars: true });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(await readHomeNavigationPreferences('account-c')).toEqual({});
+  });
   it('serializes overlapping patches and isolates accounts even when resource ids match', async () => {
     await Promise.all([
       saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) }),
-      saveHomeNavigationPreferences('account-a', { mode: 'teammates' }),
-      saveHomeNavigationPreferences('account-b', { mode: 'tasks' }),
+      saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true }),
+      saveHomeNavigationPreferences('account-b', { teammatesCollapsed: false }),
     ]);
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates', lastTeammate: teammateIdentity(row()) });
-    expect(await readHomeNavigationPreferences('account-b')).toEqual({ mode: 'tasks' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true, lastTeammate: teammateIdentity(row()) });
+    expect(await readHomeNavigationPreferences('account-b')).toEqual({ teammatesCollapsed: false });
     await saveHomeNavigationPreferences('account-a', { lastTeammate: null });
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true });
   });
   it('does not overwrite preferences after a failed read; a failed write does not poison later saves', async () => {
-    await saveHomeNavigationPreferences('account-a', { mode: 'teammates' });
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
     vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error('disk unavailable'));
     await expect(saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) })).rejects.toThrow('disk unavailable');
-    expect(await readHomeNavigationPreferences('account-a')).toEqual({ mode: 'teammates' });
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ teammatesCollapsed: true });
     vi.mocked(AsyncStorage.setItem).mockRejectedValueOnce(new Error('write failed'));
-    await expect(saveHomeNavigationPreferences('account-b', { mode: 'tasks' })).rejects.toThrow('write failed');
+    await expect(saveHomeNavigationPreferences('account-b', { teammatesCollapsed: true })).rejects.toThrow('write failed');
     await saveHomeNavigationPreferences('account-a', { lastTeammate: teammateIdentity(row()) });
     expect((await readHomeNavigationPreferences('account-a')).lastTeammate).toEqual(teammateIdentity(row()));
   });
   it('rejects malformed identities and never saves extra Session/profile fields', () => {
-    expect(normalizeHomeNavigationPreferences({ mode: 'unknown', lastTeammate: { resourceId: 'id' } })).toEqual({});
-    expect(normalizeHomeNavigationPreferences({ mode: 'teammates', lastTeammate: { ...teammateIdentity(row()), sessionId: 'cached', name: 'Cindy' } }))
-      .toEqual({ mode: 'teammates', lastTeammate: teammateIdentity(row()) });
+    expect(normalizeHomeNavigationPreferences({ teammatesCollapsed: 'yes', lastTeammate: { resourceId: 'id' } })).toEqual({});
+    expect(normalizeHomeNavigationPreferences({ lastTeammate: { ...teammateIdentity(row()), sessionId: 'cached', name: 'Cindy' } }))
+      .toEqual({ lastTeammate: teammateIdentity(row()) });
+  });
+  it('drops the retired tasks/teammates mode from stored data on the next write, keeping the rest', async () => {
+    disk.set(__testing.navigationPrefix + 'account-a', JSON.stringify({ mode: 'teammates', lastTeammate: teammateIdentity(row()) }));
+    expect(await readHomeNavigationPreferences('account-a')).toEqual({ lastTeammate: teammateIdentity(row()) });
+    await saveHomeNavigationPreferences('account-a', { teammatesCollapsed: true });
+    expect(JSON.parse(disk.get(__testing.navigationPrefix + 'account-a')!)).toEqual({ teammatesCollapsed: true, lastTeammate: teammateIdentity(row()) });
   });
 });
 describe('teammate identity navigation', () => {
-  it.each(['index', 'devices/index', 'resources/[collectionId]'])('preserves the actual %s stack entry and collection targets across repeated teammate opens', (name) => {
+  it.each(['index', 'devices/index'])('preserves the actual %s stack entry across repeated teammate opens', (name) => {
     const router = StackRouter({ initialRouteName: name });
     const options = { routeNames: [name, 'sessions/[sessionId]'], routeParamList: { [name]: { collectionId: 'teammates', targets: 'fixture-hosts', title: 'Teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
     let state = router.getInitialState(options);
     const home = state.routes[0];
     for (let turn = 0; turn < 3; turn++) {
       for (const sessionId of ['a', 'b']) state = router.getRehydratedState(router.getStateForAction(state, StackActions.push('sessions/[sessionId]', { sessionId }), options)!, options);
-      const count = homeDismissCount(state.routes, 'teammates');
+      const count = homeDismissCount(state.routes);
       expect(count).toBe(2);
       state = router.getRehydratedState(router.getStateForAction(state, StackActions.pop(count!), options)!, options);
       expect(state.routes).toEqual([home]);
       expect(state.routes[0]).toBe(home); // Same key and params: React retains the mounted list.
     }
+  });
+  it('replaces a legacy teammate collection entry instead of preserving the retired route', () => {
+    const routes = [
+      { name: 'resources/[collectionId]', params: { collectionId: 'teammates' } },
+      { name: 'sessions/[sessionId]' },
+    ];
+    expect(homeDismissCount(routes)).toBeNull();
   });
   it('uses the conversation as a navigation hint and retains the resource identity for revalidation', () => {
     expect(teammateResourceRoute(row(), 'en')).toEqual({ pathname: '/sessions/[sessionId]', params: {

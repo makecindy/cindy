@@ -9,12 +9,17 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "ローカルアプリ「{{name}}」から送信",
+    "sourceLocalAppId": "アプリ ID：{{id}}",
+    "failedSamplingAttempt": "この返信は完了しませんでした。内容は参考情報としてご覧ください。",
     "moreActions": "その他のメッセージ操作",
+    "reply": "返信",
     "newMessagesToBottom": "新着メッセージあり、最下部へ移動",
     "jumpToBottom": "最下部へ移動",
     "openForkOrigin": "分岐元メッセージを開く",
     "viewForkOrigin": "分岐元を表示",
     "emptyMessages": "メッセージはありません",
+    "historyNotCached": "この端末に履歴がありません。コンピューターに接続すると同期します。",
     "syncing": "同期中",
     "copyLinkHint": "タップしてメッセージリンクをコピー",
     "sentTime": "送信時刻 {{time}}",
@@ -66,6 +71,7 @@
     "copyStateCopied": "コピーしました",
     "copyStateFailed": "コピー失敗",
     "copyStateCopy": "コピー",
+    "copyCode": "コードをコピー",
     "thinkingHidden": "思考内容は非表示",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -100,11 +106,13 @@
     "subagentSummary": "サブエージェントの要約",
     "agentSwitchLabel": "{{from}} から {{to}} に切り替えました",
     "agentSwitchViewHandoff": "{{label}}、引き継ぎ内容を表示",
+    "sessionFallbackPill": "要約から続行",
     "sessionResumedPill": "元のセッションを再開しました",
     "handoffContentDesc": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約（チャット履歴には含まれず、ここでのみ表示）",
     "handoffContentDescEnglishSource": "引き継ぎ内容——切り替え時に新しいエンジンへ送るコンテキスト要約。原文は英語（チャット履歴には含まれず、ここでのみ表示）",
     "openDiagramDetail": "図の詳細を開く",
-    "sessionChipFallback": "セッション {{id}}",
+    "sessionChipFallback": "セッション",
+    "messageChipFallback": "引用したメッセージ",
     "imageFallbackTitle": "画像",
     "mermaidExportFailedTitle": "エクスポート失敗",
     "mermaidRenderIncompleteBody": "図の描画がまだ完了していないか、エクスポートに失敗しました。後でもう一度お試しください。",
@@ -167,7 +175,9 @@
     "diffEditCount": "{{n}} 件の編集",
     "groupSentNamed": "グループ「{{name}}」から送信",
     "groupSent": "グループから送信",
-    "sourceGroupId": "グループ ID: {{id}}"
+    "sourceGroupId": "グループ ID: {{id}}",
+    "selectText": "テキストを選択",
+    "you": "あなた"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -178,6 +188,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "元の画像を読み込めません",
+    "retryOriginal": "元の画像を再読み込み",
+    "loadingOriginal": "元の画像を読み込み中…",
     "sourceMissing": "このコンピューターに元の画像がありません。元のファイルを再度インポートしてください。",
     "deviceOffline": "コンピューターが未接続です。再接続してからお試しください。",
     "cancelAnnotation": "注釈をキャンセル",
@@ -225,6 +238,10 @@
     "cancel": "キャンセル",
     "edit": "編集",
     "steer": "割り込み",
+    "steerQueued": "まだ届いていません。メッセージはキューに残っています。",
+    "moveUp": "1つ前へ",
+    "moveDown": "1つ後ろへ",
+    "cancelSend": "送信をキャンセル",
     "collapseQueued": "キュー内メッセージを折りたたむ",
     "expandRemainingQueued": "残り {{n}} 件のキュー内メッセージを展開",
     "collapse": "折りたたむ",
@@ -233,7 +250,15 @@
     "sendingMessage": "送信中のメッセージ:{{text}}",
     "uploadingAttachments": "添付ファイルをアップロード中 {{uploaded}}/{{total}}",
     "delete": "削除",
-    "retry": "再試行"
+    "retry": "再試行",
+    "notSent": "未送信",
+    "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
+    "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
+    "waitingForComputer": "パソコンにつながったら送信",
+    "waitingForNetwork": "ネットワークが戻ったら送信",
+    "queued": "順番待ち",
+    "retryImage": "この画像を再アップロード",
+    "waitingMessage": "送信待ちのメッセージ:{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -260,12 +285,25 @@
       "usageReset": "使用量が回復したため自動で続行しました",
       "pending": "再接続中…",
       "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "別のパソコンに切り替え中…",
       "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回",
       "detail": {
         "reason": "中断の理由",
         "attempt": "今回の再試行 {{attempt}}/{{total}}",
         "sessionTotal": "このセッションでの再接続 {{count}} 回"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} が使用量の上限に達したため、{{to}} で続行しました",
+        "auth": "{{from}} のログインが切れたため、{{to}} で続行しました",
+        "unavailable": "{{from}} に接続できないため、{{to}} で続行しました",
+        "overload": "{{from}} のサービスが混雑しているため、{{to}} で続行しました",
+        "failed": "{{from}} で問題が起きたため、{{to}} で続行しました"
+      },
+      "agentReconnect": {
+        "named": "{{computer}} に再接続し、続行しました",
+        "unnamed": "元のパソコンに再接続し、続行しました"
+      },
+      "groupSwitch": "別のパソコンに自動で切り替えて続行しました"
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",
@@ -274,6 +312,7 @@
     "agentSwitchLocation": "Agent の実行先を {{device}} に変更しました",
     "agentSwitchLocationThisComputer": "Agent の実行先をこのパソコンに戻しました",
     "agentSwitchLocationOtherComputer": "Agent の実行先を別のパソコンに変更しました",
+    "agentSwitchLocationQuotaRebalance": "こちらのクォータを先に使うため",
     "learnStarted": "スキル学習を開始しました",
     "learnStartedBody": "蒸留はデスクトップのバックグラウンドで進行します。完了後、デスクトップでスキルの草案を確認・レビューしてください。",
     "learnFailed": "スキル学習を開始できませんでした",
@@ -374,5 +413,15 @@
     "memory": "記憶しました：{{title}}",
     "skillCreated": "スキルを作成：{{title}}",
     "skillUpdated": "スキルを更新：{{title}}"
+  },
+  "richAnswer": {
+    "send": "メッセージを送信",
+    "sending": "送信中…",
+    "sent": "送信済み",
+    "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
+    "playVideo": "動画を再生",
+    "openVideoSource": "元の動画を開く",
+    "calculationUnavailable": "この値を計算できません。",
+    "incomplete": "一部の内容を表示できませんでした。"
   }
 }

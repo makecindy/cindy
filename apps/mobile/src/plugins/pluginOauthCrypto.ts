@@ -1,6 +1,7 @@
 import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha256";
+import { PLUGIN_OAUTH_SEALED_MAX_BYTES, isPluginOauthBox } from "@cindy/device-link";
 /** Bounded UTF-8 helpers work without TextEncoder/TextDecoder on Hermes. */
 export function oauthUtf8Bytes(value: string): Uint8Array {
   const encoded = encodeURIComponent(value),
@@ -14,6 +15,13 @@ export function oauthUtf8Bytes(value: string): Uint8Array {
   return Uint8Array.from(bytes);
 }
 function oauthUtf8Text(bytes: Uint8Array): string {
+  // Sealed offers can carry a screenshot; plain ASCII skips the escape round trip.
+  if (bytes.every((byte) => byte < 0x80)) {
+    const parts: string[] = [];
+    for (let i = 0; i < bytes.length; i += 8192)
+      parts.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+    return parts.join("");
+  }
   return decodeURIComponent(
     Array.from(bytes, (byte) => "%" + byte.toString(16).padStart(2, "0")).join(
       "",
@@ -37,7 +45,10 @@ export interface PluginOauthCrypto {
 }
 const alphabet =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const alphabetIndex = new Int16Array(128).fill(-1);
+for (let i = 0; i < alphabet.length; i++) alphabetIndex[alphabet.charCodeAt(i)] = i;
 export function encodeOauthBytes(bytes: Uint8Array): string {
+  const parts: string[] = [];
   let result = "";
   for (let i = 0; i < bytes.length; i += 3) {
     const a = bytes[i],
@@ -46,8 +57,13 @@ export function encodeOauthBytes(bytes: Uint8Array): string {
     result += alphabet[a >> 2] + alphabet[((a & 3) << 4) | ((b ?? 0) >> 4)];
     if (b !== undefined) result += alphabet[((b & 15) << 2) | ((c ?? 0) >> 6)];
     if (c !== undefined) result += alphabet[c & 63];
+    if (result.length >= 8192) {
+      parts.push(result);
+      result = "";
+    }
   }
-  return result;
+  parts.push(result);
+  return parts.join("");
 }
 export function decodeOauthBytes(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1)
@@ -56,8 +72,8 @@ export function decodeOauthBytes(value: string): Uint8Array {
   let bits = 0,
     accumulated = 0,
     at = 0;
-  for (const c of value) {
-    accumulated = (accumulated << 6) | alphabet.indexOf(c);
+  for (let i = 0; i < value.length; i++) {
+    accumulated = ((accumulated << 6) | alphabetIndex[value.charCodeAt(i)]) & 0xffffff;
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
@@ -134,7 +150,8 @@ export class MobileOauthBox {
     const key = this.key(peer, id, direction),
       body = oauthUtf8Bytes(JSON.stringify(value));
     try {
-      if (body.length > 32000) throw new Error("OAUTH_BRIDGE_INVALID");
+      if (body.length > PLUGIN_OAUTH_SEALED_MAX_BYTES[direction])
+        throw new Error("OAUTH_BRIDGE_INVALID");
       return encodeOauthBytes(
         await this.crypto.encrypt(
           key,
@@ -156,14 +173,14 @@ export class MobileOauthBox {
   ): Promise<unknown> {
     let key: Uint8Array | undefined, body: Uint8Array | undefined;
     try {
-      if (!/^[A-Za-z0-9_-]{40,48000}$/.test(box)) throw 0;
+      if (!isPluginOauthBox(direction, box)) throw 0;
       key = this.key(peer, id, direction);
       body = await this.crypto.decrypt(
         key,
         decodeOauthBytes(box),
         oauthUtf8Bytes(`cindy-plugin-oauth-v1:${id}:${direction}`),
       );
-      if (body.length > 32000) throw 0;
+      if (body.length > PLUGIN_OAUTH_SEALED_MAX_BYTES[direction]) throw 0;
       return JSON.parse(oauthUtf8Text(body));
     } catch {
       throw new Error("OAUTH_BRIDGE_INVALID");

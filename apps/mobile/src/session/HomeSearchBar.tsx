@@ -6,6 +6,7 @@ import { Search, SlidersHorizontal, X } from "lucide-react-native";
 import { Pressable, StyleSheet, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { TextInput } from "@/components/AppText";
+import { FilterReminderDot } from "@/components/FilterReminderDot";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import {
   NativePullDownMenu,
@@ -70,7 +71,7 @@ export function HomeSearchBar({
         size={iconSize.md}
         strokeWidth={iconStroke.regular}
       />
-      {filterActive ? <View style={styles.filterDot} /> : null}
+      {filterActive ? <FilterReminderDot offset={styles.filterDotOffset} /> : null}
     </Pressable>
   );
   return (
@@ -174,14 +175,6 @@ const makeStyles = (colors: ThemeColors) =>
       position: "relative",
       width: 36,
     },
-    filterDot: {
-      backgroundColor: colors.statusAccent,
-      borderRadius: radius.pill,
-      height: 6,
-      position: "absolute",
-      right: 7,
-      top: 7,
-      width: 6,
-    },
+    filterDotOffset: { right: 7, top: 7 },
     pressed: mobileInteractionStyles.pressed,
   });

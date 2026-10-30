@@ -5,6 +5,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { lstat } from 'node:fs/promises';
+import { relocateLibraryMetaOwner } from './libraryBinding.js';
 
 import {
   LibraryVault,
@@ -353,6 +355,63 @@ function identityMatches(actual: TaskIdentity, expected: TaskIdentity): boolean 
     && actual.bytes === expected.bytes
     && actual.mime === expected.mime
     && sameRecovery(actual.recovery, expected.recovery);
+}
+
+export async function relocateLibraryStagingOwner(
+  root: string, fromId: string, toId: string, ownerScopeKey: string, assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const stat = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  assertCurrent();
+  if (!stat) return;
+  if (!stat.isDirectory()) throw new Error('staging relocation root is not a directory');
+  await relocateLibraryMetaOwner(root, fromId, toId, assertCurrent);
+  assertCurrent();
+  const vault = new LibraryVault({ rootDir: () => root, ghostId: toId });
+  try {
+    const opened = await vault.open();
+    assertCurrent();
+    if (!opened.ok) throw new Error(opened.message);
+    let cursor: string | null = null;
+    do {
+      const page = await vault.list({ path: 'tasks', cursor, strict: true });
+      assertCurrent();
+      if (!page.ok) {
+        if (page.errorCode === 'NOT_FOUND' && cursor === null) break;
+        throw new Error(page.message);
+      }
+      for (const entry of page.entries) {
+        const stagingId = entry.path.slice('tasks/'.length);
+        if (entry.kind !== 'dir' || !UUID.test(stagingId)) continue;
+        for (const [file, parse] of [
+          [manifestPath(stagingId), parseManifest], [intentPath(stagingId), parseIntent],
+        ] as const) {
+          const raw = await vault.read({ path: file, encoding: 'utf8' });
+          assertCurrent();
+          if (!raw.ok) {
+            if (raw.errorCode === 'NOT_FOUND') continue;
+            throw new Error(raw.message);
+          }
+          const parsed = parseJsonObject(raw.content, 'staging relocation');
+          if (!parsed.ok) throw new Error(parsed.message);
+          const owner = parsed.value.ghostId;
+          if (owner !== fromId && owner !== toId) throw new Error('staging task belongs to a different plugin');
+          const task = parse(raw.content, stagingId, owner, ownerScopeKey);
+          if ('errorCode' in task) throw new Error(task.message);
+          if (owner === toId) continue;
+          const written = await vault.write({ path: file, content: JSON.stringify({ ...parsed.value, ghostId: toId }) });
+          assertCurrent();
+          if (!written.ok) throw new Error(written.message);
+        }
+      }
+      cursor = page.hasMore ? page.nextCursor : null;
+    } while (cursor !== null);
+  } finally {
+    await vault.invalidate();
+  }
 }
 
 export class LibraryStagingStore {

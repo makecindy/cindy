@@ -62,7 +62,7 @@ describe('voice input override restore defaults', () => {
       expect(patch).toEqual({ composerLongPressEnabled: null });
       const next = { ...settings };
       delete next.composerLongPressEnabledOverride;
-      next.composerLongPressEnabled = false;
+      next.composerLongPressEnabled = getDefaultVoiceInputSettings('darwin').composerLongPressEnabled;
       return next;
     });
 
@@ -74,7 +74,7 @@ describe('voice input override restore defaults', () => {
     expect(ok).toBe(true);
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith({ composerLongPressEnabled: null });
-    expect(result.current.settings.composerLongPressEnabled).toBe(false);
+    expect(result.current.settings.composerLongPressEnabled).toBe(true);
     expect(result.current.settings.composerLongPressEnabledOverride).toBeUndefined();
   });
 

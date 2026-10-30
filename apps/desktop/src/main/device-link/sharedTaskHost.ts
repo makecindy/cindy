@@ -2,6 +2,7 @@ import {
   parseSharedTaskSnapshot, parseSharedTaskPeer, type SharedTaskApi, type SharedTaskCaller,
   type SharedTaskDetail, type SharedTaskIdentity, type SharedTaskQueueItem,
 } from '@cindy/device-link';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import type { SharedTaskJournal } from '../localDb/sharedTasks.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { SharedTaskAccess } from './sharedTaskAccess.js';
@@ -27,7 +28,7 @@ export interface SharedTaskHostOptions {
   creationState?: SharedTaskCreationState;
   /** Bound at construction to this profile/auth/region generation. */
   isCurrent(): boolean;
-  readSession(sessionId: string): Promise<{ id: string; title: string; status: string } | null>;
+  readSession(sessionId: string): Promise<{ id: string; title: string; status: string; source?: string | null } | null>;
   /** Teardown only the affected sharedTask/member, not the shared relay connection. */
   revoke(sharedTaskId: string, memberId?: string): void;
   changed(sharedTaskId: string): void;
@@ -48,6 +49,11 @@ export class SharedTaskHost {
   // Keep failed writes too: disposal must not report durability after a disk error.
   private readonly closeWrites = new Map<string, Promise<void>>();
   private readonly reconciliation = new Map<string, Map<string, () => void>>();
+  // Scheduling only: closed IDs the server has confirmed absent or closed.
+  private readonly settled = new Set<string>();
+  private journalIds: string[] = [];
+  private failedCreates = 0;
+  private listedAfterFailedCreates = 0;
   constructor(private readonly options: SharedTaskHostOptions) {
     const lifecycle: SharedTaskCreationState = options.creationState ?? { pending: new Map(), identities: new Map() };
     this.creating = lifecycle.pending;
@@ -91,7 +97,8 @@ export class SharedTaskHost {
     if (this.closed.has(snapshot.sharedTaskId)) throw new Error('SharedTask is closed locally');
     const session = await this.options.readSession(snapshot.sessionId);
     this.assertSessionOpen(snapshot.sessionId, generation);
-    if (!session || session.id !== snapshot.sessionId || session.status !== 'active') throw new Error('SharedTask task is unavailable');
+    if (!session || session.id !== snapshot.sessionId || session.status !== 'active'
+        || !CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) throw new Error('SharedTask task is unavailable');
     const persisted = (await this.options.journal.latest()).find((item) => item.sharedTaskId === snapshot.sharedTaskId);
     this.assertSessionOpen(snapshot.sessionId, generation);
     if (persisted?.terminal || this.closed.has(snapshot.sharedTaskId)) throw new Error('SharedTask is closed locally');
@@ -158,7 +165,8 @@ export class SharedTaskHost {
     this.assertSessionGeneration(sessionId, generation);
     const session = await this.options.readSession(sessionId);
     this.assertSessionGeneration(sessionId, generation);
-    if (!session || session.id !== sessionId || session.status !== 'active') throw new Error('SharedTask task is unavailable');
+    if (!session || session.id !== sessionId || session.status !== 'active'
+        || !CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) throw new Error('SharedTask task is unavailable');
     const journal = await this.options.journal.latest();
     this.assertSessionGeneration(sessionId, generation);
     // Server create is idempotent for an active task: close the previous IDs
@@ -179,6 +187,10 @@ export class SharedTaskHost {
     try {
       created = await creating;
       rememberCreated(created.sharedTaskId);
+    } catch (error) {
+      // A lost response may still have created a share this host never learned.
+      this.failedCreates++;
+      throw error;
     } finally { this.creating.delete(creating); }
     if (this.boundaryClosed || this.closedSessions.has(sessionId)) {
       // The boundary drains this request, journals the identity and closes it
@@ -208,25 +220,47 @@ export class SharedTaskHost {
     }
   }
 
+  /**
+   * Whether server authority can still differ from this host: an active or
+   * pending share, or a local closure the server has not confirmed. Never
+   * grants or revokes access; it only decides whether the next restore polls.
+   */
+  needsAuthorityRefresh(): boolean {
+    if (this.creating.size || this.failedCreates !== this.listedAfterFailedCreates) return true;
+    for (const [id, entry] of this.entries) if (!this.closed.has(id) && entry.detail?.status === 'active') return true;
+    for (const id of [...this.closed, ...this.created.keys(), ...this.journalIds]) if (!this.settled.has(id)) return true;
+    return false;
+  }
+
   async restore(allowNetwork = true): Promise<void> {
     this.assertCurrent();
     const journal = await this.options.journal.latest();
     this.assertCurrent();
+    this.journalIds = journal.map((item) => item.sharedTaskId);
     // Shared profile writers hand off terminal changes through the journal.
     // Close access objects as well as the index so existing captures also expire.
     for (const item of journal) if (item.terminal) this.revokeLocally(item.sharedTaskId);
     const sessions = new Set([...this.entries.values()].map((entry) => entry.identity.sessionId));
     for (const identity of this.created.values()) sessions.add(identity.sessionId);
     for (const sessionId of this.creating.values()) sessions.add(sessionId);
+    const runtimeSessions = new Set(sessions);
+    for (const item of journal) if (!item.terminal && item.snapshot
+        && item.snapshot.ownerAccountId === this.options.ownerAccountId
+        && item.snapshot.hostDeviceId === this.options.hostDeviceId) sessions.add(item.sessionId);
     for (const sessionId of sessions) {
       const session = await this.options.readSession(sessionId);
       this.assertCurrent();
-      if ((!session || session.status !== 'active') && !this.closedSessions.has(sessionId)) {
+      if ((runtimeSessions.has(sessionId) && (!session || session.status !== 'active')
+          || !CINDY_MAKE_ENABLED && isCindyMakeSource(session?.source)) && !this.closedSessions.has(sessionId)) {
         await this.closeLocallyForBoundary(sessionId);
         this.assertCurrent();
       }
     }
     if (!allowNetwork) return;
+    // Only IDs known before the list was requested can be judged by it; an ID
+    // learned mid-request may be missing from a list the server built earlier.
+    const candidates = [...this.journalIds, ...this.created.keys(), ...this.closed];
+    const failedCreates = this.failedCreates;
     const active = await this.options.api.list();
     this.assertCurrent();
     const owned = active.filter((item) => item.ownerAccountId === this.options.ownerAccountId && item.hostDeviceId === this.options.hostDeviceId);
@@ -240,13 +274,18 @@ export class SharedTaskHost {
         this.assertCurrent();
       }
     }
+    // An open share stays unsettled; the entry check keeps polling it.
+    const ownedIds = new Set(owned.map((item) => item.sharedTaskId));
+    for (const id of candidates) {
+      if (!ownedIds.has(id) && (this.closed.has(id) || !this.entries.has(id))) this.settled.add(id);
+    }
     for (const item of owned) {
       this.assertCurrent();
       // Covers a create that reached the server but was never accepted/journaled
       // here, and a terminal write made by a different process before startup.
       const session = await this.options.readSession(item.sessionId);
       this.assertCurrent();
-      if (!session || session.status !== 'active') {
+      if (!session || session.status !== 'active' || !CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) {
         this.revokeLocally(item.sharedTaskId);
         await this.options.journal.close(item);
         this.assertCurrent();
@@ -255,8 +294,11 @@ export class SharedTaskHost {
         // Retry a previous explicit close that was persisted before connectivity
         // failed. A process restart itself never closes an active sharedTask.
         await this.options.api.close(item.sharedTaskId);
+        this.settled.add(item.sharedTaskId);
       } else await this.refresh(item.sharedTaskId);
     }
+    // The owned list above included any orphan of those failed creates.
+    this.listedAfterFailedCreates = failedCreates;
   }
 
   detail(sharedTaskId: string): SharedTaskDetail | null {
@@ -326,6 +368,7 @@ export class SharedTaskHost {
     const closing = persisted.then(async () => {
       this.assertCurrent();
       await this.options.api.close(sharedTaskId);
+      this.settled.add(sharedTaskId);
     });
     this.options.revoke(sharedTaskId);
     this.options.changed(sharedTaskId);

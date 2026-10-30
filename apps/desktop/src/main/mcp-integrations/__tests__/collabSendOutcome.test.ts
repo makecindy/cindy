@@ -21,6 +21,17 @@ const mockState = vi.hoisted(() => ({
     _sessionInstanceId: string | undefined,
   ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
+  afterSelectCompanion: null as null | (() => void),
+  personalFeishu: {
+    getOwnerOpenId: () => 'ou_personal',
+    sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_personal_file' })),
+  },
+  companionFeishu: {
+    getOwnerOpenId: () => 'ou_companion',
+    sendMarkdownText: vi.fn(async () => ({ messageId: 'om_companion_text' })),
+    sendFile: vi.fn(async () => ({ ok: true, messageId: 'om_companion_file' })),
+  },
 }));
 
 vi.mock('electron', () => ({
@@ -36,6 +47,10 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
+  getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => undefined,
+  confirmTaskAction: vi.fn(async () => true),
+  captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
 
 vi.mock('@cindy/mcps', () => ({
@@ -71,8 +86,13 @@ vi.mock('../../scheduler-host/index.js', () => ({
 }));
 
 vi.mock('../../im/index.js', () => ({
-  feishuIm: {
-    sendFile: vi.fn(),
+  feishuIm: mockState.personalFeishu,
+}));
+
+vi.mock('../../im/shared/botImConnectionRuntime', () => ({
+  getBotFeishuTransport: (botId: string) => {
+    if (mockState.afterSelectCompanion) queueMicrotask(mockState.afterSelectCompanion);
+    return botId === 'bot-feishu' ? mockState.companionFeishu : null;
   },
 }));
 
@@ -116,6 +136,10 @@ import {
   resolveCollabDispatchResult,
 } from '../../maker-ipc/collabSendOutcome.js';
 import { createDesktopMcpProviders } from '../mcp-providers.js';
+import { createDbClient } from '../../localDb/client/DbClient.js';
+import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
+import type { FeishuBotMcpHostDeps } from '@cindy/mcps';
+import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
 
 const botCapabilities = {
   list: vi.fn(async () => ({ ok: true as const, capabilities: [] })),
@@ -204,6 +228,142 @@ describe('collab send outcome semantics', () => {
       } as never),
     ).toBe(true);
 
+  });
+
+  it('maps send_to_worker images to the host imagePaths field at the collab boundary', async () => {
+    const sendToWorker = vi.fn(async () => ({
+      ok: true as const,
+      agentKind: 'codex' as const,
+      wakeKind: 'already-active' as const,
+      targetTitle: null,
+      targetLastUserSendAt: null,
+    }));
+    mockState.collabService = createCollabService({ sendToWorker });
+    createDesktopMcpProviders({
+      botCapabilities,
+      getMakerMemoryManager: vi.fn(),
+      lspPool: {} as never,
+      pluginRegistry: { isEnabled: () => false, getPlugins: () => [] } as never,
+      invokeRemote: vi.fn(),
+    });
+    const orca = mockState.capturedProvidersConfig?.orca as {
+      sendToWorker: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      images: ['C:/tmp/a.png'],
+    });
+    expect(sendToWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'look',
+      imagePaths: ['C:/tmp/a.png'],
+    });
+
+    await orca.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
+    expect(sendToWorker).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'text only',
+    });
+  });
+
+  // #6439: real Desktop host callbacks + worker DB, only the external IM service
+  // is replaced. Covers missing awaits at host call sites, beyond resolver tests.
+  it('sends canonical background text and files through companion host callbacks with a worker DB', async () => {
+    const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    try {
+      commitVolatileAppSession('cloud', 'feishu-test-owner');
+      await client.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT)');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+      await client.exec('CREATE TABLE bot_profiles (id TEXT PRIMARY KEY, status TEXT)');
+      await client.exec("INSERT INTO bot_profiles VALUES ('bot-feishu', 'active')");
+      await client.exec("INSERT INTO sessions VALUES ('background-receipt', 'bot')");
+      await client.exec("INSERT INTO bot_session_links VALUES ('background-receipt', 'bot-feishu', 'canonical')");
+      setCurrentDbClient(client, 'feishu-test-owner');
+      createDesktopMcpProviders({
+        botCapabilities,
+        getMakerMemoryManager: vi.fn(),
+        lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
+        invokeRemote: vi.fn(),
+      });
+      const feishu = mockState.capturedProvidersConfig!.feishuBot as FeishuBotMcpHostDeps;
+      const session = { sessionId: 'background-receipt', sessionInstanceId: 'runtime' };
+      const owner = await feishu.getOwnerOpenId(session);
+      expect(owner).toBe('ou_companion');
+      expect(await feishu.sendMessage(owner!, 'task complete', session.sessionId, session))
+        .toMatchObject({ ok: true, messageId: 'om_companion_text' });
+      expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
+        .toMatchObject({ ok: true, messageId: 'om_companion_file' });
+      expect(mockState.companionFeishu.sendMarkdownText).toHaveBeenCalledWith('ou_companion', 'task complete');
+      expect(mockState.companionFeishu.sendFile).toHaveBeenCalledWith('ou_companion', '/tmp/report.txt', 'report.txt');
+
+      // A boundary may start after the resolver fulfills but before its caller
+      // resumes. Both production send callbacks must recheck before dispatch.
+      for (const transition of ['pending', 'generation'] as const) {
+        for (const send of [
+          () => feishu.sendMessage(owner!, 'must not send', session.sessionId, session),
+          () => feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session),
+        ]) {
+          let release: (() => void) | undefined;
+          mockState.companionFeishu.sendMarkdownText.mockClear();
+          mockState.companionFeishu.sendFile.mockClear();
+          mockState.afterSelectCompanion = () => {
+            if (transition === 'pending') release = beginAppSessionBoundary();
+            else commitVolatileAppSession('cloud', 'feishu-test-owner', true);
+          };
+          try {
+            expect(await send()).toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+            expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+            expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
+          } finally {
+            mockState.afterSelectCompanion = null;
+            release?.();
+          }
+        }
+      }
+
+      // A paused profile may still have a live tool call and connected transport.
+      // The persisted pause must block both sends even though its link survives.
+      await client.exec("UPDATE bot_profiles SET status = 'paused' WHERE id = 'bot-feishu'");
+      try {
+        await expect(feishu.getOwnerOpenId(session)).rejects.toThrow('Companion is not active');
+        expect(await feishu.sendMessage(owner!, 'paused', session.sessionId, session))
+          .toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+        expect(await feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session))
+          .toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+        expect(mockState.companionFeishu.sendMarkdownText).not.toHaveBeenCalled();
+        expect(mockState.companionFeishu.sendFile).not.toHaveBeenCalled();
+        expect(mockState.personalFeishu.sendMarkdownText).not.toHaveBeenCalled();
+        expect(mockState.personalFeishu.sendFile).not.toHaveBeenCalled();
+      } finally {
+        await client.exec("UPDATE bot_profiles SET status = 'active' WHERE id = 'bot-feishu'");
+      }
+
+      // Same-account archive removes canonical membership without changing the
+      // DB snapshot. An app-scoped recipient must not cross to personal credentials.
+      await client.exec("UPDATE bot_session_links SET role = 'history' WHERE session_id = 'background-receipt'");
+      for (const send of [
+        () => feishu.sendMessage(owner!, 'must not switch bots', session.sessionId, session),
+        () => feishu.sendFile(owner!, '/tmp/report.txt', 'report.txt', session),
+      ]) {
+        expect(await send()).toMatchObject({ ok: false, reason: 'SEND_FAIL' });
+      }
+      expect(mockState.personalFeishu.sendMarkdownText).not.toHaveBeenCalled();
+      expect(mockState.personalFeishu.sendFile).not.toHaveBeenCalled();
+    } finally {
+      commitVolatileAppSession('signed-out');
+      clearCurrentDbClient(client);
+      await client.dispose();
+    }
   });
 
   it('rejects start_skill_learning after the built-in Learn Skill is disabled', async () => {

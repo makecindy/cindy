@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
-import { isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
+import type { Session } from '@cindy/maker-core';
+import { GHOST_ERRAND_PERMISSION_MODES } from '../../shared/ghost.js';
+import type { PluginTaskPermissionMode, PluginTaskRoute, PluginTaskRun, PluginTaskView, PluginTeamPlan } from '../../shared/pluginTasks.js';
+import { isPluginTaskPermissionMode, isPluginTeamPlanWithinBudget, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../shared/pluginTasks.js';
+import type { PluginMessageAttachment } from '../../shared/pluginAttachments.js';
+import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+import { pluginMessageText } from '../../shared/pluginMessage.js';
 import {
   isSameSessionExecution,
   queuedInputBelongsTo,
@@ -11,7 +17,7 @@ import {
 export interface PluginTaskReceipt {
   id: string;
   pluginId: string;
-  operation: 'create' | 'send';
+  operation: 'create' | 'send' | 'target';
   targetId: string;
   requestKey: string;
   fingerprint: string;
@@ -48,6 +54,7 @@ export interface PluginTaskStore {
   discardUncreated(row: PluginTaskReceipt): Promise<void>;
   save(row: PluginTaskReceipt): Promise<void>;
   revokePlugin(pluginId: string): Promise<void>;
+  relocatePlugin(from: string, to: string): Promise<void>;
 }
 export class PluginTaskError extends Error {
   constructor(
@@ -59,8 +66,8 @@ export class PluginTaskError extends Error {
     this.name = 'PluginTaskError';
   }
 }
-/** Bounds legacy receipts before parsing; oversized authority never becomes a missing plan. */
-export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; settledLabels?: string[]; route?: PluginTaskRoute; [key: string]: unknown } {
+/** Bounds stored batch metadata before parsing; existing receipt fields remain intact. */
+export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginTeamPlan; route?: PluginTaskRoute; [key: string]: unknown } {
   if (typeof payload !== 'string' || payload.length > PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS)
     throw new PluginTaskError('INVALID_REQUEST', 'Task receipt exceeds the supported size');
   const data = JSON.parse(payload);
@@ -68,13 +75,14 @@ export function readPluginTaskPlanReceipt(payload: string): { teamPlan?: PluginT
     throw new PluginTaskError('INVALID_REQUEST', 'Team plan exceeds the supported size');
   return data;
 }
+
 /** Service failures must reject the public task API, without exposing internal diagnostics. */
 export function assertPluginTaskResult(result: { ok: boolean; errorCode?: string }, message: string): void {
   if (!result.ok) throw new PluginTaskError(result.errorCode || 'HOST_NOT_READY', message);
 }
 /** A live task cannot exercise more authority than the plugin's current setting. */
 export function isPluginTaskPermissionAllowed(taskMode: unknown, configuredMode: unknown, planModeEnabled = false): boolean {
-  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'ask' ? 1 : mode === 'acceptEdits' ? 2 : mode === 'auto' ? 3 : -1;
+  const rank = (mode: unknown) => mode === 'plan' ? 0 : mode === 'ask' ? 1 : mode === 'acceptEdits' ? 2 : mode === 'auto' ? 3 : mode === 'bypassPermissions' ? 4 : -1;
   const task = rank(taskMode);
   return !planModeEnabled && task >= 0 && task <= Math.max(0, rank(configuredMode));
 }
@@ -91,12 +99,21 @@ const hash = (data: unknown) => createHash('sha256').update(JSON.stringify(data,
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]))
     : value,
 )).digest('hex');
+/** Main-only context; never populated from tasks.create's wire request. */
+export interface PluginTaskCreateContext {
+  taskId: string;
+  workingDir: string;
+  assertCurrent(): void;
+}
 export interface PluginTaskServiceDeps {
   store: PluginTaskStore;
   /** Bound to the captured account/database epoch and plugin availability. */
   assertCurrent(): void;
   assertAuthorized(pluginId: string): void;
+  /** Undefined only when this plugin has opted out of its Host task card. */
   readPermissionMode(pluginId: string): unknown;
+  /** Include the inherited new-task selection when the resolver can use it. */
+  readModelPreference(pluginId: string): Partial<PluginTaskRoute> & { inheritedDefault?: string };
   resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
   createSession(
     pluginId: string,
@@ -107,15 +124,38 @@ export interface PluginTaskServiceDeps {
     requestedRoute: PluginTaskRoute | undefined,
     onPersistenceStarted: () => void,
     callId?: string,
+    /** Background task: the Session row is inserted with hidden_at set (never flashes into lists). */
+    hidden?: boolean,
+    targetContext?: PluginTaskCreateContext,
+    permissionMode?: PluginTaskPermissionMode,
   ): Promise<void>;
+  /**
+   * Re-checks `agent.hiddenTasks` (with tasks) for this plugin; throws PERMISSION_DENIED.
+   * The pipe checks first; the service re-checks behind its receipt queue.
+   */
+  assertHiddenTasksAllowed?(pluginId: string): void;
+  /**
+   * Shared Host writer for `sessions.hidden_at` (plugin setHidden and the detail-page reveal).
+   * `assertAllowed` runs synchronously right before the write.
+   */
+  setHidden?(taskId: string, hidden: boolean, assertAllowed: () => void): Promise<void>;
+  /** Uninstall fallback: reveal this plugin's background tasks before ownership is revoked. */
+  revealPluginTasks?(pluginId: string): Promise<void>;
+  /** Host archive writer (same path as the sidebar); `assertAllowed` runs right before the write. */
+  archive?(taskId: string, assertAllowed: () => void): Promise<void>;
+  /** Live execution or queued input right now; read synchronously so it can run under the write lock. */
+  isBusy?(taskId: string): boolean;
   setModel?(taskId: string, route: PluginTaskRoute, assertCurrent: () => Promise<void>): Promise<{ status: string }>;
   readSession(taskId: string): Promise<PluginTaskView | null>;
+  readLiveSession(taskId: string): Pick<Session, 'instanceId' | 'stablePlanModeState'> | undefined;
   assertTeamPlanUnstarted?(taskId: string): Promise<void>;
   dispatch(
     pluginId: string,
     taskId: string,
     clientId: string,
     text: string,
+    images?: PluginMessageImage[],
+    context?: string,
   ): Promise<{ ok: boolean; message?: string }>;
   inspect(
     taskId: string,
@@ -128,6 +168,10 @@ export interface PluginTaskServiceDeps {
   ): Promise<'cancelled' | 'stopping' | 'stale'>;
   now?: () => number;
   id?: () => string;
+  /** Host bookkeeping only; plugins cannot mint or increment usage identities. */
+  prepareInvocation?(pluginId: string, id: string, parentId?: string, operation?: string, sessionId?: string): string;
+  acceptInvocation?(pluginId: string, id: string): void;
+  scheduleAutoTitle?(pluginId: string, taskId: string, text: string, placeholderText: string): void;
 }
 
 /** Uses native input/terminal facts. Never infers completion from idle or the latest assistant. */
@@ -152,11 +196,39 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     operations = Promise.all([operations, result.catch(() => undefined)]).then(() => undefined);
     return result;
   };
-  const assertDispatch = async (pluginId: string, taskId: string) => {
+  const assertHiddenTasksAllowed = (pluginId: string) => {
+    if (!deps.assertHiddenTasksAllowed) fail('PERMISSION_DENIED', 'Background tasks are unavailable');
+    deps.assertHiddenTasksAllowed!(pluginId);
+  };
+  // The persisted/UI choice can be consumed while Pi is still executing Plan.
+  // Keep one live authority across awaits; queued acceptance must also match
+  // the runtime selected by the input coordinator, including for cold tasks.
+  const capturePlanGuard = (taskId: string, execution?: SessionExecutionIdentity) => {
+    const live = deps.readLiveSession(taskId);
+    const plan = live?.stablePlanModeState;
+    const generation = plan?.generation;
+    const assertCurrent = () => {
+      const current = deps.readLiveSession(taskId);
+      const state = current?.stablePlanModeState;
+      if (current !== live || (execution && current?.instanceId !== execution.instanceId)
+        || (live && (!plan || plan.enabled || !state || state.enabled || state.generation !== generation)))
+        fail('PERMISSION_DENIED', 'Task Plan Mode is active, unknown or changing');
+    };
+    assertCurrent();
+    return assertCurrent;
+  };
+  const isTaskPermissionAllowed = (pluginId: string, view: PluginTaskView) => {
+    const configuredMode = deps.readPermissionMode(pluginId);
+    return configuredMode === undefined
+      ? !view.planModeEnabled && (GHOST_ERRAND_PERMISSION_MODES as readonly unknown[]).includes(view.permissionMode)
+      : isPluginTaskPermissionAllowed(view.permissionMode, configuredMode, view.planModeEnabled);
+  };
+  const assertDispatch = async (pluginId: string, taskId: string, assertPlanCurrent = capturePlanGuard(taskId)) => {
     const view = await ownTask(pluginId, taskId);
     deps.assertAuthorized(pluginId);
+    assertPlanCurrent();
     if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
-    if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId), view.planModeEnabled))
+    if (!isTaskPermissionAllowed(pluginId, view))
       return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
     return view;
   };
@@ -177,7 +249,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       return fail('TASK_NOT_FOUND', 'Task not found');
     deps.assertCurrent();
     deps.assertAuthorized(pluginId);
-    return view;
+    return { ...view, hidden: view.hidden === true };
   };
   const ownRun = async (pluginId: string, runId: string) => {
     const row = await deps.store.get(runId);
@@ -230,11 +302,19 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     });
   };
   return {
+    relocatePlugin: (from: string, to: string) => exclusive(async () => {
+      await deps.store.relocatePlugin(from, to);
+      deps.assertCurrent();
+    }),
     // Host-only native lifecycle work shares send/cancel's drain. Do not use
     // exclusive here: native close callbacks may enqueue receipt writes.
     completeOperation,
     /** Retain receipts and user content, but never reuse an uninstalled installation's ownership. */
     withUninstall: (pluginId: string, remove: () => Promise<void>) => exclusive(async () => {
+      // Background tasks must never outlive the detail page that discloses them.
+      // Reveal first: a failure aborts the uninstall like a failed revocation.
+      await deps.revealPluginTasks?.(pluginId);
+      deps.assertCurrent();
       await deps.store.revokePlugin(pluginId);
       deps.assertCurrent();
       await remove();
@@ -249,11 +329,29 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     },
     create: (
       pluginId: string,
-      request: { requestKey: string; title: string; route?: PluginTaskRoute; isolatedWorkspace?: boolean; callId?: string },
+      request: { requestKey: string; title?: string; autoTitle?: boolean; route?: PluginTaskRoute; permissionMode?: PluginTaskPermissionMode; isolatedWorkspace?: boolean; callId?: string; hidden?: boolean },
+      targetContext?: PluginTaskCreateContext,
     ) =>
       exclusive(async () => {
+        targetContext?.assertCurrent();
         deps.assertAuthorized(pluginId);
-        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : []), ...(request.callId ? [{ callId: request.callId }] : [])];
+        if (request.autoTitle === true ? request.title !== undefined : !request.title?.trim())
+          return fail('INVALID_REQUEST', 'Supply a title or opt into automatic naming');
+        if (request.permissionMode !== undefined && !isPluginTaskPermissionMode(request.permissionMode))
+          return fail('INVALID_REQUEST', 'Unsupported task creation permission');
+        const assertRequestedPermission = () => {
+          if (request.permissionMode === undefined) return;
+          deps.assertAuthorized(pluginId);
+          const configuredMode = deps.readPermissionMode(pluginId);
+          if (configuredMode !== undefined && !isPluginTaskPermissionAllowed(request.permissionMode, configuredMode))
+            fail('PERMISSION_DENIED', 'Requested permission exceeds plugin dispatch policy');
+        };
+        const title = request.autoTitle ? DEFAULT_DRAFT_SESSION_TITLE : request.title!;
+        const hidden = request.hidden === true;
+        if (hidden) assertHiddenTasksAllowed(pluginId);
+        // hidden:false is the default; only a background request changes the fingerprint,
+        // so existing visible receipts replay unchanged.
+        const input = [request.title, request.route ?? null, ...(request.isolatedWorkspace ? [true] : []), ...(request.callId ? [{ callId: request.callId }] : []), ...(hidden ? [{ hidden: true }] : []), ...(targetContext ? [{ workingDir: targetContext.workingDir }] : []), ...(request.autoTitle ? [{ autoTitle: true }] : []), ...(request.permissionMode !== undefined ? [{ permissionMode: request.permissionMode }] : [])];
         const fingerprint = hash(input);
         let row = replay(
           await deps.store.find(pluginId, 'create', '', request.requestKey),
@@ -265,24 +363,44 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           // Do not recreate a deleted/ambiguous task on replay.
           return ownTask(pluginId, row.id);
         }
+        assertRequestedPermission();
         const route = await deps.resolveRoute(pluginId, request.route, request.callId);
         deps.assertCurrent();
-        const taskId = id();
+        targetContext?.assertCurrent();
+        assertRequestedPermission();
+        const taskId = targetContext?.taskId ?? id();
         row = newReceipt(
           pluginId,
           'create',
           '',
           request.requestKey,
           fingerprint,
-          { route, title: request.title },
+          { route, title, ...(request.autoTitle ? { autoTitle: true } : {}) },
           taskId,
         );
         await deps.store.insert(row);
         let persistenceStarted = false;
         try {
           deps.assertCurrent();
-          await deps.createSession(pluginId, taskId, request.title, route, request.isolatedWorkspace, request.route,
-            () => { persistenceStarted = true; }, request.callId);
+          const onPersistenceStarted = () => { assertRequestedPermission(); persistenceStarted = true; };
+          // Omitted new fields keep the original creator call shape.
+          if (request.permissionMode !== undefined) {
+            targetContext?.assertCurrent();
+            await deps.createSession(pluginId, taskId, title, route, targetContext ? undefined : request.isolatedWorkspace,
+              request.route, onPersistenceStarted, targetContext ? undefined : request.callId,
+              hidden || undefined, targetContext, request.permissionMode);
+          } else if (targetContext) {
+            targetContext.assertCurrent();
+            await deps.createSession(pluginId, taskId, title, route, undefined, request.route,
+              onPersistenceStarted, undefined, undefined, targetContext);
+          } else if (hidden) {
+            assertHiddenTasksAllowed(pluginId);
+            await deps.createSession(pluginId, taskId, title, route, request.isolatedWorkspace, request.route,
+              onPersistenceStarted, request.callId, true);
+          } else {
+            await deps.createSession(pluginId, taskId, title, route, request.isolatedWorkspace, request.route,
+              onPersistenceStarted, request.callId);
+          }
         } catch (error) {
           // Once INSERT starts, even an error is ambiguous. Never free that key
           // or infer failure from a subsequently deleted/filtered Session.
@@ -308,28 +426,71 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       await save(row,{...data,teamPlan:plan});
       return {ok:true};
     }),
-    settleWorkerLabel: (pluginId: string, taskId: string, label: string) => exclusive(async () => {
-      await ownTask(pluginId,taskId);
-      const row = (await deps.store.get(taskId))!;
-      const data = readPluginTaskPlanReceipt(row.payload);
-      if (!data.teamPlan?.items.some((x: {label:string})=>x.label===label)) return fail('INVALID_REQUEST','Worker is not in team plan');
-      await save(row,{...data,settledLabels:[...new Set([...(data.settledLabels||[]),label])]});
-    }),
     assertDispatch,
-    setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute }) => exclusive(async () => {
+    setModel: (pluginId: string, request: { taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }) => exclusive(async () => {
+      const modelFields = ['agentKind', 'providerId', 'model', 'effort', 'fastMode'] as const;
+      const followDefault = request.route === 'plugin-default';
+      const preference = followDefault ? { ...deps.readModelPreference(pluginId) } : undefined;
       const assertUnchanged = async () => {
         const task = await ownTask(pluginId, request.taskId);
         if (task.status !== 'active') return fail('TASK_BUSY', '任务已归档，请先恢复任务');
         if (task.revision !== request.expectedRevision) return fail('STALE_REVISION', '任务配置已变化，请刷新后重试');
+        // Plugin preferences and inherited defaults do not change the task
+        // revision. Recheck both after admission and at the mutation boundary.
+        if (preference) {
+          const current = deps.readModelPreference(pluginId);
+          if (modelFields.some(key => preference[key] !== current[key])
+            || preference.inheritedDefault !== current.inheritedDefault)
+            return fail('STALE_REVISION', '插件模型设置已变化，请重试以使用当前设置');
+        }
+        return task;
       };
       await assertUnchanged();
-      const route = await deps.resolveRoute(pluginId, request.route);
-      await assertUnchanged();
+      // Opt-in: persistent plugin workflows can re-read the user's current
+      // plugin selection before each new input, using the same resolver as create.
+      // Ordinary tasks and explicit routes retain their existing semantics.
+      const route = await deps.resolveRoute(pluginId, request.route === 'plugin-default' ? undefined : request.route);
+      const task = await assertUnchanged();
+      if (followDefault && modelFields
+        .every(key => task.resolvedConfig[key] === route[key])) return { status: 'unchanged', task };
       if (!deps.setModel) return fail('HOST_NOT_READY', '任务模型服务尚未就绪');
-      const result = await deps.setModel(request.taskId, route, assertUnchanged);
+      const result = await deps.setModel(request.taskId, route, async () => { await assertUnchanged(); });
       return { ...result, task: await ownTask(pluginId, request.taskId) };
     }),
     get: (pluginId: string, taskId: string) => exclusive(() => ownTask(pluginId, taskId)),
+    /** Background/visible switch for this plugin's own local task; Workers and remote tasks are not plugin tasks. */
+    setHidden: (pluginId: string, request: { taskId: string; hidden: boolean }) => exclusive(async () => {
+      assertHiddenTasksAllowed(pluginId);
+      const task = await ownTask(pluginId, request.taskId);
+      if (!deps.setHidden) return fail('HOST_NOT_READY', 'Task visibility service is not ready');
+      if (task.hidden !== request.hidden) {
+        await deps.setHidden(request.taskId, request.hidden, () => {
+          deps.assertCurrent();
+          deps.assertAuthorized(pluginId);
+          assertHiddenTasksAllowed(pluginId);
+        });
+      }
+      return ownTask(pluginId, request.taskId);
+    }),
+    /**
+     * Archive this plugin's own idle local task. Reversible by the user (unarchive) and never a
+     * delete; a task with live execution or queued input stays active so nothing is cut off.
+     */
+    archive: (pluginId: string, request: { taskId: string }) => exclusive(async () => {
+      const task = await ownTask(pluginId, request.taskId);
+      if (task.status === 'archived') return task;
+      if (!deps.archive) return fail('HOST_NOT_READY', 'Task archive service is not ready');
+      const observed = await deps.inspect(request.taskId);
+      if (observed.execution || observed.pending.length) return fail('TASK_BUSY', 'The task is still working');
+      await deps.archive(request.taskId, () => {
+        deps.assertCurrent();
+        deps.assertAuthorized(pluginId);
+        // The idle check above ran before this write waited for the session lock; input sent in
+        // between must still stop the archive.
+        if (deps.isBusy?.(request.taskId)) throw new PluginTaskError('TASK_BUSY', 'The task is still working');
+      });
+      return ownTask(pluginId, request.taskId);
+    }),
     list: (pluginId: string, after = '', limit = 50) =>
       exclusive(async () => {
         deps.assertAuthorized(pluginId);
@@ -339,45 +500,55 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           // The store projects valid create payloads as empty to avoid loading plans.
           if (row.payload !== '' && !ownsTaskReceipt(row, pluginId)) continue;
           const view = await deps.readSession(row.id);
-          if (view && view.status !== 'deleted') items.push(view);
+          if (view && view.status !== 'deleted') items.push({ ...view, hidden: view.hidden === true });
         }
         return { items, nextCursor: rows.length === limit ? rows.at(-1)!.id : null };
       }),
     send: async (
       pluginId: string,
-      request: { taskId: string; requestKey: string; expectedRevision: number; text: string },
-    ): Promise<PluginTaskRun> => completeOperation(async () => {
+      request: { taskId: string; requestKey: string; expectedRevision: number; text: string; context?: string; attachments?: PluginMessageAttachment[]; invocationId?: string },
+    ): Promise<PluginTaskRun> => completeOperation(() => withParsedPluginMessageAttachments(request.attachments, async images => {
       const prepared = await exclusive(async () => {
         const view = await ownTask(pluginId, request.taskId);
-        const fingerprint = hash([request.text, request.expectedRevision]);
+        const contentIdentity: unknown[] = images.length
+          ? [request.text, request.expectedRevision, images.map(({ hash, name }) => [hash, name])]
+          : [request.text, request.expectedRevision];
+        if (request.context) contentIdentity.push({ context: request.context });
+        const fingerprint = hash(request.invocationId === undefined ? contentIdentity : [...contentIdentity, request.invocationId]);
         const previous = replay(
           await deps.store.find(pluginId, 'send', request.taskId, request.requestKey),
           fingerprint,
         );
         if (previous)
-          return { run: JSON.parse(previous.payload) as PluginTaskRun, dispatch: false };
-        if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(pluginId), view.planModeEnabled)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+          return { run: JSON.parse(previous.payload) as PluginTaskRun, dispatch: false as const };
+        const assertPlanCurrent = capturePlanGuard(view.taskId);
+        if (!isTaskPermissionAllowed(pluginId, view)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
         if (view.status !== 'active')
           return fail('TASK_BUSY', 'Archived tasks cannot accept input');
         if (view.revision !== request.expectedRevision)
           return fail('REVISION_CONFLICT', 'Task configuration changed');
         await deps.resolveRoute(pluginId, view.resolvedConfig);
-        await assertDispatch(pluginId, view.taskId);
+        await assertDispatch(pluginId, view.taskId, assertPlanCurrent);
         const runId = id();
+        const invocationId = deps.prepareInvocation?.(pluginId, runId, request.invocationId, 'tasks.send', view.taskId);
         const run: PluginTaskRun = {
           runId,
           taskId: view.taskId,
           inputMessageId: `plugin-task:${runId}`,
           status: 'queued',
           acceptedAt: now(),
+          ...(invocationId ? { invocationId } : {}),
           acceptedConfig: view.resolvedConfig,
           usage: { status: 'unavailable', reason: 'Per-input usage has not been reconciled.' },
         };
+        const creation = await deps.store.get(view.taskId);
+        const autoTitle = !!creation && readPluginTaskPlanReceipt(creation.payload).autoTitle === true;
         deps.assertAuthorized(pluginId);
+        assertPlanCurrent();
         await deps.store.insert(
           newReceipt(pluginId, 'send', view.taskId, request.requestKey, fingerprint, run, runId),
         );
-        return { run, dispatch: true };
+        return { run, dispatch: true as const, assertPlanCurrent, autoTitle };
       });
       if (!prepared.dispatch) return prepared.run;
       let failure: 'failed' | 'reconciling' | undefined;
@@ -385,15 +556,28 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       // Never hold the receipt lock while entering Session dispatch/control. The
       // coordinator awaits accept() before vendor dispatch under its own lock.
       try {
-        await assertDispatch(pluginId, prepared.run.taskId);
+        await assertDispatch(pluginId, prepared.run.taskId, prepared.assertPlanCurrent);
+        prepared.assertPlanCurrent();
         dispatchStarted = true;
         const outcome = await deps.dispatch(
           pluginId,
           prepared.run.taskId,
           prepared.run.inputMessageId,
           request.text,
+          images,
+          request.context,
         );
         if (!outcome.ok) failure = 'failed';
+        else {
+          // Usage persistence must never turn an accepted input into a retry.
+          if (prepared.run.invocationId) {
+            try { deps.acceptInvocation?.(pluginId, prepared.run.invocationId); } catch { /* Best effort, as tool recording. */ }
+          }
+          if (prepared.autoTitle) {
+            try { deps.scheduleAutoTitle?.(pluginId, prepared.run.taskId, pluginMessageText(request.text, request.context), request.text); }
+            catch { /* Naming failure never retries an accepted message. */ }
+          }
+        }
       } catch {
         // Before entering dispatch, this input is known not to have reached the host.
         failure = dispatchStarted ? 'reconciling' : 'failed';
@@ -412,7 +596,12 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         }
         return run;
       });
-    }),
+    }).catch(error => {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (!(error instanceof PluginTaskError) && (code === 'INVALID_ATTACHMENTS' || code === 'TASK_BUSY'))
+        throw new PluginTaskError(code, code, code === 'TASK_BUSY');
+      throw error;
+    })),
     getRun: async (pluginId: string, runId: string) =>
       reconcile(await exclusive(() => ownRun(pluginId, runId))),
     listRuns: async (pluginId: string, taskId: string, after = '', limit = 50) => {
@@ -468,18 +657,25 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
               continue;
             return fail('REQUEST_EXPIRED', 'Input was already settled');
           }
+          const assertPlanCurrent = capturePlanGuard(taskId, execution);
           const view = await ownTask(row.pluginId, taskId);
+          assertPlanCurrent();
           if (view.status !== 'active') return fail('TASK_BUSY', 'Archived tasks cannot accept input');
-          if (!isPluginTaskPermissionAllowed(view.permissionMode, deps.readPermissionMode(row.pluginId), view.planModeEnabled)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
+          if (!isTaskPermissionAllowed(row.pluginId, view)) return fail('PERMISSION_DENIED', 'Task permission exceeds plugin dispatch policy');
           if (hash(view.resolvedConfig) !== hash(run.acceptedConfig))
             return fail('ROUTE_UNAVAILABLE', 'Accepted route changed before dispatch');
           await deps.resolveRoute(row.pluginId, run.acceptedConfig);
-          await assertDispatch(row.pluginId, taskId);
+          await assertDispatch(row.pluginId, taskId, assertPlanCurrent);
+          assertPlanCurrent();
           run.inputClientIds = [...new Set([...(run.inputClientIds ?? []), item.clientId])];
           run.execution = execution;
           run.status = 'running';
           await save(row, run);
-          await assertDispatch(row.pluginId, taskId);
+          if (run.invocationId) {
+            try { deps.acceptInvocation?.(row.pluginId, run.invocationId); } catch { /* Never change input acceptance. */ }
+          }
+          await assertDispatch(row.pluginId, taskId, assertPlanCurrent);
+          assertPlanCurrent();
         }
       }),
     settle: (

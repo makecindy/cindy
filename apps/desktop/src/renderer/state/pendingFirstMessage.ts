@@ -29,6 +29,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { DeferredUiAssignment } from '@/features/cc-agent/deferredUiAssignment';
+import type { BuiltInSkillDraftIntent } from '@/lib/composerDraftStore';
 
 /**
  * device-link 草稿开了协同时,把「开协同」这件事一起交接给 SessionView(issue #1170)。
@@ -50,6 +51,7 @@ export interface PendingRemoteCollab {
 
 export interface PendingPayload {
   text: string;
+  builtInSkillIntent?: BuiltInSkillDraftIntent;
   files?: AttachedFile[];
   mentions?: MentionedResource[];
   vendorOptions?: Record<string, unknown>;
@@ -140,7 +142,7 @@ export function consumePendingGoal(sessionId: string): PendingGoalPayload | null
 // 非协同的 device-link 起目标照样会在 subscribe 那次 await 里丢掉目标正文。
 //
 // 取舍:
-//  · 只存**正文**,不存附件 —— 与本仓既有取舍一致(newMakerDraft 头部:「附件 → 丢失
+//  · 只存**正文及可选的内置 Skill 调用意图**,不存附件 —— 与本仓既有取舍一致(newMakerDraft 头部:「附件 → 丢失
 //    (产品决策)」),也避免把附件字节写进 localStorage。
 //  · 恢复时**只回填输入框,绝不自动补发**。用户上次按下发送时的意图未必还成立,
 //    重启后凭空冒出一条已发消息比丢失更难解释;回填后由用户自己决定。
@@ -156,6 +158,7 @@ export type RecoverableHandoffKind = 'message' | 'goal';
 interface RecoverableHandoff {
   kind: RecoverableHandoffKind;
   text: string;
+  builtInSkillIntent?: BuiltInSkillDraftIntent;
   createdAt: number;
 }
 
@@ -215,6 +218,16 @@ function parseRecoveryTable(raw: string): {
       kind: entry.kind as RecoverableHandoffKind,
       text: entry.text as string,
       createdAt: entry.createdAt as number,
+      ...(entry.builtInSkillIntent &&
+      typeof entry.builtInSkillIntent.name === 'string' &&
+      typeof entry.builtInSkillIntent.commandName === 'string'
+        ? {
+            builtInSkillIntent: {
+              name: entry.builtInSkillIntent.name,
+              commandName: entry.builtInSkillIntent.commandName,
+            },
+          }
+        : {}),
     };
   }
   return { table, pruned };
@@ -252,10 +265,14 @@ export function rememberRecoverableHandoff(
   sessionId: string,
   kind: RecoverableHandoffKind,
   text: string,
+  builtInSkillIntent?: BuiltInSkillDraftIntent,
 ): void {
   if (!sessionId || text === '') return;
   const table = readRecoveryTable();
-  table[sessionId] = { kind, text, createdAt: Date.now() };
+  table[sessionId] = {
+    kind, text, createdAt: Date.now(),
+    ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
+  };
   writeRecoveryTable(table);
 }
 
@@ -306,13 +323,21 @@ export function takeRecoverableHandoff(
   sessionId: string,
   kind: RecoverableHandoffKind,
 ): string | null {
+  return takeRecoverableHandoffPayload(sessionId, kind)?.text ?? null;
+}
+
+/** Includes the built-in intent so restoring text cannot silently select a user skill. */
+export function takeRecoverableHandoffPayload(
+  sessionId: string,
+  kind: RecoverableHandoffKind,
+): RecoverableHandoff | null {
   if (!sessionId) return null;
   const table = readRecoveryTable();
   const entry = table[sessionId];
   if (!entry || entry.kind !== kind) return null;
   delete table[sessionId];
   writeRecoveryTable(table);
-  return entry.text;
+  return entry;
 }
 
 /** 测试用。 */

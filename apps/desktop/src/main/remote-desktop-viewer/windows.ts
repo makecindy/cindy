@@ -2,15 +2,28 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  powerMonitor,
   screen,
   type IpcMainInvokeEvent,
   type WebContents,
 } from 'electron';
-import { REMOTE_DESKTOP_CHANNEL, DeviceLinkError, parseClipboardContent } from '@cindy/device-link';
+import {
+  REMOTE_DESKTOP_CHANNEL,
+  DeviceLinkError,
+  parseClipboardContent,
+  parseRemoteDesktopRequest,
+} from '@cindy/device-link';
+import { createHash } from 'node:crypto';
+import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
 import { REMOTE_VIEWER, type RemoteViewerTarget } from '../../shared/remoteDesktopViewer.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAppCapabilities } from '../appCapabilities.js';
-import { getSelfDeviceId, remoteInvoke } from '../device-link/index.js';
+import {
+  getSelfDeviceId,
+  remoteInvoke,
+  getDeviceLinkStatus,
+  getUnresponsiveDeviceIds,
+} from '../device-link/index.js';
 import { loadDesktopIceServers } from '../remote-desktop/iceConfig.js';
 import {
   assertTrustedAppRendererEvent,
@@ -39,6 +52,8 @@ async function requestRemote<T>(device: string, request: unknown, check: () => v
   check();
   if (!getAppCapabilities().canUseDeviceLink || isAppSessionBoundaryPending())
     throw new Error('DESKTOP_STOPPED');
+  const startedAt = Date.now();
+  const startedMonotonic = performance.now();
   try {
     const result = await remoteInvoke(device, REMOTE_DESKTOP_CHANNEL, [request], {
       preSend: () => {
@@ -51,6 +66,27 @@ async function requestRemote<T>(device: string, request: unknown, check: () => v
       throw new Error(result.error.code === 'IPC_ERROR' ? result.error.message : result.error.code);
     return result.result as T;
   } catch (error) {
+    try {
+      const parsed = parseRemoteDesktopRequest(request);
+      const lease = 'lease' in parsed ? parsed.lease : null;
+      log.debug('desktop request failed', {
+        at: Date.now(),
+        startedAt,
+        elapsedMs: performance.now() - startedMonotonic,
+        operation: parsed.op,
+        session: lease ? createHash('sha256').update(lease).digest('hex').slice(0, 16) : null,
+        code: desktopDiagnosticCode(
+          error instanceof DeviceLinkError
+            ? error.code
+            : (extractIpcError(error)?.message ?? error),
+        ),
+        signaling: getDeviceLinkStatus(),
+        peerUnresponsive: getUnresponsiveDeviceIds().includes(device),
+        inFlight: error instanceof DeviceLinkError ? (error.inFlight ?? null) : null,
+      });
+    } catch {
+      /* Diagnostics must preserve the original request failure. */
+    }
     if (error instanceof DeviceLinkError) throw new Error(error.code);
     const parsed = extractIpcError(error);
     if (parsed?.code === 'DEVICE_LINK_CONTROL_DISABLED') throw new Error('REMOTE_DISABLED');
@@ -97,13 +133,24 @@ export class RemoteDesktopViewerWindows {
       target.deviceId.length > 256 ||
       target.deviceId === getSelfDeviceId() ||
       typeof target.name !== 'string' ||
-      target.name.length > 256
+      target.name.length > 256 ||
+      (target.handoff !== undefined &&
+        (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff)))
     )
       throwIpcError('INVALID_PARAMS', 'Invalid remote desktop target');
-    let entry = [...this.entries].find((e) => e.connection.target?.deviceId === target.deviceId);
+    // A 代输入 window view is its own window, separate from a whole-desktop viewer.
+    let entry = [...this.entries].find(
+      (e) =>
+        e.connection.target?.deviceId === target.deviceId &&
+        e.connection.target.handoff === target.handoff,
+    );
     if (!entry) entry = [...this.entries].find((e) => !e.connection.target) ?? this.create();
     if (!entry.connection.active)
-      entry.connection.bind({ deviceId: target.deviceId, name: target.name });
+      entry.connection.bind({
+        deviceId: target.deviceId,
+        name: target.name,
+        ...(target.handoff ? { handoff: target.handoff } : {}),
+      });
     entry.controller.open(sender);
     // The spare shell is created off the next click path, never connects to a peer.
     this.prewarm();
@@ -154,9 +201,11 @@ export class RemoteDesktopViewerWindows {
       },
       focused: () => entry.window?.isFocused() === true,
       clipboard: {
+        // The plain counter: a multi-item local clipboard (several files) is
+        // reported by the content read and skipped, without failing the pass.
         version: (current) => {
           if (!current()) return Promise.reject(new Error('DESKTOP_STOPPED'));
-          return counter.read(true);
+          return counter.read();
         },
         stop: () => counter.stop(),
         read: async (current) =>
@@ -215,6 +264,7 @@ export class RemoteDesktopViewerWindows {
           this.setInputCaptured(entry, false);
           void connection.focusChanged();
         });
+        win.on('focus', () => void connection.focusChanged());
         // The session survives hiding; the page pauses the host's video instead.
         const hidden = (value: boolean) => () => {
           if (!win.isDestroyed() && !win.webContents.isDestroyed())
@@ -263,7 +313,23 @@ export class RemoteDesktopViewerWindows {
       throwIpcError('PERMISSION_DENIED', 'Invalid viewer');
     return entry;
   }
+  private readonly endForLocalLock = () => {
+    for (const entry of this.entries) {
+      if (!entry.connection.active) continue;
+      try {
+        entry.connection.close(entry.connection.generation, true);
+      } catch {
+        // An account change can retire the owner between the power event and
+        // its handler. Revoke locally without acting as the previous owner.
+        entry.connection.deactivate();
+      }
+      const win = entry.window;
+      if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
+    }
+  };
   register(): void {
+    powerMonitor.on('lock-screen', this.endForLocalLock);
+    powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);
@@ -275,15 +341,14 @@ export class RemoteDesktopViewerWindows {
     ipcMain.handle(REMOTE_VIEWER.PRESENTED, (event) => {
       this.entry(event).controller.markPresentationReady(event.sender);
     });
-    ipcMain.handle(REMOTE_VIEWER.CLOSE, async (event, generation) => {
+    ipcMain.handle(REMOTE_VIEWER.CLOSE, (event, generation) => {
       const entry = this.entry(event);
       if (generation !== entry.connection.generation) return;
       try {
-        await entry.connection.close(generation);
+        entry.connection.close(generation);
       } catch {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOP_FAILED');
       }
-      if (generation !== entry.connection.generation) return;
       entry.controller.close(event.sender);
     });
     ipcMain.handle(REMOTE_VIEWER.PREFERENCES, async (event, generation, patch) => {
@@ -315,6 +380,13 @@ export class RemoteDesktopViewerWindows {
         throwIpcError('INVALID_PARAMS', 'Invalid retry');
       try {
         return await this.entry(event).connection.safety(generation, retry);
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
+      }
+    });
+    ipcMain.handle(REMOTE_VIEWER.CLIPBOARD_SYNC, async (event, generation) => {
+      try {
+        return await this.entry(event).connection.syncClipboard(generation);
       } catch {
         throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
       }

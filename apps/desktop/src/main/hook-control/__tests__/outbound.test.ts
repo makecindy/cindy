@@ -105,6 +105,34 @@ function deps(
 }
 
 describe('collectOutboundAttachments', () => {
+  it.each([String.raw`C:\task\shot.png`, 'C:/task/shot.png', '/home/task/shot.png'])(
+    'recognizes standalone foreign paths without reading them: %s', async (source) => {
+      const text = `![shot](${source})`;
+      const io = deps({});
+      expect(hasOutboundRefs(text)).toBe(true);
+      const result = await collectOutboundAttachments(text, [], io);
+      expect(result.text).toContain('🖼️ _shot_');
+      expect(result.text).not.toContain(source);
+      expect(result.skipped).toBe(1);
+      expect(result.attachments).toEqual([]);
+      expect(io.realpath).not.toHaveBeenCalled();
+      expect(io.readFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it('deduplicates bytes while preserving each caption for repeated image URLs', async () => {
+    const url = 'xdt-image://img1.png';
+    const text = `![overview](${url})\n![detail][same]\n![](${url})\n\n[same]: ${url}\n\n\`![example](${url})\``;
+    const r = await collectOutboundAttachments(
+      text,
+      [],
+      deps({ '/cache/img1.png': Buffer.from('png') }),
+    );
+    expect(r.attachments).toHaveLength(1);
+    expect(r.text).toBe(`🖼️ _overview_\n🖼️ _detail_\n\n\n\n\n\`![example](${url})\``);
+    expect(r.skipped).toBe(0);
+  });
+
   it('图片引用 + 旁路图去重收集, 正文替换成提示; 文件链接剥离', async () => {
     const text =
       '成果:\n![效果图](xdt-image://img1.png)\n详见 [报告](xdt-file:///out/report.md) 收工';
@@ -123,7 +151,7 @@ describe('collectOutboundAttachments', () => {
     expect(r.attachments.map((a) => a.name)).toEqual(['img1.png', 'extra.png', 'report.md']);
     expect(r.attachments[0].mimeType).toBe('image/png');
     expect(r.attachments[2].mimeType).toBe('text/markdown');
-    expect(r.text).toContain('🖼️ _效果图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _效果图_');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.text).not.toContain('xdt-file://');
     expect(r.skipped).toBe(0);
@@ -139,7 +167,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/good.png': Buffer.from('png-good') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['good.png']);
-    expect(r.text).toContain('🖼️ _good(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _good_');
     expect(r.text).toContain('[bad](xdt-file://unterminated');
     expect(r.text).not.toContain('xdt-image://');
     expect(r.skipped).toBe(0);
@@ -193,7 +221,39 @@ describe('collectOutboundAttachments', () => {
     expect(r.text).not.toContain('已作为附件发送');
     expect(r.text).toContain('🖼️ _a_');
     expect(r.text).toContain('b');
-    expect(r.text).toContain('Attachment delivery incomplete: 2 items');
+    expect(r.text).toContain('Attachment delivery incomplete: 2 items could not be sent (a, b).');
+  });
+
+  it('未导入的本地图片按说明点名, 提示文案由调用方按界面语言给出', async () => {
+    // 2026-10-26 Slack 实踩: 工作目录外的预览图没有入库, 群里只看到英文计数,
+    // 不知道是哪几张没发出去。
+    const r = await collectOutboundAttachments(
+      '![首页纪念行](/tmp/preview/banner.png)\n\n![](/tmp/preview/stars-dark.png)',
+      [],
+      {
+        resolveImageUrl: () => {
+          throw new Error('local images are never resolved here');
+        },
+        formatIncompleteNotice: (names) => `未发送：${names.join('、')}`,
+        log,
+      },
+    );
+    expect(r.attachments).toHaveLength(0);
+    expect(r.skipped).toBe(2);
+    expect(r.text).toContain('🖼️ _首页纪念行_');
+    expect(r.text).not.toContain('/tmp/preview');
+    expect(r.text).toContain('未发送：首页纪念行、stars-dark.png');
+
+    // Windows-style remote paths must not leak their directories on a POSIX host.
+    const win = await collectOutboundAttachments('![](C:\\Users\\alice\\private.png)', [], {
+      resolveImageUrl: () => {
+        throw new Error('unused');
+      },
+      formatIncompleteNotice: (names) => names.join('|'),
+      log,
+    });
+    expect(win.text).toContain('private.png');
+    expect(win.text).not.toContain('alice');
   });
 
   it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {
@@ -219,7 +279,7 @@ describe('collectOutboundAttachments', () => {
       deps({ '/cache/chart.png': Buffer.from('png') }),
     );
     expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
-    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
+    expect(r.text).toContain('🖼️ _图_');
   });
 
   it('同一路径重复引用只收一份', async () => {
@@ -363,4 +423,72 @@ describe('辅助函数', () => {
     expect(guessMime('/a/report.pdf')).toBe('application/pdf');
     expect(guessMime('/a/b.tar.gz')).toBe('application/octet-stream');
   });
+});
+
+// X video regression: real collector input -> attachment bytes/MIME/caption.
+// Existing image and xdt-file cases did not cover managed video links (unit tier).
+describe('X managed video delivery', () => {
+  // #6447: plain-label coverage missed nested visible text (unit, collector output).
+  it.each([
+    ['**成片**', '成片'],
+    ['`clip.mp4`', 'clip.mp4'],
+    ['![封面](https://example.com/cover.png)', '封面'],
+  ])('preserves the visible caption in %s', async (label, expected) => {
+    const result = await collectOutboundAttachments(
+      `[${label}](cindy-media://blobs/clip.mp4)`, [],
+      { ...deps({ '/blobs/blobs/clip.mp4': Buffer.from('video') }), provider: 'x' },
+    );
+    expect(result.text.trim()).toBe(expected);
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it('collects a video link and generated-media side channel once, with the file limit', async () => {
+    const bytes = Buffer.alloc(6 * 1024 * 1024, 1);
+    const io = deps({ '/blobs/blobs/clip.mp4': bytes });
+    const result = await collectOutboundAttachments(
+      '完成 [视频][clip]\n\n[clip]: cindy-media://blobs/clip.mp4', ['/blobs/blobs/clip.mp4'], { ...io, provider: 'x' },
+    );
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments[0]?.mimeType).toBe('video/mp4');
+    expect(Buffer.from(result.attachments[0]!.dataBase64, 'base64').equals(bytes)).toBe(true);
+    expect(result.text.trim()).toBe('完成 视频');
+    expect(result.skipped).toBe(0);
+  });
+
+  it('does not upload code examples and reports an unreadable managed video', async () => {
+    const io = deps({});
+    const result = await collectOutboundAttachments(
+      '`[demo](cindy-media://blobs/example.mp4)`\n[视频](cindy-media://blobs/missing.mp4)', [], { ...io, provider: 'x' },
+    );
+    expect(result.attachments).toEqual([]);
+    expect(io.readFile).toHaveBeenCalledTimes(1);
+    expect(result.skipped).toBe(1);
+    expect(result.text).not.toContain('cindy-media://blobs/missing.mp4');
+    expect(result.text).toContain('Attachment delivery incomplete');
+  });
+
+  it('keeps other channel collection unchanged', async () => {
+    const io = deps({ '/blobs/blobs/clip.mp4': Buffer.from('clip') });
+    const text = '[视频](cindy-media://blobs/clip.mp4)';
+    const result = await collectOutboundAttachments(text, [], { ...io, provider: 'telegram' });
+    expect(result.attachments).toEqual([]);
+    expect(io.readFile).not.toHaveBeenCalled();
+    expect(result.text).toBe(text);
+  });
+});
+
+// #6447: declared tool media and Markdown share the production collector.
+// Unit: a managed WebM must never reach the X transport (no transcoding contract).
+it.each(['markdown', 'tool'] as const)('X rejects unsupported WebM from %s with an explicit warning', async (source) => {
+  const url = `cindy-media://blobs/${'a'.repeat(64)}.webm`;
+  const readFile = vi.fn(async () => Buffer.from('webm'));
+  const result = await collectOutboundAttachments(source === 'markdown' ? `[clip](${url})` : 'clip',
+    source === 'tool' ? ['/blobs/clip.webm'] : [], {
+      provider: 'x', log, readFile,
+      resolveImageUrl: () => ({ absPath: '/blobs/clip.webm', mimeType: 'video/webm' }),
+    });
+  expect(result.attachments).toEqual([]);
+  expect(result.text).toContain('clip');
+  expect(result.text).toContain('Attachment delivery incomplete');
+  expect(readFile).not.toHaveBeenCalled();
 });

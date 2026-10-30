@@ -1,3 +1,4 @@
+import { ErrorNotice } from '@/components/ErrorNotice';
 /**
  * ContextSheet —— + 号弹出的可拖动「上下文」面板。
  *
@@ -10,7 +11,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight } from 'lucide-react-native';
 import {
   ActivityIndicator,
   Pressable,
@@ -25,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 export interface ContextSheetProps {
@@ -116,19 +118,33 @@ export function ContextSheet({
         >
           {media}
           {children}
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          {error ? <ErrorNotice message={error} /> : null}
         </SheetSurface>
       </SheetModal>
     </DismissAction.Provider>
   );
 }
 
-export function ContextSheetGroup({ label, children }: { label: string; children: ReactNode }) {
+export interface ContextSheetGroupProps {
+  /** 分组小标签;行自己带名称的分组(如 iOS 下拉行)传空串,不再重复一遍。 */
+  label: string;
+  children: ReactNode;
+  /**
+   * 卡片下方的说明(设置类分组惯例,对齐 SettingsGroup 的 footer):卡片里只放
+   * 「名称 + 取值 / 开关 / 箭头」,成句的说明与校验提示写在这里。一组只配一段。
+   */
+  footer?: string | null;
+  footerTone?: 'secondary' | 'error';
+  footerTestID?: string;
+}
+
+export function ContextSheetGroup({ label, children, footer, footerTone, footerTestID }: ContextSheetGroupProps) {
   const styles = useThemedStyles(makeContextSheetStyles);
   return (
     <View style={styles.group}>
-      <Text style={styles.groupLabel}>{label}</Text>
+      {label ? <Text style={styles.groupLabel}>{label}</Text> : null}
       <GroupRows>{children}</GroupRows>
+      {footer ? <ContextSheetNote text={footer} tone={footerTone} testID={footerTestID} /> : null}
     </View>
   );
 }
@@ -155,8 +171,11 @@ function flattenChildren(children: ReactNode): ReactNode[] {
 export interface ContextSheetRowProps {
   /** Dismiss the sheet before presenting a system picker. */
   dismissBeforePress?: boolean;
-  icon: ReactNode;
+  /** 行首图标;设置类表单行只放名称与取值,不传。 */
+  icon?: ReactNode;
   label: string;
+  /** 右侧取值(16/22 400 textSecondary),在箭头之前;过长截断。 */
+  value?: string;
   onPress: () => void;
   /** 长按(如协同 Worker 行的管理操作);不传则只有点按。 */
   onLongPress?: () => void;
@@ -178,6 +197,7 @@ export function ContextSheetRow({
   dismissBeforePress = false,
   icon,
   label,
+  value,
   onPress,
   onLongPress,
   trailing,
@@ -223,10 +243,15 @@ export function ContextSheetRow({
       ]}>
         {busy ? (
           <ActivityIndicator color={colors.textSecondary} size="small" />
-        ) : trailing === 'chevron' ? (
-          <ChevronRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.regular} />
         ) : (
-          trailing ?? null
+          <>
+            {value ? <Text numberOfLines={1} style={styles.rowValue}>{value}</Text> : null}
+            {trailing === 'chevron' ? (
+              <ChevronRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+            ) : (
+              trailing ?? null
+            )}
+          </>
         )}
       </View>
     </Pressable>
@@ -268,6 +293,11 @@ export function ContextSheetNote({ text, tone = 'secondary', testID }: {
   );
 }
 
+/** 独立操作失败；字段校验继续使用 ContextSheetNote。 */
+export function ContextSheetError({ text, testID }: { text: string; testID?: string }) {
+  return <ErrorNotice message={text} messageTestID={testID} />;
+}
+
 export interface ContextSheetChoiceRowProps<T extends string> {
   label: string;
   options: readonly { id: T; label: string }[];
@@ -275,6 +305,50 @@ export interface ContextSheetChoiceRowProps<T extends string> {
   onChange: (value: T) => void;
   disabled?: boolean;
   testID?: string;
+}
+
+export interface ContextSheetSelectRowProps {
+  label: string;
+  options: readonly { id: string; label: string; detail?: string; disabled?: boolean }[];
+  value: string;
+  onChange(value: string): void;
+  disabled?: boolean;
+  testID?: string;
+}
+
+/** 有界滚动的设备等长列表，不把选项平铺到表单里。iOS 复用原生 menu Picker。 */
+export function ContextSheetSelectRow(props: ContextSheetSelectRowProps) {
+  const { colors } = useTheme();
+  const row = (
+    <ContextSheetRow
+      icon={null}
+      disabled={props.disabled}
+      label={props.options.find((option) => option.id === props.value)?.label ?? props.label}
+      onPress={() => undefined}
+      trailing={<ChevronDown color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+    />
+  );
+  if (props.disabled) return row;
+  return (
+    <AnchoredPullDownMenu
+      accessibilityLabel={props.label}
+      actions={props.options.map((option) => ({
+        id: option.id,
+        title: option.label,
+        subtitle: option.detail,
+        disabled: props.disabled || option.disabled,
+        state: option.id === props.value ? 'on' : 'off',
+      }))}
+      onAction={(id) => {
+        if (!props.disabled && props.options.some((option) => option.id === id && !option.disabled)) {
+          props.onChange(id);
+        }
+      }}
+      testID={props.testID}
+    >
+      {row}
+    </AnchoredPullDownMenu>
+  );
 }
 
 /** 单选(pill 组;iOS 版为原生 Picker)。 */
@@ -380,10 +454,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
     group: {
       paddingTop: spacing.lg,
     },
+    // 分组小标签:13/18 600 textTertiary(设置类分组同一档)。
     groupLabel: {
       color: colors.textTertiary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.semibold,
     },
     separator: {
       backgroundColor: colors.border,
@@ -411,6 +487,15 @@ function makeContextSheetStyles(colors: ThemeColors) {
       lineHeight: lineHeight.body,
       fontWeight: fontWeight.medium,
     },
+    // 行右侧取值:16/22 400 textSecondary。
+    rowValue: {
+      color: colors.textSecondary,
+      flexShrink: 1,
+      fontSize: typeScale.body,
+      lineHeight: lineHeight.body,
+      fontWeight: fontWeight.regular,
+      maxWidth: '60%' as const,
+    },
     rowTextColumn: {
       flexShrink: 1,
       gap: 2,
@@ -420,10 +505,12 @@ function makeContextSheetStyles(colors: ThemeColors) {
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
     },
+    // 说明、提示(成句的话):13/18 400 textSecondary。
     note: {
-      color: colors.textTertiary,
+      color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+      fontWeight: fontWeight.regular,
       paddingVertical: spacing.sm,
     },
     noteError: {
@@ -483,6 +570,7 @@ function makeContextSheetStyles(colors: ThemeColors) {
     rowTrailing: {
       alignItems: 'center' as const,
       flexDirection: 'row' as const,
+      flexShrink: 1,
       gap: spacing.sm,
     },
   };

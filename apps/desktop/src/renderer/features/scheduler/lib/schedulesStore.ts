@@ -228,6 +228,11 @@ export const schedulesStore = {
 
   ensure,
   forceRefresh,
+
+  /** 有刷新在途时返回该请求(缓存此时可能已过期,例如刚创建 / 恢复 / 改绑了自动化);否则 null。 */
+  pendingRefresh(): Promise<Schedule[]> | null {
+    return inflight;
+  },
 };
 
 // ── React hook 助手:让 hook 端代码更短 ──────────────────────────────────

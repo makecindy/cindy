@@ -13,25 +13,11 @@ import { InstallTargetPicker } from './components/InstallTargetPicker';
 import { MarketManagementDialogs, useMarketManagement } from './hooks/useMarketManagement';
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import { useMarketSkillUpdate } from './hooks/useMarketSkillUpdate';
-import { deriveLocalInstall, type MarketSkill } from './hooks/useMarketList';
+import { marketInfoViewModel } from './lib/marketInfoViewModel';
 import { refresh, useSkillhub } from './hooks/useSkillhub';
 import { buildLocalSkillRoute, findLocalSkillRouteEntry } from './lib/localRoutes';
 import { buildMarketSkillRoute, skillDetailCatalog, skillDetailLocalParams, skillDetailReturnRoute, withSkillDetailReturn } from './lib/detailRoutes';
 import { marketLocalCopies } from './lib/marketLocalCopies';
-
-function marketViewModel(info: SkillhubInfoResult, local: SkillhubSkill | null, catalogScope: MarketSkill['catalogScope']): MarketSkill {
-  const primary = local ? {
-    version: local.registryEntry?.version ?? null, absolutePath: local.absolutePath, hasRegistryEntry: !!local.registryEntry,
-  } : undefined;
-  const installed = deriveLocalInstall(info, primary ? { global: primary, projects: [] } : undefined);
-  return {
-    ...info, icon: info.icon ?? undefined, catalogScope, ...installed,
-    authorAvatarUrl: null, avatarInitial: info.authorName.slice(0, 1),
-    categories: info.categories ?? [], tags: info.tags ?? [], githubUrl: info.githubUrl ?? null,
-    relativeTime: '', latestPublishedFromDeviceId: null,
-    cardState: installed.updateAvailable ? 'installed-outdated' : installed.installedLocally ? 'installed-latest' : 'not-installed',
-  };
-}
 
 /** Both list entry points resolve identity here; content readers retain their own authority. */
 export function SkillhubDetailRoute() {
@@ -78,7 +64,7 @@ export function SkillhubDetailRoute() {
     ? marketLocalCopies(skills, { ...info, isMine: info.isCreator === true, catalogScope })
     : explicitLocal ? [explicitLocal] : [], [info, skills, explicitLocal, catalogScope]);
   const selected = copies.find((copy) => copy.id === explicitLocal?.id) ?? copies[0] ?? null;
-  const market = info ? marketViewModel(info, selected, catalogScope) : null;
+  const market = info ? marketInfoViewModel(info, selected, catalogScope) : null;
 
   const selectSource = (view: 'local' | 'market', local: SkillhubSkill | null = selected, action?: 'publish') => {
     if (!isDataOwnerGenerationCurrent(owner)) return;

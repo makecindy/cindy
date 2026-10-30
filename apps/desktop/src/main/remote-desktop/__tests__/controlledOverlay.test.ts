@@ -16,6 +16,9 @@ interface FakeWindow extends EventEmitter {
   webContents: EventEmitter & { executeJavaScript: Mock };
   setContentProtection: Mock;
   setAlwaysOnTop: Mock;
+  setIgnoreMouseEvents: Mock;
+  focus: Mock;
+  moveTop: Mock;
   getBounds(): Bounds;
   setBounds(bounds: Bounds): void;
   isVisible(): boolean;
@@ -57,9 +60,16 @@ vi.mock('electron', () => ({
     bounds: Bounds;
     webContents = Object.assign(new EventEmitter(), {
       setWindowOpenHandler: vi.fn(),
-      // The page width follows the label that was actually loaded.
+      // The overlay width follows the label that was actually loaded; the
+      // confirmation reports its height.
       executeJavaScript: vi.fn(async () =>
-        this.html.includes('ByDevice') ? 240 : this.html.includes('beingControlled') ? 180 : 160,
+        this.html.includes('disconnectChoiceDetail')
+          ? 150
+          : this.html.includes('ByDevice')
+            ? 240
+            : this.html.includes('beingControlled')
+              ? 180
+              : 160,
       ),
     });
     constructor(options: Options) {
@@ -76,6 +86,7 @@ vi.mock('electron', () => ({
     setContentProtection = vi.fn();
     setVisibleOnAllWorkspaces = vi.fn();
     setAlwaysOnTop = vi.fn();
+    setIgnoreMouseEvents = vi.fn();
     getMediaSourceId() {
       return `window:${100 + this.id}:0`;
     }
@@ -89,6 +100,11 @@ vi.mock('electron', () => ({
       state.events.push(`show:${100 + this.id}`);
       this.visible = true;
     }
+    show() {
+      this.visible = true;
+    }
+    focus = vi.fn();
+    moveTop = vi.fn();
     isVisible() {
       return this.visible;
     }
@@ -134,15 +150,29 @@ const settle = async () => {
 function fixture() {
   const excluded = vi.fn((ids: number[]) => state.events.push(`exclude:${ids.join(',')}`));
   const revoke = vi.fn<(peer: string) => Promise<void>>(async () => {});
-  return { overlay: new ControlledOverlay(excluded, revoke), excluded, revoke };
+  const disconnect = vi.fn<(peer: string) => void>();
+  return {
+    overlay: new ControlledOverlay(excluded, revoke, disconnect),
+    excluded,
+    revoke,
+    disconnect,
+  };
 }
 const navigate = (window: FakeWindow, url: string) => {
   const event = { url, preventDefault: vi.fn() };
   window.webContents.emit('will-navigate', event);
   return event;
 };
-/** Clicks the revoke link of the page the window currently shows. */
-const clickRevoke = (window: FakeWindow) => {
+/** Answers the disconnect confirmation as its form / Cancel link would navigate. */
+const answer = (window: FakeWindow, choice: 'disconnect' | 'revoke' | 'cancel') =>
+  navigate(
+    window,
+    choice === 'cancel'
+      ? 'https://cindy-overlay.invalid/choose/cancel'
+      : `https://cindy-overlay.invalid/choose/disconnect?${choice === 'revoke' ? 'revoke=1' : ''}`,
+  );
+/** Clicks the Disconnect link of the page the window currently shows. */
+const clickDisconnect = (window: FakeWindow) => {
   const href = /<a href="([^"]+)"/.exec(window.html)?.[1].replaceAll('&amp;', '&');
   return navigate(window, href!);
 };
@@ -153,7 +183,7 @@ beforeEach(() => {
   state.events.length = 0;
   state.displays = [primary, secondary];
   state.load = null;
-  state.confirm.mockReset().mockResolvedValue({ response: 1 });
+  state.confirm.mockReset();
   state.themeMode = 'system';
 });
 
@@ -176,7 +206,7 @@ it('filters the overlay from capture before its first visible frame', async () =
   expect(state.events).toEqual(['exclude:101', 'show:101']);
   expect(window.html).toContain('remoteDesktop.beingViewed');
   // Measured pill width, centred under the top of the shared display's work area.
-  expect(window.getBounds()).toEqual({ x: 640, y: 37, width: 160, height: 28 });
+  expect(window.getBounds()).toEqual({ x: 640, y: 37, width: 160, height: 36 });
 });
 
 it('reloads the label in place when control is granted', async () => {
@@ -197,24 +227,26 @@ it('keeps a dragged overlay on the shared display and remembers it for the run',
   overlay.update(target);
   await settle();
   const window = state.windows[0];
-  window.setBounds({ x: 1400, y: 500, width: 180, height: 28 });
+  window.setBounds({ x: 1400, y: 500, width: 180, height: 36 });
   window.emit('moved');
-  expect(window.getBounds()).toEqual({ x: 1260, y: 500, width: 180, height: 28 });
+  expect(window.getBounds()).toEqual({ x: 1260, y: 500, width: 180, height: 36 });
   overlay.update(null);
   overlay.update(target);
   await settle();
-  expect(state.windows[1].getBounds()).toEqual({ x: 1260, y: 500, width: 180, height: 28 });
+  expect(state.windows[1].getBounds()).toEqual({ x: 1260, y: 500, width: 180, height: 36 });
   // A lease on another display starts from that display's default spot.
   overlay.update({ ...target, displayId: '2' });
   await settle();
-  expect(state.windows[1].getBounds()).toEqual({ x: 2310, y: 12, width: 180, height: 28 });
+  expect(state.windows[1].getBounds()).toEqual({ x: 2310, y: 12, width: 180, height: 36 });
 });
 
 it('removes the window and its capture filter when the lease or privacy ends it', async () => {
   const { overlay, excluded } = fixture();
   overlay.update(phone);
   await settle();
+  expect(overlay.visible).toBe(true);
   overlay.update(null);
+  expect(overlay.visible).toBe(false);
   expect(state.windows[0].destroyed).toBe(true);
   expect(excluded).toHaveBeenLastCalledWith([]);
   expect(screen.listenerCount('display-metrics-changed')).toBe(0);
@@ -254,7 +286,7 @@ it('renders the viewing device name as escaped markup and skips unchanged target
   const window = state.windows[0];
   expect(window.html).toContain('remoteDesktop.controlledByDevice:x&lt;/span&gt;&lt;b&gt;y');
   expect(window.html).not.toContain('<b>');
-  expect(window.html).toContain('remoteDevice.revokeAccess');
+  expect(window.html).toContain('remoteDesktop.disconnect');
   expect(window.getBounds()).toMatchObject({ x: 600, width: 240 });
   // Only constant code is ever executed in the page.
   expect(new Set(window.webContents.executeJavaScript.mock.calls.map(([code]) => code)).size).toBe(
@@ -263,56 +295,172 @@ it('renders the viewing device name as escaped markup and skips unchanged target
   overlay.update({ ...target });
   await settle();
   expect(window.loadURL).toHaveBeenCalledTimes(1);
-  clickRevoke(window);
+  clickDisconnect(window);
+  await settle();
+  answer(state.windows[1], 'revoke');
   await settle();
   expect(revoke).toHaveBeenCalledExactlyOnceWith('p&1');
 });
 
-it('revokes the device named on the clicked page, only after confirmation', async () => {
-  const { overlay, revoke } = fixture();
+it('disconnects the device named on the clicked page, revoking it only when ticked', async () => {
+  const { overlay, revoke, disconnect } = fixture();
   overlay.update(phone);
   await settle();
   const window = state.windows[0];
-  state.confirm.mockResolvedValueOnce({ response: 0 });
-  expect(clickRevoke(window).preventDefault).toHaveBeenCalled();
+  expect(clickDisconnect(window).preventDefault).toHaveBeenCalled();
   await settle();
+  answer(state.windows[1], 'cancel');
+  await settle();
+  expect(state.windows[1].destroyed).toBe(true);
+  expect(disconnect).not.toHaveBeenCalled();
   expect(revoke).not.toHaveBeenCalled();
 
   // The lease moves to another viewer, but its page is still loading.
   let finishLoad!: () => void;
-  state.load = () => new Promise<void>((resolve) => (finishLoad = resolve));
+  state.load = (loading) =>
+    loading === window ? new Promise<void>((resolve) => (finishLoad = resolve)) : undefined;
   overlay.update(laptop);
   // The periodic sync repeats the same target while it loads.
   overlay.update(laptop);
   await settle();
   expect(window.loadURL).toHaveBeenCalledTimes(2);
-  let answer!: (value: { response: number }) => void;
-  state.confirm.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
-  clickRevoke(window);
-  // A second click while the dialog is open does not stack another dialog.
-  clickRevoke(window);
-  answer({ response: 1 });
+  clickDisconnect(window);
   await settle();
-  expect(state.confirm).toHaveBeenCalledTimes(2);
+  // A second click while the choice is open raises it instead of stacking another.
+  clickDisconnect(window);
+  await settle();
+  expect(state.windows).toHaveLength(3);
+  expect(state.windows[2].moveTop).toHaveBeenCalledOnce();
+  answer(state.windows[2], 'revoke');
+  await settle();
+  // Revoking ends the session too.
+  expect(disconnect).toHaveBeenCalledExactlyOnceWith('phone');
   expect(revoke).toHaveBeenCalledExactlyOnceWith('phone');
 
   finishLoad();
   await settle();
-  clickRevoke(window);
+  clickDisconnect(window);
   await settle();
-  expect(revoke).toHaveBeenLastCalledWith('laptop');
+  answer(state.windows[3], 'disconnect');
+  await settle();
+  // Left unticked, the session ends without revoking.
+  expect(disconnect).toHaveBeenLastCalledWith('laptop');
+  expect(revoke).toHaveBeenCalledTimes(1);
+});
+
+// 2026-10-18 incident: a parentless native alert runs app-modally on macOS, so
+// Main stopped serving heartbeats and injected input until the lease expired.
+it('asks only the local user: hidden from capture, passed through, never focused', async () => {
+  vi.useFakeTimers();
+  try {
+    const { overlay, revoke, excluded } = fixture();
+    overlay.update(phone);
+    await settle();
+    clickDisconnect(state.windows[0]);
+    await settle();
+    const confirmation = state.windows[1];
+    expect(state.confirm).not.toHaveBeenCalled();
+    // Filtered like the overlay before its first visible frame, and shown without focus,
+    // so injected keys cannot answer it.
+    expect(confirmation.setContentProtection).toHaveBeenCalledWith(true);
+    expect(state.events.slice(-2)).toEqual(['exclude:101,102', 'show:102']);
+    expect(confirmation.options).toMatchObject({ focusable: false, acceptFirstMouse: true });
+    expect(confirmation.focus).not.toHaveBeenCalled();
+    expect(confirmation.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver', 1);
+    // Revoking is opt-in: the checkbox starts unticked.
+    expect(confirmation.html).toContain('<input type="checkbox" name="revoke" value="1">');
+    // Centred on the shared display's work area.
+    expect(confirmation.getBounds()).toEqual({ x: 520, y: 388, width: 400, height: 150 });
+
+    // The viewer's pointer passes through it as through the overlay.
+    const done = overlay.viewerPointer([{ x: 700, y: 450 }]);
+    done();
+    expect(confirmation.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    expect(state.windows[0].setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+    vi.advanceTimersByTime(1000);
+    expect(confirmation.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+
+    answer(confirmation, 'cancel');
+    await settle();
+    expect(confirmation.destroyed).toBe(true);
+    expect(excluded).toHaveBeenLastCalledWith([101]);
+
+    clickDisconnect(state.windows[0]);
+    await settle();
+    overlay.update(null);
+    await settle();
+    expect(state.windows[2].destroyed).toBe(true);
+    expect(excluded).toHaveBeenLastCalledWith([]);
+    expect(revoke).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("lets the viewer's pointer pass through for each batch's whole injection", async () => {
+  vi.useFakeTimers();
+  try {
+    const { overlay } = fixture();
+    overlay.update(phone);
+    await settle();
+    // Centred pill: x 600–839, y 37–72.
+    const window = state.windows[0];
+    const ignored = () => window.setIgnoreMouseEvents.mock.lastCall?.[0];
+    const over = { x: 700, y: 50 };
+    const clear = { x: 700, y: 200 };
+
+    // A batch that takes longer than the rest delay keeps passing through until it is done.
+    const slow = overlay.viewerPointer([over]);
+    vi.advanceTimersByTime(5000);
+    expect(ignored()).toBe(true);
+    slow();
+    // Resting over it then returns it to local clicks after the delay.
+    vi.advanceTimersByTime(999);
+    expect(ignored()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(ignored()).toBe(false);
+
+    // A click over it followed by a move away in the same batch still passes through,
+    // and a later batch entirely clear of it hands it back at once.
+    overlay.viewerPointer([over, clear])();
+    expect(ignored()).toBe(true);
+    overlay.viewerPointer([clear])();
+    expect(ignored()).toBe(false);
+
+    // Moving about over it keeps re-arming the countdown from each batch's completion.
+    overlay.viewerPointer([over])();
+    vi.advanceTimersByTime(600);
+    overlay.viewerPointer([over])();
+    vi.advanceTimersByTime(600);
+    expect(ignored()).toBe(true);
+
+    // A lease that ends mid-batch leaves nothing behind for the next overlay.
+    const late = overlay.viewerPointer([over]);
+    overlay.update(null);
+    overlay.update(phone);
+    await settle();
+    const next = state.windows[1];
+    const calls = next.setIgnoreMouseEvents.mock.calls.length;
+    late();
+    vi.runAllTimers();
+    expect(next.setIgnoreMouseEvents.mock.calls.length).toBe(calls);
+    expect(window.destroyed).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it('cancels every other navigation without acting', async () => {
-  const { overlay, revoke } = fixture();
+  const { overlay, revoke, disconnect } = fixture();
   overlay.update(phone);
   await settle();
   expect(navigate(state.windows[0], 'https://example.com/').preventDefault).toHaveBeenCalled();
   expect(
-    navigate(state.windows[0], 'https://cindy-overlay.invalid/revoke?peer=').preventDefault,
+    navigate(state.windows[0], 'https://cindy-overlay.invalid/disconnect?peer=').preventDefault,
   ).toHaveBeenCalled();
   await settle();
-  expect(state.confirm).not.toHaveBeenCalled();
+  expect(state.windows).toHaveLength(1);
+  expect(disconnect).not.toHaveBeenCalled();
   expect(revoke).not.toHaveBeenCalled();
 });
 

@@ -11,12 +11,14 @@
  *   - mount → 并行拉 plugins.getState('browser', workingDir) (取 browser 开关态)
  *     + browser.status()。注意 browser 是 HOSTED_ELSEWHERE, 不在 plugins.list()
  *     里, 必须按 id 直接读单个状态, 否则 find() 永远 undefined。
- *   - 基础配置到位后渲染;电脑权限与浏览器健康检测独立补齐,不阻塞整页。
+ *   - 各项配置独立加载;慢请求只影响对应控件,不阻塞整页。
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import {
   Check,
   ChevronDown,
@@ -44,13 +46,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
+import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
+import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
+import { useAutomationSettingsRead } from './useAutomationSettingsRead';
 import { ComputerPermissionRow } from './ComputerPermissionRow';
 import { BrowserRealProfileSubsection } from './BrowserRealProfileSubsection';
 import {
+  RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
+import { ghostInstallApprovalToken } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
   browserOpenForLoginErrorCode,
   browserOpenForLoginToastKey,
@@ -95,7 +104,7 @@ const ACTION_BUTTON_CLASS = cn(
 const ANDROID_AUTO_DEVICE_VALUE = '__auto__';
 
 function browserBackendHealthFallback(
-  active: 'external' | 'rsb-webview',
+  active: 'external' | 'rsb-webview' | 'user-browser',
 ): BrowserBackendHealth {
   return {
     active,
@@ -158,16 +167,61 @@ interface ComputerUseSectionProps {
   workingDir?: string;
 }
 
+function ConfigurationReadStatus({
+  label,
+  status,
+  retry,
+}: {
+  label: string;
+  status: 'loading' | 'retrying' | 'error' | 'ready';
+  retry: () => void;
+}) {
+  const { t } = useTranslation();
+  if (status === 'ready') return null;
+  return (
+    <div
+      role="status"
+      aria-label={label}
+      className="flex flex-wrap items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-3 text-12 text-[var(--settings-section-desc)]"
+    >
+      {status !== 'error' ? <Spinner size={12} /> : null}
+      <span>{t(`settings.computerUse.configurationRead.${status}`, { section: label })}</span>
+      {status === 'error' ? (
+        <Button variant="secondary" size="sm" onClick={retry}>
+          {t('settings.computerUse.configurationRead.retry')}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
-export function ComputerUseSection({
-  workingDir,
-}: ComputerUseSectionProps) {
+export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const { t, i18n } = useTranslation();
-  // null = not loaded yet (blank, no flash). After load, all resolve.
-  const [browserEnabled, setBrowserEnabled] = useState<boolean | null>(null);
+  const browserRead = useAutomationSettingsRead(
+    'browser enable state',
+    useCallback(
+      async () =>
+        (await window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir))
+          .effectiveEnabled,
+      [workingDir],
+    ),
+  );
+  const { value: browserEnabled, setValue: setBrowserEnabled } = browserRead;
   const [androidEnabled, setAndroidEnabled] = useState<boolean | null>(null);
-  const [computerEnabled, setComputerEnabled] = useState<boolean | null>(null);
-  const [availability, setAvailability] = useState<BrowserAvailability | null>(null);
+  const computerRead = useAutomationSettingsRead(
+    'computer enable state',
+    useCallback(
+      async () =>
+        (await window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID)).effectiveEnabled,
+      [],
+    ),
+  );
+  const { value: computerEnabled, setValue: setComputerEnabled } = computerRead;
+  const availabilityRead = useAutomationSettingsRead(
+    'browser detection',
+    useCallback(() => window.electronAPI.maker.browser.status(), []),
+  );
+  const availability = availabilityRead.value;
   const [androidStatus, setAndroidStatus] = useState<AndroidStatusSummary | null>(null);
   const [androidConfig, setAndroidConfig] = useState<AndroidAutomationConfigState | null>(null);
   const [androidAdbPathDraft, setAndroidAdbPathDraft] = useState('');
@@ -226,11 +280,10 @@ export function ComputerUseSection({
       computerPermissionFlowSeqRef.current += 1;
       computerEnableIntentRef.current = false;
       computerPermissionCompletionInFlightRef.current = false;
-      const hadActivePermissionFlow = (
-        computerTogglePendingRef.current
-        || computerPermissionPendingRef.current
-        || computerPermissionGrantInProgressRef.current
-      );
+      const hadActivePermissionFlow =
+        computerTogglePendingRef.current ||
+        computerPermissionPendingRef.current ||
+        computerPermissionGrantInProgressRef.current;
       resetComputerPermissionFlow();
       if (hadActivePermissionFlow) {
         cancelNativeComputerPermissionGrant();
@@ -281,7 +334,8 @@ export function ComputerUseSection({
       resetComputerPermissionFlow();
       cancelNativeComputerPermissionGrant();
       if (computerEnableIntentRef.current || computerEnabled) {
-        void window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, true)
+        void window.electronAPI.maker.plugins
+          .setEnabled(COMPUTER_PLUGIN_ID, true)
           .then((result) => {
             setComputerEnabled(true);
             if (result.codexMcpRefreshed === false) {
@@ -305,57 +359,61 @@ export function ComputerUseSection({
     cancelNativeComputerPermissionGrant,
     computerEnabled,
     resetComputerPermissionFlow,
+    setComputerEnabled,
     t,
   ]);
 
-  const refreshComputerPermissionStatus = useCallback(async (
-    reason: string,
-    options?: { fresh?: boolean; bypassCache?: boolean; passiveOnly?: boolean },
-  ) => {
-    // fresh:重启 daemon 后现场实测 —— 「辅助功能被撤销」只有重启 daemon 才读得到。
-    // 仅在 driver 替换或已进入授权流程后使用；页面进入/Recheck 走 passiveOnly，
-    // 开启开关会重新验证可变的 macOS TCC 状态，不能消费可能已过期的页面快照。
-    const status = await window.electronAPI.maker.computer.status({
-      forcePermissionProbe: true,
-      ...(options?.fresh ? { freshPermissionProbe: true } : {}),
-      ...(options?.bypassCache ? { bypassPermissionProbeCache: true } : {}),
-      ...(options?.passiveOnly ? { passivePermissionProbeOnly: true } : {}),
-    });
-    log.debug('computer permission status refreshed', {
-      flowReason: reason,
-      fresh: options?.fresh === true,
-      bypassCache: options?.bypassCache === true,
-      passiveOnly: options?.passiveOnly === true,
-      ...getComputerPermissionLogSummary(status),
-    });
-    setComputerStatus(status);
-    return status;
-  }, []);
-
-  const requestComputerPermissionGrant = useCallback(async (
-    reason: string,
-    openedPaneUrl?: string,
-  ) => {
-    computerPermissionGrantInProgressRef.current = true;
-    log.debug('computer permission grant requested', { reason });
-    try {
-      const result = await window.electronAPI.maker.computer.grantPermissions({
-        // The native coach presents the drag/enable steps beside System Settings.
-        // Permission status itself advances only after explicit user actions.
-        showGuide: window.electronAPI.platform === 'darwin',
-        ...(openedPaneUrl ? { openedPaneUrl } : {}),
+  const refreshComputerPermissionStatus = useCallback(
+    async (
+      reason: string,
+      options?: { fresh?: boolean; bypassCache?: boolean; passiveOnly?: boolean },
+    ) => {
+      // fresh:重启 daemon 后现场实测 —— 「辅助功能被撤销」只有重启 daemon 才读得到。
+      // 仅在 driver 替换或已进入授权流程后使用；页面进入/Recheck 走 passiveOnly，
+      // 开启开关会重新验证可变的 macOS TCC 状态，不能消费可能已过期的页面快照。
+      const status = await window.electronAPI.maker.computer.status({
+        forcePermissionProbe: true,
+        ...(options?.fresh ? { freshPermissionProbe: true } : {}),
+        ...(options?.bypassCache ? { bypassPermissionProbeCache: true } : {}),
+        ...(options?.passiveOnly ? { passivePermissionProbeOnly: true } : {}),
       });
-      log.debug('computer permission grant result', {
+      log.debug('computer permission status refreshed', {
         flowReason: reason,
-        ok: result.ok,
-        ...getComputerPermissionLogSummary(result.status),
+        fresh: options?.fresh === true,
+        bypassCache: options?.bypassCache === true,
+        passiveOnly: options?.passiveOnly === true,
+        ...getComputerPermissionLogSummary(status),
       });
-      setComputerStatus(result.status);
-      return result.status;
-    } finally {
-      computerPermissionGrantInProgressRef.current = false;
-    }
-  }, []);
+      setComputerStatus(status);
+      return status;
+    },
+    [],
+  );
+
+  const requestComputerPermissionGrant = useCallback(
+    async (reason: string, openedPaneUrl?: string) => {
+      computerPermissionGrantInProgressRef.current = true;
+      log.debug('computer permission grant requested', { reason });
+      try {
+        const result = await window.electronAPI.maker.computer.grantPermissions({
+          // The native coach presents the drag/enable steps beside System Settings.
+          // Permission status itself advances only after explicit user actions.
+          showGuide: window.electronAPI.platform === 'darwin',
+          ...(openedPaneUrl ? { openedPaneUrl } : {}),
+        });
+        log.debug('computer permission grant result', {
+          flowReason: reason,
+          ok: result.ok,
+          ...getComputerPermissionLogSummary(result.status),
+        });
+        setComputerStatus(result.status);
+        return result.status;
+      } finally {
+        computerPermissionGrantInProgressRef.current = false;
+      }
+    },
+    [],
+  );
 
   // 独立引导浮窗里的关闭按钮由 main 广播回来。
   useEffect(() => {
@@ -367,30 +425,152 @@ export function ComputerUseSection({
   // 用 ref 防止重复触发网络请求。
   const driverUpdateCheckedRef = useRef(false);
 
-  // Phase 5: agent automation 实际驱动哪个浏览器 — 'external' 时这张卡片底下
-  // 「Chrome 探测 / 下载 Chrome / 打开 Agent 专用浏览器」整套 UI 才有意义;
-  // 'rsb-webview' 时全部隐藏(内置 Electron Chromium 永远可用,不需要装 Chrome
-  // 也没有"专用 profile 登录"概念)。null = 还没拉到,跟其它 state 一样不渲染
-  // 任何 backend-dependent UI(规则 7: 不要 loading 闪屏)。
-  const [browserBackendKind, setBrowserBackendKind] = useState<
-    'external' | 'rsb-webview' | null
-  >(null);
+  const backendRead = useAutomationSettingsRead(
+    'browser backend configuration',
+    useCallback(async () => {
+      const state = await window.electronAPI.browserBackend?.getState?.();
+      // Only a genuinely absent older bridge uses the compatibility default.
+      // A failed read stays unknown, rather than inventing an active backend.
+      return {
+        active: state?.active ?? 'external',
+        useRealProfile: state?.useRealProfile === true,
+      };
+    }, []),
+  );
+  const { value: backendConfig, setValue: setBackendConfig } = backendRead;
+  const browserBackendKind = backendConfig?.active ?? null;
+  const setBrowserBackendKind = useCallback(
+    (active: 'external' | 'rsb-webview' | 'user-browser' | null) => {
+      setBackendConfig((current) => (current && active ? { ...current, active } : current));
+    },
+    [setBackendConfig],
+  );
   const [browserBackendPending, setBrowserBackendPending] = useState(false);
   const [browserBackendRecovering, setBrowserBackendRecovering] = useState(false);
-  const [browserBackendHealth, setBrowserBackendHealth] = useState<BrowserBackendHealth | null>(null);
-  const [useRealProfile, setUseRealProfile] = useState(false);
-  const [useRealProfilePending, setUseRealProfilePending] = useState(false);
-  const confirmDialog = useOptionalConfirmDialog();
+  const [browserBackendHealth, setBrowserBackendHealth] = useState<BrowserBackendHealth | null>(
+    null,
+  );
+  const useRealProfile = backendConfig?.useRealProfile ?? false;
+  const setUseRealProfile = useCallback(
+    (enabled: boolean) => {
+      setBackendConfig((current) => (current ? { ...current, useRealProfile: enabled } : current));
+    },
+    [setBackendConfig],
+  );
+  const navigate = useNavigate();
+  const userBrowserPlugin =
+    // Only the root instance can provide My browser (an organization copy with the same id cannot),
+    // so that is the one the setup steps install, enable and open.
+    useInstalledGhosts().find(
+      (ghost) => ghost.manifest.id === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID && ghost.namespace == null,
+    ) ?? null;
+  const [userBrowserSetupBusy, setUserBrowserSetupBusy] = useState(false);
   // Health can include an automatic embedded-browser recovery and therefore
   // take several seconds. Track the latest health owner so a late initial
   // probe cannot overwrite a newer user-initiated switch or recovery result.
   const browserBackendHealthSeqRef = useRef(0);
+  const browserBackendKindRef = useRef(browserBackendKind);
+  browserBackendKindRef.current = browserBackendKind;
+  const refreshUserBrowserHealth = useCallback(async () => {
+    const seq = browserBackendHealthSeqRef.current;
+    const next = await window.electronAPI.browserBackend?.getHealth?.().catch(() => null);
+    // A switch, recovery or newer read may have landed meanwhile (one read can take seconds);
+    // a late "My browser" answer must not replace the sidebar browser's state.
+    if (seq !== browserBackendHealthSeqRef.current || browserBackendKindRef.current !== 'user-browser') return;
+    if (next?.active === 'user-browser') {
+      browserBackendHealthSeqRef.current += 1;
+      setBrowserBackendHealth(next);
+    }
+  }, []);
+  // Step 1 happens right here: install the plugin from the market (Main still shows its usual
+  // permission confirmation) or turn it on, then re-check so the guidance moves on to step 2.
+  // Step 2, an installed version too old to connect, and anything unexpected open the plugin's own
+  // page, which has the update button and the extension install entry.
+  const handleSetUpUserBrowser = useCallback(async () => {
+    const openPluginPage = () =>
+      navigate(
+        userBrowserPlugin
+          ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(userBrowserPlugin))}`
+          : '/plugins',
+      );
+    if (browserBackendHealth?.reason === 'extension-disconnected') {
+      // Open the store page in the user's own browser; the page polls and turns connected once the
+      // extension is added. Without a Chromium browser, the plugin page explains the other routes.
+      setUserBrowserSetupBusy(true);
+      const opened = await window.electronAPI.browserBackend
+        .openExtensionStore?.()
+        .catch(() => null);
+      setUserBrowserSetupBusy(false);
+      if (opened?.ok) toast.success(t('settings.computerUse.browserBackend.userBrowserSetup.storeOpened'));
+      else openPluginPage();
+      return;
+    }
+    if (browserBackendHealth?.reason !== 'plugin-missing' || userBrowserPlugin?.enabled) {
+      openPluginPage();
+      return;
+    }
+    setUserBrowserSetupBusy(true);
+    try {
+      if (userBrowserPlugin) {
+        await window.electronAPI.ghosts.setEnabled(
+          installedGhostStoragePart(userBrowserPlugin),
+          true,
+          ghostInstallApprovalToken(userBrowserPlugin.approval),
+        );
+      } else {
+        // Market ids are opaque; the plugin is found by the ghost id it installs as.
+        const item = (await window.electronAPI.pluginMarket.snapshot()).items.find(
+          (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
+        );
+        const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
+        if (detail?.installState !== 'not-installed') {
+          openPluginPage();
+          return;
+        }
+        const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
+          expectedReleaseId: detail.releaseId,
+          expectedManifest: detail.manifest,
+          allowSourceReplacement: false,
+        });
+        toast.success(t('settings.ghosts.toast.installed', { name: result.ghost.manifest.name }));
+      }
+      await refreshUserBrowserHealth();
+    } catch (error) {
+      const code = extractIpcError(error)?.code;
+      // Cancelling the install confirmation is not a failure.
+      if (code !== 'MUTATION_CANCELLED') {
+        toast.error(t(userBrowserPlugin ? ghostInstallErrorKey(code) : pluginMarketErrorKey(error)));
+      }
+    } finally {
+      setUserBrowserSetupBusy(false);
+    }
+  }, [browserBackendHealth?.reason, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  // While "My browser" still lacks its plugin or extension, check again every few seconds so the
+  // guidance turns into "connected" as soon as the user finishes a step elsewhere.
+  useEffect(() => {
+    if (browserBackendKind !== 'user-browser' || browserBackendHealth?.status !== 'error') return;
+    // Schedule the next check only after the previous one finished, so slow reads never pile up.
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      await refreshUserBrowserHealth();
+      if (!stopped) timer = setTimeout(() => void tick(), 3000);
+    };
+    timer = setTimeout(() => void tick(), 3000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [browserBackendKind, browserBackendHealth?.status, refreshUserBrowserHealth]);
+  const [useRealProfilePending, setUseRealProfilePending] = useState(false);
+  const confirmDialog = useOptionalConfirmDialog();
 
   useEffect(() => {
     let cancelled = false;
     setAndroidStatus(null);
     setAndroidStatusPending(true);
-    void window.electronAPI.maker.android.getConfig()
+    void window.electronAPI.maker.android
+      .getConfig()
       .then((config) => {
         if (!cancelled) {
           setAndroidConfig(config);
@@ -399,7 +579,8 @@ export function ComputerUseSection({
       .catch((err) => {
         log.warn('android.getConfig failed', err);
       });
-    void window.electronAPI.maker.plugins.getState(ANDROID_PLUGIN_ID)
+    void window.electronAPI.maker.plugins
+      .getState(ANDROID_PLUGIN_ID)
       .then((state) => {
         if (cancelled) return;
         setAndroidEnabled(state.effectiveEnabled);
@@ -411,7 +592,8 @@ export function ComputerUseSection({
           return;
         }
         setAndroidPreparePending(true);
-        void window.electronAPI.maker.android.prepareAdb()
+        void window.electronAPI.maker.android
+          .prepareAdb()
           .then(() => (cancelled ? undefined : window.electronAPI.maker.android.status()))
           .then((status) => {
             if (!cancelled && status) setAndroidStatus(status);
@@ -457,28 +639,31 @@ export function ComputerUseSection({
     let cancelled = false;
     // Machine-wide status is independent of workingDir and may include slow
     // daemon recovery / TCC probes. Never make it a prerequisite for this page.
-    void window.electronAPI.maker.computer.status({
-      refreshPermissionGuide: false,
-      forcePermissionProbe: true,
-      bypassPermissionProbeCache: true,
-      passivePermissionProbeOnly: true,
-    }).catch((err) => {
-      log.warn('computer.status failed', err);
-      return {
-        installed: false,
-        executablePath: null,
-        version: null,
-        daemonRunning: false,
-        installCommand: 'cua-driver install instructions: https://cua.ai/docs/cua-driver',
-        docsUrl: 'https://cua.ai/docs/cua-driver',
-        error: String(err),
-      } as ComputerDriverStatus;
-    }).then((computer) => {
-      if (cancelled) return;
-      // A native permission-guide event may already have supplied newer state.
-      setComputerStatus((current) => current ?? computer);
-      log.debug('computer initial status loaded', getComputerPermissionLogSummary(computer));
-    });
+    void window.electronAPI.maker.computer
+      .status({
+        refreshPermissionGuide: false,
+        forcePermissionProbe: true,
+        bypassPermissionProbeCache: true,
+        passivePermissionProbeOnly: true,
+      })
+      .catch((err) => {
+        log.warn('computer.status failed', err);
+        return {
+          installed: false,
+          executablePath: null,
+          version: null,
+          daemonRunning: false,
+          installCommand: 'cua-driver install instructions: https://cua.ai/docs/cua-driver',
+          docsUrl: 'https://cua.ai/docs/cua-driver',
+          error: String(err),
+        } as ComputerDriverStatus;
+      })
+      .then((computer) => {
+        if (cancelled) return;
+        // A native permission-guide event may already have supplied newer state.
+        setComputerStatus((current) => current ?? computer);
+        log.debug('computer initial status loaded', getComputerPermissionLogSummary(computer));
+      });
     return () => {
       cancelled = true;
     };
@@ -487,77 +672,34 @@ export function ComputerUseSection({
   useEffect(() => {
     let cancelled = false;
     const backendHealthSeq = ++browserBackendHealthSeqRef.current;
-    // Start the slow health/recovery path alongside the base reads, but do not
-    // include it in their render gate. The Automation cards are useful while
-    // this result is pending and BrowserBackendSubsection already supports a
-    // null health state.
-    const backendHealthPromise = (async () => {
+    setBrowserBackendHealth(null);
+    if (browserBackendKind === null || browserBackendPending) return;
+    // Runtime health depends only on the loaded backend, never other settings.
+    // Wait for a switch to finish before probing its authoritative backend.
+    void (async () => {
       try {
-        return {
-          health: await (window.electronAPI.browserBackend?.getHealth?.() ?? null),
-          error: null,
-        };
+        const health = await (window.electronAPI.browserBackend?.getHealth?.() ?? null);
+        if (cancelled || browserBackendHealthSeqRef.current !== backendHealthSeq) return;
+        setBrowserBackendHealth(health?.active === browserBackendKind ? health : null);
       } catch (error) {
         log.warn('browserBackend.getHealth failed', error);
-        return { health: null, error };
+        if (cancelled || browserBackendHealthSeqRef.current !== backendHealthSeq) return;
+        setBrowserBackendHealth(browserBackendHealthFallback(browserBackendKind));
       }
-    })();
-    void (async () => {
-      const [browserState, computerState, avail, backendState] = await Promise.all([
-        // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
-        // enable state directly by id — list().find() would always be undefined
-        // and the toggle would wrongly reset to enabled on every remount.
-        window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir).catch((err) => {
-          log.warn('plugins.getState(browser) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID).catch((err) => {
-          log.warn('plugins.getState(computer) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.browser.status().catch((err) => {
-          log.warn('browser.status failed', err);
-          return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
-        }),
-        window.electronAPI.browserBackend?.getState?.().catch((err) => {
-          log.warn('browserBackend.getState failed', err);
-          return null;
-        }) ?? Promise.resolve(null),
-      ]);
-      if (cancelled) return;
-      // Browser keeps the builtin default-on behavior. Direct computer control
-      // reflects the persisted machine-wide opt-in; readiness is shown separately.
-      setBrowserEnabled(browserState ? browserState.effectiveEnabled : true);
-      const effectiveComputerEnabled = computerState ? computerState.effectiveEnabled : false;
-      setComputerEnabled(effectiveComputerEnabled);
-      setAvailability(avail);
-      // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
-      // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
-      // 让卡片整张瘫成内置态强。
-      const activeBackend = backendState?.active ?? 'external';
-      setBrowserBackendKind(activeBackend);
-      setUseRealProfile(backendState?.useRealProfile === true);
-      const { health: backendHealth, error: backendHealthError } = await backendHealthPromise;
-      if (cancelled || browserBackendHealthSeqRef.current !== backendHealthSeq) return;
-      setBrowserBackendHealth(
-        backendHealth?.active === activeBackend
-          ? backendHealth
-          : backendHealthError
-            ? browserBackendHealthFallback(activeBackend)
-            : null,
-      );
     })();
     return () => {
       cancelled = true;
     };
-  }, [workingDir]);
+  }, [browserBackendKind, browserBackendPending]);
 
   // Phase 5: 用户点 segmented chip 切换 backend。乐观更新 + IPC 失败回滚。
   const handleSelectBackend = useCallback(
-    async (kind: 'external' | 'rsb-webview') => {
+    async (kind: 'external' | 'rsb-webview' | 'user-browser') => {
       if (browserBackendPending) return;
       if (browserBackendKind === kind) return;
       const prev = browserBackendKind;
+      // Results of reads started for the previous browser no longer apply.
+      browserBackendHealthSeqRef.current += 1;
       setBrowserBackendKind(kind);
       setBrowserBackendPending(true);
       try {
@@ -565,18 +707,6 @@ export function ComputerUseSection({
         // main 返回 active 是权威 — 万一同一次 swap 失败 router 拒了我们 fallback
         // 到 main 端的真实值。
         setBrowserBackendKind(res.active);
-        const backendHealthSeq = ++browserBackendHealthSeqRef.current;
-        try {
-          const health = await window.electronAPI.browserBackend.getHealth();
-          if (browserBackendHealthSeqRef.current === backendHealthSeq) {
-            setBrowserBackendHealth(health);
-          }
-        } catch (healthErr) {
-          log.warn('browserBackend.getHealth after setKind failed', healthErr);
-          if (browserBackendHealthSeqRef.current === backendHealthSeq) {
-            setBrowserBackendHealth(browserBackendHealthFallback(res.active));
-          }
-        }
       } catch (err) {
         log.error('browserBackend.setKind failed', err);
         setBrowserBackendKind(prev);
@@ -585,7 +715,7 @@ export function ComputerUseSection({
         setBrowserBackendPending(false);
       }
     },
-    [browserBackendKind, browserBackendPending, t],
+    [browserBackendKind, browserBackendPending, setBrowserBackendKind, t],
   );
 
   const handleToggleRealProfile = useCallback(
@@ -623,12 +753,19 @@ export function ComputerUseSection({
         );
       } catch (err) {
         log.error('browserBackend.setUseRealProfile failed', err);
-        toast.error(t('settings.computerUse.realProfile.toast.failed'));
+        const errorCode = browserOpenForLoginErrorCode(err);
+        toast.error(
+          t(
+            errorCode
+              ? browserOpenForLoginToastKey(errorCode, 'settings.computerUse.realProfile.toast.failed')
+              : 'settings.computerUse.realProfile.toast.failed',
+          ),
+        );
       } finally {
         setUseRealProfilePending(false);
       }
     },
-    [confirmDialog, t, useRealProfilePending],
+    [confirmDialog, setUseRealProfile, t, useRealProfilePending],
   );
 
   const handleRecoverBrowserBackend = useCallback(async () => {
@@ -652,7 +789,7 @@ export function ComputerUseSection({
     } finally {
       setBrowserBackendRecovering(false);
     }
-  }, [browserBackendPending, browserBackendRecovering, t]);
+  }, [browserBackendPending, browserBackendRecovering, setBrowserBackendKind, t]);
 
   // 更新期间订阅 main 广播的下载进度;phase='done' 或组件卸载时清空。
   useEffect(() => {
@@ -670,16 +807,20 @@ export function ComputerUseSection({
     setDriverCheckPending(true);
     setDriverCheckFailed(false);
     try {
-      const result = await window.electronAPI.maker.computer.checkUpdate(force ? { force: true } : undefined);
+      const result = await window.electronAPI.maker.computer.checkUpdate(
+        force ? { force: true } : undefined,
+      );
       if (!computerUseSectionMountedRef.current) return null;
       setDriverUpdate(result);
       // Older peers have no checkStatus. A missing latestVersion still means
       // that a successful check cannot be established, never “up to date”.
-      setDriverCheckFailed(result.checkStatus === 'error' || !result.currentVersion || !result.latestVersion);
+      setDriverCheckFailed(
+        result.checkStatus === 'error' || !result.currentVersion || !result.latestVersion,
+      );
       if (result.currentVersion) {
-        setComputerStatus((current) => current?.installed
-          ? { ...current, version: result.currentVersion }
-          : current);
+        setComputerStatus((current) =>
+          current?.installed ? { ...current, version: result.currentVersion } : current,
+        );
       }
       return result;
     } catch (err) {
@@ -695,85 +836,93 @@ export function ComputerUseSection({
   // 面板关闭它照常跑完;面板重开后本函数 join 同一个安装 Promise。
   // resume 路径传 joinOnly:若 main 侧安装在 IPC 到达前恰好完成,只读状态
   // 刷新,绝不误起一次新安装(用户没点按钮不该有安装发生)。
-  const joinDriverUpdate = useCallback(async (joinOnly: boolean) => {
-    try {
-      let nextStatus: ComputerDriverStatus | null = null;
-      let updateSucceeded = false;
+  const joinDriverUpdate = useCallback(
+    async (joinOnly: boolean) => {
       try {
-        const result = await window.electronAPI.maker.computer.updateDriver(
-          joinOnly ? { joinOnly: true } : undefined,
-        );
-        nextStatus = result.status;
-        updateSucceeded = true;
-      } catch (err) {
-        log.warn('computer driver update failed', err);
-        if (!computerUseSectionMountedRef.current) return;
-        toast.error(t('settings.computerUse.directControl.update.toast.failed'));
-        // A nonzero installer exit does not mean the old binary is still on disk.
+        let nextStatus: ComputerDriverStatus | null = null;
+        let updateSucceeded = false;
         try {
-          nextStatus = await window.electronAPI.maker.computer.status({ skipPermissionProbe: true });
-        } catch (refreshErr) {
-          log.warn('computer.status after failed update failed', refreshErr);
-        }
-      }
-      if (!computerUseSectionMountedRef.current) return;
-      if (nextStatus) setComputerStatus(nextStatus);
-      // Publish the installed version and remove the old offer before probing
-      // permissions. A slow/failed permission probe must not retain old versions.
-      setDriverUpdate(null);
-      if (!nextStatus?.installed || !computerUseSectionMountedRef.current) return;
-      if (nextStatus.permissionState?.platform === 'macos') {
-        const previousPermissionState = nextStatus.permissionState;
-        try {
-          const permissions = await window.electronAPI.maker.computer.status({
-            forcePermissionProbe: true,
-            freshPermissionProbe: true,
-          });
-          // Keep the independently verified version if the permission status
-          // request could not even read the binary during daemon recovery.
-          nextStatus = {
-            ...permissions,
-            installed: true,
-            version: nextStatus.version,
-            executablePath: nextStatus.executablePath,
-          };
+          const result = await window.electronAPI.maker.computer.updateDriver(
+            joinOnly ? { joinOnly: true } : undefined,
+          );
+          nextStatus = result.status;
+          updateSucceeded = true;
         } catch (err) {
-          log.warn('computer permission check after update failed', err);
-          nextStatus = {
-            ...nextStatus,
-            permissions: undefined,
-            permissionState: {
-              ...previousPermissionState,
-              status: 'unknown',
-              accessibility: 'unknown',
-              screenRecording: 'unknown',
-              screenRecordingCapturable: 'unknown',
-            },
-          };
+          log.warn('computer driver update failed', err);
+          if (!computerUseSectionMountedRef.current) return;
+          toast.error(t('settings.computerUse.directControl.update.toast.failed'));
+          // A nonzero installer exit does not mean the old binary is still on disk.
+          try {
+            nextStatus = await window.electronAPI.maker.computer.status({
+              skipPermissionProbe: true,
+            });
+          } catch (refreshErr) {
+            log.warn('computer.status after failed update failed', refreshErr);
+          }
+        }
+        if (!computerUseSectionMountedRef.current) return;
+        if (nextStatus) setComputerStatus(nextStatus);
+        // Publish the installed version and remove the old offer before probing
+        // permissions. A slow/failed permission probe must not retain old versions.
+        setDriverUpdate(null);
+        if (!nextStatus?.installed || !computerUseSectionMountedRef.current) return;
+        if (nextStatus.permissionState?.platform === 'macos') {
+          const previousPermissionState = nextStatus.permissionState;
+          try {
+            const permissions = await window.electronAPI.maker.computer.status({
+              forcePermissionProbe: true,
+              freshPermissionProbe: true,
+            });
+            // Keep the independently verified version if the permission status
+            // request could not even read the binary during daemon recovery.
+            nextStatus = {
+              ...permissions,
+              installed: true,
+              version: nextStatus.version,
+              executablePath: nextStatus.executablePath,
+            };
+          } catch (err) {
+            log.warn('computer permission check after update failed', err);
+            nextStatus = {
+              ...nextStatus,
+              permissions: undefined,
+              permissionState: {
+                ...previousPermissionState,
+                status: 'unknown',
+                accessibility: 'unknown',
+                screenRecording: 'unknown',
+                screenRecordingCapturable: 'unknown',
+              },
+            };
+          }
+        }
+        if (!computerUseSectionMountedRef.current) return;
+        setComputerStatus(nextStatus);
+        if (!isComputerPermissionReady(nextStatus)) {
+          setComputerPermissionPending(false);
+          try {
+            // Unknown opt-in may still be enabled in main. Only publish off
+            // after persisting it, keeping the initial read alive on failure.
+            await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, false);
+            if (computerUseSectionMountedRef.current) setComputerEnabled(false);
+          } catch (error) {
+            log.warn('disabling computer after permission reset failed', error);
+          }
+          toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
+        }
+        if (updateSucceeded && isComputerPermissionReady(nextStatus)) {
+          toast.success(t('settings.computerUse.directControl.update.toast.success'));
+        }
+      } finally {
+        if (computerUseSectionMountedRef.current) {
+          setDriverUpdatePending(false);
+          // Finish local permission recovery before starting the network check.
+          void refreshDriverUpdateCheck();
         }
       }
-      if (!computerUseSectionMountedRef.current) return;
-      setComputerStatus(nextStatus);
-      if (!isComputerPermissionReady(nextStatus)) {
-        setComputerPermissionPending(false);
-        setComputerEnabled(false);
-        if (computerEnabled) {
-          await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, false)
-            .catch((error) => log.warn('disabling computer after permission reset failed', error));
-        }
-        toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
-      }
-      if (updateSucceeded && isComputerPermissionReady(nextStatus)) {
-        toast.success(t('settings.computerUse.directControl.update.toast.success'));
-      }
-    } finally {
-      if (computerUseSectionMountedRef.current) {
-        setDriverUpdatePending(false);
-        // Finish local permission recovery before starting the network check.
-        void refreshDriverUpdateCheck();
-      }
-    }
-  }, [computerEnabled, refreshDriverUpdateCheck, t]);
+    },
+    [refreshDriverUpdateCheck, setComputerEnabled, t],
+  );
 
   useEffect(() => {
     if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
@@ -809,19 +958,22 @@ export function ComputerUseSection({
     void joinDriverUpdate(false);
   }, [driverUpdatePending, driverCheckPending, joinDriverUpdate]);
 
-  const persistComputerEnabled = useCallback(async (next: boolean) => {
-    const result = await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, next);
-    setComputerEnabled(next);
-    if (result.codexMcpRefreshed === false) {
-      toast.warning(t('settings.computerUse.codexRefreshDeferred'));
-      return;
-    }
-    toast.success(
-      next
-        ? t('settings.computerUse.directControl.toast.enabled')
-        : t('settings.computerUse.directControl.toast.disabled'),
-    );
-  }, [t]);
+  const persistComputerEnabled = useCallback(
+    async (next: boolean) => {
+      const result = await window.electronAPI.maker.plugins.setEnabled(COMPUTER_PLUGIN_ID, next);
+      setComputerEnabled(next);
+      if (result.codexMcpRefreshed === false) {
+        toast.warning(t('settings.computerUse.codexRefreshDeferred'));
+        return;
+      }
+      toast.success(
+        next
+          ? t('settings.computerUse.directControl.toast.enabled')
+          : t('settings.computerUse.directControl.toast.disabled'),
+      );
+    },
+    [setComputerEnabled, t],
+  );
 
   // CLI-only CuaDriver installs use the legacy `permissions grant` process and
   // have no native-guide broadcasts. Keep checking that live permission state
@@ -903,7 +1055,11 @@ export function ComputerUseSection({
       setTogglePending(true);
       try {
         if (workingDir) {
-          await window.electronAPI.maker.plugins.setProjectEnabled(workingDir, BROWSER_PLUGIN_ID, next);
+          await window.electronAPI.maker.plugins.setProjectEnabled(
+            workingDir,
+            BROWSER_PLUGIN_ID,
+            next,
+          );
         } else {
           await window.electronAPI.maker.plugins.setEnabled(BROWSER_PLUGIN_ID, next);
         }
@@ -920,39 +1076,45 @@ export function ComputerUseSection({
         setTogglePending(false);
       }
     },
-    [t, workingDir],
+    [setBrowserEnabled, t, workingDir],
   );
 
-  const handleRefreshAndroidStatus = useCallback(async (showErrorToast = true) => {
-    setAndroidStatusPending(true);
-    try {
-      const status = await window.electronAPI.maker.android.status();
-      setAndroidStatus(status);
-    } catch (err) {
-      log.warn('android.status refresh failed', err);
-      setAndroidStatus(androidStatusFallback(err));
-      if (showErrorToast) {
-        toast.error(t('settings.computerUse.android.toast.statusFailed'));
+  const handleRefreshAndroidStatus = useCallback(
+    async (showErrorToast = true) => {
+      setAndroidStatusPending(true);
+      try {
+        const status = await window.electronAPI.maker.android.status();
+        setAndroidStatus(status);
+      } catch (err) {
+        log.warn('android.status refresh failed', err);
+        setAndroidStatus(androidStatusFallback(err));
+        if (showErrorToast) {
+          toast.error(t('settings.computerUse.android.toast.statusFailed'));
+        }
+      } finally {
+        setAndroidStatusPending(false);
       }
-    } finally {
-      setAndroidStatusPending(false);
-    }
-  }, [t]);
+    },
+    [t],
+  );
 
-  const handleSelectAndroidDevice = useCallback(async (value: string) => {
-    const serial = value === ANDROID_AUTO_DEVICE_VALUE ? null : value;
-    setAndroidDevicePending(true);
-    try {
-      const config = await window.electronAPI.maker.android.setDefaultDevice(serial);
-      setAndroidConfig(config);
-      await handleRefreshAndroidStatus(false);
-    } catch (err) {
-      log.warn('android.setDefaultDevice failed', err);
-      toast.error(t('settings.computerUse.android.toast.deviceFailed'));
-    } finally {
-      setAndroidDevicePending(false);
-    }
-  }, [handleRefreshAndroidStatus, t]);
+  const handleSelectAndroidDevice = useCallback(
+    async (value: string) => {
+      const serial = value === ANDROID_AUTO_DEVICE_VALUE ? null : value;
+      setAndroidDevicePending(true);
+      try {
+        const config = await window.electronAPI.maker.android.setDefaultDevice(serial);
+        setAndroidConfig(config);
+        await handleRefreshAndroidStatus(false);
+      } catch (err) {
+        log.warn('android.setDefaultDevice failed', err);
+        toast.error(t('settings.computerUse.android.toast.deviceFailed'));
+      } finally {
+        setAndroidDevicePending(false);
+      }
+    },
+    [handleRefreshAndroidStatus, t],
+  );
 
   const handleSaveAndroidAdbPath = useCallback(async () => {
     const nextAdbPath = androidAdbPathDraft.trim();
@@ -1033,10 +1195,8 @@ export function ComputerUseSection({
   const handleToggleComputer = useCallback(
     async (next: boolean) => {
       const flowSeq = computerPermissionFlowSeqRef.current;
-      const isCurrentFlow = () => (
-        computerUseSectionMountedRef.current
-        && computerPermissionFlowSeqRef.current === flowSeq
-      );
+      const isCurrentFlow = () =>
+        computerUseSectionMountedRef.current && computerPermissionFlowSeqRef.current === flowSeq;
       computerTogglePendingRef.current = true;
       setComputerTogglePending(true);
       computerEnableIntentRef.current = next;
@@ -1050,7 +1210,10 @@ export function ComputerUseSection({
           nextStatus = installResult.status;
           setComputerStatus(installResult.status);
           if (!installResult.status.installed) {
-            throw new Error(installResult.status.error ?? 'cua-driver install did not produce an installed driver');
+            throw new Error(
+              installResult.status.error ??
+                'cua-driver install did not produce an installed driver',
+            );
           }
         }
         if (next && nextStatus?.permissionState?.platform === 'macos') {
@@ -1111,7 +1274,7 @@ export function ComputerUseSection({
             ? t('settings.computerUse.directControl.toast.installFailed')
             : next && !isComputerPermissionReady(nextStatus)
               ? t('settings.computerUse.directControl.toast.permissionFailed')
-            : t('settings.computerUse.directControl.toast.toggleFailed'),
+              : t('settings.computerUse.directControl.toast.toggleFailed'),
         );
       } finally {
         computerTogglePendingRef.current = false;
@@ -1186,8 +1349,8 @@ export function ComputerUseSection({
         granted ? 'badge-granted' : 'badge-missing',
       );
       if (
-        !computerUseSectionMountedRef.current
-        || computerPermissionFlowSeqRef.current !== flowSeq
+        !computerUseSectionMountedRef.current ||
+        computerPermissionFlowSeqRef.current !== flowSeq
       ) {
         return;
       }
@@ -1222,14 +1385,17 @@ export function ComputerUseSection({
           return;
         }
 
-        log.debug('computer permission grant still pending after badge action', getComputerPermissionLogSummary(status));
+        log.debug(
+          'computer permission grant still pending after badge action',
+          getComputerPermissionLogSummary(status),
+        );
         // The System Settings pane is already open. Keep the guide alive and
         // let its native observer complete the remaining step.
         toast.warning(t('settings.computerUse.directControl.toast.permissionPending'));
       } catch (err) {
         if (
-          !computerUseSectionMountedRef.current
-          || computerPermissionFlowSeqRef.current !== flowSeq
+          !computerUseSectionMountedRef.current ||
+          computerPermissionFlowSeqRef.current !== flowSeq
         ) {
           return;
         }
@@ -1267,7 +1433,10 @@ export function ComputerUseSection({
         bypassCache: true,
       });
       if (!status.installed || !isComputerPermissionReady(status)) {
-        log.debug('computer permission recheck found missing permissions', getComputerPermissionLogSummary(status));
+        log.debug(
+          'computer permission recheck found missing permissions',
+          getComputerPermissionLogSummary(status),
+        );
       }
     } catch (err) {
       log.warn('computer.status refresh failed', err);
@@ -1277,40 +1446,31 @@ export function ComputerUseSection({
     }
   }, [refreshComputerPermissionStatus, t]);
 
-  const automationViewLoading =
-    browserEnabled === null
-    || computerEnabled === null
-    || availability === null;
-
-  // Only base configuration gates the page; runtime probes update independently.
-  if (automationViewLoading) {
-    return null;
-  }
-
   const computerAccessibilityGranted = isComputerAccessibilityPermissionReady(computerStatus);
   const computerScreenRecordingGranted = isComputerScreenRecordingPermissionReady(computerStatus);
   const computerAccessibilityPending = computerPermissionPending && !computerAccessibilityGranted;
   const computerScreenRecordingPending =
-    computerPermissionPending &&
-    computerAccessibilityGranted &&
-    !computerScreenRecordingGranted;
-  const computerReady =
-    computerStatus?.installed && isComputerPermissionReady(computerStatus);
+    computerPermissionPending && computerAccessibilityGranted && !computerScreenRecordingGranted;
+  const computerReady = computerStatus?.installed && isComputerPermissionReady(computerStatus);
   // Persisted opt-in and runtime readiness are separate states. Keeping an
   // unavailable enabled configuration checked lets the user turn it off
   // instead of forcing the only interaction back into onboarding.
   const computerSwitchChecked = getComputerPermissionSwitchChecked(
-    computerEnabled,
+    computerEnabled ?? false,
     computerTogglePending,
     computerEnableIntentRef.current,
   );
   const computerSwitchDisabled =
-    computerStatus === null || computerTogglePending || computerInstallPending || computerPermissionPending;
+    computerEnabled === null ||
+    computerStatus === null ||
+    computerTogglePending ||
+    computerInstallPending ||
+    computerPermissionPending;
 
   const configuredDefaultAndroidDevice =
-    androidConfig?.value.defaultDeviceSerial
-    ?? androidStatus?.configured_default_device_serial
-    ?? null;
+    androidConfig?.value.defaultDeviceSerial ??
+    androidStatus?.configured_default_device_serial ??
+    null;
   const androidDevices = androidStatus?.devices ?? [];
   const selectedAndroidDevice = configuredDefaultAndroidDevice
     ? androidDevices.find((device) => device.device_serial === configuredDefaultAndroidDevice)
@@ -1319,17 +1479,19 @@ export function ComputerUseSection({
     ? androidDeviceLabel(selectedAndroidDevice) || configuredDefaultAndroidDevice
     : t('settings.computerUse.android.device.auto');
   const hasStaleConfiguredAndroidDevice = Boolean(
-    configuredDefaultAndroidDevice
-    && !androidDevices.some((device) => device.device_serial === configuredDefaultAndroidDevice),
+    configuredDefaultAndroidDevice &&
+    !androidDevices.some((device) => device.device_serial === configuredDefaultAndroidDevice),
   );
   // 禁用且尚无任何探测结果时显示禁用提示,避免落在 describeAndroidDeviceStatus
   // 的「正在检查…」上(禁用态 mount 不探测,#1806)。用户手动「刷新」拿到结果后
   // 仍按真实 status 展示。
-  const androidDeviceStatusText = androidEnabled === false && !androidStatus
-    ? t('settings.computerUse.android.status.disabled')
-    : describeAndroidDeviceStatus(androidStatus, t);
+  const androidDeviceStatusText =
+    androidEnabled === false && !androidStatus
+      ? t('settings.computerUse.android.status.disabled')
+      : describeAndroidDeviceStatus(androidStatus, t);
   const androidConnectionGuideKind = getAndroidConnectionGuideKind(androidStatus);
-  const androidAdbSource = androidStatus?.adb_path_source ?? androidStatus?.adb_preparation?.source ?? null;
+  const androidAdbSource =
+    androidStatus?.adb_path_source ?? androidStatus?.adb_preparation?.source ?? null;
   const androidAdbSourceText = androidPreparePending
     ? t('settings.computerUse.android.adb.preparing')
     : androidStatus?.adb_available && androidStatus.adb_path
@@ -1342,10 +1504,12 @@ export function ComputerUseSection({
           })
         : t('settings.computerUse.android.adb.auto');
   const androidAdbPersistedOverride = androidConfig?.value.adbPathOverride?.trim() ?? '';
-  const androidAdbActivePath = androidStatus?.adb_path ?? androidStatus?.adb_preparation?.path ?? '';
+  const androidAdbActivePath =
+    androidStatus?.adb_path ?? androidStatus?.adb_preparation?.path ?? '';
   const androidAdbBaselinePath = androidAdbPersistedOverride || androidAdbActivePath;
   const androidAdbPathTrimmed = androidAdbPathDraft.trim();
-  const androidAdbPathDirty = androidAdbPathEdited && androidAdbPathTrimmed !== androidAdbBaselinePath.trim();
+  const androidAdbPathDirty =
+    androidAdbPathEdited && androidAdbPathTrimmed !== androidAdbBaselinePath.trim();
   const androidAdbPathCanSave = androidAdbPathDirty && androidAdbPathTrimmed.length > 0;
   const androidAdbPathBusy = androidAdbPathPending || androidPreparePending;
 
@@ -1379,7 +1543,10 @@ export function ComputerUseSection({
               <Globe size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p id="settings-search-settings-computerUse-browser-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p
+                id="settings-search-settings-computerUse-browser-title"
+                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+              >
                 {t('settings.computerUse.browser.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1388,12 +1555,22 @@ export function ComputerUseSection({
             </div>
           </div>
           <Switch
-            checked={browserEnabled}
-            disabled={togglePending}
+            checked={browserEnabled ?? false}
+            disabled={browserEnabled === null || togglePending}
             onCheckedChange={handleToggleBrowser}
             aria-label={t('settings.computerUse.browser.toggleAria')}
           />
         </div>
+        <ConfigurationReadStatus
+          label={t('settings.computerUse.browser.title')}
+          status={browserRead.status}
+          retry={browserRead.retry}
+        />
+        <ConfigurationReadStatus
+          label={t('settings.computerUse.browserBackend.title')}
+          status={backendRead.status}
+          retry={backendRead.retry}
+        />
         {/* Phase 5: backend 切换 segmented control,排在 enable toggle 紧下方 —
             「使用哪个浏览器」是控制 toggle 之后用户首先需要回答的问题,所以放在
             探测 / 登录 cell 之前。state 还没拉到时不渲染。 */}
@@ -1405,9 +1582,19 @@ export function ComputerUseSection({
             health={browserBackendHealth}
             onSelect={(kind) => void handleSelectBackend(kind)}
             onRecover={() => void handleRecoverBrowserBackend()}
+            userBrowserPluginState={
+              userBrowserPlugin === null
+                ? 'not-installed'
+                : userBrowserPlugin.enabled
+                  ? 'enabled'
+                  : 'disabled'
+            }
+            userBrowserSetupBusy={userBrowserSetupBusy}
+            onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
           />
         ) : null}
-        {browserBackendKind !== null ? (
+        {/* 拷贝登录文件只对独立浏览器有用;别的浏览器下隐藏,但已经开着时仍要能关掉并删除拷贝。 */}
+        {browserBackendKind === 'external' || (browserBackendKind !== null && useRealProfile) ? (
           <BrowserRealProfileSubsection
             enabled={useRealProfile}
             pending={useRealProfilePending}
@@ -1418,11 +1605,20 @@ export function ComputerUseSection({
         {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview
             backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
         {browserBackendKind === 'external' ? (
+          <ConfigurationReadStatus
+            label={t('settings.computerUse.configurationRead.browserDetection')}
+            status={availabilityRead.status}
+            retry={availabilityRead.retry}
+          />
+        ) : null}
+        {browserBackendKind === 'external' && availability !== null ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
             <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
               {availability.detected
                 ? t('settings.computerUse.browser.detected', {
-                    browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) => c.toUpperCase()),
+                    browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
+                      c.toUpperCase(),
+                    ),
                   })
                 : t('settings.computerUse.browser.notDetected')}
             </p>
@@ -1438,7 +1634,13 @@ export function ComputerUseSection({
                 {t('settings.computerUse.browser.openForLogin')}
               </Button>
             ) : (
-              <Button variant="secondary" size="sm" className="px-3" type="button" onClick={handleDownload}>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="px-3"
+                type="button"
+                onClick={handleDownload}
+              >
                 <Download size={12} className="shrink-0" />
                 {t('settings.computerUse.browser.download')}
               </Button>
@@ -1447,7 +1649,7 @@ export function ComputerUseSection({
         ) : null}
       </div>
 
-      {browserBackendKind === 'external' && availability.detected ? (
+      {browserBackendKind === 'external' && availability?.detected ? (
         <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.computerUse.browser.openForLoginHint')}
         </p>
@@ -1477,7 +1679,10 @@ export function ComputerUseSection({
               <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p id="settings-search-settings-computerUse-directControl-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p
+                id="settings-search-settings-computerUse-directControl-title"
+                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+              >
                 {t('settings.computerUse.directControl.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1492,8 +1697,16 @@ export function ComputerUseSection({
             aria-label={t('settings.computerUse.directControl.toggleAria')}
           />
         </div>
+        <ConfigurationReadStatus
+          label={t('settings.computerUse.directControl.title')}
+          status={computerRead.status}
+          retry={computerRead.retry}
+        />
         {computerStatus === null ? (
-          <div role="status" className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]">
+          <div
+            role="status"
+            className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]"
+          >
             <Spinner size={12} />
             {t('settings.computerUse.directControl.update.readingVersion')}
           </div>
@@ -1503,7 +1716,10 @@ export function ComputerUseSection({
             {window.electronAPI.platform === 'darwin' ? (
               <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
-                  <p id="settings-search-settings-computerUse-directControl-permissions-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+                  <p
+                    id="settings-search-settings-computerUse-directControl-permissions-title"
+                    className="text-13 font-medium text-[var(--settings-section-title)]"
+                  >
                     {t('settings.computerUse.directControl.permissions.title')}
                   </p>
                   {computerInstallPending || computerPermissionPending ? (
@@ -1529,7 +1745,10 @@ export function ComputerUseSection({
                   )}
                 </div>
 
-                <div id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel" className="mt-3 grid gap-2.5 sm:grid-cols-2">
+                <div
+                  id="settings-search-settings-computerUse-directControl-permissions-accessibilityLabel"
+                  className="mt-3 grid gap-2.5 sm:grid-cols-2"
+                >
                   <ComputerPermissionRow
                     label={t('settings.computerUse.directControl.permissions.accessibilityLabel')}
                     iconSrc={accessibilityPermissionIcon}
@@ -1543,40 +1762,38 @@ export function ComputerUseSection({
                           : t('settings.computerUse.directControl.permissions.grant')
                     }
                     onAction={() =>
-                      void (
-                        computerStatus.installed
-                          ? handleOpenComputerPermission(
-                              MAC_ACCESSIBILITY_SETTINGS_URL,
-                              computerAccessibilityGranted,
-                            )
-                          : handleToggleComputer(true)
-                      )
+                      void (computerStatus.installed
+                        ? handleOpenComputerPermission(
+                            MAC_ACCESSIBILITY_SETTINGS_URL,
+                            computerAccessibilityGranted,
+                          )
+                        : handleToggleComputer(true))
                     }
                   />
                   <div id="settings-search-settings-computerUse-directControl-permissions-screenRecordingLabel">
-                  <ComputerPermissionRow
-                    label={t('settings.computerUse.directControl.permissions.screenRecordingLabel')}
-                    iconSrc={screenRecordingPermissionIcon}
-                    granted={computerScreenRecordingGranted}
-                    pending={computerScreenRecordingPending}
-                    actionLabel={
-                      computerScreenRecordingPending
-                        ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                        : computerScreenRecordingGranted
-                          ? t('settings.computerUse.directControl.permissions.granted')
-                          : t('settings.computerUse.directControl.permissions.grant')
-                    }
-                    onAction={() =>
-                      void (
-                        computerStatus.installed
+                    <ComputerPermissionRow
+                      label={t(
+                        'settings.computerUse.directControl.permissions.screenRecordingLabel',
+                      )}
+                      iconSrc={screenRecordingPermissionIcon}
+                      granted={computerScreenRecordingGranted}
+                      pending={computerScreenRecordingPending}
+                      actionLabel={
+                        computerScreenRecordingPending
+                          ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                          : computerScreenRecordingGranted
+                            ? t('settings.computerUse.directControl.permissions.granted')
+                            : t('settings.computerUse.directControl.permissions.grant')
+                      }
+                      onAction={() =>
+                        void (computerStatus.installed
                           ? handleOpenComputerPermission(
                               MAC_SCREEN_RECORDING_SETTINGS_URL,
                               computerScreenRecordingGranted,
                             )
-                          : handleToggleComputer(true)
-                      )
-                    }
-                  />
+                          : handleToggleComputer(true))
+                      }
+                    />
                   </div>
                 </div>
               </div>
@@ -1594,7 +1811,10 @@ export function ComputerUseSection({
                   </span>
                   {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
                     <>
-                      <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                      <span
+                        aria-hidden="true"
+                        className="text-11 text-[var(--settings-theme-card-border)]"
+                      >
                         ·
                       </span>
                       <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
@@ -1605,10 +1825,21 @@ export function ComputerUseSection({
                   ) : null}
                   {computerStatus.installed ? (
                     <>
-                      {(!driverUpdate?.updateAvailable || driverCheckPending || driverUpdatePending || driverCheckFailed) ? (
+                      {!driverUpdate?.updateAvailable ||
+                      driverCheckPending ||
+                      driverUpdatePending ||
+                      driverCheckFailed ? (
                         <>
-                          <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">·</span>
-                          <span role="status" className="text-11 text-[var(--settings-section-desc)]">
+                          <span
+                            aria-hidden="true"
+                            className="text-11 text-[var(--settings-theme-card-border)]"
+                          >
+                            ·
+                          </span>
+                          <span
+                            role="status"
+                            className="text-11 text-[var(--settings-section-desc)]"
+                          >
                             {driverCheckPending
                               ? t('settings.computerUse.directControl.update.checking')
                               : driverUpdatePending
@@ -1627,24 +1858,36 @@ export function ComputerUseSection({
                         <span className="text-11 text-[var(--settings-section-desc)]">
                           {t('settings.computerUse.directControl.update.lastChecked', {
                             time: new Date(driverUpdate.checkedAt).toLocaleString(i18n?.language, {
-                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
                             }),
                           })}
                         </span>
                       ) : null}
                     </>
                   ) : null}
-                  {computerStatus.installed && driverUpdate?.updateAvailable && driverUpdate.latestVersion && !driverUpdatePending ? (
+                  {computerStatus.installed &&
+                  driverUpdate?.updateAvailable &&
+                  driverUpdate.latestVersion &&
+                  !driverUpdatePending ? (
                     <>
-                      <span aria-hidden="true" className="text-11 text-[var(--settings-theme-card-border)]">
+                      <span
+                        aria-hidden="true"
+                        className="text-11 text-[var(--settings-theme-card-border)]"
+                      >
                         ·
                       </span>
                       <span className="text-11 text-[var(--settings-section-desc)]">
-                        {t(driverCheckFailed
-                          ? 'settings.computerUse.directControl.update.previouslyAvailable'
-                          : 'settings.computerUse.directControl.update.available', {
-                          version: driverUpdate.latestVersion,
-                        })}
+                        {t(
+                          driverCheckFailed
+                            ? 'settings.computerUse.directControl.update.previouslyAvailable'
+                            : 'settings.computerUse.directControl.update.available',
+                          {
+                            version: driverUpdate.latestVersion,
+                          },
+                        )}
                       </span>
                       <Button
                         variant="secondary"
@@ -1709,7 +1952,8 @@ export function ComputerUseSection({
                     style={{
                       width: `${Math.min(
                         100,
-                        (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) * 100,
+                        (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
+                          100,
                       )}%`,
                     }}
                   />
@@ -1770,7 +2014,10 @@ export function ComputerUseSection({
               <Smartphone size={16} className="text-[var(--settings-section-title)]" />
             </div>
             <div className="flex min-w-0 flex-col gap-[8px]">
-              <p id="settings-search-settings-computerUse-android-title" className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              <p
+                id="settings-search-settings-computerUse-android-title"
+                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+              >
                 {t('settings.computerUse.android.title')}
               </p>
               <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
@@ -1809,17 +2056,17 @@ export function ComputerUseSection({
                   <ChevronDown size={12} className="shrink-0 opacity-60" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="min-w-[260px] max-w-[360px]"
-              >
+              <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
                 <DropdownMenuItem
                   onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
                   className="flex items-start gap-2"
                 >
                   <Check
                     size={14}
-                    className={cn('mt-0.5 shrink-0', !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0')}
+                    className={cn(
+                      'mt-0.5 shrink-0',
+                      !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0',
+                    )}
                   />
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span className="truncate">
@@ -1832,14 +2079,14 @@ export function ComputerUseSection({
                 </DropdownMenuItem>
                 {hasStaleConfiguredAndroidDevice ? (
                   <DropdownMenuItem
-                    onClick={() => void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')}
+                    onClick={() =>
+                      void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')
+                    }
                     className="flex items-start gap-2"
                   >
                     <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
                     <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate">
-                        {configuredDefaultAndroidDevice}
-                      </span>
+                      <span className="truncate">{configuredDefaultAndroidDevice}</span>
                       <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                         {t('settings.computerUse.android.device.unavailable')}
                       </span>
@@ -1866,13 +2113,13 @@ export function ComputerUseSection({
                           className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
                         />
                         <div className="flex min-w-0 flex-col gap-0.5">
-                          <span className="truncate">
-                            {androidDeviceLabel(device)}
-                          </span>
+                          <span className="truncate">{androidDeviceLabel(device)}</span>
                           <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                             {ready
                               ? t('settings.computerUse.android.device.ready')
-                              : t('settings.computerUse.android.device.state', { state: device.state })}
+                              : t('settings.computerUse.android.device.state', {
+                                  state: device.state,
+                                })}
                           </span>
                         </div>
                       </DropdownMenuItem>
@@ -1906,16 +2153,12 @@ export function ComputerUseSection({
               {androidConnectionGuideKind === 'connect' ? (
                 <>
                   <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                    {t(
-                      'settings.computerUse.android.connectionGuide.connect.adbNote',
-                    )}
+                    {t('settings.computerUse.android.connectionGuide.connect.adbNote')}
                   </p>
                   <ol className="mt-2 list-decimal space-y-1 pl-4 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
                     {[1, 2, 3, 4].map((step) => (
                       <li key={step}>
-                        {t(
-                          `settings.computerUse.android.connectionGuide.connect.step${step}`,
-                        )}
+                        {t(`settings.computerUse.android.connectionGuide.connect.step${step}`)}
                       </li>
                     ))}
                   </ol>
@@ -1932,7 +2175,10 @@ export function ComputerUseSection({
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
           <div className="flex min-w-0 flex-col gap-1">
-            <p id="settings-search-settings-computerUse-android-adb-title" className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
+            <p
+              id="settings-search-settings-computerUse-android-adb-title"
+              className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]"
+            >
               {t('settings.computerUse.android.adb.title')}
             </p>
             <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">

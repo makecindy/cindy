@@ -1,19 +1,27 @@
 /**
  * 待发送消息气泡(渲染在消息流里,不再是列表 footer)。
  *
- * 形态与已发送用户气泡同款(右对齐、surfaceElevated + borderStrong)但整体半透明——
- * 「这就是你的消息,只是还没生效」;落定时提高不透明度,回流后同一个列表位置换成正式
- * 消息,原地变实。徽标语义:
+ * 形态与已发送用户气泡同款(右对齐、surfaceElevated + border),从第一帧起一直是实色:内容已经
+ * 确定,网络往返、排队、等电脑都不是把它变灰的理由;回流后同一个列表位置换成正式消息,外观不变。
+ * 状态只放两处(设计稿 Designs/cindy/send-bubble r1 · B):气泡左侧图标,以及气泡下方那一行——
+ * 送达后正式消息的「复制 / …」占的就是这一行,所以前后行高不变。本机刚发出的条目图标延后出现,
+ * 多数发送在延迟内落定,不闪转圈。左侧图标语义:
  *  - 转圈 = 还没有「已被收下」这个事实(enqueue 在途 / 已出队待回流 / 附件上传中);
- *  - 「排入队尾 list-end」= 已确认入队,顺序由排列先后表达,不标数字;
+ *  - 已确认入队:图标与「排队中」合并到下方菜单入口,左侧不重复显示;
+ *  - 时钟 = 电脑离线,消息留在手机上,连上后自动发出(不算失败);
  *  - ✎ = 正在底部 composer 编辑这一条;
  *  - ⚠ = 失败,可重试 / 删除。
  * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ActivityIndicator, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Pressable, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent } from 'react-native';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { CompanionFadeIn } from '@/session/CompanionEntering';
+import { LOCAL_SEND_STATUS_DELAY_MS, localSendStartedAt } from '@/session/localSendMotion';
 import { Text } from '@/components/AppText';
+import { NativePullDownMenu, usesNativePullDownMenu, type NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
+import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { summarizeMessageBubblePresentation } from '@/session/messagePresentation';
 import { LONG_USER_MESSAGE_COLLAPSED_LINES, LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, mayExceedVisualLineThreshold, resolveUserMessageCollapse } from '@/session/userMessageCollapse';
@@ -23,8 +31,11 @@ import { MessageBodyTapBoundary } from '@/session/ShareMessageCheckbox';
 import { shareSelectionTapMoved, shouldCommitShareSelectionTap, type ShareSelectionTapPoint } from '@/session/shareSelectionTap';
 import {
   AlertCircle,
+  ArrowDown,
   ArrowUp,
   Bot,
+  ChevronDown,
+  Clock,
   Ghost,
   ListEnd,
   Monitor,
@@ -56,16 +67,21 @@ import {
   type ResolveRemoteMediaFn,
 } from '@/session/remoteMedia';
 import type { MobileOutboxThumb } from '@/session/sessionOutbox';
+import type { MessagePayload } from '@/session/messagePayload';
+import { pendingSendGalleryImage } from '@/session/pendingSendImages';
 import {
   fontWeight,
   iconSize,
   iconStroke,
   lineHeight,
+  motionDuration,
+  motionEasing,
   useTheme,
   useThemedStyles,
   type ThemeColors,
 } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
 
 /** 与已发送消息上的来源标签同一组图标(自动化 Timer / 任务 Send / Orca Bot / 插件 Ghost)。 */
 function sourceIcon(kind: MobilePendingSendSourceKind): LucideIcon {
@@ -84,6 +100,7 @@ export interface PendingSendBubbleActions {
   onRemove(clientId: string): void;
   onBeginEdit(clientId: string): void;
   onSteer(clientId: string): void;
+  onMove(clientId: string, direction: 'up' | 'down'): void;
   onRetryOutbox(clientId: string): void;
   onRemoveOutbox(clientId: string): void;
   busy?: boolean;
@@ -156,28 +173,64 @@ function useThumbCellUri(
 
 function ThumbCell({
   thumb,
+  slot,
   resolveRemoteMedia,
   renderImage,
+  onOpenImage,
+  onRetry,
 }: {
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   thumb: MobileOutboxThumb;
+  slot: number;
+  onRetry?: () => void;
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const [failedUris, setFailedUris] = useState<readonly string[]>([]);
   const uri = useThumbCellUri(thumb, resolveRemoteMedia, failedUris);
+  const image = pendingSendGalleryImage(thumb, uri, slot);
+  const canOpen = !!image && !!onOpenImage;
   return (
-    <View style={styles.thumbCell}>
+    <Pressable
+      accessibilityLabel={image?.title}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !canOpen }}
+      disabled={!canOpen}
+      onPress={(event) => {
+        event.stopPropagation();
+        if (image) onOpenImage?.(image.payload);
+      }}
+      style={styles.thumbCell}
+      testID={`pendingSend.image.${thumb.key}`}
+    >
       {renderImage(uri, thumb.uri, () => {
         if (uri) setFailedUris((failed) => failed.includes(uri) ? failed : [...failed, uri]);
       })}
       {thumb.uploading ? (
-        <View style={styles.thumbUploadingOverlay}>
+        <View pointerEvents="none" style={styles.thumbUploadingOverlay}>
           <ActivityIndicator color={colors.ctaText} size="small" />
         </View>
+      ) : thumb.failed ? (
+        // 只有这张没传上去:原图照常显示,上面一个重传按钮;正文与其它图不受影响。
+        <View pointerEvents="box-none" style={styles.thumbUploadingOverlay}>
+          <Pressable
+            accessibilityLabel={t('message.queue.retryImage')}
+            accessibilityRole="button"
+            disabled={!onRetry}
+            // 32 + 两侧各 6 = 44。
+            hitSlop={6}
+            onPress={(event) => { event.stopPropagation(); onRetry?.(); }}
+            style={({ pressed }) => [styles.thumbRetry, pressed && styles.pressed]}
+            testID={`pendingSend.imageRetry.${thumb.key}`}
+          >
+            <RotateCcw color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          </Pressable>
+        </View>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
@@ -186,22 +239,63 @@ function AttachmentThumbStrip({
   resolveRemoteMedia,
   renderImage,
   gap,
+  onOpenImage,
+  onRetry,
 }: {
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   gap: number;
+  onRetry?: () => void;
   thumbs: readonly MobileOutboxThumb[];
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   useSentAttachmentThumbsVersion();
   if (thumbs.length === 0) return null;
   return (
     <View style={[styles.thumbStrip, { gap }]} testID="pendingSend.thumbStrip">
-      {thumbs.map((thumb) => (
-        <ThumbCell renderImage={renderImage} key={thumb.key} resolveRemoteMedia={resolveRemoteMedia} thumb={thumb} />
+      {thumbs.map((thumb, slot) => (
+        <ThumbCell renderImage={renderImage} key={thumb.key} resolveRemoteMedia={resolveRemoteMedia}
+          thumb={thumb} slot={slot} onOpenImage={onOpenImage} onRetry={onRetry} />
       ))}
     </View>
   );
+}
+
+/**
+ * 本机刚发出的条目延后 LOCAL_SEND_STATUS_DELAY_MS 才显示状态:false = 还在延迟内,
+ * 'revealed' = 延迟后才出现(淡入),true = 一开始就该显示(别处来的条目 / 早已过了延迟)。
+ */
+function useLocalSendStatusShown(key: string): boolean | 'revealed' {
+  const sentAt = localSendStartedAt(key);
+  const remaining = sentAt === null ? 0 : sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now();
+  const waiting = remaining > 0;
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!waiting || sentAt === null) return undefined;
+    const timer = setTimeout(() => setRevealedKey(key), Math.max(0, sentAt + LOCAL_SEND_STATUS_DELAY_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [key, sentAt, waiting]);
+  if (revealedKey === key) return 'revealed';
+  return !waiting;
+}
+
+/** 进出「正在下方输入框编辑」时气泡透明度渐变,系统减弱动效时直接切换。 */
+function useAnimatedOpacity(target: number): Animated.Value {
+  const reduceMotion = useReduceMotionEnabled();
+  const value = useRef(new Animated.Value(target)).current;
+  useEffect(() => {
+    if (reduceMotion !== false) {
+      value.setValue(target);
+      return undefined;
+    }
+    const timing = Animated.timing(value, {
+      toValue: target, duration: motionDuration.fast, easing: Easing.bezier(...motionEasing.out), useNativeDriver: true,
+    });
+    timing.start();
+    return () => timing.stop();
+  }, [reduceMotion, target, value]);
+  return value;
 }
 
 export function PendingSendBubble({
@@ -211,23 +305,30 @@ export function PendingSendBubble({
   renderImage,
   renderText,
   renderFile,
+  renderReplyQuote,
   screenWidth,
   viewerDeviceId,
+  onOpenImage,
 }: {
   /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
   viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   renderText: (text: string, index: number) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
+  /** 伙伴私聊的引用回复块;普通任务不传。 */
+  renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
   screenWidth?: number;
   item: MobilePendingSendItem;
   actions: PendingSendBubbleActions;
   /** 远端媒体取件(粘贴时已上传到媒体总仓的图靠它取缩略图)。 */
   resolveRemoteMedia?: ResolveRemoteMediaFn;
+  onOpenImage?: (payload: MessagePayload) => void;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
+  // 待发送的一定是自己的消息;与落定后的正式气泡同色,避免发出瞬间换色。
+  const { colors: userBubbleColors } = useUserBubbleAppearance();
   const spinning = pendingSendSpins(item.phase);
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
@@ -240,6 +341,12 @@ export function PendingSendBubble({
   const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
+  const statusShown = useLocalSendStatusShown(item.key);
+  const waiting = item.phase === 'waiting';
+  const queued = item.phase === 'queued' && !!item.actions;
+  const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
+  // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
+  const contentOpacity = useAnimatedOpacity(editing ? 0.38 : 1);
   const layout = buildMessageContentLayout({ screenWidth });
   const rendersSentInlineBody = item.sentInlineTokens.some((token) => token.kind !== 'text');
   const displayBody = rendersSentInlineBody ? sentInlineTokensDisplayText(item.sentInlineTokens) : item.text;
@@ -317,6 +424,8 @@ export function PendingSendBubble({
     ? { left: badgeAnchor.left } : { right: 0 };
   const statusLabel = failed
     ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+    : waiting
+      ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
       ? t('message.queue.sendingMessage', { text: bubbleLabel })
       : item.queueIndex !== null
@@ -382,7 +491,7 @@ export function PendingSendBubble({
         </View>
       ) : null}
       <View style={styles.bubbleRow}>
-        <Pressable
+        {!queued ? <Pressable
           accessibilityHint={item.hint ?? undefined}
           accessibilityLabel={item.source
             ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
@@ -396,29 +505,32 @@ export function PendingSendBubble({
           testID={`pendingSend.badge.${item.phase}`}
         >
           {failed ? (
-            <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : spinning ? (
-            <ActivityIndicator color={colors.textTertiary} size="small" />
+            <AlertCircle color={colors.statusError} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           ) : editing ? (
             <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          ) : (
-            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
-            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+          ) : !statusShown ? null : (
+            <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+              {spinning ? (
+                <ActivityIndicator color={colors.textTertiary} size="small" />
+              ) : waiting ? (
+                <Clock color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+              ) : (
+                // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
+                <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+              )}
+            </CompanionFadeIn>
           )}
-        </Pressable>
-        <View
-          style={[
-            styles.content,
-            item.phase === 'settling' && styles.bubbleSettling,
-            selected && styles.bubbleSelected,
-            editing && styles.bubbleEditing,
-          ]}
+        </Pressable> : null}
+        <Animated.View
+          style={[styles.content, { opacity: contentOpacity }]}
           testID={`pendingSend.bubble.${item.clientId}`}
         >
           {hasAttachments ? (
             <View key={`attachments:${item.clientId}`} onLayout={measureBadgeAnchor} style={[styles.attachmentStrip, { gap: layout.attachmentGap }]}>
               <AttachmentThumbStrip
                 gap={layout.attachmentGap}
+                onOpenImage={onOpenImage}
+                onRetry={failed ? () => actions.onRetryOutbox(item.clientId) : undefined}
                 renderImage={renderImage}
                 resolveRemoteMedia={resolveRemoteMedia}
                 thumbs={item.thumbs}
@@ -430,7 +542,7 @@ export function PendingSendBubble({
               ) : null}
             </View>
           ) : null}
-          {hasBody ? (
+          {hasBody || (item.replyQuote && renderReplyQuote) ? (
             <MessageBodyTapBoundary value={cancelBubbleTouch}>
             <View
               key={`body:${item.clientId}`}
@@ -439,9 +551,15 @@ export function PendingSendBubble({
               onTouchMove={interactive ? handleBubbleTouchMove : undefined}
               onTouchStart={interactive ? handleBubbleTouchStart : undefined}
               onTouchCancel={cancelBubbleTouch}
-              style={[styles.bubble, density === 'compact' && styles.bubbleCompact, density === 'rich' && styles.bubbleRich]}
+              style={[
+                styles.bubble,
+                density === 'compact' && styles.bubbleCompact,
+                density === 'rich' && styles.bubbleRich,
+                userBubbleColors && { backgroundColor: userBubbleColors.background, borderColor: userBubbleColors.border },
+              ]}
               testID={`pendingSend.body.${item.clientId}`}
             >
+              {item.replyQuote && renderReplyQuote ? renderReplyQuote(item.replyQuote) : null}
               {rendersSentInlineBody ? (
                 <SentInlineAtomBody
                   interactiveAtoms={false}
@@ -482,7 +600,8 @@ export function PendingSendBubble({
             </View>
             </MessageBodyTapBoundary>
           ) : null}
-          {(item.fileCount > 0 && !item.fileNames?.length) || uploadsPending ? (
+          {/* 图片各自带上传转圈;只有非图片附件在传时才需要这一行。 */}
+          {(item.fileCount > 0 && !item.fileNames?.length) || (uploadsPending && item.thumbs.length === 0) ? (
             <View style={styles.attachmentLine}>
               <Paperclip color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
               <Text style={styles.attachmentLineText}>
@@ -500,93 +619,136 @@ export function PendingSendBubble({
               {t('message.queue.editingInComposer')}
             </Text>
           ) : null}
-          {item.errorText ? (
-            <Text style={styles.errorText} testID={`pendingSend.error.${item.clientId}`}>
-              {item.errorText}
-            </Text>
-          ) : null}
-        </View>
+        </Animated.View>
       </View>
+      {/* 气泡下方这一行:送达后正式消息的「复制 / …」也占这一行,状态与操作都放这里,前后行高不变。 */}
+      <View style={styles.statusRow} testID={`pendingSend.statusRow.${item.clientId}`}>
+        {failed ? (
+          <>
+            <Text numberOfLines={1} style={styles.statusError}>
+              {failedImages > 0 ? t('message.queue.imagesNotUploaded', { count: failedImages }) : t('message.queue.notSent')}
+            </Text>
+            <View style={styles.statusDivider} />
+            <StatusAction busy={actions.busy} label={t('message.queue.retry')} primary
+              onPress={() => actions.onRetryOutbox(item.clientId)} testID={`pendingSend.outboxRetry.${item.clientId}`} />
+            {item.canCancel !== false ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.delete')}
+                onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+            ) : null}
+          </>
+        ) : waiting && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+          <View style={styles.statusActions}>
+            <Text numberOfLines={1} style={styles.statusText}>
+              {t(item.waitingFor === 'network' ? 'message.queue.waitingForNetwork' : 'message.queue.waitingForComputer')}
+            </Text>
+            {outbox && item.canCancel !== false ? (
+              <>
+                <View style={styles.statusDivider} />
+                <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+                  onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+              </>
+            ) : null}
+          </View>
+          </CompanionFadeIn>
+        ) : item.actions && item.phase === 'queued' && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+            <QueuedSendMenu item={item} actions={actions} accessibilityLabel={item.source
+              ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
+              : statusLabel} />
+          </CompanionFadeIn>
+        ) : selected && outbox && item.canCancel !== false ? (
+          // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
+          <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>
+            <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+              onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+          </View>
+        ) : null}
+      </View>
+      {/* 有具体原因的失败(比如模型不支持图片)直接写出来,用户才知道该怎么处理;图片没传上去的
+          通用提示由那张图上的重传按钮表达,轻点气泡才看。 */}
+      {item.errorText && (failedImages === 0 || selected) ? (
+        <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
+      ) : null}
+      {/* 轻点气泡看排队操作为什么不可用。 */}
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
-      ) : null}
-      {selected && item.actions ? (
-        <View style={styles.actionRow} testID={`pendingSend.actions.${item.clientId}`}>
-          <ActionPill
-            busy={actions.busy}
-            disabled={item.actions.remove.disabled}
-            disabledReason={item.actions.remove.disabledReason}
-            icon={Trash2}
-            label={t('message.queue.cancel')}
-            onPress={() => actions.onRemove(item.clientId)}
-            testID={`pendingSend.remove.${item.clientId}`}
-          />
-          <ActionPill
-            busy={actions.busy}
-            disabled={item.actions.edit.disabled}
-            disabledReason={item.actions.edit.disabledReason}
-            icon={Pencil}
-            label={t('message.queue.edit')}
-            onPress={() => actions.onBeginEdit(item.clientId)}
-            testID={`pendingSend.edit.${item.clientId}`}
-          />
-          <ActionPill
-            busy={actions.busy}
-            cta
-            disabled={item.actions.steer.disabled}
-            disabledReason={item.actions.steer.disabledReason}
-            icon={ArrowUp}
-            label={t('message.queue.steer')}
-            onPress={() => actions.onSteer(item.clientId)}
-            testID={`pendingSend.steer.${item.clientId}`}
-          />
-        </View>
-      ) : null}
-      {selected && outbox ? (
-        <View style={styles.actionRow} testID={`pendingSend.outboxActions.${item.clientId}`}>
-          <ActionPill
-            busy={actions.busy}
-            icon={Trash2}
-            label={t(failed ? 'message.queue.delete' : 'message.queue.cancel')}
-            onPress={() => actions.onRemoveOutbox(item.clientId)}
-            testID={`pendingSend.outboxRemove.${item.clientId}`}
-          />
-          {failed ? <ActionPill
-            busy={actions.busy}
-            cta
-            icon={RotateCcw}
-            label={t('message.queue.retry')}
-            onPress={() => actions.onRetryOutbox(item.clientId)}
-            testID={`pendingSend.outboxRetry.${item.clientId}`}
-          /> : null}
-        </View>
       ) : null}
     </View>
   );
 }
 
-function ActionPill({
+/** 排队状态与操作共用一个入口,菜单浮在消息上,不展开列表行。 */
+function QueuedSendMenu({ item, actions, accessibilityLabel }: {
+  item: MobilePendingSendItem;
+  actions: PendingSendBubbleActions;
+  accessibilityLabel: string;
+}) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const choices: NativePullDownAction[] = [
+    { id: 'steer', title: t('message.queue.steer'), image: 'arrow.up', icon: ArrowUp },
+    { id: 'edit', title: t('message.queue.edit'), image: 'pencil', icon: Pencil },
+    { id: 'moveUp', title: t('message.queue.moveUp'), image: 'arrow.up', icon: ArrowUp },
+    { id: 'moveDown', title: t('message.queue.moveDown'), image: 'arrow.down', icon: ArrowDown },
+    { id: 'remove', title: t('message.queue.cancelSend'), image: 'trash', icon: Trash2, destructive: true },
+  ].filter((choice) => {
+    const availability = item.actions?.[choice.id as keyof NonNullable<MobilePendingSendItem['actions']>];
+    return !actions.busy && availability && !availability.disabled;
+  });
+  const disabled = choices.length === 0;
+  const trigger = (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={item.hint ?? undefined}
+      accessibilityRole="button"
+      accessibilityState={{ disabled, busy: actions.busy || undefined }}
+      disabled={disabled}
+      style={({ pressed }) => [styles.queueMenuTrigger, pressed && styles.pressed]}
+      testID={`pendingSend.queueStatus.${item.clientId}`}
+    >
+      <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+      <Text style={styles.queueStatusText}>{t('message.queue.queued')}</Text>
+      {!disabled && <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
+    </Pressable>
+  );
+  if (disabled) return trigger;
+  const Menu = usesNativePullDownMenu() ? NativePullDownMenu : AnchoredPullDownMenu;
+  return (
+    <Menu actions={choices} testID={`pendingSend.queueMenu.${item.clientId}`}
+      onAction={(id) => {
+        if (item.phase !== 'queued' || !choices.some((choice) => choice.id === id && !choice.disabled)) return;
+        if (id === 'steer') actions.onSteer(item.clientId);
+        else if (id === 'edit') actions.onBeginEdit(item.clientId);
+        else if (id === 'remove') actions.onRemove(item.clientId);
+        else if (id === 'moveUp') actions.onMove(item.clientId, 'up');
+        else if (id === 'moveDown') actions.onMove(item.clientId, 'down');
+      }}>
+      {trigger}
+    </Menu>
+  );
+}
+
+/** 状态行里的文字按钮:13/18 medium,可见高度跟着这一行,命中区用 hitSlop 补到 44。 */
+function StatusAction({
   busy,
-  cta,
   disabled,
   disabledReason,
-  icon: Icon,
   label,
   onPress,
+  primary,
   testID,
 }: {
   busy?: boolean;
-  cta?: boolean;
   disabled?: boolean;
   disabledReason?: string | null;
-  icon?: LucideIcon;
   label: string;
   onPress(): void;
+  primary?: boolean;
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const iconColor = cta ? colors.ctaText : colors.textSecondary;
   return (
     <Pressable
       accessibilityHint={disabledReason ?? undefined}
@@ -595,16 +757,12 @@ function ActionPill({
       accessibilityState={{ busy: busy || undefined, disabled }}
       disabled={disabled}
       onPress={disabled ? undefined : onPress}
-      style={({ pressed }) => [
-        styles.actionPill,
-        cta && styles.actionPillCta,
-        pressed && styles.pressed,
-        disabled && styles.disabled,
-      ]}
+      style={({ pressed }) => [styles.statusAction, pressed && styles.pressed]}
       testID={testID}
     >
-      {Icon ? <Icon color={iconColor} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
-      <Text style={[styles.actionPillText, cta && styles.actionPillTextCta]}>{label}</Text>
+      <Text style={[styles.statusActionText, primary && styles.statusActionTextPrimary, disabled && styles.statusActionTextDisabled]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -623,14 +781,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     width: '100%',
   },
   badge: { alignItems: 'center', justifyContent: 'center', width: 28, minHeight: 44, position: 'absolute', top: 0, zIndex: 1 },
-  // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
+  // 与已发送用户气泡同款,始终实色。
   textChunk: { flexBasis: '100%', flexShrink: 1, maxWidth: '100%' },
-  content: { alignItems: 'flex-end', gap: 2, width: '100%', opacity: 0.62 },
+  content: { alignItems: 'flex-end', gap: 2, width: '100%' },
   bubbleCompact: { gap: 6, paddingVertical: spacing.sm },
   bubbleRich: { gap: spacing.sm },
   bubble: {
     backgroundColor: colors.surfaceElevated,
-    borderColor: colors.borderStrong,
+    borderColor: colors.border,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
     gap: spacing.xs,
@@ -641,10 +799,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   collapseMeasureWrap: { left: spacing.md, right: spacing.md, top: 0, opacity: 0, position: 'absolute' },
   collapseToggleText: { alignSelf: 'flex-start', color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingVertical: spacing.xs },
-  bubbleSelected: { opacity: 1 },
-  bubbleEditing: { opacity: 0.38 },
-  // 落定中:即将变实,透明度介于排队(0.62)与已发送(1)之间。
-  bubbleSettling: { opacity: 0.85 },
   bubbleText: {
     color: colors.textPrimary,
     fontSize: typeScale.bodyLarge,
@@ -665,30 +819,40 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
   },
+  thumbRetry: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
   editingHint: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  errorText: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  // 具体失败原因:报错用黑白系 errorText(13/18),不降成三级色。
+  errorReason: { color: colors.errorText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, textAlign: 'right' },
   rowHint: {
     color: colors.textTertiary,
     fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     textAlign: 'right',
   },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, justifyContent: 'flex-end' },
-  actionPill: {
-    alignItems: 'center',
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    gap: 6,
-    justifyContent: 'center',
-    minHeight: 44,
-    paddingHorizontal: spacing.md,
-  },
-  actionPillCta: { backgroundColor: colors.cta, borderColor: colors.cta },
-  actionPillText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
-  actionPillTextCta: { color: colors.ctaText },
+  // 正式用户消息的操作行高 44(触控高度)+ 2 间距 = 46。本行吃掉 rowWrap 的 8 间距、自身高 46,
+  // 总高不变;按钮在行内实打实 44 高(hitSlop 越不过父级边界,不能靠它补)。
+  statusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 46, justifyContent: 'flex-end', marginTop: -spacing.sm, maxWidth: '100%' },
+  // 按钮自带 44 宽的留白,彼此只留 4 的间距。
+  statusActions: { alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
+  queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
+  queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。
+  statusText: { color: colors.textSecondary, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  statusError: { color: colors.errorText, flexShrink: 1, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
+  statusDivider: { backgroundColor: colors.border, height: spacing.md, width: StyleSheet.hairlineWidth },
+  // 命中区 44×44 是按钮自身大小;短标签(编辑 / 取消)也够,相邻按钮不重叠。
+  statusAction: { alignItems: 'center', justifyContent: 'center', minHeight: 44, minWidth: 44 },
+  statusActionText: { color: colors.textSecondary, fontSize: typeScale.footnote, fontWeight: fontWeight.medium, lineHeight: lineHeight.caption },
+  statusActionTextPrimary: { color: colors.textPrimary },
+  statusActionTextDisabled: { color: colors.textTertiary, fontWeight: fontWeight.regular },
   pressed: { opacity: 0.72 },
-  disabled: { opacity: 0.42 },
 });

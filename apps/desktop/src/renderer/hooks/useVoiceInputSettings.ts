@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DictationDictionaryLearningAction } from '@cindy/voice-input-core';
+import type { DictationDictionaryLearningAction, SpeakerGateStrictness } from '@cindy/voice-input-core';
 
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -31,6 +31,7 @@ import {
   type VoiceInputSettingsPatch,
 } from '../../shared/voiceInputData';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
+import { noteVoiceInputUse } from '@/voice-input/WebMicAudioEngine';
 import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
 import { getComposerSendShortcutPreference } from './useComposerSendShortcutPreference';
 
@@ -132,7 +133,13 @@ export async function adviseAndRecordVoiceInputDictionaryLearning(
 export function subscribeVoiceInputSettings(
   callback: (settings: VoiceInputSettings) => void,
 ): () => void {
+  // Every renderer receives the existing main-owned broadcast. Only a live
+  // off-to-on transition is user intent; subscribing with an already-enabled
+  // snapshot (or receiving history/language updates) must not renew the window.
+  let fastActivationEnabled = getVoiceInputSettings().fastActivationEnabled;
   return window.electronAPI.voiceInput.onDataChanged((snapshot: VoiceInputDataSnapshot) => {
+    if (!fastActivationEnabled && snapshot.settings.fastActivationEnabled) noteVoiceInputUse();
+    fastActivationEnabled = snapshot.settings.fastActivationEnabled;
     callback(snapshot.settings);
   });
 }
@@ -207,6 +214,10 @@ export function useVoiceInputSettings(): {
   setDictionarySyncEnabled: (enabled: boolean) => void;
   /** 同 {@link resetComposerLongPressEnabled}:null 删 override 恢复默认。 */
   resetDictionarySyncEnabled: () => Promise<boolean>;
+  setSpeakerFilterEnabled: (enabled: boolean) => void;
+  setSpeakerFilterStrictness: (strictness: SpeakerGateStrictness) => void;
+  /** 同 {@link resetComposerLongPressEnabled}:null 删 override 恢复默认。 */
+  resetSpeakerFilterStrictness: () => Promise<boolean>;
   /** 这几个返回持久化结果:成功才收口 UI(关对话框、清草稿、提示成功)。 */
   addDictionaryEntry: (text: string) => Promise<boolean>;
   importDictionaryEntries: (texts: string[]) => Promise<boolean>;
@@ -313,6 +324,21 @@ export function useVoiceInputSettings(): {
 
   const resetDictionarySyncEnabled = useCallback(
     () => runOverrideReset({ dictionarySyncEnabled: null }),
+    [runOverrideReset],
+  );
+
+  const setSpeakerFilterEnabled = useCallback(
+    (speakerFilterEnabled: boolean) => updateSettings({ speakerFilterEnabled }),
+    [updateSettings],
+  );
+
+  const setSpeakerFilterStrictness = useCallback(
+    (speakerFilterStrictness: SpeakerGateStrictness) => updateSettings({ speakerFilterStrictness }),
+    [updateSettings],
+  );
+
+  const resetSpeakerFilterStrictness = useCallback(
+    () => runOverrideReset({ speakerFilterStrictness: null }),
     [runOverrideReset],
   );
 
@@ -430,6 +456,9 @@ export function useVoiceInputSettings(): {
     setAutoDictionaryEnabled,
     setDictionarySyncEnabled,
     resetDictionarySyncEnabled,
+    setSpeakerFilterEnabled,
+    setSpeakerFilterStrictness,
+    resetSpeakerFilterStrictness,
     addDictionaryEntry,
     importDictionaryEntries,
     renameDictionaryEntry,

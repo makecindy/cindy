@@ -133,20 +133,26 @@ export interface ColdPiRehydrationFailureReporterDeps {
   errorCode: IpcErrorCode;
 }
 
+/** 只记日志的调用方：恢复失败降级继续的路径（切模不死锁），不向渲染层抛错。 */
+export interface ColdPiRehydrationFailureLoggerDeps {
+  log: { warn(...args: unknown[]): void };
+}
+
 export const COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE =
   'set-model: cold Pi runtime rehydration failed; runtime selection unchanged';
 
-/**
- * 冷 Pi 恢复失败的唯一出口：完整原因写 Main 日志，IPC 错误只带类别与脱敏概述。
- * 错误码由调用方给出（设备链路下仍映射为 PRECONDITION_FAILED），fail-closed 不变。
- */
-export function reportColdPiRehydrationFailure(
-  deps: ColdPiRehydrationFailureReporterDeps,
+// 降级继续的日志文案不能复用上面的“runtime selection unchanged”：切模没有失败，
+// 草率写 unchanged 会让排障者以为选择被拒，指向错误的方向。
+export const COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE =
+  'set-model: cold Pi window verification degraded; continuing with the selected route';
+
+function logColdPiRehydrationFields(
+  log: { warn(...args: unknown[]): void },
+  message: string,
   context: ColdPiRehydrationFailureContext,
-  error: unknown,
-): never {
-  const failure = describeColdPiRehydrationFailure(error);
-  deps.log.warn(COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE, {
+  failure: ColdPiRehydrationFailure,
+): void {
+  log.warn(message, {
     sessionId: context.sessionId,
     category: failure.category,
     reason: failure.reason,
@@ -156,5 +162,37 @@ export function reportColdPiRehydrationFailure(
     currentProviderId: context.currentProviderId,
     nextProviderId: context.nextProviderId,
   });
+}
+
+/**
+ * 冷 Pi 恢复失败但切模降级继续时的出口：完整原因写 Main 日志，不抛 IPC 错误。
+ * 核实是护栏不是闸门——存量路由死掉时 bootstrap 必然失败，若据此拒绝切模，
+ * 用户既发不出去也切不走（会话永久卡死）；目标路由由下一次发送懒创建。
+ */
+export function logColdPiRehydrationFailure(
+  deps: ColdPiRehydrationFailureLoggerDeps,
+  context: ColdPiRehydrationFailureContext,
+  error: unknown,
+): void {
+  logColdPiRehydrationFields(
+    deps.log,
+    COLD_PI_REHYDRATION_DEGRADED_LOG_MESSAGE,
+    context,
+    describeColdPiRehydrationFailure(error),
+  );
+}
+
+/**
+ * 冷 Pi 恢复失败仍 fail-closed 的出口（runtime-not-live 等非降级分支）：完整原因写
+ * Main 日志，IPC 错误只带类别与脱敏概述。错误码由调用方给出（设备链路下仍映射为
+ * PRECONDITION_FAILED）。
+ */
+export function reportColdPiRehydrationFailure(
+  deps: ColdPiRehydrationFailureReporterDeps,
+  context: ColdPiRehydrationFailureContext,
+  error: unknown,
+): never {
+  const failure = describeColdPiRehydrationFailure(error);
+  logColdPiRehydrationFields(deps.log, COLD_PI_REHYDRATION_FAILURE_LOG_MESSAGE, context, failure);
   return deps.throwIpcError(deps.errorCode, coldPiRehydrationFailureMessage(failure));
 }

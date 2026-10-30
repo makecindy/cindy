@@ -117,7 +117,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(scheduleBody).toContain('refreshTimer = setTimeout(');
 
     const retryBody = sliceBody(
-      'function scheduleRefreshRetryAfterTransientFailure(): void {',
+      'function scheduleRefreshRetryAfterTransientFailure(',
       '\n}\n',
     );
     expect(retryBody).not.toContain('isPassiveSharedUserDataInstance');
@@ -126,7 +126,7 @@ describe('passive shared-userData instance auth isolation', () => {
 
   it('refresh 本身不被 passive 拦:冷启动仍能换 access token,凭证缺席仍走过期出口', () => {
     const body = sliceBody(
-      'export async function refresh(): Promise<boolean> {',
+      'export async function refresh(',
       'const diskTokenChangedBeforeRefresh',
     );
 

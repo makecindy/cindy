@@ -58,7 +58,9 @@ import {
   parseFsWatchTopic,
   type PushOwnerStamp,
 } from '@cindy/device-link';
+import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
+import type { FsRpcMethods } from '@cindy/remote-file-service/protocol';
 
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -73,6 +75,8 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { uploadLocalFile } from '../device-link/mediaTransfer.js';
 import { pushToTopicSubscribers } from '../device-link/dispatch.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { sharedTaskFileOperation } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskWorkdir } from '../device-link/sharedTaskFileAccess.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
@@ -165,6 +169,13 @@ interface RemoteOpArgs {
   includeIgnored?: boolean;
   maxEntries?: number;
   docMode?: boolean;
+  /**
+   * 「显示被忽略的目录」开关(控制端下发的视图偏好)。listDir 生效;
+   * device-link 的 watch 不走本 op(控制端订阅 topic 触发),那边仍是
+   * hideMetaFiles:true 的默认过滤 —— 打开开关后这些目录在被控端可见，
+   * 但内部改动不会有实时事件(手动刷新可见)。
+   */
+  showIgnoredDirs?: boolean;
   cap?: number;
   query?: string;
   caseSensitive?: boolean;
@@ -172,6 +183,8 @@ interface RemoteOpArgs {
   transferId?: string;
   /** Optional export budget; omitted by older controllers. */
   maxBytes?: number;
+  name?: unknown;
+  file?: unknown;
 }
 
 /** 该 workdir 在被控端的执行位置:本地 fs、二跳到 SSH remote host,或歧义拒绝。 */
@@ -279,6 +292,7 @@ function setExportJobTerminal(transferId: string, job: ExportJob): void {
 async function sshSearchCollect(
   hostId: string,
   q: { workdir: string; query: string; caseSensitive: boolean; maxMatches: number },
+  gate?: { beforeSend: () => void | Promise<void> },
 ): Promise<{
   matches: SearchMatch[];
   truncated: boolean;
@@ -340,8 +354,10 @@ async function sshSearchCollect(
       resolve({ matches, truncated: true, totalMatches: matches.length, totalFiles: 0 });
     }, SEARCH_COLLECT_TIMEOUT_MS);
     timer.unref?.();
-    void mgr
-      .request(hostId, 'searchStart', q)
+    // 同账号调用保持原三参数形状;共享访客在真正发起搜索前复核授权。
+    void (
+      gate ? mgr.request(hostId, 'searchStart', q, gate) : mgr.request(hostId, 'searchStart', q)
+    )
       .then((r) => {
         searchId = r.searchId;
         // 回放启动窗口内缓冲到的本次事件(可能已含终态)。
@@ -402,16 +418,31 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   if (!args || typeof args.op !== 'string' || typeof args.workdir !== 'string' || !args.workdir) {
     return bad('invalid remote-op args');
   }
+  // 共享任务访客:只放行本任务工作目录内的读写(与房主一致);导出类长任务仍只给
+  // 同账号控制端。workdir 必须与本机记录的任务目录一致,先于任何 fs 访问校验。
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  const sharedTaskOperation = sharedTask ? sharedTaskFileOperation(args.op) : null;
+  if (sharedTask && !sharedTaskOperation) return bad('REMOTE_UNSUPPORTED');
+  const sharedTaskEndpoint =
+    sharedTask && sharedTaskOperation && args.op !== 'caps'
+      ? await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation)
+      : null;
   // 能力探测:与 workdir 无关、零 fs 访问,放在 guard 之前。老被控端没有
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
-  // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
+  // 的"能力全无"信号(见 fileBrowserTransport 的 caps 缓存)。
+  //
+  // gzip / completeDirectoryListing / fileRead:上游已落地的能力位;
+  // showIgnoredDirs:listDir 支持「显示被忽略的目录」开关(控制端据此决定
+  // 标题行的开关是可点还是禁用+升级提示;老端会静默忽略该字段)。
   if (args.op === 'caps') {
     return {
       ok: true as const,
       gzip: true as const,
+      showIgnoredDirs: true as const,
       completeDirectoryListing: true as const,
       fileRead: true as const,
       dirExport: true as const,
+      folderAttachment: !sharedTask,
     };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
@@ -420,7 +451,13 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     throwIpcError(rejection.code, rejection.message);
   }
 
-  const exec = await resolveWorkdirExecution(args.workdir, guardResult);
+  // 共享访客已从任务记录拿到权威端点,直接按它选择本地或 SSH 执行;只有同账号
+  // 请求才按路径反查全部会话(同一路径在本地与其它 SSH 会话并存时不误判歧义)。
+  const exec: WorkdirExecution = sharedTaskEndpoint
+    ? sharedTaskEndpoint.remoteHostId
+      ? { kind: 'ssh', hostId: sharedTaskEndpoint.remoteHostId }
+      : { kind: 'local' }
+    : await resolveWorkdirExecution(args.workdir, guardResult);
   const workdir = args.workdir;
 
   if (exec.kind === 'unavailable') {
@@ -463,17 +500,47 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
   }
 
+  if (sharedTask && sharedTaskEndpoint) {
+    // 上面的 guard / 端点判定 / 解压都是 await 边界:房主可能已撤权或移动任务目录。
+    // 落盘或读出前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const current = await assertSharedTaskWorkdir(sharedTask, args.workdir, sharedTaskOperation!);
+    // exec 取自请求开始时的任务端点;任务中途换了端点则拒绝,不落到旧端点。
+    if (current.remoteHostId !== sharedTaskEndpoint.remoteHostId)
+      throw new Error('[PERMISSION_DENIED] Shared task working directory endpoint mismatch');
+  }
+
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
   if (exec.kind === 'ssh') {
     const mgr = getRemoteFileBrowser();
     const hostId = exec.hostId;
+    // 共享访客:SSH 建链可能等待数秒,期间房主可能撤权或移动任务目录。每次真正
+    // 发送前按最新任务记录重新绑定目录与端点(内含成员资格复核)。
+    const gate =
+      sharedTask && sharedTaskEndpoint
+        ? {
+            beforeSend: async () => {
+              const latest = await assertSharedTaskWorkdir(
+                sharedTask,
+                args.workdir,
+                sharedTaskOperation!,
+              );
+              if (latest.remoteHostId !== hostId)
+                throw new Error(
+                  '[PERMISSION_DENIED] Shared task working directory endpoint mismatch',
+                );
+            },
+          }
+        : undefined;
+    const request = <M extends keyof FsRpcMethods>(method: M, params: FsRpcMethods[M]['params']) =>
+      gate ? mgr.request(hostId, method, params, gate) : mgr.request(hostId, method, params);
     switch (args.op) {
       case 'listDir': {
-        const { entries } = await mgr.request(hostId, 'listDir', {
+        const { entries } = await request('listDir', {
           workdir,
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
+          showIgnoredDirs: args.showIgnoredDirs === true,
           includeIgnored: args.includeIgnored,
           maxEntries: args.maxEntries,
         });
@@ -481,7 +548,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       }
       case 'readFile': {
         try {
-          const data = await mgr.request(hostId, 'readFile', {
+          const data = await request('readFile', {
             workdir,
             relPath: args.relPath ?? '',
           });
@@ -493,9 +560,9 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         }
       }
       case 'stat':
-        return mgr.request(hostId, 'stat', { workdir, relPath: args.relPath ?? '' });
+        return request('stat', { workdir, relPath: args.relPath ?? '' });
       case 'writeFile': {
-        const r = await mgr.request(hostId, 'writeFile', {
+        const r = await request('writeFile', {
           workdir,
           relPath: args.relPath ?? '',
           content: writeContent ?? '',
@@ -505,27 +572,27 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       case 'createFile':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'createFile', { workdir, relPath: args.relPath ?? '' }),
+          stat: await request('createFile', { workdir, relPath: args.relPath ?? '' }),
         };
       case 'createFolder':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'createFolder', { workdir, relPath: args.relPath ?? '' }),
+          stat: await request('createFolder', { workdir, relPath: args.relPath ?? '' }),
         };
       case 'renameEntry':
         return {
           ok: true as const,
-          stat: await mgr.request(hostId, 'renameEntry', {
+          stat: await request('renameEntry', {
             workdir,
             fromRel: args.fromRel ?? '',
             toRel: args.toRel ?? '',
           }),
         };
       case 'deleteEntry':
-        await mgr.request(hostId, 'deleteEntry', { workdir, relPath: args.relPath ?? '' });
+        await request('deleteEntry', { workdir, relPath: args.relPath ?? '' });
         return { ok: true as const };
       case 'listAllFiles':
-        return mgr.request(hostId, 'listAllFiles', { workdir, cap: args.cap });
+        return request('listAllFiles', { workdir, cap: args.cap });
       case 'exportFileStart':
       case 'exportFileStatus':
       case 'fileUrl':
@@ -544,15 +611,19 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           message: 'nested SSH workdir',
         };
       case 'searchCollect':
-        return sshSearchCollect(hostId, {
-          workdir,
-          query: args.query ?? '',
-          caseSensitive: args.caseSensitive === true,
-          maxMatches: Math.min(
-            args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
-            SEARCH_COLLECT_MAX_MATCHES,
-          ),
-        });
+        return sshSearchCollect(
+          hostId,
+          {
+            workdir,
+            query: args.query ?? '',
+            caseSensitive: args.caseSensitive === true,
+            maxMatches: Math.min(
+              args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+              SEARCH_COLLECT_MAX_MATCHES,
+            ),
+          },
+          gate,
+        );
       default:
         return bad(`unknown op: ${args.op}`);
     }
@@ -571,12 +642,15 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       return { ok: true, url: url.toString(), size: st.size, mtimeMs: st.mtimeMs };
     }
     case 'listDir': {
+      // includeIgnored 是完全绕过展示过滤(手机 HTML 快照枚举用);
+      // showIgnoredDirs 只放行可放行层(依赖 / 构建产物 / 缓存),VCS / OS 垃圾仍隐藏。
       const matcher =
         args.includeIgnored === true
           ? null
           : await loadIgnoreMatcher(workdir, {
               hideMetaFiles: args.hideMetaFiles ?? true,
               honorVcsIgnore: false,
+              showIgnoredDirs: args.showIgnoredDirs === true,
             });
       return listDir(workdir, args.relPath ?? '', matcher, {
         docMode: args.includeIgnored === true ? false : args.docMode,
@@ -843,6 +917,27 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   }
 }
 
+/** relPath 是否落在「隐藏态不可见、只有开着『显示被忽略的目录』才看得见」的
+ *  目录**内部**。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。
+ *
+ *  只判**祖先段**：忽略名单是**目录**规则，同名普通文件（`dist` / `build` /
+ *  `.cache` 这种没有扩展名的构建脚本、配置文件）在 listDir 里是照常显示的 ——
+ *  把叶子段也判进去会让这些文件的 add/change/unlink 事件被丢掉，行陈旧到手动
+ *  刷新（评审 P1）。
+ *
+ *  代价：被忽略目录**自身**的事件（`relPath='node_modules'`）也会转发给隐藏态
+ *  客户端。事件流不携带类型、同名普通文件必须放行，两者无法从路径区分；转发后
+ *  在隐藏态树里是 no-op（该目录不在 entries），只是每次目录级变更多一条无效 IPC。
+ *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。
+ *
+ *  段比较折叠大小写：matcher 用的 `ignore` 包默认 `ignorecase=true`（大小写不敏感
+ *  卷上 `DIST` 与 `dist` 是同一个目录），不折叠会把变体目录内部的事件继续推过
+ *  relay（评审 P2）。 */
+function isInsideRevealableIgnoreDir(relPath: string): boolean {
+  const segments = relPath.split('/');
+  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment.toLowerCase()));
+}
+
 function scheduleFsWatchReconcile(workdir: string): void {
   const timer = setTimeout(() => {
     // timer 排队后可能再次 release；reconcile 只消费当前意图，绝不重新
@@ -924,9 +1019,18 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   const hostId = exec.hostId;
   const offEvent = mgr.onHostEvent(hostId, (evt) => {
     if (evt.event !== 'fileTree') return;
-    const data = evt.data as { workdir: string };
+    const data = evt.data as { workdir: string; relPath?: string };
     if (data.workdir !== workdir) return;
     if (!fsWatchDesired.has(workdir)) return;
+    // device-link 订阅的是**隐藏态**视图,而 daemon 侧的 watcher 用的是与 desktop
+    // 文件树(可能开着「显示被忽略的目录」)并集后的 matcher —— dist / build / Temp
+    // 这类目录内部的事件也会发过来。不在这里按 device-link 自己的可见性再滤一道,
+    // 一次构建就会把成千上万条控制器根本不会显示的事件推过共享 relay(聚合背压
+    // → 断连)(评审 P1)。
+    // 注:恒真忽略(BUILTIN_IGNORE_ALWAYS)与「不 watch 内部」(node_modules /
+    // Library)两层 daemon 自己就不发;`.gitignore` 自定义条目要在 daemon 侧才有
+    // matcher,这里判不了,不在本层职责。
+    if (typeof data.relPath === 'string' && isInsideRevealableIgnoreDir(data.relPath)) return;
     pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data, ownerStamp);
   });
   let listenersDisposed = false;
@@ -939,7 +1043,9 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   };
   const stopWatch = (): void => {
     disposeListeners();
-    void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
+    void mgr
+      .request(hostId, 'watchStop', { workdir, consumerId: 'device-link' })
+      .catch(() => undefined);
   };
   const isRegistered = (): boolean => sshWatchOffs.get(workdir) === stopWatch;
   const disposeStaleWatch = (): void => {
@@ -970,7 +1076,14 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
       return false;
     }
     try {
-      await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+      // consumerId:daemon 把这里的隐藏态需求与 desktop 文件树(可能开着「显示
+      // 被忽略的目录」)的需求分开登记、取可见性并集 —— 否则后到的一方会把对方
+      // 的 matcher 覆盖掉,desktop 仍列着 build / dist 却收不到它们的事件。
+      await mgr.request(hostId, 'watchStart', {
+        workdir,
+        hideMetaFiles: true,
+        consumerId: 'device-link',
+      });
     } catch (err) {
       if (!isCurrent()) disposeStaleWatch();
       throw err;

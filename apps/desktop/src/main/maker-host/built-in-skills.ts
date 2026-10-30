@@ -1,3 +1,5 @@
+import { builtInSkillsRoot, sharedBuiltInSkillsRoot, validActiveBundle } from './built-in-skill-activation';
+export { builtInSkillsRoot, sharedBuiltInSkillsRoot, canonicalBuiltInSkillActivationPath } from './built-in-skill-activation';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
@@ -7,6 +9,8 @@ import type { AgentSkillCommand } from '@cindy/maker-core';
 import {
   CINDY_LEARN_NAME,
   CINDY_SKILL_CREATOR_NAME,
+  CINDY_BUILT_IN_SKILL_NAMES,
+  CINDY_PLUGIN_CREATOR_NAME,
 } from '../../shared/cindyBuiltInSkills';
 import { withSkillMutation } from '../skillhub/sharedMutationLease';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
@@ -15,13 +19,14 @@ import { atomicReplaceWindowsDirectoryEntry } from '../windowsAtomicRename.js';
 export const BUILT_IN_SKILL_CREATOR_NAME = CINDY_SKILL_CREATOR_NAME;
 export const BUILT_IN_LEARN_SKILL_NAME = CINDY_LEARN_NAME;
 
-const BUILT_IN_SKILL_NAMES = [BUILT_IN_SKILL_CREATOR_NAME, BUILT_IN_LEARN_SKILL_NAME] as const;
+const BUILT_IN_SKILL_NAMES = CINDY_BUILT_IN_SKILL_NAMES;
 const MANIFEST_FILE = '.cindy-system-skills.json';
 const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
 /** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 12;
+export const BUILT_IN_SKILLS_BUNDLE_VERSION = 25;
+const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
 
 export interface BuiltInSkillDescriptor {
   name: string;
@@ -89,6 +94,18 @@ interface PublishedMaterializationManifest extends MaterializationManifest {
   activeBundle: string;
 }
 
+/** A pre-creator release legitimately contains only the two older Skills. */
+function committedSkillDescriptors(
+  descriptors: BuiltInSkillDescriptor[],
+  manifest: MaterializationManifest,
+): BuiltInSkillDescriptor[] {
+  return descriptors.filter((descriptor) => !(
+    descriptor.name === CINDY_PLUGIN_CREATOR_NAME
+    && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
+    && !Object.prototype.hasOwnProperty.call(manifest.fingerprints, descriptor.name)
+  ));
+}
+
 export function resolveBundledSystemSkillsRoot(input: {
   isPackaged: boolean;
   appPath: string;
@@ -101,15 +118,6 @@ export function resolveBundledSystemSkillsRoot(input: {
 
 export function builtInSkillPluginRoot(userDataDir: string): string {
   return path.join(userDataDir, 'managed-agent-skills', 'cindy');
-}
-
-export function builtInSkillsRoot(userDataDir: string): string {
-  return path.join(userDataDir, 'system-skills');
-}
-
-/** Profile-independent storage shared by Global, China, dev, and isolated profiles. */
-export function sharedBuiltInSkillsRoot(appDataDir: string): string {
-  return path.join(appDataDir, 'Cindy', 'shared-system-skills');
 }
 
 export function builtInSkillDescriptors(
@@ -135,7 +143,7 @@ export function builtInSkillDescriptors(
       if (!fs.lstatSync(directory).isDirectory()) return [];
     }
     if (!samePath(fs.realpathSync.native(active), fs.realpathSync.native(target))) return [];
-    const descriptors = stableBuiltInSkillDescriptors(root, userDataDir);
+    const descriptors = committedSkillDescriptors(stableBuiltInSkillDescriptors(root, userDataDir), manifest);
     for (const descriptor of descriptors) {
       if (!fs.lstatSync(descriptor.absolutePath).isDirectory()) return [];
       if (hashDirectorySync(descriptor.absolutePath) !== manifest.fingerprints[descriptor.name]) return [];
@@ -163,40 +171,6 @@ function stableBuiltInSkillDescriptors(
   userDataDir: string,
 ): BuiltInSkillDescriptor[] {
   return builtInSkillDescriptorsAtRoot(path.join(root, ACTIVE_BUNDLE_LINK), userDataDir);
-}
-
-function validActiveBundle(value: unknown): value is string {
-  return typeof value === 'string'
-    && /^v[1-9][0-9]*-[a-f0-9]{16}-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
-}
-
-/** Keep enable/disable intent stable while immutable built-in bundle revisions change. */
-export function canonicalBuiltInSkillActivationPath(
-  source: string,
-  userDataDir: string,
-  appDataDir?: string,
-): string {
-  const name = path.basename(source);
-  if (!(BUILT_IN_SKILL_NAMES as readonly string[]).includes(name)) return source;
-  const bundleRoot = path.dirname(source);
-  const managedRoots = [
-    builtInSkillsRoot(userDataDir),
-    ...(appDataDir ? [sharedBuiltInSkillsRoot(appDataDir)] : []),
-  ];
-  if (
-    path.basename(bundleRoot) === ACTIVE_BUNDLE_LINK
-    && managedRoots.some((root) => realPathOrNormalized(path.dirname(bundleRoot)) === realPathOrNormalized(root))
-  ) {
-    return path.join(path.dirname(bundleRoot), name);
-  }
-  const versionsRoot = path.dirname(bundleRoot);
-  const stableRoot = path.dirname(versionsRoot);
-  if (
-    path.basename(versionsRoot) !== VERSIONS_DIRECTORY ||
-    !validActiveBundle(path.basename(bundleRoot)) ||
-    !managedRoots.some((root) => realPathOrNormalized(stableRoot) === realPathOrNormalized(root))
-  ) return source;
-  return path.join(stableRoot, name);
 }
 
 function parseManifest(raw: string): MaterializationManifest | null {
@@ -1057,10 +1031,10 @@ export async function prepareBuiltInSkills(
     let committedBundleVerified = manifest.schemaVersion === 2;
     if (manifest.schemaVersion === 3) {
       const committedBundle = manifest.activeBundle!;
-      const committedDescriptors = builtInSkillDescriptorsAtRoot(
+      const committedDescriptors = committedSkillDescriptors(builtInSkillDescriptorsAtRoot(
         activeBundleTarget(root, committedBundle),
         options.userDataDir,
-      );
+      ), manifest);
       committedBundleVerified = true;
       for (const descriptor of committedDescriptors) {
         const installed = await hashDirectory(descriptor.absolutePath).catch(() => null);
@@ -1094,7 +1068,8 @@ export async function prepareBuiltInSkills(
         await hashDirectory(descriptor.absolutePath).catch(() => null),
       );
     }
-    projectionSafe = !isEmptyManifest(manifest) && committedBundleVerified && descriptors.every((descriptor) => (
+    const existingDescriptors = committedSkillDescriptors(descriptors, manifest);
+    projectionSafe = !isEmptyManifest(manifest) && committedBundleVerified && existingDescriptors.every((descriptor) => (
       typeof manifest.fingerprints[descriptor.name] === 'string'
       && installedFingerprints.get(descriptor.name) === manifest.fingerprints[descriptor.name]
     ));
@@ -1117,7 +1092,7 @@ export async function prepareBuiltInSkills(
     // before attempting another activation so an interrupted prior run cannot
     // leak a newer unpublished bundle into an Agent runtime.
     if (projectionSafe) {
-      const activeProjection = await projectBuiltInSkillLinksUnlocked(options, descriptors);
+      const activeProjection = await projectBuiltInSkillLinksUnlocked(options, existingDescriptors);
       changed = activeProjection.changed || changed;
       warnings.push(...activeProjection.warnings);
       if (!activeProjection.complete) {

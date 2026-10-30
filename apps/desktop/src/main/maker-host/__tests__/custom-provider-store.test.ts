@@ -4,22 +4,26 @@
 
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
 import {
+  clearCodexAccountUltrafast,
   createCustomProvider,
   deleteCustomProvider,
   getCustomProvider,
   listCustomProviders,
+  revokeCodexAccountUltrafast,
   updateCustomProvider,
   updateCustomProviderIfUnchanged,
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
-import type { CustomProviderConfig } from '@cindy/model-providers';
+import { buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse,
+  type CustomProviderConfig } from '@cindy/model-providers';
+import { mapCodexAppServerModelsToCatalog } from '../codex-model-discovery.js';
 
 const CREATE_SQL = `
   CREATE TABLE custom_providers (
@@ -76,6 +80,102 @@ afterEach(() => {
 });
 
 describe('custom provider updates through the runtime database proxy', () => {
+  // Regression: account model/list -> storage normalization -> reload used to drop
+  // Ultrafast. Exercise real CRUD/CAS and catalog projection, including revocation.
+  it('persists native account speed discovery without granting another account or engine access', async () => {
+    mountDb();
+    const native: CustomProviderConfig = { id: 'openai-one', name: 'Account one',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }],
+      } } };
+    await createCustomProvider(native);
+    await createCustomProvider({ ...native, id: 'openai-two', name: 'Account two' });
+    const before = (await getCustomProvider(native.id))!;
+    const models = mergeDiscoveredRuntimeModels([], mapCodexAppServerModelsToCatalog([{
+      id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol',
+      description: '', hidden: false, supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'medium', isDefault: true, inputModalities: ['text'],
+      additionalSpeedTiers: ['fast', 'ultrafast'], serviceTiers: [],
+    }]));
+    const next = { ...before, runtimes: { codex: { ...before.runtimes.codex!, models } } };
+    expect(validateCustomProviderConfig(next).ok).toBe(true);
+    expect(await updateCustomProviderIfUnchanged(native.id, before, next)).toBe(true);
+    const restored = (await getCustomProvider(native.id))!;
+    expect(restored.runtimes.codex!.models[0].supportsUltrafastMode).toBe(true);
+    // Saving a pre-discovery settings snapshot must not revoke a freshly learned grant.
+    expect((await updateCustomProvider(native.id, before))!.runtimes.codex!.models[0].supportsUltrafastMode).toBe(true);
+    expect(buildUserProvider(restored).models.codex![0].supportsUltrafastMode).toBe(true);
+    expect(buildUserProvider((await getCustomProvider('openai-two'))!).models.codex![0].supportsUltrafastMode).toBe(false);
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      expect(buildUserProvider({ id: 'api', name: 'API', runtimes: {
+        [agent]: { baseUrl: 'https://example.test/v1', models: restored.runtimes.codex!.models },
+      } }).models[agent]![0].supportsUltrafastMode).not.toBe(true);
+    }
+    // A real refresh without the entitlement must replace the saved true. The
+    // descriptive name/effort metadata may still use the existing sparse merge.
+    for (const fields of [{ service_tiers: [{ id: 'priority' }] }, {}]) {
+      await updateCustomProviderIfUnchanged(native.id, (await getCustomProvider(native.id))!, restored);
+      const current = (await getCustomProvider(native.id))!;
+      const refreshed = mergeDiscoveredRuntimeModels(current.runtimes.codex!.models,
+        parseModelsListResponse({ models: [{ slug: 'gpt-6.1-sol', ...fields }] })!);
+      await updateCustomProviderIfUnchanged(native.id, current,
+        { ...current, runtimes: { codex: { ...current.runtimes.codex!, models: refreshed } } });
+      expect(buildUserProvider((await getCustomProvider(native.id))!).models.codex![0].supportsUltrafastMode).toBe(false);
+    }
+    // Accepted replacement login clears before best-effort discovery. A failed
+    // refresh writes nothing, so a reload must still expose no old entitlement.
+    await updateCustomProviderIfUnchanged(native.id, (await getCustomProvider(native.id))!, restored);
+    expect(await updateCustomProviderIfUnchanged(native.id, restored,
+      clearCodexAccountUltrafast(restored))).toBe(true);
+    const replaced = (await getCustomProvider(native.id))!;
+    expect(buildUserProvider(replaced).models.codex![0].supportsUltrafastMode).toBe(false);
+    expect(replaced.runtimes.codex!.models[0].discoveredMetadata).toEqual(models[0].discoveredMetadata);
+    expect(validateCustomProviderConfig({ ...next, runtimes: { codex: {
+      ...next.runtimes.codex, models: [{ ...models[0], supportsUltrafastMode: 'true' }],
+    } } }).ok).toBe(false);
+  });
+
+  it('merges a concurrent revocation before saving native account settings', async () => {
+    mountDb();
+    const config: CustomProviderConfig = { ...valid,
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { ...valid.runtimes.codex!,
+        models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode: true }],
+      } },
+    };
+    await createCustomProvider(config);
+    let resume!: () => void;
+    let ready!: () => void;
+    const paused = new Promise<void>(resolve => { ready = resolve; });
+    const release = new Promise<void>(resolve => { resume = resolve; });
+    const update = client!.drizzle.update.bind(client!.drizzle);
+    const spy = vi.spyOn(client!.drizzle, 'update').mockImplementationOnce((...args: any[]) => {
+      const builder = (update as any)(...args);
+      const set = builder.set.bind(builder);
+      builder.set = (...values: any[]) => {
+        const query = set(...values);
+        const run = query.run.bind(query);
+        query.run = async () => { ready(); await release; return run(); };
+        return query;
+      };
+      return builder;
+    });
+    try {
+      const saving = updateCustomProvider(config.id, { ...config, name: 'Rename kept' });
+      await paused;
+      expect(await revokeCodexAccountUltrafast(config.id, () => true)).toBe(true);
+      resume();
+      const saved = await saving;
+      expect(saved?.name).toBe('Rename kept');
+      expect(saved?.runtimes.codex!.models[0].supportsUltrafastMode).toBe(false);
+      expect(buildUserProvider((await getCustomProvider(config.id))!).models.codex![0].supportsUltrafastMode).toBe(false);
+    } finally {
+      resume();
+      spy.mockRestore();
+    }
+  });
+
   it('reports an applied model update and rejects a stale snapshot', async () => {
     const worker = await createDbClient({ useInlineWorker: true });
     try {
@@ -493,6 +593,51 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {
+  it('round-trips an explicit standalone Images API independently of chat wire and hosted tools', async () => {
+    mountDb();
+    const config = {
+      id: 'standalone-images', name: 'Standalone images',
+      runtimes: { pi: {
+        baseUrl: 'http://127.0.0.1:8080/v1', wireProtocol: 'openai-chat' as const,
+        imageApi: 'openai-images' as const,
+        models: [{ id: 'gpt-image-2', name: 'Image', mode: 'image_generation' }],
+      } },
+    };
+    expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    expect(validateCustomProviderConfig({
+      ...config, runtimes: { pi: { ...config.runtimes.pi, imageApi: 'private-cli' } },
+    }).ok).toBe(false);
+    await createCustomProvider(config);
+    const stored = await getCustomProvider(config.id);
+    expect(stored?.runtimes.pi?.imageApi).toBe('openai-images');
+    expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
+    const { imageApi: _removed, ...runtime } = config.runtimes.pi;
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
+    expect((await getCustomProvider(config.id))?.runtimes.pi?.imageApi).toBeUndefined();
+  });
+  it('round-trips an explicit standalone Videos API independently of chat wire and hosted tools', async () => {
+    mountDb();
+    const config = {
+      id: 'standalone-videos', name: 'Standalone videos',
+      runtimes: { pi: {
+        baseUrl: 'http://127.0.0.1:8080/v1', wireProtocol: 'openai-chat' as const,
+        videoApi: 'xai-videos' as const,
+        models: [{ id: 'private-video', name: 'Video', mode: 'video_generation' }],
+      } },
+    };
+    expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    expect(validateCustomProviderConfig({
+      ...config, runtimes: { pi: { ...config.runtimes.pi, videoApi: 'private-cli' } },
+    }).ok).toBe(false);
+    await createCustomProvider(config);
+    const stored = await getCustomProvider(config.id);
+    expect(stored?.runtimes.pi?.videoApi).toBe('xai-videos');
+    expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
+    const { videoApi: _removed, ...runtime } = config.runtimes.pi;
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
+    expect((await getCustomProvider(config.id))?.runtimes.pi?.videoApi).toBeUndefined();
+  });
+
   it('accepts image generation only for a Codex runtime with an OpenAI Responses route', () => {
     const model = { id: 'image-chat', name: 'Image Chat' };
     expect(
@@ -716,6 +861,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'checked', name: 'Checked', defaultEnabled: true },
     ]);
     expect(got?.runtimes.codex?.headers).toBeUndefined();
+  });
+
+  it('persists automatic and explicit interface choices without derived API snapshots', async () => {
+    mountDb();
+    await createCustomProvider({ ...valid, runtimes: { codex: { ...valid.runtimes.codex!, models: [
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ] } } });
+    const stored = await getCustomProvider(valid.id);
+    expect(stored?.runtimes.codex?.models).toEqual([
+      { id: 'automatic', name: 'Automatic', interfaceId: 'auto' },
+      { id: 'explicit', name: 'Explicit', interfaceId: 'vendor-responses' },
+    ]);
+    await updateCustomProvider(valid.id, { ...stored!, name: 'Renamed' });
+    expect((await getCustomProvider(valid.id))?.runtimes).toEqual(stored?.runtimes);
   });
 
   it('round-trips explicit true and false Pi image-input capabilities', async () => {

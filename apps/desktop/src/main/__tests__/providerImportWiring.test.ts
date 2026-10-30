@@ -7,10 +7,20 @@ const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.u
 const register = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const updateService = readFileSync(new URL('../updateService.ts', import.meta.url), 'utf8');
 const mainLayout = readFileSync(new URL('../../renderer/components/layout/MainLayout.tsx', import.meta.url), 'utf8');
+const preload = readFileSync(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
 
 describe('provider import wiring', () => {
+  it('forwards provider-share deep-link events through the preload bridge', () => {
+    // Electron preload is a context-bridge adapter; keep this source guard next to
+    // the existing wiring checks so the runtime allowlist cannot drift from the
+    // renderer contract without a real Electron bootstrap in the test.
+    expect(preload).toMatch(/onDeepLinkNavigate:[\s\S]*?\{ type: 'provider-share-join'; link: string \}/);
+    expect(preload).toMatch(/p\.type === 'provider-share-join'[\s\S]*?p\.link\.length <= 4096[\s\S]*?callback\(\{ type: 'provider-share-join', link: p\.link \}\)/);
+    expect(preload).toMatch(/takePendingDeepLink:[\s\S]*?\{ type: 'provider-share-join'; link: string \}/);
+  });
+
   it('consumes the main pending slot when an import wake-up reaches MainLayout', () => {
-    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{[\s\S]*?if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?void pullChatInvitations\(\);/);
+    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{[\s\S]*?if \(payload.type !== 'provider-import' && payload.type !== 'shared-task-join' && payload.type !== 'provider-share-join' && payload.type !== 'plugin' && payload.type !== 'local-plugin-share'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?void pullChatInvitations\(\);/);
   });
   it('passes sanitized JS argv explicitly instead of replaying Electron native startup arguments', () => {
     for (const source of [bootstrap, updateService]) {

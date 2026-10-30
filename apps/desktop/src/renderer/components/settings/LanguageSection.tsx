@@ -6,7 +6,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown } from 'lucide-react';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 
 import { cn } from '@/lib/utils';
 import { useLocale } from '@/hooks/useLocale';
@@ -31,7 +31,7 @@ export function LanguageSection() {
 
       <div
         className={cn(
-          'flex flex-row items-center justify-between gap-6 rounded-xl p-5',
+          'flex flex-row items-center justify-between gap-6 rounded-xl px-4 py-4',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}
@@ -43,7 +43,7 @@ export function LanguageSection() {
           >
             {t('settings.language.label')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.language.hint')}
           </p>
         </div>
@@ -54,7 +54,7 @@ export function LanguageSection() {
             className={cn(
               'flex h-9 w-[320px] max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
               'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-              'hover:bg-[var(--settings-menu-bg-hover)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+              'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
             )}
           >
             <span className="min-w-0 truncate text-left">
@@ -75,9 +75,8 @@ export function LanguageSection() {
               align="start"
               sideOffset={6}
               className={cn(
-                'z-[10010] max-h-[18rem] w-[var(--radix-select-trigger-width)] min-w-[220px] overflow-y-auto rounded-xl p-2',
+                'z-[10010] max-h-[min(18rem,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
                 'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                'shadow-[var(--shadow-menu)]',
               )}
             >
               <Select.Viewport className="flex flex-col gap-[2px]">
@@ -87,8 +86,8 @@ export function LanguageSection() {
                     value={opt}
                     className={cn(
                       'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                      'text-[var(--settings-input-text)] data-[highlighted]:bg-[var(--settings-menu-bg-hover)]',
-                      'data-[state=checked]:bg-[var(--settings-menu-bg-selected)] data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
+                      'text-[var(--settings-input-text)]',
+                      'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
                     )}
                   >
                     <Select.ItemText className="min-w-0 truncate">

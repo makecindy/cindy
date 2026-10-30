@@ -14,6 +14,7 @@ const OUT = resolve(here, '../src/main/maker-ipc/helpKnowledge.generated.ts');
 // Must stay in sync with HelpTabId in src/shared/helpTypes.ts.
 const ALLOWED_TABS = new Set([
   'general',
+  'appearance',
   'personalization',
   'api-keys',
   'providers',

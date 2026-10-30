@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, resolveAgentCapability, type CatalogModel } from '@cindy/model-providers';
 import {
   clearDiscoveredProviderModels, getActiveCatalog, setActiveCatalog, setCustomProviders,
   setDiscoveredCodexModels, setDiscoveredProviderModels,
@@ -47,6 +47,26 @@ afterEach(() => {
 });
 
 describe('OpenAI account catalog identity', () => {
+  it('keeps saved Ultrafast scoped through active catalog and desktop/mobile capability projection', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    seedBuiltinAccount('gpt-6.1-sol');
+    for (const supportsUltrafastMode of [true, false]) {
+      setCustomProviderConfigs([{ id: accountId, name: 'Account',
+        auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+          baseUrl: 'https://chatgpt.com/backend-api/codex', wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', supportsUltrafastMode,
+            discoveredMetadata: { supportsFastMode: true } }],
+        } } }]);
+      const providers = getActiveCatalog().providers.map(p => ({ ...p, connected: true }));
+      expect(resolveAgentCapability(providers, accountId, 'gpt-6.1-sol', 'codex'))
+        .toMatchObject({ supportsFastMode: true, supportsUltrafastMode });
+      for (const agent of ['claude-code', 'pi'] as const) {
+        expect(resolveAgentCapability(providers, accountId, 'gpt-6.1-sol', agent)?.supportsUltrafastMode).not.toBe(true);
+      }
+      expect(resolveAgentCapability(providers, 'openai', 'gpt-6.1-sol', 'codex')?.supportsUltrafastMode).not.toBe(true);
+    }
+  });
+
   it.each(['before', 'after', 'configs'] as const)('keeps one subscription image capability across public catalog revisions (account: %s)', (order) => {
     const config = {
       id: accountId, name: 'OpenAI', auth: { method: 'oauth' as const, native: 'codex' as const },
@@ -185,6 +205,67 @@ describe('OpenAI account catalog identity', () => {
     }
   });
 
+  it.each(['gpt-6.1-sol', 'gpt-future-account-model'])('restores %s into Pi without public or binary model membership', (id) => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs([{
+      id: accountId, name: 'Restored account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{
+        id, name: id,
+        discoveredMetadata: { efforts: ['low', 'high', 'max', 'ultra'], defaultEffort: 'ultra' },
+      }] } },
+    }]);
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const pi = entry(accountId, 'pi', `chatgpt/${id}`);
+      expect(pi).toMatchObject({ piApi: 'openai-responses' });
+      expect(pi.efforts).toContain('high');
+      expect(pi.efforts).not.toContain('ultra');
+      expect(pi.defaultEffort).not.toBe('ultra');
+      expect(entry('openai', 'pi', `chatgpt/${id}`)).toBeUndefined();
+      setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    }
+    // A new account snapshot replaces restored membership, without leaking to other accounts.
+    setDiscoveredProviderModels(accountId, 'codex', accountListModels(['gpt-next-account-model']));
+    expect(entry(accountId, 'pi', `chatgpt/${id}`)).toBeUndefined();
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-next-account-model')).toBeDefined();
+  });
+
+  it('does not reapply restored Codex-only effort settings as Pi user settings', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setCustomProviderConfigs([{
+      id: accountId, name: 'Restored account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{
+        id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol',
+        reasoning: true, reasoningEfforts: ['low', 'high'], reasoningDefaultEffort: 'high',
+      }] } },
+    }]);
+    expect(entry(accountId, 'codex', 'gpt-6.1-sol').defaultEffort).toBe('high');
+    const pi = entry(accountId, 'pi', 'chatgpt/gpt-6.1-sol');
+    expect(pi.efforts).not.toContain('ultra');
+    expect(pi.defaultEffort).toBe('medium');
+    expect(pi.userModelConfig).toBeUndefined();
+  });
+
+  it('keeps retired restored models out of Pi and does not borrow subscription routes for API connections', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry!.models.find(model => model.id === 'openai/gpt-6.1-sol')!.status = 'retired';
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
+    setCustomProviderConfigs([
+      { id: accountId, name: 'Subscription', auth: { method: 'oauth', native: 'codex' },
+        runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex',
+          models: [{ id: 'gpt-6.1-sol', name: 'Retired' }],
+        } } },
+      { id: 'api-independent', name: 'API connection', auth: { method: 'apiKey' },
+        runtimes: { codex: { baseUrl: 'https://api.example/v1', wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-future-account-model', name: 'API model' }],
+        } } },
+    ]);
+    expect(entry(accountId, 'pi', 'chatgpt/gpt-6.1-sol')).toBeUndefined();
+    const api = getActiveCatalog().providers.find(p => p.id === 'api-independent')!;
+    expect(api.models.codex?.some(m => m.id === 'gpt-future-account-model')).toBe(true);
+    expect(api.models.pi).toBeUndefined();
+    expect(api.routing.pi).toBeUndefined();
+  });
+
   it('does not use an addition incomplete for the actual root to revive a retired model', () => {
     const { overrides } = sanitizeModelCatalogOverrides({ additions: {
       [`${accountId}:gpt-incomplete`]: {
@@ -286,7 +367,9 @@ it('applies server Pi replacement, removal and missing-field fallback equally to
   setActiveCatalog(catalog, { authorityCatalog: catalog });
   for (const providerId of ['openai', accountId]) {
     expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi?.map(m => m.id))
-      .toEqual(['chatgpt/gpt-server-new']);
+      .toEqual(providerId === accountId
+        ? ['chatgpt/gpt-5.6-luna', 'chatgpt/gpt-server-new']
+        : ['chatgpt/gpt-server-new']);
   }
   openai.models.pi = [];
   setActiveCatalog(structuredClone(catalog), { authorityCatalog: structuredClone(catalog) });

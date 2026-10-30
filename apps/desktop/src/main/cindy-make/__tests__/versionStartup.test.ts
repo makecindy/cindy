@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   appPath: '',
   name: 'Cindy',
   packaged: false,
+  makeEnabled: true,
   spawn: vi.fn(),
   pty: vi.fn(),
   exit: vi.fn(),
@@ -65,6 +66,11 @@ vi.mock('../../logger.js', () => ({
 }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../shared/brandRegion.js', () => ({ CURRENT_CINDY_REGION: 'global' }));
+vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({
+  get CINDY_MAKE_ENABLED() {
+    return h.makeEnabled;
+  },
+}));
 
 const originalExec = process.execPath;
 const originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
@@ -83,6 +89,7 @@ beforeEach(async ({ task }) => {
   Object.defineProperty(process, 'resourcesPath', { value: h.appPath, configurable: true });
   h.name = 'Cindy';
   h.packaged = false;
+  h.makeEnabled = true;
   h.ready = false;
   await mkdir(h.profile);
   await mkdir(path.join(h.appPath, 'drizzle'), { recursive: true });
@@ -446,6 +453,37 @@ describe('one original version type for Dev and installed Cindy', () => {
 // path that keeps this process running lets Electron become ready first (the 2026-09-20 Dev
 // startup failure with a recorded original.json).
 describe('startup dispatch stays ahead of Electron ready', () => {
+  it.each([false, true])('ignores a compatible retained personal selection while Make is disabled (packaged=%s)', async packaged => {
+    h.packaged = packaged;
+    h.makeEnabled = false;
+    original.migrationHash = store.migrationIdentity(path.join(h.appPath, 'drizzle'));
+    saveOriginal();
+    const personal = await savePersonalVersion();
+    await store.selectVersion(h.profile, personal.id);
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(startup.getCurrentCindyVersionId()).toBe('original');
+    expect(h.spawn).not.toHaveBeenCalled();
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(store.selectedVersion(h.profile)).toBe(personal.id);
+    startup.finishCindyVersionStartup();
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    expect(fs.existsSync(personal.executable)).toBe(true);
+    expect(fs.existsSync(path.join(store.versionDirectory(h.profile, personal.id), 'resources', 'app.asar'))).toBe(true);
+  });
+  it('resets a retained selection even when its original record is missing', async () => {
+    h.makeEnabled = false;
+    const personal = await savePersonalVersion();
+    await store.selectVersion(h.profile, personal.id);
+    const ready = armReadyOnNextTurn();
+    expect(await startup.dispatchCindyVersionStartup()).toBe(false);
+    expect(ready).not.toHaveBeenCalled();
+    expect(h.spawn).not.toHaveBeenCalled();
+    startup.finishCindyVersionStartup();
+    await waitForIo(() => expect(store.selectedVersion(h.profile)).toBe('original'));
+    expect(fs.existsSync(personal.executable)).toBe(true);
+  });
   it.each([false, true])(
     'rejects an outdated selection using the running original before its registry refresh (packaged=%s)',
     async (packaged) => {

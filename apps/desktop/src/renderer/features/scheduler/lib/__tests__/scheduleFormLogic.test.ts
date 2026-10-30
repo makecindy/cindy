@@ -16,7 +16,7 @@
  * @vitest-environment node
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Schedule, ScheduleTemplate } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -441,6 +441,20 @@ function makeTemplate(overrides: Partial<ScheduleTemplate> = {}): ScheduleTempla
 }
 
 describe('buildScheduleInput — heartbeat 分支', () => {
+  // Unit: the shared source is one selection across mode changes and persistence;
+  // switching back to follow must clear the saved location together with the model.
+  it('preserves the selected Agent location when changing run modes', () => {
+    const form = makeForm({ targetSessionId: 'bound-task', modelAgentKind: 'pi',
+      modelAgentDeviceId: 'shared:owner', model: 'remote-model', providerId: 'remote-provider' });
+    const remembered = captureBinding(form);
+    const fresh = applyRunMode(form, 'fresh', remembered);
+    const bound = applyRunMode(fresh, 'bound', remembered);
+    expect(buildScheduleInput(bound)).toMatchObject({ targetSessionId: 'bound-task',
+      modelAgentDeviceId: 'shared:owner', model: 'remote-model', providerId: 'remote-provider' });
+    // An incomplete explicit choice must reach validation whole, not become follow mode.
+    expect(buildScheduleInput({ ...bound, model: '' })).toHaveProperty('modelAgentDeviceId', 'shared:owner');
+    expect(buildScheduleInput({ ...fresh, modelAgentDeviceId: '' })).toHaveProperty('modelAgentDeviceId', '');
+  });
   it('model/effort 空值时恒带 key 且值为 undefined(跟随会话 → patch 清列)', () => {
     const input = buildScheduleInput(makeForm({ targetSessionId: 'sess-1' }));
     expect(hasKey(input, 'model')).toBe(true);
@@ -481,6 +495,28 @@ describe('buildScheduleInput — heartbeat 分支', () => {
 });
 
 describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create 路径)', () => {
+  // Unit regression: explicit choices must survive repeated remote/local saves
+  // (model-selector-unified.md §3). Existing cases cover bound/script clearing,
+  // but an unbound schedule kept remote effort when the local choice had none.
+  // Minimal input: same Harness/model/provider, remote high -> local empty effort.
+  it.each([false, true])('clears old effort across repeated source changes before binding (persistent=%s)', (persistentSession) => {
+    let saved: Partial<ReturnType<typeof buildScheduleInput>> = {};
+    const choices: Array<Pick<ScheduleFormState, 'modelAgentDeviceId' | 'effort' | 'fastMode'>> = [
+      { modelAgentDeviceId: 'shared:owner', effort: 'xhigh', fastMode: 'ultrafast' },
+      { modelAgentDeviceId: '', effort: '', fastMode: false },
+      { modelAgentDeviceId: 'shared:owner', effort: 'low', fastMode: true },
+      { modelAgentDeviceId: '', effort: '', fastMode: false },
+    ];
+    for (const choice of choices) {
+      saved = { ...saved, ...buildScheduleInput(makeForm({
+        agentKind: 'codex', modelAgentKind: 'codex', model: 'same-model', providerId: 'same-provider',
+        persistentSession, ...choice,
+      })) };
+      expect(saved).toMatchObject({ ...choice, effort: choice.effort || undefined,
+        model: 'same-model', providerId: 'same-provider', persistentSession });
+    }
+  });
+
   it('空 model/effort 不带 key', () => {
     const input = buildScheduleInput(makeForm());
     expect(hasKey(input, 'model')).toBe(false);
@@ -651,8 +687,11 @@ describe('hasRealBinding / agentKind 映射', () => {
 
 describe('resolveTemplateAgentFields', () => {
   const defaults = {
-    getDefaultModel: (agentKind: ScheduleFormState['agentKind']) =>
-      agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+    // 与真实实现同口径:默认路由限定在给定来源内并整对返回。
+    getDefaultRoute: (agentKind: ScheduleFormState['agentKind'], preferred?: string | null) => ({
+      model: agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6',
+      providerId: preferred ?? null,
+    }),
     getAgentPrefs: (agentKind: ScheduleFormState['agentKind']) =>
       agentKind === 'codex'
         ? { providerId: 'openai', effort: 'high' as const, fastMode: true }
@@ -674,11 +713,32 @@ describe('resolveTemplateAgentFields', () => {
 
     expect(fields).toEqual({
       agentKind: 'claude-code',
+      modelAgentDeviceId: '',
       model: 'claude-sonnet-4-6',
       providerId: 'anthropic',
       effort: 'medium',
       fastMode: false,
     });
+  });
+
+  it('跨 agent 用默认路由时整对应用,并限定在任务记忆 / 模板的来源内', () => {
+    const getDefaultRoute = vi.fn((_agent: string, preferred?: string | null) =>
+      preferred === 'xd'
+        ? { model: 'claude-sonnet-5', providerId: 'xd' }
+        : { model: 'claude-opus-5-5', providerId: 'anthropic' });
+    const withRoute = {
+      getDefaultRoute,
+      getAgentPrefs: () => ({ providerId: '', effort: '' as const, fastMode: false }),
+    };
+    const form = makeForm({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'openai' });
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), withRoute))
+      .toMatchObject({ model: 'claude-opus-5-5', providerId: 'anthropic' });
+    // 任务只记了来源(没记模型):默认模型必须由这个来源提供。
+    expect(resolveTemplateAgentFields(form, makeTemplate({ agentKind: 'claude-code' }), {
+      ...withRoute,
+      getAgentPrefs: () => ({ providerId: 'xd', effort: '' as const, fastMode: false }),
+    })).toMatchObject({ model: 'claude-sonnet-5', providerId: 'xd' });
+    expect(getDefaultRoute).toHaveBeenLastCalledWith('claude-code', 'xd');
   });
 
   it('模板显式给 model/provider/effort/fast 时优先使用模板值', () => {
@@ -696,6 +756,7 @@ describe('resolveTemplateAgentFields', () => {
 
     expect(fields).toEqual({
       agentKind: 'claude-code',
+      modelAgentDeviceId: '',
       model: 'claude-opus-4-8',
       providerId: '',
       effort: 'xhigh',
@@ -925,6 +986,25 @@ describe('scheduleToUserCreateInput', () => {
 
 
 describe('script lifecycle serialization', () => {
+  // Review regression (unit): a script-mode patch previously cleared only the
+  // location/Harness, reinterpreting a retained remote model as a local route.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', effort: 'xhigh' as const, fastMode: 'ultrafast' as const },
+    { modelAgentDeviceId: '', effort: 'low' as const, fastMode: true },
+    { modelAgentDeviceId: '', effort: '' as const, fastMode: false },
+  ])('keeps the complete selected route when switching to script mode (%j)', (choice) => {
+    const remote = { modelAgentKind: 'codex' as const, modelAgentDeviceId: 'shared:owner',
+      model: 'same-model', providerId: 'openai', effort: 'xhigh', fastMode: 'ultrafast' as const };
+    const selected = { ...remote, ...choice,
+      ...(!choice.modelAgentDeviceId ? { model: 'local-model', providerId: 'local-provider' } : {}) };
+    const form = makeForm({ ...selected, executionMode: 'script', scriptCommand: 'node run.mjs' });
+    const merged = { ...remote, ...buildScheduleInput(form) };
+    // An own undefined effort clears the previous value in a Desktop patch;
+    // false must likewise clear a previously enabled Fast/Ultrafast mode.
+    expect(merged).toMatchObject({ ...selected, effort: choice.effort || undefined });
+    expect(merged.executionMode).toBe('script');
+    expect(form).toMatchObject(selected);
+  });
   it('preserves owner and installed gate while keeping script cwd', () => {
     const input = buildScheduleInput(makeForm({ executionMode: 'script',
       targetSessionId: 'owner', workingDir: '/watcher', scriptCommand: 'node run.mjs',

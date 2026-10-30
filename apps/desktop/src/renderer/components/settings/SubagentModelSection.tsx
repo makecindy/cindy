@@ -230,7 +230,7 @@ export function SubagentModelSection() {
               <span id="settings-search-settings-subagentModels-smartRouting-label" className="text-14 font-medium text-[var(--text-primary)]">
                 {t('settings.subagentModels.smartRouting.label')}
               </span>
-              <span className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
                 {settings.codexSmartSubagentRouting
                   ? t('settings.subagentModels.smartRouting.enabledHint')
                   : t('settings.subagentModels.smartRouting.nativeHint')}

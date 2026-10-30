@@ -2,7 +2,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useAuth, type MobileUser } from '@/auth/AuthContext';
 import {
   readHomeNavigationPreferences, saveHomeNavigationPreferences,
-  type HomeMode, type HomeNavigationPreferences, type LastTeammateIdentity,
+  type HomeNavigationPreferences, type LastTeammateIdentity,
 } from './homeViewPreferenceStore';
 import { startBoundedStartupRead } from './mobileHomeStartup';
 
@@ -12,11 +12,11 @@ export function homeNavigationOwner(user: MobileUser | null): string {
 }
 interface Snapshot {
   hydrated: boolean;
-  mode: HomeMode;
   lastTeammate: LastTeammateIdentity | null;
-  saveFailed: boolean;
+  teammatesCollapsed: boolean;
+  showCollapsedTeammateAvatars: boolean;
 }
-const initial: Snapshot = { hydrated: false, mode: 'tasks', lastTeammate: null, saveFailed: false };
+const initial: Snapshot = { hydrated: false, lastTeammate: null, teammatesCollapsed: false, showCollapsedTeammateAvatars: true };
 interface Entry { snapshot: Snapshot; revision: number; loading?: Promise<void> }
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -37,12 +37,16 @@ function hydrate(owner: string, entry: Entry): Promise<void> {
   const read = startBoundedStartupRead<HomeNavigationPreferences>(readHomeNavigationPreferences(owner), {});
   entry.loading = read.initial.then(({ value: stored, timedOut }) => {
     publish(entry, entry.revision === revision
-      ? { hydrated: true, mode: stored.mode ?? 'tasks', lastTeammate: stored.lastTeammate ?? null }
+      ? { hydrated: true, lastTeammate: stored.lastTeammate ?? null,
+        teammatesCollapsed: stored.teammatesCollapsed ?? false,
+        showCollapsedTeammateAvatars: stored.showCollapsedTeammateAvatars ?? true }
       : { hydrated: true });
     if (timedOut) void read.completion.then((result) => {
-      // Never switch away from the task list the user has begun using after a timeout.
-      // The stored mode remains intact on disk; only recover the identity for the next explicit switch.
-      if (result.ok && entry.revision === revision) publish(entry, { lastTeammate: result.value.lastTeammate ?? null });
+      // Late values only fill in what the user has not changed since the timeout.
+      if (result.ok && entry.revision === revision) publish(entry, {
+        showCollapsedTeammateAvatars: result.value.showCollapsedTeammateAvatars ?? true,
+        lastTeammate: result.value.lastTeammate ?? null, teammatesCollapsed: result.value.teammatesCollapsed ?? false,
+      });
     });
   });
   return entry.loading;
@@ -55,22 +59,28 @@ export function useHomeMode() {
   const entry = entryFor(owner);
   const snapshot = useSyncExternalStore(subscribe, () => entry.snapshot, () => initial);
   useEffect(() => { if (owner) void hydrate(owner, entry); }, [entry, owner]);
-  const update = useCallback((patch: { mode?: HomeMode; lastTeammate?: LastTeammateIdentity | null }) => {
+  const update = useCallback((patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean; showCollapsedTeammateAvatars?: boolean }) => {
     if (!owner) return Promise.resolve();
-    // Hydrate first so changing mode cannot erase an unread last-teammate choice.
+    // Hydrate first so one write cannot erase the other, not yet read, preference.
     return hydrate(owner, entry).then(() => {
       entry.revision += 1;
-      const revision = entry.revision;
-      publish(entry, { ...patch, saveFailed: false });
-      // Navigation must not wait behind a stalled native storage write. The preference is
-      // immediately shared in memory; durable failure is reported separately, never as success.
-      void saveHomeNavigationPreferences(owner, patch).catch(() => {
-        if (entry.revision === revision) publish(entry, { saveFailed: true });
-      });
+      publish(entry, patch);
+      // Navigation must not wait behind a stalled native storage write: the choice is shared in
+      // memory at once, and a failed write only means the next launch shows the earlier choice.
+      void saveHomeNavigationPreferences(owner, patch).catch(() => undefined);
     });
   }, [entry, owner]);
-  const setMode = useCallback((mode: HomeMode) => update({ mode }), [update]);
-  // The remembered teammate only preselects its computer when creating another; launch never reopens it.
-  const selectTeammate = useCallback((identity: LastTeammateIdentity) => update({ mode: 'teammates', lastTeammate: identity }), [update]);
-  return { ...snapshot, owner, setMode, selectTeammate };
+  const selectTeammate = useCallback((identity: LastTeammateIdentity) => update({ lastTeammate: identity }), [update]);
+  const setTeammatesCollapsed = useCallback((teammatesCollapsed: boolean) => update({ teammatesCollapsed }), [update]);
+  const setShowCollapsedTeammateAvatars = useCallback((showCollapsedTeammateAvatars: boolean) => update({ showCollapsedTeammateAvatars }), [update]);
+  return { ...snapshot, owner, selectTeammate, setTeammatesCollapsed, setShowCollapsedTeammateAvatars };
+}
+
+/** Hold the startup splash until the home's teammate section knows its stored collapse state. */
+export function useHomeStartupSplashRelease(releaseSplash: () => void): void {
+  const auth = useAuth();
+  const { owner, hydrated } = useHomeMode();
+  useEffect(() => {
+    if (auth.initialized && (!auth.isAuthenticated || !owner || hydrated)) releaseSplash();
+  }, [auth.initialized, auth.isAuthenticated, hydrated, owner, releaseSplash]);
 }

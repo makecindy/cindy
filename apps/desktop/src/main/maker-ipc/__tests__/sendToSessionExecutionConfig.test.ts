@@ -401,6 +401,37 @@ describe('resolveSendToSessionExecutionConfig', () => {
     });
   });
 
+  // Unit regression: flattened model metadata may belong to a different account.
+  // Existing Fast/effort coverage did not exercise Ultrafast or inherited speed.
+  it.each([true, false])('uses the selected account Ultrafast entitlement (%s)', (entitled) => {
+    const model = 'gpt-5.6-sol';
+    const routing = providerRouting();
+    const primary = routing.availability.codex[0];
+    routing.availability.codex = [
+      { ...primary, ultrafastModels: entitled ? [] : [model] },
+      { ...primary, id: 'selected-account', ultrafastModels: entitled ? [model] : [] },
+    ];
+    routing.resolveDefaultProviderIdForModel = () => 'selected-account';
+    for (const routeChanged of [false, true]) {
+      const source = routeChanged
+        ? { ...fableSource(), fastMode: 'ultrafast' as const }
+        : { ...sourceFor('codex'), providerId: 'selected-account', fastMode: 'ultrafast' as const };
+      const base = {
+        source, availableModels: [{ ...available('codex')[0], supportsUltrafastMode: !entitled }],
+        providerRouting: routing, hasCindyAiApiKey: true,
+      };
+      const routeOverrides = routeChanged ? { agentKind: 'codex' as const, model } : {};
+      expect(resolveSendToSessionExecutionConfig({
+        ...base, overrides: { ...routeOverrides, fastMode: 'ultrafast' },
+      })).toMatchObject(entitled
+        ? { ok: true, config: { fastMode: 'ultrafast' } }
+        : { ok: false, errorCode: 'INVALID_ARGS' });
+      expect(resolveSendToSessionExecutionConfig({
+        ...base, overrides: routeOverrides,
+      })).toMatchObject({ ok: true, config: { fastMode: entitled ? 'ultrafast' : false } });
+    }
+  });
+
   it('fails before creation when no connected provider can route the selected model', () => {
     const routing = providerRouting();
     routing.availability.codex = [];

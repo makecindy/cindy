@@ -237,6 +237,7 @@ interface SourceSession {
   workspaceKind: string;
   remoteHostId: string | null;
   agentDeviceId: string | null;
+  orcaRemoteLead: string | null;
   status: string;
   source: string;
   orcaRole: string | null;
@@ -249,17 +250,20 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
   if (
     !row ||
     !(row.status === 'active' || (worker && row.status === 'archived')) ||
+    // 含另一台电脑上 Worker 的团队也在此被拒：那名 Worker 的本机代理行没有目录。
     !row.workingDir ||
     row.remoteHostId ||
     // Agent 在另一台电脑运行的任务：Agent 会话记录在那台，本机无法完整复制。
     row.agentDeviceId ||
+    // 另一台电脑上协同 Lead 派来的 Worker：协同归属在那台，不随任务复制。
+    row.orcaRemoteLead ||
     (worker ? row.orcaRole !== 'worker' : row.orcaRole === 'worker') ||
     !['desktop', 'shared', 'feishu'].includes(row.source)
   )

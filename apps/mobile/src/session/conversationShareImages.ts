@@ -1,3 +1,4 @@
+import { conversationShareReadableBody } from "./conversationShareRichAnswer";
 import {
   collectMobileMarkdownImages,
   mobileMarkdownImageUrlForWorkdir,
@@ -11,6 +12,9 @@ export interface ConversationShareImageContext {
   workdir?: string;
   remoteHostId?: string;
   sessionId?: string;
+  snapshotRichValues?: (
+    message: ConversationShareMessage,
+  ) => ConversationShareMessage["richValues"];
 }
 
 // Compressed bytes do not bound native bitmap memory. Charge every rendered
@@ -60,7 +64,9 @@ export async function prepareConversationShareImages(
       : [message.body];
     if (message.secondaryBody) texts.push(message.secondaryBody);
     for (const text of texts) {
-      for (const image of collectMobileMarkdownImages(text)) {
+      for (const image of collectMobileMarkdownImages(
+        conversationShareReadableBody(message, text),
+      )) {
         const url = mobileMarkdownImageUrlForWorkdir(
           image.url,
           context.workdir,

@@ -104,8 +104,31 @@ function extractCommandPathTokens(command: string): CommandPathToken[] {
   scanQuoted(/"([^"\r\n]+)"/g);
   // 裸 Windows 盘符路径与裸 POSIX 绝对路径(前面是行首/空白/常见分隔)。
   // 盘符前不允许字母数字:排除 URL scheme 尾字母被当盘符(https://…)。
-  const insideQuotedRange = (index: number): boolean =>
-    quotedRanges.some((range) => index >= range.start && index < range.end);
+  // 引号区间按起点排序后二分查找;逐 token 线性扫描在数千候选 × 数千引号时是
+  // 平方级成本(#5503)。单、双引号区间可以嵌套(`"print('ok') # > /work/x.txt"`),
+  // 判定必须是「任一起点不晚于该位置的区间仍未结束」,所以用前缀最大 end,
+  // 而不是只看起点最靠后的那一个区间。
+  quotedRanges.sort((a, b) => a.start - b.start);
+  const quotedPrefixMaxEnd: number[] = [];
+  for (const range of quotedRanges) {
+    const previous = quotedPrefixMaxEnd.at(-1) ?? -1;
+    quotedPrefixMaxEnd.push(Math.max(previous, range.end));
+  }
+  const insideQuotedRange = (index: number): boolean => {
+    let low = 0;
+    let high = quotedRanges.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (quotedRanges[mid].start <= index) {
+        found = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found >= 0 && index < quotedPrefixMaxEnd[found];
+  };
   for (const m of command.matchAll(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s'"<>|?*]+/g)) {
     const start = m.index ?? 0;
     if (!insideQuotedRange(start)) push(m[0], start, start + m[0].length);
@@ -245,11 +268,45 @@ function extractTransferPlainFilenameDestinations(command: string): CommandPathT
   return out;
 }
 
-function isTopLevelPowerShellTail(value: string): boolean {
+
+/** command[from, to) 以 `-Path` 类开关结尾(可带一个引号)。等价于对该片段做
+ * /-(?:FilePath|LiteralPath|Path)\s+['"]?$/i,但只从尾部向前检查,不切片、不随
+ * 片段长度线性扫描。 */
+function endsWithPowerShellPathSwitch(command: string, from: number, to: number): boolean {
+  let end = to;
+  if (end > from && (command[end - 1] === "'" || command[end - 1] === '"')) end -= 1;
+  let cursor = end;
+  while (cursor > from && /\s/.test(command[cursor - 1])) cursor -= 1;
+  if (cursor === end) return false;
+  return /-(?:FilePath|LiteralPath|Path)$/i.test(command.slice(Math.max(from, cursor - 12), cursor));
+}
+
+/** command[from, to) 只含空白、可带一个末尾引号。等价于 /^\s*['"]?$/,长片段先做有界否定。 */
+function isBlankOrQuote(command: string, from: number, to: number): boolean {
+  if (to - from > 256 && /\S/.test(command.slice(from, from + 255))) return false;
+  return /^\s*['"]?$/.test(command.slice(from, to));
+}
+
+interface PowerShellTailScan {
+  /** 自写入 cmdlet 之后首个顶层分隔符(`;` `|` 换行)的位置;没有则为 Infinity。 */
+  terminator: number;
+  /** 每个括号事件之后的深度,按位置升序;查询位置之前没有事件即深度 0。 */
+  eventPositions: number[];
+  eventDepths: number[];
+}
+
+/**
+ * isTopLevelPowerShellTail 的增量形式:从写入 cmdlet 之后向前扫一次(到下一个写入
+ * cmdlet 为止),记录括号深度事件与首个顶层分隔符;之后任意候选位置只需二分查找。
+ * 原来每个 `-Path` 候选都从写入 cmdlet 重新扫到自身,`Set-Content -Value @((Get-Content
+ * -Path a), …数千…) -Path out` 这类命令是平方级(#5506 review)。
+ */
+function scanPowerShellTail(command: string, from: number, to: number): PowerShellTailScan {
+  const scan: PowerShellTailScan = { terminator: Infinity, eventPositions: [], eventDepths: [] };
   let depth = 0;
   let quote: "'" | '"' | null = null;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
+  for (let index = from; index < to; index += 1) {
+    const char = command[index];
     if (char === '`') {
       index += 1;
       continue;
@@ -264,55 +321,226 @@ function isTopLevelPowerShellTail(value: string): boolean {
     }
     if (char === '(' || char === '[' || char === '{') {
       depth += 1;
+      scan.eventPositions.push(index);
+      scan.eventDepths.push(depth);
       continue;
     }
     if (char === ')' || char === ']' || char === '}') {
       depth = Math.max(0, depth - 1);
+      scan.eventPositions.push(index);
+      scan.eventDepths.push(depth);
       continue;
     }
     if (depth === 0 && (char === ';' || char === '|' || char === '\r' || char === '\n')) {
-      return false;
+      scan.terminator = index;
+      break;
+    }
+  }
+  return scan;
+}
+
+/** 等价于 isTopLevelPowerShellTail(command.slice(from, to)),用预扫结果回答。 */
+function isTopLevelPowerShellTailAt(scan: PowerShellTailScan, to: number): boolean {
+  if (scan.terminator < to) return false;
+  let low = 0;
+  let high = scan.eventPositions.length - 1;
+  let depth = 0;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (scan.eventPositions[mid] < to) {
+      depth = scan.eventDepths[mid];
+      low = mid + 1;
+    } else {
+      high = mid - 1;
     }
   }
   return depth === 0;
 }
 
-function isPowerShellOutputPosition(before: string): boolean {
-  const cmdlets = [...before.matchAll(POWERSHELL_CMDLET_RE)];
-  const lastCmdlet = cmdlets.at(-1);
-  const lastWriteCmdlet = cmdlets
-    .filter((match) => POWERSHELL_WRITE_COMMANDS.has(match[0].toLowerCase()))
-    .at(-1);
-  if (!lastCmdlet || !lastWriteCmdlet) return false;
-  const writeTail = before.slice((lastWriteCmdlet.index ?? 0) + lastWriteCmdlet[0].length);
-  // Support the first positional path and the cmdlets' explicit path switches.
-  // An explicit switch may follow a nested read expression, but it must remain at the writer's
-  // top level so a nested `Get-Content -Path` cannot leak its input path.
-  if (
-    /-(?:FilePath|LiteralPath|Path)\s+['"]?$/i.test(writeTail) &&
-    isTopLevelPowerShellTail(writeTail)
-  ) {
-    return true;
-  }
-  if (lastCmdlet.index !== lastWriteCmdlet.index) return false;
-  const trailing = before.slice((lastCmdlet.index ?? 0) + lastCmdlet[0].length);
-  return /^\s*['"]?$/.test(trailing);
+interface CommandCmdlet {
+  start: number;
+  end: number;
+  write: boolean;
 }
 
-function isExplicitOutputPath(
-  command: string,
-  token: CommandPathToken,
-  tokens: readonly CommandPathToken[],
-): boolean {
+interface CommandSeparator {
+  index: number;
+  length: number;
+}
+
+interface CommandSegmentInfo {
+  start: number;
+  end: number;
+  copyMoveItem: boolean;
+  explicitDestination: boolean;
+  targetDirectoryTransfer: boolean;
+  transferCommand: boolean;
+  lastPath: CommandPathToken | undefined;
+}
+
+/**
+ * 命令级一次性索引(#5503)。候选判定原本逐候选重扫整段前缀 / 整个命令段
+ * (cmdlet 正则、分隔符 lastIndexOf、Copy-Item / cp 段正则),在「超长文本 + 数千
+ * 路径候选」的真实命令上是平方级成本,主进程同步阻塞数十秒。这里把与候选无关
+ * 的扫描提前做一次,候选只做二分查找与窗口判定。
+ */
+class CommandScanIndex {
+  private readonly cmdlets: CommandCmdlet[] = [];
+  private readonly writeCmdlets: CommandCmdlet[] = [];
+  private readonly separators: CommandSeparator[] = [];
+  private readonly segments = new Map<number, CommandSegmentInfo>();
+  private readonly tailScans = new Map<number, PowerShellTailScan>();
+
+  constructor(
+    readonly command: string,
+    private readonly tokens: readonly CommandPathToken[],
+  ) {
+    for (const match of command.matchAll(POWERSHELL_CMDLET_RE)) {
+      const start = match.index ?? 0;
+      const cmdlet = {
+        start,
+        end: start + match[0].length,
+        write: POWERSHELL_WRITE_COMMANDS.has(match[0].toLowerCase()),
+      };
+      this.cmdlets.push(cmdlet);
+      if (cmdlet.write) this.writeCmdlets.push(cmdlet);
+    }
+    for (let index = 0; index < command.length; index += 1) {
+      const char = command[index];
+      if (char === ';' || char === '\n') this.separators.push({ index, length: 1 });
+      else if ((char === '&' || char === '|') && command[index + 1] === char) {
+        this.separators.push({ index, length: 2 });
+      }
+    }
+  }
+
+  /** 最后一个结束位置不超过 limit 的 cmdlet(等价于在 command.slice(0, limit) 上 matchAll 取末项)。 */
+  private static lastEndingBefore(list: readonly CommandCmdlet[], limit: number): CommandCmdlet | undefined {
+    let low = 0;
+    let high = list.length - 1;
+    let found: CommandCmdlet | undefined;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (list[mid].end <= limit) {
+        found = list[mid];
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  isPowerShellOutputPosition(tokenStart: number): boolean {
+    const lastCmdlet = CommandScanIndex.lastEndingBefore(this.cmdlets, tokenStart);
+    const lastWriteCmdlet = CommandScanIndex.lastEndingBefore(this.writeCmdlets, tokenStart);
+    if (!lastCmdlet || !lastWriteCmdlet) return false;
+    // Support the first positional path and the cmdlets' explicit path switches.
+    // An explicit switch may follow a nested read expression, but it must remain at the writer's
+    // top level so a nested `Get-Content -Path` cannot leak its input path.
+    if (
+      endsWithPowerShellPathSwitch(this.command, lastWriteCmdlet.end, tokenStart) &&
+      isTopLevelPowerShellTailAt(this.tailScanFrom(lastWriteCmdlet), tokenStart)
+    ) {
+      return true;
+    }
+    if (lastCmdlet.start !== lastWriteCmdlet.start) return false;
+    return isBlankOrQuote(this.command, lastCmdlet.end, tokenStart);
+  }
+
+  /** 写入 cmdlet 之后的顶层扫描,按 cmdlet 惰性计算一次;只需扫到下一个写入 cmdlet。 */
+  private tailScanFrom(writeCmdlet: CommandCmdlet): PowerShellTailScan {
+    const cached = this.tailScans.get(writeCmdlet.start);
+    if (cached) return cached;
+    const position = this.writeCmdlets.indexOf(writeCmdlet);
+    const next = this.writeCmdlets[position + 1];
+    const scan = scanPowerShellTail(this.command, writeCmdlet.end, next ? next.start : this.command.length);
+    this.tailScans.set(writeCmdlet.start, scan);
+    return scan;
+  }
+
+  /** 起点落在 [from, to) 且终点不超过 to 的 token,按起点升序;token 列表已排序,二分定位起点。 */
+  tokensWithin(from: number, to: number): CommandPathToken[] {
+    let low = 0;
+    let high = this.tokens.length - 1;
+    let first = this.tokens.length;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.tokens[mid].start >= from) {
+        first = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    const out: CommandPathToken[] = [];
+    for (let index = first; index < this.tokens.length && this.tokens[index].start < to; index += 1) {
+      if (this.tokens[index].end <= to) out.push(this.tokens[index]);
+    }
+    return out;
+  }
+
+  /** token 所在的命令段:前一个分隔符(起点 < tokenStart)之后到下一个分隔符(起点 ≥ tokenEnd)之前。 */
+  segmentFor(tokenStart: number, tokenEnd: number): CommandSegmentInfo {
+    let low = 0;
+    let high = this.separators.length - 1;
+    let previous: CommandSeparator | undefined;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.separators[mid].index < tokenStart) {
+        previous = this.separators[mid];
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    const segmentStart = previous ? previous.index + previous.length : 0;
+    low = 0;
+    high = this.separators.length - 1;
+    let next: CommandSeparator | undefined;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.separators[mid].index >= tokenEnd) {
+        next = this.separators[mid];
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    const segmentEnd = next ? next.index : this.command.length;
+    const key = segmentStart * 2 ** 32 + segmentEnd;
+    const cached = this.segments.get(key);
+    if (cached) return cached;
+    const segment = this.command.slice(segmentStart, segmentEnd);
+    const trimmed = segment.trim();
+    // token 已按 (start, end) 排序,段内末位路径直接取范围内最后一个,不再逐段全量筛选。
+    const lastPath = this.tokensWithin(segmentStart, segmentEnd).at(-1);
+    const info: CommandSegmentInfo = {
+      start: segmentStart,
+      end: segmentEnd,
+      copyMoveItem: /(?:^|\|\s*)(?:Copy-Item|Move-Item)\b/i.test(trimmed),
+      explicitDestination: /-(?:Destination|LiteralDestination|Target)\s+/i.test(segment),
+      targetDirectoryTransfer:
+        /(?:^|\|\s*)(?:cp|mv)\s+/i.test(trimmed) &&
+        /(?:^|\s)(?:-t(?:\s+|$)|--target-directory(?:\s+|=))/i.test(segment),
+      transferCommand: /(?:^|\|\s*)(?:cp|copy|mv|move|Copy-Item|Move-Item)\s+/i.test(trimmed),
+      lastPath,
+    };
+    this.segments.set(key, info);
+    return info;
+  }
+}
+
+function isExplicitOutputPath(index: CommandScanIndex, token: CommandPathToken): boolean {
+  const command = index.command;
   const before = command.slice(Math.max(0, token.start - 240), token.start);
-  const powerShellBefore = command.slice(0, token.start);
   const after = command.slice(token.end, token.end + 80);
   if (
     WRITE_CALL_PREFIX_RE.test(before) ||
     WRITE_CALL_LATER_KEYWORD_PREFIX_RE.test(before) ||
     OBJECT_FIRST_WRITE_CALL_PREFIX_RE.test(before) ||
     /^\s*['"]?\s*\)\s*\.\s*write_(?:text|bytes)\s*\(/i.test(after) ||
-    isPowerShellOutputPosition(powerShellBefore) ||
+    index.isPowerShellOutputPosition(token.start) ||
     OUTPUT_OPTION_PREFIX_RE.test(before) ||
     REDIRECT_PREFIX_RE.test(before) ||
     SAVE_COMMAND_PREFIX_RE.test(before) ||
@@ -330,74 +558,54 @@ function isExplicitOutputPath(
   }
 
   // copy/move 的最后一个路径参数是目标。只看当前命令段,避免把前一条命令的路径带进来。
-  const previousSeparators = [
-    { index: command.lastIndexOf(';', token.start - 1), length: 1 },
-    { index: command.lastIndexOf('\n', token.start - 1), length: 1 },
-    { index: command.lastIndexOf('&&', token.start - 1), length: 2 },
-    { index: command.lastIndexOf('||', token.start - 1), length: 2 },
-  ];
-  const previousSeparator = previousSeparators.reduce((latest, candidate) =>
-    candidate.index > latest.index ? candidate : latest,
-  );
-  const segmentStart = previousSeparator.index + previousSeparator.length;
-  const nextSeparators = [
-    command.indexOf(';', token.end),
-    command.indexOf('\n', token.end),
-    command.indexOf('&&', token.end),
-    command.indexOf('||', token.end),
-  ].filter((index) => index >= 0);
-  const segmentEnd = nextSeparators.length > 0 ? Math.min(...nextSeparators) : command.length;
-  const segment = command.slice(segmentStart, segmentEnd);
-  const lastPath = tokens
-    .filter((candidate) => candidate.start >= segmentStart && candidate.end <= segmentEnd)
-    .sort((a, b) => a.start - b.start || a.end - b.end)
-    .at(-1);
-  const beforeInSegment = command.slice(segmentStart, token.start);
-  if (/(?:^|\|\s*)(?:Copy-Item|Move-Item)\b/i.test(segment.trim())) {
-    const hasExplicitDestination = /-(?:Destination|LiteralDestination|Target)\s+/i.test(segment);
-    if (hasExplicitDestination) {
-      return /-(?:Destination|LiteralDestination|Target)\s+['"]?$/i.test(beforeInSegment);
+  // 段信息按段缓存:同一段里的几千个候选共用一次正则扫描(#5503)。
+  const segment = index.segmentFor(token.start, token.end);
+  const lastPath = segment.lastPath;
+  const beforeInSegment = command.slice(segment.start, token.start);
+  if (segment.copyMoveItem) {
+    if (segment.explicitDestination) {
+      return endsWithDestinationSwitch(beforeInSegment);
     }
     return lastPath?.start === token.start && lastPath.end === token.end;
   }
-  const isTargetDirectoryTransfer =
-    /(?:^|\|\s*)(?:cp|mv)\s+/i.test(segment.trim()) &&
-    /(?:^|\s)(?:-t(?:\s+|$)|--target-directory(?:\s+|=))/i.test(segment);
-  if (isTargetDirectoryTransfer) {
-    return /(?:^|\s)(?:-t|--target-directory)(?:\s+|=)['"]?$/i.test(beforeInSegment);
+  if (segment.targetDirectoryTransfer) {
+    return endsWithTargetDirectoryOption(beforeInSegment);
   }
   return (
     lastPath?.start === token.start &&
     lastPath.end === token.end &&
-    /(?:^|\|\s*)(?:cp|copy|mv|move|Copy-Item|Move-Item)\s+/i.test(segment.trim())
+    segment.transferCommand
   );
 }
 
-function transferDirectoryOutputs(
-  command: string,
-  destination: CommandPathToken,
-  tokens: readonly CommandPathToken[],
-): string[] {
+/** 等价于 /-(?:Destination|LiteralDestination|Target)\s+['"]?$/i,只检查尾部。 */
+function endsWithDestinationSwitch(text: string): boolean {
+  let end = text.length;
+  if (end > 0 && (text[end - 1] === "'" || text[end - 1] === '"')) end -= 1;
+  let cursor = end;
+  while (cursor > 0 && /\s/.test(text[cursor - 1])) cursor -= 1;
+  if (cursor === end) return false;
+  return /-(?:Destination|LiteralDestination|Target)$/i.test(text.slice(Math.max(0, cursor - 20), cursor));
+}
+
+/** 等价于 /(?:^|\s)(?:-t|--target-directory)(?:\s+|=)['"]?$/i,只检查尾部。 */
+function endsWithTargetDirectoryOption(text: string): boolean {
+  let end = text.length;
+  if (end > 0 && (text[end - 1] === "'" || text[end - 1] === '"')) end -= 1;
+  let cursor = end;
+  while (cursor > 0 && /\s/.test(text[cursor - 1])) cursor -= 1;
+  const withEquals = cursor === end && text[end - 1] === '=';
+  if (cursor === end && !withEquals) return false;
+  const optionEnd = withEquals ? end - 1 : cursor;
+  const window = text.slice(Math.max(0, optionEnd - 24), optionEnd);
+  return /(?:^|\s)(?:-t|--target-directory)$/i.test(window);
+}
+
+function transferDirectoryOutputs(index: CommandScanIndex, destination: CommandPathToken): string[] {
   if (!/[\\/]$/.test(destination.path)) return [destination.path];
-  const previousSeparators = [
-    { index: command.lastIndexOf(';', destination.start - 1), length: 1 },
-    { index: command.lastIndexOf('\n', destination.start - 1), length: 1 },
-    { index: command.lastIndexOf('&&', destination.start - 1), length: 2 },
-    { index: command.lastIndexOf('||', destination.start - 1), length: 2 },
-  ];
-  const previousSeparator = previousSeparators.reduce((latest, candidate) =>
-    candidate.index > latest.index ? candidate : latest,
-  );
-  const segmentStart = previousSeparator.index + previousSeparator.length;
-  const nextSeparators = [
-    command.indexOf(';', destination.end),
-    command.indexOf('\n', destination.end),
-    command.indexOf('&&', destination.end),
-    command.indexOf('||', destination.end),
-  ].filter((index) => index >= 0);
-  const segmentEnd = nextSeparators.length > 0 ? Math.min(...nextSeparators) : command.length;
-  const sourcePaths = tokens
-    .filter((token) => token.start >= segmentStart && token.end <= segmentEnd)
+  const command = index.command;
+  const { start: segmentStart, end: segmentEnd } = index.segmentFor(destination.start, destination.end);
+  const sourcePaths = index.tokensWithin(segmentStart, segmentEnd)
     .filter((token) => token.start !== destination.start)
     .filter((token) => !/[\\/]$/.test(token.path))
     .map((token) => token.path);
@@ -550,11 +758,12 @@ export function extractConverterOutputPaths(command: string): string[] {
  */
 export function extractCommandOutputPathCandidates(command: string): string[] {
   const tokens = extractCommandPathTokens(command);
+  const index = new CommandScanIndex(command, tokens);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const token of tokens) {
-    if (!isExplicitOutputPath(command, token, tokens)) continue;
-    for (const output of transferDirectoryOutputs(command, token, tokens)) {
+    if (!isExplicitOutputPath(index, token)) continue;
+    for (const output of transferDirectoryOutputs(index, token)) {
       if (seen.has(output)) continue;
       seen.add(output);
       out.push(output);

@@ -16,7 +16,7 @@ export interface SessionMeta {
   workspaceKind?: WorkspaceKind;
   effort?: Effort;
   permissionMode?: PermissionMode;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** Initial plan selection, persisted with the task rather than after creation. */
   planMode?: boolean;
   /** Persist the host-owned Review purpose atomically with session creation. */

@@ -42,6 +42,12 @@ export interface BotCollaborationMeta {
   childSessionId: string | null;
   /** 委派目标摘要，用于卡片折叠态文案。 */
   objective: string;
+  /**
+   * 仅 `interjection`：补充消息的首行摘要（≤ BOT_INTERJECTION_PREVIEW_MAX 字），
+   * 让主聊天留痕说清楚「告诉了后台任务什么」。完整指令仍只保存在后台任务里；
+   * 旧记录没有此字段，留痕回退为通用文案。
+   */
+  interjectionPreview?: string;
   result?: {
     /** Task title at completion; older receipts fall back to the known task title. */
     title?: string;
@@ -54,6 +60,18 @@ export interface BotCollaborationMeta {
     error?: string;
     artifacts: Array<{ absolutePath: string }>;
   };
+}
+
+/** Maximum trimmed note length, in UTF-16 code units; shared by delivery UI and host validation. */
+export const BOT_INTERJECTION_MAX_CHARS = 4_000;
+
+/** 补充消息留痕摘要的上限：只取首行，主聊天不复制完整指令。 */
+export const BOT_INTERJECTION_PREVIEW_MAX = 200;
+
+/** First non-empty line, bounded; never the full instruction. */
+export function botInterjectionPreview(text: string): string {
+  const line = text.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
+  return Array.from(line).slice(0, BOT_INTERJECTION_PREVIEW_MAX).join('');
 }
 
 const ROLES = new Set<BotCollaborationRole>([
@@ -108,6 +126,10 @@ export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta |
     childSessionId,
     ...(receipt.result ? { result: receipt.result } : {}),
     objective: raw.objective,
+    ...(raw.role === 'interjection' && typeof raw.interjectionPreview === 'string'
+      && botInterjectionPreview(raw.interjectionPreview)
+      ? { interjectionPreview: botInterjectionPreview(raw.interjectionPreview) }
+      : {}),
   };
 }
 

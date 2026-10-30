@@ -28,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { PiRpcProcess } from '../rpc-client.js';
+import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -526,6 +528,27 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     });
 
+  it('applies a model compaction policy in native Pi and detects a later policy change', { timeout: 30_000 }, async () => {
+    let pct: number | null = 75;
+    const deps = buildDeps();
+    deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+    deps.resolveModelCompactionPct = (provider, model) => provider === 'xd' && model === 'pi-test-model' ? pct : null;
+    const agent = new PiAgent(deps);
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-model-compaction-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await agent.startSession({ sessionId: 'model-compaction-native', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = 80;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+      await handle.close();
+      handle = await agent.startSession({ sessionId: 'model-compaction-native-next', workingDir, model: 'pi-test-model', providerId: 'xd' });
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('hot');
+      pct = null;
+      expect((await handle.previewModelSwitch?.('pi-test-model', { providerId: 'xd' }))?.action).toBe('rebuild');
+    } finally { await handle?.close(); rmSync(workingDir, { recursive: true, force: true }); }
+  });
+
   it.each(['CLAUDE.md', 'AGENTS.md', 'AGENTS.override.md'])(
     'loads global %s with native precedence and keeps the prompt stable across turns',
     { timeout: 60_000 },
@@ -1023,7 +1046,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       try {
         writeFileSync(path.join(workingDir, 'proof.txt'), 'GROK47_TOOL_OK');
         const imagePath = path.join(workingDir, 'pixel.png');
-        writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64'));
+        writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=', 'base64'));
         handle = await agent.startSession({ sessionId: 'grok47-native', workingDir,
           model: row.id, providerId: 'xai', effort: 'high', permissionMode: 'bypassPermissions' });
         const send = async (image = false) => {
@@ -1339,9 +1362,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     'forwards an image attachment through pi to the gateway (multimodal image)',
     { timeout: 60_000 },
     async () => {
-      // 合法 1x1 透明 PNG —— pi 不会因非法图片拒收;其 base64 应原样出现在网关请求体。
+      // Valid 1x1 RGBA PNG, including chunk CRCs. Pi 1.4 rejects the old corrupt
+      // fixture during image normalization; intact bytes must reach the model.
       const PNG_1x1_B64 =
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
       const agent = new PiAgent(buildDeps());
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-img-cwd-'));
       let handle: AgentSessionHandle | null = null;
@@ -1383,7 +1407,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     { timeout: 60_000 },
     async () => {
       const pngBase64 =
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=';
       const agent = new PiAgent(buildDeps());
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-review-formats-'));
       const markdownPath = path.join(workingDir, 'launch.md');
@@ -1509,6 +1533,82 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  it.each(['snapshot', 'startup'] as const)(
+    'runs one read-only plan turn from %s, then restores ordinary tools',
+    { timeout: 60_000 },
+    async (source) => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-turn-'));
+      let handle: AgentSessionHandle | undefined;
+      try {
+        handle = await new PiAgent(buildDeps()).startSession({
+          sessionId: `plan-turn-${source}`, workingDir, model: 'pi-test-model',
+          ...(source === 'startup' ? { planMode: true } : {}),
+        });
+        if (source === 'snapshot') {
+          await handle.setPlanMode!(true);
+          // Desktop consumes the checkbox before dispatching the frozen message.
+          await handle.setPlanMode!(false);
+        }
+        const sendTurn = async (planMode?: boolean) => {
+          const before = seenRequests.length;
+          const done = (async () => {
+            for await (const event of handle!.events()) if (event.type === 'done') break;
+          })();
+          await handle!.send({ type: 'user', content: 'Give a short plan.' },
+            planMode === undefined ? undefined : { planMode });
+          await done;
+          const requests = seenRequests.slice(before);
+          expect(requests).toHaveLength(1);
+          return JSON.parse(requests[0]!.body) as { tools: Array<{ name: string }>; system: unknown };
+        };
+        const planned = await sendTurn(source === 'snapshot' ? true : undefined);
+        expect(planned.tools.map((tool) => tool.name)).toContain('read');
+        expect(planned.tools.map((tool) => tool.name)).not.toContain('write');
+        expect(planned.tools.map((tool) => tool.name)).not.toContain('edit');
+        expect(handle.getPlanMode!()).toBe(false);
+        const ordinary = await sendTurn();
+        expect(ordinary.tools.map((tool) => tool.name)).toContain('write');
+        expect(ordinary.tools.map((tool) => tool.name)).toContain('edit');
+      } finally {
+        await handle?.close();
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('re-syncs native plan execution before the next ordinary message', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-execute-'));
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({
+        sessionId: 'plan-execute', workingDir, model: 'pi-test-model', planMode: true,
+      });
+      const resolver = vi.fn(async (request: { kind: string; questions?: Array<{ question: string }> }) => ({
+        kind: 'ask_user_question',
+        answers: { [request.questions![0]!.question]: 'Execute the plan (track progress)' },
+      }));
+      handle.setInteractionResolver!(resolver as never);
+      scriptedResponses.push(anthropicStreamBody('Plan:\n1. Say hello.'));
+      const before = seenRequests.length;
+      await handle.send({ type: 'user', content: 'Plan a greeting.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(before + 1), { timeout: 20_000 });
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+      expect(resolver).toHaveBeenCalled();
+      expect(handle.getPlanMode!()).toBe(false);
+      expect(handle.getExecutionPlanMode!()).toBe(false);
+      const next = seenRequests.length;
+      await handle.send({ type: 'user', content: 'An ordinary greeting.' });
+      await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(next), { timeout: 20_000 });
+      const request = JSON.parse(seenRequests[next]!.body) as { tools: Array<{ name: string }> };
+      expect(request.tools.map((tool) => tool.name)).toContain('write');
+      await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
+    } finally {
+      scriptedResponses.length = 0;
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   it.each(['anthropic-messages', 'openai-completions'] as const)(
     'keeps native plan notifications separate from replies using %s',
     { timeout: 60_000 },
@@ -1554,14 +1654,16 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it(
-    're-syncs plan mode from pi persisted state on resume (no mirror desync)',
+  it.each([false, true])(
+    're-syncs plan mode from pi persisted state on resume (scan initially unavailable=%s)',
     { timeout: 60_000 },
-    async () => {
+    async (scanUnavailable) => {
       const agent = new PiAgent(buildDeps());
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-plan-resume-cwd-'));
       let handle: AgentSessionHandle | null = null;
       let resumed: AgentSessionHandle | null = null;
+      let restoreScan = () => {};
+      let restoreRpc = () => {};
       try {
         handle = await agent.startSession({
           sessionId: 'plan-resume-session',
@@ -1583,6 +1685,21 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         await handle.close();
         handle = null;
 
+        if (scanUnavailable) {
+          // Fault only the host's two state-read paths; Pi still restores its
+          // actual plan-mode extension and executes real prompts after recovery.
+          const scan = vi.spyOn(sessionJsonlScan, 'scanPiSessionJsonl').mockResolvedValue(null);
+          const request = PiRpcProcess.prototype.request;
+          const rpc = vi.spyOn(PiRpcProcess.prototype, 'request').mockImplementation(function (this: PiRpcProcess, command, options) {
+            if (command.type === 'get_entries') {
+              return Promise.resolve({ type: 'response', command: 'get_entries', success: false, error: 'scan unavailable' });
+            }
+            return request.call(this, command, options);
+          });
+          restoreScan = () => scan.mockRestore();
+          restoreRpc = () => rpc.mockRestore();
+        }
+
         // resume 同一会话:pi 的 plan-mode 扩展自恢复 planModeEnabled=true,新会话的
         // planModeActive 必须从 get_entries 校正回 true(而非默认 false),否则 /plan toggle 会锁死。
         resumed = await agent.startSession({
@@ -1591,8 +1708,35 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           model: 'pi-test-model',
           resumeSessionId: resumeKey,
         });
-        expect(resumed.getPlanMode?.()).toBe(true);
+        if (scanUnavailable) {
+          expect(resumed.getPlanMode?.()).toBeNull();
+          const requestsBefore = seenRequests.length;
+          await expect(resumed.send({ type: 'user', content: 'continue planning' }))
+            .rejects.toMatchObject({ code: 'TURN_DISPATCH_REJECTED' });
+          expect(seenRequests).toHaveLength(requestsBefore);
+          restoreScan();
+          restoreRpc();
+          for (const expectedPlan of [true, false]) {
+            const before = seenRequests.length;
+            const done = (async () => {
+              for await (const event of resumed!.events()) if (event.type === 'done') break;
+            })();
+            await resumed.send({ type: 'user', content: 'continue the task' });
+            await done;
+            const requests = seenRequests.slice(before);
+            expect(requests).toHaveLength(1);
+            const payload = JSON.parse(requests[0]!.body) as { tools: Array<{ name: string }> };
+            expect(payload.tools.some((tool) => tool.name === 'write')).toBe(!expectedPlan);
+            expect(payload.tools.some((tool) => tool.name === 'edit')).toBe(!expectedPlan);
+            expect(resumed.getPlanMode?.()).toBe(false);
+            expect(resumed.getExecutionPlanMode?.()).toBe(expectedPlan);
+          }
+        } else {
+          expect(resumed.getPlanMode?.()).toBe(true);
+        }
       } finally {
+        restoreScan();
+        restoreRpc();
         await handle?.close();
         await resumed?.close();
         rmSync(workingDir, { recursive: true, force: true });
@@ -1969,6 +2113,58 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // Integration: the real Pi request builder must preserve declared low and
+  // upstream remaps, while an unavailable low must follow the catalog default.
+  // The former offline SDK probe never exercised Cindy startup reconciliation.
+  it.each([
+    { efforts: ['low', 'medium', 'high', 'max'] as const, requested: 'low' as const, wire: 'low' },
+    { efforts: ['low', 'medium', 'high', 'max'] as const, requested: 'medium' as const, wire: 'high' },
+    { efforts: ['medium', 'high', 'max'] as const, requested: 'low' as const, wire: 'high' },
+  ])('sends catalog effort $requested as $wire and records the real payload boundary', { timeout: 30_000 }, async ({ efforts, requested, wire }) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-effort-wire-'));
+    const deps = buildDeps();
+    const debug = vi.fn();
+    deps.logger = { ...noopLogger, debug };
+    const model = 'deepseek/deepseek-v4-flash';
+    deps.capabilityAdditions = { availableModels: [{
+      id: model, displayName: 'DeepSeek test route', contextWindow: 200_000,
+      efforts: [...efforts], defaultEffort: 'high',
+    }] };
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.resolvePiGatewayModelSpec = () => ({
+      api: 'openai-completions',
+      compat: { thinkingFormat: 'deepseek', maxTokensField: 'max_tokens',
+        requiresReasoningContentOnAssistantMessages: true },
+      thinkingLevelMap: { low: 'low', medium: 'high', high: 'high', max: 'max' },
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `effort-${requested}-${efforts.length}`,
+        workingDir, model, providerId: 'xd', effort: requested });
+      const before = seenRequests.length;
+      const done = (async () => {
+        for await (const event of handle!.events()) if (event.type === 'done') return;
+      })();
+      await handle.send({ type: 'user', content: 'private translation fixture' });
+      await done;
+      const requests = seenRequests.slice(before);
+      expect(requests).toHaveLength(1);
+      const body = JSON.parse(requests[0]!.body);
+      expect(body.reasoning_effort).toBe(wire);
+      expect(body.thinking).toEqual({ type: 'enabled' });
+      const stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
+      expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output', 'agent-settled']);
+      expect(stages[0]).toMatchObject({ wireEffort: wire, toolCount: body.tools.length, messageCount: body.messages.length,
+        preparationMs: expect.any(Number) });
+      expect(stages[0].preparationMs).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(stages)).not.toContain('private translation fixture');
+      expect(JSON.stringify(stages)).not.toContain('test-key-123');
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it.each(['ask', 'auto', 'bypassPermissions'] as const)(
     'host text-only turn blocks tools in %s and restores the next ordinary turn',

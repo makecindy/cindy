@@ -104,6 +104,15 @@ function harness(over: Partial<PeerUsageSyncDeps> = {}) {
 }
 
 describe('usage device rows wire format', () => {
+  it('preserves media fees with zero tokens across devices', async () => {
+    const rows = rowsFor(['2026-10-15'], 0);
+    rows.modelRows[0].agentKind = 'media';
+    const decoded = await decodeUsageDeviceRowsResponse(await hostResponse(rows, '2026-10-15', null));
+    expect(decoded?.kind).toBe('rows');
+    if (decoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(decoded.rows.modelRows[0]).toMatchObject({ agentKind: 'media', money: usd(1), inputTokens: 0 });
+  });
+
   it('round-trips rows, filters by sinceDay and validates requests', async () => {
     const rows = rowsFor(['2026-09-24', '2026-09-25', '2026-09-26']);
     const decoded = await decodeUsageDeviceRowsResponse(
@@ -180,6 +189,57 @@ describe('usage device rows wire format', () => {
     ]);
     expect(isUnixMs(8.64e15)).toBe(true);
     expect(isUnixMs(8.64e15 + 1)).toBe(false);
+  });
+
+  it('round-trips optional task sources without dropping legacy tasks or usage', async () => {
+    const sourceRows = rowsFor(['2026-09-26']);
+    const tasks = ['cindy-make', 'cindy-make-merge', null, undefined].map((source, index) => ({
+      sessionId: 'task-' + index,
+      title: 'Task ' + index,
+      model: 'gpt-5.5',
+      providerId: null,
+      source,
+      contextTokens: 0,
+      contextWindow: 0,
+      lastActiveAt: 1,
+    }));
+    const sessionRows = tasks.map((entry) => ({ day: '2026-09-26', sessionId: entry.sessionId, tokens: 5 }));
+    const decoded = await decodeUsageDeviceRowsResponse(
+      await readUsageDeviceRows(
+        {
+          getAllSpendDays: async () => sourceRows.spendDays,
+          getModelUsageSince: async () => sourceRows.modelRows,
+          getSessionUsageSince: async () => ({ rows: sessionRows, tasks }),
+          remoteVisibleTaskIds: async (ids) => new Set(ids),
+          todayKey: () => '2026-09-26',
+        },
+        { sinceDay: null },
+      ),
+    );
+    if (decoded?.kind !== 'rows') throw new Error('expected rows');
+    expect(decoded.rows.tasks.map((entry) => [entry.sessionId, entry.source])).toEqual([
+      ['task-0', 'cindy-make'],
+      ['task-1', 'cindy-make-merge'],
+      ['task-2', null],
+      ['task-3', null],
+    ]);
+    expect(decoded.rows.sessionRows).toEqual(sessionRows);
+    expect(decoded.rows.spendDays).toEqual(sourceRows.spendDays);
+    expect(decoded.rows.modelRows).toEqual(sourceRows.modelRows);
+  });
+
+  it('drops malformed task sources while retaining task metadata', () => {
+    const rows = sanitizeUsageDeviceRows({
+      ...rowsFor([]),
+      tasks: [
+        { sessionId: 'number', source: 1 },
+        { sessionId: 'long', source: 'x'.repeat(257) },
+      ],
+    });
+    expect(rows?.tasks.map((entry) => [entry.sessionId, entry.source])).toEqual([
+      ['number', null],
+      ['long', null],
+    ]);
   });
 
   it('drops a cached peer whose sync time is outside the Date range', async () => {

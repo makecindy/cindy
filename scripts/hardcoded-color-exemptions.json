@@ -106,7 +106,7 @@
  },
  {
   "glob": "apps/desktop/src/renderer/components/ui/toast/Toast.tsx",
-  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 已导出供 toastColors 守)",
+  "reason": "E5D Toast 四色定稿 hardcode(docs/design-rules/cindy-design-system.md §2 sanctioned,info #417CDD/success #2AAE5B/warning #F3A115/error #D91F37;VARIANT_MAP 使用已批准的语义色)",
   "owner": "E5D",
   "matches": [
    {
@@ -135,11 +135,6 @@
   "basis": "Existing approval above; DS-7 narrows it to the named colour role and exact approved values, no new palette approval."
  },
  {
-  "glob": "apps/desktop/src/renderer/__tests__/toastColors.test.ts",
-  "reason": "E5D Toast 四色定稿单测(期望 hex)",
-  "owner": "E5D"
- },
- {
   "glob": "apps/desktop/src/renderer/__tests__/themePermissionColors.test.ts",
   "reason": "E5D Auto Approval 默认值单测(期望 hex #417CDD)",
   "owner": "E5D"
@@ -148,11 +143,6 @@
   "glob": "apps/desktop/src/renderer/components/splash/SplashScreen.tsx",
   "reason": "E6/E6-B splash 双模式:进度条双套白黑 alpha(既有值恢复)+ hsl(var()) 双模式取色(膘叔交付,阿梅 E6-B-R PASS)",
   "owner": "E6"
- },
- {
-  "glob": "apps/desktop/src/renderer/__tests__/newMakerCreateAgentVisualContract.test.ts",
-  "reason": "合同测试值守护断言(expect toContain hex),非样式硬编码",
-  "owner": "E2"
  },
  {
   "glob": "apps/desktop/src/renderer/components/new-chat/*.tsx",
@@ -532,5 +522,68 @@
   "glob": "docs/design-rules/design-inventory.md",
   "reason": "台账 GENERATED 区块自述计数口径(`hsl(var(--token)`),同 DESIGN.md 文档示例先例",
   "owner": "design-system"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/features/region-screenshot/screenshotColors.ts",
+  "reason": "全局截图的标注墨水 (烧录进用户截图的内容像素, 红色即 annotation-accent) 与覆盖在任意屏幕内容上的功能像素 (暗化遮罩、选区白描边与暗色外圈、放大镜十字线、定格底色): 不是界面语义色, 两种模式必须同值才能在任何底色上看清; 界面 chrome 仍走 token。DESIGN.md §2「Screenshot overlay and annotation ink」登记",
+  "owner": "region-screenshot",
+  "reviewDate": "2027-04-26",
+  "matches": [
+   {
+    "value": "#FF3B30",
+    "before": "red:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#FFCC00",
+    "before": "yellow:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#34C759",
+    "before": "green:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#007AFF",
+    "before": "blue:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#000000",
+    "before": "black:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#FFFFFF",
+    "before": "white:\\s*['\\\"]",
+    "object": "SCREENSHOT_INK"
+   },
+   {
+    "value": "#000000",
+    "before": "backdrop:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.45)",
+    "before": "shade:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "#FFFFFF",
+    "before": "edge:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.6)",
+    "before": "edgeOuter:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   },
+   {
+    "value": "rgba(0, 0, 0, 0.35)",
+    "before": "crosshair:\\s*['\\\"]",
+    "object": "SCREENSHOT_OVERLAY"
+   }
+  ]
  }
 ]

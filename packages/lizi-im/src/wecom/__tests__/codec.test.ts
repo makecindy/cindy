@@ -43,7 +43,7 @@ describe("WeCom markdown chunking", () => {
   });
 
   it("normalizes an empty final response", () => {
-    expect(chunkWecomMarkdown(" \r\n ")).toEqual(["✅ (本轮无文本输出)"]);
+    expect(chunkWecomMarkdown(" \r\n ")).toEqual([]);
   });
 
   it("preserves code fences and line boundaries in long Markdown replies", () => {

@@ -72,7 +72,7 @@ describe('outboundPolicy', () => {
     });
     expect(calls).toEqual([
       ['<b>粗</b> &amp; 细', true],
-      ['粗 &amp; 细', false],
+      ['粗 & 细', false],
     ]);
   });
 

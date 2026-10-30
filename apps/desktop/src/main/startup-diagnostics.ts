@@ -32,19 +32,30 @@
  *
  * 平台注记:process.kill(pid, 0) 探活在 macOS / Windows 均可用(Windows 上由
  * libuv 转 OpenProcess 探测);标记文件极小(<400B)、30s 一次写 userData,两端
- * I/O 开销可忽略。pid 复用理论上可能让死进程被误判"还活着"而漏报一次,概率极低
- * 且只影响诊断不影响功能,接受。
+ * I/O 开销可忽略。pid 复用会让死进程被误判"还活着":实测 Windows 上一份旧标记被
+ * 复用 pid 连续保留 9 天,每次启动都误报并存实例。启动后台用 OS 进程启动时刻核对
+ * (resolveReusedPids),确认复用后补出该实例的退出结论并清掉标记。
  */
 
 import { app, crashReporter } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLogger } from './logger';
+import { readProcessStartTimes } from './processIdentity';
 
 const log = createLogger('startup-diagnostics');
 
 /** 心跳刷新间隔。30s:足够定位 hang 的时间窗,又不构成可感知的 I/O 负担。 */
 const HEARTBEAT_INTERVAL_MS = 30_000;
+/**
+ * 进程启动时刻与标记 startedAt 的比较容差:`ps` 只报到秒,再留一点采样偏差。
+ * 写标记的进程启动必然早于 startedAt,因此容差只需覆盖精度,不必放大。
+ */
+const PID_REUSE_TOLERANCE_MS = 2_000;
+/** PID 复用核对要拉起 PowerShell / ps,延后到启动高峰之后,不和首屏抢 CPU。 */
+const PID_REUSE_CHECK_DELAY_MS = 15_000;
+/** 后台核对不在启动关键路径上,给冷启动的 PowerShell 留足时间;超时按「读不到」处理。 */
+const PID_REUSE_QUERY_TIMEOUT_MS = 10_000;
 /** crash dump 扫描回看窗口。 */
 const DUMP_SCAN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 /** dump 清单最多列几个(按 mtime 降序),防日志刷屏。 */
@@ -81,6 +92,16 @@ export interface PreviousRunReport {
   kind: PreviousRunReportKind;
   file: string;
   marker?: RunMarker;
+  /** 标记的 pid 仍存活、但已被这一时刻启动的另一个进程占用(PID 复用)。 */
+  pidReusedSince?: string;
+}
+
+/** pid 已不属于写标记的实例时,按标记最后状态给出它的退出结论。 */
+function classifyEndedRun(marker: RunMarker): PreviousRunReportKind {
+  if (marker.state === 'exited') {
+    return marker.exitCode != null && marker.exitCode !== 0 ? 'crash-exit' : 'clean';
+  }
+  return marker.state === 'shutdown-begin' ? 'shutdown-incomplete' : 'abnormal';
 }
 
 export interface RunMarkerStoreDeps {
@@ -230,16 +251,68 @@ export class RunMarkerStore {
         reports.push({ kind: 'still-running', file, marker });
         continue;
       }
-      const kind: PreviousRunReportKind =
-        marker.state === 'exited'
-          ? (marker.exitCode != null && marker.exitCode !== 0 ? 'crash-exit' : 'clean')
-          : marker.state === 'shutdown-begin'
-            ? 'shutdown-incomplete'
-            : 'abnormal';
-      reports.push({ kind, file, marker });
+      reports.push({ kind: classifyEndedRun(marker), file, marker });
       this.remove(file);
     }
     return reports;
+  }
+
+  /**
+   * analyzePreviousRuns 只凭 PID 存活判 still-running。Windows / macOS 会复用 PID:旧实例
+   * 早已退出、编号被别的程序占用时,它的标记会被永久保留,每次启动都误报「另一个实例在运行」,
+   * 而它真正的退出结论永远不会出现。
+   *
+   * 用 OS 报告的进程启动时刻核对:写标记的进程启动时刻必然不晚于 marker.startedAt,当前占用
+   * 该 PID 的进程若明显晚于它启动,就不可能是写标记的那个实例——按标记状态补出退出结论并清掉
+   * 标记。读不到启动时刻或时刻对不上时保持 still-running,不臆断。
+   *
+   * 核对发生在启动之后:期间旧实例可能已正常退出并写下 exited,所以按此刻重读的标记下结论——
+   * exited 由 process 'exit' 钩子写下,本身就证明该实例已结束,不必再看 PID 查询结果;
+   * 标记已不在(被别的实例尸检清掉)就不再报。
+   */
+  async resolveReusedPids(
+    stillRunning: readonly PreviousRunReport[],
+    readStartTimes: (pids: readonly number[]) => Promise<ReadonlyMap<number, number>>,
+  ): Promise<PreviousRunReport[]> {
+    const pids = stillRunning.flatMap((r) => (r.marker ? [r.marker.pid] : []));
+    if (pids.length === 0) return [...stillRunning];
+    const startTimes = await readStartTimes(pids);
+    return stillRunning.flatMap((report) => {
+      if (!report.marker) return [report];
+      const marker = this.readMarker(report.file);
+      if (!marker || marker.pid !== report.marker.pid) return [];
+      if (marker.state === 'exited') {
+        this.remove(report.file);
+        return [{ kind: classifyEndedRun(marker), file: report.file, marker }];
+      }
+      const ownerStartedAtMs = startTimes.get(marker.pid);
+      const markerStartedAtMs = Date.parse(marker.startedAt);
+      if (
+        ownerStartedAtMs === undefined ||
+        !Number.isFinite(markerStartedAtMs) ||
+        ownerStartedAtMs <= markerStartedAtMs + PID_REUSE_TOLERANCE_MS
+      ) {
+        return [{ ...report, marker }];
+      }
+      this.remove(report.file);
+      return [
+        {
+          kind: classifyEndedRun(marker),
+          file: report.file,
+          marker,
+          pidReusedSince: new Date(ownerStartedAtMs).toISOString(),
+        },
+      ];
+    });
+  }
+
+  private readMarker(file: string): RunMarker | null {
+    try {
+      const marker = JSON.parse(fs.readFileSync(file, 'utf8')) as RunMarker;
+      return marker && typeof marker.pid === 'number' && marker.state ? marker : null;
+    } catch {
+      return null;
+    }
   }
 
   private remove(file: string): void {
@@ -306,6 +379,12 @@ function logPreviousRunReports(reports: PreviousRunReport[]): boolean {
   let hadAbnormal = false;
   for (const r of reports) {
     const m = r.marker;
+    if (r.pidReusedSince) {
+      log.info(
+        `[exit-diagnosis] pid=${m!.pid} now belongs to another process started at ${r.pidReusedSince}, ` +
+          `not the v=${m!.version} instance started at ${m!.startedAt} — that instance is gone:`,
+      );
+    }
     switch (r.kind) {
       case 'clean':
         log.info(
@@ -401,6 +480,23 @@ function logCrashDumpScan(hadAbnormal: boolean): void {
 }
 
 /**
+ * still-running 的结论等 PID 复用核对完再记日志,避免先写一行「另一个实例在运行」的误报。
+ * 核对出的退出结论只进日志、不回填 _previousRunReports:复用往往发生在很久以后,
+ * 不应据此为一次陈旧的退出触发日志上报的原生崩溃兜底。
+ */
+function scheduleReusedPidCheck(store: RunMarkerStore, stillRunning: PreviousRunReport[]): void {
+  const timer = setTimeout(() => {
+    store
+      .resolveReusedPids(stillRunning, (pids) =>
+        readProcessStartTimes(pids, { timeoutMs: PID_REUSE_QUERY_TIMEOUT_MS }),
+      )
+      .then((resolved) => logPreviousRunReports(resolved))
+      .catch((err) => log.warn('run marker pid reuse check failed (non-fatal)', err));
+  }, PID_REUSE_CHECK_DELAY_MS);
+  timer.unref?.();
+}
+
+/**
  * 启动诊断入口。必须在 app ready 之前、userData 定型之后调用(bootstrap-electron
  * 顶层满足两者)。幂等;整体 try/catch —— 诊断永不阻断启动。
  */
@@ -423,8 +519,10 @@ export function initStartupDiagnostics(): void {
     });
     const reports = store.analyzePreviousRuns();
     _previousRunReports = reports;
-    const hadAbnormal = logPreviousRunReports(reports);
+    const stillRunning = reports.filter((r) => r.kind === 'still-running');
+    const hadAbnormal = logPreviousRunReports(reports.filter((r) => r.kind !== 'still-running'));
     logCrashDumpScan(hadAbnormal);
+    if (stillRunning.length > 0) scheduleReusedPidCheck(store, stillRunning);
     store.begin();
     _store = store;
     _heartbeatTimer = setInterval(() => _store?.heartbeat(), HEARTBEAT_INTERVAL_MS);

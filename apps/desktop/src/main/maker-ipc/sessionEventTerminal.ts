@@ -1,8 +1,8 @@
-import { reviewTeammateLearning } from './botLearningReview.js';
 import { botLearningTracker } from './botLearningTracker.js';
+import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import type { BotDelegationService } from './botDelegationService.js';
-import type { BotGroupChatService } from './botGroupChatService.js';
+import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
@@ -38,11 +38,17 @@ import {
   createContextOverflowRollover,
   isContextOverflowErrorData,
   isOversizedHistoryErrorData,
+  isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
-import { isTerminalTurnErrorEvent } from './sessionTurnActivityTracker.js';
+import { isTerminalTurnErrorEvent, type SessionListActivityTracker } from './sessionTurnActivityTracker.js';
+import { botGroupRuntimeFailureCode } from './botGroupRuntimeFailure.js';
 import { ProductTurnUsageTargetTracker } from './turnWallClock.js';
 import { createWorkerTurnStartSequencer } from './workerTurnStartSequencer.js';
-import { AutoResumeBookkeeping, shouldSkipOrcaWorkerTerminal } from './autoResumeBookkeeping.js';
+import {
+  AutoResumeBookkeeping,
+  shouldSkipOrcaWorkerTerminal,
+  type OrcaSuppressedTerminal,
+} from './autoResumeBookkeeping.js';
 import { isSuccessfulAssistantReplyDoneData } from '../cindy-brain/assistantReplyHook.js';
 import { hasEnabledGhostAssistantHook, runGhostAssistantReplyHook } from '../cindy-brain/index.js';
 import { withGhostAssistantHookModel } from '../cindy-brain/subscriptionGateway.js';
@@ -54,7 +60,8 @@ import {
   type ProductTurnFailureOwner,
 } from './productTurnFailureOwner.js';
 export interface FinishSessionTerminalEventDeps {
-  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string) => void;
+  readonly sessionListActivityTracker: SessionListActivityTracker;
+  readonly onPluginTaskTerminal?: (sessionId: string, execution: { instanceId: string; generation: number }, outcome: 'completed' | 'failed' | 'cancelled' | 'interrupted', outputMessageId?: string, inputClientIds?: string[]) => void;
   readonly onSuccessfulProductTurn?: (
     sessionId: string,
     owner?: ProductTurnFailureOwner,
@@ -74,10 +81,32 @@ export interface FinishSessionTerminalEventDeps {
     | 'noteFailedTurnCompletionTail'
     | 'stashSuppressedError'
     | 'stashOrcaSuppressedTerminal'
+    | 'stashBotGroupSuppressedTerminal'
     | 'discardReplacementProvenByProviderEvent'
     | 'consumeFailedTurnCompletionTail'
     | 'hasSuppressedError'
   >;
+  /**
+   * 供应商组正在为这次失败换电脑(协调器登记了先不呈现)：error 行改为暂存，换成了就丢掉，没换成再补落
+   * (provider-group/heldTurnErrors.ts)。返回 false = 不是被暂存的那次失败，照常落库。
+   * `agentMeta` 是失败那一轮的事件身份：补落时不再读当时正在进行的那一轮。
+   */
+  readonly stashProviderGroupHeldError?: (
+    sessionId: string,
+    holdId: number,
+    data: unknown,
+    agentMeta: unknown,
+  ) => boolean;
+  /**
+   * 同一次换电脑期间，Worker 与群专线终态一起暂存(provider-group/heldWorkerTerminals.ts)：换成了由续跑
+   * 那一轮回报结果，没换成才回报这次异常终止。对不是 Worker 的任务回报时本就什么都不做。
+   */
+  readonly stashProviderGroupHeldWorkerTerminal?: (
+    sessionId: string,
+    holdId: number,
+    terminal: OrcaSuppressedTerminal,
+    groupTerminal?: BotGroupLaneTerminal | null,
+  ) => void;
   readonly productTurnUsageTargetTracker: Pick<
     ProductTurnUsageTargetTracker,
     'remember' | 'finish'
@@ -90,6 +119,7 @@ export interface FinishSessionTerminalEventDeps {
     | 'isAutoResumePending'
     | 'isAutoResumeDeferred'
     | 'getActiveInputClientId'
+    | 'getProviderGroupSwitchHoldId'
   > | null;
   readonly contextOverflowRolloverHolder: Pick<
     ReturnType<typeof createContextOverflowRollover>,
@@ -117,7 +147,7 @@ export interface FinishSessionTerminalEventDeps {
     ReturnType<typeof createWorkerTurnStartSequencer>,
     'waitForStart'
   >;
-  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn'> | null;
+  readonly orcaTeamServiceForEvents: Pick<OrcaTeamService, 'handleWorkerTerminalTurn' | 'noteWorkerProductTerminal'> | null;
 }
 
 export function finishSessionTerminalEvent(
@@ -129,16 +159,18 @@ export function finishSessionTerminalEvent(
   const {
     event,
     attributedEvent,
+    broadcastEvent,
     eventAgentMeta,
     isContinuationBoundary,
     isPlannedUpgradeClose,
     isRemoteAuthRetry,
     isGatewayProxyTokenRecovery,
+    groupLaneInputClientId,
   } = prepared;
-  const { persistId, workerTerminalCapture } = delivery;
+  const { persistId, workerTerminalCapture, providerGroupHoldId } = delivery;
   const terminalOwner =
     event.type === 'done' || isTerminalTurnErrorEvent(event)
-      ? captureProductTurnFailureOwner(session, event, eventAgentMeta)
+      ? captureProductTurnFailureOwner(session, event, eventAgentMeta, prepared.pluginTargetInputIds)
       : undefined;
   // done / 终止型 error 持久化边界:把在飞 assistant 落库(与 text isFinal 互斥幂等)。
   // tool_use 边界的 flush 已在上面 broadcast 前做(需先于 tool_use 落库);
@@ -247,6 +279,14 @@ export function finishSessionTerminalEvent(
           workerTerminalDoneData?.error?.message,
         ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
       : undefined;
+    const groupTerminal: BotGroupLaneTerminal | null = deps.botGroupChatServiceHolder ? {
+      sessionId: session.id,
+      activeInputClientId: groupLaneInputClientId,
+      outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+      resultText: workerTerminalFinalText,
+      resultMessageClientId: turnAssistantPersistId,
+      ...(isTerminalTurnErrorEvent(event) ? { failureCode: botGroupRuntimeFailureCode(event.data) } : {}),
+    } : null;
     const autoResumeSuppressesPersist = isSessionErrorSuppressed(
       deps.agentInputCoordinatorHolder,
       session.id,
@@ -256,6 +296,13 @@ export function finishSessionTerminalEvent(
     // hanging on the suppressed-error owner. stashOrca 失败必须立刻收口，
     // 否则 worker 会永远停在 running。
     let deferredOrcaWorkerTerminal = false;
+    // 供应商组正在为这次失败换电脑：Worker 这一轮还没有结局，先不把它回报给 Lead，按那次登记暂存。
+    // error 事件随 error 行一起暂存；只以 done 收尾的失败在下面暂存。
+    let providerGroupHeldWorkerTerminal = false;
+    const providerGroupDoneHoldId =
+      event.type === 'done'
+        ? (deps.agentInputCoordinatorHolder?.getProviderGroupSwitchHoldId?.(session.id) ?? null)
+        : null;
     const overflowClaim =
       event.type === 'error' &&
       !session.remoteHostId &&
@@ -263,10 +310,13 @@ export function finishSessionTerminalEvent(
       !isPlannedUpgradeClose &&
       !isRemoteAuthRetry &&
       !isGatewayProxyTokenRecovery &&
-      !autoResumeSuppressesPersist &&
-      (isContextOverflowErrorData(attributedEvent.data) ||
-        isOversizedHistoryErrorData(attributedEvent.data))
-        ? (deps.contextOverflowRolloverHolder?.claim(session.id) ?? 'idle')
+      !autoResumeSuppressesPersist
+        ? (deps.contextOverflowRolloverHolder?.claim(session.id, {
+            instanceId: event.sessionInstanceId,
+            generation: event.sessionTurnGeneration,
+          }, isContextOverflowErrorData(attributedEvent.data)
+            || isOversizedHistoryErrorData(attributedEvent.data)
+            || isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
     const deferUnsuccessfulProductTurn = (): void => {
       if (terminalOwner) deps.deferUnsuccessfulProductTurn?.(terminalOwner);
@@ -282,7 +332,7 @@ export function finishSessionTerminalEvent(
     // renderer's deferred persist IPC is the final auth/gateway failure exit;
     // overflow uses the async surface below. Planned upgrade closes are kept
     // under the same owner so a paired success can clear them.
-    const recoveryOwnsUnsuccessfulBoundary =
+    let recoveryOwnsUnsuccessfulBoundary =
       isTerminalTurnErrorEvent(event) &&
       (isRemoteAuthRetry ||
         isGatewayProxyTokenRecovery ||
@@ -294,6 +344,10 @@ export function finishSessionTerminalEvent(
     }
     if (overflowClaim === 'claimed') {
       const overflowErrorData = attributedEvent.data;
+      // Duplicate terminals can replace the session-indexed stash while this
+      // promise is pending. Keep this claim's own broadcast for failure.
+      const claimedBroadcast = deps.overflowSuppressedBroadcasts.get(session.id);
+      const ownedBroadcast = claimedBroadcast?.event === broadcastEvent ? claimedBroadcast : undefined;
       let overflowFailureSurfaced = false;
       const surfaceOverflowFailure = (): void => {
         if (overflowFailureSurfaced) return;
@@ -308,23 +362,29 @@ export function finishSessionTerminalEvent(
           overflowErrorPayload,
           eventAgentMeta,
         );
-        const stashed = deps.overflowSuppressedBroadcasts.get(session.id);
-        deps.overflowSuppressedBroadcasts.delete(session.id);
-        if (stashed) {
+        if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+          deps.overflowSuppressedBroadcasts.delete(session.id);
+        }
+        if (ownedBroadcast) {
           deps.broadcastToAllWindows(MAKER_PUSH.EVENT, {
-            ...stashed,
-            persistId: overflowPersistId ?? stashed.persistId,
+            ...ownedBroadcast,
+            persistId: overflowPersistId ?? ownedBroadcast.persistId,
           });
-          deps.handleAgentIslandEventAfterBroadcast(session, stashed.event);
+          deps.handleAgentIslandEventAfterBroadcast(session, ownedBroadcast.event);
         }
         onTurnErrorEvent(session.id, overflowErrorPayload, eventAgentMeta, overflowPersistId);
         notifyUnsuccessfulProductTurn();
       };
       void deps.contextOverflowRolloverHolder
-        ?.tryRecover(session.id, overflowErrorData)
+        ?.tryRecover(session.id, overflowErrorData, {
+          instanceId: event.sessionInstanceId,
+          generation: event.sessionTurnGeneration,
+        })
         .then((recovered) => {
           if (recovered) {
-            deps.overflowSuppressedBroadcasts.delete(session.id);
+            if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+              deps.overflowSuppressedBroadcasts.delete(session.id);
+            }
             return;
           }
           surfaceOverflowFailure();
@@ -338,6 +398,9 @@ export function finishSessionTerminalEvent(
         });
     } else if (overflowClaim === 'in-flight') {
       // 同一 turn 的重复终态 error：继续压住，避免污染历史。
+      if (deps.overflowSuppressedBroadcasts.get(session.id)?.event === broadcastEvent) {
+        deps.overflowSuppressedBroadcasts.delete(session.id);
+      }
       if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
     } else if (
       event.type === 'error' &&
@@ -346,16 +409,55 @@ export function finishSessionTerminalEvent(
       !isGatewayProxyTokenRecovery &&
       !autoResumeSuppressesPersist
     ) {
-      onTurnErrorEvent(
-        session.id,
-        attributedEvent.data as {
-          message?: unknown;
-          reason?: unknown;
-          sdkError?: unknown;
-        } | null,
-        eventAgentMeta,
-        persistId,
-      );
+      // 投递层为 overflow/oversized/compat 终态错误压住了广播；走到这里说明没有 claim
+      // owner（rollover holder 未装配）会去 surface/丢弃它。补出广播，否则错误行写了
+      // 但用户看不到横幅，且 map 里的条目永不清理。
+      const stashed = deps.overflowSuppressedBroadcasts.get(session.id);
+      if (stashed) {
+        deps.overflowSuppressedBroadcasts.delete(session.id);
+        // 只补当前事件的广播：stash 按 session 索引，可能残留更早 turn 的条目（例如
+        // autoResume 压住、owner 路径不碰这个 map 的情形）。把过期事件盖着当前 persistId
+        // 播出去会让横幅文案与错误行对不上；过期条目直接丢弃（它自己的 owner 已负责过它）。
+        if (stashed.event === broadcastEvent) {
+          deps.broadcastToAllWindows(MAKER_PUSH.EVENT, stashed);
+          deps.handleAgentIslandEventAfterBroadcast(session, stashed.event);
+        }
+      }
+      // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
+      // 不归这次暂存，照常落库。
+      if (
+        providerGroupHoldId !== null &&
+        deps.stashProviderGroupHeldError?.(session.id, providerGroupHoldId, attributedEvent.data, eventAgentMeta) === true
+      ) {
+        if (persistId) releaseReservedTurnErrorPersistId(session.id, persistId);
+        // The same persisted failure now belongs to group recovery rather than
+        // generic auto-resume. Keep plugin/upstream callers pending until that
+        // owner succeeds, hands back recovery, or releases the final error.
+        // Only an accepted stash owns it; a different, unheld error settles normally.
+        recoveryOwnsUnsuccessfulBoundary = true;
+        deferUnsuccessfulProductTurn();
+        // 同一次失败：协同 Worker 的回报与 error 行按同一次登记结算。
+        if (deps.stashProviderGroupHeldWorkerTerminal && isTerminalTurnErrorEvent(event)) {
+          deps.stashProviderGroupHeldWorkerTerminal(session.id, providerGroupHoldId, {
+            status: 'error',
+            finalText: workerTerminalFinalText,
+            diagnostic: workerTerminalDiagnostic,
+            capture: workerTerminalCapture,
+          }, groupTerminal);
+          providerGroupHeldWorkerTerminal = true;
+        }
+      } else {
+        onTurnErrorEvent(
+          session.id,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
+          eventAgentMeta,
+          persistId,
+        );
+      }
     } else if (persistId) {
       releaseReservedTurnErrorPersistId(session.id, persistId);
     }
@@ -380,6 +482,12 @@ export function finishSessionTerminalEvent(
             capture: workerTerminalCapture,
           },
         );
+        if (groupLaneInputClientId) {
+          deps.autoResumeBookkeeping.stashBotGroupSuppressedTerminal(session.id, {
+            sessionId: session.id, activeInputClientId: groupLaneInputClientId,
+            outcome: 'error', resultText: '', failureCode: botGroupRuntimeFailureCode(event.data),
+          });
+        }
       }
     } else if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
       // replacement 可在 sendToAgent 返回前同步失败并让 coordinator 的 activeTurn
@@ -390,10 +498,13 @@ export function finishSessionTerminalEvent(
     // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
     // _turnStartedAtBySession 之前保存一份，让 deferred 路径能正确做 /clear 竞态 cap。
     // 自愈压住 error 行时同理:补落发生在 resetTurnPersistState 之后(退避 3–20 秒,
-    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。
+    // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。供应商组换电脑暂存 error 行时同理。
     if (
       event.type === 'error' &&
-      (isRemoteAuthRetry || isGatewayProxyTokenRecovery || autoResumeSuppressesPersist)
+      (isRemoteAuthRetry ||
+        isGatewayProxyTokenRecovery ||
+        autoResumeSuppressesPersist ||
+        providerGroupHoldId !== null)
     ) {
       saveTurnStartedAtForDeferred(session.id);
     }
@@ -433,6 +544,18 @@ export function finishSessionTerminalEvent(
     }
     if (!isContinuationBoundary) {
       deps.markTurnEndedAfterPersistDrain(session.id);
+      if (
+        event.turnScope !== 'background' && event.turnOrigin?.kind !== 'goal'
+      ) {
+        deps.sessionListActivityTracker.end(session.id, {
+          identity: event.sessionTurnGeneration === undefined ? undefined
+            : `${event.sessionInstanceId ?? session.instanceId}:${event.sessionTurnGeneration}`,
+          hold: autoResumeSuppressesPersist || recoveryOwnsUnsuccessfulBoundary ||
+            deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) ||
+            deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) ||
+            (event.type === 'done' && (event.data as { silentStop?: boolean } | null)?.silentStop === true),
+        });
+      }
       // 逻辑 turn 结束:跨段存活的计划行引用到此回收(continuation boundary
       // 上必须保留,否则最终 done 找不到计划行 → 无章无失败印记 → 胶囊永久
       // 钉住,review P1-1)。
@@ -494,22 +617,53 @@ export function finishSessionTerminalEvent(
         session.id,
         event.sessionTurnGeneration,
       );
+    const skipWorkerTerminal = shouldSkipOrcaWorkerTerminal({
+      isContinuationBoundary,
+      stashedThisErrorEvent: deferredOrcaWorkerTerminal,
+      eventType: event.type,
+      isPairedFailedTurnDone,
+      isFailedTurnCompletionTail,
+      hasSuppressedError: deps.autoResumeBookkeeping.hasSuppressedError(session.id),
+      isAutoResumePending:
+        deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true,
+      isAutoResumeDeferred:
+        deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
+    });
+    if (!skipWorkerTerminal && providerGroupDoneHoldId !== null && deps.stashProviderGroupHeldWorkerTerminal) {
+      // A missed error callback can be reconstructed by the coordinator from
+      // Session's terminal snapshot while this outer event is still done. Keep
+      // its failure detail on the same hold, so abandonment and generic handback
+      // retain the product receipt even when no error event reached this pipeline.
+      const observed = session.getObservedCurrentTurnTerminal();
+      const detail = observed.kind === 'error' && observed.generation === terminalOwner?.generation
+        ? observed : {};
+      if (deps.stashProviderGroupHeldError?.(session.id, providerGroupDoneHoldId, detail, eventAgentMeta) !== false) {
+        deps.stashProviderGroupHeldWorkerTerminal(session.id, providerGroupDoneHoldId, {
+          status: 'done', finalText: workerTerminalFinalText,
+          diagnostic: workerTerminalDiagnostic, capture: workerTerminalCapture,
+        }, groupTerminal);
+        providerGroupHeldWorkerTerminal = true;
+        recoveryOwnsUnsuccessfulBoundary = true;
+        deferUnsuccessfulProductTurn();
+      }
+    }
     if (
       event.type === 'done' &&
       !isContinuationBoundary &&
       !isPairedFailedTurnDone &&
       !isFailedTurnCompletionTail &&
       !deferredOrcaWorkerTerminal &&
+      !recoveryOwnsUnsuccessfulBoundary &&
       !isTerminalTurnErrorEvent(event) &&
       isSuccessfulAssistantReplyDoneData(event.data) &&
       !deps.autoResumeBookkeeping.hasSuppressedError(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) &&
       !deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id)
     ) {
+      // 夜间学习只在这里计一次数（不调用模型）；非伙伴、自动输入与重放的终态由计数模块自己排除。
       if (turnBoundaryAssistantPersistId && !session.remoteHostId) {
-        const replyId = turnBoundaryAssistantPersistId;
-        void reviewTeammateLearning(session.id, replyId).catch(() =>
-          deps.log.warn('Teammate learning review did not complete'));
+        void countNightlyLearningTurn(session.id, turnBoundaryAssistantPersistId).catch(() =>
+          deps.log.warn('Nightly learning turn count did not complete'));
       }
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
@@ -518,20 +672,7 @@ export function finishSessionTerminalEvent(
         );
       }
     }
-    if (
-      !shouldSkipOrcaWorkerTerminal({
-        isContinuationBoundary,
-        stashedThisErrorEvent: deferredOrcaWorkerTerminal,
-        eventType: event.type,
-        isPairedFailedTurnDone,
-        isFailedTurnCompletionTail,
-        hasSuppressedError: deps.autoResumeBookkeeping.hasSuppressedError(session.id),
-        isAutoResumePending:
-          deps.agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true,
-        isAutoResumeDeferred:
-          deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true,
-      })
-    ) {
+    if (!skipWorkerTerminal) {
       // Capture before queue-drain microtasks can promote the follow-up turn.
       // Recovery-owned terminals are settled by their owner (deferred auth /
       // gateway persistence, overflow surface, or auto-resume abandonment).
@@ -547,7 +688,7 @@ export function finishSessionTerminalEvent(
         deps.onPluginTaskTerminal?.(session.id, {
           instanceId: event.sessionInstanceId ?? session.instanceId,
           generation: event.sessionTurnGeneration,
-        }, outcome, turnAssistantPersistId ?? undefined);
+        }, outcome, turnAssistantPersistId ?? undefined, prepared.pluginTargetInputIds.length ? prepared.pluginTargetInputIds : undefined);
       }
       if (
         unsuccessfulBoundary &&
@@ -557,8 +698,6 @@ export function finishSessionTerminalEvent(
         notifyUnsuccessfulProductTurn();
       }
       // Group lane turns are attributed by the accepted input, captured before the queue drains.
-      const groupLaneInputClientId =
-        deps.agentInputCoordinatorHolder?.getActiveInputClientId?.(session.id, event.sessionTurnGeneration) ?? null;
       const botDelegationPendingInputClientIds =
         deps.agentInputCoordinatorHolder
           ?.getQueueControlSnapshot(session.id)
@@ -599,37 +738,37 @@ export function finishSessionTerminalEvent(
           });
         }
       })();
-      if (deps.botGroupChatServiceHolder) {
-        const groupDoneData = event.data as { result?: unknown } | null;
-        void deps.botGroupChatServiceHolder
-          .settleLaneTurn({
+      if (
+        groupTerminal && deps.botGroupChatServiceHolder &&
+        !providerGroupHeldWorkerTerminal
+      ) {
+        const groupService = deps.botGroupChatServiceHolder;
+        void settleBotGroupLaneTerminal(groupService, groupTerminal, drainPersistQueue).catch((error) => {
+          deps.log.warn('Bot group lane terminal settlement failed', {
             sessionId: session.id,
-            activeInputClientId: groupLaneInputClientId,
-            outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            resultText: typeof groupDoneData?.result === 'string' ? groupDoneData.result : '',
-            resultMessageClientId: turnAssistantPersistId,
-          })
-          .catch((error) => {
-            deps.log.warn('Bot group lane terminal settlement failed', {
-              sessionId: session.id,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            error: error instanceof Error ? error.message : String(error),
           });
+        });
       }
-      void (async () => {
-        try {
-          await deps.workerTurnStartSequencer.waitForStart(session.id);
-          await deps.orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
-            sessionId: session.id,
-            status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
-            finalText: workerTerminalFinalText,
-            diagnostic: workerTerminalDiagnostic,
-            capture: workerTerminalCapture,
-          });
-        } catch {
-          /* non-fatal */
-        }
-      })();
+      if (providerGroupHeldWorkerTerminal) {
+        // 已与产品终态一起暂存，由同一次恢复登记结算。
+      } else {
+        deps.orcaTeamServiceForEvents?.noteWorkerProductTerminal(workerTerminalCapture);
+        void (async () => {
+          try {
+            await deps.workerTurnStartSequencer.waitForStart(session.id);
+            await deps.orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
+              sessionId: session.id,
+              status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+              finalText: workerTerminalFinalText,
+              diagnostic: workerTerminalDiagnostic,
+              capture: workerTerminalCapture,
+            });
+          } catch {
+            /* non-fatal */
+          }
+        })();
+      }
     }
   }
   return { turnAssistantPersistId };

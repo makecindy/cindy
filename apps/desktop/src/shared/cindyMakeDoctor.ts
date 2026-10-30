@@ -99,7 +99,7 @@ export interface CindyMakeTaskOptions {
   effort?: string;
   providerId?: string | null;
   permissionMode?: string;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   planModeEnabled?: boolean;
 }
 
@@ -136,6 +136,10 @@ export interface CindyMakeTaskActionState {
 
 export interface CindyMakeGlobalState {
   upstreamMerge?: import('./cindyMakeMerge').CindyMakeMergeState;
+  /** Device-level GitHub binding of the personal version; absent until first read. */
+  personalRemote?: import('./cindyMakePersonalRemote').CindyMakePersonalRemoteState;
+  /** The single Sync of the personal version (GitHub steps only when shared there). */
+  personalSync?: import('./cindyMakeSync').CindyMakeSyncState;
   ownerStamp?: import('./dataOwnerPush').DataOwnerPushStamp;
   environmentCheck?: CindyMakeOperationSnapshot;
   environmentPrepare?: CindyMakeOperationSnapshot;

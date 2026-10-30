@@ -215,6 +215,7 @@ export function recordSessionPiTurnUsage(
             } else {
               money = resolveTurnCost({
                 rawModel: model,
+                agent: 'pi',
                 tokens: group.tokens,
                 // Pi computes usage.cost from its local model catalog. For
                 // BYOM/provider-api routes that is a reference estimate,

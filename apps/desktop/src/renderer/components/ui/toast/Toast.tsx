@@ -49,9 +49,11 @@ export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
 
 export interface ToastProps {
   item: ToastItem;
+  /** Interactive content, such as a disclosure, in place of the plain message. */
+  message?: React.ReactNode;
 }
 
-export function Toast({ item }: ToastProps) {
+export function Toast({ item, message }: ToastProps) {
   const meta = VARIANT_MAP[item.variant];
   const Icon = meta.icon;
   const panelRef = useRef<HTMLDivElement>(null);
@@ -143,14 +145,14 @@ export function Toast({ item }: ToastProps) {
           <span className="max-w-[160px] truncate text-13 font-medium leading-snug text-[var(--text-tertiary)]">
             {item.source.name}
           </span>
-          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)] opacity-60">
+          <span aria-hidden className="text-13 leading-snug text-[var(--text-tertiary)]">
             ·
           </span>
         </span>
       )}
 
       {/* Preserve diagnostic newlines and allow unbroken URLs to fit. */}
-        {item.message}
+        {message ?? item.message}
       </span>
 
       {item.action && (

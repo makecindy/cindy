@@ -1,15 +1,22 @@
 import type { DeviceView } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderShareCatalogEntry } from '@/device-link/providerShareCatalogCache';
 import {
+  restoredRemoteAgentUnusable,
   isProviderShareAgentDeviceId,
   providerShareRemoteCatalogs,
   remoteAgentProviders,
   selectRemoteAgentDevices,
 } from '@/session/remoteAgentCatalogs';
 import { groupSourceFilters, remoteFilterId } from '@/session/remoteSourceFilters';
+
+const catalogEntries = vi.hoisted(() => ({ value: [] as unknown[] }));
+vi.mock('@/session/unifiedMobileModels', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  mobileUnifiedEntries: () => catalogEntries.value,
+}));
 
 const device = (deviceId: string, patch: Partial<DeviceView> = {}): DeviceView => ({
   deviceId,
@@ -43,7 +50,7 @@ describe('remote Agent catalogs', () => {
       keepDeviceIds: [],
       revokedDeviceIds: new Set(['revoked']),
     })).toEqual([
-      { deviceId: 'unnamed', name: 'unnamed', canOpen: true },
+      { deviceId: 'unnamed', name: 'another computer', canOpen: true },
       { deviceId: 'office', name: 'Office PC', canOpen: true },
       { deviceId: 'studio', name: 'Studio Mac', canOpen: true },
     ]);
@@ -65,6 +72,17 @@ describe('remote Agent catalogs', () => {
       { id: 'legacy' },
     ] as unknown as ProviderView[];
     expect(remoteAgentProviders(providers).map((provider) => provider.id)).toEqual(['allowed']);
+  });
+
+  // Remote-only policy must narrow the picker without mutating the catalog used by same-account remote control.
+  it('applies model grants only to remote Agent choices and keeps old hosts compatible', () => {
+    const localModels = [{ id: 'small' }, { id: 'large' }];
+    const provider = { id: 'allowed', remoteInvocationEnabled: true, models: { codex: localModels } } as unknown as ProviderView;
+    expect(remoteAgentProviders([provider])[0]).toBe(provider);
+    const restricted = { ...provider, remoteModelIds: ['small'] };
+    expect(remoteAgentProviders([restricted])[0].models.codex).toEqual([{ id: 'small' }]);
+    expect(restricted.models.codex).toBe(localModels);
+    expect(remoteAgentProviders([{ ...restricted, remoteModelIds: [] }])[0].models.codex).toEqual([]);
   });
 
   it('groups source choices into one block per computer', () => {
@@ -103,7 +121,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     agentDeviceId: `share:${shareId}`,
     shareId,
     providerId: 'anthropic',
-    deviceName: "Magi's Mac Mini",
+    providerLabel: "Anthropic",
     ownerName: 'Magi',
     status: 'active',
     hostOnline: true,
@@ -120,7 +138,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     loaded: input.loaded ?? true,
     keepDeviceIds: input.keepDeviceIds ?? [],
     keepOnly: input.keepOnly,
-    deviceName: (item) => `${item.deviceName} · 来自 ${item.ownerName} 的分享`,
+    deviceName: (item) => `来自 ${item.ownerName} 的分享`,
     unavailableName: '已不可用的分享',
   });
 
@@ -135,7 +153,7 @@ describe('provider shares in the remote Agent catalogs', () => {
     const [catalog] = build({ shares: [share('one')] });
     expect(catalog).toEqual({
       deviceId: 'share:one',
-      name: "Magi's Mac Mini · 来自 Magi 的分享",
+      name: "来自 Magi 的分享",
       status: 'ready',
       providers: [providers[0]],
       modelVisibilityOverrides: { 'claude-code:anthropic:claude-x': true },
@@ -149,8 +167,10 @@ describe('provider shares in the remote Agent catalogs', () => {
       share('ready'),
     ];
     expect(build({ shares }).map((item) => item.deviceId)).toEqual(['share:ready']);
-    expect(build({ shares, keepDeviceIds: ['share:paused', 'share:offline'] }).map((item) => [item.deviceId, item.status]))
-      .toEqual([['share:paused', 'ready'], ['share:offline', 'error'], ['share:ready', 'ready']]);
+    // 留下来的不可用分享标 offline:恢复出来的新建任务选择据此退回被控电脑默认，收藏也先不显示。
+    expect(build({ shares, keepDeviceIds: ['share:paused', 'share:offline'] })
+      .map((item) => [item.deviceId, item.status, item.offline ?? false]))
+      .toEqual([['share:paused', 'ready', true], ['share:offline', 'error', true], ['share:ready', 'ready', false]]);
   });
 
   it('only returns kept shares when reading for the model pill', () => {
@@ -171,5 +191,27 @@ describe('provider shares in the remote Agent catalogs', () => {
       payload: { providers: [{ ...providers[0], remoteInvocationEnabled: false } as ProviderView] },
     });
     expect(build({ shares: [closed] })[0].providers).toEqual([]);
+  });
+});
+
+// 回归(#6415 review):按记忆恢复的远程选择只检查模型 id 存在、或没读到目录就保留，创建时才失败。
+describe('restoredRemoteAgentUnusable', () => {
+  const pick = { deviceId: 'studio', agentKind: 'codex' as const, model: 'gpt-x', providerId: 'openai', effort: '', fastMode: false };
+  const ready = { deviceId: 'studio', name: 'Studio', status: 'ready' as const, providers: [] };
+  const entry = (providerId: string) => ({ providerId, modelId: 'gpt-x', capabilities: {} });
+  it('keeps the pick while loading, falls back once the list is settled without it, or it is offline / unreadable', () => {
+    expect(restoredRemoteAgentUnusable({ pick, catalog: undefined, settled: false })).toBe(false);
+    expect(restoredRemoteAgentUnusable({ pick, catalog: undefined, settled: true })).toBe(true);
+    expect(restoredRemoteAgentUnusable({ pick, catalog: { ...ready, status: 'loading' }, settled: true })).toBe(false);
+    expect(restoredRemoteAgentUnusable({ pick, catalog: { ...ready, status: 'error' }, settled: true })).toBe(true);
+    expect(restoredRemoteAgentUnusable({ pick, catalog: { ...ready, offline: true }, settled: true })).toBe(true);
+  });
+  it('requires a selectable entry from the remembered source, not just a known model id', () => {
+    catalogEntries.value = [entry('openai')];
+    expect(restoredRemoteAgentUnusable({ pick, catalog: ready, settled: true })).toBe(false);
+    catalogEntries.value = [entry('other')];
+    expect(restoredRemoteAgentUnusable({ pick, catalog: ready, settled: true })).toBe(true);
+    catalogEntries.value = [];
+    expect(restoredRemoteAgentUnusable({ pick, catalog: ready, settled: true })).toBe(true);
   });
 });

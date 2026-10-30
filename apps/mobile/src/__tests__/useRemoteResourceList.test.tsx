@@ -3,22 +3,26 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
+import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS } from '@/device-link/remoteResourceAvailability';
 const h = vi.hoisted(() => ({
   auth: { user: { id: 'owner' }, accountGeneration: 1 }, focused: true,
-  link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn(() => true as boolean | null),
+  link: { connectionEpoch: 1, status: 'online', presenceVersion: 1, getPresenceAvailability: vi.fn((_deviceId: string) => true as boolean | null),
     invoke: vi.fn(), openLink: vi.fn(), onRemoteResourceChanged: vi.fn((_listener: (deviceId: string, payload: { collectionId: string }) => void) => () => {}), subscribe: vi.fn(), unsubscribe: vi.fn() },
+  app: { currentState: 'active', listener: null as null | ((state: string) => void) },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   list: vi.fn(), cached: [] as HostedRemoteCollectionItem[], persist: vi.fn(), snapshot: vi.fn(),
 }));
-vi.mock('react-native', () => ({ AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } }));
+vi.mock('react-native', () => ({ AppState: { get currentState() { return h.app.currentState; }, addEventListener: (_event: string, listener: (state: string) => void) => { h.app.listener = listener; return { remove() { h.app.listener = null; } }; } } }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (effect: () => void | (() => void)) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]) }; });
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
-vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: (error: unknown) => String(error) }));
+vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: (error: unknown) => String(error) }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResourceCache', () => ({
   readRemoteResourceSnapshot: h.snapshot, cacheRemoteResourceItems: h.persist,
+  peekRemoteResourceSnapshot: () => undefined,
   subscribeRemoteResourceCache: () => () => {}, remoteResourceCacheRevision: () => 0,
 }));
 vi.mock('@/device-link/remoteResourceAvailability', async (original) => ({
@@ -37,13 +41,42 @@ let result: ReturnType<typeof useRemoteResourceList>;
 function Probe({ enabled = true }: { enabled?: boolean }) { result = useRemoteResourceList('teammates', targets, enabled); return null; }
 async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
+  vi.clearAllMocks(); h.app.currentState = 'active'; h.app.listener = null; h.auth.accountGeneration = 1; h.auth.user.id = 'owner'; h.cached = []; h.focused = true;
   h.link.status = 'online'; h.link.connectionEpoch = 1; h.link.getPresenceAvailability.mockReturnValue(true);
   h.list.mockResolvedValue({ items: [] }); h.link.openLink.mockResolvedValue(undefined);
   h.snapshot.mockImplementation(async () => ({ home: [], items: { teammates: h.cached }, read: {} }));
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 describe('shared real resource list', () => {
+  it('fills a slow disk shard after another computer replied, without reviving its deleted rows', async () => {
+    vi.useFakeTimers();
+    let finish!: (snapshot: unknown) => void;
+    h.snapshot.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    h.list.mockImplementation(async (_invoke, host) => host.deviceId === 'mac'
+      ? { items: [] } : new Promise(() => {}));
+    await render();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    await act(async () => finish({ home: [], items: { teammates: [cached(targets[0], 'deleted'), cached(targets[1], 'saved-pc')] }, read: {} }));
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['saved-pc']);
+    expect(result.isOnline(targets[1])).toBe(false);
+  });
+  // Regression: one sleeping computer raised a section-wide warning on a healthy phone.
+  // Unit: real roster hook, cached offline shard + a successful online shard.
+  it('keeps known offline computers without reporting a failed refresh and reads them on return', async () => {
+    h.cached = [cached(targets[1], 'sleeping')];
+    h.link.getPresenceAvailability.mockImplementation(id => id !== 'pc');
+    h.list.mockResolvedValue({ items: [item('fresh')] });
+    await render();
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh', 'sleeping']);
+    expect(result.error).toBeNull();
+    expect(result.isOnline(targets[1])).toBe(false);
+    expect(h.link.openLink.mock.calls.map(([id]) => id)).toEqual(['mac']);
+    h.link.getPresenceAvailability.mockReturnValue(true);
+    h.link.presenceVersion++;
+    await render();
+    expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh', 'fresh']);
+    expect(result.isOnline(targets[1])).toBe(true);
+  });
   it('reconciles deletion from a successful host, retains a failed host as offline, and reports partial failures', async () => {
     h.cached = [cached(targets[0], 'deleted'), cached(targets[1], 'offline')];
     h.list.mockImplementation(async (_invoke, host) => {
@@ -175,6 +208,88 @@ it('shows disk-cached rows during the first slow network read without claiming a
   h.list.mockReturnValue(new Promise(() => {}));
   await render();
   expect(result.items[0].item.ref.id).toBe('cached-visible');
-  expect(result.loading).toBe(false); expect(result.syncing).toBe(true);
+  expect(result.loading).toBe(true); expect(result.syncing).toBe(true);
   expect(result.isOnline(targets[0])).toBe(false);
+});
+
+it('ends a stalled cold relay wait with cached rows and retries after reconnect', async () => {
+  vi.useFakeTimers();
+  h.cached = [cached(targets[0], 'cached-startup')];
+  h.link.status = 'connecting';
+  await render();
+  expect(h.list).not.toHaveBeenCalled();
+  expect(result.loading).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(REMOTE_RESOURCE_STARTUP_TIMEOUT_MS));
+  expect(result.loading).toBe(false);
+  expect(result.error).toContain('devices.resources.hostOffline');
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['cached-startup']);
+  h.link.status = 'online'; h.link.connectionEpoch++;
+  h.list.mockResolvedValue({ items: [item('fresh-after-reconnect')] });
+  await render();
+  expect(h.list).toHaveBeenCalled();
+  expect(result.error).toBeNull();
+});
+
+it('commits and persists a successful host before a slow sibling settles', async () => {
+  let finish!: (value: unknown) => void;
+  h.list.mockImplementation(async (_invoke, host) => host.deviceId === 'mac' ? { items: [item('fresh-mac')] }
+    : new Promise(resolve => { finish = resolve; }));
+  await render();
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['fresh-mac']);
+  expect(result.isOnline(targets[0])).toBe(true);
+  expect(result.syncing).toBe(true);
+  expect(result.loading).toBe(true);
+  expect(h.persist).toHaveBeenCalledWith('owner', 'teammates', result.items);
+  await act(async () => finish({ items: [] }));
+  expect(result.syncing).toBe(false);
+});
+
+it('keeps current-epoch evidence through a failed refresh, retries only failures, then stops on success', async () => {
+  vi.useFakeTimers();
+  h.list.mockResolvedValue({ items: [item('previous')] }); await render();
+  h.list.mockImplementation(async (_invoke, host) => {
+    if (host.deviceId === 'mac') throw new Error('INVOKE_TIMEOUT');
+    return { items: [item('fresh-pc')] };
+  });
+  await act(async () => { void result.refresh(); });
+  await act(async () => vi.advanceTimersByTimeAsync(7750));
+  expect(result.isOnline(targets[0])).toBe(true);
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['previous', 'fresh-pc']);
+  const before = h.list.mock.calls.length;
+  h.list.mockResolvedValue({ items: [item('recovered')] });
+  await act(async () => vi.advanceTimersByTimeAsync(900));
+  expect(h.list.mock.calls.slice(before).map(([, host]) => host.deviceId)).toEqual(['mac']);
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['recovered', 'fresh-pc']);
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(h.list).toHaveBeenCalledTimes(before + 1);
+});
+
+it('does not authorize an old epoch while a new read is pending and cancels retry when hidden', async () => {
+  vi.useFakeTimers(); await render();
+  h.link.connectionEpoch++;
+  h.list.mockRejectedValue(new Error('INVOKE_TIMEOUT'));
+  await render(); expect(result.isOnline(targets[0])).toBe(false);
+  await act(async () => vi.advanceTimersByTimeAsync(7750));
+  h.focused = false; await render();
+  const before = h.list.mock.calls.length;
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(h.list).toHaveBeenCalledTimes(before);
+});
+
+it('cancels foreground retries and late replies in the background and resumes on return', async () => {
+  vi.useFakeTimers();
+  let finish!: (value: unknown) => void;
+  h.list.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  await render();
+  h.app.currentState = 'background';
+  await act(async () => h.app.listener!('background'));
+  await act(async () => finish({ items: [item('background-late')] }));
+  expect(result.items).toEqual([]);
+  const before = h.list.mock.calls.length;
+  await act(async () => vi.advanceTimersByTimeAsync(60000));
+  expect(h.list).toHaveBeenCalledTimes(before);
+  h.list.mockResolvedValue({ items: [item('foreground-fresh')] });
+  h.app.currentState = 'active';
+  await act(async () => h.app.listener!('active'));
+  expect(result.items.map(row => row.item.ref.id)).toEqual(['foreground-fresh', 'foreground-fresh']);
 });

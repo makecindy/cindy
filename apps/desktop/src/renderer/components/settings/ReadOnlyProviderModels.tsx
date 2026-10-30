@@ -4,10 +4,14 @@
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { RefreshCw } from 'lucide-react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
+import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { isDeviceModelVisible } from '@/lib/providerModels';
+import { cn } from '@/lib/utils';
 
 export interface ReadOnlyProviderModel {
   id: string;
@@ -41,15 +45,22 @@ export function ReadOnlyProviderModelSection({
   models,
   note,
   action,
+  onRefresh,
+  refreshing = false,
   testId,
 }: {
   title: string;
   models: readonly ReadOnlyProviderModel[];
   note: string | null;
   action?: ReactNode;
+  onRefresh?: () => void;
+  refreshing?: boolean;
   testId?: string;
 }) {
   const { t } = useTranslation();
+  const refreshLabel = t(refreshing
+    ? 'settings.providers.models.refreshingAria'
+    : 'settings.providers.models.refreshBuiltinAria');
   return (
     <div
       className="flex min-h-0 flex-1 flex-col border-t"
@@ -63,6 +74,24 @@ export function ReadOnlyProviderModelSection({
           <span className="text-12 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
             {t('settings.providers.models.modelCount', { count: models.length })}
           </span>
+        )}
+        {onRefresh && (
+          <Tip text={refreshLabel}>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshing}
+              aria-busy={refreshing}
+              aria-label={refreshLabel}
+              className={cn(
+                'ml-auto flex h-7 w-7 shrink-0 select-none items-center justify-center self-center rounded-full transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                refreshing && 'cursor-not-allowed opacity-60',
+              )}
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              <Spinner icon={RefreshCw} size={14} spinning={refreshing} />
+            </button>
+          </Tip>
         )}
       </div>
       {note !== null ? (

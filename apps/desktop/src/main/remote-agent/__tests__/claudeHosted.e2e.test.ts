@@ -10,19 +10,27 @@ import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
-import { ClaudeCodeAgent, type AgentDeps, type AgentEvent, type InteractionRequest, type Logger } from '@cindy/maker-core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
+import { ClaudeCodeAgent, type AgentDeps, type AgentEvent, type InteractionDecision, type InteractionRequest, type Logger } from '@cindy/maker-core';
+import { buildUserProvider } from '@cindy/model-providers';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { remoteAgentEventMapper } from '../controller/eventMap';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { exerciseConnectionPool } from './poolHarness';
+import { getActiveCatalog, setCustomProviders } from '../../maker-host/active-catalog';
+import { createModelRoutingTransform, setClaudeProxyGatewayKeyReader, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host';
+import { setCustomProviderKeyReader } from '../../maker-host/provider-route';
+import { bindHostedSessionProvider, clearAllSessionProviders } from '../../maker-host/session-provider-store';
+import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
 const CLAUDE = path.join(REPO, 'apps', 'claude-code-bin', ARCH, process.platform === 'win32' ? 'claude.exe' : 'claude');
 const RG = path.join(REPO, 'apps', 'ripgrep-bin', ARCH, process.platform === 'win32' ? 'rg.exe' : 'rg');
-const available = fs.existsSync(CLAUDE) && fs.existsSync(RG) && process.platform !== 'win32';
+const available = fs.existsSync(CLAUDE) && fs.existsSync(RG);
 const MODEL = 'claude-sonnet-4-5';
 
 const noopLogger: Logger = {
@@ -57,6 +65,8 @@ function text(value: string): string {
 }
 
 interface MainRequest {
+  sdkSessionId: string;
+  apiKey: string;
   system: string;
   firstUser: string;
   toolNames: string[];
@@ -75,13 +85,17 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
   let root = '';
   let steps: Array<{ name: string; input: unknown }> = [];
   const requests: MainRequest[] = [];
-  const previousHome = process.env.HOME;
+  /** 主请求原文(连接池场景看接回后模型拿到的历史)。 */
+  const rawBodies: string[] = [];
+  /** 设了就按它决定这一步(可看已有工具结果与最后一条用户消息)；返回 null 时回一句话。 */
+  let script: ((ctx: { results: MainRequest['results']; lastUser: string }) => { name: string; input: unknown } | null) | null = null;
 
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-cc-hosted-')));
     // Claude Code 读写 ~/.claude：指向临时目录，不碰开发机的真实配置。
-    process.env.HOME = path.join(root, 'home');
-    fs.mkdirSync(process.env.HOME, { recursive: true });
+    const isolatedHome = path.join(root, 'home');
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) vi.stubEnv(key, isolatedHome);
     server = createServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
@@ -109,15 +123,22 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
           : Array.isArray(parsed.system) ? parsed.system.map((part: { text?: string }) => part.text ?? '').join('\n') : '';
         const results: MainRequest['results'] = [];
         let firstUser = '';
+        let lastUser = '';
+        rawBodies.push(body);
         for (const message of parsed.messages ?? []) {
           if (!firstUser && message.role === 'user') firstUser = contentText(message.content);
+          if (message.role === 'user' && contentText(message.content)) lastUser = contentText(message.content);
           if (!Array.isArray(message.content)) continue;
           for (const block of message.content as Array<Record<string, unknown>>) {
             if (block.type === 'tool_result') results.push({ text: contentText(block.content), isError: block.is_error === true });
           }
         }
-        requests.push({ system, firstUser, toolNames, results });
-        const step = steps[results.length];
+        requests.push({
+          system, firstUser, toolNames, results,
+          sdkSessionId: String(req.headers['x-claude-code-session-id'] ?? ''),
+          apiKey: String(req.headers['x-api-key'] ?? ''),
+        });
+        const step = script ? script({ results, lastUser }) : steps[results.length];
         res.end(step ? toolUse(results.length, step.name, step.input) : text('all done'));
       });
     });
@@ -126,13 +147,13 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
   });
 
   afterAll(async () => {
-    process.env.HOME = previousHome;
+    vi.unstubAllEnvs();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    // Claude Code 退出时可能还在写 ~/.claude，重试几次再删。
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    // 异步等待 CLI 退出并释放 Windows 文件句柄，避免同步重试挡住子进程收尾。
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
 
-  function claudeDeps(): AgentDeps {
+  function claudeDeps(proxyEndpoint = endpoint): AgentDeps {
     return {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -140,37 +161,57 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
         logout: async () => {},
         getAuthEnv: async () => ({ ANTHROPIC_API_KEY: 'fake-test-key' }),
       },
-      runtimeConfig: { endpoint },
+      runtimeConfig: { endpoint: proxyEndpoint },
       binaryPath: CLAUDE,
       logger: noopLogger,
     };
   }
 
-  async function run(permissionMode: 'bypassPermissions' | 'default', resolve?: (request: InteractionRequest) => boolean) {
+  async function run(
+    permissionMode: 'bypassPermissions' | 'default',
+    resolve?: (request: InteractionRequest) => boolean,
+    route?: { endpoint: string; model: string; providerId: string; resolveHostedId?: boolean },
+    initialPermissionMode = permissionMode,
+    credentialConsent?: (request: InteractionRequest) => Promise<InteractionDecision>,
+  ) {
     const project = path.join(root, `project-${permissionMode}`);
     const hostRoot = path.join(root, `host-${permissionMode}`);
     fs.mkdirSync(project, { recursive: true });
     fs.writeFileSync(path.join(project, 'hello.txt'), 'hello from the controller\n');
     fs.writeFileSync(path.join(project, 'CLAUDE.md'), '# Project memory\nAlways answer briefly.\n');
-    const agent = new ClaudeCodeAgent(claudeDeps());
+    if (credentialConsent) {
+      fs.writeFileSync(path.join(project, '.env'), 'INVALID_FIXTURE=first');
+      fs.writeFileSync(path.join(project, '.env.production'), 'INVALID_FIXTURE=second');
+    }
+    const agent = new ClaudeCodeAgent(claudeDeps(route?.endpoint));
     const host = createRemoteAgentHost({
       isAgentAvailable: (kind) => kind === 'claude-code',
       startHosted: (input) => agent.startSession(hostedStartOptions(input)),
       isControllerAuthorized: () => true,
+      ...(route ? {
+        providerAccess: {
+          resolve: async () => route.providerId,
+          isAllowed: (providerId: string) => providerId === route.providerId,
+        },
+        bindOwnerProviderRoute: bindHostedSessionProvider,
+      } : {}),
       captureOwner: () => 'owner',
       isOwnerCurrent: () => true,
       runsRoot: hostRoot,
     });
+    if (route) setClaudeProxySessionIdResolver((sdkSessionId) => route.resolveHostedId === false ? null : host.resolveClaudeSessionId(sdkSessionId));
     const captured: string[] = [];
     const handle = await startRemoteAgentSession('claude-code', {
       sessionId: `cc-hosted-${permissionMode}`,
       workingDir: project,
-      model: MODEL,
-      permissionMode,
+      model: route?.model ?? MODEL,
+      ...(route ? { providerId: route.providerId } : {}),
+      permissionMode: initialPermissionMode,
     }, {
       invoke: async (args) => JSON.parse(JSON.stringify(await host.handle('controller-1', JSON.parse(JSON.stringify(args[0]))) ?? null)),
       rgPath: RG,
       prepareMcp: async () => ({ servers: new Map(), dispose() {} }),
+      ...(credentialConsent ? { credentialConsent: { description: 'Fixture credential confirmation' } } : {}),
       capture: () => ({
         beforeWrite: async (file) => {
           captured.push(file);
@@ -185,6 +226,7 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     const asked: InteractionRequest[] = [];
     handle.setInteractionResolver(async (request) => {
       asked.push(request);
+      if (credentialConsent) return credentialConsent(request);
       const allow = resolve ? resolve(request) : true;
       return request.kind === 'permission'
         ? { kind: 'permission', behavior: allow ? 'allow' : 'deny', ...(allow ? {} : { reason: 'denied by test' }) }
@@ -200,14 +242,18 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
         if (event.type === 'done') return;
       }
     })();
-    await handle.send({ type: 'user', content: 'Do the scripted work.' });
-    await done;
-    await handle.close({ reason: 'navigation' });
-    host.dispose();
+    try {
+      if (initialPermissionMode !== permissionMode) await handle.setPermissionMode!(permissionMode);
+      await handle.send({ type: 'user', content: 'Do the scripted work.' });
+      await done;
+    } finally {
+      await handle.close({ reason: 'navigation' });
+      host.dispose();
+    }
     return { project, hostRoot, events, asked, captured };
   }
 
-  it('replaces the built-in file and shell tools and runs every step on the controller', { timeout: 120_000 }, async () => {
+  it.skipIf(process.platform === 'win32')('replaces the built-in file and shell tools and runs every step on the controller', { timeout: 120_000 }, async () => {
     const projectPath = path.join(root, 'project-bypassPermissions');
     steps = [
       { name: 'mcp__cindy_exec__Bash', input: { command: 'pwd; ls', description: 'Show location' } },
@@ -216,7 +262,8 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
       { name: 'mcp__cindy_exec__Edit', input: { file_path: path.join(projectPath, 'made.txt'), old_string: 'one', new_string: 'two' } },
     ];
     requests.length = 0;
-    const { project, hostRoot, events, captured } = await run('bypassPermissions');
+    const { project, hostRoot, events, captured, asked } = await run('bypassPermissions');
+    expect(asked).toEqual([]);
     const first = requests[0];
     // 模型看不到只能操作本机的自带文件与命令工具。
     for (const builtin of ['Bash', 'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep']) {
@@ -245,7 +292,15 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     expect(toolNames).toEqual(['Bash', 'Write', 'Read', 'Edit']);
   });
 
-  it('asks on this computer for commands that change things, but not for reads and read-only commands', { timeout: 120_000 }, async () => {
+  it.skipIf(process.platform === 'win32')('honors switching an existing hosted session to Full access without a confirmation', { timeout: 120_000 }, async () => {
+    steps = [{ name: 'mcp__cindy_exec__Bash', input: { command: 'printf switched > switched.txt' } }];
+    requests.length = 0;
+    const { project, asked } = await run('bypassPermissions', undefined, undefined, 'default');
+    expect(asked).toEqual([]);
+    expect(fs.readFileSync(path.join(project, 'switched.txt'), 'utf8')).toBe('switched');
+  });
+
+  it.skipIf(process.platform === 'win32')('asks on this computer for commands that change things, but not for reads and read-only commands', { timeout: 120_000 }, async () => {
     const projectPath = path.join(root, 'project-default');
     steps = [
       { name: 'mcp__cindy_exec__Read', input: { file_path: path.join(projectPath, 'hello.txt') } },
@@ -267,5 +322,157 @@ describe.skipIf(!available)('remote agent with a real Claude Code', () => {
     expect(last.results[0].isError).toBe(false);
     expect(last.results[1].isError).toBe(false);
     expect(last.results[3].isError).toBe(true);
+  });
+
+  // Bug: MCP 首次 HTTP 响应默认 60s，原 JSON 隧道把人工确认也算进去。
+  // 生产入口：真实 ClaudeCodeAgent → runHost 隧道 → startRemoteAgentSession → 执行器。
+  // 原 E2E 都立即回答；此处第 70s 授权，后续另一凭证读取应直接成功。tier: e2e(真实 CLI/计时)。
+  it('keeps a credential confirmation alive past the MCP first-response timeout', { timeout: 120_000 }, async () => {
+    const projectPath = path.join(root, 'project-bypassPermissions');
+    steps = [
+      { name: 'mcp__cindy_exec__Read', input: { file_path: path.join(projectPath, '.env') } },
+      { name: 'mcp__cindy_exec__Read', input: { file_path: path.join(projectPath, '.env.production') } },
+    ];
+    requests.length = 0;
+    let waited = false;
+    const { asked } = await run('bypassPermissions', undefined, undefined, 'bypassPermissions', async () => {
+      if (!waited) {
+        waited = true;
+        // real-wait: CLI 子进程的 60s HTTP 定时器不能由 Vitest fake timers 推进。
+        await new Promise((resolve) => setTimeout(resolve, 70_000));
+      }
+      return { kind: 'permission', behavior: 'allow', permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL] };
+    });
+    expect(asked).toHaveLength(1);
+    const results = requests.at(-1)!.results;
+    expect(results.map((result) => result.isError)).toEqual([false, false]);
+    expect(results[0].text).toContain('INVALID_FIXTURE=first');
+    expect(results[1].text).toContain('INVALID_FIXTURE=second');
+    expect(requests.every((request) => request.system === requests[0].system)).toBe(true);
+    expect(requests.every((request) => JSON.stringify(request.toolNames) === JSON.stringify(requests[0].toolNames))).toBe(true);
+  });
+
+  it('releases an idle task under slot pressure and resumes the same conversation, keeping background commands here', { timeout: 300_000 }, async () => {
+    const agent = new ClaudeCodeAgent(claudeDeps());
+    let backgroundId = '';
+    let afterStart = 0;
+    // 第一轮在本机执行器里起一条后台命令；接回后那一轮用原来的 ID 读它的输出。
+    script = ({ results, lastUser }) => {
+      if (lastUser.includes('codeword PINEAPPLE') && results.length === afterStart) {
+        return { name: 'mcp__cindy_exec__Bash', input: { command: 'echo bg-started; sleep 0.3; echo bg-done', run_in_background: true } };
+      }
+      if (lastUser.includes('What was the codeword') && results.length === afterStart + 1) {
+        return { name: 'mcp__cindy_exec__BashOutput', input: { bash_id: backgroundId } };
+      }
+      return null;
+    };
+    try {
+      await exerciseConnectionPool({
+        kind: 'claude-code',
+        root,
+        model: MODEL,
+        rgPath: RG,
+        startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+        deps: { mapEvent: remoteAgentEventMapper },
+        modelRequests: () => rawBodies,
+        afterFirstTurn: () => {
+          const started = requests.at(-1)!.results.at(-1)!.text;
+          backgroundId = /with ID: (\S+?)\./.exec(started)?.[1] ?? '';
+          expect(backgroundId).not.toBe('');
+        },
+        afterResumedTurn: () => {
+          const output = requests.at(-1)!.results.at(-1)!;
+          expect(output.isError).toBe(false);
+          expect(output.text).toContain('bg-done');
+        },
+      });
+    } finally {
+      script = null;
+    }
+  });
+
+  async function withProviderProxy(
+    model: string,
+    use: (proxyEndpoint: string, fallbackRequests: string[]) => Promise<void>,
+    createProxy = createAnthropicCompatProxy,
+  ): Promise<void> {
+    const fallbackRequests: string[] = [];
+    const fallback = createServer((req, res) => {
+      if (req.method === 'POST' && req.url?.startsWith('/v1/messages')) fallbackRequests.push(req.url);
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/event-stream' }).end(text('FALLBACK'));
+    });
+    let proxy: ProxyHandle | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        fallback.once('error', reject);
+        fallback.listen(0, '127.0.0.1', () => {
+          fallback.removeListener('error', reject);
+          resolve();
+        });
+      });
+      const address = fallback.address();
+      if (!address || typeof address === 'string') throw new Error('fallback server has no port');
+      const fallbackEndpoint = `http://127.0.0.1:${address.port}`;
+      setCustomProviders(['selected', 'other'].map((id) => buildUserProvider({
+        id, name: id,
+        runtimes: { 'claude-code': {
+          baseUrl: id === 'selected' ? endpoint : fallbackEndpoint,
+          wireProtocol: 'anthropic-messages', models: [{ id: model, name: model }],
+        } },
+      })));
+      setCustomProviderKeyReader((id) => `${id}-native-test-key`);
+      setClaudeProxyGatewayKeyReader(() => 'fake-test-key');
+      proxy = await createProxy({ upstream: fallbackEndpoint, routingTransform: createModelRoutingTransform() });
+      await use(proxy.url, fallbackRequests);
+    } finally {
+      try {
+        await proxy?.dispose();
+      } finally {
+        try {
+          if (fallback.listening) await new Promise<void>((resolve) => fallback.close(() => resolve()));
+        } finally {
+          setClaudeProxySessionIdResolver(() => null);
+          setClaudeProxyGatewayKeyReader(() => null);
+          setCustomProviderKeyReader(() => null);
+          setCustomProviders([]);
+          clearAllSessionProviders();
+        }
+      }
+    }
+  }
+
+  it.skipIf(process.platform === 'win32')('cleans up the fallback server and provider settings when proxy startup fails', async () => {
+    let fallbackEndpoint = '';
+    const use = vi.fn(async () => {});
+    const createProxy = vi.fn<typeof createAnthropicCompatProxy>(async (options) => {
+      if (typeof options.upstream !== 'string') throw new Error('expected a literal test upstream');
+      fallbackEndpoint = options.upstream;
+      throw new Error('proxy startup failed');
+    });
+    await expect(withProviderProxy('hosted-shared-model', use, createProxy)).rejects.toThrow('proxy startup failed');
+    expect(createProxy).toHaveBeenCalledOnce();
+    expect(use).not.toHaveBeenCalled();
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'selected' || provider.id === 'other')).toBe(false);
+    await expect(fetch(fallbackEndpoint)).rejects.toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32').each(['claude-sonnet-4-5-20250929', 'hosted-shared-model'])('routes the first real Claude SDK model request for %s to its selected provider', { timeout: 120_000 }, async (model) => {
+    await withProviderProxy(model, async (proxyEndpoint, fallbackRequests) => {
+      requests.length = 0;
+      steps = [];
+      if (model.startsWith('claude-')) {
+        await run('bypassPermissions', undefined, { endpoint: proxyEndpoint, model, providerId: 'selected', resolveHostedId: false });
+        expect(fallbackRequests.length).toBeGreaterThan(0);
+        expect(requests).toEqual([]);
+        fallbackRequests.length = 0;
+      }
+      await run('bypassPermissions', undefined, { endpoint: proxyEndpoint, model, providerId: 'selected' });
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests[0].sdkSessionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(requests[0].sdkSessionId).not.toBe('cc-hosted-bypassPermissions');
+      expect(requests.every((request) => request.apiKey === 'selected-native-test-key')).toBe(true);
+      expect(fallbackRequests).toEqual([]);
+    });
   });
 });

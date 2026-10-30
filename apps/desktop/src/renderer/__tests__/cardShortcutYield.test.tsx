@@ -12,7 +12,8 @@ import userEvent from '@testing-library/user-event';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (original) => ({
+  ...await original<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 

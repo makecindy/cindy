@@ -14,6 +14,7 @@ import { isSafeGhostRelativePath } from '../../../shared/ghost.js';
 
 /** 合成启动文档的保留路径(不对应磁盘文件)。 */
 export const GHOST_BOOT_PATH = '/__boot__';
+export const GHOST_MAIL_SDK_PATH = '/__cindy_mail__.js';
 
 /**
  * 把请求 pathname 解析为安装目录内的绝对文件路径;任何越界 / 非法形态返回 null。
@@ -72,6 +73,7 @@ export function ghostBootHtml(entry: string): string {
     // HTTPS；不在这里继承响应头已有的 data:/blob:/media 放行。
     `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https:">`,
     '</head><body>',
+    `<script src="${GHOST_MAIL_SDK_PATH}"></script>`,
     `<script src="${src}"></script>`,
     '</body></html>',
   ].join('');

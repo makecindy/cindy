@@ -74,14 +74,15 @@ describe('agent input queue snapshot durability boundary', () => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`
       CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
-      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
     `);
     const sid = `receipt-malformed-${allMalformed}`;
     const good = allMalformed ? [] : [queued('pending', 'valid'), queued('accepted', 'history')];
     const payload = JSON.stringify([...good, null, 'legacy row', { clientId: 'bad' }, { clientId: 'removed' }]);
     sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, ?)').run(sid, payload, 1);
-    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'history', 'user', null);
-    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'removed', 'message_tombstone', 1);
+    sqlite.prepare('INSERT INTO messages (session_id, client_id, role, rewind_at) VALUES (?, ?, ?, ?)').run(sid, 'history', 'user', null);
+    sqlite.prepare('INSERT INTO messages (session_id, client_id, role, rewind_at) VALUES (?, ?, ?, ?)').run(sid, 'removed', 'message_tombstone', 1);
     mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
     try {
       expect((await loadAgentInputQueueSnapshot(sid)).map((item) => item.clientId)).toEqual(good.map((item) => item.clientId));
@@ -94,6 +95,30 @@ describe('agent input queue snapshot durability boundary', () => {
       await expect(readInputDeliveryReceipts(sid, expected.map((item) => item.clientId))).resolves.toEqual(expected);
       await expect(readInputDeliveryReceipts(sid, ['bad'])).resolves.toEqual([{ clientId: 'bad', state: 'unknown' }]);
       expect(sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots').get()).toEqual({ payload });
+    } finally { sqlite.close(); }
+  });
+  it('reports cleared history as removed while preserving later messages and pending inputs', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+      INSERT INTO sessions VALUES ('clear-receipts', NULL);
+      INSERT INTO sessions VALUES ('other-task', 999);
+      INSERT INTO messages VALUES ('clear-receipts', 'before', 'user', NULL, 99);
+      INSERT INTO messages VALUES ('clear-receipts', 'at', 'user', NULL, 100);
+      INSERT INTO messages VALUES ('clear-receipts', 'after', 'user', NULL, 101);
+    `);
+    sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, ?)')
+      .run('clear-receipts', JSON.stringify([queued('pending', 'pending')]), 1);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
+    try {
+      const ids = ['before', 'at', 'after', 'pending', 'unknown'];
+      const states = async () => (await readInputDeliveryReceipts('clear-receipts', ids)).map(row => row.state);
+      expect(await states()).toEqual(['accepted', 'accepted', 'accepted', 'pending', 'unknown']);
+      sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(100, 'clear-receipts');
+      expect(await states()).toEqual(['removed', 'removed', 'accepted', 'pending', 'unknown']);
+      expect(await states()).toEqual(['removed', 'removed', 'accepted', 'pending', 'unknown']);
     } finally { sqlite.close(); }
   });
   it.each(['settled', 'pending', 'receipt-retry'] as const)('does not let %s cancellation replace a failed snapshot boundary', async (timing) => {

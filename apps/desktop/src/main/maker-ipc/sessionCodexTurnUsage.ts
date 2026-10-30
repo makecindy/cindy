@@ -26,6 +26,7 @@ import {
   sumTurnUsageSegments,
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
+import { isCodexGatewayWireModel } from '@cindy/model-providers';
 import { type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
@@ -114,7 +115,7 @@ export function recordSessionCodexTurnUsage(
         }
         const isCodexBudgetRoute =
           (sessionProvider == null || sessionProvider === 'xd') &&
-          pricingModel.startsWith('codex/');
+          isCodexGatewayWireModel(pricingModel);
         const isCodexXaiProviderRoute =
           (sessionProvider == null || sessionProvider === 'xai') &&
           isExclusiveXaiModelId(pricingModel);
@@ -278,7 +279,7 @@ export function recordSessionCodexTurnUsage(
           !isCustomProviderRoute &&
           !isExclusiveXaiModelId(model) &&
           (codexAuthInjection === 'env-key' ||
-            model.startsWith('codex/') ||
+            isCodexGatewayWireModel(model) ||
             (sessionProvider === 'xd' && hasGatewayKey))
         ) {
           void triggerClaudeAccountUsageRefresh();

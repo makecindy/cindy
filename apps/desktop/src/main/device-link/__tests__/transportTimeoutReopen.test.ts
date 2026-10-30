@@ -298,3 +298,28 @@ describe('createTransportTimeoutReopenLoop', () => {
     expect(loop.isActive('dev-d')).toBe(false);
   });
 });
+
+describe('successful recovery notifications', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it('notifies only the recovered peer after a failed first attempt', async () => {
+    const onReopened = vi.fn();
+    const reopen = vi.fn().mockRejectedValueOnce(new Error('busy')).mockResolvedValue(undefined);
+    const loop = createTransportTimeoutReopenLoop({ reopen, onReopened, shouldAbort: () => false, baseDelayMs: 10 });
+    loop.trigger('a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onReopened).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onReopened.mock.calls).toEqual([['a']]);
+    expect(loop.isActive('a')).toBe(false);
+    expect(loop.isActive('b')).toBe(false);
+  });
+  it('ignores success from a cancelled generation', async () => {
+    let resolve!: () => void;
+    const onReopened = vi.fn();
+    const loop = createTransportTimeoutReopenLoop({ reopen: () => new Promise<void>(r => { resolve = r; }), onReopened, shouldAbort: () => false });
+    loop.trigger('a'); loop.cancel('a');
+    resolve(); await vi.advanceTimersByTimeAsync(0);
+    expect(onReopened).not.toHaveBeenCalled();
+  });
+});

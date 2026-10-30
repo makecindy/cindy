@@ -57,6 +57,11 @@ import { useLocale } from '@/hooks/useLocale';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tip } from '@/components/ui/tooltip';
 import { fetchReleaseNotes } from '@/release-notes';
+import {
+  formatRelaunchActivityHint,
+  normalizeRelaunchActivitySummary,
+  type RelaunchActivitySummary,
+} from '../../../shared/relaunchActivitySummary';
 
 // 运行期端点清单(dev/packaged 都在启动阻断后有真值,烘焙兜底已退役)
 const websiteUrl = () => window.electronAPI.clientEndpoints.websiteUrl;
@@ -83,6 +88,8 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const hideUntilBusyDecision = useDeferUpdateBannerWhileBusy(status, version);
   // 就地中断警告态:只在点击入口时探到「有任务在跑」才进入。
   const [confirming, setConfirming] = useState(false);
+  // 只有全部类别都读出来才替换通用警告。null = 沿用原来那句。
+  const [activitySummary, setActivitySummary] = useState<RelaunchActivitySummary | null>(null);
   // 入口点击的 busy 探针在飞标记 —— 防重入。探针是一次 IPC round trip(毫秒级),所以
   // 刻意不给 loading UI(几毫秒的 spinner 只会闪一下),只用 ref 挡住连点导致的
   // 重复探针 / 重复重启。与 WindowControls 的关窗入口保持同样的「无 loading 态」处理。
@@ -150,6 +157,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   useEffect(() => {
     if (status !== 'ready' || isWindowsRuntimeMissing || isLinuxInstallationUnsupported) {
       relaunchEpochRef.current += 1;
+      setActivitySummary(null);
       setConfirming(false);
     }
   }, [status, isWindowsRuntimeMissing, isLinuxInstallationUnsupported]);
@@ -196,6 +204,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {
     restoreFocusRef.current = true;
+    setActivitySummary(null);
     setConfirming(false);
   };
 
@@ -207,6 +216,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 的探针结论不能反过来推翻它(否则轻则 confirming 残留、重则直接重启)。
   const handleDismiss = () => {
     relaunchEpochRef.current += 1;
+    setActivitySummary(null);
     setConfirming(false);
     dismiss(status, version ?? null);
   };
@@ -226,6 +236,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     // Main may emit exactly the same prerequisite error again. Keep the
     // prompt visible without relying on a false -> true error transition.
     if (isLinuxInstallationUnsupported) {
+      setActivitySummary(null);
       setConfirming(false);
       setShowLinuxInstallationDialog(true);
     }
@@ -268,12 +279,29 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
     const epoch = relaunchEpochRef.current;
-    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw)都落在保守的那一侧。
+    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw、形状不对)都落在保守的那一侧。
+    // 是否确认只看 busy 布尔。不能把返回对象当成 true,否则 busy 为 false 的对象也会被拦下。
     let hasInFlight = true;
+    let summary: RelaunchActivitySummary | null = null;
     try {
-      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
+      const describe = window.electronAPI.describeRelaunchBlockingActivity;
+      if (describe) {
+        const normalized = normalizeRelaunchActivitySummary(await describe());
+        if (!normalized) {
+          hasInFlight = true;
+        } else {
+          hasInFlight = normalized.busy;
+          summary = normalized.busy && normalized.categories.length > 0
+            ? { categories: normalized.categories, companionNames: normalized.companionNames }
+            : null;
+        }
+      } else {
+        const busy = await window.electronAPI.anyActivityBlockingRelaunch();
+        hasInFlight = busy === true ? true : busy === false ? false : true;
+      }
     } catch {
       hasInFlight = true;
+      summary = null;
     } finally {
       relaunchProbeRef.current = false;
     }
@@ -284,6 +312,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     if (statusRef.current !== 'ready') return;
     if (hasInFlight) {
       setShowLinuxInstallationDialog(false);
+      setActivitySummary(summary);
       setConfirming(true);
     } else handleRelaunch();
   };
@@ -428,7 +457,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     if (confirming && !isPreparing) {
       return withPrerequisiteDialogs(
         <div className="flex flex-col items-center gap-0.5 border-t border-sidebar-border py-1.5">
-          <Tip text={t('update.banner.confirmTooltip')} side="right">
+          <Tip text={formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmTooltip')} side="right">
             <button
               onClick={handleRelaunch}
               aria-label={t('update.banner.confirmAria')}
@@ -544,7 +573,7 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             {isPreparing
               ? t('update.banner.preparingSubtitle')
               : confirming
-                ? t('update.banner.confirmBusyHint')
+                ? (formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmBusyHint'))
                 : t('update.banner.subtitle')}
           </p>
           {notesVersion && (

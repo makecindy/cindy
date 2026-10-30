@@ -89,13 +89,38 @@ describe('Windows Review host reads', () => {
     });
     expect((await callReviewReadTool('review_read_file', { path: target }, work, grants)).success).toBe(false);
   });
-  it('bounds directory pages and permits continuing past excluded entries', async () => {
-    await Promise.all(Array.from({ length: 205 }, (_, i) => fs.writeFile(path.join(work, `file-${i}.txt`), '')));
+  it.each([false, true])('bounds directory pages with excluded entries: %s', async (includeExcluded) => {
+    // Pagination needs 200+ entries, not hundreds of real disk operations.
+    // Real path confinement, junctions and file identity are exercised above.
+    const directoryPath = grants[0].realPath;
+    const directoryStat = await fs.stat(directoryPath);
+    const names = Array.from({ length: 205 }, (_, i) => `file-${i}.txt`);
+    const listedNames = includeExcluded ? ['.env', ...names] : names;
+    const fileStat = { ...directoryStat, nlink: 1, isFile: () => true, isDirectory: () => false };
+    const virtualFiles = new Set(names.map((name) => path.join(directoryPath, name)));
+    vi.spyOn(fs, 'realpath').mockImplementation(async (target) => {
+      const candidate = String(target);
+      if (candidate === work || candidate === directoryPath) return directoryPath;
+      if (virtualFiles.has(candidate)) return candidate;
+      throw new Error('Unexpected fixture path');
+    });
+    vi.spyOn(fs, 'stat').mockImplementation(async (target) => {
+      if (String(target) === directoryPath) return directoryStat;
+      if (virtualFiles.has(String(target))) return fileStat as typeof directoryStat;
+      throw new Error('Unexpected fixture path');
+    });
+    vi.spyOn(fs, 'opendir').mockImplementation(async () => ({
+      async *[Symbol.asyncIterator]() {
+        for (const name of listedNames) yield { name };
+      },
+    }) as Awaited<ReturnType<typeof fs.opendir>>);
     const first = text(await callReviewReadTool('review_list_directory', { path: '.' }, work, grants));
     const second = text(await callReviewReadTool('review_list_directory', { path: '.', offset: first.nextOffset }, work, grants));
-    expect(first.entries).toHaveLength(200);
-    expect(second.entries).toHaveLength(5);
+    expect(first.entries).toHaveLength(includeExcluded ? 199 : 200);
+    expect(first.nextOffset).toBe(200);
+    expect(second.entries).toHaveLength(includeExcluded ? 6 : 5);
     expect(second.nextOffset).toBeNull();
+    expect([...first.entries, ...second.entries]).toEqual(names.map((name) => ({ name, directory: false })));
   });
   it('rejects unsupported tools, malformed arguments, binary and oversized text', async () => {
     await fs.writeFile(path.join(work, 'binary'), Buffer.from([0, 1, 2]));

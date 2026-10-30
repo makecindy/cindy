@@ -21,7 +21,7 @@ const COPY_NOTICE_DISMISS_MS = 2500;
 export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
   visit: WebsiteVisit;
   insets: BrowserInsets;
-  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'onClose'>;
+  chrome: Pick<HtmlBrowserChromeProps, 'top' | 'bottom' | 'left' | 'right' | 'standalone' | 'onClose'>;
   onReturn(): void;
 }) {
   const { t } = useTranslation();
@@ -32,6 +32,8 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
   const [navigation, setNavigation] = useState<WebViewNavigation | null>(null);
   const [source, setSource] = useState({ uri: visit.url });
   const [rendererEpoch, setRendererEpoch] = useState(0);
+  // WKWebView paints white until its first load ends; each renderer starts hidden over the themed page.
+  const [paintedEpoch, setPaintedEpoch] = useState<number | null>(null);
   const rendererGone = useRef(false);
   const pendingAddress = useRef<{ url: string; previous: string[] } | null>(null);
   const address = navigation?.url ?? source.uri;
@@ -89,7 +91,11 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
             if (event.nativeEvent.url === pendingAddress.current?.url) pendingAddress.current = null;
             setFailed(false);
           }}
-          onLoadEnd={() => { if (live.current && script) webView.current?.injectJavaScript(script); }}
+          onLoadEnd={() => {
+            if (!live.current) return;
+            setPaintedEpoch(rendererEpoch);
+            if (script) webView.current?.injectJavaScript(script);
+          }}
           onScroll={({ nativeEvent: { contentOffset } }) => {
             if (live.current) webView.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
           }}
@@ -105,7 +111,7 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
           onError={() => { if (live.current) setFailed(true); }}
           onContentProcessDidTerminate={() => { if (live.current) { rendererGone.current = true; setFailed(true); } }}
           onRenderProcessGone={() => { if (live.current) { rendererGone.current = true; setFailed(true); } }}
-          style={styles.fill}
+          style={[styles.fill, { backgroundColor: colors.surface }, paintedEpoch !== rendererEpoch && styles.unpainted]}
         />}
         {!ready && !failed && <View style={styles.center}><ActivityIndicator color={colors.textSecondary} /></View>}
         {failed && <View pointerEvents="none" style={[styles.center, { backgroundColor: colors.surface }]}>
@@ -135,6 +141,7 @@ export function HtmlWebsiteBrowser({ visit, insets, chrome, onReturn }: {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   viewport: { flex: 1, overflow: 'hidden' },
+  unpainted: { opacity: 0 },
   center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   // 报错说明(成句的话):footnote 13/18 400;字色 errorText 在调用处按主题注入。
   failedText: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },

@@ -6,6 +6,12 @@
  * An installed Ghost without a matching market record remains local.
  */
 import { isCindyAccountGhostId, type GhostInstallApproval } from '../../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  hasDeliveryNamespace,
+  installedGhostStoragePart,
+} from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
@@ -73,6 +79,54 @@ export function ghostReapprovalRoute(
   return item?.installState === 'installed' || item?.installState === 'update-available'
     ? 'market'
     : 'local-package';
+}
+
+/**
+ * Bind a market row to the installed instance it is allowed to update.
+ *
+ * An explicit namespace must hit that logical identity. A legacy row
+ * (missing namespace) binds the physical root, including an
+ * in-place stamped plugin whose storage part is still the bare ghostId. It must
+ * not fall through to a `_ns/...` twin.
+ */
+export function findInstalledGhostForMarketItem<
+  T extends {
+    manifest: { id: string };
+    dir?: string;
+    namespace?: string | null;
+  },
+>(ghosts: readonly T[], item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>): T | undefined {
+  const sameId = ghosts.filter((ghost) => ghost.manifest.id === item.ghostId);
+  if (sameId.length === 0) return undefined;
+  if (hasDeliveryNamespace(item)) {
+    return findInstalledGhostByIdentity(
+      sameId,
+      createPluginLogicalIdentity(item.namespace, item.ghostId),
+    );
+  }
+  return sameId.find((ghost) => installedGhostStoragePart(ghost) === item.ghostId);
+}
+
+/** True when this market row is the update/origin route for this installed instance. */
+export function marketItemMatchesInstalledGhost(
+  item: Pick<PluginMarketItem, 'ghostId' | 'namespace'>,
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): boolean {
+  if (item.ghostId !== ghost.manifest.id) return false;
+  if (hasDeliveryNamespace(item) && hasDeliveryNamespace(ghost)) {
+    return item.namespace === ghost.namespace;
+  }
+  if (hasDeliveryNamespace(item) && item.namespace !== null) return false;
+  return installedGhostStoragePart(ghost) === item.ghostId;
+}
+
+export function marketItemForInstalledGhost(
+  items: readonly PluginMarketItem[],
+  ghost: { manifest: { id: string }; dir?: string; namespace?: string | null },
+): PluginMarketItem | null {
+  return items.find((item) =>
+    (item.installState === 'installed' || item.installState === 'update-available') &&
+    marketItemMatchesInstalledGhost(item, ghost)) ?? null;
 }
 
 /**

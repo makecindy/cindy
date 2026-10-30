@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 /**
@@ -23,8 +24,10 @@ import { TaskMigrationStatus } from './TaskMigrationStatus';
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Ellipsis, Pin } from 'lucide-react';
+import { ArrowLeft, Ellipsis, Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -40,14 +43,7 @@ import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import {
-  DropdownMenu,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/windowDrag';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
@@ -64,18 +60,26 @@ import {
 import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
+import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
+import {
+  archiveConfirmDescription,
+  loadActiveBoundScheduleNames,
+} from '@/features/scheduler/lib/archiveScheduleWarning';
 import { ScheduleBindingBadge } from './sidebar/ScheduleBindingBadge';
 import { RemoteProjectIcon } from './sidebar/RemoteProjectIcon';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
-import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './sidebar/menuStyles';
+import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
+import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { TaskTagDots, TaskTagMenuSection, TaskTagEditor } from '@/features/task-tags/TaskTags';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
@@ -99,7 +103,7 @@ function AgentDeviceIndicator({
   // 分享来的供应商(`share:<id>`)不在同账号设备列表里，名字取自已收到的分享。
   const { nameFor: providerShareDeviceName } = useProviderShareAgentDevices();
   const device = devices?.find((item) => item.deviceId === deviceId);
-  const name = device?.name || providerShareDeviceName(deviceId) || deviceId;
+  const name = deviceDisplayName(deviceId, device?.name || providerShareDeviceName(deviceId));
   const offline = device ? !device.online : false;
   const vendor = agentKindToVendor(agentKind);
   return (
@@ -141,10 +145,12 @@ function AgentDeviceIndicator({
 export function SessionContentHeaderRegistration({
   session,
   remoteSessionUnavailable = false,
+  remoteSyncing = false,
   readOnly = false,
 }: {
   session: Session;
   remoteSessionUnavailable?: boolean;
+  remoteSyncing?: boolean;
   readOnly?: boolean;
 }) {
   useRegisterContentHeader(
@@ -153,10 +159,11 @@ export function SessionContentHeaderRegistration({
         <SessionContentHeader
           session={session}
           remoteSessionUnavailable={remoteSessionUnavailable}
+          remoteSyncing={remoteSyncing}
           readOnly={readOnly}
         />
       ),
-      [readOnly, session, remoteSessionUnavailable],
+      [readOnly, session, remoteSessionUnavailable, remoteSyncing],
     ),
   );
   return null;
@@ -165,15 +172,18 @@ export function SessionContentHeaderRegistration({
 interface SessionContentHeaderProps {
   session: Session;
   remoteSessionUnavailable?: boolean;
+  remoteSyncing?: boolean;
   readOnly?: boolean;
 }
 
 export function SessionContentHeader({
   session: sessionProp,
   remoteSessionUnavailable = false,
+  remoteSyncing = false,
   readOnly = false,
 }: SessionContentHeaderProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { sessions, patchLocal } = useCCSessions();
   const remoteProjectSessions = useRemoteProjectSessions();
   const routeSessionById = useMemo(
@@ -189,9 +199,10 @@ export function SessionContentHeader({
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
   const sharedGuest = isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const { runningSessionIds } = useSessionRunningStatus(session.id);
+  // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
+  // 或存量半移动行的会话，不能靠 cwd 猜归属。
   const { confirm: confirmDialog } = useConfirmDialog();
-  const { runSessionAction, unarchiveSession, beginRemoteArchive, cancelRemoteArchive } =
-    useSessionLifecycleActions();
+  const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
   const isPinned = session.pinnedAt != null;
   const isArchived = session.status === 'archived';
@@ -411,6 +422,11 @@ export function SessionContentHeader({
         }
       }
 
+      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
+      // (半移动)。判定不在这里做:归属只有共享写路径一处权威,renderer 的缓存/复核都是
+      // 异步镜像,任何「先查询再决定」都会有「查询通过后、写入前恰好回收」的窗口,把
+      // 主进程本会放行的移动挡在请求之前;这里照常发请求,被守卫拒绝时在下面映射成
+      // 同一条 toast。「移到对话」不改目录,不受影响。
       const oldPatch = {
         workingDir: session.workingDir,
         workspaceKind: session.workspaceKind,
@@ -436,13 +452,12 @@ export function SessionContentHeader({
       } catch (err) {
         log.error('[session move]', err);
         patchLocal(session.id, oldPatch);
-        toast.error(
-          t(
-            target.kind === 'dialogue'
-              ? 'ccAgent.sidebar.sessionMenu.moveToDialogueFailed'
-              : 'ccAgent.sidebar.sessionMenu.moveToProjectFailed',
-          ),
-        );
+        // 归属守卫在主进程唯一权威地拒绝跨根移动(在关 runtime / 写库 / 转录迁移之前,
+        // 不留部分写入);被它拒绝时给产品既定的「暂不支持移出 worktree」说明,其它失败
+        // 照旧用通用报错文案。
+        const feedback = sessionMoveFailureFeedback(target.kind, err);
+        if (feedback.level === 'warning') toast.warning(t(feedback.key));
+        else toast.error(t(feedback.key));
       }
     },
     [patchLocal, runningSessionIds, session, t],
@@ -465,53 +480,53 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    // 接管查询先发不 await,让它与菜单打开时那次 prefetch 在链路上重叠;
-    // resolveSession 失败降级为「未接管」,不阻断归档(与 sidebar 同口径)。
-    const attachedPromise = window.electronAPI.binding
-      .resolveSession(session.id)
-      .then((binding) => binding.attached)
-      .catch(() => false);
-    if (await attachedPromise) {
-      toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-      return;
-    }
-    // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
-    // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
-    // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
-    // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
-    // 远程任务的预检是一次完整隧道往返:先乐观隐藏行并跳离,预检干净则沿用同一叠加层
-    // 写库,需要确认时取消再让行回来(与 sidebar 同口径,见 handleActionClick)。
-    const remoteArchiveToken = session.deviceLinkDeviceId
-      ? beginRemoteArchive(session.id, session.deviceLinkDeviceId, session.id)
-      : null;
-    const preflight = await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId);
-    // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
-    // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
-    // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
-    // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
-    if (preflight !== 'clean') {
-      const ok = await confirmDialog({
-        title: t('ccAgent.sidebar.confirmArchive.title'),
-        description:
-          t('ccAgent.sidebar.confirmArchive.description') +
-          (preflight === 'dirty'
-            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
-            : ''),
-        confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-        cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-      });
-      if (!ok) {
-        if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
-        return;
-      }
-    }
     await runSessionAction(session.id, 'archive', {
       activeSessionId: session.id,
-      remoteArchiveToken,
+      prepareArchive: async (isCurrent) => {
+        // 接管查询先发不 await,让它与菜单打开时那次 prefetch 在链路上重叠;
+        // resolveSession 失败降级为「未接管」,不阻断归档(与 sidebar 同口径)。
+        const attachedPromise = window.electronAPI.binding
+          .resolveSession(session.id)
+          .then((binding) => binding.attached)
+          .catch(() => false);
+        if (await attachedPromise) {
+          toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+          return false;
+        }
+        // 绑定了 active 自动化:后续运行会恢复原任务,需要确认。读本地缓存,排在 worktree 预检之前。
+        const scheduleNames =
+          (await loadActiveBoundScheduleNames([
+            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId },
+          ])).get(session.id) ?? [];
+        // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
+        // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
+        // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
+        // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
+        // 远程列表已经乐观换桶；预检与确认期间保留当前详情，取消时恢复行。
+        const preflight = await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId);
+        if (!isCurrent()) return false;
+        // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
+        // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
+        // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
+        // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
+        if (preflight !== 'clean' || scheduleNames.length > 0) {
+          const ok = await confirmDialog({
+            title: t('ccAgent.sidebar.confirmArchive.title'),
+            description: archiveConfirmDescription(t, {
+              dirtyWorktree: preflight === 'dirty',
+              scheduleNames,
+            }),
+            confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
+            cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
+          });
+          if (!ok) {
+            return false;
+          }
+        }
+        return true;
+      },
     });
   }, [
-    beginRemoteArchive,
-    cancelRemoteArchive,
     confirmDialog,
     remoteWritesBlocked,
     runSessionAction,
@@ -576,6 +591,16 @@ export function SessionContentHeader({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
+      {session.source === 'side-chat' && session.parentSessionId && (
+        <Tip text={t('chat.sideChat.returnMain')}>
+          <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
+            aria-label={t('chat.sideChat.returnMain')}
+            onClick={() => void resolveSessionRoute(session.parentSessionId!).then(route => navigate(route))
+              .catch(() => toast.error(t('chat.sideChat.failed')))}>
+            <ArrowLeft size={16} />
+          </Button>
+        </Tip>
+      )}
       {isPinned && (
         <Pin
           size={13}
@@ -596,7 +621,7 @@ export function SessionContentHeader({
       {!isEditing && remoteIconKind && (
         <Tip
           text={
-            session.deviceLinkDeviceName ?? session.deviceLinkDeviceId ?? session.remoteHostId ?? ''
+            session.deviceLinkDeviceId ? deviceDisplayName(session.deviceLinkDeviceId, session.deviceLinkDeviceName) : session.remoteHostId ?? ''
           }
         >
           <RemoteProjectIcon
@@ -643,6 +668,20 @@ export function SessionContentHeader({
         </span>
       )}
 
+      {remoteSyncing && (
+        <Tip text={t('ccAgent.remoteSession.syncing')}>
+          <span
+            role="status"
+            aria-label={t('ccAgent.remoteSession.syncing')}
+            aria-busy="true"
+            className="mx-1 inline-flex shrink-0 text-[var(--text-tertiary)]"
+            style={WINDOW_NO_DRAG_STYLE}
+          >
+            <Spinner size={14} />
+          </span>
+        </Tip>
+      )}
+
       {!isEditing && !!session.tags?.length && (
         <span
           className="mx-1 shrink-0 [--task-tag-ring-bg:hsl(var(--content-area))]"
@@ -651,6 +690,10 @@ export function SessionContentHeader({
           <TaskTagDots tags={session.tags} />
         </span>
       )}
+
+      {!isEditing && <OrcaRemoteLeadBadge session={session} />}
+
+      {!isEditing && <BotTaskOwnerChip session={session} />}
 
       {!isEditing && !readOnly && (!sharedGuest || session.status === 'active') && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少

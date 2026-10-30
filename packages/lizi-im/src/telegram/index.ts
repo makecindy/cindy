@@ -23,8 +23,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { BaseIM } from '../BaseIM.js';
+import { ConnectionBackoff, ConnectionRetry } from '../connectionRetry.js';
 import type { ChannelIM } from '../channelIM.js';
 import type {
+  IMAttachment,
   IMCardActionEvent,
   IMHost,
   IMMessageEvent,
@@ -38,6 +40,8 @@ import {
   createTelegramApiClient,
   TelegramApiError,
   type TelegramApiClient,
+  type TgChatMemberUpdated,
+  type TgFile,
   type TgMessage,
   type TgUpdate,
   type TgUser,
@@ -46,8 +50,12 @@ import { chunkTelegramSource } from './chunk.js';
 import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } from './codec.js';
 import { buildCardPayload, hasLiveCallbackToken, parseCallbackQuery } from './components.js';
 import {
+  collectGroupHistoryMedia,
+  fetchTelegramFileBytes,
   detectGroupTrigger,
+  displayNameOf,
   groupWindowEntryOf,
+  hasDownloadableMedia,
   laneThreadIdOf,
   normalizeMessage,
   type TelegramGroupWindowEntry,
@@ -92,6 +100,12 @@ const POLL_TIMEOUT_SEC = 50;
  */
 const ALBUM_SETTLE_MS = 1_000;
 /**
+ * 群历史媒体池: Bot API 拿不到旧消息, 「先发视频、再单独 @bot」时只能靠收到时
+ * 记下的 file_id 补下载。纯内存短程衔接 — 条数与时长都有上限, 重启即清空。
+ */
+const GROUP_MEDIA_POOL_MAX = 200;
+const GROUP_MEDIA_POOL_TTL_MS = 24 * 60 * 60 * 1_000;
+/**
  * 超过该时限的消息视为「离线期积压重放」, 不再起 turn。
  *
  * Telegram 会替离线的 bot 保留最长 24h 的 update, 一上线整批推来。官方 bot
@@ -104,11 +118,12 @@ const ALBUM_SETTLE_MS = 1_000;
  * 用户早已不在等, 逐条回答只会刷屏并派出过期任务。
  */
 const STALE_MESSAGE_MS = 60 * 60 * 1_000;
-const POLL_RETRY_BASE_MS = 1_000;
-const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
 const POLL_CONFLICT_RETRY_MS = 30_000;
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
+/** Bot API getFile 的下载上限(Telegram 对 bot 侧固定 20 MB)。 */
+const MAX_BOT_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+const BOT_DOWNLOAD_TIMEOUT_MS = 60_000;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
 /**
  * typing 续命间隔/上限:引用呈现能力契约的**单一出处**(#1855 L1),不再本地
@@ -181,6 +196,28 @@ type TelegramReplyParams =
   | Record<string, never>;
 
 /** 回挂目标 id → 出站请求参数; null/空 = 不挂回。 */
+/** 编码 messageId(`chatId|msgId`)或原生数字 id → 原生数字 id 字符串; 解不出返回 null。 */
+function nativeMessageIdOf(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  try {
+    return decodeMessageId(trimmed).messageId;
+  } catch {
+    return null;
+  }
+}
+
+/** 下载落盘的文件名消毒: 只留 basename, 去控制字符与路径分隔符。 */
+function safeFileName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return path.basename(name).replace(/[\u0000-\u001f\u007f/\\]/g, '_').trim().slice(0, 180);
+}
+
+function isChatMemberPresent(status: TgChatMemberUpdated['new_chat_member']['status']): boolean {
+  return status === 'member' || status === 'administrator' || status === 'creator' || status === 'restricted';
+}
+
 function replyParamsFor(targetId: string | null | undefined): TelegramReplyParams {
   if (!targetId) return {};
   return { reply_parameters: { message_id: Number(targetId), allow_sending_without_reply: true } };
@@ -271,6 +308,66 @@ export interface TelegramIMOptions {
   apiFactory?: (token: string) => TelegramApiClient;
   /** 行为配置 getter(缺省 = TELEGRAM_DEFAULT_BEHAVIOR)。 */
   behavior?: () => TelegramBehaviorConfig;
+  /**
+   * 凭证与游标在 host.secrets 里的键名前缀。缺省为空 = 设置页那份个人 bot 的
+   * 历史键名; 伙伴自有连接各给一个前缀, 同一进程里多份实例互不读写对方的凭证。
+   */
+  secretKeyPrefix?: string;
+  /**
+   * 是否注册 `telegramBot:*` 设置卡 IPC 并广播状态(缺省 true)。通道名固定,
+   * 同进程第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
+   */
+  ipc?: boolean;
+  /**
+   * 非主人私聊是否进业务层(缺省 false = 只回一句礼貌提示)。伙伴自有连接对外
+   * 开放时打开: 陌生人私聊带 `speaker.isOwner=false` 进业务层, 命令仍只认主人。
+   */
+  guestDm?: boolean;
+}
+
+/** 宿主 Agent 工具可直接发出的媒体种类 → Bot API 方法与字段名。 */
+export const TELEGRAM_OUTBOUND_MEDIA: Record<
+  TelegramOutboundMediaKind,
+  { method: string; field: string }
+> = {
+  photo: { method: 'sendPhoto', field: 'photo' },
+  document: { method: 'sendDocument', field: 'document' },
+  video: { method: 'sendVideo', field: 'video' },
+  audio: { method: 'sendAudio', field: 'audio' },
+  voice: { method: 'sendVoice', field: 'voice' },
+  animation: { method: 'sendAnimation', field: 'animation' },
+  sticker: { method: 'sendSticker', field: 'sticker' },
+  video_note: { method: 'sendVideoNote', field: 'video_note' },
+};
+
+export type TelegramOutboundMediaKind =
+  | 'photo'
+  | 'document'
+  | 'video'
+  | 'audio'
+  | 'voice'
+  | 'animation'
+  | 'sticker'
+  | 'video_note';
+
+export interface TelegramOutboundMedia {
+  kind: TelegramOutboundMediaKind;
+  /** 三选一: 本地文件(multipart 上传) / 公网 URL / Telegram file_id(转发已有文件)。 */
+  absPath?: string;
+  url?: string;
+  fileId?: string;
+  /** 纯文本说明(贴纸 / 圆形视频不支持)。 */
+  caption?: string;
+  /** 回复哪条消息(编码 messageId `chatId|msgId` 或原生数字 id)。 */
+  replyToMessageId?: string;
+}
+
+/** `telegramBot:get-status` / `set-config` 的返回形状(设置卡与伙伴连接页共用)。 */
+export interface TelegramConfigState {
+  status: IMStatus;
+  ownerUserId: string | null;
+  botUsername: string | null;
+  saveErrorStatus?: IMStatus;
 }
 
 export class TelegramIM extends BaseIM implements ChannelIM {
@@ -298,10 +395,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    */
   private lifetimeAbort = new AbortController();
   private pollLoop: Promise<void> | null = null;
+  private readonly connectionRetry = new ConnectionRetry();
   private disposing = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
-  private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
   private readonly pendingAlbums = new Map<string, PendingAlbum>();
   /**
@@ -344,6 +441,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 所以领取要看归属: 回合活着就由它持有, 收口(finalize/close)后才允许替换。
    */
   private readonly activeStreamRounds = new Map<string, number>();
+  /**
+   * 群里收到的媒体消息(`${botId}:${chatId}:${messageId}` → 原消息), 插入序即时间序,
+   * 超出 GROUP_MEDIA_POOL_MAX 淘汰最旧, 超龄不取。受保护群不入池。不随轮次出池:
+   * 轮次被拒时群窗口游标不推进, 下次触发还要能补齐; 已受理轮次由游标防重复注入,
+   * 同一轮里已随附件送达的(相册成员、被引消息)由 collectGroupHistoryMedia 排除。
+   */
+  private readonly groupMediaPool = new Map<string, TgMessage>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -359,10 +463,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     private readonly opts: TelegramIMOptions = {},
   ) {
     super('telegram', host);
-    if (!host.paths.telegramMediaDir) {
-      throw new Error('IMHost.paths.telegramMediaDir is required to wire the telegram channel');
-    }
-    this.mediaDir = host.paths.telegramMediaDir;
+  }
+
+  /** 本实例的 secret 键名(见 TelegramIMOptions.secretKeyPrefix)。 */
+  private secretKey(base: string): string {
+    return `${this.opts.secretKeyPrefix ?? ''}${base}`;
   }
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
@@ -370,13 +475,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async init(): Promise<void> {
     this.disposing = false;
     this.resetLifetimeAbort();
-    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
-    this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    this.ownerUserId = this.host.secrets.read(this.secretKey(OWNER_USER_ID_SECRET_KEY))?.trim() ?? '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return;
@@ -414,7 +519,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
-    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
@@ -427,7 +532,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 标志必须先落盘成功再停轮询: 反过来的话, 写失败时本机已经停了、UI 也显示
     // 已下线, 但重启就会自动上线回来抢另一台的轮询 —— 恰好毁掉下线的全部意义。
     // 宁可停在"没下线成功"的明确错误上, 也不留一个会自己复活的假下线。
-    if (!this.host.secrets.write(OFFLINE_SECRET_KEY, '1')) {
+    if (!this.host.secrets.write(this.secretKey(OFFLINE_SECRET_KEY), '1')) {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
@@ -436,6 +541,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.groupMediaPool.clear();
     await this.stopPolling();
     if (!this.botId) this.botId = botIdFromToken(token);
     this.setStatus({ kind: 'offline', appId: this.botContextId });
@@ -443,13 +549,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   /** 从下线态恢复: 清标志并按保留的 token 重新建连(offset 续上, 不重放)。 */
   async goOnline(): Promise<boolean> {
-    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    const tokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
     if (tokenResult.kind === 'error') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return false;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
-    this.host.secrets.remove(OFFLINE_SECRET_KEY);
+    this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
     // remove 返回 void 且吞掉异常(文件锁/权限/磁盘错误), 只能回读确认。标志没删掉
     // 却照常连上, 会让用户看到"已上线"、重启后却又回到 offline —— 与写标志失败
     // 同源的静默失败, 同样宁可停在明确错误上。
@@ -478,7 +584,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 都视为 set，I/O／解密失败或旧 host 没实现 readResult 都是 unknown。
    */
   private offlineFlagState(): 'set' | 'absent' | 'unknown' {
-    const result = this.secretReadResult(OFFLINE_SECRET_KEY);
+    const result = this.secretReadResult(this.secretKey(OFFLINE_SECRET_KEY));
     if (result.kind === 'error') return 'unknown';
     return result.kind === 'missing' ? 'absent' : 'set';
   }
@@ -493,6 +599,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.groupMediaPool.clear();
     await this.stopPolling();
     // bot 身份是上一个账号的连接期产物: 登出/换账号后必须清干净, 否则下一个
     // 账号在 offline 等拿不到 getMe 的状态下会继承旧账号的 bot 名字。
@@ -502,42 +609,74 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.setStatus({ kind: 'idle' });
   }
 
-  registerIpc(): void {
-    const configResult = (saveErrorStatus?: IMStatus) => ({
+  /** 设置卡 / 伙伴连接页读到的配置态(状态 + 主人 + bot 用户名)。 */
+  getConfigState(saveErrorStatus?: IMStatus): TelegramConfigState {
+    return {
       status: this.status,
       ownerUserId: this.ownerUserId || null,
       botUsername: this.botUsername || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
-    });
+    };
+  }
 
-    this.host.ipc.handle('telegramBot:set-config', async (payload) => {
-      const config = isRecord(payload) ? payload : {};
-      const token = typeof config.token === 'string' ? config.token.trim() : '';
-      const ownerUserId =
-        typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
-      if (!this.host.secrets.isAvailable()) {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
-        return configResult();
-      }
+  /** 当前主人的 Telegram 用户 id(未配置为空串)。 */
+  getOwnerUserId(): string {
+    return this.ownerUserId;
+  }
 
-      // 回滚前必须先可靠读取旧值；把读取失败当成“不存在”会在后续失败时误删旧配置。
-      const previousTokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
-      const previousOwnerResult = this.secretReadResult(OWNER_USER_ID_SECRET_KEY);
-      if (previousTokenResult.kind === 'error' || previousOwnerResult.kind === 'error') {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
-        return configResult();
-      }
-      const previousToken =
-        previousTokenResult.kind === 'value' ? previousTokenResult.value : null;
-      const previousOwnerUserId =
-        previousOwnerResult.kind === 'value' ? previousOwnerResult.value : null;
-      const previousRuntimeOwnerUserId = this.ownerUserId;
+  /**
+   * 保存 token / 主人并建连。设置卡经 `telegramBot:set-config` 调用; 伙伴自有连接
+   * 由宿主直接调用(不注册 IPC)。token 为空时只换主人。
+   */
+  async setConfig(payload: unknown): Promise<TelegramConfigState> {
+    const configResult = (saveErrorStatus?: IMStatus) => this.getConfigState(saveErrorStatus);
+    const config = isRecord(payload) ? payload : {};
+    const token = typeof config.token === 'string' ? config.token.trim() : '';
+    const ownerUserId =
+      typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
+    if (!this.host.secrets.isAvailable()) {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return configResult();
+    }
 
-      const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
-      const ownerSaved = ownerUserId
-        ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
-        : true;
-      if (!tokenSaved || !ownerSaved) {
+    // 回滚前必须先可靠读取旧值；把读取失败当成“不存在”会在后续失败时误删旧配置。
+    const previousTokenResult = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY));
+    const previousOwnerResult = this.secretReadResult(this.secretKey(OWNER_USER_ID_SECRET_KEY));
+    if (previousTokenResult.kind === 'error' || previousOwnerResult.kind === 'error') {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return configResult();
+    }
+    const previousToken =
+      previousTokenResult.kind === 'value' ? previousTokenResult.value : null;
+    const previousOwnerUserId =
+      previousOwnerResult.kind === 'value' ? previousOwnerResult.value : null;
+    const previousRuntimeOwnerUserId = this.ownerUserId;
+
+    const tokenSaved = token ? this.host.secrets.write(this.secretKey(TOKEN_SECRET_KEY), token) : true;
+    const ownerSaved = ownerUserId
+      ? this.host.secrets.write(this.secretKey(OWNER_USER_ID_SECRET_KEY), ownerUserId)
+      : true;
+    if (!tokenSaved || !ownerSaved) {
+      await this.rollbackConfigOrFailClosed(
+        previousToken,
+        previousOwnerUserId,
+        previousRuntimeOwnerUserId,
+      );
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return configResult();
+    }
+
+    const nextOwnerUserId = ownerUserId || this.ownerUserId;
+    if (token) {
+      this.configVersion += 1;
+      await this.stopPolling();
+      this.ownerUserId = nextOwnerUserId;
+      // 手动填 token 点连接 = 明确要在这台机器上用, 清掉遗留的下线标志,
+      // 否则连上了但重启后又被 init 判回 offline。remove 吞异常且无返回值
+      // (Windows 文件锁尤甚, 见 engineering-conventions「文件系统差异」), 必须
+      // 回读确认 —— 否则用户重填 token 看似恢复、重启后又掉回 offline。
+      this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
+      if (this.offlineFlagState() !== 'absent') {
         await this.rollbackConfigOrFailClosed(
           previousToken,
           previousOwnerUserId,
@@ -546,61 +685,88 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
-
-      const nextOwnerUserId = ownerUserId || this.ownerUserId;
-      if (token) {
-        this.configVersion += 1;
-        await this.stopPolling();
-        this.ownerUserId = nextOwnerUserId;
-        // 手动填 token 点连接 = 明确要在这台机器上用, 清掉遗留的下线标志,
-        // 否则连上了但重启后又被 init 判回 offline。remove 吞异常且无返回值
-        // (Windows 文件锁尤甚, 见 engineering-conventions「文件系统差异」), 必须
-        // 回读确认 —— 否则用户重填 token 看似恢复、重启后又掉回 offline。
-        this.host.secrets.remove(OFFLINE_SECRET_KEY);
-        if (this.offlineFlagState() !== 'absent') {
-          await this.rollbackConfigOrFailClosed(
-            previousToken,
-            previousOwnerUserId,
-            previousRuntimeOwnerUserId,
-          );
-          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
-          return configResult();
-        }
-        const connected = await this.connect(token);
-        if (!connected) {
-          const failedStatus = this.status;
-          const restored = await this.rollbackConfigOrFailClosed(
-            previousToken,
-            previousOwnerUserId,
-            previousRuntimeOwnerUserId,
-          );
-          if (!restored) return configResult(this.status);
-          const previous = previousToken?.trim();
-          if (previous) {
-            this.configVersion += 1;
-            await this.connect(previous);
-          }
-          return configResult(failedStatus);
-        }
-        const noticeConfigVersion = this.configVersion;
-        await this.sendOwnerNoticeWithTimeout(
-          nextOwnerUserId,
-          'linked',
-          OWNER_NOTICE_TIMEOUT_MS,
-          () => this.configVersion === noticeConfigVersion && this.ownerUserId === nextOwnerUserId,
+      const connected = await this.connect(token, false);
+      if (!connected) {
+        const failedStatus = this.status;
+        const restored = await this.rollbackConfigOrFailClosed(
+          previousToken,
+          previousOwnerUserId,
+          previousRuntimeOwnerUserId,
         );
-      } else if (nextOwnerUserId !== this.ownerUserId) {
-        this.configVersion += 1;
-        this.ownerUserId = nextOwnerUserId;
+        if (!restored) return configResult(this.status);
+        const previous = previousToken?.trim();
+        if (previous) {
+          this.configVersion += 1;
+          await this.connect(previous);
+        }
+        return configResult(failedStatus);
       }
-      return configResult();
-    });
+      const noticeConfigVersion = this.configVersion;
+      await this.sendOwnerNoticeWithTimeout(
+        nextOwnerUserId,
+        'linked',
+        OWNER_NOTICE_TIMEOUT_MS,
+        () => this.configVersion === noticeConfigVersion && this.ownerUserId === nextOwnerUserId,
+      );
+    } else if (nextOwnerUserId !== this.ownerUserId) {
+      this.configVersion += 1;
+      this.ownerUserId = nextOwnerUserId;
+    }
+    return configResult();
+  }
 
-    this.host.ipc.handle('telegramBot:get-status', () => ({
-      status: this.status,
-      ownerUserId: this.ownerUserId || null,
-      botUsername: this.botUsername || null,
-    }));
+  /**
+   * 解绑: 清命令菜单、通知主人、删掉本连接的全部凭证与游标, 回到 idle。
+   * 设置卡经 `telegramBot:disconnect` 调用; 伙伴自有连接移除时由宿主直接调用。
+   */
+  async disconnect(): Promise<{ status: IMStatus }> {
+    this.configVersion += 1;
+    const disconnectedOwnerUserId = this.ownerUserId;
+    // 下线态 this.api 已被 stopPolling 置空,但解绑仍要用它清命令菜单、发解绑
+    // 通知 —— 不复活的话「先下线再解绑」会让 /help 等失效命令永久留在 Telegram
+    // 里,而 token 随即被删,以后再也没机会清。用保留的 token 临时造一个
+    // client(best-effort;末尾 stopPolling 会再次置空)。
+    if (!this.api) {
+      const retainedToken = this.host.secrets.read(this.secretKey(TOKEN_SECRET_KEY))?.trim() ?? '';
+      if (retainedToken) {
+        this.api = (this.opts.apiFactory ?? createTelegramApiClient)(retainedToken);
+      }
+    }
+    // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
+    if (this.api && disconnectedOwnerUserId) {
+      void this.api
+        .call('deleteMyCommands', {
+          scope: { type: 'chat', chat_id: Number(disconnectedOwnerUserId) },
+        })
+        .catch(() => {});
+    }
+    this.ownerUserId = '';
+    await this.sendOwnerNoticeWithTimeout(
+      disconnectedOwnerUserId,
+      'disconnected',
+      OWNER_NOTICE_TIMEOUT_MS,
+      () => !this.ownerUserId,
+    );
+    this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
+    this.host.secrets.remove(this.secretKey(OWNER_USER_ID_SECRET_KEY));
+    this.host.secrets.remove(this.secretKey(LEGACY_RUNTIME_ACTIVE_SECRET_KEY));
+    this.host.secrets.remove(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
+    // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
+    // offline, 表现为"填了 token 却不工作"。
+    this.host.secrets.remove(this.secretKey(OFFLINE_SECRET_KEY));
+    await this.stopPolling();
+    this.setStatus({ kind: 'idle' });
+    return { status: this.status };
+  }
+
+  registerIpc(): void {
+    // 伙伴自有连接不注册设置卡 IPC: 通道名固定, 第二份实例会重复注册;
+    // 它们由宿主的伙伴连接 IPC 按连接 id 分发到实例方法。
+    if (this.opts.ipc === false) return;
+
+    this.host.ipc.handle('telegramBot:set-config', (payload) => this.setConfig(payload));
+
+    this.host.ipc.handle('telegramBot:get-status', () => this.getConfigState());
 
     /**
      * 上线/下线开关(不碰凭证)。单 channel 双向 —— handler 不依赖 event.sender、
@@ -627,45 +793,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return { status: this.status };
     });
 
-    this.host.ipc.handle('telegramBot:disconnect', async () => {
-      this.configVersion += 1;
-      const disconnectedOwnerUserId = this.ownerUserId;
-      // 下线态 this.api 已被 stopPolling 置空,但解绑仍要用它清命令菜单、发解绑
-      // 通知 —— 不复活的话「先下线再解绑」会让 /help 等失效命令永久留在 Telegram
-      // 里,而 token 随即被删,以后再也没机会清。用保留的 token 临时造一个
-      // client(best-effort;末尾 stopPolling 会再次置空)。
-      if (!this.api) {
-        const retainedToken = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
-        if (retainedToken) {
-          this.api = (this.opts.apiFactory ?? createTelegramApiClient)(retainedToken);
-        }
-      }
-      // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
-      if (this.api && disconnectedOwnerUserId) {
-        void this.api
-          .call('deleteMyCommands', {
-            scope: { type: 'chat', chat_id: Number(disconnectedOwnerUserId) },
-          })
-          .catch(() => {});
-      }
-      this.ownerUserId = '';
-      await this.sendOwnerNoticeWithTimeout(
-        disconnectedOwnerUserId,
-        'disconnected',
-        OWNER_NOTICE_TIMEOUT_MS,
-        () => !this.ownerUserId,
-      );
-      this.host.secrets.remove(TOKEN_SECRET_KEY);
-      this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-      this.host.secrets.remove(LEGACY_RUNTIME_ACTIVE_SECRET_KEY);
-      this.host.secrets.remove(UPDATES_OFFSET_SECRET_KEY);
-      // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
-      // offline, 表现为"填了 token 却不工作"。
-      this.host.secrets.remove(OFFLINE_SECRET_KEY);
-      await this.stopPolling();
-      this.setStatus({ kind: 'idle' });
-      return { status: this.status };
-    });
+    this.host.ipc.handle('telegramBot:disconnect', () => this.disconnect());
   }
 
   // ── inbound subscriptions ──────────────────────────────────────────────────
@@ -793,6 +921,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
     const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+    if (!markdown.trim()) {
+      await this.requireApi().call('deleteMessage', {
+        chat_id: chatId, message_id: Number(nativeId),
+      });
+      return;
+    }
     const { html } = markdownToTelegramHtml(markdown);
     await this.editHtml(chatId, nativeId, html, undefined);
   }
@@ -938,6 +1072,158 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
+  // ── 宿主 Agent 工具的 Bot API 直通 ───────────────────────────────────────
+  //
+  // 下面这组方法给 desktop 的 cindy_telegram_bot MCP 用: Agent 在 Telegram 轮次里
+  // 直接驱动 Bot API(发媒体 / 投票 / 表情 / 群信息 / 任意方法)。谁能调、能对哪个
+  // chat 调由宿主按轮次作用域判定, 这层只负责目标解码、回流与上传纪律。
+
+  /** 当前连接的 Bot API 客户端(未连接为 null)。 */
+  getBotApi(): TelegramApiClient | null {
+    return this.api;
+  }
+
+  /** 当前 bot 的数字 id(字符串; 未连接为空串)。 */
+  getBotId(): string {
+    return this.botId ? String(this.botId) : '';
+  }
+
+  getBotUsername(): string {
+    return this.botUsername;
+  }
+
+  /** lane userId(私聊数字 id 或 `g/{chatId}[/{threadId}]`)→ Bot API 发送目标。 */
+  resolveSendTarget(userId: string): { chat_id: string; message_thread_id?: number } {
+    return this.targetOf(userId);
+  }
+
+  /** 宿主工具经 Bot API 直接发出的消息回流进群窗口(与 sendText 同口径, 私聊忽略)。 */
+  recordOutboundEcho(userId: string, text: string, sent: TgMessage, fileNames?: string[]): void {
+    this.recordOwnEcho(userId, text, sent, fileNames);
+  }
+
+  /**
+   * 发一条媒体消息到 lane。本地文件走 multipart(与 sendFile 同一上限), URL / file_id
+   * 走 JSON。说明文字按纯文本发(不走 HTML, 免得说明里的尖括号被 Telegram 拒掉)。
+   */
+  async sendMedia(userId: string, input: TelegramOutboundMedia): Promise<{ messageId: string }> {
+    const spec = TELEGRAM_OUTBOUND_MEDIA[input.kind];
+    if (!spec) throw new Error(`unsupported telegram media kind: ${String(input.kind)}`);
+    const api = this.requireApi();
+    const target = this.targetOf(userId);
+    const caption = input.caption?.trim() ?? '';
+    const captionAllowed = input.kind !== 'sticker' && input.kind !== 'video_note';
+    const replyTo = input.replyToMessageId ? nativeMessageIdOf(input.replyToMessageId) : null;
+    const reply = replyTo ? replyParamsFor(replyTo) : {};
+    const echoName =
+      input.absPath ? path.basename(input.absPath) : input.kind;
+    let sent: TgMessage;
+    if (input.absPath) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(input.absPath);
+      } catch {
+        throw new Error('NOT_FOUND');
+      }
+      if (stat.size === 0) throw new Error('EMPTY');
+      if (stat.size > MAX_OUTBOUND_FILE_BYTES) throw new Error('TOO_LARGE');
+      const form = new FormData();
+      form.set('chat_id', target.chat_id);
+      if (target.message_thread_id !== undefined) {
+        form.set('message_thread_id', String(target.message_thread_id));
+      }
+      if (reply.reply_parameters) form.set('reply_parameters', JSON.stringify(reply.reply_parameters));
+      if (caption && captionAllowed) form.set('caption', caption);
+      form.set(spec.field, new Blob([fs.readFileSync(input.absPath)]), path.basename(input.absPath));
+      sent = await api.callForm<TgMessage>(spec.method, form);
+    } else {
+      const source = input.url?.trim() || input.fileId?.trim();
+      if (!source) throw new Error('NO_SOURCE');
+      sent = await this.callSend<TgMessage>(spec.method, {
+        ...target,
+        ...reply,
+        [spec.field]: source,
+        ...(caption && captionAllowed ? { caption } : {}),
+      });
+    }
+    this.recordOwnEcho(userId, caption, sent, [echoName]);
+    return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+  }
+
+  /**
+   * 按 file_id 把用户发来的文件下载到 destDir(文件名取 Telegram 路径的 basename,
+   * 调用方可覆盖; 同名不覆盖, 自动加序号)。超过 Bot API 的 20 MB 上限直接报错。
+   */
+  async downloadFile(
+    fileId: string,
+    destDir: string,
+    fileName?: string,
+  ): Promise<{ absPath: string; size: number; fileName: string }> {
+    const api = this.requireApi();
+    const file = await api.call<TgFile>(
+      'getFile',
+      { file_id: fileId },
+      AbortSignal.timeout(BOT_DOWNLOAD_TIMEOUT_MS),
+    );
+    if (!file.file_path) throw new Error('NO_FILE_PATH');
+    if (file.file_size !== undefined && file.file_size > MAX_BOT_DOWNLOAD_BYTES) {
+      throw new Error('TOO_LARGE');
+    }
+    const res = await fetch(api.fileUrl(file.file_path), {
+      signal: AbortSignal.timeout(BOT_DOWNLOAD_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`DOWNLOAD_FAILED:${res.status}`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.byteLength > MAX_BOT_DOWNLOAD_BYTES) throw new Error('TOO_LARGE');
+    fs.mkdirSync(destDir, { recursive: true });
+    const base = safeFileName(fileName || path.basename(file.file_path)) || 'telegram-file';
+    let candidate = path.join(destDir, base);
+    const ext = path.extname(base);
+    const stem = base.slice(0, base.length - ext.length);
+    for (let n = 1; fs.existsSync(candidate); n += 1) {
+      candidate = path.join(destDir, `${stem}-${n}${ext}`);
+    }
+    fs.writeFileSync(candidate, bytes);
+    return { absPath: candidate, size: bytes.byteLength, fileName: path.basename(candidate) };
+  }
+
+  /**
+   * bot 自己在某个群里的成员状态变化: 被拉进群 / 被移出。进群窗口一条系统行(让群
+   * 清单与上下文都知道这件事), 并私聊告知主人 —— 主人不在群里时也能知道 bot 去了哪。
+   * 私聊里的拉黑 / 解除拉黑不处理(没有可见动作)。
+   */
+  private async handleMyChatMember(change: TgChatMemberUpdated, updateId: number): Promise<void> {
+    const chat = change.chat;
+    if (chat.type !== 'group' && chat.type !== 'supergroup') return;
+    const wasIn = isChatMemberPresent(change.old_chat_member.status);
+    const isIn = isChatMemberPresent(change.new_chat_member.status);
+    if (wasIn === isIn) return;
+    const title = chat.title ?? String(chat.id);
+    const actor = displayNameOf(change.from);
+    const text = isIn
+      ? `机器人 @${this.botUsername || 'bot'} 已被「${actor}」加入本群`
+      : `机器人 @${this.botUsername || 'bot'} 已被「${actor}」移出本群`;
+    this.emitGroupWindow({
+      chatId: String(chat.id),
+      threadId: '',
+      messageId: `membership-${updateId}`,
+      chatName: chat.title ?? null,
+      author: { name: 'Telegram', isBot: true },
+      text,
+      sentAt: change.date * 1000,
+    });
+    if (!this.ownerUserId || !this.api) return;
+    const notice = isIn
+      ? `👥 我被「${actor}」加进了群「${title}」(chat_id: ${chat.id})。`
+      : `👥 我被「${actor}」移出了群「${title}」(chat_id: ${chat.id})。`;
+    try {
+      await this.sendPlainChunked(this.ownerUserId, notice);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram membership notice failed: ${msg}`);
+    }
+  }
+
   async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
     const api = this.api;
     if (!api) return null;
@@ -946,7 +1232,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (behavior.emojiReactions === 'off') return null;
       if (this.ambientTriggerIds.has(messageId)) return null; // ambient 全静默
       let effective = emoji;
-      if (emoji === '👨‍💻') {
+      if (emoji === '🤔') {
         // 每次开始处理选择一次，不随进度反复切换；排队 👀 保持固定。
         effective = pickExpressiveReaction(PROCESSING_REACTION_POOL);
       } else if (behavior.emojiReactions === 'expressive') {
@@ -1010,7 +1296,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── connect / polling ──────────────────────────────────────────────────────
 
-  private async connect(token: string): Promise<boolean> {
+  private async connect(token: string, autoRetry = true): Promise<boolean> {
     const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
     // getMe 是网络请求, 这段窗口里另一台设备可能远程下线、用户可能本地下线或
     // 登出。这些路径都只递增 configVersion + 停当前 poll —— 尚未创建 poll 的
@@ -1025,6 +1311,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch (err) {
       if (this.configVersion !== generation || this.disposing) return false;
       this.setStatus(mapConnectErrorToStatus(err));
+      const retryable = !(err instanceof TelegramApiError)
+        || err.errorCode === 429 || err.errorCode >= 500;
+      if (autoRetry && retryable) {
+        this.connectionRetry.schedule(() => {
+          if (this.configVersion !== generation || this.disposing) return;
+          if (this.offlineFlagState() !== 'absent') return;
+          void this.connect(token);
+        }, { minimumDelayMs: err instanceof TelegramApiError ? (err.retryAfterSec ?? 0) * 1_000 : 0 });
+      }
       return false;
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
@@ -1044,6 +1339,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.log.info('connect result discarded: offline flag is set or unreadable after getMe');
       return false;
     }
+    this.connectionRetry.reset();
     this.api = api;
     this.botId = me.id;
     this.botUsername = me.username ?? '';
@@ -1110,7 +1406,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     let offset = this.readPersistedOffset();
     this.lastSeenOffset = offset;
-    let retryDelay = POLL_RETRY_BASE_MS;
+    const backoff = new ConnectionBackoff({ jitterMinRatio: 1 });
     while (!abort.signal.aborted && this.configVersion === generation) {
       try {
         const updates = await api.call<TgUpdate[]>(
@@ -1118,11 +1414,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           {
             offset,
             timeout: POLL_TIMEOUT_SEC,
-            allowed_updates: ['message', 'callback_query'],
+            allowed_updates: ['message', 'callback_query', 'my_chat_member'],
           },
           abort.signal,
         );
-        retryDelay = POLL_RETRY_BASE_MS;
+        backoff.reset();
         if (this.status.kind !== 'connected') {
           this.setStatus({ kind: 'connected', appId: String(this.botId) });
         }
@@ -1151,13 +1447,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
         // 网络抖动/超时: connecting + 指数退避重试。
         if (this.status.kind === 'connected') this.setStatus({ kind: 'connecting' });
-        await sleep(retryDelay, abort.signal);
-        retryDelay = Math.min(retryDelay * 2, POLL_RETRY_MAX_MS);
+        await sleep(backoff.nextDelay(err instanceof TelegramApiError
+          ? (err.retryAfterSec ?? 0) * 1_000 : 0), abort.signal);
       }
     }
   }
 
   private async stopPolling(): Promise<void> {
+    this.connectionRetry.reset();
     this.clearPendingAlbums();
     this.pollAbort?.abort();
     this.pollAbort = null;
@@ -1182,7 +1479,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    */
   private dispatchUpdate(update: TgUpdate, generation: number): void {
     const chatId =
-      update.message?.chat.id ?? update.callback_query?.message?.chat.id ?? 'global';
+      update.message?.chat.id ??
+      update.callback_query?.message?.chat.id ??
+      update.my_chat_member?.chat.id ??
+      'global';
     const key = String(chatId);
     const inflightKey = Symbol();
     this.inflightUpdates.set(inflightKey, update.update_id);
@@ -1211,6 +1511,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       await this.handleCallbackQuery(update.callback_query);
       return;
     }
+    if (update.my_chat_member) {
+      await this.handleMyChatMember(update.my_chat_member, update.update_id);
+      return;
+    }
     const m = update.message;
     if (!m || !m.from) return;
     if (m.from.id === this.botId) return; // 自身消息(某些客户端场景)不处理
@@ -1219,6 +1523,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (m.media_group_id) {
       if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
         this.emitGroupWindow(groupWindowEntryOf(m), m);
+        this.rememberGroupMedia(m);
       }
       this.bufferAlbumMessage(m, update.update_id);
       return;
@@ -1294,6 +1599,86 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }, ALBUM_SETTLE_MS);
   }
 
+  private groupMediaKey(chatId: string, messageId: string): string {
+    return `${this.botId}:${chatId}:${messageId}`;
+  }
+
+  private rememberGroupMedia(m: TgMessage): void {
+    if (m.has_protected_content === true || !hasDownloadableMedia(m)) return;
+    const key = this.groupMediaKey(String(m.chat.id), String(m.message_id));
+    this.groupMediaPool.delete(key);
+    this.groupMediaPool.set(key, m);
+    while (this.groupMediaPool.size > GROUP_MEDIA_POOL_MAX) {
+      const oldest = this.groupMediaPool.keys().next().value;
+      if (oldest === undefined) break;
+      this.groupMediaPool.delete(oldest);
+    }
+  }
+
+  /** Host calls this only after resolving an exact, authorized history row. */
+  async readGroupHistoryImage(fileId: string): Promise<Buffer | null> {
+    const api = this.api;
+    if (!api || this.disposing) return null;
+    const generation = this.configVersion;
+    const bytes = await fetchTelegramFileBytes(
+      { api, contextId: String(this.botId), history: true },
+      fileId,
+    );
+    return !this.disposing && generation === this.configVersion ? bytes : null;
+  }
+
+  /**
+   * 下载群窗口里这些消息(本轮群上下文实际纳入的行)带的媒体 — 「先发视频、再单独
+   * @bot」场景的补齐。只认池里还在的消息: 已随某轮附件送达、超龄、重启前收到或
+   * 受保护的都不在池里, 原样返回空。结果只供模型消息使用, 由调用方保证不落库。
+   */
+  async collectGroupHistoryMedia(
+    chatId: string,
+    messageIds: readonly string[],
+    /** 本轮触发消息(event.raw): 它的相册成员与被引消息已随本轮附件送达, 不重复补。 */
+    trigger?: Pick<TgMessage, 'media_group_id' | 'reply_to_message'>,
+  ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
+    const api = this.api;
+    if (!api || messageIds.length === 0) return { attachments: [], unavailable: [] };
+    const cutoff = Date.now() - GROUP_MEDIA_POOL_TTL_MS;
+    const repliedId = trigger?.reply_to_message?.message_id;
+    const messages = messageIds
+      .map((id) => this.groupMediaPool.get(this.groupMediaKey(chatId, id)))
+      .filter((m): m is TgMessage => m !== undefined && m.date * 1_000 >= cutoff)
+      .filter(
+        (m) =>
+          m.message_id !== repliedId &&
+          (trigger?.media_group_id === undefined || m.media_group_id !== trigger.media_group_id),
+      )
+      .sort((a, b) => a.message_id - b.message_id);
+    if (messages.length === 0) return { attachments: [], unavailable: [] };
+    const generation = this.configVersion;
+    const stagedDiscards: Array<() => Promise<void>> = [];
+    const collected = await collectGroupHistoryMedia(messages, {
+      api,
+      stagedDiscards,
+      ...(this.host.media ? { media: this.host.media } : {}),
+      ...(this.host.files ? { files: this.host.files } : {}),
+    });
+    if (this.disposing || this.configVersion !== generation) {
+      await this.discardStagedMedia(stagedDiscards);
+      return { attachments: [], unavailable: [] };
+    }
+    return collected;
+  }
+
+  /** 下载期间配置换代: 回滚本次暂存进媒体总仓的音视频(尽力而为, 失败只记日志)。 */
+  private async discardStagedMedia(discards: Array<() => Promise<void>>): Promise<void> {
+    for (const discard of discards) {
+      try {
+        await discard();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`telegram staged media discard failed: ${msg}`);
+      }
+    }
+  }
+
   private clearPendingAlbums(): void {
     for (const album of this.albumsInFlight) {
       if (album.timer) clearTimeout(album.timer);
@@ -1335,30 +1720,56 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
-      if (String(m.from.id) !== this.ownerUserId) {
-        // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
-        // per-user 冷却防刷屏; 不进任何业务链路。
-        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
-        return;
+      const isOwnerDm = String(m.from.id) === this.ownerUserId;
+      if (!isOwnerDm) {
+        if (!this.opts.guestDm) {
+          // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
+          // per-user 冷却防刷屏; 不进任何业务链路。
+          this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+          return;
+        }
+        // 对外开放的私聊: 命令永远 owner 专属, 陌生人的命令静默丢(与群成员同口径,
+        // 不可被探测); 普通消息带非主人标记进业务层。
+        const probe = (m.text ?? '').trimStart();
+        if (probe.startsWith('/') || probe.startsWith('!')) return;
       }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
       const acceptedConfigVersion = this.configVersion;
+      const stagedDiscards: Array<() => Promise<void>> = [];
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
         contextId: String(this.botId),
-        mediaDir: this.mediaDir,
+        stagedDiscards,
         ...(siblings.length > 0 ? { siblings } : {}),
         ...(this.host.media ? { media: this.host.media } : {}),
+        ...(this.host.files ? { files: this.host.files } : {}),
       });
-      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) {
+        await this.discardStagedMedia(stagedDiscards);
+        return;
+      }
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
       // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
       // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
-      this.emitMessage(event);
+      this.emitMessage(
+        isOwnerDm
+          ? event
+          : {
+              ...event,
+              speaker: {
+                id: String(m.from.id),
+                name:
+                  [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') ||
+                  String(m.from.id),
+                ...(m.from.username ? { username: m.from.username } : {}),
+                isOwner: false,
+              },
+            },
+      );
       return;
     }
 
@@ -1367,6 +1778,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
       if (!opts.skipGroupWindow) {
         this.emitGroupWindow(groupWindowEntryOf(m), m);
+        this.rememberGroupMedia(m);
       }
       // 群消息的历史价值与「该不该现在回答」是两件事: 上面照常入窗(数据面),
       // 这里只拦 turn 触发 —— 隔夜的 @ 不再唤起一轮回答。
@@ -1424,18 +1836,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         );
       }
       const acceptedConfigVersion = this.configVersion;
+      const stagedDiscards: Array<() => Promise<void>> = [];
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
         contextId: String(this.botId),
-        mediaDir: this.mediaDir,
         overrideText: trigger.text,
         laneUserId,
+        stagedDiscards,
         ...(siblings.length > 0 ? { siblings } : {}),
         ...(this.host.media ? { media: this.host.media } : {}),
+        ...(this.host.files ? { files: this.host.files } : {}),
       });
-      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) {
+        await this.discardStagedMedia(stagedDiscards);
+        return;
+      }
       this.emitMessage({
         ...event,
+        invoked: !ambient,
         speaker: {
           id: String(m.from.id),
           name:
@@ -2190,8 +2608,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     previousRuntimeOwnerUserId: string,
   ): Promise<boolean> {
     // 两项都必须尝试，不能因第一项失败而把另一项也留在新值。
-    const tokenRestored = this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-    const ownerRestored = this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+    const tokenRestored = this.restoreSecret(this.secretKey(TOKEN_SECRET_KEY), previousToken);
+    const ownerRestored = this.restoreSecret(this.secretKey(OWNER_USER_ID_SECRET_KEY), previousOwnerUserId);
     this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
     if (tokenRestored && ownerRestored) return true;
 
@@ -2200,13 +2618,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
     await this.stopPolling();
-    const latchWritten = this.host.secrets.write(OFFLINE_SECRET_KEY, '1');
+    const latchWritten = this.host.secrets.write(this.secretKey(OFFLINE_SECRET_KEY), '1');
     const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';
     if (!latchConfirmed) {
       // 最后兜底：闩锁无法确认时删除 token 并回读。二者任一可靠落盘，重启都不会
       // 自动上线；若存储整体失效，运行态仍保持停止并显式报错。
-      this.host.secrets.remove(TOKEN_SECRET_KEY);
-      const tokenRemovalConfirmed = this.secretReadResult(TOKEN_SECRET_KEY).kind === 'missing';
+      this.host.secrets.remove(this.secretKey(TOKEN_SECRET_KEY));
+      const tokenRemovalConfirmed = this.secretReadResult(this.secretKey(TOKEN_SECRET_KEY)).kind === 'missing';
       if (!tokenRemovalConfirmed) {
         this.log.warn(
           'telegram config rollback failed and no durable offline guard could be confirmed',
@@ -2219,7 +2637,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   /** 持久化游标按 botId 命名空间 — 换 bot(token)后旧 offset 无意义, 归零。 */
   private readPersistedOffset(): number {
-    const raw = this.host.secrets.read(UPDATES_OFFSET_SECRET_KEY);
+    const raw = this.host.secrets.read(this.secretKey(UPDATES_OFFSET_SECRET_KEY));
     if (!raw) return 0;
     const separator = raw.indexOf(':');
     if (separator <= 0) return 0;
@@ -2231,7 +2649,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private persistOffset(offset: number): void {
     try {
       if (!this.host.secrets.isAvailable()) return;
-      this.host.secrets.write(UPDATES_OFFSET_SECRET_KEY, `${this.botId}:${offset}`);
+      this.host.secrets.write(this.secretKey(UPDATES_OFFSET_SECRET_KEY), `${this.botId}:${offset}`);
     } catch {
       /* best-effort — 丢失只是退化回 at-least-once 重放 */
     }
@@ -2327,10 +2745,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private setStatus(s: IMStatus): void {
     this.status = s;
-    this.host.ipc.broadcast('telegramBot:status-change', {
-      status: s,
-      botUsername: this.botUsername || null,
-    });
+    if (this.opts.ipc !== false) {
+      this.host.ipc.broadcast('telegramBot:status-change', {
+        status: s,
+        botUsername: this.botUsername || null,
+      });
+    }
     for (const h of this.statusHandlers) {
       try {
         h(s);

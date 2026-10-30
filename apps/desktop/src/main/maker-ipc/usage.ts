@@ -6,6 +6,7 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { createHash } from 'node:crypto';
 import { readSubscriptionAccountUsage, triggerSubscriptionAccountUsage, syncSubscriptionAccountUsage, setSubscriptionAccountUsageBroadcaster } from '../usage/subscriptionAccountUsage.js';
@@ -16,6 +17,7 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   readClaudeAccountUsageSnapshot,
+  readClaudeAccountQuotaClear,
   triggerClaudeAccountUsageRefresh,
 } from '../usage/claudeAccountUsage.js';
 import {
@@ -36,7 +38,7 @@ import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
 } from '../usage/codexWebUsage.js';
-import { app } from 'electron';
+import { app, powerMonitor } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
 import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
@@ -74,6 +76,10 @@ import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
+import { observeUsageChanges } from '../usageBroadcaster.js';
+import type { CodexResetAutoUseSettings } from '@cindy/maker-shared/device-link-contract';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -190,8 +196,8 @@ export async function readXaiSubscriptionUsageSnapshotForDeviceLink(providerId?:
   return await readSubscriptionAccountUsage(providerId) as XaiSubscriptionUsageSnapshot | null;
 }
 
-export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
-  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read();
+export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string, options?: { fresh?: boolean }): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
+  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read(options);
   if (subscriptionAccountKind(providerId) !== 'claude') return null;
   return await readSubscriptionAccountUsage(providerId) as import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null;
 }
@@ -211,13 +217,13 @@ function normalizeCodexUsageProvider(providerId?: string): string | undefined {
 }
 let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
-function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string) {
+export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string, options?: { fresh?: boolean }) {
   const providerId = normalizeCodexUsageProvider(requestedProviderId);
   const scope = activeOwnerScopeKey();
   if (scope !== codexReadersOwner) { codexUsageReaders.clear(); codexReadersOwner = scope; }
   const key = providerId ?? 'openai';
   const existing = codexUsageReaders.get(key);
-  if (existing) return existing();
+  if (existing) return existing(options);
 const reader = createCodexAccountUsageSnapshotReader({
   readAccessToken: () => scope === activeOwnerScopeKey() ? desktopCodexAuthAdapter.getAccessToken(providerId) : Promise.reject(new Error('Account scope changed')),
   readAccountId: () => desktopCodexAuthAdapter.getAccountId(providerId),
@@ -233,7 +239,7 @@ const reader = createCodexAccountUsageSnapshotReader({
 });
 
   codexUsageReaders.set(key, reader);
-  return reader();
+  return reader(options);
 }
 
 /**
@@ -246,6 +252,23 @@ export function triggerCodexAccountUsageRefresh(providerId?: string): void {
   void readCodexAccountUsageSnapshotWithWebRefresh(providerId).catch(() => {
     /* best-effort: 失败保留上一次快照, 不影响 turn 收尾 */
   });
+}
+
+type CodexRateLimitsReader = (providerId?: string) => Promise<MobileCodexRateLimitsResult>;
+let codexRateLimitsReader: CodexRateLimitsReader | null = null;
+
+/**
+ * Codex 限额与重置次数的同一次读取(与设置页、用量 chip 同一个 reset service)。供菜单栏等
+ * 主进程消费方使用；IPC 尚未注册时返回 null。
+ */
+export async function readCodexRateLimitsForHost(providerId?: string): Promise<MobileCodexRateLimitsResult | null> {
+  return codexRateLimitsReader ? codexRateLimitsReader(providerId) : null;
+}
+
+const resetRestoredListeners = new Set<(providerId: string) => Promise<void>>();
+export function onCodexAutoResetRestored(listener: (providerId: string) => Promise<void>): () => void {
+  resetRestoredListeners.add(listener);
+  return () => resetRestoredListeners.delete(listener);
 }
 
 export function registerMakerUsageIpc(maker: Maker): void {
@@ -284,28 +307,82 @@ export function registerMakerUsageIpc(maker: Maker): void {
     return service;
   }
 
+  async function accountKeyFor(providerId?: string): Promise<string> {
+    const scope = activeOwnerScopeKey();
+    const id = normalizeCodexUsageProvider(providerId);
+    const state = await desktopCodexAuthAdapter.getState({ providerId: id });
+    const accountId = state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId(id) : null;
+    if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('Account scope changed');
+    return codexResetAccountKey(state.authSource === 'oauth' ? state.identity ?? null : null, accountId);
+  }
+
+  // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
+  // this account-level RPC. A stale response still returns its usage payload but cannot consume a
+  // newer recovery state.
+  const readCodexRateLimits: CodexRateLimitsReader = async (providerId) => {
+    const scope = activeOwnerScopeKey();
+    const accountKey = await accountKeyFor(providerId);
+    const service = getResetService(providerId);
+    const result = providerId && providerId !== 'openai'
+      ? await service.read()
+      : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
+    if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+    if (accountKey !== await accountKeyFor(providerId)) throw new Error('ChatGPT account changed');
+    return { ...result, providerId: providerId ?? 'openai', autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) };
+  };
+  codexRateLimitsReader = readCodexRateLimits;
+
+  const automatic = new CodexResetAutoUse({
+    scope: activeOwnerScopeKey, now: Date.now, read: readCodexRateLimits,
+    authorized: (providerId, snapshot) => {
+      if (isAppSessionBoundaryPending() || !snapshot.autoUse?.accountKey) return false;
+      const current = codexResetAutoUseStore.read(providerId, snapshot.autoUse.accountKey);
+      return current.settings.enabled && JSON.stringify(current.settings) === JSON.stringify(snapshot.autoUse.settings);
+    },
+    consume: (providerId, key, authorized) => getResetService(providerId).consume(key, authorized),
+    record: (providerId, snapshot, at) => codexResetAutoUseStore.record(providerId, snapshot.autoUse!.accountKey, at),
+    refreshWeb: async (providerId) => { await readCodexAccountUsageSnapshotWithWebRefresh(providerId, { fresh: true }); },
+    restored: async (providerId) => {
+      for (const listener of resetRestoredListeners) await listener(providerId);
+    },
+    warn: () => log.warn('Codex automatic reset check could not complete'),
+  });
+  const checkEnabled = () => {
+    if (isAppSessionBoundaryPending()) return;
+    for (const providerId of codexResetAutoUseStore.providers()) void automatic.check(providerId);
+  };
+  // Checks run on the execution computer even with no renderer or remote phone connected.
+  const timer = setInterval(checkEnabled, 60_000);
+  timer.unref();
+  const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
+  powerMonitor.on('resume', checkEnabled);
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); powerMonitor.removeListener('resume', checkEnabled); });
+  checkEnabled();
+
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
-    // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
-    // this account-level RPC. A stale response still returns its usage payload but cannot consume a
-    // newer recovery state.
-    readCodexRateLimits: async (providerId) => {
+    readCodexRateLimits,
+    setCodexResetAutoUse: async (patch, expectedAccountKey, providerId = 'openai') => {
       const scope = activeOwnerScopeKey();
-      const service = getResetService(providerId);
-      const result = providerId && providerId !== 'openai'
-        ? await service.read()
-        : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
-      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
-      return { ...result, providerId: providerId ?? 'openai' };
+      const key = await accountKeyFor(providerId);
+      if (!key || key !== expectedAccountKey) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+      if (patch !== null) parseCodexResetAutoUse({ ...codexResetAutoUseStore.read(providerId, key).settings, ...patch });
+      await codexResetAutoUseStore.write(providerId, key, patch as Partial<CodexResetAutoUseSettings> | null);
+      if (scope !== activeOwnerScopeKey() || key !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: Account changed');
+      checkEnabled();
+      return readCodexRateLimits(providerId);
     },
     consumeCodexRateLimitReset: async (key, providerId) => {
       const scope = activeOwnerScopeKey();
+      const accountKey = await accountKeyFor(providerId);
       const result = await getResetService(providerId).consume(key);
       if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      if (accountKey !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
       return { ...result, providerId: providerId ?? 'openai',
-        rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai' } : null };
+        rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai',
+          autoUse: codexResetAutoUseStore.read(providerId ?? 'openai', accountKey) } : null };
     },
     readClaudeSubscriptionUsageSnapshot: readClaudeSubscriptionUsageSnapshotForDeviceLink,
     readXaiSubscriptionUsageSnapshot: readXaiSubscriptionUsageSnapshotForDeviceLink,
@@ -313,6 +390,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     },
     readClaudeAccountUsageSnapshot,
+  readClaudeAccountQuotaClear,
     triggerClaudeAccountUsageRefresh,
     readModelPricing: getGatewayModelPricing,
     readReferenceModelPricing: getReferenceModelPricing,

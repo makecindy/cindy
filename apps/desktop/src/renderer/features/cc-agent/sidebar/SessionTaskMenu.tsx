@@ -35,6 +35,7 @@ import {
   type TaskMoveDestination,
 } from './TaskMoveSubmenu';
 import { TaskMigrationDialog } from './TaskMigrationDialog';
+import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 
 interface Props {
@@ -229,6 +230,25 @@ function ActiveSessionTaskMenu({
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
             {item('rename', onRename, ownerActionsBlocked)}
+            {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
+            {!archived && !empty && !session.deviceLinkDeviceId && (
+              <DropdownMenuItem
+                className={MENU_ITEM_CLASS}
+                disabled={ownerActionsBlocked}
+                onSelect={() => {
+                  void setSessionNotificationsMuted(
+                    session,
+                    session.notificationsMuted !== true,
+                  ).catch(() => toast.error(t('ccAgent.sidebar.muteNotificationsFailed')));
+                }}
+              >
+                {t(
+                  session.notificationsMuted
+                    ? 'ccAgent.sidebar.sessionMenu.unmuteNotifications'
+                    : 'ccAgent.sidebar.sessionMenu.muteNotifications',
+                )}
+              </DropdownMenuItem>
+            )}
             {tags}
             {separator}
             {copy}
@@ -283,8 +303,7 @@ function ActiveSessionTaskMenu({
           ))}
         {!guest && (
           <>
-            {/* Agent 在另一台电脑运行的任务：Agent 会话记录在那台，移动与复制到其他电脑都会丢失它。 */}
-            {!archived && !empty && !session.remoteHostId && !session.agentDeviceId && (
+            {!archived && !empty && !session.remoteHostId && (
               <TaskMoveSubmenu
                 session={session}
                 disabled={ownerActionsBlocked}

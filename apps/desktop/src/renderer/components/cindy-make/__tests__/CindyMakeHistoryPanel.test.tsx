@@ -270,6 +270,35 @@ describe('Make history controls', () => {
     expect(f.read).toHaveBeenCalled();
   });
 
+  it('offers submitting a finished change to Cindy and shows where its pull request stands', async () => {
+    const A = 'a'.repeat(40);
+    const B = 'b'.repeat(40);
+    const finished = { id: 'round-a', reportedAt: 1, baseTree: A, tree: B };
+    harness([
+      item({ runId: 'done', completions: [finished], integration: 'integrated' }),
+      item({ runId: 'noop', completions: [{ ...finished, tree: A }], createdAt: 0 }),
+    ]);
+    const api = window.electronAPI as unknown as Record<string, unknown>;
+    const contribution = vi.fn(async (request: { action: string }) =>
+      request.action === 'status'
+        ? [{ runId: 'done', number: 4, url: 'https://github.com/makecindy/cindy/pull/4', state: 'open', submittedAt: 1 }]
+        : new Promise(() => {}),
+    );
+    api.cindyMakeContribution = contribution;
+    api.openExternal = vi.fn();
+    render(<CindyMakeHistoryPanel />);
+    expect(await screen.findByText('cindyMake.contribution.state.open')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'cindyMake.contribution.update' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(contribution).toHaveBeenCalledWith({ action: 'draft', runId: 'done' });
+
+    cleanup();
+    harness([item({ runId: 'noop', completions: [{ ...finished, tree: A }] })]);
+    render(<CindyMakeHistoryPanel />);
+    await screen.findByText('cindyMake.history.rounds');
+    expect(screen.queryByRole('button', { name: 'cindyMake.contribution.action' })).toBeNull();
+  });
+
   it('keeps an explicit retry for a failed integration without presenting it as generation', async () => {
     const f = harness([item({ actions: ['open', 'retry'], operationError: 'checksFailed' })]);
     render(<CindyMakeHistoryPanel />);

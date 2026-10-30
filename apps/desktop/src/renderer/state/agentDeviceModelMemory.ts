@@ -27,7 +27,7 @@ const STORAGE_KEY = 'xdt:agentDeviceModelMemory:v1';
 /** 某台电脑某 (agent, 来源) 下每个模型的 override。 */
 interface Slot {
   effortByModel: Record<string, Effort>;
-  fastByModel: Record<string, boolean>;
+  fastByModel: Record<string, boolean | 'ultrafast'>;
   thinkingByModel: Record<string, boolean>;
 }
 
@@ -39,7 +39,7 @@ export type AgentDeviceModelMemorySnapshot = Record<
   string,
   {
     effortByModel: Record<string, string>;
-    fastByModel: Record<string, boolean>;
+    fastByModel: Record<string, boolean | 'ultrafast'>;
     thinkingByModel: Record<string, boolean>;
   }
 >;
@@ -94,7 +94,8 @@ function sanitize(raw: unknown): MemoryMap {
       const rec = value as Partial<Record<SlotField, unknown>>;
       const slot: Slot = {
         effortByModel: sanitizeRecord(rec.effortByModel, isEffort),
-        fastByModel: sanitizeRecord(rec.fastByModel, isBoolean),
+        fastByModel: sanitizeRecord(rec.fastByModel, (value): value is boolean | 'ultrafast' =>
+          isBoolean(value) || value === 'ultrafast'),
         thinkingByModel: sanitizeRecord(rec.thinkingByModel, isBoolean),
       };
       if (!isEmptySlot(slot)) bySlot[key] = slot;
@@ -264,7 +265,7 @@ export function getAgentDeviceModelFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-): boolean | undefined {
+): boolean | 'ultrafast' | undefined {
   return readSlot(deviceId, agent, providerId, model)?.fastByModel[model];
 }
 
@@ -273,7 +274,7 @@ export function setAgentDeviceModelFast(
   agent: AgentKind,
   providerId: string,
   model: string,
-  enabled: boolean,
+  enabled: boolean | 'ultrafast',
 ): void {
   writeValue(deviceId, agent, providerId, model, 'fastByModel', enabled);
 }

@@ -9,7 +9,7 @@
  * "裁决/续跑/止损"的确定性逻辑全在代码里(规则 9):
  *   - 续跑闸门:status=active ∧ 会话空闲 ∧ 未在 firing ∧ 守卫全过 才发下一轮
  *   - 防失控守卫(**全部 per-goal 可配置、可空,仅设了上限才生效**):token 预算 / 最大轮数
- *     / 空轮抑制 / complete 自停 / blocked(模型自报 / 出错)/ 用户打断暂停 / in-flight 去重 + 防抖
+ *     / 空轮抑制 / complete 自停 / blocked(模型自报 / 出错)/ 用户显式暂停 / in-flight 去重 + 防抖
  * 交给模型的是"目标算不算完成 / 是否应 blocked"的语义判断;上限的确定 / 激活 /
  * 持久化全代码驱动。
  */
@@ -223,7 +223,7 @@ export interface GoalCounters {
  * 纯函数:给定上一状态 + 本轮结果 → 下一状态 + 是否续跑。无 IO、无副作用。
  *
  * 停止信号:
- *   - 用户打断(origin 'other')→ paused
+ *   - 普通输入(origin 'other')结束 → 继续目标，不计入目标轮数/用量
  *   - 终止型 error → paused(用户 Stop)/ blocked(真出错)
  *   - 模型自报 complete → complete(终态)/ blocked → blocked
  *   - **仅当设了对应上限**:token 撞预算 / 轮数撞 maxTurns → budgetLimited(终态);
@@ -232,20 +232,10 @@ export interface GoalCounters {
  * 目标会一直续到 complete/blocked/用户停。
  */
 export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): GoalDecision {
-  // 用户/其它来源在 goal active 期间发起的 turn → 暂停,不计入 goal 计数。
-  if (outcome.origin === 'other') {
-    return {
-      status: 'paused',
-      lastReason: 'paused: user sent a message during the goal',
-      turnsUsed: prev.turnsUsed,
-      tokensUsed: prev.tokensUsed,
-      noProgressStreak: prev.noProgressStreak,
-      shouldFire: false,
-    };
-  }
-
-  const turnsUsed = prev.turnsUsed + 1;
-  const tokensUsed = prev.tokensUsed + Math.max(0, outcome.tokensThisTurn);
+  // Ordinary input keeps its real origin and does not consume Goal counters.
+  const goalTurn = outcome.origin === 'goal';
+  const turnsUsed = prev.turnsUsed + (goalTurn ? 1 : 0);
+  const tokensUsed = prev.tokensUsed + (goalTurn ? Math.max(0, outcome.tokensThisTurn) : 0);
 
   // 终止型 error:区分"用户 Stop(abort)"与"真出错"。
   //  - 用户 Stop → paused(干净暂停,语义对);
@@ -278,6 +268,13 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
       tokensUsed,
       noProgressStreak: prev.noProgressStreak,
       shouldFire: false,
+    };
+  }
+
+  if (!goalTurn) {
+    return {
+      status: 'active', lastReason: null, turnsUsed, tokensUsed,
+      noProgressStreak: prev.noProgressStreak, shouldFire: true,
     };
   }
 
@@ -352,6 +349,7 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
 // ── 每轮事件累计状态 ─────────────────────────────────────────────────────────
 
 interface TurnAccumulator {
+  userDispatchPending: boolean;
   /** 创建目标之前已在运行的轮次；只保存在本生命周期内，不计入目标裁决。 */
   precedingTurn: { session: SessionLike; generation: number } | null;
   text: string;
@@ -377,6 +375,7 @@ function freshTurn(
   pendingCompletion: Promise<void> | null = null,
 ): TurnAccumulator {
   return {
+    userDispatchPending: false,
     precedingTurn: null,
     text: '',
     sawToolUse: false,
@@ -481,7 +480,7 @@ export class GoalController {
     this.now = deps.now ?? (() => Date.now());
     this.debounceMs = deps.continuationDebounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.unsubscribeIntervention = onUiSessionIntervention((sessionId) => {
-      // 新消息（包括同一轮内的插话）撤销旧轮豁免，保留原有用户打断语义。
+      // 新消息（包括同轮插话）撤销旧轮豁免；按真实来源结算后继续目标。
       const turn = this.turns.get(sessionId);
       if (turn) turn.precedingTurn = null;
     });
@@ -633,6 +632,7 @@ export class GoalController {
         previousBoundary?.pendingPersistence ?? null,
         previousBoundary?.pendingCompletion ?? null,
       );
+      editBoundary.userDispatchPending = true;
       this.turns.set(sessionId, editBoundary);
       let editObjectivePersisted = false;
       let updatedState: GoalState | null = null;
@@ -708,6 +708,7 @@ export class GoalController {
       previousBoundary?.pendingPersistence ?? null,
       previousBoundary?.pendingCompletion ?? null,
     );
+    createBoundary.userDispatchPending = true;
     createBoundary.precedingTurn = previousBoundary?.precedingTurn ?? null;
     this.turns.set(sessionId, createBoundary);
     let createdState: GoalState | null = null;
@@ -845,7 +846,7 @@ export class GoalController {
         if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         if (limited) {
           this.stopSession(sessionId);
-          this.emit(limited);
+          this.emit(limited, current.status);
         }
         return limited;
       }
@@ -985,7 +986,7 @@ export class GoalController {
         await this.resumeGoal(sessionId);
         return reconcileLifecycleChange();
       }
-      this.emit(next);
+      this.emit(next, state.status);
       if (
         next.status === 'active' &&
         state.status === 'budgetLimited' &&
@@ -1131,9 +1132,12 @@ export class GoalController {
     }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
+    const previousGoal = await this.deps.storage.get(sessionId);
+    if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
     if (this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
+    if (previousGoal) this.deps.onGoalStopped?.(sessionId, this.now());
     this.turns.delete(sessionId);
   }
 
@@ -1190,7 +1194,7 @@ export class GoalController {
       }),
     );
     if (this.turns.get(sessionId) !== pauseBoundary) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
   }
 
   /**
@@ -1341,6 +1345,7 @@ export class GoalController {
       lookupBoundary.pendingPersistence,
       lookupBoundary.pendingCompletion,
     );
+    resumedBoundary.userDispatchPending = !opts?.auto;
     this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
@@ -1759,9 +1764,12 @@ export class GoalController {
     return session ? session.isTurnRunning() : false;
   }
 
-  private emit(state: GoalState): void {
+  private emit(state: GoalState, previousStatus?: GoalState['status']): void {
     if (this.disposed || this.disposing) return;
     this.deps.emitStatus({ sessionId: state.sessionId, goal: toPayload(state) });
+    if (previousStatus === 'active' && state.status !== 'active') {
+      this.deps.onGoalStopped?.(state.sessionId, state.updatedAt);
+    }
   }
 
   /**
@@ -1791,7 +1799,7 @@ export class GoalController {
   }
 
   private onEvent(sessionId: string, event: AgentEvent): void {
-    if (this.disposed) return;
+    if (this.disposed || event.turnScope === 'background') return;
     let turn = this.turns.get(sessionId);
     if (!turn) {
       turn = freshTurn();
@@ -1996,6 +2004,7 @@ export class GoalController {
           // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
           // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
           this.deps.emitStatus({ sessionId, goal: null });
+          this.deps.onGoalStopped?.(sessionId, this.now());
         })(),
       );
       if (isCurrentTurn()) this.stopSession(sessionId);
@@ -2094,7 +2103,7 @@ export class GoalController {
       },
     );
     if (!isCurrentTurn()) return;
-    if (updated) this.emit(updated);
+    if (updated) this.emit(updated, state.status);
 
     this.resetTurn(sessionId);
 
@@ -2125,7 +2134,7 @@ export class GoalController {
         }),
       );
       if (!isCurrent()) return true;
-      if (blocked) this.emit(blocked);
+      if (blocked) this.emit(blocked, 'active');
     } catch (persistError) {
       this.deps.logger.error('[goal] failed to persist dispatch failure', {
         sessionId,
@@ -2243,6 +2252,17 @@ export class GoalController {
     }, this.debounceMs);
     (timer as { unref?: () => void }).unref?.();
     this.deferredManualResumeTimers.set(sessionId, timer);
+  }
+
+  /** A confirmed quota refresh can satisfy an existing wait; overload backoff stays unchanged. */
+  async resumeRestoredQuota(matches: (sessionId: string) => Promise<boolean>): Promise<void> {
+    for (const [sessionId, timer] of this.usageResumeTimers) {
+      const state = await this.deps.storage.get(sessionId).catch(() => null);
+      if (state?.status !== 'usageLimited' || state.lastReason === OVERLOAD_LAST_REASON) continue;
+      if (!await matches(sessionId) || this.usageResumeTimers.get(sessionId) !== timer) continue;
+      clearTimeout(timer);
+      await this.autoResumeFromUsageLimit(sessionId);
+    }
   }
 
   /**
@@ -2412,7 +2432,7 @@ export class GoalController {
       );
       if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
-      if (limited) this.emit(limited);
+      if (limited) this.emit(limited, state.status);
       return;
     }
     const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
@@ -2434,6 +2454,20 @@ export class GoalController {
       return;
     }
     if (this.firing.has(sessionId)) return;
+    // FIFO, approvals, recovery and explicit input holds own dispatch priority.
+    // Queue projections/terminal observers wake us when that boundary releases.
+    try {
+      if (this.deps.ensureInputReady && !await this.deps.ensureInputReady(sessionId)) return;
+    } catch (error) {
+      if (!isCurrentLifecycle()) return;
+      const persisted = await this.blockDispatchFailure(
+        sessionId, lifecycleBoundary,
+        'turn dispatch failed: unable to restore input queue', isCurrentLifecycle,
+      );
+      if (opts?.throwOnRestoreFailure || (!persisted && opts?.throwOnUnpersistedRestoreFailure)) throw error;
+      return;
+    }
+    if (!isCurrentLifecycle()) return;
     // 首轮 vs 续轮由 state 派生(turnsUsed===0 = 首轮尚未真正跑完),不再由调用方指定。
     // 关键:首轮被 busy 跳过 / 被暂停后再发时,只要首轮还没跑过就仍按 first 发,否则首轮
     // 特有的"质量自检 + AskUserQuestion"约定(buildFirstTurnDirective)会丢,目标直接进
@@ -2443,8 +2477,7 @@ export class GoalController {
       // 会话忙 → 重排一次防抖重试,别丢这一轮(而非直接放弃)。
       // 首轮尤其关键:新建会话后 agent 可能仍在 spawn/init,isTurnRunning() 瞬时为真;旧实现
       // 直接丢弃首轮 → 目标永久卡在 active/0 轮、首轮指令从未下发(用户侧表现为"没有交互卡片、
-      // 目标不动")。重试期间若真有用户 turn 抢跑,其收尾会把目标置 paused,届时重试见
-      // status≠active 自然停,不会空转。
+      // 目标不动")。重试期间若有普通输入抢跑，先完成输入，再由终态通知续跑目标。
       this.deps.logger.info('[goal] session busy, retry fire soon', { sessionId, kind });
       this.scheduleContinuation(sessionId);
       return;
@@ -2477,6 +2510,7 @@ export class GoalController {
       if (!isCurrentLifecycle()) return;
       if (!session) throw new GoalSessionRestoreError();
       restoringSession = false;
+      if (this.deps.isInputBlocked?.(sessionId)) return;
       // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
       // listener,必须迁到新 session,否则这轮 turn 的 done/error 事件进不了 finalizeTurn,
       // 目标卡死在 active(reviewer P1)。attachListener 按 session 身份判等,未换则 no-op;
@@ -2498,14 +2532,14 @@ export class GoalController {
       // 由 turnsUsed 派生,'first' 可能被 busy 重试 / 暂停后重发,放这里会重复落库。
       // 这里只负责把完整 directive(含裁决约定)发给模型。
       if (this.deps.beforeDispatchUserTurn) {
-        await this.deps.beforeDispatchUserTurn(sessionId);
+        await this.deps.beforeDispatchUserTurn(sessionId, dispatchAbortController.signal);
         baselineStarted = true;
       }
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后 goal 循环的下一轮 directive 同样要带交接上下文
       // (2026-07-20 审计)。
       const pendingHandoff = await agentHandoffPending.peek(sessionId);
-      if (!isCurrentDispatch()) {
+      if (!isCurrentDispatch() || this.deps.isInputBlocked?.(sessionId)) {
         if (baselineStarted) {
           this.deps.onUndispatchedUserTurn?.(sessionId);
           baselineStarted = false;
@@ -2515,6 +2549,12 @@ export class GoalController {
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };
+      const userDispatchAt = this.now();
+      const noteUserDispatched = () => {
+        if (!dispatchBoundary?.userDispatchPending) return;
+        dispatchBoundary.userDispatchPending = false;
+        this.deps.onGoalUserDispatched?.(sessionId, userDispatchAt);
+      };
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
         {
@@ -2536,6 +2576,7 @@ export class GoalController {
           signal: dispatchAbortController.signal,
         },
       );
+      if (result.accepted) noteUserDispatched();
       if (pendingHandoff && result.accepted) {
         agentHandoffPending.consume(sessionId);
       }
@@ -2623,7 +2664,7 @@ export class GoalController {
       if (!isCurrentFailure()) return;
 
       if ((e as { code?: unknown } | null)?.code === 'SESSION_RUNNING') {
-        // dispatch 前的窄 race；现有 turn 的终态会暂停 Goal，空闲检查则负责稍后重试。
+        // dispatch 前的窄 race；先处理当前输入；终态与输入空闲通知负责稍后续跑。
         this.scheduleContinuation(sessionId);
         return;
       }

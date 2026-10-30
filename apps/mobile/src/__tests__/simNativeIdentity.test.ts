@@ -6,6 +6,22 @@ const current = "a".repeat(40);
 const previous = "b".repeat(40);
 
 describe("simulator native compatibility", () => {
+  // 2026-10-29: avoid expensive calculation when no installed fingerprint can be
+  // compared, and distinguish a calculator timeout from an incompatible app (unit).
+  it("skips calculation when the installed fingerprint is missing", () => {
+    const compute = vi.fn(() => current);
+    expect(inspectSimulatorNativeIdentity({ appPath: '/app', read: () => '', compute }))
+      .toMatchObject({ healthy: false, code: 'native-unknown', reason: 'installed-fingerprint-missing' });
+    expect(compute).not.toHaveBeenCalled();
+  });
+
+  it("reports calculation timeout without claiming the app needs a rebuild", () => {
+    const result = inspectSimulatorNativeIdentity({ appPath: '/app', read: () => current,
+      compute: () => { throw Object.assign(new Error('private child output'), { code: 'NATIVE_FINGERPRINT_TIMEOUT' }); } });
+    expect(result).toMatchObject({ healthy: false, code: 'native-unknown', reason: 'native-fingerprint-timeout' });
+    expect(JSON.stringify(result)).not.toContain('private');
+  });
+
   it.each([
     [current, current, true, "native-matched"],
     [previous, current, false, "native-mismatch"],

@@ -1,4 +1,4 @@
-import { botGroupReadKey, isBotGroupUnread, seedBotGroupReadState } from '../botReadState';
+import { botGroupReadKey, botGroupUnreadCount, isBotGroupUnread, seedBotGroupReadState } from '../botReadState';
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,5 +151,27 @@ describe('Bot read positions', () => {
 
     expect(getBotLastReadAtMap()).toEqual({});
     expect(markBotRead('bot-1', 5_000)).toBe(true);
+  });
+
+  it('counts a group\'s unread messages from the host\'s incoming times, and falls back to one without them', () => {
+    setBotReadStateOwner('owner-1');
+    const at = (ms: number) => new Date(ms).toISOString();
+    const group = { id: 'g', lastReplyAt: 4_000, incomingMessageTimes: [at(1_000), at(2_000), at(3_000), at(4_000)] };
+    // Never read before: seeding marks the existing history as read.
+    seedBotGroupReadState([group]);
+    expect(botGroupUnreadCount(group)).toBe(0);
+    // Read up to the second message (as stored by an earlier visit).
+    window.localStorage.setItem('cindy.bots.readState.v1.owner-1', JSON.stringify({ [botGroupReadKey('g')]: 2_000 }));
+    resetBotReadStateForTests();
+    setBotReadStateOwner('owner-1');
+    expect(botGroupUnreadCount(group)).toBe(2);
+    expect(isBotGroupUnread(group)).toBe(true);
+    // An older host sends no list: anything newer reads as one.
+    expect(botGroupUnreadCount({ id: 'g', lastReplyAt: 4_000 })).toBe(1);
+    // The list and the latest reply disagreeing still never hides a new reply.
+    expect(botGroupUnreadCount({ id: 'g', lastReplyAt: 4_000, incomingMessageTimes: [] })).toBe(1);
+    markBotRead(botGroupReadKey('g'), 4_000);
+    expect(botGroupUnreadCount(group)).toBe(0);
+    expect(isBotGroupUnread(group)).toBe(false);
   });
 });

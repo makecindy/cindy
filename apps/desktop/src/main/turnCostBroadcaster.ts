@@ -91,7 +91,7 @@ function isOwnerScopeCurrent(scope: OwnerScope): boolean {
   return scope === null || broadcastTap.isDataOwnerBroadcastScopeCurrent?.(scope) !== false;
 }
 
-function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
+export function broadcastTurnCostPayload(payload: MessageTurnCostPayload, ownerScope: OwnerScope): void {
   if (ownerScope === null) {
     broadcastTap.tapWindowBroadcast(MESSAGE_TURN_COST_CHANGED, payload);
   } else {

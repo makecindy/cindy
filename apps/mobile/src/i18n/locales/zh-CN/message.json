@@ -9,12 +9,17 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "由本机应用「{{name}}」发送",
+    "sourceLocalAppId": "应用 ID：{{id}}",
+    "failedSamplingAttempt": "此回复未完成，内容仅供参考。",
     "moreActions": "更多消息操作",
+    "reply": "回复",
     "newMessagesToBottom": "有新消息，跳到底部",
     "jumpToBottom": "跳到底部",
     "openForkOrigin": "打开分叉来源消息",
     "viewForkOrigin": "查看分叉来源",
     "emptyMessages": "暂无消息",
+    "historyNotCached": "历史消息尚未缓存，连接电脑后同步",
     "syncing": "正在同步",
     "copyLinkHint": "点按复制消息链接",
     "sentTime": "发送时间 {{time}}",
@@ -66,6 +71,7 @@
     "copyStateCopied": "已复制",
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
+    "copyCode": "复制代码",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",
@@ -100,11 +106,13 @@
     "subagentSummary": "Subagent 小结",
     "agentSwitchLabel": "已从 {{from}} 切换到 {{to}}",
     "agentSwitchViewHandoff": "{{label}}，查看交接内容",
+    "sessionFallbackPill": "已用摘要接续",
     "sessionResumedPill": "已续接原任务",
     "handoffContentDesc": "交接内容——切换时发送给新引擎的上下文摘要（不计入对话记录，仅在此展示）",
     "handoffContentDescEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文（不计入对话记录，仅在此展示）",
     "openDiagramDetail": "打开图表详情",
-    "sessionChipFallback": "任务 {{id}}",
+    "sessionChipFallback": "某个任务",
+    "messageChipFallback": "引用的消息",
     "imageFallbackTitle": "图片",
     "mermaidExportFailedTitle": "导出失败",
     "mermaidRenderIncompleteBody": "图表尚未渲染完成或导出出错，请稍后重试。",
@@ -167,7 +175,9 @@
     "diffEditCount": "{{n}} 处编辑",
     "groupSentNamed": "从群聊「{{name}}」发送",
     "groupSent": "从群聊发送",
-    "sourceGroupId": "群聊 ID：{{id}}"
+    "sourceGroupId": "群聊 ID：{{id}}",
+    "selectText": "选择文字",
+    "you": "你"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -178,6 +188,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "originalUnavailable": "原图暂不可用",
+    "retryOriginal": "重试原图",
+    "loadingOriginal": "正在加载原图…",
     "sourceMissing": "源图片已不在这台电脑上，请重新导入原文件。",
     "deviceOffline": "电脑尚未连接，请恢复连接后重试。",
     "cancelAnnotation": "取消标注",
@@ -225,6 +238,10 @@
     "cancel": "取消",
     "edit": "编辑",
     "steer": "插话",
+    "steerQueued": "暂未送达，消息仍保留在队列中。",
+    "moveUp": "提前一位",
+    "moveDown": "延后一位",
+    "cancelSend": "取消发送",
     "collapseQueued": "收起排队消息",
     "expandRemainingQueued": "展开剩余 {{n}} 条排队消息",
     "collapse": "收起",
@@ -233,7 +250,15 @@
     "sendingMessage": "发送中的消息：{{text}}",
     "uploadingAttachments": "附件上传中 {{uploaded}}/{{total}}",
     "delete": "删除",
-    "retry": "重试"
+    "retry": "重试",
+    "notSent": "未发送",
+    "imagesNotUploaded_one": "{{count}} 张图片没传上去",
+    "imagesNotUploaded_other": "{{count}} 张图片没传上去",
+    "waitingForComputer": "等电脑连上后发送",
+    "waitingForNetwork": "等网络恢复后发送",
+    "queued": "排队中",
+    "retryImage": "重新上传这张图片",
+    "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
     "contextRebuild": {
@@ -260,12 +285,25 @@
       "usageReset": "用量已恢复，已自动继续",
       "pending": "重新连接中…",
       "pendingWithProgress": "重新连接中 {{attempt}}/{{total}}…",
+      "groupSwitchPending": "正在换一台电脑继续…",
       "details": "本次重试 {{attempt}}/{{total}} · 本任务累计重连 {{count}} 次",
       "detail": {
         "reason": "中断原因",
         "attempt": "本次重试 {{attempt}}/{{total}}",
         "sessionTotal": "本任务累计重连 {{count}} 次"
-      }
+      },
+      "agentSwitch": {
+        "usage-limit": "{{from}} 撞到用量上限，已换到 {{to}} 继续",
+        "auth": "{{from}} 登录已失效，已换到 {{to}} 继续",
+        "unavailable": "{{from}} 连不上，已换到 {{to}} 继续",
+        "overload": "{{from}} 的服务繁忙，已换到 {{to}} 继续",
+        "failed": "{{from}} 出了问题，已换到 {{to}} 继续"
+      },
+      "agentReconnect": {
+        "named": "已重新连上 {{computer}}，继续运行",
+        "unnamed": "已重新连上原来的电脑，继续运行"
+      },
+      "groupSwitch": "已自动换一台电脑继续"
     },
     "modelLabel": "模型",
     "sessionLabel": "任务",
@@ -274,6 +312,7 @@
     "agentSwitchLocation": "Agent 改到 {{device}} 运行",
     "agentSwitchLocationThisComputer": "Agent 改回这台电脑运行",
     "agentSwitchLocationOtherComputer": "Agent 改到另一台电脑运行",
+    "agentSwitchLocationQuotaRebalance": "这个账号的配额更该先用",
     "learnStarted": "技能学习已启动",
     "learnStartedBody": "蒸馏在电脑端后台进行，完成后请到电脑端查看并评审技能草案。",
     "learnFailed": "技能学习未能启动",
@@ -374,5 +413,15 @@
     "memory": "已记住：{{title}}",
     "skillCreated": "已建立技能：{{title}}",
     "skillUpdated": "已更新技能：{{title}}"
+  },
+  "richAnswer": {
+    "send": "发送消息",
+    "sending": "正在发送…",
+    "sent": "已提交",
+    "sendFailed": "消息未提交，已保留填写内容",
+    "playVideo": "播放视频",
+    "openVideoSource": "打开原视频",
+    "calculationUnavailable": "此项暂时无法计算。",
+    "incomplete": "部分内容未能显示。"
   }
 }

@@ -1,4 +1,11 @@
 {
+  "imageDelivery": {
+    "stored": "Image delivered",
+    "failed": "Image delivery failed. Retry transferring the existing image.",
+    "retry": "Retry delivery",
+    "retrying": "Delivering…",
+    "retryFailed": "Delivery is still unavailable. Check that the source computer is online."
+  },
   "agentActionRow": {
     "noContent": "Nothing to display",
     "fileChange": {

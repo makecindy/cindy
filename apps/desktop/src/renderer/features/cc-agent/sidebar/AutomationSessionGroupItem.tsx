@@ -27,6 +27,7 @@ import {
 import { useAutomationGroupCollapsed } from '../hooks/useAutomationGroupCollapsed';
 import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebarTime';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
+import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
 import { MENU_ITEM_CLASS } from './menuStyles';
@@ -92,6 +93,19 @@ interface FrozenGroupState {
   originActiveSessionId: string | null;
   hasBeenActive: boolean;
   visibleSessionIds: string[];
+}
+
+/** 伙伴设置的「例行任务」页（本机或远程伙伴）。 */
+function teammateRoutinesPath(botId: string, deviceId?: string): string {
+  const base = deviceId
+    ? `/bots/remote/${encodeURIComponent(deviceId)}/${encodeURIComponent(botId)}`
+    : `/bots/${encodeURIComponent(botId)}`;
+  return `${base}?settings=1&settingsPage=routines`;
+}
+
+/** 单独成组件：伙伴归属订阅只在例行任务分组上挂载，普通自动化组头不付这份成本。 */
+function TeammateRoutineOwnerMark({ session }: { session: Session }) {
+  return <BotFollowMark followers={useSessionFollowers(session)} />;
 }
 
 const AUTOMATION_GROUP_INLINE_ACTION_SELECTOR = '[data-automation-group-inline-action="true"]';
@@ -213,8 +227,13 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // 远程分组只提供在对方电脑上执行的操作（运行、暂停 / 恢复、标为已读）；编辑页与删除
     // 确认只管本机任务，查看入口也不能拿远程 id 去聚焦本机自动化页。
     const isRemoteGroup = !!group.deviceLinkDeviceId;
+    // 伙伴例行任务分组没有 schedule：只提供标为已读，运行与编辑在伙伴设置「例行任务」页。
+    // 伙伴任务的归档归伙伴生命周期管理，主进程拒绝通用归档，所以这里也不提供「全部归档」。
+    const teammateRoutine = group.teammateRoutine;
     // 远程且已结束、又没有未读时，菜单里没有可执行项，不显示「更多」。
-    const hasMoreMenuItems = !isRemoteGroup || canMarkRead || group.scheduleStatus !== 'expired';
+    const hasMoreMenuItems = teammateRoutine
+      ? canMarkRead
+      : !isRemoteGroup || canMarkRead || group.scheduleStatus !== 'expired';
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
     // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
     // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -257,6 +276,8 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       ? latestRemoteActivity
       : latestLocalActivity;
     const scheduleId = group.scheduleId;
+    // 组头右侧悬停操作槽：schedule 分组恒有（运行 + 更多），例行任务分组仅在有菜单项时有。
+    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems);
     // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
     // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
     // 里显示「已停止」文案,避免用户误判为普通空闲态。
@@ -486,7 +507,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
               event.preventDefault();
               event.stopPropagation();
-              if (!scheduleId) return;
+              if (!hasHoverActions || !hasMoreMenuItems) return;
               setRowTooltipOpen(false);
               setMenuOpen(true);
             }}
@@ -507,9 +528,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
             }}
             className={cn(
               // list 组头与普通 SessionCard 共用 10px 内容边距；只有展开后的子任务
-              // 由下方 pl-3 容器额外缩进。text 模式继续沿用 SessionItem 的树形缩进。
+              // 由下方 pl-2 容器增加 8px 层级缩进。text 模式沿用 SessionItem 的树形缩进。
               'group relative flex h-8 w-full items-center gap-1.5 rounded-full',
-              sessionVariant === 'list' ? 'px-2.5' : indented ? 'pl-[22px] pr-2' : 'pl-3 pr-2',
+              sessionVariant === 'list' ? 'px-2.5' : indented ? 'pl-5 pr-2' : 'pl-3 pr-2',
               'text-left text-sm font-medium',
               hasActiveHidden
                 ? 'bg-sidebar-item-active text-[var(--sidebar-item-active-foreground)]'
@@ -548,9 +569,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   onClick={(event) => {
                     event.stopPropagation();
                     navigate(
-                      group.scheduleId && !isRemoteGroup
-                        ? scheduleFocusPath(group.scheduleId)
-                        : '/cc-agent/scheduled',
+                      teammateRoutine
+                        ? teammateRoutinesPath(teammateRoutine.botId, group.deviceLinkDeviceId)
+                        : group.scheduleId && !isRemoteGroup
+                          ? scheduleFocusPath(group.scheduleId)
+                          : '/cc-agent/scheduled',
                     );
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
@@ -580,6 +603,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               >
                 <span className="min-w-0 truncate">{group.title}</span>
               </button>
+              {/* 例行任务分组：标题后显示所属伙伴头像，与组内各行的伙伴标记同源。 */}
+              {teammateRoutine && latestSession && (
+                <TeammateRoutineOwnerMark session={latestSession} />
+              )}
             </span>
             {/* 展开箭头挪到标题后,视觉上属于「标题右侧的次要控件」,和右侧 meta/操作
               槽用 ml-auto 分开;shrink-0 保证长标题挤压时不会先把 chevron 挤没。 */}
@@ -633,7 +660,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     hasActiveHidden
                       ? 'text-[var(--sidebar-item-active-foreground)]'
                       : 'text-sidebar-action-icon',
-                    scheduleId &&
+                    hasHoverActions &&
                       !menuOpen &&
                       'group-hover:opacity-0 group-focus-within/slot:opacity-0',
                     menuOpen && 'opacity-0',
@@ -713,12 +740,13 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     <span className="min-w-0 truncate text-right">{meta}</span>
                   )}
                 </div>
-                {scheduleId && (
+                {hasHoverActions && (
                   <>
                     <div
                       aria-hidden
                       className={cn(
-                        'invisible col-start-1 row-start-1 h-6 w-[42px]',
+                        'invisible col-start-1 row-start-1 h-6',
+                        scheduleId ? 'w-[42px]' : 'w-5',
                         !menuOpen && 'hidden group-hover:block group-focus-within/slot:block',
                       )}
                     />
@@ -733,28 +761,30 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     >
                       {/* 高频 Run 继续直点;Edit/Pause/Resume/Delete 收进 More 菜单,避免 Edit
                     和左侧 Timer chip 形成重复入口,同时保留原来菜单里的低频操作空间。 */}
-                      <Tip text={t('ccAgent.sidebar.automationGroup.menu.runNow')} side="bottom">
-                        <button
-                          type="button"
-                          data-automation-group-inline-action="true"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            // 点击后主动 blur:group/slot 的 focus-within 会让操作按钮
-                            // 常驻可见 + meta 常隐,鼠标移开也不恢复;显式失焦让 hover 语义
-                            // 重新接管。
-                            event.currentTarget.blur();
-                            onScheduleAction(group, 'run');
-                          }}
-                          aria-label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
-                          className={cn(
-                            'flex size-5 shrink-0 items-center justify-center rounded-md',
-                            'transition-colors',
-                            actionButtonToneClassName,
-                          )}
-                        >
-                          <Play size={14} strokeWidth={2} />
-                        </button>
-                      </Tip>
+                      {scheduleId && (
+                        <Tip text={t('ccAgent.sidebar.automationGroup.menu.runNow')} side="bottom">
+                          <button
+                            type="button"
+                            data-automation-group-inline-action="true"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              // 点击后主动 blur:group/slot 的 focus-within 会让操作按钮
+                              // 常驻可见 + meta 常隐,鼠标移开也不恢复;显式失焦让 hover 语义
+                              // 重新接管。
+                              event.currentTarget.blur();
+                              onScheduleAction(group, 'run');
+                            }}
+                            aria-label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
+                            className={cn(
+                              'flex size-5 shrink-0 items-center justify-center rounded-md',
+                              'transition-colors',
+                              actionButtonToneClassName,
+                            )}
+                          >
+                            <Play size={14} strokeWidth={2} />
+                          </button>
+                        </Tip>
+                      )}
                       {hasMoreMenuItems && (
                         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
                           <DropdownMenuTrigger asChild>
@@ -798,7 +828,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                       {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
                                     </DropdownMenuItem>
                                   )}
-                                  {!isRemoteGroup && (
+                                  {scheduleId && !isRemoteGroup && (
                                     <DropdownMenuItem
                                       onSelect={() => onScheduleAction(group, 'edit')}
                                       className={MENU_ITEM_CLASS}
@@ -806,7 +836,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                       {t('ccAgent.sidebar.automationGroup.menu.edit')}
                                     </DropdownMenuItem>
                                   )}
-                                  {group.scheduleStatus !== 'expired' && (
+                                  {scheduleId && group.scheduleStatus !== 'expired' && (
                                     <DropdownMenuItem
                                       onSelect={() => onScheduleAction(group, 'toggle-pause')}
                                       className={MENU_ITEM_CLASS}
@@ -816,9 +846,20 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                         : t('ccAgent.sidebar.automationGroup.menu.pause')}
                                     </DropdownMenuItem>
                                   )}
-                                  {!isRemoteGroup && (
+                                  {scheduleId && !isRemoteGroup && (
                                     <>
                                       <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onSelect={() => onScheduleAction(group, 'archive-all')}
+                                        disabled={
+                                          !group.sessions.some(
+                                            (session) => session.status === 'active',
+                                          )
+                                        }
+                                        className={MENU_ITEM_CLASS}
+                                      >
+                                        {t('ccAgent.sidebar.projectAction.archivedAll')}
+                                      </DropdownMenuItem>
                                       <DropdownMenuItem
                                         onSelect={() => onScheduleAction(group, 'delete')}
                                         disabled={
@@ -846,7 +887,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           </div>
         </Tip>
         {hasVisibleChildren && (
-          <div className="flex flex-col gap-0.5 pl-3">
+          <div className="flex flex-col gap-0.5 pl-2">
             {visibleSessions.map((session: Session, index) => {
               const nextSession = visibleSessions[index + 1];
               const nextHighlighted =

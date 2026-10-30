@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
@@ -123,7 +123,7 @@ describe('messageMarkdown', () => {
     const blocks = parseMobileMarkdown(PR_WATCH_EXPANDED_BLANK_FIXTURE);
 
     expect(blocks.length).toBeGreaterThan(1);
-    // badge Markdown 位于 strong 标记内,当前解析为文本而非图片;空白不是图片尺寸撑高导致。
+    // badge Markdown 位于 strong 标记内,强调里的图片按原文显示(不成图片);空白不是图片尺寸撑高导致。
     expect(collectMobileMarkdownImages(PR_WATCH_EXPANDED_BLANK_FIXTURE)).toEqual([]);
     expect(blocks.some((block) => block.type === 'code')).toBe(true);
   });
@@ -537,6 +537,45 @@ describe('messageMarkdown', () => {
       { type: 'text', text: ', ' },
       { type: 'link', text: 'docs', url: 'https://example.com/docs' },
       { type: 'text', text: '.' },
+    ]);
+  });
+
+  it('keeps links and other inline tokens inside emphasis, flattened with marks', () => {
+    expect(parseMobileMarkdownInlines('打开 **https://example.com/abc/** 安装')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/abc/', url: 'https://example.com/abc/', marks: ['strong'] },
+      { type: 'text', text: ' 安装' },
+    ]);
+    expect(parseMobileMarkdownInlines('**看 [文档](https://example.com/docs) 和 `a.ts`**')).toEqual([
+      { type: 'strong', text: '看 ' },
+      { type: 'link', text: '文档', url: 'https://example.com/docs', marks: ['strong'] },
+      { type: 'strong', text: ' 和 ' },
+      { type: 'code', text: 'a.ts', marks: ['strong'] },
+    ]);
+    expect(parseMobileMarkdownInlines('*见 https://example.com/x*')).toEqual([
+      { type: 'emphasis', text: '见 ' },
+      { type: 'link', text: 'https://example.com/x', url: 'https://example.com/x', marks: ['emphasis'] },
+    ]);
+    expect(parseMobileMarkdownInlines('**~~https://example.com/old~~**')).toEqual([
+      { type: 'link', text: 'https://example.com/old', url: 'https://example.com/old', marks: ['strong', 'strikethrough'] },
+    ]);
+  });
+
+  it('keeps images inside emphasis as literal text and does not linkify their [alt](url)', () => {
+    expect(parseMobileMarkdownInlines(
+      '**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 https://example.com/y**',
+    )).toEqual([
+      { type: 'strong', text: '<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 ' },
+      { type: 'link', text: 'https://example.com/y', url: 'https://example.com/y', marks: ['strong'] },
+    ]);
+  });
+
+  it('keeps bare paths inside emphasis within an HTML comment as plain text', () => {
+    expect(parseMobileMarkdownInlines('<!-- **src/a.ts** --> **src/b.ts**')).toEqual([
+      { type: 'text', text: '<!-- ' },
+      { type: 'strong', text: 'src/a.ts' },
+      { type: 'text', text: ' --> ' },
+      { type: 'link', text: 'src/b.ts', url: 'src/b.ts', bare: true, marks: ['strong'] },
     ]);
   });
 
@@ -1553,11 +1592,9 @@ describe('bare file paths(正文纯文本形态)', () => {
     ]);
   });
 
-  it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
-    // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
-    // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。
+  it('被强调包裹的路径同样识别,带外层强调标记(与桌面 remark 在 strong 子节点里 linkify 同口径)', () => {
     expect(parseMobileMarkdownInlines('**src/App.tsx**')).toEqual([
-      { type: 'strong', text: 'src/App.tsx' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true, marks: ['strong'] },
     ]);
   });
 
@@ -1982,4 +2019,89 @@ describe('title 剥离不得灾难性回溯(ReDoS)', () => {
       { type: 'text', text: ' 补充' },
     ]);
   });
+});
+
+// Performance regression: inline image/comment guards used to rebuild full-source
+// masks for every token. Existing semantic fixtures do not bound that repeated work.
+// Real parser, counted full-source replacements (no wall-clock threshold), unit tier.
+it('prepares paragraph image guards once while preserving formatted text and images', () => {
+  const source = '**one** `two` **three** `four` ![photo](https://example.invalid/a.png)';
+  const replace = String.prototype.replace;
+  let fullSourcePasses = 0;
+  const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === source) fullSourcePasses += 1;
+    return Reflect.apply(replace, this, args);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type !== 'text')).toEqual([
+      { type: 'strong', text: 'one' }, { type: 'code', text: 'two' },
+      { type: 'strong', text: 'three' }, { type: 'code', text: 'four' },
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+    ]);
+    expect(fullSourcePasses).toBeLessThanOrEqual(4);
+  } finally { spy.mockRestore(); }
+});
+
+// A distant URL used to be normalized for every preceding formatted token,
+// repeatedly scanning its full prefix. Count that work through the real parser.
+it('normalizes a pending bare URL once and still discovers the following URL', () => {
+  const source = '**one** `two` **three** `four` https://example.invalid/a。 https://example.invalid/b!';
+  const urlIndex = source.indexOf('https:');
+  const slice = String.prototype.slice;
+  let prefixScans = 0;
+  const spy = vi.spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+    if (String(this) === source && start === 0 && end === urlIndex) prefixScans += 1;
+    return Reflect.apply(slice, this, [start, end]);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.slice(-4)).toEqual([
+      { type: 'link', text: 'https://example.invalid/a', url: 'https://example.invalid/a' },
+      { type: 'text', text: '。 ' },
+      { type: 'link', text: 'https://example.invalid/b', url: 'https://example.invalid/b' },
+      { type: 'text', text: '!' },
+    ]);
+    expect(prefixScans).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
+});
+
+// #7088 follow-up: each formatted token rescanned all remaining syntax, blocking
+// Hermes on a long paragraph. Count examined suffix characters through the real
+// parser (unit, not wall-clock timing); existing semantic tests miss this cost.
+it('bounds repeated suffix searches while keeping text, links and images', () => {
+  const source = '**one** `two` '.repeat(30) + '![photo](https://example.invalid/a.png) after src/end.ts';
+  const exec = RegExp.prototype.exec;
+  let searchedCharacters = 0;
+  const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+    const from = this.lastIndex;
+    const match = Reflect.apply(exec, this, [input]);
+    if (input === source && this.global) searchedCharacters += (match ? match.index + match[0].length : source.length) - from;
+    return match;
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+      { type: 'text', text: ' after ' },
+      { type: 'link', text: 'src/end.ts', url: 'src/end.ts', bare: true },
+    ]);
+    expect(searchedCharacters).toBeLessThan(source.length * 20);
+  } finally { spy.mockRestore(); }
+});
+
+// The pending-search optimization must retain raw prefix boundaries and rejected
+// spans. Through the public parser, protect rendering when another grammar wins
+// before/inside a candidate; these cases distinguish unsafe token-level caching.
+it.each([
+  ['**a**_b_', [{ type: 'strong', text: 'a' }, { type: 'text', text: '_b_' }]],
+  ['`a`$b$', [{ type: 'code', text: 'a' }, { type: 'text', text: '$b$' }]],
+  ['![a `b`](bad) then ![ok](src/a.png)', [
+    { type: 'text', text: '![a ' }, { type: 'code', text: 'b' },
+    { type: 'text', text: '](bad) then ' }, { type: 'image', alt: 'ok', url: 'src/a.png' },
+  ]],
+])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
+  expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
 });

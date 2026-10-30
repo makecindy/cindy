@@ -144,7 +144,8 @@ async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
 
 describe('skillhub/installService', () => {
   beforeEach(async () => {
-    vi.resetModules();
+    // Keep the module graph warm: each case owns TEST_ROOT and resets every mock below.
+    // The restart-specific cases call resetModules() at the exact boundary they exercise.
     vi.resetAllMocks();
     removeTestRoot();
     fs.mkdirSync(TEST_ROOT, { recursive: true });
@@ -186,6 +187,32 @@ describe('skillhub/installService', () => {
     expect(await uninstall(source, target)).toEqual({ success: true });
     expect(fs.existsSync(source)).toBe(false);
     expect(isCindySkillEnabled(source)).toBe(true);
+  });
+
+  it('keeps files intact when a remote approval expires after the uninstall leases are acquired', async () => {
+    const { source, target } = await localFixture('remote-remove');
+    const { uninstall } = await import('../installService');
+    const { shell } = await import('electron');
+    const beforeCommit = vi.fn(() => false);
+    expect((await uninstall(source, target, () => true, beforeCommit)).success).toBe(false);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(shell.trashItem).not.toHaveBeenCalled();
+  });
+
+  it('checks the remote instance after extraction and preserves the old version when confirmation is stale', async () => {
+    const { source } = await localFixture('remote-update');
+    await setupInstallDownload('remote-update', await makeZip({ 'SKILL.md': 'new content' }));
+    const { getCurrentDataOwnerId } = await import('../../authManager');
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('owner');
+    const { install } = await import('../installService');
+    const { registryService } = await import('../registry');
+    const beforeCommit = vi.fn(async () => false);
+    const result = await install({ name: 'remote-update', installPath: source, version: '2.0.0', force: true }, () => {}, { current: () => true, beforeCommit });
+    expect(result).toMatchObject({ success: false, errorCode: 'CANCELLED' });
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(source, 'SKILL.md'), 'utf8')).toBe('fixture content');
+    expect(registryService.addInstall).not.toHaveBeenCalled();
   });
 
   it('serializes an in-flight scanner repair before uninstall snapshots and removes its completed link', async () => {
@@ -463,6 +490,8 @@ describe('skillhub/installService', () => {
         unlink.mockRestore();
       }
       if (!result.success || !result.cleanupToken) throw new Error('expected unfinished cleanup');
+      // Simulate an app restart: the pending lease/journal modules own process state that
+      // clearAllMocks() cannot reset, so re-importing is part of this recovery contract.
       vi.resetModules();
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
       for (const name of ['old-source', 'reinstalled-alias', 'different-alias']) {
@@ -562,6 +591,8 @@ describe('skillhub/installService', () => {
         return;
       }
       if (!result.success || !result.cleanupToken) throw new Error('expected durable receipt');
+      // Simulate an app restart so the durable cleanup receipt is reconstructed by the
+      // module-level journal/lease state; mock reset alone cannot exercise that boundary.
       vi.resetModules();
       const { retryUninstallCleanup } = await import('../installService');
       const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
@@ -2072,6 +2103,8 @@ describe('skillhub/installService', () => {
       });
       const { uninstall } = await import('../installService');
       expect(await uninstall(source, target)).toEqual({ success: true });
+      // Auto-sync preferences are module-scoped and this case verifies their cross-restart
+      // persistence; only resetModules() gives the next import a fresh in-memory store.
       vi.resetModules();
       const { listIgnoredAutoSyncSkills, clearIgnoredAutoSyncSkill } =
         await import('../autoSyncPreferences');

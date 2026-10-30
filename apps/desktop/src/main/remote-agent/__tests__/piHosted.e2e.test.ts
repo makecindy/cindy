@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { exerciseConnectionPool } from './poolHarness';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
@@ -67,6 +68,7 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
   let root = '';
   let steps: Array<{ name: string; input: unknown }> = [];
   const requests: ModelRequest[] = [];
+  const rawBodies: string[] = [];
 
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-hosted-')));
@@ -74,6 +76,7 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
+        rawBodies.push(body);
         const parsed = JSON.parse(body || '{}') as {
           system?: string | Array<{ text?: string }>;
           tools?: Array<{ name: string }>;
@@ -222,6 +225,41 @@ describe.skipIf(!available)('remote agent with a real Pi', () => {
 
     await handle.close({ reason: 'navigation' });
     host.dispose();
+  });
+
+  // 同一台电脑上 Pi 的会话文件落在工作目录的上级目录下，对方会改写接回用的路径：这样的任务不让出。
+  it('keeps a Pi task whose session path the provider would rewrite, and still releases tasks without history', { timeout: 300_000 }, async () => {
+    steps = [];
+    const agent = new PiAgent(piDeps(path.join(root, 'pi-home-pool')));
+    await exerciseConnectionPool({
+      kind: 'pi',
+      root,
+      model: 'pi-test-model',
+      rgPath: RG,
+      startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+      modelRequests: () => rawBodies,
+      expectResumable: false,
+    });
+  });
+
+  // 工作目录与 Pi 的会话文件不共用上级目录(macOS 的 /tmp 与 /private/var 是两条路径)：让出后接回同一个会话。
+  it.runIf(process.platform === 'darwin')('releases an idle task under slot pressure and resumes the same Pi session', { timeout: 300_000 }, async () => {
+    steps = [];
+    const projectDir = fs.mkdtempSync('/tmp/cindy-pool-pi-');
+    const agent = new PiAgent(piDeps(path.join(root, 'pi-home-pool-resume')));
+    try {
+      await exerciseConnectionPool({
+        kind: 'pi',
+        root,
+        projectDir,
+        model: 'pi-test-model',
+        rgPath: RG,
+        startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+        modelRequests: () => rawBodies,
+      });
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('asks the user here before running commands in ask mode, and holds high-impact commands until confirmed', { timeout: 120_000 }, async () => {

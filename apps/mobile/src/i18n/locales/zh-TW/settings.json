@@ -1,7 +1,6 @@
 {
   "localLogs": {
     "upload": "上傳日誌",
-    "uploadHint": "僅傳送篩選後的執行記錄及應用程式、系統版本。詳細 Debug 日誌請使用匯出。",
     "uploadResult": {
       "unavailable": "目前版本未設定日誌上傳。",
       "consentRequired": "上傳日誌前需同意隱私政策。",
@@ -9,18 +8,16 @@
       "failed": "上傳失敗，日誌仍保留在手機上。"
     },
     "title": "Debug 日誌",
-    "record": "記錄 Debug 日誌",
-    "hint": "記錄手機上的連線、恢復、檔案預覽與播放、捲動、鍵盤與效能細節。預設關閉，最多保留 7 天、8 MB，不會自動上傳。",
-    "export": "匯出 Debug 日誌",
+    "record": "記錄日誌",
+    "export": "匯出日誌",
     "clear": "清空日誌",
     "busy": "處理中…",
     "failed": "無法儲存或分享日誌，請重試。",
     "clearHint": "刪除已儲存的診斷日誌？",
     "cancel": "取消",
-    "exportHint": "分享詳細本機日誌供疑難排解；不含任務內文或憑證。",
-    "options": "日誌選項",
     "uploadCopied": "日誌已上傳，編號 {{code}} 已複製",
-    "uploadSucceeded": "日誌已上傳，編號 {{code}}"
+    "uploadSucceeded": "日誌已上傳，編號 {{code}}",
+    "footer": "日誌儲存在手機上，最多 7 天、8 MB，不會自動上傳。匯出的完整日誌不含對話內文和憑證；上傳只傳送篩選後的執行記錄和版本資訊。"
   },
   "title": "設定",
   "appearance": {
@@ -31,11 +28,35 @@
       "light": "淺色",
       "dark": "深色"
     },
-    "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定"
+    "saveFailed": "顯示模式沒有儲存成功，重新開啟後會恢復之前的設定",
+    "userBubble": {
+      "title": "我的訊息氣泡顏色",
+      "presets": "顏色",
+      "default": "預設",
+      "peach": "初稿",
+      "yellow": "晨光",
+      "sage": "靈感",
+      "blue": "夢境",
+      "lavender": "夜貓",
+      "red": "項圈",
+      "custom": "自訂顏色",
+      "hue": "色相",
+      "preview": "訊息預覽",
+      "sampleUser": "幫我整理一下今天的靈感。",
+      "sampleAssistant": "好的，我們一起把想法梳理清楚。",
+      "hint": "深淺模式下自動調整明暗，確保文字清晰。僅儲存在此裝置。",
+      "customHint": "左右拖曳色帶選擇顏色。深淺模式下自動調整明暗，僅儲存在此裝置。",
+      "saveFailed": "顏色已在本次使用中生效，但未能儲存。",
+      "retry": "重試",
+      "cancel": "取消",
+      "reset": "恢復預設",
+      "apply": "套用",
+      "hex": "色碼"
+    }
   },
   "language": {
     "title": "語言",
-    "hint": "僅影響應用介面。Agent 回覆語言由 Agent 自身決定。",
+    "hint": "介面和 AI 錯誤說明使用此語言；一般回覆依你的訊息或語言要求",
     "options": {
       "system": "跟隨系統",
       "zh-CN": "簡體中文",
@@ -47,51 +68,55 @@
   },
   "version": {
     "sectionTitle": "版本",
-    "appVersion": "版本 {{version}}",
-    "updateMethodInApp": "更新方式：在 App 內更新，重新啟動後生效",
-    "updateMethodPackage": "更新方式：下載並安裝新版本",
-    "updateMethodUnavailable": "開發版，不支援 App 內更新",
-    "pairedDesktopVersion": "配套桌面版本 {{version}}",
+    "updateMethodInApp": "可在 App 內更新，重新啟動後生效。",
+    "updateMethodPackage": "需要下載並安裝新版本。",
+    "updateMethodUnavailable": "開發版不支援 App 內更新。",
     "checkAction": "檢查更新",
     "testFlightCheckAction": "檢查內容更新",
     "checking": "檢查中",
     "checkingAccessibility": "正在檢查更新",
     "testFlightCheckingAccessibility": "正在檢查內容更新",
-    "testFlightUpdateManaged": "測試版安裝更新由 TestFlight 管理",
-    "testFlightNoContentUpdate": "當前沒有可用的內容更新。新測試版本請在 TestFlight 中檢視。",
-    "testFlightContentUpdateUnavailable": "當前構建無法檢查內容更新。新測試版本請在 TestFlight 中檢視。",
-    "googlePlayUpdateManaged": "應用程式版本更新由 Google Play 管理",
-    "googlePlayNoContentUpdate": "目前沒有可用的內容更新。新應用程式版本請在 Google Play 中查看。",
-    "googlePlayContentUpdateUnavailable": "目前無法檢查內容更新。新應用程式版本請在 Google Play 中查看。",
+    "testFlightUpdateManaged": "新測試版請在 TestFlight 中安裝。",
+    "testFlightNoContentUpdate": "目前沒有可用的內容更新。",
+    "testFlightContentUpdateUnavailable": "目前的建置無法檢查內容更新。",
+    "googlePlayUpdateManaged": "新版本請在 Google Play 中更新。",
+    "googlePlayNoContentUpdate": "目前沒有可用的內容更新。",
+    "googlePlayContentUpdateUnavailable": "目前的建置無法檢查內容更新。",
     "bundleUpdateFound": "發現整包更新",
     "upToDate": "已是最新版本",
-    "bundleUpToDateNoOta": "整包已是最新，當前版本不支援熱更新",
+    "bundleUpToDateNoOta": "已是最新，此版本不支援熱更新。",
     "downloadedRestarting": "更新已下載，正在重啟",
-    "downloadedRestartRequired": "更新已下載，完全退出 App 後重新開啟即可生效",
+    "downloadedRestartRequired": "更新已下載，完全結束並重新開啟 App 後生效。",
     "bundleCheckFailed": "無法檢查整包更新，請稍後重試",
     "checkFailedDetail": "檢查更新失敗：{{detail}}",
-    "checkFailed": "檢查更新失敗，請稍後重試"
+    "checkFailed": "檢查更新失敗，請稍後重試",
+    "currentLabel": "目前版本",
+    "pairedDesktopLabel": "配套桌面版本"
   },
   "betaChannel": {
     "title": "Beta 測試管道",
     "badge": "Beta",
-    "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。",
-    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
-    "ok": "我知道了",
+    "description": "提前接收即將發布的用戶端更新。內容更新會在下次檢查時下載，重新啟動 App 後生效。",
     "saveFailed": "儲存 Beta 測試管道設定失敗",
     "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
   },
   "notifications": {
     "sectionTitle": "通知",
-    "taskDone": "任務完成通知",
-    "taskDoneHint": "電腦上的任務完成、出錯或需要你回覆時，推送到這臺手機；完成或需要回復時附帶最新回覆內容。",
-    "permissionDenied": "系統通知權限未開啟。請到 iOS「設定 → 通知 → {{appName}}」允許通知後重試。",
-    "unregisterQueued": "已關閉。當前網路下注銷未完成，將在下次聯網時自動補上。"
+    "taskDone": "訊息與任務通知",
+    "taskDoneHint": "收到新訊息，或任務完成、出錯、等你回覆時通知你。",
+    "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
+    "unregisterQueued": "已關閉，連網後自動完成註銷。",
+    "preview": "顯示訊息內容預覽",
+    "background": "在背景保持訊息連線",
+    "backgroundActive": "正在背景接收訊息",
+    "backgroundStop": "停止接收",
+    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
+    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
   },
   "about": {
     "sectionTitle": "關於這臺手機",
     "deviceName": "裝置名稱",
-    "deviceNameDetail": "電腦端授權列表會顯示這個名稱。",
+    "deviceNameDetail": "顯示在電腦的授權列表中",
     "platform": "平臺",
     "editAccessibility": "修改{{label}}"
   },
@@ -158,7 +183,7 @@
     "openUserAgreement": "開啟使用者協議",
     "appFilingNumber": "App 備案號",
     "analytics": "使用統計",
-    "analyticsHint": "幫助我們瞭解 Cindy 的啟動與留存情況。上報裝置型號、系統版本、應用版本、裝置識別符號等裝置與使用環境資訊，登入後還包含你的帳號 ID；不包含任何對話內容、檔案或提示詞。",
+    "analyticsHint": "用於瞭解啟動與留存。上報裝置型號、系統與應用版本、裝置識別符號等資訊，登入後含帳號 ID；不含對話、檔案或提示詞。",
     "analyticsSaveFailed": "設定未能儲存，重啟後可能恢復原值。",
     "analyticsReset": "恢復預設",
     "analyticsResetAction": "恢復"
@@ -166,7 +191,7 @@
   "account": {
     "logoutConfirmTitle": "退出登入？",
     "logoutConfirmRunning": "仍有任務正在執行。退出後任務會繼續在電腦上執行，但這臺手機將不再接收和控制這些任務；這臺手機上儲存的帳號和本地遠端映象也會被清除。",
-    "logoutHint": "退出會清除這臺手機上儲存的全部帳號和本地遠端映象，不會影響電腦端任務。",
+    "logoutHint": "退出會清除這臺手機上的全部帳號和遠端映象，不影響電腦上的任務。",
     "logout": "退出登入",
     "loggingOut": "退出中",
     "loggingOutAccessibility": "正在退出登入"
@@ -179,7 +204,7 @@
   "voiceDictionary": {
     "sectionTitle": "語音詞典",
     "label": "檢視詞典",
-    "hint": "詞典儲存在電腦上，並在你的電腦之間自動同步；手機只能檢視，新增和刪除請回電腦操作。",
+    "hint": "詞典在電腦上編輯並自動同步，手機僅可檢視。",
     "openAccessibility": "檢視語音詞典",
     "screenTitle": "語音詞典",
     "entryCount": "{{count}} 個詞條",
@@ -188,9 +213,97 @@
     "refresh": "重新整理",
     "refreshing": "重新整理中…",
     "refreshAccessibility": "重新整理詞典",
-    "readOnlyHint": "手機只能檢視，新增和刪除請回電腦操作。",
-    "offlineHint": "電腦當前都不線上，顯示的是上次同步到手機的內容。",
-    "noDesktops": "還沒有可同步的電腦。在電腦上登入同一帳號後，詞典會自動出現在這裡。"
+    "readOnlyHint": "手機僅供檢視，新增或刪除詞條請到電腦操作",
+    "offlineHint": "電腦不在線上，正在顯示上次同步的詞典",
+    "noDesktops": "在電腦上登入同一帳號，即可同步詞典"
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "操作未能儲存，請重試。",
+    "title": "辨識我的聲音",
+    "sectionTitle": "聲紋過濾",
+    "label": "辨識我的聲音",
+    "entryHint": "語音輸入時將旁人的聲音靜音。聲紋只儲存在這支手機上。",
+    "openAccessibility": "開啟辨識我的聲音設定",
+    "on": "已開啟",
+    "off": "未開啟",
+    "hint": "語音輸入時將旁人的聲音靜音，只辨識你說的話；和你同時說話的聲音無法完全濾掉。聲紋加密儲存在這臺手機上，不會上傳或同步。",
+    "unsupported": "目前安裝的版本不支援聲紋辨識，請更新到最新版本。",
+    "model": {
+      "title": "辨識模型",
+      "needed": "首次使用需下載約 {{size}} 的辨識模型，建議連接 Wi-Fi。",
+      "download": "下載辨識模型",
+      "downloading": "正在下載（{{done}} / {{total}}）",
+      "cancel": "取消下載",
+      "retry": "重新下載",
+      "failed": {
+        "network": "辨識模型下載失敗，請檢查網路後重試。",
+        "disk": "辨識模型無法儲存，請檢查手機儲存空間後重試。",
+        "checksum": "下載的辨識模型驗證未通過，請重試。",
+        "unavailable": "暫時無法取得辨識模型，請稍後再試。"
+      }
+    },
+    "profile": {
+      "title": "聲紋",
+      "missing": "尚未錄製聲紋",
+      "missingHint": "錄入聲紋後才會生效。",
+      "enrolled": "已錄製聲紋",
+      "enrolledAt": "{{date}} 錄製",
+      "enroll": "錄製聲紋",
+      "reenroll": "重新錄製",
+      "delete": "刪除聲紋",
+      "deleteConfirm": {
+        "title": "刪除聲紋？",
+        "description": "刪除後語音輸入不再過濾旁人的聲音，直到你重新錄製。",
+        "confirm": "刪除",
+        "cancel": "取消"
+      }
+    },
+    "strictness": {
+      "label": "靈敏度",
+      "hint": "越嚴格越能擋住旁人的聲音，但吵雜時也更容易剪掉你的話。",
+      "restoreDefault": "恢復預設",
+      "options": {
+        "relaxed": "寬鬆",
+        "standard": "標準",
+        "strict": "嚴格"
+      }
+    },
+    "enroll": {
+      "description": "請用平常的語氣朗讀下面 {{clips}} 段文字。每段最多錄音 {{seconds}} 秒，讀完點選結束錄音。請在平時使用語音輸入的地方錄製，避免其他人同時說話。",
+      "step": "第 {{current}} / {{total}} 段",
+      "record": "開始朗讀",
+      "stop": "結束錄音",
+      "rerecord": "重錄這段",
+      "recording": "正在錄音…還剩 {{seconds}} 秒",
+      "saving": "正在產生聲紋…",
+      "submit": "完成錄製",
+      "cancel": "取消",
+      "passages": {
+        "p1": "今天上午我先整理一下這週的工作安排，下午再把需要討論的問題列出來，傳給大家提前看看。",
+        "p2": "如果明天天氣不錯，我們可以早點出發，路上順便買些水果和零食，中午就在公園裡吃飯。",
+        "p3": "請幫我把這段內容改得更簡潔一些，保留關鍵數字和結論，然後用三到五句話總結重點。"
+      },
+      "errors": {
+        "too_short": "第 {{index}} 段偵測到的語音不足，請重新錄製。",
+        "no_embedding": "第 {{index}} 段沒能辨識出聲紋，請重錄這段。",
+        "inconsistent": "第 {{index}} 段和其他幾段不像同一個人，可能混入了別人的聲音或噪音，請重錄這段。",
+        "models_missing": "辨識模型尚未下載完成，請稍後再試。",
+        "storage_unavailable": "系統鑰匙圈暫時無法使用，聲紋無法加密儲存，請稍後再試。",
+        "failed": "產生聲紋失敗，請重試。",
+        "microphone": "無法使用麥克風，請檢查麥克風權限後重試。",
+        "noAudio": "麥克風沒有傳來聲音，請檢查後重試。"
+      },
+      "stepChoice": "第 {{index}} 段，{{status}}",
+      "stepStatus": {
+        "pending": "待錄音",
+        "recorded": "已錄音",
+        "retry": "待重錄",
+        "recording": "錄音中"
+      },
+      "rerecordStep": "重錄第 {{index}} 段",
+      "readHint": "準備好後開始朗讀，讀完點選結束錄音。",
+      "otherClipsKept": "其他段錄音已保留。"
+    }
   },
   "deviceNameEditor": {
     "screenTitle": "裝置名稱",
@@ -205,5 +318,10 @@
     "discardBody": "裝置名稱的修改還沒有儲存。",
     "discardConfirm": "放棄修改",
     "keepEditing": "繼續編輯"
+  },
+  "developer": {
+    "title": "開發者",
+    "identity": "識別資訊",
+    "updateInfo": "更新資訊"
   }
 }

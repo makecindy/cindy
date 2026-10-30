@@ -558,6 +558,13 @@ describe('snapshotRealProfile', () => {
     const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
     const db = new DatabaseSync(path.join(source.userDataDir, 'Profile 6', 'Cookies'));
     db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;');
+    const realExec = DatabaseSync.prototype.exec;
+    // Keep the real exclusive-lock conflict, but do not spend the production
+    // busy timeout waiting for a lock this test only releases in finally.
+    const exec = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === 'BEGIN') realExec.call(this, 'PRAGMA busy_timeout = 0');
+      return realExec.call(this, sql);
+    });
     try {
       await expect(
         snapshotRealProfile({ source, destDir, platform: 'darwin' }),
@@ -565,6 +572,7 @@ describe('snapshotRealProfile', () => {
       expect(fs.existsSync(destDir)).toBe(false);
       expect(leftoverStagingNames(destDir)).toEqual([]);
     } finally {
+      exec.mockRestore();
       db.close();
     }
   }, 10_000);

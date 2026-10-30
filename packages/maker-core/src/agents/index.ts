@@ -12,6 +12,8 @@ export type {
   ClaudeSubagentModelAccessStatus,
 } from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
+export { findUnenforcedCapabilityRoutes } from './capability-route-support.js';
+export { isCodexExplicitOnlyOverlayRoute } from './codex/capability-routing.js';
 export { isCodexHistoryRecoveryRequired } from './codex/history-recovery.js';
 export {
   CODEX_HISTORY_OVERSIZED_REASON,
@@ -86,6 +88,13 @@ export {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
 } from './shared/stream-interrupt-error.js';
+// 上游拒收「可选请求增强字段」（如 prompt_cache_retention）时的稳定 reason：
+// desktop 据此把该 provider/model 的 compat 修正写进 models.json 并重放一轮（自愈）。
+export {
+  UNSUPPORTED_REQUEST_OPTION_REASON,
+  isUnsupportedRequestOptionErrorMessage,
+  unsupportedRequestOptionCompatOverride,
+} from './shared/unsupported-request-option-error.js';
 // 同上理由(同 bundle 直接复用,不造第三份):desktop 的中断自愈判据要认「网络到不了
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
 export { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from './shared/network-error.js';
@@ -103,6 +112,9 @@ export {
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   annotatePermissionRequestForUnavailableReview,
+  annotatePermissionRequestForAutoReview,
+  AUTO_REVIEW_REASON_METADATA_KEY,
+  autoReviewReasonFromMetadata,
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   type AutoReviewUserIntent,
@@ -121,8 +133,8 @@ export {
 } from './shared/auto-review-decision.js';
 export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export { AUTO_REVIEW_CONTINUATION_POLICY } from './shared/continuation-policy.js';
-export type { ReviewableAction } from './shared/auto-review.js';
-export { classifyShellCommand } from './shared/auto-review.js';
+export type { CredentialCommandOptions, GitRead, ReviewableAction } from './shared/auto-review.js';
+export { classifyShellCommand, reviewAction, shellCommandReadsCredentials } from './shared/auto-review.js';
 export type {
   ToolLoopReviewDecision,
   ToolLoopReviewer,
@@ -141,3 +153,5 @@ export {
   isClaudeProjectKeyExact,
   findClaudeSessionJsonl,
 } from './claude-code/claude-projects-fs.js';
+
+export type { PiCacheCompatibility } from './pi/cache-compatibility.js';

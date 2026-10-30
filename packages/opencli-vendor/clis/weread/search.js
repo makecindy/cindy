@@ -1,0 +1,186 @@
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
+import { fetchWebApi, WEREAD_UA, WEREAD_WEB_ORIGIN } from './utils.js';
+function decodeNumericHtmlEntity(raw, radix) {
+    const codePoint = parseInt(raw, radix);
+    if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) {
+        return null;
+    }
+    try {
+        return String.fromCodePoint(codePoint);
+    }
+    catch {
+        return null;
+    }
+}
+function decodeHtmlText(value) {
+    return value
+        .replace(/<[^>]+>/g, '')
+        .replace(/&#x([0-9a-fA-F]+);/gi, (entity, n) => decodeNumericHtmlEntity(n, 16) ?? entity)
+        .replace(/&#(\d+);/g, (entity, n) => decodeNumericHtmlEntity(n, 10) ?? entity)
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .trim();
+}
+function normalizeSearchTitle(value) {
+    return value.replace(/\s+/g, ' ').trim();
+}
+function buildSearchIdentity(title, author) {
+    return `${normalizeSearchTitle(title)}\u0000${normalizeSearchTitle(author)}`;
+}
+function countSearchTitles(entries) {
+    const counts = new Map();
+    for (const entry of entries) {
+        const key = normalizeSearchTitle(entry.title);
+        if (!key)
+            continue;
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+}
+function countSearchIdentities(entries) {
+    const counts = new Map();
+    for (const entry of entries) {
+        const key = buildSearchIdentity(entry.title, entry.author);
+        if (!normalizeSearchTitle(entry.title) || !normalizeSearchTitle(entry.author))
+            continue;
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+}
+function isUniqueCount(counts, key) {
+    return (counts.get(key) || 0) <= 1;
+}
+/**
+ * Build exact and title-only queues separately.
+ * Exact title+author matches are preferred; title-only matching is used only
+ * when the HTML card did not expose an author field.
+ */
+function buildSearchUrlQueues(entries) {
+    const exactQueues = new Map();
+    const titleOnlyQueues = new Map();
+    for (const entry of entries) {
+        const titleKey = normalizeSearchTitle(entry.title);
+        if (!titleKey || !entry.url)
+            continue;
+        const queueMap = entry.author ? exactQueues : titleOnlyQueues;
+        const queueKey = entry.author ? buildSearchIdentity(entry.title, entry.author) : titleKey;
+        const current = queueMap.get(queueKey);
+        if (current) {
+            current.push(entry.url);
+            continue;
+        }
+        queueMap.set(queueKey, [entry.url]);
+    }
+    return { exactQueues, titleOnlyQueues };
+}
+function resolveSearchResultUrl(params) {
+    const { exactQueues, titleOnlyQueues, apiIdentityCounts, htmlIdentityCounts, apiTitleCounts, htmlTitleCounts, title, author, } = params;
+    const identityKey = buildSearchIdentity(title, author);
+    if (isUniqueCount(apiIdentityCounts, identityKey) && isUniqueCount(htmlIdentityCounts, identityKey)) {
+        const exactUrl = exactQueues.get(identityKey)?.shift();
+        if (exactUrl)
+            return exactUrl;
+    }
+    const titleKey = normalizeSearchTitle(title);
+    if (!isUniqueCount(apiTitleCounts, titleKey) || !isUniqueCount(htmlTitleCounts, titleKey)) {
+        return '';
+    }
+    return titleOnlyQueues.get(titleKey)?.shift() ?? '';
+}
+/**
+ * Extract rendered search result reader URLs from the server-rendered search page.
+ * The public JSON API still returns bookId, but the current web app links results
+ * through /web/reader/<opaque-id> rather than /web/bookDetail/<bookId>.
+ */
+async function loadSearchHtmlEntries(query) {
+    const url = new URL('/web/search/books', WEREAD_WEB_ORIGIN);
+    url.searchParams.set('keyword', query);
+    let resp;
+    try {
+        resp = await fetch(url.toString(), {
+            headers: { 'User-Agent': WEREAD_UA },
+        });
+    }
+    catch (error) {
+        throw new CommandExecutionError(`Failed to fetch WeRead search page: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!resp.ok) {
+        throw new CommandExecutionError(`WeRead search page request failed: HTTP ${resp.status}`);
+    }
+    const html = await resp.text();
+    const items = Array.from(html.matchAll(/<li[^>]*class="wr_bookList_item"[^>]*>([\s\S]*?)<\/li>/g));
+    return items.map((match) => {
+        const chunk = match[1];
+        const hrefMatch = chunk.match(/<a[^>]*href="([^"]+)"[^>]*class="wr_bookList_item_link"[^>]*>|<a[^>]*class="wr_bookList_item_link"[^>]*href="([^"]+)"[^>]*>/);
+        const titleMatch = chunk.match(/<p[^>]*class="wr_bookList_item_title"[^>]*>([\s\S]*?)<\/p>/);
+        const authorMatch = chunk.match(/<p[^>]*class="wr_bookList_item_author"[^>]*>([\s\S]*?)<\/p>/);
+        const href = hrefMatch?.[1] || hrefMatch?.[2] || '';
+        const title = decodeHtmlText(titleMatch?.[1] || '');
+        const author = decodeHtmlText(authorMatch?.[1] || '');
+        return {
+            author,
+            url: href ? new URL(href, WEREAD_WEB_ORIGIN).toString() : '',
+            title,
+        };
+    }).filter((item) => item.url && item.title);
+}
+cli({
+    site: 'weread',
+    name: 'search',
+    access: 'read',
+    description: 'Search books on WeRead',
+    domain: 'weread.qq.com',
+    strategy: Strategy.PUBLIC,
+    browser: false,
+    args: [
+        { name: 'query', positional: true, required: true, help: 'Search keyword' },
+        { name: 'limit', type: 'int', default: 10, help: 'Max results' },
+    ],
+    columns: ['rank', 'title', 'author', 'bookId', 'url'],
+    func: async (args) => {
+        const [data, htmlEntries] = await Promise.all([
+            fetchWebApi('/search/global', { keyword: args.query }),
+            loadSearchHtmlEntries(String(args.query ?? '')),
+        ]);
+        const books = data?.books ?? [];
+        if (!Array.isArray(books)) {
+            throw new CommandExecutionError('WeRead search API returned an unreadable books payload');
+        }
+        if (books.length === 0) {
+            throw new EmptyResultError('weread search', `No books were returned for query ${args.query}.`);
+        }
+        const { exactQueues, titleOnlyQueues } = buildSearchUrlQueues(htmlEntries);
+        const apiIdentityCounts = countSearchIdentities(books.map((item) => ({
+            title: item.bookInfo?.title ?? '',
+            author: item.bookInfo?.author ?? '',
+        })));
+        const htmlIdentityCounts = countSearchIdentities(htmlEntries.filter((entry) => entry.author));
+        const apiTitleCounts = countSearchTitles(books.map((item) => ({ title: item.bookInfo?.title ?? '' })));
+        const htmlTitleCounts = countSearchTitles(htmlEntries);
+        return books.slice(0, Number(args.limit)).map((item, i) => {
+            const title = item.bookInfo?.title ?? '';
+            const author = item.bookInfo?.author ?? '';
+            return {
+                rank: i + 1,
+                title,
+                author,
+                bookId: item.bookInfo?.bookId ?? '',
+                url: resolveSearchResultUrl({
+                    exactQueues,
+                    titleOnlyQueues,
+                    apiIdentityCounts,
+                    htmlIdentityCounts,
+                    apiTitleCounts,
+                    htmlTitleCounts,
+                    title,
+                    author,
+                }),
+            };
+        });
+    },
+});

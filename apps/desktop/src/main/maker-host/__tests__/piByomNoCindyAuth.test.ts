@@ -63,6 +63,7 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
   ],
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
+  setMivoSecretAliasVerifier: vi.fn(),
   readCustomProviderKey: (providerId: string) =>
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));

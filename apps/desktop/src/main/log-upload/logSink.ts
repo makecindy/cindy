@@ -17,6 +17,7 @@
 
 import { BATCH_TIMEOUT_MS, MAX_BATCH_BYTES, MAX_LOGS_PER_BATCH } from './limits';
 import type { LogUploadMeta, LogUploadTarget, UploadRecord } from './types';
+import { requestErrorMessage } from '../requestErrorMessage';
 
 export interface LogSinkDeps {
   /** 生产实现为 `outboundFetch`（吃系统代理）；测试注入内存 fake。 */
@@ -26,7 +27,7 @@ export interface LogSinkDeps {
 export type LogSinkResult =
   | { ok: true; batches: number; records: number }
   /** status 0 = 网络层失败（离线 / DNS / 超时）。 */
-  | { ok: false; batches: number; sentRecords: number; status: number };
+  | { ok: false; batches: number; sentRecords: number; status: number; error?: string };
 
 /** 单条上报记录在 wire 上的形状。值全部是字符串——web tracking 只接受字符串字段。 */
 function toWireLog(record: UploadRecord, uploadCode: string): Record<string, string> {
@@ -117,7 +118,7 @@ async function postBatch(
   deps: LogSinkDeps,
   url: string,
   body: string,
-): Promise<{ ok: boolean; status: number }> {
+): Promise<{ ok: boolean; status: number; error?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
   try {
@@ -136,9 +137,9 @@ async function postBatch(
       signal: controller.signal,
     });
     return { ok: res.status >= 200 && res.status < 300, status: res.status };
-  } catch {
+  } catch (error) {
     // 网络层失败(离线 / DNS / abort):status 0,调用方据此保留待补传标记。
-    return { ok: false, status: 0 };
+    return { ok: false, status: 0, error: requestErrorMessage(error) };
   } finally {
     clearTimeout(timer);
   }
@@ -170,7 +171,8 @@ export async function sendLogs(
     });
     const res = await postBatch(deps, url, body);
     if (!res.ok) {
-      return { ok: false, batches: i, sentRecords, status: res.status };
+      return { ok: false, batches: i, sentRecords, status: res.status,
+        ...(res.error !== undefined ? { error: res.error } : {}) };
     }
     sentRecords += batches[i].length;
   }

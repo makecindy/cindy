@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AgentIslandCompanionChatRead, AgentIslandCompanionChatsInput } from '../../shared/agentIsland';
+import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush';
 
 const state = vi.hoisted(() => ({
-  sessions: ['a', 'b', 'c'].map((id) => ({ id, status: 'active' })),
-  history: null as { id: string; status: string }[] | null,
-  remoteSessions: [] as { id: string; status: string; deviceLinkDeviceId?: string }[],
+  sessions: ['a', 'b', 'c'].map((id) => ({ id, status: 'active' })) as { id: string; status: string; source?: string }[],
+  history: null as { id: string; status: string; source?: string }[] | null,
+  remoteSessions: [] as { id: string; status: string; source?: string; deviceLinkDeviceId?: string }[],
   attention: new Map<string, string>([
     ['a', 'done'],
     ['b', 'done'],
@@ -18,16 +20,36 @@ const state = vi.hoisted(() => ({
   workers: new Map<string, ReadonlySet<string>>(),
   owner: { dataOwnerId: 'owner-a', generation: 1 },
   isLoading: false,
+  historyLoading: false,
+  historyError: null as Error | null,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
-const botState = vi.hoisted(() => ({ bots: [] as any[], unread: {} as Record<string, number>, groups: [] as any[], remote: [] as any[] }));
+const botState = vi.hoisted(() => ({
+  bots: [] as unknown[],
+  unread: {} as Record<string, number>,
+  groups: [] as unknown[],
+  unreadGroups: new Set<string>(),
+  remote: [] as unknown[],
+  markRead: vi.fn(),
+  markRemoteRead: vi.fn(),
+}));
 vi.mock('@/features/bots/useBotUnreadSync', () => ({ useBotUnreadSync: () => {} }));
-vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => botState.bots, useBotUnreadCounts: () => botState.unread }));
+vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => botState.bots, useBotUnreadCounts: () => botState.unread,
+  canonicalBotSessionId: (bot: { sessions: { id: string; role?: string; kind?: string }[] }) => bot.sessions.find(session => session.role === 'canonical' || session.kind === 'chat')?.id,
+}));
 vi.mock('@/features/bots/botGroupStore', () => ({ useBotGroupList: () => ({ groups: botState.groups }) }));
-vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote }));
+vi.mock('@/features/bots/botReadState', () => ({
+  isBotGroupUnread: (group: { id: string }) => botState.unreadGroups.has(group.id),
+  subscribeBotReadState: () => () => {},
+  getBotLastReadAtMap: () => ({}),
+  markBotRead: botState.markRead,
+}));
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBotSync: () => {}, useRemoteBots: () => botState.remote, markRemoteBotRead: botState.markRemoteRead }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   getDataOwnerGeneration: () => state.owner,
+  isDataOwnerPushCurrent: (stamp: { dataOwnerId: string; ownerGeneration: number }) =>
+    stamp.dataOwnerId === state.owner.dataOwnerId && stamp.ownerGeneration === state.owner.generation,
   isDataOwnerGenerationCurrent: (owner: typeof state.owner) =>
     owner.dataOwnerId === state.owner.dataOwnerId && owner.generation === state.owner.generation,
 }));
@@ -44,12 +66,15 @@ vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: (options: { includeArchived: string }) => ({
     sessions:
       options.includeArchived === 'all' ? (state.history ?? state.sessions) : state.sessions,
-    isLoading: state.isLoading,
-    error: null,
+    isLoading: options.includeArchived === 'all' ? state.historyLoading : state.isLoading,
+    error: options.includeArchived === 'all' ? state.historyError : null,
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
-  useRemoteProjectSessions: () => state.remoteSessions,
+  remoteProjectsStore: {
+    subscribe: () => () => {},
+    getMergedRemoteSessions: () => state.remoteSessions,
+  },
 }));
 vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
   usePublishedAutomationScheduleSessionIndex: () => state.empty,
@@ -58,7 +83,11 @@ vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({}));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => state.running },
 }));
-vi.mock('@/lib/sessionAttentionStore', () => ({ useSessionAttentionKinds: () => state.attention }));
+vi.mock('@/lib/sessionAttentionStore', () => ({
+  useSessionAttentionKinds: () => state.attention,
+  getSessionAttentionKinds: () => state.attention,
+  subscribeSessionAttention: () => () => undefined,
+}));
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivityMap: () => state.empty }));
 vi.mock('@/lib/orcaSessionIdentity', () => ({ isOrcaWorkerSession: () => false }));
 
@@ -67,10 +96,14 @@ import { useSessionDisplayRunningState } from '../features/cc-agent/hooks/useSes
 
 afterEach(() => {
   cleanup();
-  botState.bots = []; botState.unread = {}; botState.groups = []; botState.remote = [];
+  botState.bots = []; botState.unread = {}; botState.groups = []; botState.unreadGroups = new Set(); botState.remote = [];
   vi.unstubAllGlobals();
   state.publish.mockClear();
+  botState.markRead.mockClear(); botState.markRemoteRead.mockClear();
   state.isLoading = false;
+  state.historyLoading = false;
+  state.historyError = null;
+  state.sessions = ['a', 'b', 'c'].map((id) => ({ id, status: 'active' }));
   state.history = null;
   state.remoteSessions = [];
   state.running = new Map();
@@ -85,6 +118,62 @@ afterEach(() => {
 });
 
 describe('app badge projection lifecycle', () => {
+  // Existing Dock tests did not verify the island or its read action. One unread local chat
+  // and one offline remote chat must survive task-list loading and use the same read positions (unit).
+  it('syncs companion unread independently of task loading and applies owner-fenced island reads', () => {
+    const set = vi.fn<(input: AgentIslandCompanionChatsInput) => Promise<{ ok: true }>>().mockResolvedValue({ ok: true });
+    let read!: (chat: AgentIslandCompanionChatRead, stamp: DataOwnerPushStamp) => void;
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish, agentIsland: {
+      setCompanionChats: set,
+      onCompanionChatRead: (cb: typeof read) => { read = cb; return () => {}; },
+    } });
+    const local = { id: 'bot', name: 'Cindy', avatar: '', avatarColor: 'blue', createdAt: 1,
+      lastMessageAt: 100, lastMessageRole: 'assistant', lastMessagePreview: 'new reply',
+      sessions: [{ id: 'chat', role: 'canonical' }] };
+    botState.bots = [local, { ...local, id: 'hidden', hiddenAt: 1, sessions: [{ id: 'hidden-chat', role: 'canonical' }] }];
+    botState.unread = { bot: 2, hidden: 1 };
+    botState.remote = [{ id: 'remote', sessionId: 'remote-chat', deviceId: 'other-computer', name: 'Remote',
+      avatar: '', avatarColor: 'blue', activityAt: 100, lastReplyAt: 100, readAt: 50, preview: 'remote reply', online: false }];
+    state.isLoading = true;
+    const view = render(<AppBadgeAttentionSync />);
+    const snapshot = set.mock.calls.at(-1)![0];
+    expect(snapshot.chats).toEqual([
+      expect.objectContaining({ sessionId: 'chat', visible: true, unread: true }),
+      expect.objectContaining({ sessionId: 'hidden-chat', visible: false }),
+      expect.objectContaining({ sessionId: 'remote-chat', deviceId: 'other-computer', unread: true }),
+    ]);
+    const stamp = { dataOwnerId: state.owner.dataOwnerId, ownerGeneration: state.owner.generation };
+    read({ ...snapshot.chats[0], readThroughAt: 100 }, stamp);
+    expect(botState.markRead).toHaveBeenCalledWith('bot', 100);
+    read({ ...snapshot.chats[2], readThroughAt: 100 }, stamp);
+    expect(botState.markRemoteRead).toHaveBeenCalledWith('other-computer', 'remote', 100);
+    read({ ...snapshot.chats[0], readThroughAt: 200 }, { ...stamp, ownerGeneration: 0 });
+    expect(botState.markRead).toHaveBeenCalledTimes(1);
+    botState.remote = botState.remote.map(bot => ({ ...(bot as object), online: true }));
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(set).toHaveBeenCalledTimes(2);
+    botState.unread = {};
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(set.mock.calls.at(-1)![0].chats[0].unread).toBe(false);
+  });
+  it.each(['done', 'awaiting', 'error'])('excludes hidden Make tasks with %s attention while retaining notification deduplication IDs', (kind) => {
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+    state.sessions = [
+      ...state.sessions,
+      { id: 'make', status: 'active', source: 'cindy-make' },
+      { id: 'make-merge', status: 'active', source: 'cindy-make-merge' },
+    ];
+    state.history = [{ id: 'archived-make', status: 'archived', source: 'cindy-make' }];
+    state.remoteSessions = [{ id: 'remote-make', status: 'active', source: 'cindy-make', deviceLinkDeviceId: 'device-a' }];
+    state.attention.set('make', kind);
+    state.attention.set('make-merge', kind);
+    render(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      count: 3,
+      sessionIds: ['a', 'b', 'c', 'make', 'make-merge', 'remote-make', 'archived-make'],
+    }));
+  });
+
   it('retains active attention when archived history fills the all bucket', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
     state.history = Array.from({ length: 1000 }, (_, index) => ({
@@ -97,6 +186,22 @@ describe('app badge projection lifecycle', () => {
     const projection = state.publish.mock.calls.at(-1)?.[0];
     expect(projection.sessionIds).toHaveLength(1003);
     expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
+  });
+
+  it('keeps publishing the projection when the archived bucket is still loading or broken', () => {
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+    // 历史桶只补齐去重目录；它一直 loading / 报错也不得把计入数的投影一次次吞掉，
+    // 否则角标会永久停在最后一次推送的旧值（界面上已经没有未读了）。
+    state.historyLoading = true;
+    state.historyError = new Error('db busy');
+    const view = render(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ count: 3, sessionIds: ['a', 'b', 'c'] }),
+    );
+    // 历史桶一直坏着，同一个组件在未读清零后也必须把 0 推下去。
+    state.attention = new Map();
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 0 }));
   });
 
   it('keeps remote IDs in the projection but excludes remote attention from the badge', () => {
@@ -208,4 +313,15 @@ it('maps each unread chat once and fences all Bot lanes out of event-backed Dock
   botState.unread = {};
   view.rerender(<AppBadgeAttentionSync />);
   expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
+});
+
+it('excludes archived group unread state from the app badge', () => {
+  vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+  botState.groups = [
+    { id: 'active-group', archived: false },
+    { id: 'archived-group', archived: true },
+  ];
+  botState.unreadGroups = new Set(['active-group', 'archived-group']);
+  render(<AppBadgeAttentionSync />);
+  expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
 });

@@ -56,7 +56,7 @@ it.each([false, true])('only repins a window extended to the tail outside progra
     firstVisibleItemKey: 'search-window', isNearBottomRef: { current: false },
     programmaticScrollRef: { current: navigating }, restoringRef: { current: false },
     scrollRef: { current: { scrollHeight: 600, scrollTop: 0, clientHeight: 600 } },
-    setIsNearBottom: vi.fn(), setUnreadCount: vi.fn(), setFirstVisibleItemKey: vi.fn(),
+    setIsNearBottom: vi.fn(), setUnreadKeys: vi.fn(), NO_UNREAD_KEYS: new Set(), setFirstVisibleItemKey: vi.fn(),
     resolveWindowCoverageLossAction, REPIN_AT_BOTTOM_PX,
   };
   new Function(...Object.keys(bindings), code)(...Object.values(bindings))();

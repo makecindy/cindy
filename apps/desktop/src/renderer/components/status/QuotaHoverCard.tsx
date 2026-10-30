@@ -45,6 +45,10 @@ export interface QuotaHoverCardSessionUsage {
 }
 
 export interface QuotaHoverCardProps {
+  /** One compact provider action beside the last quota window’s reset countdown. */
+  windowAction?: React.ReactNode;
+  /** Provider-specific manual actions, inside the existing scrollable card. */
+  children?: React.ReactNode;
   /** Embedded settings surface shares content without a second card frame. */
   variant?: 'popover' | 'embedded';
   /** The settings identity row already names this subscription and plan. */
@@ -121,6 +125,7 @@ function WindowBlock({
   breakdown,
   showAbsoluteReset = false,
   compact = false,
+  action,
   nowMs,
   paceNowMs,
   locale,
@@ -134,6 +139,7 @@ function WindowBlock({
   breakdown?: UsageCardWindow['breakdown'];
   showAbsoluteReset?: boolean;
   compact?: boolean;
+  action?: React.ReactNode;
   nowMs: number;
   paceNowMs: number | null;
   locale: string | undefined;
@@ -224,14 +230,17 @@ function WindowBlock({
         {bar}
         <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
           <span className="font-medium text-[var(--text-primary)]">{percentText}</span>
-          {resetCountdown !== null ? (
-            <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
-              <span>{resetCountdown}</span>
-              {showAbsoluteReset && resetAt !== null && (
-                <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
-              )}
-            </span>
-          ) : null}
+          <div className="flex min-w-0 items-center gap-2">
+            {resetCountdown !== null ? (
+              <span className="flex min-w-0 flex-col items-end text-right text-12 text-[var(--text-secondary)]">
+                <span>{resetCountdown}</span>
+                {showAbsoluteReset && resetAt !== null && (
+                  <span>{t('quotaCard.resetAt', { at: resetAt })}</span>
+                )}
+              </span>
+            ) : null}
+            {action}
+          </div>
         </div>
       </div>
       {detail ? <div className="mt-1 text-12 text-[var(--text-secondary)]">{detail}</div> : null}
@@ -435,6 +444,8 @@ function SessionUsageSection({
 
 /** 套餐、配额、任务合计与本轮明细按同一信息层级渲染；供应商差异只来自 account。 */
 export function QuotaHoverCard({
+  windowAction,
+  children,
   variant = 'popover',
   hideIdentity = false,
   account,
@@ -449,18 +460,28 @@ export function QuotaHoverCard({
   const embedded = variant === 'embedded';
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
-  const { title, planLabel, windows, details = [], notices = [], emptyText, updatedAt } = account;
+  const {
+    title,
+    identity,
+    planLabel,
+    windows,
+    details = [],
+    notices = [],
+    emptyText,
+    updatedAt,
+  } = account;
   // Use observation time for pace so a stale snapshot cannot drift as the card renders.
   const paceNowMs = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : null;
   const staleMinutes =
     paceNowMs !== null && nowMs - paceNowMs > STALE_AFTER_MS
       ? Math.floor((nowMs - paceNowMs) / 60_000)
       : null;
-  const windowBlocks = windows.map(({ key, ...displayWindow }) => (
+  const windowBlocks = windows.map(({ key, ...displayWindow }, index) => (
     <WindowBlock
       key={key}
       {...displayWindow}
       compact={embedded}
+      action={!embedded && index === windows.length - 1 ? windowAction : undefined}
       nowMs={nowMs}
       paceNowMs={paceNowMs}
       locale={locale}
@@ -475,7 +496,9 @@ export function QuotaHoverCard({
         'flex select-none flex-col pb-2 text-13 leading-5 text-[var(--text-primary)]',
         variant === 'embedded'
           ? 'w-full min-w-0'
-          : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] w-[340px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+          : 'max-h-[min(calc(100vh-16px),var(--radix-popover-content-available-height,100vh))] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]',
+        !embedded &&
+          (identity ? 'w-max min-w-[min(340px,calc(100vw-16px))]' : 'w-[340px]'),
       )}
       style={variant === 'popover' ? { boxShadow: 'var(--shadow-menu)' } : undefined}
     >
@@ -492,11 +515,18 @@ export function QuotaHoverCard({
         {title && (!embedded || !hideIdentity) ? (
           <>
             <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-12 text-[var(--text-secondary)]">
-              <span className="min-w-0 break-words font-medium">{title}</span>
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="shrink-0 font-medium">{title}</span>
+                {identity ? (
+                  <span className="min-w-0 truncate text-[var(--text-primary)]">
+                    {identity}
+                  </span>
+                ) : null}
+              </div>
               {planLabel ? (
                 <span
                   data-testid="quota-plan-badge"
-                  className="ml-auto max-w-[65%] break-words rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
+                  className="ml-auto max-w-[65%] shrink-0 break-words rounded-full border border-[var(--border-default)] px-[7px] py-px text-11 font-medium"
                 >
                   {planLabel}
                 </span>
@@ -518,6 +548,9 @@ export function QuotaHoverCard({
         ) : (
           windowBlocks
         )}
+        {!embedded && windows.length === 0 && windowAction ? (
+          <div className="flex justify-end px-4">{windowAction}</div>
+        ) : null}
         {emptyText ? (
           <div className="px-4 py-2 text-[var(--text-secondary)]">{emptyText}</div>
         ) : null}
@@ -552,6 +585,8 @@ export function QuotaHoverCard({
             </section>
           </>
         ) : null}
+
+        {children}
 
         {sessionUsage ? (
           <>

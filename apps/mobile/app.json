@@ -65,12 +65,17 @@
       [
         "expo-build-properties",
         {
+          "android": {
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          },
           "ios": {
             "buildReactNativeFromSource": true,
             "enableSceneSupport": true
           }
         }
       ],
+      "./plugins/with-android-release-optimization",
       [
         "expo-splash-screen",
         {
@@ -95,12 +100,17 @@
       "./plugins/with-communication-notifications",
       "expo-secure-store",
       "expo-web-browser",
+      "./plugins/with-incoming-share-files",
       [
         "expo-sharing",
         {
           "ios": {
             "enabled": true,
             "activationRule": {
+              "supportsText": true,
+              "supportsWebUrlWithMaxCount": 20,
+              "supportsWebPageWithMaxCount": 20,
+              "supportsMovieWithMaxCount": 20,
               "supportsFileWithMaxCount": 20,
               "supportsImageWithMaxCount": 20
             }
@@ -135,7 +145,6 @@
           }
         }
       ],
-      "./plugins/with-incoming-share-files",
       "./plugins/with-remote-desktop-presentation",
       "./plugins/with-foreground-only-audio",
       [

@@ -13,10 +13,13 @@ vi.mock("@/theme", () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock("@/platform/chrome/AnchoredPullDownMenu", () => ({ AnchoredPullDownMenu: () => null }));
 
 import { usesNativePullDownMenu } from "@/platform/chrome/NativePullDownMenu";
-import { buildPullDownMenuSections } from "@/platform/chrome/pullDownMenuModel";
+import { buildPullDownMenuSections, resolvePullDownSubmenu } from "@/platform/chrome/pullDownMenuModel";
 import {
   buildHomeDisplayPullDownActions,
   buildHomeScopePullDownActions,
+  homeScopeCollections,
+  openHomeRemoteCollection,
+  parseHomeScopePullDownAction,
 } from "@/session/homeChromeMenus";
 
 const readSource = (path: string) =>
@@ -38,25 +41,21 @@ function filter(
 }
 
 const displayInput = {
-  groupByProject: true,
-  groupByProjectLabel: "By project",
-  groupDialogue: false,
-  groupDialogueLabel: "Dialogue",
-  groupHeading: "Group",
-  projectOrder: "custom" as const,
-  projectOrderActivityLabel: "Activity",
-  projectOrderCustomLabel: "Manual",
-  projectOrderHeading: "Project order",
-  showProjectOrder: true,
-  sortBy: "priority" as const,
-  sortByPriorityLabel: "Priority",
-  sortByTimeLabel: "Time",
-  sortHeading: "Sort",
-  statusActiveLabel: "Active",
-  statusAllLabel: "All",
-  statusArchivedLabel: "Archived",
-  statusFilter: "archived" as const,
-  statusHeading: "Status",
+  dialogueCount: 2,
+  projects: [{ count: 1, key: "p1", title: "cindy" }],
+  state: {
+    groupByProject: true,
+    groupDialogue: false,
+    lastActivityFilter: "all" as const,
+    projectFilter: "all" as const,
+    projectOrder: "custom" as const,
+    sortBy: "priority" as const,
+    statusFilter: "archived" as const,
+    taskInfoFields: ["time" as const],
+    vendorFilter: "all" as const,
+    viewMode: "list" as const,
+  },
+  t: (key: string) => key,
 };
 
 describe("Android home chrome menus follow the iOS pull-down", () => {
@@ -90,27 +89,32 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     }
   });
 
-  it("renders the display groups as titled sections in iOS order with the same checks", () => {
+  it("renders the display menu as the same setting rows and submenus as iOS", () => {
     const actions = buildHomeDisplayPullDownActions(displayInput);
-    const iosLeaves = actions.flatMap((group) => group.subactions ?? []);
     const sections = buildPullDownMenuSections(actions);
-    // 每个带标题的内联分组对应一段带标题的分组,和 iOS UIMenu 一样。
-    expect(sections.map((section) => section.title)).toEqual(
-      actions.map((group) => group.title.trim() || undefined),
-    );
-    const android = sections.flatMap((section) => section.rows);
-    expect(android).toEqual(iosLeaves);
-    expect(android.map((action) => [action.id, action.state])).toEqual([
-      ["groupByProject", "on"],
-      ["groupDialogue", "off"],
-      ["sort.recency", "off"],
-      ["sort.priority", "on"],
-      ["projectOrder.activity", "off"],
-      ["projectOrder.custom", "on"],
-      ["status.active", "off"],
-      ["status.archived", "on"],
-      ["status.all", "off"],
+    // 三段无标题分组 = iOS UIMenu 的三段分隔;每行是进入子菜单的设置项,标题下显示当前值。
+    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined]);
+    const rows = sections.flatMap((section) => section.rows);
+    expect(rows).toEqual(actions.flatMap((group) => group.subactions ?? []));
+    expect(rows.map((action) => [action.id, action.subtitle, !!action.subactions?.length])).toEqual([
+      ["group", "devices.list.menu.groupProject", true],
+      ["sort", "devices.list.menu.sortBy.priority", true],
+      ["projectOrder", "devices.list.menu.projectOrder.custom", true],
+      ["status", "devices.list.menu.status.archived", true],
+      ["filter", "devices.list.menu.summaryNone", true],
+      ["view", "devices.list.menu.view.list", true],
+      ["taskInfo", "devices.list.menu.taskInfo.time", true],
+      ["teammates", "", true],
     ]);
+    const sort = resolvePullDownSubmenu(actions, ["sort"]);
+    expect(sort?.subactions?.map((action) => [action.id, action.state])).toEqual([
+      ["sort.priority", "on"],
+      ["sort.recency", "off"],
+      ["sort.created", "off"],
+    ]);
+    const projects = resolvePullDownSubmenu(actions, ["filter", "filter.projects"]);
+    expect(buildPullDownMenuSections(projects?.subactions ?? []).map((section) => section.rows.map((row) => row.id)))
+      .toEqual([["filter.projects.all"], ["filter.project:dialogue", "filter.project:p1"]]);
   });
 
   it("wires the Android header to the same pull-down actions as the iOS header", () => {
@@ -122,21 +126,44 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(androidHeader).toContain("actions={homeScopePullDownActions}");
     expect(androidHeader).toContain("onAction={handleHomeScopeAction}");
     expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
-    // 自绘范围 / 显示设置面板只在包里没有 MenuView 时兜底。
+    // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
-    expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDisplaySettings}");
+    // Display selection is exercised through the rendered platform component in
+    // nativeGlassControls.test.tsx; do not freeze its JSX prop list here.
     const iosHeader = home.slice(home.indexOf("<HomeNativeStackHeader"), home.indexOf("/>", home.indexOf("<HomeNativeStackHeader")));
     expect(iosHeader).toContain("scopeActions={homeScopePullDownActions}");
-    expect(iosHeader).toContain("displayActions={homeDisplayPullDownActions}");
+    // iOS 系统顶栏的菜单项属于顶栏选项:传结构稳定的同一份菜单,后台同步不重建顶栏(会关掉菜单)。
+    expect(iosHeader).toContain("displayActions={stableDisplayActions}");
+    expect(home).toContain("useStableValue(homeDisplayPullDownActions, pullDownActionsEqual)");
+    const nativeHeader = readSource("src/platform/chrome/HomeNativeStackHeader.tsx");
+    expect(nativeHeader).toContain("export const HomeNativeStackHeader = memo(");
+    // 三层菜单(分组 → 选项)只能走 Stack.Toolbar.Menu;MenuView 的 iOS 原生层只转两层。
+    // 图标/提醒点的选择由 HomeNativeStackHeader.test.tsx 渲染验证。
+    expect(nativeHeader).toContain('<Stack.Toolbar.Menu');
   });
 
-  it("routes settings pickers and local-log options through the pull-down on Android", () => {
+  it("never offers Teammates as a scope: they are the home's own section", () => {
+    const collections = [
+      { id: "teammates", title: "Teammates", resourceKind: "bot", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+      { id: "tools", title: "Tools", resourceKind: "tool", targets: [{ deviceId: "mac", deviceName: "Mac" }] },
+    ];
+    const offered = homeScopeCollections(collections, "teammates");
+    const actions = buildHomeScopePullDownActions([], "All", offered);
+    expect(actions.map(action => action.id)).not.toContain("scope.collection:teammates");
+    const parsed = parseHomeScopePullDownAction("scope.collection:tools");
+    const collection = parsed.kind === "collection" ? offered.find(item => item.id === parsed.collectionId) : undefined;
+    const push = vi.fn();
+    openHomeRemoteCollection(collection!, push);
+    expect(push).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pathname: "/resources/[collectionId]",
+      params: expect.objectContaining({ collectionId: "tools", targets: JSON.stringify(collections[1].targets) }) }));
+  });
+
+  it("routes settings pickers through the pull-down on Android", () => {
     const settings = readSource("app/settings.tsx");
     // 只按 MenuView 是否可用分流,不按平台:Android 与 iOS 同走系统下拉,自绘 sheet / Alert 仅作回退。
     expect(settings).not.toMatch(/Platform\.OS\s*===\s*['"]ios['"]/);
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}");
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}");
-    expect(settings).toContain("onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options')");
-    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(3);
+    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(2);
   });
 });

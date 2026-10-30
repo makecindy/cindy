@@ -11,9 +11,18 @@ import {
   effectiveInstallOrigin,
   type GhostInstallReceipt,
   GhostInstallReceiptStore,
+  isValidGhostSourceStateArchiveId,
 } from '../ghostInstallReceipt';
 
 describe('GhostInstallReceiptStore cleanup', () => {
+  it('accepts only a canonical random archive namespace destination', () => {
+    expect(isValidGhostSourceStateArchiveId('_ns__cindy-archive-00000000-0000-4000-8000-000000000002__hello')).toBe(true);
+    for (const value of ['hello', '../hello', '_ns__acme__hello',
+      'cindy-source-00000000-0000-4000-8000-000000000002',
+      '_ns__cindy-archive-not-random__hello']) {
+      expect(isValidGhostSourceStateArchiveId(value)).toBe(false);
+    }
+  });
   let workDir: string;
   let stateRoot: string;
   let store: GhostInstallReceiptStore;
@@ -31,6 +40,32 @@ describe('GhostInstallReceiptStore cleanup', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await fs.promises.rm(workDir, { recursive: true, force: true });
+  });
+
+  it('lists legacy, root and organization journals together', async () => {
+    const ids = ['hello', '_ns/_root/hello', '_ns/acme/hello'];
+    for (const id of ids) await store.writePendingMutation(id, { kind: 'uninstall' });
+    expect(store.listPendingMutationIdsSync()).toEqual({ state: 'ok', ids: expect.arrayContaining(ids), blocked: false });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('blocks cleanup for malformed journals under %s', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    await fs.promises.writeFile(path.join(stateRoot, parent, '.pending-BAD!.json'), '{}');
+    expect(store.listPendingMutationIdsSync()).toEqual({
+      state: 'ok', ids: [parent + '/hello'], blocked: true,
+    });
+  });
+
+  it.each(['_ns/_root', '_ns/acme'])('does not ignore journals when %s disappears during scanning', async (parent) => {
+    await store.writePendingMutation(parent + '/hello', { kind: 'uninstall' });
+    const readdir = fs.readdirSync;
+    vi.spyOn(fs, 'readdirSync').mockImplementation((...args) => {
+      if (String(args[0]) === path.join(stateRoot, parent)) {
+        throw Object.assign(new Error('journal parent disappeared'), { code: 'ENOENT' });
+      }
+      return readdir(...args);
+    });
+    expect(store.listPendingMutationIdsSync().state).toBe('unreadable');
   });
 
   function createSetupReceipt(): GhostInstallReceipt {
@@ -83,6 +118,76 @@ describe('GhostInstallReceiptStore cleanup', () => {
       skillContentSha256: {},
     });
   }
+
+  // Async discovery adds an await window: preserve the sync reader's no-follow
+  // parent gate. A linked namespace must never become an approved installation.
+  // Unit; one valid receipt behind a directory link (junction on Windows).
+  it('async reading rejects a linked namespace parent', async () => {
+    const outside = path.join(workDir, 'outside');
+    await fs.promises.mkdir(outside);
+    await fs.promises.writeFile(path.join(outside, 'hello.json'), JSON.stringify(createSetupReceipt()));
+    await fs.promises.mkdir(path.join(stateRoot, '_ns'));
+    await fs.promises.symlink(outside, path.join(stateRoot, '_ns', 'acme'), process.platform === 'win32' ? 'junction' : 'dir');
+    expect(await store.readAsync('_ns/acme/hello')).toMatchObject({ state: 'invalid' });
+  });
+
+  // Unit regression: repeated store.read() must reuse only icon format validation.
+  // Existing receipt tests do not cover unchanged revision/path with replaced icon
+  // bytes. A same-length invalid replacement must fail, and enabled stays fresh.
+  it('reuses unchanged icon validation while checking changed bytes and approval state', () => {
+    const receipt = createSetupReceipt();
+    const icon = 'data:image/png;base64,' + Buffer.from(workDir).toString('base64');
+    const receiptPath = path.join(stateRoot, 'hello.json');
+    const persist = (iconDataUrl: string, enabled = true) => {
+      fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl, enabled }));
+    };
+    const regexTest = vi.spyOn(RegExp.prototype, 'test');
+    const iconChecks = (value: string) => regexTest.mock.calls.filter(([input]) => input === value).length;
+
+    persist(icon);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: icon } });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: icon } });
+    expect(iconChecks(icon)).toBe(1);
+
+    const originalStat = fs.statSync(receiptPath);
+    const invalidIcon = icon.slice(0, -1) + '!';
+    persist(invalidIcon);
+    fs.utimesSync(receiptPath, originalStat.atime, originalStat.mtime);
+    expect(store.read('hello')).toMatchObject({ state: 'invalid' });
+    expect(iconChecks(invalidIcon)).toBe(1);
+
+    const replacement = icon.replace('image/png', 'image/gif');
+    persist(replacement);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: replacement } });
+    persist(replacement, false);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { enabled: false } });
+    expect(iconChecks(replacement)).toBe(1);
+
+    fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl: replacement, trust: null }));
+    expect(store.read('hello')).toMatchObject({ state: 'invalid' });
+  });
+
+  // Unit resource regression: read() must evict validated strings at both cache
+  // budgets; eviction only causes revalidation, never changes approval results.
+  it.each([
+    { budget: 'entry count', count: 70, payloadSize: 32 },
+    { budget: 'retained bytes', count: 7, payloadSize: 700 * 1024 },
+  ])('revalidates evicted icons after exceeding the $budget budget', ({ count, payloadSize }) => {
+    const receipt = createSetupReceipt();
+    const receiptPath = path.join(stateRoot, 'hello.json');
+    const prefix = 'data:image/png;base64,' + Buffer.from(workDir).toString('base64').replace(/=+$/, '');
+    const firstIcon = prefix + 'A'.repeat(payloadSize) + '0';
+    const regexTest = vi.spyOn(RegExp.prototype, 'test');
+    for (let index = 0; index < count; index++) {
+      fs.writeFileSync(receiptPath, JSON.stringify({
+        ...receipt, iconDataUrl: prefix + 'A'.repeat(payloadSize) + index,
+      }));
+      expect(store.read('hello').state).toBe('approved');
+    }
+    fs.writeFileSync(receiptPath, JSON.stringify({ ...receipt, iconDataUrl: firstIcon }));
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { iconDataUrl: firstIcon } });
+    expect(regexTest.mock.calls.filter(([input]) => input === firstIcon)).toHaveLength(2);
+  });
 
   it('removes a regular receipt and managed snapshot tree', async () => {
     const receipt = path.join(stateRoot, 'hello.json');
@@ -187,6 +292,19 @@ describe('GhostInstallReceiptStore cleanup', () => {
     await store.write(loaded.receipt);
     const saved = JSON.parse(await fs.promises.readFile(file, 'utf8'));
     expect(saved).toEqual(raw);
+  });
+
+  it('round trips independent target approval without inferring it from old tasks grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.targetCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, targetCapabilityApproved: true });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({ state: 'approved', receipt: { taskCapabilityApproved: true, targetCapabilityApproved: true, revision: receipt.revision } });
   });
 
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {

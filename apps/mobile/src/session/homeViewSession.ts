@@ -37,8 +37,14 @@ export function getHomeViewSession(): HomeViewSession {
 }
 
 /** Retain committed interactions synchronously, before navigation can mount Home elsewhere. */
-export function useRetainedHomeState<T>(session: HomeViewSession | undefined, key: string, initial: T | (() => T)):
-  [T, Dispatch<SetStateAction<T>>] {
+export function useRetainedHomeState<T>(
+  session: HomeViewSession | undefined,
+  key: string,
+  initial: T | (() => T),
+  onCommit?: (next: T) => void,
+): [T, Dispatch<SetStateAction<T>>] {
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
   const [localValue, setValue] = useState<T>(() => session
     ? session.read(key, initial)
     : typeof initial === 'function' ? (initial as () => T)() : initial);
@@ -54,6 +60,7 @@ export function useRetainedHomeState<T>(session: HomeViewSession | undefined, ke
     latest.current = next;
     session?.write(key, next);
     setValue(next);
+    commitRef.current?.(next);
   }, [session, key]);
   return [value, update];
 }

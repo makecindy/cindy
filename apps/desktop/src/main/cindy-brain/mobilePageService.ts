@@ -10,16 +10,34 @@ import {
   type PluginPageSurface,
   type PluginPageAsset,
   type PluginPageFile,
+  PLUGIN_SETTINGS_ACTION,
+  type PluginSettingsRequest,
+  type PluginOauthAction,
   type RemoteCollectionItem,
+  type PluginConfigurationSummary,
 } from '@cindy/device-link';
-import type { InstalledGhost } from '../../shared/ghost.js';
+import { ghostContentKeys, ghostFallbackDisplayAuthor, ghostInstallApprovalToken, ghostPermissionItems, ghostTrustLabelKey, type GhostSetupAssessment, type InstalledGhost } from '../../shared/ghost.js';
+import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/context.js';
+import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { resolvePreferredSystemLocale } from '../../shared/locale.js';
+import { t } from '../i18n.js';
+import { mobilePluginUsage } from './mobilePluginUsage.js';
+import { mobilePluginConfiguration } from './mobilePluginConfiguration.js';
 import type { GhostConfirmShowParams } from './confirmSlot.js';
+import type { PluginModelPickerTarget } from './ghostModelPicker.js';
 import {
   RemoteResourceRegistryError,
   type RemoteResourceProvider,
 } from '../device-link/remoteResourceRegistry.js';
 
 interface Page {
+  desktopSettings?: true;
+  documentEpoch?: number;
+  documentId?: string;
+  documentSources?: Set<string>;
+  channels?: string[];
+  authorizations?: Map<string, { path: string; body?: string; running: boolean; keepAlive?: () => boolean; result?: import('@cindy/device-link').PluginPageFetchResult }>;
   id: string;
   controller: string;
   plugin: string;
@@ -49,11 +67,17 @@ interface Page {
     answering: boolean;
   };
   directoryAnswers?: Map<string, string>;
+  modelPicker?: { value: NonNullable<PluginPagePoll['modelPickers']>[number]; cancel(): void };
   intents?: import('@cindy/device-link').PluginNativeIntent[];
   previews?: Map<string, MobilePluginPreview>;
 }
 interface Dependencies {
+  management?: import('./remotePluginManagement.js').RemotePluginManagement;
   list(): InstalledGhost[];
+  listOrder?(): ReadonlyMap<string, NonNullable<RemoteCollectionItem['pluginOrder']>>;
+  setupAssessment?(id: string): GhostSetupAssessment;
+  configuration?(id: string, assessment?: GhostSetupAssessment): PluginConfigurationSummary;
+  runtimeState?(id: string): string;
   revision(ghost: InstalledGhost): string;
   captureOwner(): () => boolean;
   captureController(controllerId: string): () => boolean;
@@ -63,7 +87,7 @@ interface Dependencies {
   bundle(ghost: InstalledGhost, entry: string): Promise<PluginPageFile[]>;
   asset(ghost: InstalledGhost, file: PluginPageFile, offset: number): Promise<PluginPageAsset>;
   connect(ghost: InstalledGhost, pageId: string, channels: string[]): Promise<void>;
-  post(ghost: InstalledGhost, pageId: string, channel: string, data: unknown): Promise<void>;
+  post(ghost: InstalledGhost, pageId: string, channel: string, data: unknown, sourceId?: string): Promise<void>;
   poll(ghost: InstalledGhost, pageId: string, after: number): Promise<PluginPagePoll['events']>;
   disconnect(pluginId: string, pageId: string): Promise<void>;
   fetch(
@@ -75,6 +99,7 @@ interface Dependencies {
     revision?: string,
   ): Promise<import('@cindy/device-link').PluginPageFetchResult>;
   fetchPreview?: MobilePreviewReader;
+  settingsFetch?(ghost: InstalledGhost, path: string, method: string, body: string | undefined, current: () => boolean, confirmConnection?: (label: string, host: string) => Promise<boolean>): Promise<import('@cindy/device-link').PluginPageFetchResult>;
   resolveMedia?(
     ghostId: string,
     url: string,
@@ -91,6 +116,7 @@ interface Dependencies {
     ): Promise<import('@cindy/device-link').PluginTaskPreferences>;
   };
   now?(): number;
+  answerModelPicker?(pageId: string, requestId: string, route: unknown): Promise<{ handled: boolean; accepted: boolean }>;
 }
 const fail = (message = 'Plugin page is no longer available'): never => {
   throw new RemoteResourceRegistryError('NOT_FOUND', message);
@@ -102,12 +128,18 @@ const record = (v: unknown): Record<string, unknown> =>
  * Writes are never replayed after reconnect. Reading/polling does not acknowledge unread content. */
 export class MobilePluginPages {
   private readonly pages = new Map<string, Page>();
+  // Retired document IDs remain notice-only until the lease closes.
+  private readonly documentSources = new Map<string, Page>();
+  private source(id: string): Page | undefined {
+    const page = this.pages.get(id) ?? this.documentSources.get(id);
+    return page && (page.documentId ?? page.id) === id ? page : undefined;
+  }
   constructor(private readonly deps: Dependencies) {}
   private now() {
     return this.deps.now?.() ?? Date.now();
   }
   private ghost(id: string) {
-    return this.deps.list().find((g) => g.manifest.id === id) ?? fail();
+    return this.deps.list().find((g) => installedGhostStoragePart(g) === id) ?? fail();
   }
   private check(page: Page, enabled = true): InstalledGhost {
     const ghost = this.ghost(page.plugin);
@@ -122,11 +154,15 @@ export class MobilePluginPages {
     }
     return ghost;
   }
+  private idleExpired(page: Page): boolean {
+    return this.now() - page.touchedAt > 120_000 &&
+      ![...(page.authorizations?.values() ?? [])].some(a => a.running && a.keepAlive?.());
+  }
   private page(id: unknown, controller: string): Page {
     if (typeof id !== 'string') return fail();
     const page = this.pages.get(id);
     if (!page || page.controller !== controller) return fail();
-    if (this.now() - page.touchedAt > 120_000) {
+    if (this.idleExpired(page)) {
       this.close(page);
       return fail();
     }
@@ -136,7 +172,10 @@ export class MobilePluginPages {
   }
   private close(page: Page) {
     this.pages.delete(page.id);
+    for (const id of page.documentSources ?? []) this.documentSources.delete(id);
+    for (const id of page.authorizations?.keys() ?? []) notifyOauthCardClosed(id);
     this.cancelDirectory(page);
+    page.modelPicker?.cancel();
     page.previews?.clear();
     for (const pending of page.confirms.values()) {
       clearTimeout(pending.timer);
@@ -154,6 +193,281 @@ export class MobilePluginPages {
       }
     }
   }
+  settingsBinding(action: PluginOauthAction): OauthCardBinding | null {
+    if (action.actionId !== PLUGIN_SETTINGS_ACTION || action.expectedRevision !== 0) return null;
+    const page = this.pages.get(action.requestId);
+    if (!page?.desktopSettings) return null;
+    return {
+      ghostId: page.plugin,
+      controllerDeviceId: page.controller,
+      settingsPage: true,
+      current: () => {
+        try {
+          this.page(page.id, page.controller);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    };
+  }
+  settingsAuthorizationBinding(action: PluginOauthAction): OauthCardBinding | null {
+    if (action.actionId !== 'settings-oauth' || action.expectedRevision !== 0) return null;
+    const page = [...this.pages.values()].find(
+      (p) => p.desktopSettings && p.authorizations?.has(action.requestId),
+    );
+    if (!page) return null;
+    return {
+      ghostId: page.plugin,
+      controllerDeviceId: page.controller,
+      current: () => {
+        try {
+          this.page(page.id, page.controller);
+          return page.authorizations!.has(action.requestId);
+        } catch {
+          return false;
+        }
+      },
+    };
+  }
+  runSettingsAuthorization(action: PluginOauthAction): boolean {
+    const binding = this.settingsAuthorizationBinding(action),
+      remote = getRemoteOauthContext();
+    if (!binding?.current() || !remote || remote.peer !== binding.controllerDeviceId) return false;
+    const page = [...this.pages.values()].find((p) => p.authorizations?.has(action.requestId))!;
+    const authorization = page.authorizations!.get(action.requestId)!;
+    if (authorization.running) return false;
+    const ghost = this.check(page);
+    authorization.running = true;
+    // Only the already-bound transaction can retain this page while the phone is away.
+    // A missing deadline preserves the legacy idle policy. Identity checks still run.
+    authorization.keepAlive = () => remote.expiresAt !== undefined &&
+      this.now() < remote.expiresAt && !remote.cancelled?.aborted;
+    void (async () => {
+      try {
+        // The original endpoint owns OAuth validation, exchange and persistence.
+        const result = await this.deps.settingsFetch!(
+          ghost,
+          authorization.path,
+          'POST',
+          authorization.body,
+          binding.current,
+        );
+        if (!binding.current()) throw new Error('PLUGIN_PAGE_CLOSED');
+        authorization.result = result;
+        remote.finish(
+          result.status === 200 &&
+            JSON.parse(Buffer.from(result.base64, 'base64').toString()).ok === true,
+        );
+      } catch {
+        if (binding.current())
+          authorization.result = {
+            status: 200,
+            mime: 'application/json',
+            base64: Buffer.from(JSON.stringify({ ok: false, error: 'CANCELLED' })).toString(
+              'base64',
+            ),
+          };
+        remote.finish(false);
+      } finally {
+        authorization.keepAlive = undefined;
+        authorization.body = undefined;
+      }
+    })();
+    return true;
+  }
+  async settingsRequest(controller: string, request: PluginSettingsRequest): Promise<unknown> {
+    const page = this.page(request.id, controller);
+    if (!page.desktopSettings) return fail();
+    const ghost = this.check(page),
+      command = request.command,
+      sourceId = page.documentId ?? page.id;
+    const current = () => {
+      try {
+        return this.page(page.id, controller) === page;
+      } catch {
+        return false;
+      }
+    };
+    const done = <T>(value: T): T => {
+      if (!current()) return fail();
+      return value;
+    };
+    switch (command.kind) {
+      case 'document': {
+        if (command.epoch < (page.documentEpoch ?? 0)) return fail();
+        if (command.epoch === page.documentEpoch) return {};
+        // Bound retained notice origins within this lease; a reload opens a fresh lease.
+        if ((page.documentSources?.size ?? 0) >= 1024) return fail();
+        page.documentEpoch = command.epoch;
+        page.documentId = randomUUID();
+        (page.documentSources ??= new Set()).add(page.documentId);
+        this.documentSources.set(page.documentId, page);
+        this.cancelDirectory(page);
+        page.modelPicker?.cancel();
+        for (const pending of page.confirms.values()) {
+          clearTimeout(pending.timer);
+          pending.answer(false);
+        }
+        page.confirms.clear();
+        page.directoryAnswers?.clear();
+        return {};
+      }
+      case 'close':
+        this.close(page);
+        return {};
+      case 'asset': {
+        const file = page.files.find((f) => f.path === command.path);
+        if (!file || command.offset > file.size) return fail();
+        return done(await this.deps.asset(ghost, file, command.offset));
+      }
+      case 'subscribe': {
+        const channels = [...new Set([...(page.channels ?? []), ...command.channels])];
+        if (channels.length > 16) return fail();
+        await this.deps.connect(ghost, page.id, channels);
+        page.channels = channels;
+        return done({});
+      }
+      case 'post':
+        if (!page.channels?.includes(command.channel)) return fail();
+        await this.deps.post(ghost, page.id, command.channel, command.data, sourceId);
+        return done({});
+      case 'unsubscribe': {
+        const channels = (page.channels ?? []).filter((name) => name !== command.channel);
+        await this.deps.connect(ghost, page.id, channels);
+        page.channels = channels;
+        return done({});
+      }
+      case 'poll': {
+        const events = page.channels?.length ? await this.deps.poll(ghost, page.id, command.after) : [];
+        const sameDocument = sourceId === (page.documentId ?? page.id);
+        return done({
+          events: sameDocument ? events : [],
+          confirms: sameDocument ? [...page.confirms.values()].map((p) => p.value) : [],
+          notifications: page.notices.splice(0),
+          directories: sameDocument && page.directory ? [page.directory.value] : [],
+          modelPickers: sameDocument && page.modelPicker ? [page.modelPicker.value] : [],
+        });
+      }
+      case 'confirm': {
+        const pending = page.confirms.get(command.requestId);
+        if (!pending || pending.value.expiresAt <= this.now()) return fail();
+        clearTimeout(pending.timer);
+        page.confirms.delete(command.requestId);
+        pending.answer(command.accepted);
+        return {};
+      }
+      case 'answer-model-picker': {
+        if (!page.modelPicker || command.requestId !== page.modelPicker.value.requestId || !this.deps.answerModelPicker) return fail();
+        return done(await this.deps.answerModelPicker(page.id, command.requestId, command.route));
+      }
+      case 'answer-directory':
+        await this.answerDirectory(page, command);
+        return done({});
+      case 'authorization-result': {
+        const authorization = page.authorizations?.get(command.requestId);
+        if (!authorization?.result) return fail();
+        const result = authorization.result;
+        page.authorizations!.delete(command.requestId);
+        return result;
+      }
+      case 'authorize': {
+        const match = /^\/oauth\/([a-zA-Z0-9_-]+)\/connect$/.exec(command.path);
+        if (
+          !match ||
+          !ghost.manifest.network?.secrets?.some((s) => s.key === match[1] && s.source === 'oauth')
+        )
+          return fail();
+        page.authorizations ??= new Map();
+        if (page.authorizations.size >= 4) return fail();
+        const id = randomUUID();
+        page.authorizations.set(id, { path: command.path, body: command.body, running: false });
+        return { requestId: id, actionId: 'settings-oauth', expectedRevision: 0 };
+      }
+      case 'fetch': {
+        if (!command.path.startsWith('/') || command.path.startsWith('//')) return fail();
+        const url = new URL(command.path, 'https://plugin.invalid');
+        if (
+          url.origin !== 'https://plugin.invalid' ||
+          url.hash ||
+          !/^\/(?:kv|app-context|agent-models|media-models|secrets(?:\/[^/]+(?:\/check)?)?|oauth(?:\/[^/]+\/(?:client|default|insufficient-scopes|accounts\/[^/]+))?|connections(?:\/[^/]+(?:\/[^/]+)?)?|wake)$/.test(
+            url.pathname,
+          )
+        )
+          return fail();
+        return done(
+          await this.deps.settingsFetch!(
+            ghost,
+            url.pathname + url.search,
+            command.method,
+            command.body,
+            () => current() && sourceId === (page.documentId ?? page.id),
+            (label, host) =>
+              this.confirm(sourceId, {
+                ghostId: page.plugin,
+                ghostName: ghost.manifest.name,
+                iconDataUrl: ghost.iconDataUrl,
+                body:
+                  t('settings.ghosts.connections.confirmMessage')
+                    .replaceAll('{{name}}', ghost.manifest.name)
+                    .replaceAll('{{host}}', host) +
+                  '\n\n' +
+                  t('settings.ghosts.connections.confirmDetail').replaceAll('{{label}}', label),
+                confirmText: t('settings.ghosts.connections.confirmAllow'),
+                cancelText: t('settings.ghosts.connections.confirmCancel'),
+                danger: false,
+              }),
+          ),
+        );
+      }
+    }
+  }
+  private async answerDirectory(
+    page: Page,
+    input: { requestId?: unknown; path?: unknown },
+  ): Promise<void> {
+    if (
+      !page.active ||
+      typeof input.requestId !== 'string' ||
+      !(
+        input.path === null ||
+        (typeof input.path === 'string' && input.path.length > 0 && input.path.length <= 4096)
+      )
+    )
+      return fail();
+    const receipt = createHash('sha256').update(JSON.stringify(input.path)).digest('hex');
+    const previous = page.directoryAnswers?.get(input.requestId);
+    if (previous) {
+      if (previous !== receipt) return fail();
+      return;
+    }
+    const pending = page.directory;
+    if (
+      !pending ||
+      pending.value.id !== input.requestId ||
+      pending.answering ||
+      pending.value.expiresAt <= this.now()
+    )
+      return fail();
+    pending.answering = true;
+    try {
+      const path =
+        input.path === null ? null : await this.deps.validateDirectory!(input.path as string);
+      this.check(page);
+      if (!page.active || page.directory !== pending || pending.value.expiresAt <= this.now())
+        return fail();
+      clearTimeout(pending.timer);
+      page.directory = undefined;
+      page.directoryAnswers ??= new Map();
+      page.directoryAnswers.set(input.requestId, receipt);
+      if (page.directoryAnswers.size > 32)
+        page.directoryAnswers.delete(page.directoryAnswers.keys().next().value!);
+      pending.answer(path);
+      return;
+    } finally {
+      pending.answering = false;
+    }
+  }
   private cancelDirectory(page: Page) {
     if (!page.directory) return;
     clearTimeout(page.directory.timer);
@@ -162,13 +476,13 @@ export class MobilePluginPages {
   }
   captureSource(pageId: unknown, pluginId: string): () => boolean {
     if (typeof pageId !== 'string') return fail();
-    const page = this.pages.get(pageId);
+    const page = this.source(pageId);
     if (!page || page.plugin !== pluginId || !page.active || page.sourceHidden) return fail();
     this.check(page);
     return () => {
       try {
-        this.page(pageId, page.controller);
-        return page.active && !page.sourceHidden;
+        this.page(page.id, page.controller);
+        return this.source(pageId) === page && page.active && !page.sourceHidden;
       } catch {
         return false;
       }
@@ -180,7 +494,7 @@ export class MobilePluginPages {
     purpose: string | null,
   ): Promise<string | null> {
     const current = this.captureSource(pageId, pluginId),
-      page = this.pages.get(pageId)!;
+      page = this.source(pageId)!;
     if (!current() || page.directory || !this.deps.validateDirectory) return fail();
     const ghost = this.check(page),
       id = randomUUID();
@@ -211,7 +525,7 @@ export class MobilePluginPages {
   ): boolean {
     try {
       if (!this.captureSource(pageId, pluginId)()) return false;
-      const page = this.pages.get(pageId)!,
+      const page = this.source(pageId)!,
         ghost = this.check(page);
       if ((page.intents?.length ?? 0) >= 8) return false;
       (page.intents ??= []).push({
@@ -227,7 +541,7 @@ export class MobilePluginPages {
   }
   notify(pageId: string, pluginId: string, text: string): boolean {
     this.sweep();
-    const page = this.pages.get(pageId);
+    const page = this.pages.get(pageId) ?? this.documentSources.get(pageId);
     if (
       !page ||
       !page.active ||
@@ -257,18 +571,18 @@ export class MobilePluginPages {
   }
   private sweep() {
     for (const page of this.pages.values()) {
-      if (
-        !page.currentOwner() ||
-        !page.currentController() ||
-        this.now() - page.touchedAt > 120_000
-      )
-        this.close(page);
+      try {
+        this.check(page);
+        if (this.idleExpired(page)) this.close(page);
+      } catch {
+        if (this.pages.has(page.id)) this.close(page);
+      }
     }
   }
   /** Explicit page context supplied by a plugin handling that page's business request.
    * A missing/invalid context never falls back to a different phone. */
   async confirm(pageId: string, params: GhostConfirmShowParams): Promise<boolean> {
-    const page = this.pages.get(pageId);
+    const page = this.source(pageId);
     if (!page || !page.active || page.sourceHidden || page.plugin !== params.ghostId) return fail();
     this.check(page);
     if (this.now() - page.touchedAt > 120_000 || page.confirms.size) return fail();
@@ -294,13 +608,41 @@ export class MobilePluginPages {
       });
     });
   }
-  private item(ghost: InstalledGhost): RemoteCollectionItem {
-    const m = ghost.manifest;
-    const mobile = parsePluginMobileDeclaration(m.mobile);
-    const unread = ghost.enabled ? this.deps.unread(m.id) : null;
+  modelPickerTarget(pageId: string, pluginId: string): PluginModelPickerTarget | null {
+    const page = this.source(pageId);
+    if (!page || !page.active || page.sourceHidden || page.plugin !== pluginId) return null;
+    this.check(page);
     return {
-      ref: { collectionId: PLUGIN_COLLECTION, kind: 'plugin', id: m.id },
+      id: page.id,
+      isCurrent: () => {
+        try {
+          this.check(page);
+          return this.source(pageId) === page && page.active && !page.sourceHidden;
+        } catch { return false; }
+      },
+      send: (value, cancel) => {
+        this.check(page);
+        if (this.source(pageId) !== page || !page.active || page.sourceHidden || page.modelPicker) return false;
+        page.modelPicker = { value, cancel };
+        return true;
+      },
+      dismiss: requestId => {
+        if (page.modelPicker?.value.requestId === requestId) page.modelPicker = undefined;
+      },
+    };
+  }
+  private item(
+    ghost: InstalledGhost,
+    order?: RemoteCollectionItem['pluginOrder'],
+  ): RemoteCollectionItem {
+    const m = ghost.manifest;
+    const id = installedGhostStoragePart(ghost);
+    const mobile = parsePluginMobileDeclaration(m.mobile);
+    const unread = ghost.enabled ? this.deps.unread(id) : null;
+    return {
+      ref: { collectionId: PLUGIN_COLLECTION, kind: 'plugin', id },
       revision: this.deps.revision(ghost),
+      ...(order ? { pluginOrder: order } : {}),
       display: {
         title: m.name,
         subtitle: m.description ?? '',
@@ -329,7 +671,13 @@ export class MobilePluginPages {
             ? [{ id: `open:${surface}`, label: surface, disabled: !ghost.enabled }]
             : [];
         }),
-        { id: ghost.enabled ? 'disable' : 'enable', label: ghost.enabled ? 'Disable' : 'Enable' },
+        {
+          id: ghost.enabled ? 'disable' : 'enable',
+          label: ghost.enabled ? 'Disable' : 'Enable',
+          ...(!ghost.enabled && (ghost.approval.state !== 'approved' || ghost.retirement)
+            ? { disabled: true }
+            : {}),
+        },
       ],
     };
   }
@@ -340,9 +688,18 @@ export class MobilePluginPages {
         resourceKind: 'plugin',
         title: { fallback: 'Plugins', translations: { 'zh-CN': '插件' } },
         icon: { name: 'puzzle', fallbackText: 'P' },
+        ...(this.deps.management
+          ? { actions: [{ id: 'management:snapshot', label: 'Manage plugins' }] }
+          : {}),
       },
       list: async (_ctx, request) => {
         this.sweep();
+        let order: ReturnType<NonNullable<Dependencies['listOrder']>> | undefined;
+        try {
+          order = this.deps.listOrder?.();
+        } catch {
+          /* Optional ordering cannot block the list. */
+        }
         const q = request.query?.toLocaleLowerCase();
         const items = this.deps
           .list()
@@ -351,7 +708,7 @@ export class MobilePluginPages {
               !q ||
               `${g.manifest.name} ${g.manifest.description ?? ''}`.toLocaleLowerCase().includes(q),
           )
-          .map((g) => this.item(g));
+          .map((g) => this.item(g, order?.get(installedGhostStoragePart(g))));
         return {
           collectionId: PLUGIN_COLLECTION,
           revision: createHash('sha256').update(JSON.stringify(items)).digest('hex'),
@@ -361,6 +718,98 @@ export class MobilePluginPages {
       get: async (_ctx, request) => {
         const ghost = this.ghost(request.ref.id);
         const item = this.item(ghost);
+        const locale = resolvePreferredSystemLocale([request.client.locale ?? 'en']);
+        // Read-only declaration facts and copy shared with PC; no saved values leave Host.
+        const permissionText = (key: string, args?: Record<string, string>) =>
+          t(`settings.ghosts.perm.${key}`, locale).replace(
+            /\{\{(\w+)\}\}/g,
+            (match, name: string) => args?.[name] ?? match,
+          );
+        const permissions = ghostPermissionItems(ghost.manifest)
+          .filter((permission) => permission.kind !== 'tool')
+          .map((permission) => ({
+            kind: permission.kind,
+            labelKey: permission.labelKey,
+            title: permissionText(permission.labelKey, permission.labelArgs),
+            description: [
+              permission.detailKey
+                ? permissionText(permission.detailKey, permission.detailArgs)
+                : '',
+              permission.detail ?? '',
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+          }));
+        const author = ghostFallbackDisplayAuthor(ghost);
+        const detailFacts = [
+          {
+            key: 'version',
+            title: t('settings.ghosts.detail.infoVersion', locale),
+            value: 'v' + ghost.manifest.version,
+          },
+          ...(author
+            ? [
+                {
+                  key: 'author',
+                  title: t('settings.ghosts.detail.infoAuthor', locale),
+                  value: author,
+                },
+              ]
+            : []),
+          {
+            key: 'trust',
+            title: t('settings.ghosts.detail.infoTrust', locale),
+            value: t('settings.ghosts.trust.' + ghostTrustLabelKey(ghost.trust), locale).replaceAll(
+              '{{publisher}}',
+              ghost.trust?.publisherName ?? t('settings.ghosts.trust.unknownPublisher', locale),
+            ),
+          },
+          {
+            key: 'identifier',
+            title: t('settings.ghosts.detail.infoId', locale),
+            value: ghost.manifest.id,
+          },
+          {
+            key: 'contents',
+            title: t('settings.ghosts.detail.infoContents', locale),
+            value: ghostContentKeys(ghost.manifest)
+              .map((key) => t('settings.ghosts.contents.' + key, locale))
+              .join(' · '),
+          },
+          {
+            key: 'panel',
+            title: t('settings.ghosts.detail.infoPanel', locale),
+            value: t(
+              ghost.manifest.panel
+                ? 'settings.ghosts.contents.panel'
+                : 'settings.ghosts.detail.panelNone',
+              locale,
+            ),
+          },
+          ...(ghost.dir
+            ? [
+                {
+                  key: 'location',
+                  title: t('settings.ghosts.detail.infoLocation', locale),
+                  value: ghost.dir,
+                },
+              ]
+            : []),
+        ];
+        let assessment: GhostSetupAssessment | undefined;
+        try {
+          assessment = this.deps.setupAssessment?.(installedGhostStoragePart(ghost));
+        } catch {
+          // A failed read is unknown, never a fabricated missing configuration.
+        }
+        let configuration = mobilePluginConfiguration(ghost.manifest, undefined, assessment);
+        try {
+          configuration =
+            this.deps.configuration?.(installedGhostStoragePart(ghost), assessment) ??
+            configuration;
+        } catch {
+          // A failed configuration read retains declarations with unknown status.
+        }
         return {
           ...item,
           blocks: [
@@ -378,10 +827,18 @@ export class MobilePluginPages {
                 tools:
                   ghost.manifest.tools?.map((tool) => ({
                     name: tool.name,
-                    description: tool.description,
+                    description: tool.description ?? '',
                   })) ?? [],
-                tasks: Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
+                permissions,
+                details: detailFacts,
+                tasks: ghost.manifest.showTaskPreferences !== false && Boolean(ghost.manifest.agent?.tasks || ghost.manifest.agent?.errand),
                 mobile: parsePluginMobileDeclaration(ghost.manifest.mobile) !== null,
+                usage: mobilePluginUsage(
+                  ghost,
+                  assessment,
+                  this.deps.runtimeState?.(installedGhostStoragePart(ghost)),
+                  configuration,
+                ),
               },
             },
           ],
@@ -389,6 +846,14 @@ export class MobilePluginPages {
       },
       invoke: async (context, request) => {
         this.sweep();
+        if (request.actionId.startsWith('management:')) {
+          if (!this.deps.management)
+            throw new RemoteResourceRegistryError(
+              'UNSUPPORTED_CAPABILITY',
+              'Update Cindy on the target computer',
+            );
+          return this.deps.management.invoke(context.controllerDeviceId, request);
+        }
         const input = record(request.input);
         const id = request.resourceRef?.id;
         if (!id) return fail();
@@ -447,6 +912,51 @@ export class MobilePluginPages {
             for (const page of this.pages.values()) if (page.plugin === id) this.close(page);
           return { effects: [{ kind: 'refresh-collection', collectionId: PLUGIN_COLLECTION }] };
         }
+        if (request.actionId === 'settings:open') {
+          const ghost = this.ghost(id);
+          if (
+            !this.deps.settingsFetch ||
+            !ghost.enabled ||
+            !ghost.manifest.settingsHtml ||
+            input.expectedInstalledApproval !== ghostInstallApprovalToken(ghost.approval) ||
+            this.pages.size >= 32
+          )
+            return fail();
+          const page: Page = {
+            id: randomUUID(),
+            plugin: id,
+            controller: context.controllerDeviceId,
+            revision: this.deps.revision(ghost),
+            currentOwner: this.deps.captureOwner(),
+            currentController: this.deps.captureController(context.controllerDeviceId),
+            surface: 'settings',
+            desktopSettings: true,
+            active: true,
+            touchedAt: this.now(),
+            files: [],
+            confirms: new Map(),
+            notices: [],
+            answered: new Map(),
+          };
+          this.check(page);
+          page.files = await this.deps.bundle(ghost, ghost.manifest.settingsHtml);
+          this.check(page);
+          if (this.pages.size >= 32) return fail();
+          this.pages.set(page.id, page);
+          return {
+            effects: [],
+            result: {
+              pageId: page.id,
+              pluginId: id,
+              manifestId: ghost.manifest.id,
+              name: ghost.manifest.name,
+              controllerAuthorization: true,
+              documentIsolation: true,
+              entry: ghost.manifest.settingsHtml,
+              files: page.files,
+            },
+          };
+        }
         if (request.actionId.startsWith('open:')) {
           const surface = request.actionId.slice(5);
           if (!isPluginPageSurface(surface)) return fail();
@@ -491,7 +1001,7 @@ export class MobilePluginPages {
           this.pages.set(page.id, page);
           const result: PluginPageDocument = {
             pageId: page.id,
-            pluginId: id,
+            pluginId: installedGhostStoragePart(ghost),
             title: ghost.manifest.name,
             surface,
             entry,
@@ -502,6 +1012,8 @@ export class MobilePluginPages {
           return { effects: [], result };
         }
         const page = this.page(input.pageId, context.controllerDeviceId);
+        // Desktop configuration values only cross the authenticated encrypted bridge.
+        if (page.desktopSettings) return fail();
         if (page.plugin !== id) return fail();
         const ghost = this.check(page);
         switch (request.actionId) {
@@ -523,6 +1035,7 @@ export class MobilePluginPages {
             // Suspension removes native intents; their cover must not survive resume.
             page.sourceHidden = false;
             this.cancelDirectory(page);
+            page.modelPicker?.cancel();
             page.intents = [];
             page.previews?.clear();
             for (const pending of page.confirms.values()) {
@@ -577,6 +1090,7 @@ export class MobilePluginPages {
               notifications: page.notices.splice(0),
               unreadAt: page.unreadAt,
               directories: page.directory ? [page.directory.value] : [],
+              modelPickers: page.modelPicker ? [page.modelPicker.value] : [],
               intents: page.intents ?? [],
             };
             return { effects: [], result };
@@ -585,6 +1099,7 @@ export class MobilePluginPages {
             if (typeof input.hidden !== 'boolean' || !page.active) return fail();
             page.sourceHidden = input.hidden;
             if (input.hidden) {
+              page.modelPicker?.cancel();
               for (const pending of page.confirms.values()) {
                 clearTimeout(pending.timer);
                 pending.answer(false);
@@ -634,57 +1149,16 @@ export class MobilePluginPages {
             page.previews?.delete(input.intentId);
             return { effects: [] };
           }
-          case 'answer-directory': {
-            if (
-              !page.active ||
-              typeof input.requestId !== 'string' ||
-              !(
-                input.path === null ||
-                (typeof input.path === 'string' &&
-                  input.path.length > 0 &&
-                  input.path.length <= 4096)
-              )
-            )
-              return fail();
-            const receipt = createHash('sha256').update(JSON.stringify(input.path)).digest('hex');
-            const previous = page.directoryAnswers?.get(input.requestId);
-            if (previous) {
-              if (previous !== receipt) return fail();
-              return { effects: [] };
-            }
-            const pending = page.directory;
-            if (
-              !pending ||
-              pending.value.id !== input.requestId ||
-              pending.answering ||
-              pending.value.expiresAt <= this.now()
-            )
-              return fail();
-            pending.answering = true;
-            try {
-              const path =
-                input.path === null
-                  ? null
-                  : await this.deps.validateDirectory!(input.path as string);
-              this.check(page);
-              if (
-                !page.active ||
-                page.directory !== pending ||
-                pending.value.expiresAt <= this.now()
-              )
-                return fail();
-              clearTimeout(pending.timer);
-              page.directory = undefined;
-              page.directoryAnswers ??= new Map();
-              page.directoryAnswers.set(input.requestId, receipt);
-              if (page.directoryAnswers.size > 32)
-                page.directoryAnswers.delete(page.directoryAnswers.keys().next().value!);
-              pending.answer(path);
-              return { effects: [] };
-            } finally {
-              pending.answering = false;
-            }
+          case 'answer-model-picker': {
+            if (!page.active || page.sourceHidden || !page.modelPicker ||
+                input.requestId !== page.modelPicker.value.requestId || !this.deps.answerModelPicker) return fail();
+            const result = await this.deps.answerModelPicker(page.id, page.modelPicker.value.requestId, input.route);
+            this.check(page);
+            return { effects: [], result };
           }
+          case 'answer-directory':
+            await this.answerDirectory(page, input);
+            return { effects: [] };
           case 'answer': {
             const pending =
               typeof input.confirmId === 'string' ? page.confirms.get(input.confirmId) : null;

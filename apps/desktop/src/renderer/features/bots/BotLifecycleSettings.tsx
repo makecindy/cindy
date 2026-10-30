@@ -5,11 +5,11 @@ import { useTranslation } from 'react-i18next';
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
 import type { ConversationSearchResponse } from '../../../shared/conversationSearch';
 import type { BotProfile } from './botStore';
-import { runBotLifecycleAction } from './botStore';
+import { useBotSettingsTarget } from './useBotSettingsTarget';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { BotDeleteDialog } from './BotDeleteDialog';
-import { withoutBotGroupLanes } from './botGroupLane';
+import { withoutBotHiddenLanes } from './botGroupLane';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -30,6 +30,7 @@ export function BotLifecycleSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useTranslation();
+  const target = useBotSettingsTarget();
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -40,8 +41,8 @@ export function BotLifecycleSettings({
   const [restarted, setRestarted] = useState(false);
   const actionInFlight = useRef(false);
 
-  // 群专线即使随群删除被归档，也不是这位伙伴自己的历史任务。
-  const archivedSessions = withoutBotGroupLanes(bot.sessions)
+  // 群专线 / IM 专线即使被归档，也不是这位伙伴自己的历史任务。
+  const archivedSessions = withoutBotHiddenLanes(bot.sessions)
     .filter((item) => item.kind === 'history')
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const isPaused = bot.status === 'paused';
@@ -55,7 +56,7 @@ export function BotLifecycleSettings({
     setActionError(false);
     try {
       if (beforeAction && !(await beforeAction())) return;
-      await runBotLifecycleAction({ botId: bot.id, action });
+      await target.lifecycle.run({ botId: bot.id, action });
       setRestarted(action === 'restart');
     } catch {
       setActionError(true);
@@ -88,7 +89,7 @@ export function BotLifecycleSettings({
     setSearchError(false);
     try {
       setSearchResult(
-        await window.electronAPI.localDb.bots.searchHistory({
+        await target.history.search({
           botId: bot.id,
           query: trimmed,
           limit: 20,

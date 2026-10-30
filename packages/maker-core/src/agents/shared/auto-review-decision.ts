@@ -232,6 +232,33 @@ export function annotatePermissionRequestForUnavailableReview<
   };
 }
 
+/** InteractionRequest.metadata：审阅器判定「需要用户决定」时写给用户的原因（已脱敏、限长）。 */
+export const AUTO_REVIEW_REASON_METADATA_KEY = 'autoReviewReason';
+
+export function autoReviewReasonFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+): string | undefined {
+  const reason = metadata?.[AUTO_REVIEW_REASON_METADATA_KEY];
+  return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+}
+
+/**
+ * 确认卡说明「为什么问你」：故障降级用固定文案；审阅器的 ask 原因挂在 metadata 上，
+ * 不覆盖 Agent／SDK 自带的 description。其余确认（Ask 档、逐次确认策略）原样返回。
+ */
+export function annotatePermissionRequestForAutoReview<
+  T extends {
+    kind: 'permission';
+    description?: string;
+    metadata?: Record<string, unknown>;
+  },
+>(req: T, review: { unavailable?: boolean; reason?: string } | undefined): T {
+  if (review?.unavailable) return annotatePermissionRequestForUnavailableReview(req);
+  const reason = review?.reason?.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS);
+  if (!reason) return req;
+  return { ...req, metadata: { ...req.metadata, [AUTO_REVIEW_REASON_METADATA_KEY]: reason } };
+}
+
 /**
  * 有界用户原话与宿主动作事实；不含助手历史、工具结果、Skill 或 Memory。
  * `userIntent.currentUserReferences` 是宿主盖章的「用户本条明确指向的内容」（被回复／引用的消息、
@@ -446,12 +473,27 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return action.description?.trim()
-        ? null
-        : 'Unknown actions cannot be reviewed without concrete action details.';
+      if (!action.description?.trim()) return 'Unknown actions cannot be reviewed without concrete action details.';
+      return fileChangeWithoutPaths(action.description)
+        ? 'File-change review needs concrete paths.'
+        : null;
     default:
       return null;
   }
+}
+
+/** A risk-first reviewer would wave a pathless patch through as "low risk"; never approve unseen writes. */
+function fileChangeWithoutPaths(description: string): boolean {
+  let envelope: unknown;
+  try { envelope = JSON.parse(description); } catch { return false; }
+  if (!envelope || typeof envelope !== 'object') return false;
+  const { toolName, input } = envelope as { toolName?: unknown; input?: unknown };
+  if (toolName !== 'file_change') return false;
+  const changes = input && typeof input === 'object' ? (input as { changes?: unknown }).changes : undefined;
+  const paths = Array.isArray(changes)
+    ? changes.map((change) => (change && typeof change === 'object' ? (change as { path?: unknown }).path : undefined))
+    : changes && typeof changes === 'object' ? Object.keys(changes) : [];
+  return !paths.some((path) => typeof path === 'string' && path.trim().length > 0);
 }
 
 function oversizedReviewEvidence(action: ReviewableAction): string | null {

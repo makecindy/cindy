@@ -33,9 +33,21 @@ vi.mock('react-native', async () => {
     testID?: string;
     onPress?: () => void;
     accessibilityState?: { busy?: boolean; disabled?: boolean };
+    pointerEvents?: string;
+    accessibilityElementsHidden?: boolean;
+    importantForAccessibility?: string;
   };
-  const View = ({ children, testID, onPress }: Props) =>
-    createElement('div', { 'data-testid': testID, onClick: onPress }, children);
+  const View = ({ children, testID, onPress, pointerEvents, accessibilityElementsHidden, importantForAccessibility }: Props) =>
+    createElement('div', {
+      'data-testid': testID,
+      'data-pointer-events': pointerEvents,
+      'aria-hidden': accessibilityElementsHidden,
+      'data-important-for-accessibility': importantForAccessibility,
+      // Model the native subtree hit-testing boundary; jsdom ignores pointerEvents.
+      onClick: (event: { currentTarget: HTMLElement }) => {
+        if (!event.currentTarget.closest('[data-pointer-events="none"]')) onPress?.();
+      },
+    }, children);
   return {
     View,
     Pressable: View,
@@ -115,7 +127,6 @@ vi.mock('@/platform/gestureHandler', () => {
 
 // Keep native device polling outside the drawer window/lifecycle fixture.
 vi.mock('@/plugins/PluginMenuUnreadDot', () => ({ PluginMenuUnreadDot: () => null }));
-vi.mock('@/session/HomeModeSwitch', () => ({ HomeModeSwitch: () => null }));
 
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('expo-router', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
@@ -125,7 +136,6 @@ vi.mock('@/session/AccountSwitcherSheet', () => ({ AccountSwitcherSheet: () => n
 vi.mock('@/session/remoteSessionStore', () => ({
   remoteSessionStore: { subscribe: () => () => {}, getSessions: () => [], isSessionRunning: () => false },
 }));
-vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ chooseMode: vi.fn() }) }));
 
 const drawerProps = (over: Partial<Parameters<typeof HomeChromeDrawer>[0]> = {}) => ({
   onClose: vi.fn(),
@@ -215,5 +225,42 @@ describe('Android home drawer window and close lifecycle', () => {
     expect(container.querySelector('[data-testid="home.chromeDrawer"]')).toBeNull();
     // onClosed 只在窗口真正卸载后触发一次:调用方的延后动作以此为信号执行。
     expect(props.onClosed).toHaveBeenCalledOnce();
+  });
+
+  it.each(['android', 'ios'] as const)('ignores backdrop and menu taps during %s exit without cancelling the queued action', async platform => {
+    h.platform.OS = platform;
+    const completed = vi.fn();
+    let pending: (() => void) | null = null;
+    const props = drawerProps({
+      onOpenSearch: vi.fn(() => { pending = completed; }),
+      onClose: vi.fn(() => { pending = null; }),
+      onClosed: vi.fn(() => { const action = pending; pending = null; action?.(); }),
+    });
+    const click = async (id: string) => {
+      await act(async () => (container.querySelector(`[data-testid="${id}"]`) as HTMLElement).click());
+    };
+    await act(async () => root.render(<HomeChromeDrawer {...props} />));
+    await click('home.chromeDrawer.search');
+    expect(props.onOpenSearch).toHaveBeenCalledOnce();
+    await act(async () => root.render(<HomeChromeDrawer {...props} open={false} />));
+    const overlay = container.querySelector('[data-testid="home.chromeDrawer"]')!;
+    expect(overlay.getAttribute('data-pointer-events')).toBe('none');
+    expect(overlay.getAttribute('aria-hidden')).toBe('true');
+    expect(overlay.getAttribute('data-important-for-accessibility')).toBe('no-hide-descendants');
+    for (const id of ['home.chromeMenu.backdrop', 'home.chromeDrawer.search', 'home.chromeDrawer.accounts', 'home.chromeDrawer.devices', 'devices.settingsButton', 'home.chromeDrawer.logout']) {
+      await click(id);
+    }
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(props.onOpenSearch).toHaveBeenCalledOnce();
+    expect(props.onOpenAccounts).not.toHaveBeenCalled();
+    expect(props.onOpenDevices).not.toHaveBeenCalled();
+    expect(props.onOpenSettings).not.toHaveBeenCalled();
+    expect(props.onLogout).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+    await finishTiming();
+    expect(completed).toHaveBeenCalledOnce();
+    await act(async () => root.render(<HomeChromeDrawer {...props} />));
+    await click('home.chromeDrawer.accounts');
+    expect(props.onOpenAccounts).toHaveBeenCalledOnce();
   });
 });

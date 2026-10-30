@@ -13,6 +13,10 @@ export type {
 } from './types.js';
 export { ExternalChromeBackend } from './external-chrome-backend.js';
 export { BackendRouter } from './router.js';
-export { BrowserBackendController, type BrowserBackendControllerOptions } from './controller.js';
+export {
+  BrowserBackendController,
+  resolveBackendProfile,
+  type BrowserBackendControllerOptions,
+} from './controller.js';
 export { BrowserBackendHealthService } from './health-service.js';
 export { RsbWebviewBackend, type RsbWebviewBackendOptions } from './rsb-webview-backend.js';

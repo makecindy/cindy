@@ -125,7 +125,13 @@ export function InteractionPromptCardShell({
         >
           {children}
         </div>
-        {pinnedContent}
+        {pinnedContent ? (
+          // Reserve the same gutter as the scroll region above so pinned rows
+          // keep the scrolled rows' right edge, whatever the scrollbar width.
+          <div data-testid="interaction-prompt-pinned" className="overflow-hidden [scrollbar-gutter:stable]">
+            {pinnedContent}
+          </div>
+        ) : null}
         {footer}
       </div>
     </div>

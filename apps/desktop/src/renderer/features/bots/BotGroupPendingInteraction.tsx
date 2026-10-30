@@ -3,20 +3,22 @@
  *
  * 群专线是一条普通 Cindy Session：权限请求 / 提问经 maker 事件进入 makerChatStore，
  * 与任务页是同一份状态（按 sessionId 分片），这里只读它的轻量快照并复用任务页的
- * PermissionPrompt / AskUserQuestionPrompt，作答也走同一条 store 动作。其它交互（计划
+ * PermissionPrompt / AskUserQuestionPrompt / InputHandoffCard，作答也走同一条路径。其它交互（计划
  * 审阅、插件配置等）在群里只提示「在等你确认」。
  *
  * 灵动岛活动镜像报告等待交互、store 里却没有卡片时（窗口刚重载、错过了实时推送），
  * 先显示这条提示，再按任务页打开时的同一路径补读一次这条专线：ensureInitialMessages
  * 会顺带向宿主拉挂起交互的快照并重建卡片；读进来的历史受 store 的软淘汰约束。
  */
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { CircleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
+import { InputHandoffCard } from '@/features/input-handoff/InputHandoffCard';
 import { makerChatStore } from '@/lib/makerChatStore';
+import * as sessionService from '@/lib/sessionService';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import type { BotChatIdentity } from './BotSessionContentHeader';
 
@@ -34,6 +36,28 @@ export function BotGroupPendingInteraction({
   );
   const getSnapshot = useCallback(() => makerChatStore.getLightSnapshot(sessionId), [sessionId]);
   const light = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const questionRequestId = light.pendingAskUser?.requestId;
+  const [questionFiles, setQuestionFiles] = useState<{
+    sessionId: string; requestId: string; workingDir: string; remoteHostId: string | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!questionRequestId) return;
+    let cancelled = false;
+    // Group lanes are hidden from the task list; use the actual lane/step row,
+    // whose worktree may differ from both the group folder and the bot's home.
+    void (async () => {
+      try {
+        const session = await sessionService.get(sessionId);
+        if (!cancelled) setQuestionFiles({ sessionId, requestId: questionRequestId,
+          workingDir: session.workingDir ?? '', remoteHostId: session.remoteHostId ?? null });
+      } catch {
+        // Keep the question answerable when its local lane is unavailable.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionId, questionRequestId]);
+  const currentQuestionFiles = questionFiles?.sessionId === sessionId && questionFiles.requestId === questionRequestId
+    ? questionFiles : null;
   const activity = useAgentIslandActivity(sessionId);
   const missedCard =
     activity?.phase === 'needs-interaction' && !light.pendingPermission && !light.pendingAskUser;
@@ -57,12 +81,23 @@ export function BotGroupPendingInteraction({
     return (
       <AskUserQuestionPrompt
         sessionId={sessionId}
+        workingDir={currentQuestionFiles?.workingDir ?? ''}
+        remoteHostId={currentQuestionFiles?.remoteHostId}
         pending={light.pendingAskUser}
         onAnswer={(requestId, answers) => makerChatStore.answerUserQuestion(sessionId, requestId, answers)}
         viewerState={light.askUserViewerState}
         onViewerStateChange={(next) => makerChatStore.setAskUserViewerState(sessionId, next)}
         draft={light.askUserDraft}
         onDraftChange={(next) => makerChatStore.setAskUserDraft(sessionId, next)}
+      />
+    );
+  }
+  if (light.pendingInputHandoff) {
+    return (
+      <InputHandoffCard
+        key={light.pendingInputHandoff.requestId}
+        sessionId={sessionId}
+        snapshot={light.pendingInputHandoff}
       />
     );
   }
@@ -85,4 +120,3 @@ export function BotGroupPendingInteraction({
     </p>
   );
 }
-

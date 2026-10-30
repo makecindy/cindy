@@ -3,7 +3,16 @@ import { act, createElement, useImperativeHandle, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0 }));
+const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
+
+// Keep site-video's native surface out of this Node message-rendering test.
+vi.mock('@/platform/gestureHandler', () => {
+  const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
+  return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
+});
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
@@ -19,7 +28,7 @@ vi.mock('react-native', async () => {
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
-    AccessibilityInfo: {}, Alert: {}, Linking: {}, StatusBar: {},
+    AccessibilityInfo: { isReduceMotionEnabled: () => Promise.resolve(true), addEventListener: () => ({ remove() {} }) }, Alert: {}, Linking: {}, StatusBar: {},
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -33,6 +42,7 @@ vi.mock('@legendapp/list/react-native', () => ({
   useRecyclingState: (initial: any) => useState(initial), useViewability: () => {},
 }));
 vi.mock('lucide-react-native', () => ({
+  Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null, FileArchive: () => null, FileAudio: () => null, FileChartColumn: () => null,
   FileCode: () => null, FileImage: () => null, FileSpreadsheet: () => null, FileText: () => null, FileVideo: () => null,
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleStop: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
@@ -57,10 +67,11 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 })
 vi.mock('@/session/usePluginResultCard', () => ({ usePluginResultCard: () => ({}), useSessionPluginResource: () => ({ title: 'Art' }) }));
 vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({ downloadRemoteMediaShareTemp: vi.fn() }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
-vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () => [false, vi.fn()] }));
+vi.mock('@/session/expandedBlockMemory', () => ({ useFoldableExpandedState: () => [viewportHarness.expanded, vi.fn()] }));
 vi.mock('@/platform/chrome', () => ({ NativePullDownMenu: () => null, showActionMenu: vi.fn(), usesNativePullDownMenu: () => false, usesSystemActionMenu: () => false }));
 vi.mock('@/session/MobileComposerInputRow', () => ({ MobileComposerInputRow: () => null, MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT: 0, MOBILE_COMPOSER_CONTROL_SIZE: 44 }));
 vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 vi.mock('@/session/mermaidWebView', () => ({ MermaidDiagram: () => null }));
 vi.mock('@/session/mathWebView', () => ({ MathFormulaWebView: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
@@ -105,6 +116,27 @@ describe('attachment-only user plugin bubble', () => {
 });
 
 describe('partner work feedback', () => {
+  it('retains failed reply warnings inside expanded work and the upstream error notice', () => {
+    const items = buildMobileMessageRenderItems([
+      msg('failed', 'assistant', 'Incomplete opening', { agentMeta: { failedSamplingAttempt: {
+        threadId: 'thread', turnId: 'turn', attempt: 1, itemId: 'item',
+      } } }),
+      msg('error', 'error', 'Connection interrupted'),
+      msg('answer', 'assistant', 'Accepted answer', { agentMeta: { turnCompleted: true } }),
+    ], { isSessionStreaming: false });
+    viewportHarness.expanded = true;
+    try {
+      const host = document.createElement('div');
+      host.innerHTML = renderClient(<MessageRenderer items={items} />);
+      expect(host.textContent).toContain('This reply did not complete. Its content is for reference only.');
+      expect(host.textContent).toContain('Could not complete the reply');
+      expect(host.textContent).toContain('Error Details');
+      expect(host.querySelectorAll('[data-testid="message.agentBubble"]')).toHaveLength(2);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  });
+
   it('uses the short hint in the existing live work row and preserves the completed record', () => {
     const messages = [msg('u', 'user', 'Remember this'), msg('c', 'tool_use', {
       toolName: 'bot_memory', toolUseId: 'c', input: { action: 'write' },
@@ -120,6 +152,62 @@ describe('partner work feedback', () => {
     const completed = renderToStaticMarkup(<MessageRenderer items={done} companion companionWorkingLabel="Saving memory…" />);
     expect(completed).not.toContain('Saving memory…');
     expect(completed).toContain('message.workGroupToggle');
+  });
+});
+
+describe('running work group expansion', () => {
+  // Missing preview regression: actual MessageRenderer must expose raw/old-Host
+  // activity while folded, not just Host-projected lines. Native views are adapters.
+  it('shows the latest thinking without Host lines in ordinary and companion tasks', () => {
+    const messages = [msg('u', 'user', 'Check this'), ...Array.from({ length: 6 }, (_, n) =>
+      msg(`thought-${n}`, 'thinking', { text: `Thinking step ${n}`, durationMs: 1 }))];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true }).filter(item => item.type === 'work_group');
+    for (const companion of [false, true]) {
+      const html = renderToStaticMarkup(<MessageRenderer
+        items={companion ? companionConversationItems(items) : items} companion={companion} isSessionStreaming />);
+      expect(html).toContain('Thinking step 5');
+      expect(html).not.toContain('Thinking step 0');
+    }
+  });
+  it.each([undefined, []])('requests an old-Host preview only when running lines are absent: %j', (lines) => {
+    const setVisible = vi.fn();
+    const items = buildMobileMessageRenderItems([
+      msg('thought', 'thinking', { text: 'Cached thinking', durationMs: 1 }),
+    ], { isSessionStreaming: true }).filter(item => item.type === 'work_group')
+      .map(item => ({ ...item, deferred: { owner: {}, key: item.key, expanded: false,
+        loading: false, failed: false, lines, setVisible, toggle() {}, retry() {} } }));
+    const html = renderClient(<MessageRenderer items={companionConversationItems(items)} companion isSessionStreaming />);
+    expect(setVisible).toHaveBeenCalledWith(false, lines === undefined);
+    expect(html.includes('Cached thinking')).toBe(lines === undefined);
+  });
+  const render = (awaitingDetails: boolean) => {
+    const messages = [msg('u', 'user', 'Fix it'), msg('c', 'tool_use', {
+      toolName: 'Bash', toolUseId: 'c', input: { command: 'pnpm test' },
+    }, { toolUseId: 'c' })];
+    const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true })
+      .filter((item) => item.type === 'work_group')
+      .map((item) => ({ ...item, deferred: {
+        owner: {}, key: 'work-c', expanded: false, loading: awaitingDetails, failed: false, awaitingDetails,
+        lines: [{ kind: 'thinking' as const, key: 'line', text: 'Checking the failing case' }],
+        setVisible: vi.fn(), toggle: vi.fn(), retry: vi.fn(),
+      } }));
+    expect(items).toHaveLength(1);
+    viewportHarness.expanded = true;
+    try {
+      return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming />);
+    } finally {
+      viewportHarness.expanded = false;
+    }
+  };
+
+  it('keeps the Host lines visible after expanding until detail rows arrive', () => {
+    const waiting = render(true);
+    expect(waiting).toContain('message.workLine');
+    expect(waiting).toContain('Collapse ');
+    expect(waiting).not.toContain('pnpm test');
+    const loaded = render(false);
+    expect(loaded).not.toContain('message.workLine');
+    expect(loaded).toContain('pnpm test');
   });
 });
 
@@ -168,6 +256,27 @@ describe('partner conversation presentation', () => {
       <MessageRenderer items={resultItems('')} companion />,
     ];
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
+  });
+
+  // Regression: expanding process prose must not duplicate the final reply's portrait.
+  // Exercise the production projection and renderer, including nested work groups.
+  it('keeps expanded companion work readable without repeating the reply portrait', () => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'Check it'),
+      msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
+      msg('t', 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'pwd' } }, { toolUseId: 't' }),
+      msg('f', 'assistant', 'Here is the result', { agentMeta: { assistantPhase: 'final_answer' } }),
+    ], { isSessionStreaming: false }));
+    viewportHarness.expanded = true;
+    try {
+      const html = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+      expect(html.match(/message\.agentBubble/g)).toHaveLength(2);
+      expect(html).toContain('message.toolRow');
+      expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
+      expect(html.match(/partner-portrait/g)).toHaveLength(1);
+    } finally {
+      viewportHarness.expanded = false;
+    }
   });
 
   it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {

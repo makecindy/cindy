@@ -1,3 +1,4 @@
+import { isOrdinaryTaskListSession } from '../../../shared/sessionSource';
 /**
  * selectedMachineStore —— 控制端「机器切换栏」当前选择态(device-link 远程机器切换)。
  * ---------------------------------------------------------------------------
@@ -205,9 +206,10 @@ export function selectVisibleSessions(
   remoteSessions: Session[],
   selection: MachineSelection,
 ): Session[] {
-  // Companion metadata remains in the mirror for chat, but belongs only to the Bots UI.
-  const visibleLocal = localSessions.filter((session) => session.source !== 'bot');
-  const visibleRemote = remoteSessions.filter((session) => session.source !== 'bot');
+  // Attached task metadata remains readable in the mirror but has its own entry.
+  const isOrdinaryTask = isOrdinaryTaskListSession;
+  const visibleLocal = localSessions.filter(isOrdinaryTask);
+  const visibleRemote = remoteSessions.filter(isOrdinaryTask);
   if (selection === MACHINE_ALL) return [...visibleLocal, ...visibleRemote];
   const set = new Set(selection);
   const out = set.has(MACHINE_LOCAL) ? [...visibleLocal] : [];

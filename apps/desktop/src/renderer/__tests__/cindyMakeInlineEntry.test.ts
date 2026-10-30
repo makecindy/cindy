@@ -94,6 +94,8 @@ describe('Cindy Make composer presentation', () => {
         CindyMakeEditingActions: 'editing-actions',
         cindyMakeRecoveryId,
         session,
+        sessionId: session?.id,
+        pendingReplyQuote: null,
         remoteMakeCards: { blocked: false, handlesSession: false, supported: false },
       });
 

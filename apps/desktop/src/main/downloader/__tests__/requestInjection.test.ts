@@ -22,6 +22,7 @@ const release = vi.fn(async () => {});
 const send = vi.fn();
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   send.mockReset();
   release.mockClear();
@@ -173,6 +174,9 @@ it.each([
   ['cancel', 'ABORTED'],
   ['timeout', 'TIMEOUT'],
 ] as const)('keeps the written prefix after a mid-body %s and resumes from it', async (failure, code) => {
+  // Exercise the deadline only once the prefix has been written and the next read stalls;
+  // real filesystem latency must not decide which failure this test observes.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const abort = new AbortController();
   const opts = options({ signal: abort.signal, timeout: { idleMs: 20 } });
   let pulls = 0;
@@ -181,13 +185,14 @@ it.each([
       new Response(
         new ReadableStream(
           {
-            pull(c) {
+            async pull(c) {
               if (++pulls === 1) return c.enqueue(Buffer.from('abc'));
               if (failure === 'network') return c.error(new Error('connection reset'));
               init.signal!.addEventListener('abort', () => c.error(new Error('aborted')), {
                 once: true,
               });
               if (failure === 'cancel') abort.abort();
+              if (failure === 'timeout') await vi.advanceTimersByTimeAsync(20);
             },
           },
           { highWaterMark: 0 },
@@ -199,7 +204,10 @@ it.each([
   expect(fs.readFileSync(`${opts.targetPath}.part`, 'utf8')).toBe('abc');
   expect(readMeta(opts.targetPath)?.downloadedBytes).toBe(3);
   send.mockResolvedValueOnce(resumed('def'));
-  await expect(execute({ ...opts, signal: undefined })).resolves.toMatchObject({ size: 6 });
+  // The short deadline injected for the failed attempt is not a resume performance budget.
+  await expect(execute({ ...opts, signal: undefined, timeout: undefined })).resolves.toMatchObject({
+    size: 6,
+  });
   expect(send.mock.calls[1][1].headers).toMatchObject({ Range: 'bytes=3-', 'If-Range': 'v1' });
   expect(fs.readFileSync(opts.targetPath, 'utf8')).toBe(BODY);
   expect(readMeta(opts.targetPath)).toBeNull();

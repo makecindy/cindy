@@ -62,6 +62,18 @@ describe('discord ImChannelAdapter characterization', () => {
     });
   });
 
+  it('reads the current routing identity rather than the status display tag', () => {
+    let appId = 'application-1';
+    const im = {
+      get botContextId() { return appId; },
+      getStatus: () => ({ kind: 'connected', appId: 'display#0000' }),
+    } as unknown as DiscordIM;
+    const current = buildDiscordAdapter(im, CONFIG);
+    expect(current.getBotContextId?.()).toBe('application-1');
+    appId = 'application-2';
+    expect(current.getBotContextId?.()).toBe('application-2');
+  });
+
   it('vendorOptions inject discordChatId + source=discord', () => {
     expect(adapter.buildVendorOptions('9876543210')).toEqual({
       discordChatId: '9876543210',
@@ -72,7 +84,7 @@ describe('discord ImChannelAdapter characterization', () => {
   it('title, generated title prefix, and processing emoji match Discord contract', () => {
     expect(adapter.sessions.defaultTitle('9876543210')).toBe('Discord · 543210');
     expect(adapter.sessions.generatedTitlePrefix).toBe('Discord · ');
-    expect(adapter.processingEmoji).toBe('👨‍💻');
+    expect(adapter.processingEmoji).toBe('👩🏻‍💻');
     expect(adapter.queuedEmoji).toBe('👀');
   });
 
@@ -92,5 +104,16 @@ describe('discord ImChannelAdapter characterization', () => {
       path.join(os.tmpdir(), 'xdt-discord-adapter-test', 'im-working-dir', 'discord-app_123'),
       dir,
     );
+  });
+});
+
+describe('discord teammate-owned connection', () => {
+  it('maps only the configured owner to the teammate main task', () => {
+    const im = { getOwnerUserId: () => '123456789012345678', botContextId: '9001' } as unknown as DiscordIM;
+    const adapter = buildDiscordAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    expect(adapter.companionLane?.('123456789012345678')).toEqual({ kind: 'owner-dm' });
+    expect(adapter.companionLane?.('42')).toEqual({ kind: 'guest-dm', userId: '42' });
+    const unset = buildDiscordAdapter({ getOwnerUserId: () => '' } as unknown as DiscordIM, CONFIG, { companionBotId: 'bot-mia' });
+    expect(unset.companionLane?.('123456789012345678')).toEqual({ kind: 'guest-dm', userId: '123456789012345678' });
   });
 });

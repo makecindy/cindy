@@ -4,6 +4,7 @@ import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import i18n from '@/i18n';
 import { RemoteDesktopViewerWindow } from '../RemoteDesktopViewerWindow';
 import type { ViewerSnapshot } from '../viewerController';
+import { getToastSnapshot, toast } from '@/lib/toast';
 
 const lifecycle = vi.hoisted(() => ({
   created: vi.fn(),
@@ -61,6 +62,105 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const clipboardNotices = ['clipboardSyncSkipped', 'clipboardSyncConflict'] as const;
+it.each(clipboardNotices)('shows %s briefly without retry', async (notice) => {
+  await i18n.changeLanguage('zh-CN');
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+        inputFocus: async () => {},
+      },
+    },
+  });
+  render(<RemoteDesktopViewerWindow />);
+  await act(async () => {});
+  vi.useFakeTimers();
+  const snapshot: ViewerSnapshot = {
+    target: { deviceId: 'host', name: 'Mac' },
+    status: 'live',
+    error: null,
+    ready: true,
+    controlling: true,
+    controlPending: false,
+    closing: false,
+    displayId: 'one',
+    transport: 'direct',
+    latency: null,
+    receiveRate: null,
+    settings: { fps: 30, quality: 'auto', audio: false },
+    caps: null,
+    preferences: {
+      audio: true,
+      idleTimeoutMinutes: 5,
+      privacyScreen: false,
+      hostMute: false,
+      clipboardSync: true,
+      lockOnExit: false,
+    },
+    safety: { privacyActive: false, notice, clipboardProgress: null },
+    credential: null,
+    credentialBusy: false,
+    credentialNotice: null,
+    fittedDisplay: null,
+  };
+  try {
+    act(() => lifecycle.update?.(snapshot));
+    const text = i18n.t(`remoteDesktop.${notice}`);
+    expect(screen.getByText(text)).toBeDefined();
+    expect(screen.queryByRole('button', { name: i18n.t('remoteDesktop.retry') })).toBeNull();
+    expect(document.querySelector('.remote-viewer-feedback')).toBeNull();
+    expect(getToastSnapshot()).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    act(() => lifecycle.update?.({ ...snapshot }));
+    await act(async () => vi.advanceTimersByTimeAsync(1400));
+    expect(screen.queryByText(text)).toBeNull();
+    act(() => lifecycle.update?.({ ...snapshot }));
+    expect(getToastSnapshot()).toHaveLength(0);
+
+    // A new item with the same failure is visible; idle polls still do not extend it.
+    const next = { ...snapshot, safety: { ...snapshot.safety, clipboardNoticeVersion: 2 } };
+    act(() => lifecycle.update?.(next));
+    expect(screen.getByText(text)).toBeDefined();
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    act(() => lifecycle.update?.({ ...next }));
+    await act(async () => vi.advanceTimersByTimeAsync(1400));
+    expect(getToastSnapshot()).toHaveLength(0);
+
+    // A distinct size failure gets its own short notice; recovery removes it early.
+    act(() =>
+      lifecycle.update?.({
+        ...snapshot,
+        safety: { ...snapshot.safety, notice: 'clipboardSyncTooLarge' },
+      }),
+    );
+    expect(screen.getByText(i18n.t('remoteDesktop.clipboardSyncTooLarge'))).toBeDefined();
+    act(() => lifecycle.update?.({ ...snapshot, safety: { ...snapshot.safety, notice: null } }));
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(getToastSnapshot()).toHaveLength(0);
+
+    act(() =>
+      lifecycle.update?.({
+        ...snapshot,
+        safety: { ...snapshot.safety, notice: 'privacyFailed' },
+      }),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(screen.getByRole('button', { name: i18n.t('remoteDesktop.retry') })).toBeDefined();
+    expect(document.querySelector('.remote-viewer-feedback')).not.toBeNull();
+  } finally {
+    cleanup();
+    toast.dismissAll();
+    await vi.advanceTimersByTimeAsync(400);
+    vi.useRealTimers();
+  }
+});
+
 it('confirms toolbar and native exits, keeps cancellation connected, and discards stale confirmations', async () => {
   await i18n.changeLanguage('zh-CN');
   const close = vi.fn(async () => {});
@@ -107,6 +207,7 @@ it('confirms toolbar and native exits, keeps cancellation connected, and discard
     ready: true,
     preferences: {
       audio: true,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -189,6 +290,7 @@ it('hides view-only controls and enables desktop actions only after control is c
   const state: ViewerSnapshot = {
     preferences: {
       audio: true,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -348,6 +450,7 @@ it.each([
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: false,
@@ -397,6 +500,7 @@ it('announces an active privacy screen without a banner or toolbar setting marke
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: true,
         hostMute: false,
         clipboardSync: true,
@@ -576,6 +680,7 @@ it('splits display size into a ratio choice and recommended resolutions for this
     ready: true,
     preferences: {
       audio: false,
+      idleTimeoutMinutes: 5,
       privacyScreen: false,
       hostMute: false,
       clipboardSync: false,
@@ -673,6 +778,7 @@ it('explains why a manual clipboard transfer failed and clears it on the next at
     lifecycle.update?.({
       preferences: {
         audio: true,
+        idleTimeoutMinutes: 5,
         privacyScreen: false,
         hostMute: false,
         clipboardSync: false,

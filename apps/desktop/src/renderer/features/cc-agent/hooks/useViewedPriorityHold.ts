@@ -10,23 +10,25 @@ export function useViewedPriorityHold(
   state: ViewedPriorityHoldState,
   viewedSessionId: string | undefined,
   ctx: MainListPriorityContext,
+  options?: { project?: boolean },
 ): ViewedPriorityHoldState {
-  const projected = useMemo(
-    () =>
-      advanceViewedPriorityHold(
-        {
-          prevViewedId: state.prevViewedId,
-          heldPriorityRanks: new Map(state.heldPriorityRanks),
-          recentlyViewedAtMs: new Map(state.recentlyViewedAtMs),
-        },
-        viewedSessionId,
-        ctx,
-        Date.now(),
-      ),
-    [state, viewedSessionId, ctx],
-  );
+  const project = options?.project !== false;
+  const projected = useMemo(() => {
+    if (!project) return state;
+    return advanceViewedPriorityHold(
+      {
+        prevViewedId: state.prevViewedId,
+        heldPriorityRanks: new Map(state.heldPriorityRanks),
+        recentlyViewedAtMs: new Map(state.recentlyViewedAtMs),
+      },
+      viewedSessionId,
+      ctx,
+      Date.now(),
+    );
+  }, [state, viewedSessionId, ctx, project]);
   useLayoutEffect(() => {
+    if (!project) return;
     Object.assign(state, projected);
-  }, [state, projected]);
+  }, [state, projected, project]);
   return projected;
 }

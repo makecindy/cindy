@@ -73,6 +73,8 @@ export interface RemoteResourceDisplay {
   preview?: RemoteText;
   /** Ephemeral public generation state. Absent when idle; never a connectivity signal. */
   generation?: { phase: string; startedAt: number | null };
+  /** Optional roster activity; older hosts omit it, older controllers ignore it. */
+  teammateActivity?: { phase: string };
   timestamp?: number;
   /** Latest visible reply in host time; controllers keep their own read position. */
   lastReplyAt?: number;
@@ -140,6 +142,8 @@ export interface RemoteResourceBlock {
 export interface RemoteCollectionItem {
   ref: RemoteResourceRef;
   display: RemoteResourceDisplay;
+  /** Optional Host-owned plugin chronology. Missing dates remain unknown on older Hosts. */
+  pluginOrder?: { addedAt?: number; recentIndex?: number };
   links: RemoteResourceLink[];
   actions?: RemoteActionDescriptor[];
   /** Opaque provider revision. Controllers compare it but never interpret it. */
@@ -225,6 +229,7 @@ export interface RemoteResourceChangedPayload {
 }
 
 const MAX_ID_CHARS = 160;
+const MAX_RESOURCE_ID_CHARS = 256;
 const MAX_CURSOR_CHARS = 1_024;
 const MAX_QUERY_CHARS = 1_000;
 const MAX_LOCALE_CHARS = 64;
@@ -282,7 +287,7 @@ export function parseRemoteResourceRef(value: unknown): RemoteResourceRef | null
   if (!record) return null;
   const collectionId = boundedText(record.collectionId, MAX_ID_CHARS);
   const kind = boundedText(record.kind, MAX_ID_CHARS);
-  const id = boundedText(record.id, MAX_ID_CHARS);
+  const id = boundedText(record.id, MAX_RESOURCE_ID_CHARS);
   return collectionId && kind && id ? { collectionId, kind, id } : null;
 }
 

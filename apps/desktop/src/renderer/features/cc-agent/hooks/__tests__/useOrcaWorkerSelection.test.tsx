@@ -130,6 +130,28 @@ describe('useOrcaWorkerSelection', () => {
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
+  it('does not acknowledge or clear a done worker selected while its conversation is not visible', async () => {
+    mocks.workers = [
+      makeWorker('worker-a', 'session-a', true),
+      makeWorker('worker-b', 'session-b', false, 'done'),
+    ];
+    markWorkerAttention('worker-b');
+    const { result } = renderHook(
+      () => useOrcaWorkerSelection({ leadSessionId: 'lead-1', viewVisible: false }),
+      { wrapper },
+    );
+
+    act(() => result.current.handleSwitchFocus('worker-b'));
+
+    await waitFor(() => expect(mocks.refresh).toHaveBeenCalled());
+    expect(mocks.switchFocus).toHaveBeenCalledWith({
+      leadSessionId: 'lead-1',
+      workerIdOrLabel: 'worker-b',
+    });
+    expect(mocks.idleWorker).not.toHaveBeenCalled();
+    expect(hasWorkerAttention('worker-b')).toBe(true);
+  });
+
   it('silently keeps done attention and refreshes when acknowledgement loses a state race', async () => {
     mocks.workers = [
       makeWorker('worker-a', 'session-a', true),

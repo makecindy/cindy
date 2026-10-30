@@ -41,7 +41,7 @@ export interface ComputerMcpServerOptions {
 
 const DESCRIPTION_LIST =
   'Discover local desktop computer-use tools. These tools operate on the user desktop through the installed driver. ' +
-  'Use read-only status/get_accessibility_tree/list_apps/list_windows/get_window_state before click/type_text/press_key/hotkey.';
+  'Pass names to retrieve only the needed schemas; reuse them instead of guessing CLI flags. Use read-only status/list_windows/get_window_state before input.';
 
 const DESCRIPTION_CALL =
   'Invoke a local desktop computer-use tool. After status/permission checks, include session_goal in the first call\'s args as a short English name for the overall objective (not the current step); omit it thereafter. Arguments are validated before dispatching to the host driver.';
@@ -405,17 +405,19 @@ export function createComputerMcpServer(
   // 单实例跨 session 共享,所以 tracker 内部按 sessionId 分键。
   const snapshotTracker = new WindowSnapshotTracker();
 
-  server.tool('list_tools', DESCRIPTION_LIST, {}, async () =>
+  server.tool('list_tools', DESCRIPTION_LIST, {
+    names: z.array(z.enum(COMPUTER_TOOL_NAMES)).min(1).max(COMPUTER_TOOL_NAMES.length).optional(),
+  }, async ({ names }) =>
     textResult({
       ok: true,
-      tools: COMPUTER_TOOLS.map((tool) => ({
+      tools: COMPUTER_TOOLS.filter((tool) => !names || names.includes(tool.name)).map((tool) => ({
         name: tool.name,
         description: tool.description,
         readOnly: tool.readOnly === true,
         inputSchema: z.toJSONSchema(z.object(tool.inputShape).strict()),
       })),
       workflow:
-        'Start with status and check_permissions. Use get_accessibility_tree/list_windows, optionally narrow list_windows with query/workspace_root/process_name (for example, {"process_name":"Simulator"}), inspect a target with get_window_state, perform one action, and call get_window_state again to verify. Targeted actions such as click/type_text require pid; include window_id whenever the target window is known, and always for coordinates. Use get_window_state with include_screenshot:false for bounded text observations; request an image for visual grounding and normally omit screenshot_out_file. Prefer the exact element_token returned by the latest observation, or pass snapshot_id with element_index. Re-observe on STALE_SNAPSHOT. After an action, verify its intended postcondition with verify_state or a fresh observation; a delivered or unverifiable action does not prove completion. Never replay a mutation automatically after cancellation or a connection failure. Use start_recording/stop_recording/replay_trajectory only when the user explicitly asks for recording or replay.',
+        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Targeted actions require pid; include window_id whenever known, always for coordinates. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically. If using the native CLI instead, repeat the same non-default session on EVERY observation and action, then end_session; CLI invocations without it are separate leases. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
     }),
   );
 
@@ -446,7 +448,7 @@ export function createComputerMcpServer(
     args: Record<string, unknown> | undefined,
     signal?: AbortSignal,
     dispatchOptions?: ComputerDispatchOptions,
-  ) {
+  ): Promise<ReturnType<typeof textResult>> {
     const def = getComputerTool(name);
     if (!def) {
       return textResult({ ok: false, errorCode: 'UNKNOWN_TOOL', data: { requested: name } }, true);
@@ -492,21 +494,31 @@ export function createComputerMcpServer(
       sessionId,
     );
     if (staleResult) return staleResult;
+    const secureFieldResult = await checkSecureField(name as ComputerMcpToolName, parsedData, sessionId);
+    if (secureFieldResult) return secureFieldResult;
     const postcondition = parsedData.postcondition;
+    const observe = parsedData.observe as Record<string, unknown> | undefined;
     delete parsedData.postcondition; // Cindy-owned verification, never part of driver action args.
-    if (postcondition && typeof parsedData.window_id !== "number") {
+    delete parsedData.observe;
+    if (observe && postcondition) {
+      return textResult({ ok: false, errorCode: 'INVALID_ARGS', data: {
+        message: 'Use observe for a fresh snapshot or postcondition for an assertion, not both.',
+      } }, true);
+    }
+    if ((postcondition || observe) && typeof parsedData.window_id !== "number") {
       return textResult(
         {
           ok: false,
           errorCode: "INVALID_ARGS",
           data: {
             message:
-              "postcondition requires an exact window_id or a fresh element snapshot identifying the window.",
+              "postcondition/observe requires an exact window_id or a fresh element snapshot identifying the window.",
           },
         },
         true,
       );
     }
+    const observationScope = snapshotTracker.observationScope(sessionId, parsedData.pid as number, parsedData.window_id as number);
     if (typeof parsedData.snapshot_id === "string") {
       const driverId = snapshotTracker.driverSnapshotId(
         sessionId,
@@ -553,6 +565,19 @@ export function createComputerMcpServer(
       parsedData,
       sessionId,
     );
+    // Both delivered and uncertain actions honor an explicit observation request.
+    // Keep its normal read guards and registration in one path; never replay input.
+    const readActionObservation = async () => {
+      const read = await handleCallTool('get_window_state', {
+        ...observationScope,
+        ...observe,
+        pid: parsedData.pid,
+        window_id: parsedData.window_id,
+        include_screenshot: observe?.include_screenshot ?? false,
+        ...(typeof parsedData.session === 'string' ? { session: parsedData.session } : {}),
+      }, signal, dispatchOptions);
+      return JSON.parse(read.content[0].text) as Record<string, unknown>;
+    };
 
     try {
       const data = await callComputerTool(
@@ -588,6 +613,7 @@ export function createComputerMcpServer(
           : undefined;
       const postcheck =
         !recovery &&
+        !observe &&
         POSTCHECK_ACTION_TOOLS.has(name as ComputerMcpToolName) &&
         outcome.ok &&
         (postcondition || outcome.outcome?.status === "unknown")
@@ -596,6 +622,12 @@ export function createComputerMcpServer(
               signal,
             })
           : undefined;
+      // Use the normal explicit-read path: host session ownership, secure-field
+      // frames, output handling and fresh element registration remain identical.
+      // A returned observation is evidence, never a reason to replay the input.
+      const observation = observe && !recovery && outcome.ok && !signal?.aborted
+        ? await readActionObservation()
+        : undefined;
       if (postcondition && postcheck) {
         const checked = computerResultOutcome("verify_state", postcheck.data);
         // An interrupted multi-chunk input is not a completed action, even if a
@@ -624,9 +656,10 @@ export function createComputerMcpServer(
           ...outcome,
           tool: name,
           ...(snapshotId ? { snapshot_id: snapshotId } : {}),
-          data,
+          data: withoutDuplicateElements(name, data),
           ...(recovery ? { recovery } : {}),
           ...(postcheck ? { postcheck } : {}),
+          ...(observation ? { observation } : {}),
         },
         !outcome.ok,
       );
@@ -655,17 +688,21 @@ export function createComputerMcpServer(
         windowUnresolved && !signal?.aborted
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
           : undefined;
-      const postcheck =
+      const shouldObserveUnknownAction =
         !recovery &&
         !signal?.aborted &&
         errorCode !== "REQUEST_CANCELLED" &&
         POSTCHECK_ACTION_TOOLS.has(name as ComputerMcpToolName) &&
-        (err as { outcomeUnknown?: boolean })?.outcomeUnknown
-          ? await checkActionState(parsedData, postcondition, {
-              ...callContext,
-              signal,
-            })
-          : undefined;
+        (err as { outcomeUnknown?: boolean })?.outcomeUnknown;
+      const observation = observe && shouldObserveUnknownAction
+        ? await readActionObservation()
+        : undefined;
+      const postcheck = !observe && shouldObserveUnknownAction
+        ? await checkActionState(parsedData, postcondition, {
+            ...callContext,
+            signal,
+          })
+        : undefined;
       const installedDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
@@ -780,6 +817,7 @@ export function createComputerMcpServer(
           errorCode,
           ...(recovery ? { recovery } : {}),
           ...(postcheck ? { postcheck } : {}),
+          ...(observation ? { observation } : {}),
           ...(appDiscovery || installedDiscovery
             ? {
                 recovery: {
@@ -847,6 +885,7 @@ export function createComputerMcpServer(
         context,
       );
     }
+    const scope = snapshotTracker.observationScope(context.sessionId, args.pid, args.window_id);
     snapshotTracker.invalidate(context.sessionId, args.pid, args.window_id);
     const tool = postcondition ? "verify_state" : "get_window_state";
     const readArgs = {
@@ -860,7 +899,15 @@ export function createComputerMcpServer(
             include_screenshot: false,
           }
         // Automatic evidence must not create unmanaged screenshots of user windows.
-        : { include_screenshot: false }),
+        // It is never reused for element actions, so the compact tree is enough.
+        : {
+            ...scope,
+            include_screenshot: false,
+            tree_format: "markdown",
+            // CUA 0.37's structured diff fails its own output validation. Only
+            // non-reusable Markdown evidence uses since; actionable reads stay full.
+            ...(scope ? { since: 'latest' } : {}),
+          }),
     };
     const read = await readForRecovery(
       deps,
@@ -1509,6 +1556,48 @@ export function createComputerMcpServer(
     );
   }
 
+  /**
+   * 代输入 hint: a password field is the owner's to fill. Typing into one from
+   * the agent would put the secret in the model's context, so refuse and point
+   * at request_input_handoff. Runs after the freshness check resolved the target.
+   */
+  async function checkSecureField(
+    name: ComputerMcpToolName,
+    parsedData: Record<string, unknown>,
+    sessionId: string | undefined,
+  ) {
+    if ((name !== 'type_text' && name !== 'set_value') || !deps.isSecureTarget) return null;
+    const pid = parsedData.pid as number;
+    let snapshotId = typeof parsedData.snapshot_id === 'string' ? parsedData.snapshot_id : undefined;
+    let index = typeof parsedData.element_index === 'number' ? parsedData.element_index : undefined;
+    if (typeof parsedData.element_token === 'string') {
+      const ref = snapshotTracker.elementReference(sessionId, parsedData.element_token, snapshotId);
+      if (ref) {
+        snapshotId = ref.snapshotId;
+        index = ref.index;
+      }
+    }
+    const windowId = typeof parsedData.window_id === 'number' ? parsedData.window_id : undefined;
+    const frame = index === undefined ? undefined : snapshotTracker.elementFrame(sessionId, pid, windowId, index, snapshotId);
+    // An element we cannot place is not guessed at; plain typing goes to the focused element.
+    if (index !== undefined && !frame) return null;
+    const point = frame ? { x: frame.x + frame.w / 2, y: frame.y + frame.h / 2 } : undefined;
+    const secure = await deps.isSecureTarget({ pid, ...(point ? { point } : {}) }).catch(() => false);
+    if (!secure) return null;
+    return textResult(
+      {
+        ok: false,
+        errorCode: 'SECURE_FIELD',
+        data: {
+          tool: name,
+          message: 'This element is a password field. Cindy does not let the agent type into password fields.',
+          hint: 'Call request_input_handoff with this pid and window so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
+        },
+      },
+      true,
+    );
+  }
+
   /** get_window_state 成功观察后登记新一代快照;其余工具或观察失败时返回 null。 */
   function recordWindowSnapshot(
     name: ComputerMcpToolName,
@@ -1522,7 +1611,11 @@ export function createComputerMcpServer(
     if (!data || typeof data !== 'object' || Array.isArray(data) || !computerResultOutcome(name, data).ok) {
       return null;
     }
-    const snapshotId = snapshotTracker.record(sessionId, parsedData.pid, parsedData.window_id);
+    const snapshotId = snapshotTracker.record(sessionId, parsedData.pid, parsedData.window_id, {
+      ...(typeof parsedData.query === 'string' ? { query: parsedData.query } : {}),
+      ...(typeof parsedData.max_elements === 'number' ? { max_elements: parsedData.max_elements } : {}),
+      ...(typeof parsedData.max_depth === 'number' ? { max_depth: parsedData.max_depth } : {}),
+    });
     const driverSnapshotId = readDriverSnapshotId(data);
     if (driverSnapshotId) {
       snapshotTracker.registerAlias(snapshotId, driverSnapshotId);
@@ -1534,6 +1627,20 @@ export function createComputerMcpServer(
   return server;
 }
 
+
+/**
+ * Cindy asks drivers for both tree formats to register element tokens and frames.
+ * The model reads the compact Markdown rows; the structured copy stays host-side.
+ */
+function withoutDuplicateElements(name: string, data: unknown): unknown {
+  if (name !== 'get_window_state' || !data || typeof data !== 'object' || Array.isArray(data)) return data;
+  // A degraded read can carry elements with an empty tree; they are then the only targets.
+  const markdown = (data as { tree_markdown?: unknown }).tree_markdown;
+  if (typeof markdown !== 'string' || markdown.trim().length === 0) return data;
+  if (!('elements' in data)) return data;
+  const { elements: _elements, ...rest } = data as Record<string, unknown>;
+  return rest;
+}
 
 function readDriverSnapshotId(data: unknown): string | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;

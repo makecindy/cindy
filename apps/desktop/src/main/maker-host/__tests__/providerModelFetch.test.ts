@@ -58,6 +58,23 @@ describe('import discovery limits', () => {
 });
 
 describe('buildModelsFetchRequest', () => {
+  it('discovers ElevenLabs speech capabilities through the existing custom-header connection', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex', apiKey: undefined,
+      baseUrl: 'https://api.elevenlabs.io/v1', headers: { 'xi-api-key': 'fake-elevenlabs-key' },
+    }), async (url, init) => {
+      expect(url).toBe('https://api.elevenlabs.io/v1/models');
+      expect(init?.headers).toEqual({ 'xi-api-key': 'fake-elevenlabs-key' });
+      return fakeResponse(200, JSON.stringify([
+        { model_id: 'eleven_multilingual_v2', name: 'Eleven Multilingual v2', can_do_text_to_speech: true },
+        { model_id: 'voice-conversion', can_do_text_to_speech: false, can_do_voice_conversion: true },
+      ]));
+    });
+    expect(result).toMatchObject({ ok: true, models: [
+      { id: 'eleven_multilingual_v2', discoveredMetadata: { mode: 'audio_speech' } },
+      { id: 'voice-conversion', discoveredMetadata: { mode: 'other' } },
+    ] });
+  });
+
   it('discovers Sub2API Codex capabilities at the backend path', async () => {
     const result = await fetchProviderModels(spec({ agent: 'codex',
       baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',
@@ -475,4 +492,21 @@ it.each([401, 403, 429, 503])('does not disguise manifest authorization or avail
   const result = await fetchProviderModels(spec({ modelsUrl: 'https://relay.example/v1/models?client_version=0.147.0' }), fetcher);
   expect(result.ok).toBe(false);
   expect(fetcher).toHaveBeenCalledOnce();
+});
+
+describe('ElevenLabs catalog authentication', () => {
+  it('uses xi-api-key on the official endpoint even when stored in an Anthropic runtime', () => {
+    const result = buildModelsFetchRequest(spec({
+      baseUrl: 'https://api.elevenlabs.io/v1', apiKey: 'fake-eleven-key', authMethod: 'apiKey',
+      headers: { Authorization: 'stale', 'X-Api-Key': 'stale', 'Xi-Api-Key': 'stale', 'anthropic-version': 'stale' },
+    }));
+    expect(result.url).toBe('https://api.elevenlabs.io/v1/models');
+    expect(result.init.headers).toEqual({ 'xi-api-key': 'fake-eleven-key' });
+  });
+  it('does not guess ElevenLabs authentication for a custom host or leak a stale key in no-auth mode', () => {
+    const custom = buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://elevenlabs.example/v1', apiKey: 'fake-key' }));
+    expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
+    const noAuth = buildModelsFetchRequest(spec({ baseUrl: 'https://api.elevenlabs.io/v1', apiKey: undefined, authMethod: 'none', headers: { 'Xi-Api-Key': 'stale' } }));
+    expect(noAuth.init.headers).toEqual({});
+  });
 });

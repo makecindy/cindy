@@ -4,6 +4,7 @@ import { REMOTE_DESKTOP_OFFER_BUDGET } from '@cindy/device-link';
 import { readFile } from 'node:fs/promises';
 import { installContentSecurityPolicy, parseOrigin } from '../security/csp';
 import { throwIpcError } from '../utils/ipcValidate';
+import { markCaptureWindowWebContents } from './captureWindowRegistry';
 
 declare const DESKTOP_CAPTURE_VITE_DEV_SERVER_URL: string | undefined;
 declare const DESKTOP_CAPTURE_VITE_NAME: string;
@@ -24,12 +25,12 @@ export class DesktopCaptureWindow {
     const base = DESKTOP_CAPTURE_VITE_DEV_SERVER_URL
       ? new URL('index.html', DESKTOP_CAPTURE_VITE_DEV_SERVER_URL).href
       : CAPTURE_URL;
-    return this.mode === 'files' ? `${base}?mode=files` : base;
+    return this.mode === 'desktop' ? base : `${base}?mode=${this.mode}`;
   }
 
   constructor(
     private readonly failed: () => void,
-    private readonly mode: 'desktop' | 'files' = 'desktop',
+    private readonly mode: 'desktop' | 'files' | 'direct' = 'desktop',
   ) {}
 
   get contents() {
@@ -62,7 +63,7 @@ export class DesktopCaptureWindow {
   private getSession(): Session {
     if (this.captureSession) return this.captureSession;
     const ses = session.fromPartition(
-      this.mode === 'files' ? 'cindy-file-peer' : 'cindy-desktop-capture',
+      this.mode === 'desktop' ? 'cindy-desktop-capture' : this.mode === 'files' ? 'cindy-file-peer' : 'cindy-direct-peer',
       { cache: false },
     );
     this.captureSession = ses;
@@ -103,8 +104,8 @@ export class DesktopCaptureWindow {
           url.host !== 'capture' ||
           (url.search !== '' &&
             !(
-              this.mode === 'files' &&
-              url.search === '?mode=files' &&
+              this.mode !== 'desktop' &&
+              url.search === `?mode=${this.mode}` &&
               url.pathname === '/index.html'
             )) ||
           !/^\/(?:index\.html|assets\/[A-Za-z0-9_-]+\.js)$/.test(url.pathname)
@@ -159,6 +160,14 @@ export class DesktopCaptureWindow {
       },
     });
     this.window = win;
+    markCaptureWindowWebContents(win.webContents);
+    if (this.mode === 'direct') {
+      // This data-only window signals exclusively to already authorized peers.
+      // Chromium's default mDNS host names cannot resolve across routed LANs.
+      // Expose the default route's address without enumerating other interfaces,
+      // granting media permissions, or changing the SDP's ICE/DTLS credentials.
+      win.webContents.setWebRTCIPHandlingPolicy('default_public_and_private_interfaces');
+    }
     const failed = () => {
       if (this.window !== win) return;
       this.dispose();

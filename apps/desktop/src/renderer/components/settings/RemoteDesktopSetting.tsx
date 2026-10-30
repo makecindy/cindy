@@ -3,12 +3,17 @@ import { useTranslation } from 'react-i18next';
 import type { WindowsDesktopSupport } from '../../../shared/remoteDesktop';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { extractIpcError } from '../../utils/ipcError';
 import { RemoteDesktopPermissions } from './RemoteDesktopPermissions';
+
+/** The failed setup step the helper reported, such as `service-create 5`. */
+const SETUP_DETAIL = /^[a-z-]+(?:\/[a-z-]+)? -?\d+$/;
 
 export function RemoteDesktopSetting() {
   const { t } = useTranslation();
   const [windowsSupport, setWindowsSupport] = useState<WindowsDesktopSupport>();
   const [serviceError, setServiceError] = useState(false);
+  const [serviceErrorDetail, setServiceErrorDetail] = useState<string>();
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -95,6 +100,12 @@ export function RemoteDesktopSetting() {
             {serviceError && (
               <p role="alert" className="text-12 text-[var(--text-primary)]">
                 {t('remoteDesktop.windowsError')}
+                {serviceErrorDetail && (
+                  <span className="text-[var(--text-tertiary)]">
+                    {' '}
+                    {t('remoteDesktop.windowsErrorDetail', { code: serviceErrorDetail })}
+                  </span>
+                )}
               </p>
             )}
           </div>
@@ -107,11 +118,18 @@ export function RemoteDesktopSetting() {
               changing.current = true;
               setBusy(true);
               setServiceError(false);
+              setServiceErrorDetail(undefined);
               void window.electronAPI.remoteDesktop
                 .windowsSupport(windowsSupport !== 'ready')
                 .then(() => window.electronAPI.remoteDesktop.state(true))
                 .then((state) => setWindowsSupport(state.windowsSupport))
-                .catch(() => setServiceError(true))
+                .catch((err: unknown) => {
+                  const message = extractIpcError(err)?.message;
+                  setServiceErrorDetail(
+                    message && SETUP_DETAIL.test(message) ? message : undefined,
+                  );
+                  setServiceError(true);
+                })
                 .finally(() => {
                   changing.current = false;
                   setBusy(false);

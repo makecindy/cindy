@@ -25,12 +25,15 @@ export type RemoteSessionActivityPhase = 'running' | 'needs-interaction' | 'comp
 
 /** 镜像 @cindy/device-link 的 SessionActivityPayload(renderer 不直接依赖该包)。 */
 export interface RemoteSessionActivity {
+  completionToken?: string;
   sessionId: string;
   phase: RemoteSessionActivityPhase;
   compactDetail: string;
+  summaryFormat?: 'plain-text';
   workingPhase?: string;
   interactionKind?: string;
   attention: boolean;
+  completionNotification?: 'pending' | 'teammate' | 'silent';
 }
 
 /** Active remote turns must win over the persisted "started without ended" heuristic. */
@@ -62,10 +65,13 @@ function isPhase(value: unknown): value is RemoteSessionActivityPhase {
 
 function sameActivity(a: RemoteSessionActivity, b: RemoteSessionActivity): boolean {
   return (
+    a.completionToken === b.completionToken &&
     a.phase === b.phase &&
     a.compactDetail === b.compactDetail &&
+    a.summaryFormat === b.summaryFormat &&
     a.workingPhase === b.workingPhase &&
     a.interactionKind === b.interactionKind &&
+    a.completionNotification === b.completionNotification &&
     a.attention === b.attention
   );
 }
@@ -151,12 +157,16 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
     return;
   }
   const next: RemoteSessionActivity = {
+    ...(typeof p.completionToken === 'string' && p.completionToken.length > 0 && p.completionToken.length <= 128
+      ? { completionToken: p.completionToken } : {}),
     sessionId,
     phase: p.phase,
     compactDetail: typeof p.compactDetail === 'string' ? p.compactDetail : '',
+    ...(p.summaryFormat === 'plain-text' ? { summaryFormat: 'plain-text' as const } : {}),
     workingPhase: typeof p.workingPhase === 'string' ? p.workingPhase : undefined,
     interactionKind: typeof p.interactionKind === 'string' ? p.interactionKind : undefined,
     attention,
+    completionNotification: p.completionNotification === 'pending' || p.completionNotification === 'teammate' || p.completionNotification === 'silent' ? p.completionNotification : undefined,
   };
   let activityMap = activityByDevice.get(deviceId);
   if (!activityMap) {

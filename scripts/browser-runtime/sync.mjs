@@ -292,6 +292,86 @@ const LOCAL_PATCHES = {
   ],
   'extension/src/browser/routes/agent.act.ts': [
     {
+      desc: 'execute fixed structured DOM reads in an isolated world without the interaction grace delay',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { readBrowserDom } from "../../../../../shim/browser-dom-read.js";`,
+        ],
+        [
+          `          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+          `          // Only structured host reads enter this path. Arbitrary fn is
+          // ignored here, never trusted as a promise of read-only behavior.
+          if (action.kind === "evaluate" && body.domRead !== undefined && !isExistingSession) {
+            if (!evaluateEnabled) {
+              return jsonActError(res, 403, ACT_ERROR_CODES.evaluateDisabled,
+                browserEvaluateDisabledMessage("evaluate"));
+            }
+            const observed = await readBrowserDom({
+              cdpUrl, targetId: tab.targetId, spec: body.domRead,
+              timeoutMs: action.timeoutMs, ssrfPolicy,
+              browserProxyMode: navigationPolicy.browserProxyMode, signal: req.signal,
+            });
+            if ("blockedByDialog" in observed) {
+              return res.json({ ok: true, targetId: tab.targetId, ...observed });
+            }
+            return res.json({ ok: true, targetId: tab.targetId, url: observed.url, result: observed.value });
+          }
+          const profileName = profileCtx.profile.name;
+          if (isExistingSession) {`,
+        ],
+      ]),
+    },
+    {
+      desc: 'resolve the selected tab alias before comparing or executing action targets',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";`,
+          `import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { resolveActionTargetIds } from "openclaw/plugin-sdk/browser-action-targets";`,
+        ],
+        [
+          `      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {`,
+          `      const requestedAction = action;
+      await withRouteTabContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+          let resolvedAction: BrowserActRequest;
+          try {
+            resolvedAction = resolveActionTargetIds(requestedAction, targetId, tab.targetId);
+          } catch {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId");
+          }
+          const action = resolvedAction;`,
+        ],
+        [
+          `          if (action.targetId && action.targetId !== tab.targetId) {
+            return jsonActError(
+              res,
+              403,
+              ACT_ERROR_CODES.targetIdMismatch,
+              "action targetId must match request targetId",
+            );
+          }
+`,
+          ``,
+        ],
+      ]),
+    },
+    {
       desc: 'carry the effective browser proxy mode through interaction navigation guards',
       transform: (source) => applyExactReplacements(source, [
         [
@@ -826,7 +906,16 @@ const LOCAL_PATCHES = {
     cleanup();
   }
 }`,
-          `        await waitForStep(page.waitForFunction(fn, { timeout }));
+          `        // Pass a real function so Playwright caches its compilation between
+        // polls (string expressions re-eval and can fail under Trusted Types).
+        // Compile only on the host; execution stays in the page context.
+        const predicate = new Function(
+          "const value = (" + normalizeBrowserEvaluateFunctionSource(fn) + ")(); " +
+            "if (value && typeof value.then === 'function') { " +
+            "Promise.resolve(value).catch(() => {}); throw new Error('wait.fn requires a synchronous predicate'); } " +
+            "return value;",
+        ) as () => unknown;
+        await waitForStep(page.waitForFunction(predicate, undefined, { timeout }));
       }
     }
       },
@@ -1457,6 +1546,30 @@ const UNTORN_DOWN_BROWSER_MESSAGE =
   ],
   'extension/src/browser/pw-session.ts': [
     {
+      desc: 'use Playwright local-path uploads only for a live browser managed by this runtime',
+      transform: (source) => applyExactReplacements(source, [
+        [
+          `import path from "node:path";`,
+          `import path from "node:path";
+import { getBrowserControlState } from "../browser-control-state.js";
+import { isManagedLocalCdpConnection } from "openclaw/plugin-sdk/cdp-locality";`,
+        ],
+        [
+          `          const headers = getHeadersWithAuth(target);
+          // Bypass proxy for loopback CDP connections (#31219)`,
+          `          const headers = getHeadersWithAuth(target);
+          const isLocal = isManagedLocalCdpConnection(
+            normalized, target, getBrowserControlState()?.profiles.values() ?? [],
+          );
+          // Bypass proxy for loopback CDP connections (#31219)`,
+        ],
+        [
+          `chromium.connectOverCDP(target, { timeout, headers })`,
+          `chromium.connectOverCDP(target, { timeout, headers, isLocal })`,
+        ],
+      ]),
+    },
+    {
       desc: 'export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)',
       find: `// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.`,
       replace: `/**
@@ -1510,7 +1623,161 @@ export async function quarantineTargetWithoutClosing(opts: {
 }`,
     },
   ],
+  'extension/src/browser/cdp.ts': [
+    {
+      desc: 'let callers create automation-only tabs without activating the headed browser window',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  cdpUrl: string;\n  url: string;\n  ssrfPolicy?: SsrFPolicy;`,
+            `  cdpUrl: string;\n  url: string;\n  background?: boolean;\n  navigationPolicy?: ReturnType<typeof withBrowserNavigationPolicy>;\n  ssrfPolicy?: SsrFPolicy;`,
+          ],
+          [
+            `    url: opts.url,\n    ...withBrowserNavigationPolicy(opts.ssrfPolicy),`,
+            `    url: opts.url,\n    ...(opts.navigationPolicy ?? withBrowserNavigationPolicy(opts.ssrfPolicy)),`,
+          ],
+          [
+            `          const created = (await send("Target.createTarget", { url: opts.url })) as {`,
+            `          const created = (await send("Target.createTarget", {\n            url: opts.url,\n            background: opts.background === true,\n          })) as {`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/routes/tabs.ts': [
+    {
+      desc: 'carry the background-open intent from the neutral runtime into tab creation',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `      const url = toStringOrEmpty((req.body as { url?: unknown })?.url);\n      const label = readOptionalTabLabel(req.body);`,
+            `      const url = toStringOrEmpty((req.body as { url?: unknown })?.url);\n      const label = readOptionalTabLabel(req.body);\n      const background = (req.body as { background?: unknown })?.background === true;`,
+          ],
+          [
+            `          const tab = await profileCtx.openTab(url, { label });`,
+            `          const tab = await profileCtx.openTab(url, { label, background });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.selection.ts': [
+    {
+      desc: 'keep the implicit first tab used by agent navigation in the background',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  openTab: (url: string) => Promise<BrowserTab>;`,
+            `  openTab: (url: string, opts?: { background?: boolean }) => Promise<BrowserTab>;`,
+          ],
+          [
+            `        openedTab = await openTab("about:blank");`,
+            `        openedTab = await openTab("about:blank", { background: true });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.tab-ops.ts': [
+    {
+      desc: 'propagate background tab creation to the managed Chrome CDP target',
+      transform: (source) =>
+        applyExactReplacements(source, [
+          [
+            `  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;`,
+            `  openTab: (url: string, opts?: { label?: string; background?: boolean }) => Promise<BrowserTab>;`,
+          ],
+          [
+            `  const openTab = async (url: string, opts?: { label?: string }): Promise<BrowserTab> => {`,
+            `  const openTab = async (\n    url: string,\n    opts?: { label?: string; background?: boolean },\n  ): Promise<BrowserTab> => {`,
+          ],
+          [
+            `      cdpUrl: profile.cdpUrl,\n      url,\n      ssrfPolicy: getCdpControlPolicy(),`,
+            `      cdpUrl: profile.cdpUrl,\n      url,\n      background: opts?.background,\n      navigationPolicy: ssrfPolicyOpts,\n      ssrfPolicy: getCdpControlPolicy(),`,
+          ],
+          [
+            `    const createdViaCdp = await createTargetViaCdp(createTargetOpts)\n      .then((r) => r.targetId)\n      .catch(() => null);`,
+            `    const createdViaCdp = await createTargetViaCdp(createTargetOpts)\n      .then((r) => r.targetId)\n      .catch((err: unknown) => {\n        if (opts?.background === true) {\n          throw err;\n        }\n        return null;\n      });`,
+          ],
+        ]),
+    },
+  ],
+  'extension/src/browser/server-context.types.ts': [
+    {
+      desc: 'type the host-only background option on profile tab operations',
+      find: `  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;`,
+      replace: `  openTab: (url: string, opts?: { label?: string; background?: boolean }) => Promise<BrowserTab>;`,
+    },
+  ],
   'extension/src/browser/chrome.ts': [
+    {
+      desc: 'reuse the bounded CDP command helper for graceful Windows Chrome shutdown',
+      find: `  openCdpWebSocket,\n} from "./cdp.helpers.js";`,
+      replace: `  openCdpWebSocket,\n  withCdpSocket,\n} from "./cdp.helpers.js";`,
+    },
+    {
+      desc: 'close Windows Chrome via CDP and wait for actual process exit before force-stop',
+      find: `    if (proc.killed) {
+      return;
+    }
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!proc.exitCode && proc.killed) {
+        break;
+      }
+      if (
+        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
+      ) {
+        return;
+      }
+      const remainingMs = timeoutMs - (Date.now() - start);`,
+      replace: `    if (proc.exitCode != null || proc.signalCode != null) {
+      return;
+    }
+    // LOCAL PATCH (Cindy, via sync.mjs): Windows SIGTERM force-kills too.
+    // Ask Chrome to flush and close via CDP, within the existing grace period.
+    const start = Date.now();
+    if (!proc.killed && process.platform === "win32" && timeoutMs > 0) {
+      try {
+        // Discovery, WebSocket handshake and command each share the budget.
+        const cdpTimeoutMs = Math.max(1, Math.floor(timeoutMs / 3));
+        const wsUrl = await getChromeWebSocketUrl(
+          cdpUrlForPort(running.cdpPort), cdpTimeoutMs,
+        );
+        if (wsUrl && proc.exitCode == null && proc.signalCode == null && Date.now() - start < timeoutMs) {
+          await withCdpSocket(wsUrl, (send) => send("Browser.close"), {
+            handshakeTimeoutMs: cdpTimeoutMs,
+            commandTimeoutMs: cdpTimeoutMs,
+            handshakeRetries: 0,
+          });
+        }
+      } catch {
+        // Closing Chrome can drop CDP before replying. Still wait for exit.
+      }
+    } else if (!proc.killed && process.platform !== "win32") {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+    }
+
+    while (true) {
+      // CDP can disappear while Chrome is still flushing its profile.
+      if (proc.exitCode != null || proc.signalCode != null) {
+        return;
+      }
+      const remainingMs = timeoutMs - (Date.now() - start);
+      if (remainingMs <= 0) break;`,
+    },
+    {
+      desc: 'start headed automation Chrome without an empty foreground window',
+      find: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  }`,
+      replace: `  if (headlessMode.headless) {\n    args.push("--headless=new");\n    args.push("--disable-gpu");\n  } else {\n    args.push("--no-startup-window");\n  }`,
+    },
     {
       desc: 'expose managed-profile PID lookup so the host can confirm process exit from the OS, not from CDP endpoint silence (a stalled Chrome stops answering while still alive)',
       find: `function clearChromeSingletonArtifacts(userDataDir: string) {`,

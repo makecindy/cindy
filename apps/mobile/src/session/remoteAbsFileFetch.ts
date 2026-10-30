@@ -9,7 +9,8 @@
  * ——media:fetch 故意不限 workdir,靠 device-link 的三道 gate(被控开关 /
  * 撤销黑名单 / channel 白名单)保证「等同本地访问」的信任级。
  *
- * 缓存策略(bot review 实捉后收紧):`xdt-file://` 不进被控端 mtime/size 感知
+ * 完整文件进入共用读取层，优先使用持久字节缓存、后台复验，不复用下述临时 URL。
+ * 流式地址缓存策略:`xdt-file://` 不进被控端 mtime/size 感知
  * 的上传去重缓存(那只对 `xdt-image://` 生效,见 desktop mediaFetch.ts),手机侧
  * 又没有 mtime 来源可验证文件是否被覆写——若按 presign 全期(约 1 小时)缓存,
  * 同路径文件被 agent 覆写后会一直吃到旧字节。因此这里只做**短 TTL** 缓存:
@@ -24,6 +25,7 @@ import type {
   MobileMakerTransport,
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
+import { releasePeerMedia } from '@/device-link/peerFileRegistry';
 import {
   effectiveRemoteMediaSshContext,
   remoteFileMediaUrl,
@@ -43,6 +45,9 @@ export interface RemoteAbsFileFetchDeps {
   deviceId: string;
   openLink: (deviceId: string) => Promise<unknown>;
   presignGet: (ossKey: string) => Promise<MobileRemoteMediaPresignResult>;
+  deleteOssObject?: (key: string) => void;
+  /** 取消信号(如页面卸载、导出提示上的「取消」):中止取件,不再重试。 */
+  isCancelled?: () => boolean;
 }
 
 /** 缓存 TTL:只护住一次预览/分享动作链,把「同路径覆写吃旧字节」窗口压到 1 分钟。 */
@@ -99,19 +104,44 @@ export async function fetchRemoteAbsFileToUrl(
     ? `${eff.sessionId}\u0000${eff.remoteHostId}\u0000${eff.workdir}`
     : '';
   const key = `${deps.deviceId}\u0000${absPath}\u0000${sshKey}\u0000${deps.stream === false ? 'file' : 'stream'}`;
-  const cached = lookupCache(key, Date.now());
+  const cached = deps.stream === false ? null : lookupCache(key, Date.now());
   if (cached) return cached.url;
-  const resolved = await withTransientRemoteRetry(async () => {
-    await deps.openLink(deps.deviceId);
-    // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
-    return resolveMobileRemoteMedia(
-      { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh) },
-      { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
-      deps.stream === false ? { stream: false } : undefined,
-    );
-  });
-  rememberFetch(key, resolved, Date.now());
-  return resolved.url;
+  // 与 exportRemoteFileToUrl 同一写法:轮询 isCancelled 转成取件的 AbortSignal。
+  const abort = deps.isCancelled ? new AbortController() : null;
+  const check = () => {
+    if (deps.isCancelled?.()) abort?.abort();
+  };
+  const assertActive = () => {
+    check();
+    if (abort?.signal.aborted) throw new Error(i18n.t('files.export.leftPage'));
+  };
+  const timer = abort ? setInterval(check, 100) : null;
+  try {
+    const fetchOpts = {
+      beforeFetch: () => deps.openLink(deps.deviceId),
+      ...(deps.deleteOssObject ? { discardBackgroundOssKey: deps.deleteOssObject } : {}),
+      ...(deps.stream === false ? { stream: false } : {}),
+      ...(abort ? { signal: abort.signal } : {}),
+    };
+    const resolved = await withTransientRemoteRetry(async () => {
+      assertActive();
+      // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
+      return resolveMobileRemoteMedia(
+        { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh) },
+        { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
+        Object.keys(fetchOpts).length ? fetchOpts : undefined,
+      );
+    });
+    // Only the local copy can outlive its temporary cloud object.
+    if (resolved.ossKey && resolved.url.startsWith('file://')) {
+      deps.deleteOssObject?.(resolved.ossKey);
+    }
+    if (deps.stream !== false) rememberFetch(key, resolved, Date.now());
+    assertActive();
+    return resolved.url;
+  } finally {
+    if (timer) clearInterval(timer);
+  }
 }
 
 /**
@@ -145,14 +175,20 @@ export async function fetchRemoteAbsFileOnce(
    */
   constraints?: RemoteMediaFetchConstraints | null,
   signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<MobileResolvedRemoteMedia> {
   return withTransientRemoteRetry(async () => {
+    const assertActive = () => { if (signal?.aborted) throw new Error('PREVIEW_CANCELLED'); };
+    assertActive();
     await deps.openLink(deps.deviceId);
+    assertActive();
     // kind 只影响结果的 previewable 标志(此处不消费),按 image 占位。
     return resolveMobileRemoteMedia(
       { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
-      { onOssKey, signal, stream: false },
+      // HTML already restores its visible snapshot before calling here. Returning
+      // another stale snapshot would write old bytes back into that preview cache.
+      { onOssKey, signal, stream: false, skipCache: true, ...(onProgress ? { onProgress } : {}) },
     );
   });
 }
@@ -185,4 +221,63 @@ export function adaptTextFilePreviewResult(
       ? i18n.t('composer.attachments.pathNotReadable')
       : res.error ?? i18n.t('composer.attachments.readFailed');
   return { ok: false, code: 'READ_FAILED', message };
+}
+
+/** Size-limited text fallback; uses existing transfer/cache and temporary-file cleanup. */
+export async function readRemoteTextFilePreview(
+  deps: RemoteAbsFileFetchDeps & {
+    readPreview: (path: string) => Promise<RemoteTextFilePreviewResult>;
+    isCurrent: () => boolean;
+  },
+  path: string,
+  signal: AbortSignal = new AbortController().signal,
+): Promise<RemoteTextFilePreviewResult> {
+  const assertActive = () => {
+    if (signal?.aborted || !deps.isCurrent()) throw new Error('PREVIEW_CANCELLED');
+  };
+  assertActive();
+  let preview: RemoteTextFilePreviewResult | undefined;
+  try {
+    preview = await deps.readPreview(path);
+  } catch (error) {
+    // Older Hosts ignore the opt-in and return their existing compact error.
+    // Permission, missing-file and connection failures must never bypass the text reader.
+    if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'PAYLOAD_TOO_LARGE') throw error;
+  }
+  assertActive();
+  if (preview && (!preview.success || !preview.transferRequired)) return preview;
+  const maxBytes = 10 * 1024 * 1024;
+  const uploaded = new Set<string>();
+  let localUri: string | undefined;
+  try {
+    const media = await resolveMobileRemoteMedia(
+      { kind: 'image', url: remoteFileMediaUrl(path, undefined, undefined, { maxBytes }) },
+      { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
+      // The visible text cache already provides the stale snapshot. This read
+      // must validate the Host version before updating that snapshot again.
+      { signal, stream: false, revalidate: true, beforeFetch: async () => {
+        assertActive();
+        await deps.openLink(deps.deviceId);
+        assertActive();
+      }, onOssKey: (key) => uploaded.add(key) },
+    );
+    if (media.url.startsWith('file://')) localUri = media.url;
+    assertActive();
+    if (!Number.isSafeInteger(media.size) || media.size < 0) throw new Error('PREVIEW_CHANGED');
+    if (media.size > maxBytes) return { success: false, reason: 'oversize', size: media.size, limitMb: 10 };
+    const { withDownloadedRemoteMediaFile } = await import('./remoteMediaDiskCacheExpo');
+    const result = await withDownloadedRemoteMediaFile(media.url, media.mimeType, maxBytes, async (file) => {
+      assertActive();
+      if (file.size !== media.size) throw new Error('PREVIEW_CHANGED');
+      const data = await file.text();
+      assertActive();
+      return { success: true, data, size: media.size, limitMb: 10 };
+    }, signal);
+    assertActive();
+    if (!result) throw new Error('PREVIEW_READ_FAILED');
+    return result;
+  } finally {
+    if (localUri) releasePeerMedia(localUri);
+    for (const key of uploaded) deps.deleteOssObject?.(key);
+  }
 }

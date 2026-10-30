@@ -34,6 +34,7 @@ import {
   useRemoteMobileFavorites,
   mobileFavorite,
   mobileFavoriteMutation,
+  __resetRemoteMobileFavoritesCacheForTest,
 } from "@/session/useRemoteMobileFavorites";
 const item = {
   uid: "fav-1",
@@ -53,6 +54,7 @@ beforeEach(() => {
   h.context.status = "online";
   h.context.recoveringDeviceIds.clear();
   h.unresponsive.clear();
+  __resetRemoteMobileFavoritesCacheForTest();
   root = createRoot(document.createElement("div"));
 });
 afterEach(() => act(() => root.unmount()));
@@ -72,6 +74,20 @@ it.each(['peer', 'unresponsive'])('retains favorites and refreshes after %s reco
   expect(h.invoke).toHaveBeenCalledTimes(calls + 1);
   expect(h.view.items[0].effort).toBe('low');
   expect(h.view.error).toBeNull();
+});
+// 回归:任务页 / 新建页每次挂载选择器都从空列表开始，等读回来「收藏」才出现。
+// 重新挂载时先显示上次读到的收藏，后台读到新的再替换。
+it("a freshly mounted picker shows the last favorites while the fresh read is in flight", async () => {
+  await act(async () => root.render(createElement(Probe, {})));
+  act(() => root.unmount());
+  root = createRoot(document.createElement("div"));
+  let resolve!: (v: unknown) => void;
+  h.invoke.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+  await act(async () => root.render(createElement(Probe, {})));
+  expect(h.view.ready).toBe(true);
+  expect(h.view.items).toEqual([mobileFavorite(item)]);
+  await act(async () => resolve([{ ...item, effort: "low" }]));
+  expect(h.view.items[0].effort).toBe("low");
 });
 it("maps engine spelling and treats unchanged field order as no operation", () => {
   const mobile = mobileFavorite(item);

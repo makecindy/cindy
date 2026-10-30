@@ -337,6 +337,22 @@ describe('getSubscriptionValuePriceFor', () => {
 });
 
 describe('readUsageHistoryWith', () => {
+  it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {
+    const money = actual(1.25);
+    const result = await readUsageHistoryWith(makeDeps({
+      getAllSpendDays: async () => [{ day: TODAY, monies: [money] }],
+      getModelUsageSince: async () => [{
+        ...modelRow(TODAY, 'pi', 'seedance-2.0', money), agentKind: 'media',
+      }],
+    }));
+    expect(result.totals.today.amount).toBe(1.25);
+    expect(result.totals.last30DaysTokens).toBe(0);
+    expect(result.models).toEqual([expect.objectContaining({
+      agentKind: 'media', model: 'seedance-2.0', money, estimatedMoney: null,
+    })]);
+    expect(result.modelDaily[0]).toMatchObject({ agentKind: 'media', apiMoney: money, tokens: 0 });
+  });
+
   it('supports an all-time request without changing the default 30-day model window', async () => {
     const oldRow = modelRow('2026-04-01', 'codex', 'gpt-5.5', actual(0), {
       inputTokens: 123,
@@ -835,11 +851,12 @@ describe('readUsageHistoryWith', () => {
 
 describe('production cache and empty payload', () => {
   it('overlays current local task metadata on a cached aggregate', async () => {
-    const meta = (sessionId: string, title: string) => ({
+    const meta = (sessionId: string, title: string, source: string | null = null) => ({
       sessionId,
       title,
       model: 'gpt-5.5',
       providerId: null,
+      source,
       contextTokens: 0,
       contextWindow: 0,
       lastActiveAt: 1,
@@ -855,9 +872,11 @@ describe('production cache and empty payload', () => {
     const first = await readUsageHistory({ days: 30, includeTasks: true });
     expect(first.tasks?.map((task) => task.title)).toEqual(['Old title', 'Doomed']);
     // 重命名 s1、删除 s2:不产生用量,聚合缓存照常复用,但出口的任务元数据必须是当前值。
-    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title')]);
+    vi.mocked(getUsageTaskMeta).mockResolvedValue([meta('s1', 'New title', 'cindy-make')]);
     const second = await readUsageHistory({ days: 30, includeTasks: true });
     expect(second.tasks?.map((task) => [task.sessionId, task.title])).toEqual([['s1', 'New title']]);
+    expect(second.tasks?.[0].source).toBe('cindy-make');
+    expect(second.taskDaily).toEqual(first.taskDaily);
     expect(getSessionUsageSince).toHaveBeenCalledTimes(1);
   });
 

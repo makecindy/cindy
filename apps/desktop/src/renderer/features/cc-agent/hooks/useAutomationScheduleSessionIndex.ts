@@ -56,6 +56,17 @@ export function resetAutomationScheduleOptimisticUnreadForTests(): void {
   optimisticUnreads.clear();
 }
 
+/**
+ * 清掉已发布索引 —— 仅供测试。
+ *
+ * `publishedIndex` 是模块级状态，跨用例残留会让后一条用例继承前一条的 schedule
+ * 信息（静默的用例顺序耦合）。生产路径不调用。
+ */
+export function resetAutomationSchedulePublishedIndexForTests(): void {
+  publishedIndex = new Map();
+  for (const listener of publishedIndexListeners) listener();
+}
+
 function rememberOptimisticUnread(
   sessionId: string,
   runId: string,

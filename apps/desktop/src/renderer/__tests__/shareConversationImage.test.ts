@@ -13,13 +13,17 @@ vi.mock('@/lib/annotationBurnIn', () => ({
 const {
   SHARE_EXCLUDE_ATTR,
   SHARE_MESSAGE_ATTR,
+  SHARE_PENDING_IMAGE_ATTR,
   SHARE_SESSION_ATTR,
   SHARE_SOURCE_ATTR,
   ShareImageTooLargeError,
+  appendShareMessages,
   assertShareImageReadableSize,
   buildShareImageFooter,
+  buildShareStageMotionFreeze,
   expandScrollableBlocks,
   inlineCloneImages,
+  prepareShareMessageClone,
   queryShareableMessageIds,
   redactTextNodes,
   stripCloneAnchors,
@@ -75,6 +79,131 @@ describe('stripMessageSources', () => {
     expect(el.textContent).not.toMatch(/张三|自动化|手机|Slack/);
     expect(el.textContent).toContain('帮我看下这个报错');
     expect(el.textContent).toContain('正文内容');
+  });
+});
+
+describe('prepareShareMessageClone', () => {
+  // 只发 $指令 的用户消息:气泡内只有插件标注行,气泡本身也打了来源标记。
+  const chipOnlyMessage = () =>
+    root(`
+      <div ${SHARE_MESSAGE_ATTR}="m1" data-user-msg-id="m1">
+        <div class="bubble" ${SHARE_SOURCE_ATTR}>
+          <div ${SHARE_SOURCE_ATTR}><button aria-expanded="false">GitHub 已调用</button></div>
+        </div>
+        <div ${SHARE_EXCLUDE_ATTR}><button>复制</button></div>
+      </div>
+    `).firstElementChild as HTMLElement;
+
+  it('清洗后没有内容的消息返回 null,不在图里留空白或空图', () => {
+    expect(prepareShareMessageClone(chipOnlyMessage())).toBeNull();
+  });
+
+  it('插件标注去掉后保留正文,且不改动原节点', () => {
+    const node = root(`
+      <div ${SHARE_MESSAGE_ATTR}="m1">
+        <div class="bubble">
+          <div ${SHARE_SOURCE_ATTR} class="border-b"><button aria-expanded="false">GitHub</button></div>
+          <div>帮我过审这个 PR</div>
+        </div>
+      </div>
+    `).firstElementChild as HTMLElement;
+    const clone = prepareShareMessageClone(node);
+    expect(clone?.textContent?.trim()).toBe('帮我过审这个 PR');
+    expect(clone?.querySelector('.border-b')).toBeNull();
+    expect(clone?.hasAttribute(SHARE_MESSAGE_ATTR)).toBe(false);
+    expect(node.querySelector(`[${SHARE_SOURCE_ATTR}]`)).not.toBeNull();
+  });
+
+  it('只有音频播放器或分隔线等非文字内容的消息照常保留', () => {
+    for (const html of [
+      '<div><p><audio controls src="xdt-audio://a.mp3"></audio></p></div>',
+      '<div><div class="markdown"><hr /></div></div>',
+    ]) {
+      expect(prepareShareMessageClone(root(html).firstElementChild as HTMLElement)).not.toBeNull();
+    }
+  });
+
+  it('只有图片附件的消息照常保留', () => {
+    const node = root(`<div><img src="data:image/png;base64,AAAA" alt="" /></div>`)
+      .firstElementChild as HTMLElement;
+    expect(prepareShareMessageClone(node)).not.toBeNull();
+  });
+
+  it('流里仍在加载的图片照常进图:去掉加载占位,恢复显示', () => {
+    const node = root(`
+      <div ${SHARE_MESSAGE_ATTR}="media-1">
+        <span ${SHARE_EXCLUDE_ATTR} role="status"></span>
+        <img ${SHARE_PENDING_IMAGE_ATTR} src="cindy-media://shot.png" style="max-width: 480px; display: none;" />
+      </div>
+    `).firstElementChild as HTMLElement;
+    const clone = prepareShareMessageClone(node);
+    const img = clone?.querySelector('img');
+    expect(clone?.querySelector('[role="status"]')).toBeNull();
+    expect(img?.hasAttribute(SHARE_PENDING_IMAGE_ATTR)).toBe(false);
+    expect(img?.style.display).toBe('');
+    expect(img?.style.maxWidth).toBe('480px');
+    // 原节点不受影响,流里照旧等加载完成。
+    expect(node.querySelector('img')?.style.display).toBe('none');
+  });
+});
+
+describe('appendShareMessages', () => {
+  const message = (text: string | null) =>
+    root(
+      text === null
+        ? `<div><div ${SHARE_SOURCE_ATTR}><button aria-expanded="false">GitHub</button></div></div>`
+        : `<div><p>${text}</p></div>`,
+    ).firstElementChild as HTMLElement;
+  // 序列里每项 = [消息在可选序列中的位置, 正文(null = 只剩插件标注)]
+  const assemble = (items: Array<[number, string | null]>) => {
+    const stage = document.createElement('div');
+    const ids = items.map(([index]) => `m${index}`);
+    const order = new Map(ids.map((id, i) => [id, items[i][0]]));
+    const count = appendShareMessages(
+      stage,
+      items.map(([, text]) => message(text)),
+      ids,
+      order,
+    );
+    const layout = Array.from(stage.children).map((child) =>
+      child.hasAttribute('data-share-gap') ? '⋯' : (child.textContent ?? '').trim(),
+    );
+    return { count, layout };
+  };
+
+  it('跳过空消息时,它之前的跳选断点延续到下一条有内容的消息', () => {
+    expect(
+      assemble([
+        [1, 'A'],
+        [5, null],
+        [6, 'B'],
+      ]),
+    ).toEqual({ count: 2, layout: ['A', '⋯', 'B'] });
+  });
+
+  it('相邻选中、中间只是一条空消息时不加断点', () => {
+    expect(
+      assemble([
+        [1, 'A'],
+        [2, null],
+        [3, 'B'],
+      ]),
+    ).toEqual({ count: 2, layout: ['A', 'B'] });
+  });
+
+  it('图首不放断点;全空时返回 0', () => {
+    expect(
+      assemble([
+        [1, null],
+        [5, 'B'],
+      ]).layout,
+    ).toEqual(['B']);
+    expect(
+      assemble([
+        [1, null],
+        [2, null],
+      ]),
+    ).toEqual({ count: 0, layout: [] });
   });
 });
 
@@ -368,6 +497,15 @@ describe('queryShareableMessageIds', () => {
     document.body.appendChild(message);
 
     expect(queryShareableMessageIds(sessionId)).toEqual(['escaped']);
+  });
+});
+
+describe('buildShareStageMotionFreeze', () => {
+  it('只作用于导出 stage,关掉入场动画与过渡,避免图片按动画中途的透明度入图', () => {
+    const css = buildShareStageMotionFreeze().textContent ?? '';
+    expect(css).toContain('[data-share-export] *');
+    expect(css).toContain('animation:none!important');
+    expect(css).toContain('transition:none!important');
   });
 });
 

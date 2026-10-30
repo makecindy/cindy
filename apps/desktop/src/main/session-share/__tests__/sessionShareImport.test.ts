@@ -61,6 +61,15 @@ const legacyImageMock = vi.hoisted(() => ({
 }));
 const closeSharedTaskForTask = vi.hoisted(() => vi.fn());
 vi.mock('../../device-link/sharedTaskRuntime.js', () => ({ closeSharedTaskForTask }));
+// 没有草稿偏好时按新建任务口径解析默认模型;本 harness 不搭供应商目录,按 agent 固定返回。
+const resolveNewTaskDefaultModelRoute = vi.hoisted(() =>
+  vi.fn(async (agent: string) =>
+    agent === 'codex'
+      ? { model: 'gpt-6-astra', providerId: 'openai' }
+      : { model: 'claude-opus-5-5', providerId: 'anthropic' },
+  ),
+);
+vi.mock('../../maker-host/model-route-guard-live.js', () => ({ resolveNewTaskDefaultModelRoute }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => tmpRoot, getVersion: () => '9.9.9' },
@@ -1309,7 +1318,7 @@ describe('sessionShareImport', () => {
     expect(session.userSendAt).toBe(1700000000100);
   });
 
-  it('missing draftPrefs falls back to built-in defaults, still ignoring snapshot', async () => {
+  it('missing draftPrefs falls back to the new-task default route, still ignoring snapshot', async () => {
     const filePath = await writeBundleFile(await buildBundle({ session: exporterSessionConfig }));
     const inspect = await inspectShareFile(filePath);
     if (inspect.encrypted) return;
@@ -1320,15 +1329,16 @@ describe('sessionShareImport', () => {
       sharedMediaRootOverride: sharedMediaRoot,
     });
     const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
-    expect(session.model).toBe('claude-sonnet-4-6');
+    expect(resolveNewTaskDefaultModelRoute).toHaveBeenCalledWith('claude-code');
+    expect(session.model).toBe('claude-opus-5-5');
     expect(session.effort).toBe('high');
     expect(session.permissionMode).toBe('auto');
-    expect(session.providerId).toBeNull();
+    expect(session.providerId).toBe('anthropic');
     expect(session.fastMode).toBe(false);
     expect(session.planModeEnabled).toBe(false);
   });
 
-  it('codex bundle without draftPrefs falls back to codex default model', async () => {
+  it('codex bundle without draftPrefs falls back to the codex new-task default', async () => {
     const filePath = await writeBundleFile(
       await buildBundle({
         agentKind: 'codex',
@@ -1344,7 +1354,8 @@ describe('sessionShareImport', () => {
       sharedMediaRootOverride: sharedMediaRoot,
     });
     const session = (dbMock.txCalls[0].args as { session: Record<string, unknown> }).session;
-    expect(session.model).toBe('gpt-5.4');
+    expect(session.model).toBe('gpt-6-astra');
+    expect(session.providerId).toBe('openai');
     expect(session.codexHistoryHasProductPrompt).toBe(false);
   });
 

@@ -3,9 +3,11 @@ import {
   emptyRateHistory,
   loadCachedRateHistory,
   recordRunningTokenRate,
+  recordTokenSpeed,
   saveCachedRateHistory,
   RATE_SAMPLE_FRESH_MS,
   type RateHistory,
+  type TokenSpeedSnapshot,
 } from '@cindy/maker-shared';
 
 export function useRunningTokenRateHistory(input: {
@@ -15,6 +17,8 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
+  /** 电脑端按 Pi 扩展算法测得的速度；旧版电脑不发，回落到用量计数。 */
+  tokenSpeed?: TokenSpeedSnapshot;
   /** 本地发送或队列已让活动条出现，但远端本轮 startedAt 可能仍是 null。 */
   streaming?: boolean;
 }) {
@@ -24,6 +28,7 @@ export function useRunningTokenRateHistory(input: {
     outputTokens,
     generationDurationMs,
     generationReliable,
+    tokenSpeed,
     streaming = false,
   } = input;
   // 挂载时从按会话的进程内缓存播种：ComposerActivityStatus 以账号、设备和任务身份为 key，
@@ -51,12 +56,14 @@ export function useRunningTokenRateHistory(input: {
           : startedAt === null
             ? { ...cached, baseline: null, lastReport: null, latestRate: null }
             : cached;
-      const recorded = recordRunningTokenRate(seeded, {
-        startedAt,
-        outputTokens,
-        generationDurationMs,
-        generationReliable,
-      });
+      const recorded = tokenSpeed && generationReliable
+        ? recordTokenSpeed(seeded, { startedAt, speed: tokenSpeed })
+        : recordRunningTokenRate(seeded, {
+            startedAt,
+            outputTokens,
+            generationDurationMs,
+            generationReliable,
+          });
       // 同一挂载在 600ms 收尾粘滞内再次发送时不会重新播种。本地活动已开始而
       // 远端 startedAt 仍为 null 时，上一轮速率不能继续当作当前速度。
       if (
@@ -68,7 +75,7 @@ export function useRunningTokenRateHistory(input: {
       }
       return recorded;
     });
-  }, [sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, streaming]);
+  }, [sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed, streaming]);
   useEffect(() => {
     if (sessionKey) saveCachedRateHistory(sessionKey, history);
   }, [sessionKey, history]);

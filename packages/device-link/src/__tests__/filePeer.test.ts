@@ -34,6 +34,12 @@ describe("file transfer signaling", () => {
   ])("rejects malformed requests %#", (value) => {
     expect(() => parseFilePeerRequest(value)).toThrow();
   });
+  it("enables session-bound lifetime only with explicit boolean opt-in", () => {
+    const offer = { action: "offer", sdp: "v=0" };
+    expect(parseFilePeerRequest({ ...offer, sessionBound: true })).toEqual({ ...offer, sessionBound: true });
+    for (const sessionBound of [undefined, false, 1, "true", null])
+      expect(parseFilePeerRequest({ ...offer, sessionBound })).toEqual(offer);
+  });
   it("accepts empty files and rejects unbounded metadata", () => {
     expect(
       parseFilePeerFile({ ticket: connection, size: 0, mimeType: "text/html" })

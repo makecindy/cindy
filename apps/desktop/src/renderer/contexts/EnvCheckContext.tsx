@@ -11,7 +11,6 @@ import {
 
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 
 /**
  * 由主窗派生的附属窗口(会话多开副窗 / 右侧栏子窗口 / 插件面板子窗口):
@@ -19,7 +18,7 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
  * (初始 'passed' + 不跑 auto-check)。
  */
 function isDerivedWindow(): boolean {
-  return isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow();
+  return isSecondaryWindow() || isSidebarWindow();
 }
 
 /* ── Types ── */

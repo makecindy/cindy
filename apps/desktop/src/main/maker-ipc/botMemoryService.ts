@@ -29,6 +29,7 @@ import {
   type BotMemoryUpdateInput,
 } from '../../shared/botMemory.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import matter from 'gray-matter';
 
 const PREVIEW_CHARS = 240;
 const DESCRIPTION_MAX = 200;
@@ -299,6 +300,48 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
         scheduleRefresh(owner);
         return saved;
       });
+    },
+
+    /**
+     * Restore one memory file exactly as another computer stored it (cloud companions).
+     * Goes through the store so MEMORY.md, FTS and the runtime refresh stay consistent.
+     */
+    async restoreRaw(botId: string, rawFilename: unknown, raw: string): Promise<void> {
+      const filename = readFilename(rawFilename);
+      const [, type, name] = /^([a-z]+)_(.+)\.md$/.exec(filename)!;
+      const parsed = matter(raw);
+      const data = parsed.data as { title?: unknown; description?: unknown; bodyLength?: unknown };
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim().slice(0, BOT_MEMORY_TITLE_MAX) : name!;
+      const exact = Number.isSafeInteger(data.bodyLength) && parsed.content.length === (data.bodyLength as number) + 1 && parsed.content.endsWith('\n');
+      const body = exact ? parsed.content.slice(0, -1) : parsed.content.trim();
+      if (!body) throwIpcError('INVALID_PARAMS', 'Invalid memory content');
+      const description = typeof data.description === 'string' && data.description.trim()
+        ? data.description.trim().slice(0, DESCRIPTION_MAX) : botMemoryDescriptionFromBody(body) || title;
+      const { store, owner } = await storeOf(botId);
+      await serialized(`${botId}/${filename}`, async () => {
+        owner.assertCurrent?.();
+        const existing = await store.read(filename).catch((error: unknown) => {
+          if (error instanceof MemoryError && error.code === 'not-found') return null;
+          throw error;
+        });
+        await store.write({ type: type as BotMemoryType, name: name!, title, description, body,
+          mode: existing ? 'update' : 'create', preserveBody: exact }).catch(translateStoreError);
+        owner.assertCurrent?.();
+      });
+      scheduleRefresh(owner);
+    },
+
+    /** Remove a memory regardless of its version (cloud tombstone). Missing is fine. */
+    async removeRaw(botId: string, rawFilename: unknown): Promise<void> {
+      const filename = readFilename(rawFilename);
+      const { store, owner } = await storeOf(botId);
+      await serialized(`${botId}/${filename}`, async () => {
+        await store.delete(filename).catch((error: unknown) => {
+          if (error instanceof MemoryError && error.code === 'not-found') return;
+          translateStoreError(error);
+        });
+      });
+      scheduleRefresh(owner);
     },
 
     async delete(input: BotMemoryDeleteInput): Promise<void> {

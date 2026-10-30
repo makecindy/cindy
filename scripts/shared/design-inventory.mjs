@@ -361,7 +361,7 @@ export function extractViewEntries(mainEntrySource) {
 
 /**
  * 从 renderer/index.tsx 抽出模块图分发入口：`urlParams.get('<param>')` 条件决定
- * 加载哪个 entry 模块（resource-usage / sidebar-window / ghost-panel / main）。
+ * 加载哪个 entry 模块（resource-usage / sidebar-window / main）。
  * 返回「参数名 → 入口模块」映射——只核参数名不够：参数保留但分支改加载别的入口
  * 时（换窗口实现），catalog 的 productionEntry / styleRoots 仍指向旧窗口，
  * --check 却照样通过。映射核对与路由组件核对同构。
@@ -545,6 +545,7 @@ export function catalogSurfaces() {
       reachableComponents: [
         'BotsHomeView',
         'BotsListView',
+        'BotMarketDialog',
         'BotRosterView',
         'BotSessionView',
         'RemoteBotSessionView',
@@ -565,6 +566,7 @@ export function catalogSurfaces() {
       routerPaths: [
         '/bots',
         '/bots/list',
+        '/bots/market/:packageId?',
         '/bots/:botId',
         '/bots/:botId/direct/:threadId',
         '/bots/:botId/history/:sessionId',
@@ -572,10 +574,13 @@ export function catalogSurfaces() {
         '/bots/roster',
         '/bots/groups/:groupId',
         '/bots/remote/:deviceId/:botId',
+        '/bots/remote/:deviceId/:botId/history/:sessionId',
+        '/bots/remote/:deviceId/:botId/session/:sessionId',
       ],
       routeEntryComponents: {
         '/bots': 'BotsHomeView',
         '/bots/list': 'BotsListView',
+        '/bots/market/:packageId?': 'BotMarketRoute',
         '/bots/:botId': 'BotsHomeView',
         '/bots/:botId/direct/:threadId': 'BotDirectMessageView',
         '/bots/:botId/history/:sessionId': 'BotHistorySessionView',
@@ -583,6 +588,8 @@ export function catalogSurfaces() {
         '/bots/roster': 'BotRosterView',
         '/bots/groups/:groupId': 'BotGroupChatView',
         '/bots/remote/:deviceId/:botId': 'RemoteBotSessionView',
+        '/bots/remote/:deviceId/:botId/history/:sessionId': 'BotHistorySessionView',
+        '/bots/remote/:deviceId/:botId/session/:sessionId': 'RemoteBotSessionView',
       },
     },
     {
@@ -601,23 +608,27 @@ export function catalogSurfaces() {
       title: 'SkillHub 本地技能',
       productionEntry:
         'hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向）',
-      // SkillhubHomeView 直接渲染 PluginManagementLayout（features/plugin 共享布局）、
-      // 统一详情布局与 InstallTargetPicker——只扫列表组件文件
-      // 会漏掉这些子组件的样式事实。
+      // 包含本机、远程页面及跨 feature 共用的电脑入口和布局。
       reachableComponents: [
         'SkillhubLocalLayout',
         'SkillhubHomeView',
+        'RemoteSkillsPage',
+        'SkillCategoryFilterBar',
         'SkillhubDetailView',
         'SkillhubDetailRoute',
         'SkillDetailLayout',
         'SkillhubFeatureLayout',
         'PluginManagementLayout',
+        'PluginDevicePicker',
         'SkillhubMarketDetailView',
         'InstallTargetPicker',
       ],
       styleRoots: [
         'apps/desktop/src/renderer/features/skillhub/SkillhubLocalLayout.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubHomeView.tsx',
+        'apps/desktop/src/renderer/features/skillhub/skillhub-home.css',
+        'apps/desktop/src/renderer/features/skillhub/components/SkillCategoryFilterBar.tsx',
+        'apps/desktop/src/renderer/features/skillhub/RemoteSkillsPage.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/SkillhubDetailRoute.tsx',
         'apps/desktop/src/renderer/features/skillhub/components/SkillDetailLayout.tsx',
@@ -625,6 +636,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/features/skillhub/SkillhubMarketDetailView.tsx',
         'apps/desktop/src/renderer/features/skillhub/components/InstallTargetPicker.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx',
       ],
       routerPaths: [
         // The pathless parent renders the retained catalog itself at /skillhub/local.
@@ -681,15 +693,18 @@ export function catalogSurfaces() {
       platform: 'desktop',
       title: '已装插件',
       productionEntry: 'hash `/plugins`（GhostPluginPage）',
-      // GhostPluginPage 直接渲染 PluginManagementLayout、MarketPluginDetailView、
-      // PluginScopePicker、MyPublishesSection、AddMarketplaceDialog、UpdateAllDialog,
-      // 并直接导入 plugin-motion.css——只扫页面与详情两个文件会漏掉这些样式事实。
+      // 覆盖本机、远程管理与页面共用的菜单、详情及动效。
       reachableComponents: [
         'GhostPluginPage',
         'GhostPluginDetailView',
+        'GhostPluginActions',
+        'RemotePluginPage',
+        'RemotePluginConfiguration',
+        'RemotePluginReadOnlyDetail',
+        'PluginDevicePicker',
         'PluginManagementLayout',
         'MarketPluginDetailView',
-        'PluginScopePicker',
+        'PluginProjectMenu',
         'MyPublishesSection',
         'AddMarketplaceDialog',
         'UpdateAllDialog',
@@ -697,6 +712,11 @@ export function catalogSurfaces() {
       styleRoots: [
         'apps/desktop/src/renderer/features/plugin/GhostPluginPage.tsx',
         'apps/desktop/src/renderer/features/plugin/GhostPluginDetailView.tsx',
+        'apps/desktop/src/renderer/features/plugin/GhostPluginActions.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginPage.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginConfiguration.tsx',
+        'apps/desktop/src/renderer/features/plugin/RemotePluginReadOnlyDetail.tsx',
+        'apps/desktop/src/renderer/features/plugin/PluginDevicePicker.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginManagementLayout.tsx',
         'apps/desktop/src/renderer/features/plugin/MarketPluginDetailView.tsx',
         'apps/desktop/src/renderer/features/plugin/PluginScopePicker.tsx',
@@ -756,25 +776,6 @@ export function catalogSurfaces() {
       routeEntryComponents: { '/sidebar-window': 'SidebarWindowLayout' },
     },
     {
-      id: 'desktop.window.ghost-panel',
-      platform: 'desktop',
-      title: '插件面板独立窗口',
-      productionEntry:
-        '`?ghostPanelWindow=<id>` → renderer/ghost-panel-window-entry.tsx；hash `/ghost-panel-window`',
-      reachableComponents: ['GhostPanelWindowLayout'],
-      styleRoots: [
-        'apps/desktop/src/renderer/ghost-panel-window-entry.tsx',
-        'apps/desktop/src/renderer/components/layout/GhostPanelWindowLayout.tsx',
-        'apps/desktop/src/main/ghost-panel-window',
-        // ghost-panel-window-entry.tsx 直接导入 globals.css（同侧栏窗理由）。
-        'apps/desktop/src/renderer/styles/globals.css',
-        'apps/desktop/src/renderer/styles/generated/tokens.css',
-      ],
-      routerPaths: ['/ghost-panel-window'],
-      rendererEntryModules: { ghostPanelWindow: './ghost-panel-window-entry' },
-      routeEntryComponents: { '/ghost-panel-window': 'GhostPanelWindowLayout' },
-    },
-    {
       id: 'desktop.window.resource-usage',
       platform: 'desktop',
       title: '资源用量窗口',
@@ -793,6 +794,82 @@ export function catalogSurfaces() {
       rendererEntryModules: { resourceUsageWindow: './resource-usage-entry' },
     },
     {
+      id: 'desktop.window.region-screenshot',
+      platform: 'desktop',
+      title: '全局截图浮层',
+      productionEntry:
+        '`?regionScreenshot=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RegionScreenshotOverlay', 'ScreenshotToolbar', 'ScreenshotStyleBar', 'Magnifier', 'Button', 'Tip'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/renderer/components/ui/tooltip.tsx',
+        'apps/desktop/src/main/region-screenshot',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshot: './region-screenshot-entry' },
+    },
+    {
+      id: 'desktop.window.region-screenshot-editor',
+      platform: 'desktop',
+      title: '截图独立编辑窗口',
+      productionEntry:
+        '`?regionScreenshotEditor=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RegionScreenshotOverlay', 'ScreenshotToolbar', 'ScreenshotStyleBar', 'Button', 'Tip'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/renderer/components/ui/tooltip.tsx',
+        'apps/desktop/src/main/region-screenshot/editor.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshotEditor: './region-screenshot-entry' },
+    },
+    {
+      id: 'desktop.window.recording-preview',
+      platform: 'desktop',
+      title: '录屏独立回放窗口',
+      productionEntry:
+        '`?recordingPreview=1` → renderer/recording-preview-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['RecordingPreview', 'Button'],
+      styleRoots: [
+        'apps/desktop/src/renderer/recording-preview-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot/RecordingPreview.tsx',
+        'apps/desktop/src/renderer/components/ui/button.tsx',
+        'apps/desktop/src/renderer/components/ui/button.css',
+        'apps/desktop/src/main/region-screenshot/recordingPreview.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { recordingPreview: './recording-preview-entry' },
+    },
+    {
+      id: 'desktop.window.region-screenshot-pin',
+      platform: 'desktop',
+      title: '截图贴图窗口',
+      productionEntry:
+        '`?regionScreenshotPin=1` → renderer/region-screenshot-pin-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['PinView'],
+      styleRoots: [
+        'apps/desktop/src/renderer/region-screenshot-pin-entry.tsx',
+        'apps/desktop/src/renderer/features/region-screenshot/PinView.tsx',
+        'apps/desktop/src/main/region-screenshot/pins.ts',
+        'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { regionScreenshotPin: './region-screenshot-pin-entry' },
+    },
+    {
       id: 'desktop.window.remote-desktop',
       platform: 'desktop',
       title: '远程桌面独立窗口',
@@ -806,6 +883,8 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/components/ui/switch.tsx',
         'apps/desktop/src/renderer/components/ui/confirm-dialog.tsx',
         'apps/desktop/src/renderer/components/ui/select.tsx',
+        'apps/desktop/src/renderer/components/ui/select-parts.tsx',
+        'apps/desktop/src/renderer/components/ui/select.css',
         'apps/desktop/src/renderer/components/ui/button.tsx',
         'apps/desktop/src/renderer/components/ui/form-field.tsx',
         'apps/desktop/src/renderer/features/remote-desktop/viewerWindow.css',
@@ -1122,7 +1201,6 @@ function renderTable(headers, aligns, rows) {
 export function renderGeneratedBlock(
   surfaces,
   {
-    snapshotDate = 'UNSET',
     generateCommand = 'pnpm design:inventory',
     routerCoverage = { mapped: [], missing: [] },
     redirects = [],
@@ -1144,7 +1222,7 @@ export function renderGeneratedBlock(
     '本区块由 `scripts/design-inventory.mjs` 生成，请勿手改。',
     '重新生成：`pnpm design:inventory`；校验：`pnpm check:design-inventory`。',
     '',
-    `计数快照日期：${snapshotDate}。生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / RGB / HSL / OKLCH 等字面通道），两者在共享 matcher 内统一排除纯语义包装、注释及 PR 编号；数值颜色函数还需位于样式属性、CSS 声明/函数或任意值语境，普通文案字符串里的颜色函数文本不计入；字面 fallback 仍计入——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class、\`border-radius:\` 与 React style 对象的 \`borderRadius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数；Mobile 的 ThemeColors / typeScale 等 RN 属性不计入此列，不能将 0 解释为未使用 Token。`,
+    `生成命令：\`${generateCommand}\`。裸颜色匹配与 \`scripts/hardcoded-color-audit.mjs\` 共用 \`scripts/shared/hardcoded-color-match.mjs\`（HEX / RGB / HSL / OKLCH 等字面通道），两者在共享 matcher 内统一排除纯语义包装、注释及 PR 编号；数值颜色函数还需位于样式属性、CSS 声明/函数或任意值语境，普通文案字符串里的颜色函数文本不计入；字面 fallback 仍计入——语义 token 消费与注释引用不是迁移债务；裸圆角为粗粒度（\`rounded*\` class、\`border-radius:\` 与 React style 对象的 \`borderRadius:\`）。Token 计数为样式源里 \`var(--token)\` / \`hsl(var(--token)\` 的去重 ID 数；Mobile 的 ThemeColors / typeScale 等 RN 属性不计入此列，不能将 0 解释为未使用 Token。`,
     '',
     `登记 surface 数：${surfaces.length}。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。`,
     '',
@@ -1402,14 +1480,18 @@ export function mobileCatalogSurfaces() {
     ['device-management', '设备管理', ['devices/manage.tsx', 'devices/manage/[deviceId].tsx']],
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],
     ['resources', '远程资源列表与详情', ['resources/[collectionId].tsx', 'resources/[collectionId]/[resourceId].tsx']],
+    ['mail', '邮件阅读与附件预览', ['mail-preview.tsx']],
     ['plugins', '插件目录、页面与原生交互', ['plugins.tsx']],
     ['companions.direct', '伙伴私聊回看', ['companions/direct/[threadId].tsx']],
     ['companions.groups', '伙伴群聊与分工', ['companions/groups/[groupId].tsx']],
+    ['companions.cloud', '云端伙伴：主力电脑离线时的对话与换电脑', ['companions/cloud/[actorId].tsx']],
     ['chat.session', '任务内容与输入', ['sessions/[sessionId].tsx']],
     ['chat.sharing', '共享任务邀请与成员；供应商分享链接提示', ['shared-session.tsx', 'provider-share.tsx']],
+    ['chat.incoming-share', '外部分享内容预览与任务、伙伴目标选择', ['incoming-share.tsx']],
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
-    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/device-name.tsx', 'settings/voice-dictionary.tsx']],
+    ['relay-join', '扫码加入自建中转', ['relay-join.tsx']],
+    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
   ];
@@ -1436,6 +1518,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['+native-intent.ts', 'native intent routing; no screen'],
     ['automations/[deviceId].tsx', 'legacy automation link redirect; no screen'],
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
+    ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1446,6 +1529,9 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
       if (route === 'splash-preview.tsx' && !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
+      if (route === 'plugin-management-preview.tsx' &&
+        (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||
+          !source.includes('__DEV__ && process.env.EXPO_PUBLIC_CINDY_PLUGIN_DEMOS === "1"'))) missing.push(file);
       if (route === 'listperf.tsx' && !source.includes('if (!__DEV__)')) missing.push(file);
       exclusions.push({ path: file, reason: excluded.get(route) });
       continue;

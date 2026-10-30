@@ -1,9 +1,11 @@
+import { teammateSelectionStyle } from './teammateSelection';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
-import { AlertTriangle, Pin } from 'lucide-react';
+import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { BotConnectionStatus } from './BotConnectionStatus';
+import { TeammateStatusDot } from './TeammateStatusDot';
+import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { CindyDevicePicker } from './CindyDevicePicker';
 import type { CindyDeviceOption } from './cindyDeviceRoster';
 import { formatBotUnreadBadge } from './botListDisplay';
@@ -13,6 +15,7 @@ export function CindyDeviceRow({
   current,
   options,
   selected,
+  status,
   subtitle,
   timestamp,
   typing,
@@ -25,6 +28,7 @@ export function CindyDeviceRow({
   current: CindyDeviceOption;
   options: readonly CindyDeviceOption[];
   selected: boolean;
+  status: TeammateStatus;
   subtitle: ReactNode;
   timestamp: string;
   typing?: boolean;
@@ -40,6 +44,7 @@ export function CindyDeviceRow({
   return (
     <div
       data-testid="cindy-device-row"
+      style={teammateSelectionStyle}
       className={cn(
         'group relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 transition-colors',
         selected
@@ -56,47 +61,37 @@ export function CindyDeviceRow({
         className="absolute inset-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         aria-label={`${bot.name} · ${current.label}`}
       />
-      <span className="pointer-events-none relative shrink-0">
-        <BotAvatar bot={bot} size="md" />
-        <BotConnectionStatus
-          online={'deviceId' in bot && bot.connectionKnown === false ? null : current.online}
-          deviceName={current.label}
-        />
+      <span className="pointer-events-none relative flex shrink-0">
+        <BotAvatar bot={bot} size="row" />
+        <TeammateStatusDot status={status} />
       </span>
-      <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_2.5rem] items-center gap-x-2.5 gap-y-0.5">
+      <div className="pointer-events-none relative grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5">
         <span className="flex min-w-0 items-center gap-2">
           {'pinnedAt' in bot && bot.pinnedAt ? (
             <Pin size={11} aria-label={t('bots.list.pinned')} className="shrink-0" />
           ) : null}
           <span
             className={cn(
-              'min-w-0 flex-1 truncate text-14 leading-5',
+              'min-w-0 truncate text-14 leading-5',
               current.unread && 'font-medium',
             )}
           >
             {bot.name}
           </span>
-          {'needsAttention' in bot && bot.needsAttention ? (
-            <AlertTriangle
-              size={13}
-              aria-label={t('bots.list.needsAttention')}
-              className="shrink-0 text-[var(--warning-fg)]"
-            />
-          ) : null}
+          <CindyDevicePicker
+            options={options}
+            current={current}
+            onSelect={onSelect}
+            className={cn(
+              'pointer-events-auto min-w-0 shrink px-1 text-11 text-inherit focus-visible:ring-inset',
+              '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
+              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
+              selected &&
+                'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
+            )}
+          />
         </span>
-        <span className={cn('min-h-4 justify-self-end text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-        <CindyDevicePicker
-          options={options}
-          current={current}
-          onSelect={onSelect}
-          className={cn(
-            'pointer-events-auto col-span-2 -mx-2 text-12 text-inherit focus-visible:ring-inset',
-            '[--button-face-bg:transparent] [--button-face-border:transparent] [--button-face-outset:0px]',
-            'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:var(--sidebar-item-hover)]',
-            selected &&
-              'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)] enabled:[&:not([aria-disabled=true])]:active:[--button-face-bg:color-mix(in_srgb,currentColor_16%,transparent)]',
-          )}
-        />
+        <span className={cn('min-h-4 min-w-10 justify-self-end whitespace-nowrap text-right text-11 tabular-nums', mutedClass)}>{timestamp}</span>
         <span
           className={cn('truncate text-12 leading-4', mutedClass, typing && 'italic')}
           title={typeof subtitle === 'string' ? subtitle : undefined}
@@ -104,20 +99,13 @@ export function CindyDeviceRow({
           {subtitle}
         </span>
         <span className="flex min-h-4 items-center justify-end">
-          {current.unread ? (
-            current.unreadCount ? (
-              <span
-                aria-label={t('bots.list.unread', { count: current.unreadCount })}
-                className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
-              >
-                {formatBotUnreadBadge(current.unreadCount)}
-              </span>
-            ) : (
-              <span
-                aria-label={t('bots.devicePicker.unread')}
-                className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]"
-              />
-            )
+          {current.unread && current.unreadCount ? (
+            <span
+              aria-label={t('bots.list.unread', { count: current.unreadCount })}
+              className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-10 text-[var(--bot-unread-fg)]"
+            >
+              {formatBotUnreadBadge(current.unreadCount)}
+            </span>
           ) : null}
         </span>
       </div>

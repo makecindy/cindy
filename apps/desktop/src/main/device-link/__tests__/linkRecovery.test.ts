@@ -1,11 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import {
+  ensureInvokeLinkReady,
   invokeWithClosedLinkRecovery,
   requiresSessionLink,
 } from '../linkRecovery.js';
 
 describe('device-link closed link recovery', () => {
+  it('waits for the reliable link before sending a new read, while another peer proceeds', async () => {
+    let finish!: () => void;
+    const reopen = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const send = vi.fn();
+    const waiting = ensureInvokeLinkReady(() => true, reopen, () => {}).then(send);
+    const healthySend = vi.fn();
+    await ensureInvokeLinkReady(() => false, reopen, () => {}).then(healthySend);
+    expect(healthySend).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(reopen).toHaveBeenCalledOnce();
+    finish();
+    await waiting;
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('does not send or reopen after cancellation, and rechecks cancellation after a pending handshake', async () => {
+    let cancelled = true;
+    const assertCurrent = () => { if (cancelled) throw new Error('cancelled'); };
+    let finish!: () => void;
+    const reopen = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    await expect(ensureInvokeLinkReady(() => true, reopen, assertCurrent)).rejects.toThrow('cancelled');
+    expect(reopen).not.toHaveBeenCalled();
+    cancelled = false;
+    const send = vi.fn();
+    const waiting = ensureInvokeLinkReady(() => true, reopen, assertCurrent).then(send);
+    cancelled = true;
+    finish();
+    await expect(waiting).rejects.toThrow('cancelled');
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('正常成功或不可重试错误不会触发 reopen', async () => {
     const successInvoke = vi.fn().mockResolvedValue({ ok: true });
     const reopen = vi.fn();

@@ -25,6 +25,8 @@ import {
   type VersionProfile,
 } from '../versionStore';
 import { cleanupPersonalVersions } from '../personalVersionCleanup';
+import * as pendingBuild from '../pendingBuild';
+import { makeSourceRoot } from '../sourcePaths';
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -65,13 +67,13 @@ async function fixture() {
     appPath: path.join(resources, 'app.asar'),
     resources,
   };
-  const retain = () =>
+  const retain = (candidateCommit = commit) =>
     retainPersonalVersion({
       profile,
       sourceDirectory: source,
       appName: 'Cindy',
       title: 'Blue background',
-      commit,
+      commit: candidateCommit,
     });
   return {
     root,
@@ -141,6 +143,65 @@ describe('local Cindy version snapshots', () => {
     await rm(path.join(h.userData, 'cindy-make'), { recursive: true });
     expect(await verifyPersonalVersion(h.userData, first, h.original)).toMatchObject({ id: first });
   });
+  it('keeps the published personal version when settling the pending ledger fails', async () => {
+    const h = await fixture();
+    const first = (await h.retain())!;
+    publishPersonalVersion(h.userData, first);
+    const sourceRoot = makeSourceRoot(h.userData);
+    const pending = { commit: 'b'.repeat(40), tree: '1'.repeat(40) };
+    writeVersionJson(path.join(h.resources, 'cindy-source.json'), {
+      sourceCommit: pending.commit,
+      builtAt: h.builtAt,
+    });
+    const second = (await h.retain(pending.commit))!;
+    pendingBuild.recordPendingBuild(sourceRoot, pending);
+    const settle = vi.spyOn(pendingBuild, 'settlePendingBuilds').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    try {
+      expect(() => publishPersonalVersion(h.userData, second)).not.toThrow();
+    } finally {
+      settle.mockRestore();
+    }
+    expect(personalVersionId(h.userData)).toBe(second);
+    expect(pendingBuild.readPendingBuilds(sourceRoot)).toEqual([pending]);
+    expect(hasPublishedPersonalVersionCommit(h.userData, pending.commit)).toBe(true);
+    expect(await verifyPersonalVersion(h.userData, second, h.original)).toMatchObject({
+      id: second,
+    });
+    expect(fs.existsSync(path.join(versionDirectory(h.userData, second), 'version.json'))).toBe(
+      true,
+    );
+  });
+  it.each(['pending', 'unknown'] as const)(
+    'leaves the %s ledger untouched when switching the personal slot fails',
+    async (state) => {
+      const h = await fixture();
+      const first = (await h.retain())!;
+      publishPersonalVersion(h.userData, first);
+      const second = (await h.retain())!;
+      const sourceRoot = makeSourceRoot(h.userData);
+      const pending = { commit: h.commit, tree: '1'.repeat(40) };
+      const ledgerPath = path.join(sourceRoot, 'pending-build.json');
+      if (state === 'pending') pendingBuild.recordPendingBuild(sourceRoot, pending);
+      else await writeFile(ledgerPath, '{ damaged');
+      const before = await readFile(ledgerPath, 'utf8');
+      const writeSelection = (file: string, value: unknown) => {
+        if (file === path.join(versionsRoot(h.userData), 'personal.json'))
+          throw new Error('disk full');
+        writeVersionJson(file, value);
+      };
+      expect(() => publishPersonalVersion(h.userData, second, writeSelection)).toThrow('disk full');
+      expect(personalVersionId(h.userData)).toBe(first);
+      expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+      expect(pendingBuild.hasPendingBuild(sourceRoot, pending)).toBe(
+        state === 'pending' ? true : undefined,
+      );
+      expect(fs.existsSync(path.join(versionDirectory(h.userData, second), 'version.json'))).toBe(
+        true,
+      );
+    },
+  );
   it('keeps only the latest personal slot while staging and preserves running files and publication facts', async () => {
     const h = await fixture();
     const first = (await h.retain())!;

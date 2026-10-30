@@ -17,7 +17,7 @@ export type MobileImageAttachmentCandidate = MobileAttachmentUploadCandidate & {
   height?: number | null;
   /**
    * 仅 HEIC / HEIF 等非白名单格式带此钩子:任务开跑时就地转 JPEG(#3889)。
-   * 托盘预览仍用原始 uri;返回字段由上传管线覆盖到 candidate 上。
+   * 返回字段由上传管线覆盖到 candidate 上，并更新上传中预览。
    */
   resolve?: () => Promise<{ uri: string; name: string; mimeType: string; size: number }>;
 };

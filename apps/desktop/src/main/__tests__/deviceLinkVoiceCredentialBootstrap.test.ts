@@ -61,7 +61,8 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
   it('每个 relay 连接代上线时从设备目录补齐展示名与已在线桌面', () => {
     const deviceLinkHost = readFileSync(resolve(mainRoot, 'device-link/index.ts'), 'utf8');
 
-    expect(deviceLinkHost).toContain("serverApiFetch<DeviceDirectoryResponse>('/api/device-link/devices'");
+    // 自建中转必须经统一路由，避免目录刷新把 Cindy 账号 token 发给用户服务器。
+    expect(deviceLinkHost).toContain("deviceLinkApiFetch<DeviceDirectoryResponse>('/api/device-link/devices'");
     const onlineBranch = deviceLinkHost.indexOf("if (status === 'online') {");
     const seedCachedNames = deviceLinkHost.indexOf(
       'seedControllerDisplayNamesFromLastKnown();',

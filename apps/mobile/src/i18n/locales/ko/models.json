@@ -25,6 +25,12 @@
     "fastTag": "빠름"
   },
   "options": {
+    "speed": {
+      "label": "속도",
+      "standard": "표준",
+      "fast": "빠름",
+      "ultrafast": "초고속"
+    },
     "fastMode": "빠른 모드",
     "fastModeAccessibility": "빠른 모드 {{model}}",
     "reasoningEffort": "추론 강도",
@@ -92,6 +98,10 @@
     "recommended": "추천",
     "source": "공급원",
     "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "제공자 그룹 · 컴퓨터 {{count}}대",
+    "groupBadge_other": "제공자 그룹 · 컴퓨터 {{count}}대",
     "harness": "Harness",
     "restoreRecommended": "권장 설정 복원",
     "saveFailed": "저장하지 못했습니다. 다시 시도하세요.",

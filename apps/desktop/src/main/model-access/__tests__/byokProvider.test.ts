@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { buildByokPricing } from '../byokPricing.js';
+import { resolveModelPricePresentation } from '../../../renderer/lib/modelPricePresentation.js';
+import { modelPriceDetailRows, modelPriceDiscountLabelValues } from '../../../renderer/lib/modelPriceFormat.js';
 import { buildByokProvider, byokNativeConfigs, mergeByokNativeConfigs } from '../byokProvider.js';
 
 const credential = {
@@ -60,6 +63,34 @@ describe('buildByokProvider model types', () => {
     expect(byokNativeConfigs([result])[0]?.runtimes.pi?.models.map((model) => model.id)).toEqual([
       'byok-a/chat',
     ]);
+  });
+
+  it('keeps a model-group Auto as the server named it, with its Pi default marker and Pi route', () => {
+    const groupAuto = {
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+      agents: ['pi'] as Array<'pi'>,
+      mode: 'chat' as const,
+      currency: 'CNY' as const,
+      newSessionDefault: ['pi'] as Array<'pi'>,
+      modalities: { input: ['text', 'image'], output: ['text'] },
+      perAgent: { pi: { wireProtocol: 'openai-responses' as const } },
+    };
+    const result = buildByokProvider({
+      provider: { id: 'byok-a', name: 'Enterprise', connectionRevision: 1, models: [groupAuto] },
+      credential,
+    });
+    expect(result.models.pi?.[0]).toMatchObject({
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+      newSessionDefault: ['pi'],
+      defaultEnabled: true,
+      piApi: 'openai-responses',
+    });
+    expect(byokNativeConfigs([result])[0]?.runtimes.pi?.models[0]).toMatchObject({
+      id: 'auto/grp_123',
+      name: 'Auto (研发组)',
+    });
   });
 
   it('can project an image-only enterprise Provider without chat engines', () => {
@@ -179,4 +210,40 @@ it.each(['byok-a/chat', 'gpt-6-sol'])('preserves an explicit per-engine null def
       perAgent: { pi: { wireProtocol: 'openai-completions', defaultEffort: null } } }],
   }, credential });
   expect(provider.models.pi?.[0]).toMatchObject({ efforts: ['low', 'high'], defaultEffort: null });
+});
+
+// Regression: BYOK selection/settings displayed undiscounted reference prices.
+// Existing provider tests cover capability projection only. Public directory -> provider/quote
+// -> shared picker/settings presentation must retain original, effective and discount. Tier: unit.
+it.each([undefined, 0, 0.2, 1])('shows enterprise discount %s consistently in picker/settings details', (costDiscount) => {
+  const directory = { id: 'byok-a', name: 'Enterprise', connectionRevision: 1,
+    models: [{ ...chatModel, costDiscount, inputCostPerToken: 0.000002, outputCostPerToken: 0.000006,
+      cacheReadInputTokenCost: 0.0000005, cacheCreationInputTokenCost: 0.000001 }] };
+  const projected = buildByokProvider({ provider: directory, credential });
+  expect(projected.models.pi?.[0]).toMatchObject({ currency: 'CNY', costDiscount });
+  const presentation = resolveModelPricePresentation({
+    providerId: directory.id, modelId: chatModel.id, agent: 'pi',
+    providers: [{ ...projected, connected: true }],
+    gatewayPricing: null, referencePricing: buildByokPricing([directory]),
+  });
+  expect(presentation?.kind).toBe('priced');
+  if (presentation?.kind !== 'priced') throw new Error('missing enterprise price');
+  expect(presentation.current.inputPerMtok).toBeCloseTo(2 * (1 - (costDiscount ?? 0)));
+  expect(presentation.current.outputPerMtok).toBeCloseTo(6 * (1 - (costDiscount ?? 0)));
+  if (costDiscount) {
+    expect(presentation.discount).toBeCloseTo(costDiscount);
+    expect(presentation.original?.inputPerMtok).toBe(2);
+    expect(modelPriceDiscountLabelValues(presentation.discount!)).toEqual({
+      percent: costDiscount === 1 ? '100' : '20', rate: costDiscount === 1 ? '0' : '8',
+    });
+    expect(modelPriceDetailRows(presentation.current, presentation.original)).toEqual([
+      { kind: 'input', value: costDiscount === 1 ? '¥0' : '¥1.6', originalValue: '¥2' },
+      { kind: 'output', value: costDiscount === 1 ? '¥0' : '¥4.8', originalValue: '¥6' },
+      { kind: 'cacheRead', value: costDiscount === 1 ? '¥0' : '¥0.4', originalValue: '¥0.5' },
+      { kind: 'cacheCreate', value: costDiscount === 1 ? '¥0' : '¥0.8', originalValue: '¥1' },
+    ]);
+  } else {
+    expect(presentation.original).toBeUndefined();
+    expect(presentation.discount).toBeUndefined();
+  }
 });

@@ -1,5 +1,9 @@
+// @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import ts from 'typescript';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
 import {
@@ -11,6 +15,14 @@ import {
 import { excludeOrcaWorkerSessions, selectVisibleDeviceSessions } from '@/session/mobileHome';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
+import { __test_internals as expansion } from '@/session/expandedBlockMemory';
+import { buildRemoteSessionSections, summarizeRemoteSessionOverview } from '@/session/sessionList';
+import { collaborationRenderer } from './fixtures/messageRendererComponents';
+
+function executeDetail<T>(code: string, globals: Record<string, unknown>): T {
+  const emitted = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return new Function(...Object.keys(globals), emitted)(...Object.values(globals));
+}
 
 // orcaCollab 卡片文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦
 // (全局 mock 默认 en-US)。
@@ -295,25 +307,78 @@ describe('selectVisibleDeviceSessions', () => {
   });
 
   it('feeds the derived rows into the device/project list sections', () => {
-    const detail = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
-    expect(detail).toContain('selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir)');
-    expect(detail).toContain('buildRemoteSessionSections(sessions,');
-    expect(detail).toContain('summarizeRemoteSessionOverview(sessions,');
+    const detail = ts.createSourceFile('device.tsx', readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const names = new Set(['sessions', 'filterCounts', 'sections']);
+    const declarations: string[] = [];
+    // Only the component's derived rows feed its sections. A nested sync read
+    // also calls its response `sessions`; it must not enter this lexical scope.
+    const component = detail.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'DeviceDetailScreenContent');
+    if (!component?.body) throw new Error('Missing device detail component');
+    for (const statement of component.body.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const node of statement.declarationList.declarations) {
+        if (ts.isIdentifier(node.name) && names.has(node.name.text) && node.initializer) {
+          declarations.push('const ' + node.getText(detail) + ';');
+        }
+      }
+    }
+    const allSessions = [
+      session({ id: 'lead', orcaRole: 'lead', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/cindy' }),
+      session({ id: 'worker', orcaRole: 'worker', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/cindy' }),
+      session({ id: 'other-device', orcaRole: null, deviceLinkDeviceId: 'dev-b', workingDir: '/repo/cindy' }),
+      session({ id: 'normal', orcaRole: null, deviceLinkDeviceId: 'dev-a', workingDir: '/repo/cindy' }),
+    ];
+    const result = executeDetail<{ filterCounts: { all: number }; sections: ReturnType<typeof buildRemoteSessionSections> }>(
+      declarations.join(String.fromCharCode(10)) + '; return { filterCounts, sections };', {
+        useMemo: (compute: () => unknown) => compute(), selectVisibleDeviceSessions,
+        buildRemoteSessionSections, summarizeRemoteSessionOverview,
+        // The real detail sections now also consume alias metadata; worker filtering remains unchanged.
+        projectAliases: new Map(), allSessions, deviceId: 'dev-a', projectWorkingDir: '/repo/cindy',
+        messagePreviewIndex: new Map(), pendingInteractionIndex: new Map(), scheduleIndex: new Map(),
+        searchQuery: '', statusFilter: 'all', automationScopeKey: null,
+        i18nInstance: i18n, t: i18n.t.bind(i18n),
+      });
+    expect(result.sections.flatMap(section => section.data.map(row => row.session.id)).sort()).toEqual(['lead', 'normal']);
+    expect(result.filterCounts.all).toBe(2);
   });
 });
 
 describe('MessageRenderer wires the orca card', () => {
-  it('routes message items carrying an orcaCard to OrcaCollabCard', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
-    expect(source).toContain('item.message.orcaCard');
-    // F4:透传 screenWidth,使 CollabCardShell layout 随屏宽响应(与 SubagentCard 一致)。
-    expect(source).toContain('<OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}');
-    expect(source).toContain('blockKey={JSON.stringify([actions.remoteDeviceId, item.key])}');
-    expect(source).toContain('controlledExpanded={expanded}');
-    // Legacy `orca-toggled-` entries meant "collapsed" for dispatch cards; do not read them.
-    expect(source).toContain('`orca-expanded-${JSON.stringify([accountGeneration, blockKey, card.variant])}`');
-    expect(source).not.toContain('`orca-toggled-');
-    expect(source).toContain('onControlledToggle={toggleExpanded}');
-    expect(source).toContain('testID={`message.orcaCard.${card.variant}`}');
+  it('routes real normalized cards and scopes remembered expansions by device and account', () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const renderer = collaborationRenderer();
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    expansion.reset();
+    const [normalized] = normalizeRemoteMessages([message({ id: 'dispatch', role: 'tool_use', content: {
+      toolName: 'create_worker', input: { label: 'api', initial_task: 'Build API' },
+    } })]);
+    const item = { type: 'message', key: 'dispatch', message: normalized };
+    const show = (deviceId: string) => createElement(renderer.RenderItemView, { item, actions: { remoteDeviceId: deviceId, screenWidth: 320 } });
+    const toggle = () => host.querySelector<HTMLButtonElement>('[data-testid="message.orcaCard.dispatch"]')!;
+    try {
+      // Legacy dispatch toggles recorded collapsed state and cannot become new expansions.
+      expansion.setExpanded('orca-toggled-' + JSON.stringify([1, JSON.stringify(['dev-a', 'dispatch']), 'dispatch']), true);
+      act(() => root.render(show('dev-a')));
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      expect(host.textContent).not.toContain('Build API');
+      act(() => toggle().click());
+      expect(host.querySelector('[data-testid="message.orcaCardBody"]')?.textContent).toBe('Build API');
+      const compact = toggle().getAttribute('data-style');
+      act(() => root.render(createElement(renderer.RenderItemView, { item, actions: { remoteDeviceId: 'dev-a', screenWidth: 800 } })));
+      expect(toggle().getAttribute('data-style')).not.toBe(compact);
+      act(() => root.render(null));
+      act(() => root.render(show('dev-a')));
+      expect(toggle().getAttribute('aria-expanded')).toBe('true');
+      act(() => root.render(show('dev-b')));
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+      renderer.state.accountGeneration = 2;
+      act(() => root.render(show('dev-a')));
+      expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      act(() => root.unmount());
+      expansion.reset();
+    }
   });
 });

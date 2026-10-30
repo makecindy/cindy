@@ -8,7 +8,7 @@
  *    而不是把错误继续往上抛炸掉 #root(白屏);
  * 3. 非 Error 抛出物(字符串等)也能正常归一化展示。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // 仓库同款 i18n mock:t 返回 key 本身,断言直接用 key。
@@ -51,7 +51,8 @@ describe('TopLevelErrorBoundary', () => {
       expect(screen.getByText('appError.title')).toBeTruthy();
       expect(screen.getByText('appError.reload')).toBeTruthy();
       expect(screen.getByText('appError.backHome')).toBeTruthy();
-      expect(screen.getByText('appError.details')).toBeTruthy();
+      expect(screen.queryByText(/provider boom/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
       // 错误详情里能看到原始 message(给用户复制反馈用)
       expect(screen.getByText(/provider boom/)).toBeTruthy();
     } finally {
@@ -68,6 +69,8 @@ describe('TopLevelErrorBoundary', () => {
         </TopLevelErrorBoundary>,
       );
       expect(screen.getByText('appError.title')).toBeTruthy();
+      expect(screen.queryByText(/string boom/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
       expect(screen.getByText(/string boom/)).toBeTruthy();
     } finally {
       silence.mockRestore();

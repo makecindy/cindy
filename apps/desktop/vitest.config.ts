@@ -8,11 +8,13 @@ const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
 const desktopTestInclude = [
   'src/main/__tests__/**/*.test.ts',
   'src/main/**/__tests__/**/*.test.ts',
-  'src/renderer/__tests__/**/*.test.ts',
-  'src/renderer/**/__tests__/**/*.test.ts',
+  // Renderer tests may live in a feature test directory or beside the
+  // production module (for example src/renderer/lib/*.test.ts). Keep the
+  // pattern broad so a new test cannot silently fall outside the unit gate.
+  'src/renderer/**/*.test.ts',
   // renderer 组件测试(React,tsx):按文件头 `// @vitest-environment jsdom`
-  // 切 DOM 环境;此前 include 只收 .test.ts,tsx 用例根本不会被跑。
-  'src/renderer/**/__tests__/**/*.test.tsx',
+  // 切 DOM 环境；根目录和嵌套目录都由上面的模式覆盖。
+  'src/renderer/**/*.test.tsx',
   'src/preload/__tests__/**/*.test.ts',
   // shared 是 main/renderer 共用的纯函数层;此前漏配导致 src/shared/__tests__
   // 下的测试(如 workingDir.test.ts)从未跑过。

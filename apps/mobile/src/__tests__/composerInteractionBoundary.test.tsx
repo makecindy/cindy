@@ -13,6 +13,7 @@ const runtime = vi.hoisted(() => ({
   durations: [] as number[],
   deferAnimations: false,
   animationHeight: undefined as number | undefined,
+  reactions: new Set<() => void>(),
 }));
 vi.mock('react-native', () => ({ PanResponder: { create: vi.fn(() => ({ panHandlers: {} })) } }));
 vi.mock('expo-constants', () => ({
@@ -47,6 +48,23 @@ vi.mock('react-native-reanimated', async () => {
     useSharedValue: (initial: unknown) => useRef({ value: initial }).current,
     useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
     useAnimatedStyle: (calculate: () => unknown) => ({ get current() { return calculate(); } }),
+    // UI-thread reactions run when the test flushes a frame, after shared values change.
+    useAnimatedReaction: (prepare: () => unknown, react: (value: unknown, previous: unknown) => void) => {
+      const latest = useRef({ prepare, react, previous: undefined as unknown, job: null as (() => void) | null });
+      latest.current.prepare = prepare;
+      latest.current.react = react;
+      if (!latest.current.job) {
+        const state = latest.current;
+        state.job = () => {
+          const value = state.prepare();
+          if (Object.is(value, state.previous)) return;
+          const previous = state.previous;
+          state.previous = value;
+          state.react(value, previous);
+        };
+        runtime.reactions.add(state.job);
+      }
+    },
     runOnJS: (fn: (...args: unknown[]) => void) => (...args: unknown[]) => {
       runtime.js.push(() => fn(...args));
     },
@@ -66,6 +84,7 @@ vi.mock('react-native-reanimated', async () => {
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
+const flushFrame = () => { for (const job of runtime.reactions) job(); };
 const flushJS = () => act(() => { for (const job of runtime.js.splice(0)) job(); });
 const gestureOf = (value: unknown) => value as TestGesture;
 const styleOf = (value: unknown) => (value as { current: { height: number | 'auto'; maxHeight?: number } }).current;
@@ -97,6 +116,7 @@ beforeEach(() => {
   runtime.reduceMotion = false;
   runtime.deferAnimations = false;
   runtime.animationHeight = undefined;
+  runtime.reactions.clear();
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
@@ -187,13 +207,105 @@ describe('composer resize interaction boundary', () => {
     expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
   });
 
+  it('takes over a chat drag that crosses the composer top: shrinks with the finger, never grows past the start', () => {
+    const event = { value: { id: 0, active: false, startY: 0, y: 0, successful: false } };
+    const pullThrough = { armed: { value: true }, event, grabberRef: {} } as unknown as NonNullable<UseComposerResizeInput['pullThrough']>;
+    const input = { ...composerInput(), pullThrough };
+    const harness = mountComposer(input);
+    flushFrame();
+    expect(harness.result.contentHeight.value).toBe(60);
+    // Hand-off and the first move can land in one frame; the reaction still begins first.
+    event.value = { id: 1, active: true, startY: 500, y: 520, successful: false };
+    flushFrame();
+    expect(harness.result.active.value).toBe(true);
+    expect(harness.result.contentHeight.value).toBe(40);
+    event.value = { id: 1, active: true, startY: 500, y: 450, successful: false };
+    flushFrame();
+    expect(harness.result.contentHeight.value).toBe(60);
+    event.value = { id: 1, active: true, startY: 500, y: 510, successful: false };
+    flushFrame();
+    expect(harness.result.contentHeight.value).toBe(50);
+    event.value = { id: 1, active: false, startY: 500, y: 510, successful: true };
+    flushFrame();
+    flushJS();
+    expect(harness.result.mode).toBe('manual');
+    expect(harness.result.visibleContentHeight).toBe(50);
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    // A repeated end for the same hand-off is ignored.
+    event.value = { ...event.value };
+    flushFrame();
+    expect(runtime.js).toHaveLength(0);
+  });
+
+  it('a chat drag pulled past one line collapses the composer like the grabber does', () => {
+    const event = { value: { id: 0, active: false, startY: 0, y: 0, successful: false } };
+    const pullThrough = { armed: { value: true }, event, grabberRef: {} } as unknown as NonNullable<UseComposerResizeInput['pullThrough']>;
+    const input = { ...composerInput(), pullThrough };
+    const harness = mountComposer(input);
+    flushFrame();
+    event.value = { id: 1, active: true, startY: 500, y: 500, successful: false };
+    flushFrame();
+    event.value = { id: 1, active: false, startY: 500, y: 600, successful: true };
+    flushFrame();
+    flushJS();
+    expect(input.onSnapToAuto).toHaveBeenCalledOnce();
+  });
+
+  it('dismisses mid-drag once the pull goes a further stretch past the folded one-line pill', () => {
+    const input = composerInput();
+    const harness = mountComposer(input);
+    const gesture = gestureOf(harness.result.gesture);
+    gesture.begin({ translationY: 0 });
+    flushJS();
+    // 60 → one line (20) takes 40pt, the toolbar folds over the next 24pt,
+    // and the keyboard only goes after a further 40pt past the folded pill.
+    gesture.update({ translationY: 64 });
+    flushJS();
+    expect(harness.result.collapseProgress.value).toBe(1);
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    gesture.update({ translationY: 103 });
+    flushJS();
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    gesture.update({ translationY: 104 });
+    flushJS();
+    expect(input.onSnapToAuto).toHaveBeenCalledOnce();
+    expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
+    // The finger keeps moving and lifts later: nothing settles a second time.
+    gesture.update({ translationY: 10 });
+    expect(harness.result.collapseProgress.value).toBe(1);
+    gesture.finalize({ translationY: 10 }, true);
+    expect(runtime.js).toHaveLength(0);
+    expect(input.onSnapToAuto).toHaveBeenCalledOnce();
+  });
+
+  it('a chat drag dismisses mid-gesture a further stretch past the folded one-line pill', () => {
+    const event = { value: { id: 0, active: false, startY: 0, y: 0, successful: false } };
+    const pullThrough = { armed: { value: true }, event, grabberRef: {} } as unknown as NonNullable<UseComposerResizeInput['pullThrough']>;
+    const input = { ...composerInput(), pullThrough };
+    const harness = mountComposer(input);
+    flushFrame();
+    event.value = { id: 1, active: true, startY: 500, y: 603, successful: false };
+    flushFrame();
+    flushJS();
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    event.value = { id: 1, active: true, startY: 500, y: 604, successful: false };
+    flushFrame();
+    flushJS();
+    expect(input.onSnapToAuto).toHaveBeenCalledOnce();
+    event.value = { id: 1, active: false, startY: 500, y: 620, successful: true };
+    flushFrame();
+    expect(runtime.js).toHaveLength(0);
+    expect(input.onSnapToAuto).toHaveBeenCalledOnce();
+    expect(harness.result.collapseProgress.value).toBe(1);
+  });
+
   it('cancellation restores the settled height without dismissing the keyboard', () => {
     const input = composerInput();
     const harness = mountComposer(input);
     const gesture = gestureOf(harness.result.gesture);
     gesture.begin({ translationY: 0 });
-    gesture.update({ translationY: 100 });
-    gesture.finalize({ translationY: 100 }, false);
+    gesture.update({ translationY: 30 });
+    gesture.finalize({ translationY: 30 }, false);
     expect(harness.result.active.value).toBe(false);
     expect(harness.result.contentHeight.value).toBe(60);
     expect(styleOf(harness.result.frameStyle).maxHeight).toBe(input.autoMaxContentHeight);

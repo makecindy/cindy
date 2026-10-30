@@ -87,6 +87,22 @@ afterEach(() => {
 });
 
 describe('ConnectProviderBanner', () => {
+  // 2026-10-20 黑盒验收：分享任务已成功回复，本机零连接仍显示无模型引导。
+  // 现有用例只覆盖本机连接状态；最小输入为零本机来源 + 远程执行，tier: unit。
+  it('远程执行时隐藏本机引导，切回本机后恢复', () => {
+    const { rerender } = render(
+      <MemoryRouter><ConnectProviderBanner remote /></MemoryRouter>,
+    );
+    expect(screen.queryByTestId('connect-provider-banner')).toBeNull();
+    expect(localStorage.getItem('providerOnboarding.dismissedAt')).toBeNull();
+
+    rerender(<MemoryRouter><ConnectProviderBanner remote={false} /></MemoryRouter>);
+    expect(screen.getByTestId('connect-provider-banner')).not.toBeNull();
+
+    rerender(<MemoryRouter><ConnectProviderBanner remote /></MemoryRouter>);
+    expect(screen.queryByTestId('connect-provider-banner')).toBeNull();
+  });
+
   it('零连接 + cloud → 渲染,CTA 落 /settings?tab=providers', () => {
     renderBanner();
 

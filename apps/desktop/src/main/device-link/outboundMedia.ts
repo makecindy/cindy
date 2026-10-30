@@ -4,7 +4,8 @@
  * ---------------------------------------------------------------------------
  * 在 device-link handleInvoke 里、deps.invoke 之前对 maker:send / maker:steer /
  * maker:input:enqueue / maker:input:update-content 调用(这些 channel 才携带用户消息附件)。失败抛错 → handleInvoke
- * 转 throwIpcError(DEVICE_LINK_MEDIA_TRANSFER_FAILED) → 整条消息不发(产品决策)。
+ * 转 DEVICE_LINK_MEDIA_TRANSFER_FAILED；源文件权限拒绝保留 MEDIA_ACCESS_DENIED。
+ * 两者均整条消息不发(产品决策)。
  *
  * 被控端 normalizeUserMessage 识别 OSS 引用串 → presign-get 下载 → 物化喂 agent。
  *
@@ -14,16 +15,17 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
-type PeerUpload = (source: string | Buffer, mimeType?: string) => Promise<string | null>;
-const peerUploadContext = new AsyncLocalStorage<PeerUpload>();
-export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () => Promise<T>) {
-  return peerUploadContext.run(upload, operation);
+type PeerUpload = (source: string | Buffer, mimeType?: string, signal?: AbortSignal) => Promise<string | null>;
+type RetainSentImage = (source: string | Buffer, ref: string) => Promise<void>;
+const peerUploadContext = new AsyncLocalStorage<{ upload: PeerUpload; retain?: RetainSentImage }>();
+export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () => Promise<T>, retain?: RetainSentImage) {
+  return peerUploadContext.run({ upload, retain }, operation);
 }
 
 import { createLogger } from '../logger';
 import * as imageCacheStore from '../imageCacheStore';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore';
-import { uploadLocalFile, uploadBuffer, mimeOf, type UploadResult } from './mediaTransfer';
+import { uploadLocalFile, uploadBuffer, removeRemote, mimeOf, type UploadResult } from './mediaTransfer';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import {
   OUTBOUND_IMAGE_INPUT_MAX_BYTES,
@@ -33,6 +35,8 @@ import {
 import { buildLegacyAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachmentOssRef';
 import { readStartReviewRequest } from '../maker-ipc/reviewStartHandler.js';
 import { withPreparedOutboundReview } from '../maker-ipc/reviewOutboundInput.js';
+import { createSourceFileAccessError, isSourceFileAccessError } from './sourceFileError';
+import { readWithSourceFileAccessRecovery, sourceFileAccessTransferOptions, onSourceFileAccessDiscard } from './sourceFileAccessRecovery';
 
 const log = createLogger('device-link:outboundMedia');
 
@@ -100,14 +104,46 @@ async function uploadAttachment(src: AttachmentSource): Promise<string> {
     const context = peerUploadContext.getStore();
     if (!context || sharedTaskMediaId()) return null;
     const effectiveMime = contentType ?? mimeOf(typeof source === 'string' ? path.extname(source).slice(1).toLowerCase() : 'bin');
-    const result = await context(source, effectiveMime);
+    const transfer = sourceFileAccessTransferOptions();
+    transfer.assertCurrent?.();
+    const result = await context.upload(source, effectiveMime, transfer.signal);
+    transfer.assertCurrent?.();
     const parsed = result && parsePeerAttachmentRef(result);
     return parsed ? buildPeerAttachmentRef({ ...parsed, originalName }) : null;
   };
-  const bufferRef = async (bytes: Buffer, options: Parameters<typeof uploadBuffer>[1]) =>
-    await direct(bytes, options?.contentType) ?? buildUploadedAttachmentRef(await uploadBuffer(bytes, options), originalName);
-  const fileRef = async (file: string, options: Parameters<typeof uploadLocalFile>[1]) =>
-    await direct(file, options?.contentType) ?? buildUploadedAttachmentRef(await uploadLocalFile(file, options), originalName);
+  const retain = async (source: string | Buffer, ref: string) => {
+    // The compressed bytes may have a different content address from the local draft.
+    // Save before returning so history can immediately resolve its final address offline.
+    await peerUploadContext.getStore()?.retain?.(source, ref).catch(() => undefined);
+    return ref;
+  };
+  const retainUpload = async (source: string | Buffer, uploaded: UploadResult) => {
+    onSourceFileAccessDiscard(() => { void removeRemote(uploaded.key); });
+    sourceFileAccessTransferOptions().assertCurrent?.();
+    const ref = await retain(source, buildUploadedAttachmentRef(uploaded, originalName));
+    sourceFileAccessTransferOptions().assertCurrent?.();
+    return ref;
+  };
+  const bufferRef = async (bytes: Buffer, options: Parameters<typeof uploadBuffer>[1]) => {
+    const peerRef = await direct(bytes, options?.contentType);
+    return peerRef ? retain(bytes, peerRef) : retainUpload(bytes,
+      await uploadBuffer(bytes, { ...options, ...sourceFileAccessTransferOptions() }));
+  };
+  const fileRef = async (file: string, options: Parameters<typeof uploadLocalFile>[1]) => {
+    try {
+      return await readWithSourceFileAccessRecovery(file, async () => {
+        const peerRef = await direct(file, options?.contentType);
+        if (peerRef) return retain(file, peerRef);
+        return retainUpload(file, await uploadLocalFile(file, { ...options, ...sourceFileAccessTransferOptions() }));
+      });
+    } catch (error) {
+      if (isSourceFileAccessError(error, file)) {
+        // Do not send Node's private source path across IPC or persist it in chat history.
+        throw createSourceFileAccessError();
+      }
+      throw error;
+    }
+  };
 
   // 1) 内存 base64(剪贴板/截图,视觉上下文语义)→ 压缩 → uploadBuffer(不把字节内联进 relay)
   if (typeof src.base64 === 'string' && src.base64) {

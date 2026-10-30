@@ -63,3 +63,11 @@ describe('decodeRemoteErrorMessage', () => {
     );
   });
 });
+
+describe('remote session limit guidance', () => {
+  it.each(['DEVICE_LIMIT', 'TOTAL_LIMIT'])('decodes %s inside lazy-create failures', reason => {
+    const message = 'LAZY_CREATE_FAILED: [REMOTE_AGENT_BUSY] [' + reason + '] limit reached';
+    expect(decodeRemoteErrorMessage(message)).toBe(i18n.t('chat.remoteError.REMOTE_AGENT_' + reason));
+    expect(remoteErrorMessageForBanner(message)).toBe(message);
+  });
+});

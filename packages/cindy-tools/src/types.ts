@@ -122,6 +122,8 @@ export interface CindyGhostSetupPlan {
 /** ghost_info / ghost_list 共用的单段意识条目。 */
 export interface CindyGhostInfo {
   id: string;
+  /** null is root; a string is the organization slug. Omitted only on legacy hosts. */
+  namespace?: string | null;
   name: string;
   /** 显式触发指令(用户敲 /<command> 点名调用);未声明则省略。 */
   command?: string;
@@ -141,6 +143,8 @@ export interface CindyGhostInfo {
 /** ghost_call 的结构化失败分类(host 侧产生,总机原样透传给 agent)。 */
 export type CindyGhostCallErrorCode =
   | 'GHOST_NOT_FOUND' // 未装入或已抽离
+  | 'GHOST_AMBIGUOUS' // 同名多实例，需指定 namespace
+  | 'GHOST_NAMESPACE_MISMATCH' // 插件已安装，但指定的 namespace 不匹配；按返回身份修正参数
   | 'GHOST_ASLEEP' // 沉睡中(用户可在主界面侧边栏「插件」中唤醒)
   | 'GHOST_RETIRED' // 功能已下线，不可唤醒或重试
   | 'GHOST_DISABLED_IN_WORKDIR' // 用户在当前工作目录停用了该意识(不要重试)
@@ -155,13 +159,13 @@ export type CindyGhostCallErrorCode =
 
 export type CindyGhostInfoErrorCode = Extract<
   CindyGhostCallErrorCode,
-  'GHOST_NOT_FOUND' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
+  'GHOST_NOT_FOUND' | 'GHOST_AMBIGUOUS' | 'GHOST_NAMESPACE_MISMATCH' | 'GHOST_ASLEEP' | 'GHOST_DISABLED_IN_WORKDIR' | 'GHOST_RETIRED'
 >;
 
 /** host 可见性判序回调(getAwakeGhost)的返回:只产可见性错误,不产 INTERNAL。 */
 export type CindyGhostInfoHostResult =
   | { ok: true; ghost: CindyGhostInfo }
-  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string };
+  | { ok: false; errorCode: CindyGhostInfoErrorCode; message: string; candidates?: Array<{ ghostId: string; namespace: string | null }> };
 
 /** ghost_info 给模型的 wire 结果:host 结果之上,handler 兜底 catch 可产 INTERNAL。 */
 export type CindyGhostInfoResult =
@@ -213,6 +217,14 @@ export type CindyGhostCallResult =
        * 固定媒体字段,不消费本字段(兼容性有回归测试锁定)。
        */
       xdt_media_descriptions?: Array<{ url: string; description: string }>;
+      /**
+       * Images the plugin shows the model (host-checked and re-encoded under
+       * the inline budget). ghost_call returns them as MCP image content after
+       * the JSON text; they are not part of the JSON.
+       */
+      images?: Array<{ data: string; mimeType: string }>;
+      /** Images the plugin offered that did not fit the inline budget. */
+      imagesOmitted?: number;
     }
   | {
       ok: false;
@@ -262,12 +274,16 @@ export type CindyForgeInstallResult =
       name: string;
       version: string;
       enabled: boolean;
+      instanceId?: string;
+      namespace?: string | null;
       note: string;
     }
   | {
       ok: false;
       errorCode: CindyForgePackErrorCode | (string & {});
       message: string;
+      targets?: Array<{ instanceId: string; name: string; namespace: string | null; version: string; enabled: boolean }>;
+      copyNamespace?: string | null;
     };
 
 /** ghost_forge_publish 立即返回时的失败分类。传输开始后的失败走 status.errorCode。 */
@@ -338,6 +354,7 @@ export type CindyMediaCapability =
 export type CindyMediaToolRequest =
   | { action: 'list_models'; capability?: CindyMediaCapability }
   | { action: 'resolve_local_path'; url: string }
+  | { action: 'inspect'; url: string }
   | { action: 'import_image'; path: string }
   | {
       action: 'prepare';
@@ -355,7 +372,7 @@ export interface CindyGhostsMcpDeps {
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Host-owned connection card. No URLs or credentials may be supplied by the model. */
-  connectAccount?(target: { kind: 'plugin'; id: string; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
+  connectAccount?(target: { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean } | { kind: 'host'; id: 'grok'; reauthorize?: boolean }, signal?: AbortSignal): Promise<Record<string, unknown>>;
   /** Cindy Core 原生媒体调用器；能力本身不依赖任何插件。 */
   callMedia?(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
   /**
@@ -367,12 +384,13 @@ export interface CindyGhostsMcpDeps {
    * 按 id 现查单个当前可用插件；与 ghost_call 共享同一可见性判定。
    * 判序：不存在 → 未登录 → 当前工作目录停用 → 未启用。
    */
-  getAwakeGhost(ghostId: string): Promise<CindyGhostInfoHostResult>;
+  getAwakeGhost(ghostId: string, namespace?: string | null): Promise<CindyGhostInfoHostResult>;
   /**
    * 读取已声明的随包手册；Host 每次调用都重新执行插件可见性判定，且不启动沙箱。
    */
   readGhostManual(request: {
     ghostId: string;
+    namespace?: string | null;
     path?: string;
   }): Promise<CindyGhostManualResult>;
   /**
@@ -381,6 +399,7 @@ export interface CindyGhostsMcpDeps {
    */
   callGhostTool(request: {
     ghostId: string;
+    namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
     /** Host-only cancellation from the MCP request; never enters plugin args. */
@@ -398,8 +417,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 批量交接(可选):true 时本次调用**只做 attachments 过户、不派发
      * 工具**(tool/args 被忽略)。用途:agent 计划连续多次调用同一意识、
-     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
-     * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
+     * 每次用一个 workdir 外文件时,可把整批文件一次性交接。Ask 可整批确认；
+     * Auto 沿用实际审批负责人，本地 Full Access 自动交接，
      * 且不会形成降档后仍生效的人工永久授权。
      * 普通调用 attachments 上限 4 项,grant_only 放宽(上限由 host 定)。
      */
@@ -407,7 +426,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 目录过户(可选):要整体交给意识上传的本地目录**绝对路径**(部署
      * 构建产物等场景)。host 验证路径；workdir 内直接放行，workdir 外仅
-     * 本地 Full Access 自动过户，其它权限档及远程会话须用户确认。随后收集
+     * 本地 Full Access 自动交接，Auto 沿用实际审批负责人，Ask 须确认；远程
+     * 任务不能借档位自动授权控制端文件。随后收集
      * 文件并预检限额、发一次性限时票据,以 args.dir_deposit =
      * { token, file_count, total_bytes, rel_paths } 注入交给意识——意识拿到
      * 的只有票据与相对路径清单,摸不到绝对路径与文件字节;上传时经
@@ -417,8 +437,8 @@ export interface CindyGhostsMcpDeps {
     /**
      * 下行落盘过户(可选):让意识把下载的文件存进的本地目录**绝对路径**
      * (附件下载等场景)。host 验证为已存在目录；workdir 内直接放行，
-     * workdir 外仅本地 Full Access 自动过户，其它权限档及远程会话须用户
-     * 确认。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
+     * workdir 外本地 Full Access 自动交接，Auto 沿用实际审批负责人，Ask 须
+     * 确认；远程任务不能借档位自动授权控制端文件。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
      * 交给意识——意识经 fetch-request 的 as:'file' + saveTo 报 token,主机
      * 把响应字节直接写进该目录(文件名消毒去重,不覆盖);意识全程摸不到
      * 绝对路径与文件字节。
@@ -445,7 +465,7 @@ export interface CindyGhostsMcpDeps {
    * 会话内工具定义恒定(prompt 缓存安全);装/卸/唤醒/沉睡在新会话生效,
    * 实时清单仍以 ghost_list 为准。缺省 = 不注入(描述与今日基线一致)。
    */
-  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall'>>;
+  getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall' | 'namespace'>>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
   /**
@@ -478,7 +498,7 @@ export interface CindyGhostsMcpDeps {
    * 重新校验并打包源码目录，然后把这次产生的确切包安装或原位更新。
    * 只有显式调用本工具才安装；forgePack 本身始终保持纯打包。
    */
-  forgeInstall(request: { dir: string; iconSource?: string }): Promise<CindyForgeInstallResult>;
+  forgeInstall(request: { dir: string; iconSource?: string; targetInstanceId?: string; installCopy?: boolean; namespace?: string | null }): Promise<CindyForgeInstallResult>;
   /**
    * 消费 forgePack(intent=publish) 签发的一次性票据，把该次打包的确切字节
    * 提交到当前组织发布。立即返回 transferId / uploadId,传输在后台跑。
@@ -486,6 +506,15 @@ export interface CindyGhostsMcpDeps {
   forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
+  /** Ordinary personal community author capability, separate from organization Forge publishing. */
+  communityContribution?(request:
+    | { action: 'prepare'; ghostId: string; namespace?: string | null }
+    | { action: 'submit' | 'status' | 'cancel'; id: string }
+    | { action: 'list'; query?: string; filter?: 'all' | 'pending' | 'needs_action' | 'published'; cursor?: string }
+    | { action: 'detail'; pluginId: string; cursor?: string }
+    | { action: 'submission'; pluginId: string; submissionId: string }
+    | { action: 'cancel-review'; pluginId: string; release: { releaseId: string; sha256: string; revision: string } }
+  ): Promise<unknown>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

@@ -1,6 +1,11 @@
+import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { localizedModelName } from '@/lib/modelDisplayNames';
 import { Star, Zap } from 'lucide-react';
+import { SpeedIcon } from './SpeedIcon';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu';
 import { useTranslation } from 'react-i18next';
 
 import { formatContextWindow, type UnifiedModelEntry } from '@cindy/model-providers';
@@ -39,7 +44,7 @@ export interface ModelConfigFlyoutProps {
   engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
-  onFastChange: (enabled: boolean) => void;
+  onFastChange: (enabled: boolean | 'ultrafast') => void;
   onResetToRecommended: () => void;
   onAddFavorite: () => void;
   onRemoveFavorite: () => void;
@@ -183,12 +188,42 @@ export function ModelConfigFlyout({
               disabled={disabled}
             />
           )}
-          {config.fastCapable && (
+          {config.fastCapable && config.capability?.supportsUltrafastMode && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  aria-label={t('newChat.modelSelector.speed.label')}
+                  title={t(`newChat.modelSelector.speed.${config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}`)}
+                  className={cn(
+                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors',
+                    config.fast ? 'border-transparent text-[var(--fast-accent)]' : 'border-[var(--model-dropdown-border)] text-[var(--text-tertiary)]',
+                  )}
+                >
+                  <SpeedIcon mode={config.fast} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuRadioGroup
+                  value={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
+                  onValueChange={value => onFastChange(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}
+                >
+                  {(['standard', 'fast', 'ultrafast'] as const).map(speed => (
+                    <DropdownMenuRadioItem key={speed} value={speed}>
+                      {t(`newChat.modelSelector.speed.${speed}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {config.fastCapable && !config.capability?.supportsUltrafastMode && (
             <button
               type="button"
               disabled={disabled}
               onClick={() => onFastChange(!config.fast)}
-              aria-pressed={config.fast}
+              aria-pressed={!!config.fast}
               title={t('newChat.modelSelector.unified.fastTip')}
               aria-label={t('newChat.modelSelector.unified.fastTip')}
               data-fast-toggle
@@ -225,7 +260,12 @@ export function ModelConfigFlyout({
         onChange={onEngineChange}
       />
 
-      {price && (
+      {config.capability?.displayPricing && config.capability.currency && (
+        <div className="mt-2.5 max-h-72 overflow-y-auto border-t border-[var(--model-dropdown-border)] pt-2.5">
+          <DisplayPricingDetails model={config.capability} />
+        </div>
+      )}
+      {!config.capability?.displayPricing && price && (
         // 价格区(设计稿 v4 定稿):**紧凑两行**,不画删除线表格。
         //   第 1 行:每百万 token · 折扣中,较标准价省 X%(省 X% 绿色加粗)
         //   第 2 行:折后价单行排列 —— 输入 ¥32 · 输出 ¥162 · 缓存读取 ¥3.2

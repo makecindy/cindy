@@ -9,6 +9,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { toast } from '@/lib/toast';
 import { refresh } from '../hooks/useSkillhub';
 import { showUninstallCleanup } from '../lib/uninstallCleanupNotifications';
+import { useSkillhubTarget } from '../SkillhubTargetContext';
 
 /** Local management for Skill details, independent of cloud ownership. */
 export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
@@ -17,12 +18,15 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
   onUninstalled?: () => void;
 }) {
   const { t } = useTranslation();
+  const target = useSkillhubTarget();
+  disabled = disabled || (!!target && !target.writable);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null);
   if (skill.kind !== 'skill') return null;
   const enabled = pendingEnabled ?? skill.cindyEnabled !== false;
   const reportError = (error: unknown, operation: 'toggleFailed' | 'uninstallFailed') => {
+    if (target && !target.current()) return;
     const code = extractIpcError(error)?.code;
     toast.error(t(`skillhub.management.${code === 'PRECONDITION_FAILED' || code === 'PERMISSION_DENIED' ? 'refreshRequired' : operation}`));
   };
@@ -32,8 +36,13 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
     setBusy(true);
     setPendingEnabled(value);
     try {
-      await window.electronAPI.skillhub.setEnabled({ absolutePath: skill.absolutePath, skillId: skill.id, enabled: value });
-      await refresh();
+      if (target) {
+        const result = await target.mutate(value ? 'enable' : 'disable', skill);
+        if (!target.current()) return;
+        if (result.phase !== 'succeeded') throw new Error('UNAVAILABLE');
+      } else await window.electronAPI.skillhub.setEnabled({ absolutePath: skill.absolutePath, skillId: skill.id, enabled: value });
+      await (target?.refresh ?? refresh)();
+      if (target && !target.current()) return;
       toast.success(t(value ? 'skillhub.management.enabledToast' : 'skillhub.management.disabledToast', { name: skill.name }));
     } catch (error) { reportError(error, 'toggleFailed'); }
     finally {
@@ -47,6 +56,15 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
     busyRef.current = true;
     setBusy(true);
     try {
+      if (target) {
+        const result = await target.mutate('uninstall', skill);
+        if (!target.current() || result.phase === 'cancelled') return;
+        if (result.phase !== 'succeeded') throw new Error('UNAVAILABLE');
+        toast.success(t('skillhub.detail.uninstalledToast', { name: skill.name }));
+        await target.refresh();
+        if (target.current()) onUninstalled?.();
+        return;
+      }
       const result = await window.electronAPI.skillhub.uninstall(skill.absolutePath, skill.id);
       if (!result.success) {
         if (result.errorCode === 'CANCELLED') return;
@@ -66,7 +84,7 @@ export function LocalSkillControls({ skill, disabled = false, onUninstalled }: {
 
   return (
     <div className="flex shrink-0 items-center gap-2" onClick={(event) => event.stopPropagation()}>
-      <Tip text={`${skill.absolutePath}\n${t(skill.managedByPlugin ? 'skillhub.management.managedByPlugin' : 'skillhub.management.activationHint')}`}>
+      <Tip text={`${target?.displayPath(skill.absolutePath) ?? skill.absolutePath}\n${t(skill.managedByPlugin ? 'skillhub.management.managedByPlugin' : 'skillhub.management.activationHint')}`}>
         {/* Keep Tooltip's open/closed data-state off the Switch's checked/unchecked root. */}
         <span className="inline-flex">
           <Switch checked={enabled} disabled={busy || disabled || skill.managedByPlugin}

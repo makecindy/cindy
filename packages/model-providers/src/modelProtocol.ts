@@ -1,4 +1,5 @@
 import { compatibilityProtocol } from '@cindy/model-compat/protocol';
+import { PI_MODEL_APIS } from './types.js';
 import type {
   AgentKind,
   CatalogModel,
@@ -18,8 +19,8 @@ export function modelProtocolComparison(
 ) {
   // Canonical protocol is model metadata, never reverse-engineered from a harness configuration.
   const declared = Object.values(models)
-    .filter((m) => m.nativeApi !== undefined)
-    .map((m) => m.nativeApi);
+    .map((m) => m.nativeApi)
+    .filter((api): api is PiModelApi | null => api === null || PI_MODEL_APIS.some(value => value === api));
   const reference: PiModelApi | null = declared.length
     ? new Set(declared).size === 1
       ? declared[0]!
@@ -29,6 +30,9 @@ export function modelProtocolComparison(
       : provider.id === 'openai' && models.codex
         ? 'openai-responses'
         : null;
+  const declaredApis = Object.values(models).map(m => m.nativeApis).filter(v => v !== undefined);
+  const nativeApis = declaredApis.length ? declaredApis.every(v => JSON.stringify(v) === JSON.stringify(declaredApis[0]))
+    ? declaredApis[0] : null : reference ? [reference] : null;
   const forAgent = (agent: AgentKind) => {
     const model = models[agent];
     if (!model) return null;
@@ -50,25 +54,24 @@ export function modelProtocolComparison(
       agent === 'pi' ? outbound : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
     const outboundProtocol = compatibilityProtocol(outbound) ?? outbound;
     const harnessProtocol = compatibilityProtocol(harness) ?? harness;
-    const referenceProtocol = compatibilityProtocol(reference) ?? reference;
     const localConversion = Boolean(agent !== 'pi' && outboundProtocol && harnessProtocol && outboundProtocol !== harnessProtocol);
     // Pi speaks the selected upstream API directly. Fixed-protocol harnesses
     // also need compatibility when the supplier converts the model's native API.
     // The location of that conversion never changes the default-on decision.
     const compatibility =
-      localConversion || Boolean(agent !== 'pi' && referenceProtocol && outboundProtocol && referenceProtocol !== outboundProtocol);
+      localConversion || Boolean(agent !== 'pi' && nativeApis?.length && outboundProtocol && !nativeApis.some(api => (compatibilityProtocol(api) ?? api) === outboundProtocol));
     return {
       harness,
       outbound,
       localConversion,
       mode: compatibility
         ? ('compatibility' as const)
-        : outbound && (reference || agent === 'pi')
+        : outbound && (nativeApis?.length || agent === 'pi')
           ? ('matching' as const)
           : ('unknown' as const),
     };
   };
-  return { reference, forAgent };
+  return { reference, nativeApis, forAgent };
 }
 
 /** Default-on engines use a configured protocol without harness or provider compatibility. */

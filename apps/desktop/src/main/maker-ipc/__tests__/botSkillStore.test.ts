@@ -19,8 +19,11 @@ import {
   normalizeBotSkillSlug,
   parseBotSkillFile,
   readBotSkill,
+  readBotSkillSource,
+  listBotSkillSources,
   renderBotSkillFile,
   saveBotSkill,
+  saveBotSkillSource,
   seedBotSkillIfMissing,
 } from '../botSkillStore';
 
@@ -367,4 +370,49 @@ it('preserves a foreground edit when background learning uses an older snapshot'
   expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected']);
   expect((await readBotSkill(userDataDir, 'bot-1', 'weekly-report'))?.body).toBe('Human corrected workflow');
   await expect(saveBotSkill(userDataDir, 'bot-1', { ...SAMPLE, expectedUpdatedAt: null })).rejects.toThrow('Skill changed during review');
+});
+
+describe('verbatim SKILL.md (cloud companions)', () => {
+  it('round-trips native frontmatter the settings model does not know', async () => {
+    const source = '---\nname: brew\ndescription: Brew tea\nallowed-tools: Bash(git:*)\ndisable-model-invocation: true\nmetadata:\n  displayName: Brew\n---\n\nsteps\n';
+    await saveBotSkillSource(userDataDir, 'bot_a', 'brew', source);
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'brew')).toBe(source);
+    expect((await readBotSkill(userDataDir, 'bot_a', 'brew'))?.body).toBe('steps');
+    expect(await readBotSkillSource(userDataDir, 'bot_a', 'missing')).toBeNull();
+    await expect(saveBotSkillSource(userDataDir, 'bot_a', '../x', source)).rejects.toBeInstanceOf(BotSkillStoreError);
+    await expect(saveBotSkillSource(userDataDir, 'bot_a', 'big', `---\nname: big\n---\n${'x'.repeat(BOT_SKILL_MAX_BODY_BYTES + 1)}`))
+      .rejects.toBeInstanceOf(BotSkillStoreError);
+  });
+
+  it('applies the requested enabled state, moving the whole skill folder', async () => {
+    const source = '---\nname: brew\ndescription: Brew\n---\n\nsteps\n';
+    await saveBotSkillSource(userDataDir, 'bot_c', 'brew', source);
+    await fs.writeFile(path.join(botSkillsDir(userDataDir, 'bot_c'), 'brew', 'helper.sh'), 'echo hi');
+    await saveBotSkillSource(userDataDir, 'bot_c', 'brew', source, { enabled: false });
+    expect((await readBotSkill(userDataDir, 'bot_c', 'brew'))?.enabled).toBe(false);
+    expect(await listBotSkillSources(userDataDir, 'bot_c')).toEqual([{ slug: 'brew', source, enabled: false }]);
+    await saveBotSkillSource(userDataDir, 'bot_c', 'brew', source, { enabled: true });
+    expect((await readBotSkill(userDataDir, 'bot_c', 'brew'))?.enabled).toBeUndefined();
+    expect(await fs.readFile(path.join(botSkillsDir(userDataDir, 'bot_c'), 'brew', 'helper.sh'), 'utf8')).toBe('echo hi');
+  });
+});
+
+describe('strict skill reads (cloud companions)', () => {
+  // chmod cannot make a file unreadable on Windows.
+  it.skipIf(process.platform === 'win32')('lists every skill source, empty without a folder, and fails instead of hiding an unreadable one', async () => {
+    expect(await listBotSkillSources(userDataDir, 'bot_b')).toEqual([]);
+    const source = '---\nname: brew\ndescription: Brew\n---\n\nsteps\n';
+    await saveBotSkillSource(userDataDir, 'bot_b', 'brew', source);
+    expect(await listBotSkillSources(userDataDir, 'bot_b')).toEqual([{ slug: 'brew', source, enabled: true }]);
+    const dir = botSkillsDir(userDataDir, 'bot_b');
+    await fs.chmod(dir, 0o000);
+    try {
+      await expect(listBotSkillSources(userDataDir, 'bot_b')).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(readBotSkillSource(userDataDir, 'bot_b', 'brew')).rejects.toMatchObject({ code: 'EACCES' });
+      // The settings list keeps its lenient behaviour.
+      expect(await listBotSkills(userDataDir, 'bot_b')).toEqual([]);
+    } finally {
+      await fs.chmod(dir, 0o700);
+    }
+  });
 });

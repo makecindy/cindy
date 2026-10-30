@@ -191,6 +191,8 @@ export interface ResponsivenessTrackerDeps {
   isProbeEligible(deviceId: string): boolean;
   /** 首次业务超时后的 peer 级恢复；由 Desktop 接入 openRemoteLink 去重。 */
   recoverLink?: (deviceId: string) => Promise<unknown>;
+  /** Verify shared relay activity before attributing a timeout to one device. */
+  confirmRelayForTimeout?: () => boolean;
   /** 时钟注入(测试用;默认 Date.now)。 */
   now?: () => number;
   log?: TrackerLogger;
@@ -318,6 +320,9 @@ export function createResponsivenessTracker(
       const outcome =
         isBreakerObservedError(err)
         || (wasProbe && channel !== DEVICE_RESPONSIVENESS_PROBE_CHANNEL)
+        || (classifyDeviceSendFailure(err) === 'timeout' && (
+          lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.() === false
+        ))
           ? 'inconclusive'
           : classifyDeviceSendFailure(err);
       markBreakerObserved(err);
@@ -358,7 +363,11 @@ export function createResponsivenessTracker(
               classifyDeviceSendSuccess(DEVICE_RESPONSIVENESS_PROBE_CHANNEL, true),
             ),
           (err) => {
-            const outcome = classifyDeviceSendFailure(err);
+            const classified = classifyDeviceSendFailure(err);
+            const outcome = classified === 'timeout' && (
+              lifecycleEpochs.get(deviceId) !== lifecycleEpoch || deps.confirmRelayForTimeout?.() === false
+            )
+              ? 'inconclusive' : classified;
             settle(deviceId, slot, outcome, false);
             // 探测是 open 后唯一会真正穿过 peer link 的流量。若它仍等满超时，
             // 继续按单-peer 半径重开 link；clear/reset 已翻代时 breaker 会先关闭。

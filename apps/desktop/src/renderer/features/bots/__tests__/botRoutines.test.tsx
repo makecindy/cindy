@@ -1,16 +1,23 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
+import type { ReactElement } from 'react';
+const render = (ui: ReactElement) => testingRender(<MemoryRouter>{ui}</MemoryRouter>);
+vi.mock('../BotTaskModelEditor', () => ({ BotTaskModelEditor: ({ onChange }: { onChange: (value: unknown) => void }) => <button onClick={() => onChange({ harness: 'codex', model: 'budget', providerId: 'subscription', effort: 'medium', fastMode: false })}>Choose routine model</button> }));
 import type { Routine } from '@cindy/maker-scheduler';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn(async () => true) }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm }) }));
+const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: { success: toastSuccess, error: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 import { BotRoutines } from '../BotRoutines';
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  toastSuccess.mockClear();
 });
 it('saves the visible edited instructions before running, and preserves every trigger', async () => {
   const routine: Routine = {
@@ -130,10 +137,24 @@ it('saves enabled state and does not run a routine just by saving', async () => 
   fireEvent.click(screen.getByRole('switch', { name: 'routines.enabled' }));
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
   await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ enabled: false }), 'daily'));
+  expect(toastSuccess).toHaveBeenCalledWith('routines.saved');
   expect(api.runNow).not.toHaveBeenCalled();
   await waitFor(() => expect((screen.getByRole('button', { name: 'routines.back' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'routines.back' }));
   await screen.findByText('Daily report');
+});
+it('saves the selected session mode without executing a routine', async () => {
+  const api = setup();
+  const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  render(<BotRoutines botId="bot" />);
+  fireEvent.click(await screen.findByText('Daily report'));
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'routines.sessionMode' }), { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: 'routines.sessionModeFresh' }));
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ sessionMode: 'fresh' }), 'daily'));
+  expect(api.runNow).not.toHaveBeenCalled();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
 });
 it('requires confirmation for deletion, then refreshes the list', async () => {
   const api = setup();
@@ -250,4 +271,60 @@ it('hands the editor back step to the host back button and focuses a new routine
   expect(await back.current!()).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'routines.add' }));
   expect(document.activeElement).toBe(screen.getByLabelText('routines.name'));
+});
+
+it('allows an independent follow-up model while keeping its instructions and triggers fixed', async () => {
+  // 宿主内置的「跟进」：引擎只接受 enabled 与模型配置变化（BUILTIN_ROUTINE），界面不给改指令、触发条件或删除的入口。
+  const builtin: Routine = {
+    ...existing, id: 'builtin-follow-up-bot', name: 'follow-up', prompt: 'host template', builtin: 'follow-up',
+  };
+  const api = setup();
+  api.list.mockResolvedValue([builtin, existing]);
+  render(<BotRoutines botId="bot" />);
+
+  const toggle = await screen.findByRole('switch', { name: 'routines.builtinFollowUp.name' });
+  expect(screen.queryByText('follow-up')).toBeNull();
+  // 内置规则的触发条件很多且来源重复，只写一句固定白话，不逐条列出。
+  const row = toggle.parentElement!;
+  expect(row.textContent).toContain('routines.builtinFollowUp.hint');
+  expect(row.textContent).not.toContain('routines.everyMinutes');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
+  expect(api.save).toHaveBeenCalledWith(
+    'bot',
+    { name: 'follow-up', prompt: 'host template', enabled: false, triggers: builtin.triggers },
+    'builtin-follow-up-bot',
+  );
+  expect(api.remove).not.toHaveBeenCalled();
+  expect(screen.getByText('Daily report')).toBeTruthy();
+  fireEvent.click(screen.getByText('routines.builtinFollowUp.name'));
+  expect((screen.getByLabelText('routines.instructions') as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'routines.delete' })).toBeNull();
+  fireEvent.click(screen.getByText('Choose routine model'));
+  fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
+  await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({
+    prompt: 'host template', triggers: builtin.triggers,
+    modelOverride: { agentKind: 'codex', model: 'budget', providerId: 'subscription', effort: 'medium', fastMode: false, agentDeviceId: null },
+  }), builtin.id));
+
+});
+
+// Production list switches: previously only built-ins could pause without opening
+// the editor. Unit tier; the existing save test only covered the editor.
+it('pauses from the list, preserves configuration, and keeps the switch on after a failed save', async () => {
+  const api = setup();
+  render(<BotRoutines botId="bot" />);
+  const toggle = await screen.findByRole('switch', { name: 'Daily report' });
+  api.save.mockRejectedValueOnce(new Error('disk full'));
+  fireEvent.click(toggle);
+  await screen.findByRole('alert');
+  expect(toggle.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+  expect(screen.getByText('routines.paused')).toBeTruthy();
+  expect(screen.queryByLabelText('routines.instructions')).toBeNull();
+  expect(api.save).toHaveBeenLastCalledWith('bot', {
+    name: existing.name, prompt: existing.prompt, enabled: false, triggers: existing.triggers,
+  }, existing.id);
+  expect(api.runNow).not.toHaveBeenCalled();
 });

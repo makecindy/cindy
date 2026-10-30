@@ -1,3 +1,4 @@
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -112,6 +113,25 @@ function sameRealPath(a: string, b: string): boolean {
 }
 
 describe('skillSlot · checkSkillMdConsistency', () => {
+  it('reclaims a new root snapshot link before reinstalling the same skill', async () => {
+    const installed = { ...ghost('helper', [{ dir: 'skills/guide', name: 'guide' }]), namespace: null };
+    const snapshotRoot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', '_root', 'helper');
+    const skillRoot = (revision: string) => path.join(snapshotRoot, revision);
+    const write = async (revision: string) => {
+      installed.approvedSkillRoot = skillRoot(revision);
+      const directory = path.join(installed.approvedSkillRoot, 'skills', 'guide');
+      await fs.promises.mkdir(directory, { recursive: true });
+      await fs.promises.writeFile(path.join(directory, 'SKILL.md'), '---\nname: guide\ndescription: 说明\n---\n正文\n');
+    };
+    const reconcile = (ghosts: InstalledGhost[]) => reconcileGhostSkillLinks({ ghosts, brainRoot, approvalStateRoot, homeDir });
+    await write('original');
+    expect((await reconcile([installed])).actions).toContainEqual({ linkName: 'helper--guide', op: 'linked' });
+    await fs.promises.rm(snapshotRoot, { recursive: true });
+    expect((await reconcile([])).actions).toContainEqual({ linkName: 'helper--guide', op: 'removed' });
+    await write('replacement');
+    expect((await reconcile([installed])).actions).toContainEqual({ linkName: 'helper--guide', op: 'linked' });
+    expect(sameRealPath(path.join(sharedDir(), 'helper--guide'), path.join(skillRoot('replacement'), 'skills', 'guide'))).toBe(true);
+  });
   const item = { dir: 'skills/foo', name: 'foo', description: '教 Agent 用 foo' };
   const md = (name: string, description: string) =>
     `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`;
@@ -136,6 +156,46 @@ describe('skillSlot · checkSkillMdConsistency', () => {
 });
 
 describe('skillSlot · reconcileGhostSkillLinks', () => {
+  it('projects root and organization skills separately and reclaims a namespaced dangling link', async () => {
+    const root = ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]);
+    const organization = {
+      ...ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }]),
+      namespace: 'acme',
+      dir: path.join(brainRoot, '_ns', 'acme', 'my-ghost'),
+      approvedSkillRoot: path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision'),
+    };
+    await writeSkillDir('my-ghost', 'skills/foo', 'foo');
+    await fs.promises.mkdir(path.join(organization.approvedSkillRoot, 'skills', 'foo'), { recursive: true });
+    await fs.promises.writeFile(path.join(organization.approvedSkillRoot, 'skills', 'foo', 'SKILL.md'),
+      '---\nname: foo\ndescription: 说明\n---\n正文\n');
+    await reconcileGhostSkillLinks({ ghosts: [root, organization], brainRoot, approvalStateRoot, homeDir });
+    const rootLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    const orgLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    expect(sameRealPath(rootLink, path.join(brainRoot, 'my-ghost', 'skills', 'foo'))).toBe(true);
+    expect(sameRealPath(orgLink, path.join(organization.approvedSkillRoot, 'skills', 'foo'))).toBe(true);
+    await fs.promises.rm(organization.approvedSkillRoot, { recursive: true });
+    await reconcileGhostSkillLinks({ ghosts: [root], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(orgLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reclaims a pre-namespace-link-named orphan under a namespaced snapshot path', async () => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', 'acme', 'my-ghost', 'revision', 'skills', 'foo');
+    const legacyLink = path.join(sharedDir(), ghostSkillLinkName('my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, legacyLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    await expect(fs.promises.lstat(legacyLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['other', '_root'])('does not reclaim a namespaced dangling link to a %s snapshot', async (namespace) => {
+    const snapshot = path.join(approvalStateRoot, 'skill-snapshots', '_ns', namespace, 'my-ghost', 'revision', 'skills', 'foo');
+    const externalLink = path.join(sharedDir(), ghostSkillLinkName('_ns__acme__my-ghost', 'foo'));
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    await fs.promises.symlink(snapshot, externalLink, process.platform === 'win32' ? 'junction' : 'dir');
+    await reconcileGhostSkillLinks({ ghosts: [], brainRoot, approvalStateRoot, homeDir });
+    expect(await fs.promises.readlink(externalLink)).toBe(snapshot);
+  });
+
   it('启用插件 → 私有目录可见;二次对账幂等', async () => {
     await writeSkillDir('my-ghost', 'skills/foo', 'foo');
     const ghosts = [ghost('my-ghost', [{ dir: 'skills/foo', name: 'foo' }])];
@@ -502,13 +562,16 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     expect(fs.existsSync(liveLink)).toBe(false); // 断链回收(目标带 cindy-brain 段)
   });
 
-  it('账号边界按 owner 根撤销全局 Cindy skill 投影,不删除外来链接', async () => {
+  it('账号边界跳过非目录根后仍撤销其他根的 Cindy skill 投影,不删除外来链接', async () => {
     const ownerRoot = path.join(workDir, 'owners', 'bbb');
     const managedTarget = path.join(ownerRoot, 'cindy-brain', 'other-ghost', 'skills', 'foo');
     const foreignTarget = path.join(workDir, 'projects', 'other-ghost', 'skills', 'foo');
     await fs.promises.mkdir(managedTarget, { recursive: true });
     await fs.promises.mkdir(foreignTarget, { recursive: true });
     await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const codexRoot = path.join(homeDir, '.codex', 'skills');
+    await fs.promises.mkdir(path.dirname(codexRoot), { recursive: true });
+    await fs.promises.writeFile(codexRoot, 'user-owned file');
     const managedLink = path.join(legacySharedDir(), 'other-ghost--foo');
     const foreignLink = path.join(legacySharedDir(), 'foreign--foo');
     await fs.promises.symlink(managedTarget, managedLink, process.platform === 'win32' ? 'junction' : 'dir');
@@ -516,8 +579,10 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
 
     const result = await removeGhostSkillLinksForRoots([path.join(ownerRoot, 'cindy-brain')], homeDir);
     expect(result.changed).toBe(true);
+    expect(result.blockers).toEqual([]);
     expect(fs.existsSync(managedLink)).toBe(false);
     expect(fs.existsSync(foreignLink)).toBe(true);
+    expect(await fs.promises.readFile(codexRoot, 'utf8')).toBe('user-owned file');
   });
 
   it('账号边界会按 raw link target 撤销已不存在 owner 根下的悬空投影', async () => {
@@ -540,6 +605,58 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     expect(fs.existsSync(managedLink)).toBe(false);
   });
 
+  it.each(['.claude', '.codex', '.agents'])(
+    '账号边界保留 %s/skills 同名普通文件,不让无关路径阻断登录',
+    async (parent) => {
+      const skillRoot = path.join(homeDir, parent, 'skills');
+      await fs.promises.mkdir(path.dirname(skillRoot), { recursive: true });
+      await fs.promises.writeFile(skillRoot, 'user-owned file');
+
+      const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir);
+
+      expect(result.blockers).toEqual([]);
+      expect(result.changed).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain(skillRoot);
+      expect(await fs.promises.readFile(skillRoot, 'utf8')).toBe('user-owned file');
+    },
+  );
+
+  it('账号边界保留非目录的技能路径父级,也继续检查后续根的权限错误', async () => {
+    const codexRoot = path.join(homeDir, '.codex');
+    await fs.promises.writeFile(codexRoot, 'user-owned parent');
+    const readDirectory = fs.promises.readdir;
+    vi.spyOn(fs.promises, 'readdir').mockImplementation(async (...args) => {
+      if (String(args[0]) === legacySharedDir()) {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return readDirectory(...args);
+    });
+
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir);
+
+    // A non-directory ancestor can report ENOENT on Windows and ENOTDIR on POSIX.
+    // Both must preserve the file without hiding the later root's permission error.
+    expect(result.blockers).toHaveLength(1);
+    expect(result.blockers[0]).toContain(legacySharedDir());
+    expect(result.blockers.some((blocker) => blocker.includes(codexRoot))).toBe(false);
+    expect(await fs.promises.readFile(codexRoot, 'utf8')).toBe('user-owned parent');
+  });
+
+  it('账号边界保留私有 skills 同名文件,不将其判为未撤销的技能链接', async () => {
+    await fs.promises.mkdir(path.dirname(sharedDir()), { recursive: true });
+    await fs.promises.writeFile(sharedDir(), 'user-owned private file');
+
+    const result = await removeGhostSkillLinksForRoots(
+      [brainRoot, approvalStateRoot], homeDir, [sharedDir()],
+    );
+
+    expect(result.blockers).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.changed).toBe(false);
+    expect(await fs.promises.readFile(sharedDir(), 'utf8')).toBe('user-owned private file');
+  });
+
   it('账号边界读取全局技能根失败:记 blocker,禁止在未确认清空时提交新 owner', async () => {
     const ownerRoot = path.join(workDir, 'owners', 'bbb', 'cindy-brain');
     await fs.promises.mkdir(ownerRoot, { recursive: true });
@@ -553,6 +670,84 @@ describe('skillSlot · reconcileGhostSkillLinks', () => {
     } finally {
       readdir.mockRestore();
     }
+  });
+
+  it('revokes private owner links without waiting for an unrelated shared-root writer', async () => {
+    await fs.promises.mkdir(sharedDir(), { recursive: true });
+    const privateLink = path.join(sharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, privateLink, 'junction');
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const foreignLink = path.join(legacySharedDir(), 'other-instance');
+    await fs.promises.symlink(homeDir, foreignLink, 'junction');
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    const result = await removeGhostSkillLinksForRoots(
+      [brainRoot, approvalStateRoot], homeDir, [sharedDir()], busyLock,
+    );
+
+    expect(result).toEqual({ changed: true, warnings: [], blockers: [] });
+    expect(busyLock).not.toHaveBeenCalled();
+    expect(fs.existsSync(privateLink)).toBe(false);
+    expect(fs.existsSync(foreignLink)).toBe(true);
+    expect(fs.existsSync(brainRoot)).toBe(true);
+  });
+
+  it('still requires the shared lock for a dangling legacy owner link', async () => {
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const legacyLink = path.join(legacySharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, legacyLink, 'junction');
+    await fs.promises.rmdir(brainRoot);
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    await expect(removeGhostSkillLinksForRoots(
+      [brainRoot], homeDir, [], busyLock,
+    )).rejects.toThrow('shared roots busy');
+    expect(busyLock).toHaveBeenCalledOnce();
+    expect((await fs.promises.lstat(legacyLink)).isSymbolicLink()).toBe(true);
+
+    const heldLock = vi.fn();
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], async (task) => {
+      heldLock();
+      return task();
+    });
+    expect(heldLock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ changed: true, warnings: [], blockers: [] });
+    await expect(fs.promises.lstat(legacyLink)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rechecks legacy link ownership after waiting for the shared lock', async () => {
+    await fs.promises.mkdir(legacySharedDir(), { recursive: true });
+    const legacyLink = path.join(legacySharedDir(), 'old-owner--skill');
+    await fs.promises.symlink(brainRoot, legacyLink, 'junction');
+    const delayedLock = vi.fn();
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], async (task) => {
+      delayedLock();
+      await fs.promises.unlink(legacyLink);
+      await fs.promises.symlink(homeDir, legacyLink, 'junction');
+      return task();
+    });
+
+    expect(delayedLock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ changed: false, warnings: [], blockers: [] });
+    expect(await fs.promises.realpath(legacyLink)).toBe(await fs.promises.realpath(homeDir));
+  });
+
+  it('does not treat an unreadable legacy root as an empty sweep', async () => {
+    const readdir = fs.promises.readdir;
+    vi.spyOn(fs.promises, 'readdir').mockImplementation(async (...args) => {
+      if (String(args[0]) === legacySharedDir()) {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      }
+      return readdir(...args);
+    });
+    const busyLock = vi.fn(async () => { throw new Error('shared roots busy'); });
+
+    const result = await removeGhostSkillLinksForRoots([brainRoot], homeDir, [], busyLock);
+
+    expect(result.changed).toBe(false);
+    expect(result.blockers).toHaveLength(1);
+    expect(result.blockers[0]).toContain(legacySharedDir());
+    expect(busyLock).not.toHaveBeenCalled();
   });
 
   it('账号边界删除已识别的旧 owner 投影失败:记 blocker,不能静默跨账号保留', async () => {
@@ -731,7 +926,7 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
       validateApprovedSkillSnapshot: (candidate) =>
         manager.verifyApprovedSkillSnapshot(candidate),
     });
-    const linkName = ghostSkillLinkName('e2e-ghost', 'demo');
+    const linkName = ghostSkillLinkName(installedGhostStoragePart(manager.list()[0]!), 'demo');
     const approvedSkillRoot = manager.list()[0].approvedSkillRoot;
     expect(approvedSkillRoot).toBeTruthy();
     const target = path.join(approvedSkillRoot!, 'skills', 'demo');
@@ -741,7 +936,7 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
       await fs.promises.readFile(path.join(sharedDir(), linkName, 'SKILL.md'), 'utf8'),
     ).toContain('演示技能');
     await fs.promises.writeFile(
-      path.join(brainRoot, 'e2e-ghost', 'skills', 'demo', 'SKILL.md'),
+      path.join(manager.list()[0].dir, 'skills', 'demo', 'SKILL.md'),
       '---\nname: demo\ndescription: 演示技能\n---\n\n篡改后的指令\n',
     );
     expect(

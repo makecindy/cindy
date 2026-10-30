@@ -89,8 +89,11 @@ describe('mobile schedule form model', () => {
 
   it('keeps codex fast mode explicit and clears it when switching back to Claude', () => {
     const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'codex');
-    expect(buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true }))
-      .toMatchObject({ agentKind: 'codex', model: 'gpt-5.5', fastMode: true });
+    // 不写死默认模型:留空交给运行电脑按新建任务口径解析,序列化时省略。
+    expect(draft.model).toBe('');
+    const input = buildMobileScheduleInput({ ...draft, name: 'Codex', prompt: 'run', fastMode: true });
+    expect(input).toMatchObject({ agentKind: 'codex', fastMode: true });
+    expect(input).not.toHaveProperty('model');
 
     const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');

@@ -74,6 +74,15 @@ describe('composerResize worklets(经 react-native-worklets 插件转译后)', (
       bounds: { minContentHeight: 20, maxContentHeight: 300 },
     })).toBe(120);
   });
+  it('runs the mid-drag dismissal worklet with initialized captures', () => {
+    const fn = loadWorkletTransformedModule().shouldDismissComposerDuringDrag as WorkletLike;
+    expect(typeof fn.__workletHash).toBe('number');
+    for (const value of Object.values(fn.__closure ?? {})) expect(value).not.toBeUndefined();
+    const bounds = { minContentHeight: 28, maxContentHeight: 400 };
+    expect(fn({ startContentHeight: 28, translationY: 63, bounds })).toBe(false);
+    expect(fn({ startContentHeight: 28, translationY: 64, bounds })).toBe(true);
+  });
+
   it('runs the folding progress worklet with initialized captures', () => {
     const fn = loadWorkletTransformedModule().composerCollapseProgress as WorkletLike;
     expect(typeof fn.__workletHash).toBe('number');

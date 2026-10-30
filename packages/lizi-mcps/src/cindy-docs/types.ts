@@ -94,6 +94,8 @@ export interface DocsPdfPageInspection {
   blank: boolean;
   /** 结构存在但未做位图级可见性验证。 */
   visibilityUnverified: boolean;
+  /** 该页文字提取失败时的解析器错误(此时 textChars=0 不代表没有文字)。 */
+  textError?: string;
 }
 
 export interface DocsPdfInspection {

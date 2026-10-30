@@ -2,12 +2,13 @@
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+vi.mock('expo-crypto', () => ({ randomUUID: vi.fn(() => 'history-request') }));
 const h = vi.hoisted(() => ({
-  router: { replace: vi.fn() }, generation: 1,
+  router: { replace: vi.fn(), push: vi.fn() }, generation: 1,
   params: { collectionId: 'teammates', resourceId: 'bot-1', resourceKind: 'bot', deviceId: 'mac', deviceName: 'Mac' },
   translation: { t: (key: string) => key, i18n: { language: 'en' } },
   read: vi.fn(), action: vi.fn(), upsert: vi.fn(), push: null as null | ((device: string, payload: any) => void),
-  link: { connectionEpoch: 1, status: 'online', invoke: vi.fn(), onRemoteResourceChanged: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() },
+  link: { openLink: vi.fn(), connectionEpoch: 1, status: 'online', invoke: vi.fn(), onRemoteResourceChanged: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() },
 }));
 vi.mock('react-native', async () => {
   const { createElement: el } = await import('react');
@@ -18,10 +19,17 @@ vi.mock('expo-router', async () => {
   const { useEffect } = await import('react');
   return { Redirect: ({ href }: { href: string }) => { useEffect(() => h.router.replace(href), [href]); return null; }, useFocusEffect: (effect: () => void | (() => void)) => useEffect(effect, [effect]), useRouter: () => h.router, useLocalSearchParams: () => h.params };
 });
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => h.translation }));
 vi.mock('react-native-safe-area-context', async () => { const { createElement: el } = await import('react'); return { SafeAreaView: ({ children }: any) => el('div', {}, children) }; });
 vi.mock('@/components/AppText', () => ({ Text: 'span' }));
 vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: () => null }));
+vi.mock('@/session/CompanionProfileSheet', async () => {
+  const { createElement: el } = await import('react');
+  return { CompanionProfileSheet: ({ visible, resource, onClose, onClosed, onOpenSearch }: any) => visible
+    ? el('div', {}, el('button', { 'data-testid': 'profile-settings', onClick: () => { onClose(); onClosed(); } }, resource.ref.id), onOpenSearch ? el('button', { 'data-testid': 'profile-history', onClick: () => { onOpenSearch(); onClosed(); } }, 'History') : null)
+    : null };
+});
 vi.mock('@/components/MobilePrimitives', async () => {
   const { createElement: el } = await import('react');
   return { MainWindowEmptyState: ({ copy }: any) => el('span', {}, copy), MainWindowActionButton: ({ action }: any) => el('button', { onClick: action.onPress, 'data-testid': action.testID }, action.label) };
@@ -29,7 +37,7 @@ vi.mock('@/components/MobilePrimitives', async () => {
 vi.mock('@/platform/chrome', () => ({ SimpleStackHeader: () => null, simpleScreenSafeAreaEdges: () => [] }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: h.generation }) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
-vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: String }));
+vi.mock('@/device-link/remoteStatus', async () => ({ ...await vi.importActual<typeof import('@/device-link/remoteStatus')>('@/device-link/remoteStatus'), formatRemoteError: String }));
 vi.mock('@/device-link/focusedTopicSubscription', () => ({ startFocusedTopicSubscription: () => () => {} }));
 vi.mock('@/device-link/remoteResources', async (importOriginal) => ({ ...await importOriginal<typeof import('../device-link/remoteResources')>(), getRemoteResource: h.read, invokeRemoteResourceAction: h.action }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { getSessionDeviceId: () => null, upsertDeviceSession: h.upsert } }));
@@ -41,7 +49,7 @@ const resource = (stage: string) => ({ ref: { collectionId: 'teammates', kind: '
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 beforeEach(() => {
-  vi.clearAllMocks(); h.generation = 1; h.params.collectionId = 'teammates';
+  vi.clearAllMocks(); h.link.openLink.mockResolvedValue(undefined); h.generation = 1; h.params.collectionId = 'teammates';
   h.link.onRemoteResourceChanged.mockImplementation(callback => { h.push = callback; return () => { h.push = null; }; });
   h.link.invoke.mockResolvedValue({ id: 'chat-1', source: 'bot' });
   container = document.createElement('div'); root = createRoot(container);
@@ -65,6 +73,18 @@ it('retries failed preparation through the advertised action without creating an
   expect(h.action).toHaveBeenCalledWith(h.link.invoke, { deviceId: 'mac', deviceName: 'Mac' }, expect.objectContaining({ actionId: 'opaque-retry', resourceRef: resource('failed').ref }), 'en');
   expect(container.textContent).toContain('devices.companions.invitation.skills');
 });
+it.each(['welcome', 'failed'])('opens settings while preparation is %s and defers navigation until editing ends', async stage => {
+  h.read.mockResolvedValue(resource(stage));
+  await act(async () => root.render(createElement(Screen)));
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="remoteResourceResolver.settings"]')!.click());
+  expect(container.querySelector('[data-testid="profile-settings"]')?.textContent).toBe('bot-1');
+  h.read.mockResolvedValue(resource('ready'));
+  await act(async () => h.push!('mac', { collectionId: 'teammates' }));
+  expect(h.router.replace).not.toHaveBeenCalled();
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="profile-settings"]')!.click());
+  expect(h.router.replace).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/sessions/[sessionId]' }));
+  expect(h.action).not.toHaveBeenCalled();
+});
 it('ignores a late ready response from the previous account', async () => {
   let finish!: (value: unknown) => void;
   h.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(resource('failed'));
@@ -74,6 +94,20 @@ it('ignores a late ready response from the previous account', async () => {
   await act(async () => finish(resource('ready')));
   expect(h.router.replace).not.toHaveBeenCalled();
   expect(h.upsert).not.toHaveBeenCalled();
+});
+it('keeps settings open when a ready chat finishes loading during a model edit', async () => {
+  h.read.mockResolvedValue(resource('failed'));
+  await act(async () => root.render(createElement(Screen)));
+  let finish!: (value: unknown) => void;
+  h.link.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  h.read.mockResolvedValue(resource('ready'));
+  await act(async () => h.push!('mac', { collectionId: 'teammates' }));
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="remoteResourceResolver.settings"]')!.click());
+  await act(async () => finish({ id: 'chat-1', source: 'bot' }));
+  expect(h.router.replace).not.toHaveBeenCalled();
+  expect(container.querySelector('[data-testid="profile-settings"]')).not.toBeNull();
+  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="profile-settings"]')!.click());
+  expect(h.router.replace).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/sessions/[sessionId]' }));
 });
 it('keeps a failed preparation on screen with an inline notice when its retry fails', async () => {
   h.read.mockResolvedValue(resource('failed'));
@@ -100,4 +134,13 @@ it('redirects stale routine links without reading or subscribing to the host', a
   expect(h.read).not.toHaveBeenCalled();
   expect(h.action).not.toHaveBeenCalled();
   expect(h.link.onRemoteResourceChanged).not.toHaveBeenCalled();
+});
+
+it('opens existing history after the failed teammate settings close', async () => {
+  h.read.mockResolvedValue({ ...resource('failed'), links: resource('ready').links });
+  await act(async () => root.render(createElement(Screen)));
+  await act(async () => (container.querySelector('[data-testid="remoteResourceResolver.settings"]') as HTMLButtonElement).click());
+  expect(h.router.push).not.toHaveBeenCalled();
+  await act(async () => (container.querySelector('[data-testid="profile-history"]') as HTMLButtonElement).click());
+  expect(h.router.push).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/sessions/[sessionId]', params: expect.objectContaining({ sessionId: 'chat-1', deviceId: 'mac', openSearch: '1', openSearchRequest: 'history-request' }) }));
 });

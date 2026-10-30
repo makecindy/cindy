@@ -1,4 +1,5 @@
 import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
+import { readMailCard, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
@@ -7,9 +8,32 @@ import { getGhostCard, upsertGhostCard, type GhostCardRecord } from './cardStore
 import { assertRemoteBotInvocationAllowed } from '../device-link/remoteBotSessionBoundary.js';
 import { remoteResourceRegistry, RemoteResourceRegistryError, type RemoteResourceProvider } from '../device-link/remoteResourceRegistry.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast, getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { isValidGhostId } from '../../shared/ghost.js';
+import { createPluginLogicalIdentity, findInstalledGhostByIdentity, findInstalledGhostByInstanceId, isGhostInstanceId } from '../../shared/pluginIdentity.js';
+import { parseMailAttachmentUpload, type MailAttachmentUpload } from './mailAttachmentUpload.js';
 
 const COLLECTION = 'plugin-results';
 const KIND = 'card';
+
+export function findGhostForRemotePluginIdentity<T extends { manifest: { id: string }; namespace?: string | null }>(
+  ghosts: readonly T[], id: string,
+): T | undefined {
+  if (isGhostInstanceId(id) && !isValidGhostId(id)) {
+    return findInstalledGhostByInstanceId(ghosts, id);
+  }
+  if (!id.startsWith('[')) {
+    const matches = ghosts.filter((ghost) => ghost.manifest.id === id);
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(id);
+    if (!Array.isArray(parsed) || parsed.length !== 2 ||
+        (parsed[0] !== null && typeof parsed[0] !== 'string') || !isValidGhostId(parsed[1])) return undefined;
+    return findInstalledGhostByIdentity(ghosts, createPluginLogicalIdentity(parsed[0], parsed[1]));
+  } catch {
+    return undefined;
+  }
+}
 
 function decodeText(value: string): string {
   return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (full, entity: string) => {
@@ -47,7 +71,7 @@ export function projectGhostCardBlocks(html: string): RemoteResourceBlock[] {
 }
 
 export interface RemotePluginCardAction {
-  id: string; label: string; prompt?: string; url?: string; disabled: boolean;
+  id: string; label: string; prompt?: string; url?: string; disabled: boolean; submit?: boolean;
 }
 /** Input is already sanitizer-owned HTML. Only declared inert controls are projected. */
 export function projectGhostCardActions(html: string, externalLinks: boolean): RemotePluginCardAction[] {
@@ -61,6 +85,7 @@ export function projectGhostCardActions(html: string, externalLinks: boolean): R
     const after = source.slice(match.index! + match[0].length);
     const label = read('aria-label') ?? decodeText(after.slice(0, after.indexOf(`</${match[1]}>`) < 0 ? 256 : after.indexOf(`</${match[1]}>`)).replace(/<[^>]+>/g, '')).trim().slice(0, 512);
     items.push({ id: action ?? `link:${items.length}`, label: label || action || url!,
+      ...(read('data-ghost-submit') === 'true' ? { submit: true } : {}),
       ...(action && read('data-ghost-prompt') !== undefined ? { prompt: read('data-ghost-prompt') } : {}),
       ...(!action && url ? { url } : {}), disabled: /(?:^|\s)disabled(?:\s|$|=)/.test(attrs) });
     if (items.length >= 64) break;
@@ -69,7 +94,12 @@ export function projectGhostCardActions(html: string, externalLinks: boolean): R
 }
 interface CardInteractions {
   externalLinks(ghostId: string): boolean;
-  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string): Promise<boolean>;
+  dispatch(callId: string, actionId: string, prompt: string | undefined, pageId: string, ghostId: string, controllerId: string, formValues?: Record<string, string>, formChange?: boolean, upload?: MailAttachmentUpload): Promise<boolean>;
+}
+function mailUploadAction(html: string): RemotePluginCardAction | undefined {
+  const mail = readMailCard(html);
+  return mail && !mail.supersededBy && ['draft', 'syncing', 'error'].includes(mail.state) && mail.fields.some(f => f.kind === 'mail-attachments')
+    ? { id: `mail:attach:${mail.key}`, label: 'Attach', disabled: false, submit: true } : undefined;
 }
 /** Task-scoped native controls. No plugin scripts or arbitrary host bridge. */
 export function createGhostCardRemoteProvider(deps: {
@@ -97,23 +127,41 @@ export function createGhostCardRemoteProvider(deps: {
     async list() { return { collectionId: COLLECTION, revision: '1', items: [] }; },
     async get(_context, request) {
       const { card, revision } = await read(request.ref.id);
-      const blocks = projectGhostCardBlocks(card.html);
+      const supportsForms = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-forms');
+      const mail = readMailCard(card.html), legacyMail = isLegacyMailCard(card.html);
+      const obsolete = !!mail?.supersededBy || legacyMail;
+      const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(card.html) : card.html);
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
-        data: { pluginId: card.ghostId, revision, items: projectGhostCardActions(card.html, deps.interactions.externalLinks(card.ghostId)) },
+        data: { pluginId: card.ghostId, revision, mail, legacyMail, mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
+          items: obsolete ? [] : projectGhostCardActions(card.html, deps.interactions.externalLinks(card.ghostId)).map(action => action.submit && !supportsForms ? { ...action, disabled: true } : action) },
       });
       return { ref: request.ref, display: { title: card.ghostId }, links: [], revision, blocks };
     },
     async invoke(context, request) {
       if (!deps.interactions || !request.resourceRef) throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Card actions unavailable');
       const { card, callId, valid, revision } = await read(request.resourceRef.id);
-      const action = projectGhostCardActions(card.html, false).find(item => item.id === request.actionId && !item.url);
+      if (isLegacyMailCard(card.html) || readMailCard(card.html)?.supersededBy) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Mail view has been replaced');
+      const change = request.input?.formChange === true;
+      const uploadAction = !change ? mailUploadAction(card.html) : undefined;
+      const attaching = uploadAction?.id === request.actionId;
+      const upload = parseMailAttachmentUpload(request.input?.mailAttachment);
+      if (attaching ? !upload : request.input?.mailAttachment !== undefined)
+        throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Invalid mail attachment');
+      const action = change && readGhostCardFormChange(card.html) === request.actionId
+        ? { id: request.actionId, submit: true, disabled: false, prompt: undefined }
+        : change ? undefined : attaching ? uploadAction : projectGhostCardActions(card.html, false).find(item => item.id === request.actionId && !item.url);
       const input = request.input ?? {};
-      if (!action || action.disabled || input.revision !== revision || typeof input.pageId !== 'string'
+      const form = readGhostCardForm(card.html);
+      const values = input.formValues === undefined ? null : parseGhostCardFormValues(input.formValues);
+      if (action?.submit ? (!form || !values || Object.keys(values).length !== form.length || form.some(field => !(field.name in values))) : input.formValues !== undefined)
+        throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card form is unavailable or incomplete');
+      if (!action || action.disabled || (!change && input.revision !== revision && !(action?.submit && input.formKey && input.formKey === readGhostCardFormChange(card.html))) || typeof input.pageId !== 'string'
         || (action.prompt !== undefined && (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 2000))
         || (action.prompt === undefined && input.prompt !== undefined) || !valid())
         throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card action is no longer available');
-      const delivered = await deps.interactions.dispatch(callId, action.id, input.prompt as string | undefined, input.pageId, card.ghostId, context.controllerDeviceId);
+      const extra: [boolean?, MailAttachmentUpload?] = upload ? [false, upload] : change ? [true] : [];
+      const delivered = await deps.interactions.dispatch(callId, action.id, input.prompt as string | undefined, input.pageId, card.ghostId, context.controllerDeviceId, values ?? undefined, ...extra);
       if (!valid() || !delivered) throw new RemoteResourceRegistryError('INTERNAL', 'Card action could not be delivered');
       return { effects: [] };
     },
@@ -168,7 +216,9 @@ export function createPluginIdentityRemoteProvider(deps: {
       const valid = deps.captureScope();
       let ids: unknown;
       try { ids = JSON.parse(request.ref.id); } catch { /* validated below */ }
-      if (!Array.isArray(ids) || ids.length !== 2 || !ids.every((id) => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+      if (!Array.isArray(ids) || ids.length !== 2 ||
+          typeof ids[0] !== 'string' || ids[0].length === 0 || ids[0].length > 128 ||
+          typeof ids[1] !== 'string' || ids[1].length === 0 || ids[1].length > 320) {
         throw new RemoteResourceRegistryError('NOT_FOUND', 'Plugin not found');
       }
       await deps.authorize(ids[0]);

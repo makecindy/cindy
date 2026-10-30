@@ -1,8 +1,29 @@
 import { extractIpcError } from '@/utils/ipcError';
 
 /** Stable Plugin Market IPC error codes → localized renderer copy keys. */
+export function pluginMarketOrganizationAccessErrorKey(
+  code: string | null | undefined,
+): string | null {
+  if (!code) return null;
+  switch (code) {
+    case 'PLUGIN_NAMESPACE_CLIENT_REQUIRED':
+      return 'settings.ghosts.market.errors.namespaceClientRequired';
+    case 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE':
+      return 'settings.ghosts.market.errors.organizationContextUnavailable';
+    case 'PLUGIN_NAMESPACE_CONFIG_REQUIRED':
+      return 'settings.ghosts.market.errors.namespaceConfigRequired';
+    default:
+      return 'settings.ghosts.market.errors.organizationUnavailable';
+  }
+}
+
 export function pluginMarketErrorKey(error: unknown): string {
-  switch (extractIpcError(error)?.code) {
+  const code = extractIpcError(error)?.code;
+  switch (code) {
+    case 'PLUGIN_NAMESPACE_CLIENT_REQUIRED':
+    case 'PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE':
+    case 'PLUGIN_NAMESPACE_CONFIG_REQUIRED':
+      return pluginMarketOrganizationAccessErrorKey(code)!;
     case 'INVALID_PARAMS':
       return 'settings.ghosts.market.errors.invalidRequest';
     case 'NOT_FOUND':
@@ -11,6 +32,8 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.market.errors.conflict';
     case 'PRECONDITION_FAILED':
       return 'settings.ghosts.market.errors.stateChanged';
+    case 'PLUGIN_LIST_CHANGED':
+      return 'settings.ghosts.market.errors.listChanged';
     case 'PERMISSION_DENIED':
       return 'settings.ghosts.market.errors.accessDenied';
     case 'UNSUPPORTED_CAPABILITY':

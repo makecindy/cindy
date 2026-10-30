@@ -95,6 +95,13 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+it('keeps the drawer out of the window drag region so its close button stays clickable', () => {
+  renderDrawer();
+  // Portaled after the page's title-bar drag strip, so this no-drag wins under the close button.
+  const dialog = screen.getByRole('dialog');
+  expect((dialog.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag');
+});
+
 describe('BotGroupSettingsDrawer 分工 settings', () => {
   it('tags the organizer and lets another active member take over', async () => {
     renderDrawer();

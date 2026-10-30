@@ -13,7 +13,7 @@ import {
   STALL_ABORT_RECOVERY_GRACE_MS,
   Session,
 } from './session.js';
-import type { AgentEvent, InteractionDecision, SendOrigin } from './types/events.js';
+import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
 import type { AgentSessionHandle, BackgroundTaskSnapshot } from './agents/base-agent.js';
 
 type LoggedError = { msg: string; meta?: Record<string, unknown> };
@@ -104,9 +104,11 @@ function createStubHandle(opts?: StubOptions) {
     endTurn() {
       turnRunning = false;
     },
-    callInteraction(): Promise<unknown> {
+    callInteraction(request: InteractionRequest = {
+      kind: 'permission', requestId: 'req-1', toolUseId: 'tool-1', toolName: 'test', input: {},
+    }): Promise<unknown> {
       if (!interactionResolver) throw new Error('no interaction resolver installed');
-      return interactionResolver({ kind: 'permission', requestId: 'req-1' });
+      return interactionResolver(request);
     },
   };
 }
@@ -433,6 +435,51 @@ describe('Session turn stall watchdog', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each(['sync', 'async'] as const)('only suspends stall protection for a blocking question: %s', async (delivery) => {
+    vi.useFakeTimers();
+    const stub = createStubHandle();
+    const session = createSession(stub);
+    try {
+      let answer!: (decision: InteractionDecision) => void;
+      session.setInteractionListener(() => new Promise((resolve) => { answer = resolve; }));
+      await session.send('work');
+      const pending = stub.callInteraction({ kind: 'ask_user_question', requestId: 'question', toolUseId: 'question-item',
+        questions: [{ question: 'Optional scope?' }], ...(delivery === 'async' ? { delivery } : {}) });
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(delivery === 'async' ? 0 : 1);
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledTimes(delivery === 'async' ? 1 : 0);
+      answer({ kind: 'ask_user_question', answers: {} });
+      await pending;
+      if (delivery === 'sync') {
+        await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+        expect(stub.abort).toHaveBeenCalledOnce();
+      }
+    } finally { await session.close(); vi.useRealTimers(); }
+  });
+
+  it('settling an async question does not release a concurrent blocking interaction', async () => {
+    vi.useFakeTimers();
+    const stub = createStubHandle();
+    const session = createSession(stub);
+    try {
+      const answers: Array<(decision: InteractionDecision) => void> = [];
+      session.setInteractionListener(() => new Promise((resolve) => { answers.push(resolve); }));
+      await session.send('work');
+      const optional = stub.callInteraction({ kind: 'ask_user_question', requestId: 'optional', toolUseId: 'optional-item',
+        delivery: 'async', questions: [{ question: 'Optional scope?' }] });
+      const blocking = stub.callInteraction();
+      answers[0]({ kind: 'ask_user_question', answers: {} });
+      await optional;
+      expect(session.getTurnControlSnapshot().pendingInteractionCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(STALL_MS * 2);
+      expect(stub.abort).not.toHaveBeenCalled();
+      answers[1]({ kind: 'permission', behavior: 'allow' });
+      await blocking;
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(stub.abort).toHaveBeenCalledOnce();
+    } finally { await session.close(); vi.useRealTimers(); }
   });
 
   it('交互回应之后重新起表(排除项不能变成永久豁免)', async () => {

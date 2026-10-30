@@ -1,3 +1,12 @@
+import { createServer } from 'node:http';
+import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import { loadCatalogWithSource, type ModelRegistry } from '@cindy/model-providers';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -1969,4 +1978,99 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     setCustomProviderKeyReader(() => null);
     expect(resolveVisionBackendRoute('nokey-provider', 'nokey-model', null)).toBeNull();
   });
+});
+
+// Tier: integration. Persisted transport must survive catalog refresh + process
+// restart, while retirement blocks dispatch. No credentials enter the snapshot.
+describe('task interface snapshot', () => {
+  it('pins across restart and refuses retired profiles without falling back', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'cindy-interface-'));
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const config = { id: 'snapshot-kimi', name: 'Kimi', runtimes: { codex: {
+      catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding/v1',
+      wireProtocol: 'openai-chat' as const, models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+    } } };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
+      expect(first.api).toBe('openai-responses');
+      expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
+      registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      configureSessionModelInterfaceStorage(() => directory); // real disk restore
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
+      // Explicit image edits override pinned metadata, never the saved interface.
+      // Reset removes the override rather than permanently rewriting the snapshot.
+      for (const value of [false, true]) {
+        setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, patches: {
+          'snapshot-kimi:k3.1-pro': { perAgent: { codex: { supportsImageInput: value } } },
+        } });
+        configureSessionModelInterfaceStorage(() => directory);
+        const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
+        expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(edited.route).toEqual(first.route);
+        expect(edited.api).toBe(first.api);
+      }
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      registry.interfaceProfiles!.find(p => p.id === first.profileId)!.retired = true;
+      expect(() => sessionModelInterface('task', config.id, 'codex', next, registry)).toThrow('MODEL_INTERFACE_RETIRED');
+    } finally {
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      configureSessionModelInterfaceStorage(() => null);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+// Tier: integration. Fixed production loader + resolver + proxy, real HTTP on
+// both sides. Only the served registry changes between calls; no client rebuild.
+it('dispatches a newly delivered model through all three existing HTTP interfaces', async () => {
+  let delivered: unknown;
+  const received: Array<{ url: string; body: Record<string, unknown>; auth?: string }> = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.url?.startsWith('/api/model-catalog/catalog')) {
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(delivered)); return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, body: JSON.parse(Buffer.concat(chunks).toString()), auth: req.headers.authorization });
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const port = (upstream.address() as { port: number }).port;
+  const base = `http://127.0.0.1:${port}`;
+  let decision: ReturnType<typeof buildRouteDecision>;
+  const proxy = await createAnthropicCompatProxy({ upstream: base, routingTransform: () => decision });
+  try {
+    for (const [index, api] of ['anthropic-messages', 'openai-responses', 'openai-completions'].entries()) {
+      const wire = api === 'openai-completions' ? 'openai-chat' : api;
+      const requestPath = ['/v1/messages', '/responses', '/chat/completions'][index];
+      const modelId = `future-model-${index}`;
+      const registry: ModelRegistry = { schemaVersion: 6, updatedAt: `2099-01-0${index + 1}T00:00:00.000Z`,
+        interfaceProfiles: ['anthropic-messages', 'openai-responses', 'openai-completions'].map((api, i) => ({ id: `fixture-api-${i}`, providerId: 'fixture', api, baseUrl: base, inputBaseUrls: [base], requestPath: ['/v1/messages', '/responses', '/chat/completions'][i] })),
+        models: [{ id: modelId, name: 'Future', routes: [{ providerId: 'fixture', modelId, agents: ['codex'],
+          defaults: { contextWindow: 32768, maxOutputTokens: 1024 }, interfaces: [{ profileId: `fixture-api-${index}`, wireModelId: `wire-${index}` }], preferredInterfaces: { codex: [`fixture-api-${index}`] } }] }],
+      };
+      delivered = { version: '2', providers: BUNDLED_CATALOG.providers, modelRegistry: registry };
+      const loaded = await loadCatalogWithSource({ baseUrl: base }, { fetchText: async url => (await fetch(url)).text() });
+      expect(loaded.source).toBe('remote');
+      const provider = buildUserProvider({ id: 'http-account', name: 'HTTP', runtimes: { codex: {
+        catalogPresetId: 'fixture', baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: modelId, name: 'Future' }],
+      } } }, { modelRegistry: loaded.catalog.modelRegistry });
+      const routing = providerRoutingForModel(provider, 'codex', modelId)!;
+      expect(routing.wireProtocol).toBe(wire);
+      decision = buildRouteDecision(routing, null, 'codex', 'fixture-key');
+      decision = { ...decision!, pathOverride: routing.requestPath };
+      const response = await fetch(`${proxy.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: modelId, stream: false }) });
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received.at(-1)).toMatchObject({ url: requestPath, body: { model: `wire-${index}` }, auth: 'Bearer fixture-key' });
+    }
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
 });

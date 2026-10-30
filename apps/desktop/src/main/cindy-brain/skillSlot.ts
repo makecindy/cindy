@@ -18,10 +18,14 @@ import matter from 'gray-matter';
 
 import {
   GHOST_SKILL_NAME_RE,
-  isValidGhostId,
   type GhostSkillItem,
   type InstalledGhost,
 } from '../../shared/ghost.js';
+import {
+  installedGhostStoragePart,
+  parsePluginInstallRelId,
+  parsePluginStoragePart,
+} from '../../shared/pluginIdentity.js';
 import { parseAndValidateFrontmatter } from '../skillhub/frontmatterValidation.js';
 import { sharedGlobalSkillsPaths } from '../maker-host/shared-global-skills.js';
 
@@ -82,7 +86,7 @@ export interface ReconcileGhostSkillLinksResult {
  * visible.
  *
  * The sweep keeps unrelated foreign-link failures as warnings, but separately
- * reports blockers whenever it cannot prove a shared root is clean or cannot
+ * reports blockers whenever it cannot inspect an existing directory or cannot
  * remove an identified owner projection. The account boundary must not expose a
  * new owner while one of those blockers remains (I-2).
  */
@@ -90,10 +94,44 @@ export async function removeGhostSkillLinksForRoots(
   managedRoots: readonly string[],
   homeDir?: string,
   additionalSkillDirs: readonly string[] = [],
+  withSharedRootsLock?: <T>(task: () => Promise<T>) => Promise<T>,
 ): Promise<{ changed: boolean; warnings: string[]; blockers: string[] }> {
+  const paths = sharedGlobalSkillsPaths(homeDir);
+  const sharedDirs = [paths.claudeSkillsDir, paths.codexSkillsDir, paths.sharedSkillsDir];
+  // The caller holds this instance's owner boundary. Other instances cannot
+  // publish its private projections, and current builds never create shared
+  // Ghost links. An empty legacy sweep is read-only and must not wait for an
+  // unrelated instance's shared-root writer (which may be unresponsive).
+  // Actual shared mutations still re-scan and revalidate under the same lock
+  // used by older builds; an unreadable directory remains a boundary blocker.
+  const inspected = withSharedRootsLock
+    ? await sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, false)
+    : null;
+  const shared = withSharedRootsLock && inspected?.managedLinksPresent
+    ? await withSharedRootsLock(() =>
+      sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, true))
+    : inspected ?? await sweepGhostSkillLinksForRoots(managedRoots, homeDir, sharedDirs, true);
+  const privateLinks = await sweepGhostSkillLinksForRoots(
+    managedRoots, homeDir, additionalSkillDirs, true,
+  );
+  return {
+    changed: shared.changed || privateLinks.changed,
+    warnings: [...new Set([...shared.warnings, ...privateLinks.warnings])],
+    blockers: [...new Set([...shared.blockers, ...privateLinks.blockers])],
+  };
+}
+
+/** Use identical ownership checks for the read-only legacy probe and locked removal. */
+async function sweepGhostSkillLinksForRoots(
+  managedRoots: readonly string[],
+  homeDir: string | undefined,
+  skillDirs: readonly string[],
+  removeLinks: boolean,
+): Promise<{ changed: boolean; managedLinksPresent: boolean; warnings: string[]; blockers: string[] }> {
   const warnings: string[] = [];
   const blockers: string[] = [];
   let changed = false;
+  let managedLinksPresent = false;
   const paths = sharedGlobalSkillsPaths(homeDir);
   const lexicalRoots = [...new Set(managedRoots.map(normalizeForCompare))];
   const resolvedRoots: string[] = [];
@@ -115,9 +153,9 @@ export async function removeGhostSkillLinksForRoots(
       }
     }
   }
-  if (lexicalRoots.length === 0) return { changed, warnings, blockers };
+  if (lexicalRoots.length === 0) return { changed, managedLinksPresent, warnings, blockers };
 
-  for (const dir of [paths.claudeSkillsDir, paths.codexSkillsDir, paths.sharedSkillsDir, ...additionalSkillDirs]) {
+  for (const dir of skillDirs) {
     let entries: Dirent[];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -125,6 +163,9 @@ export async function removeGhostSkillLinksForRoots(
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
       const message = `Unable to read global skill root ${dir}: ${(err as Error).message}`;
       warnings.push(message);
+      // A non-directory root (or ancestor) cannot expose skill entries. Preserve
+      // the user's file and keep sweeping the other roots without blocking login.
+      if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') continue;
       blockers.push(message);
       continue;
     }
@@ -174,6 +215,8 @@ export async function removeGhostSkillLinksForRoots(
         } catch { /* An unprovable/user-owned dangling link is left untouched. */ }
       }
       if (!managed) continue;
+      managedLinksPresent = true;
+      if (!removeLinks) continue;
       try {
         const stat = await fsp.lstat(linkPath);
         if (!stat.isSymbolicLink()) {
@@ -207,7 +250,7 @@ export async function removeGhostSkillLinksForRoots(
       }
     }
   }
-  return { changed, warnings, blockers };
+  return { changed, managedLinksPresent, warnings, blockers };
 }
 
 interface ReconcileOptions {
@@ -270,7 +313,8 @@ function targetLooksGhostManaged(
   if (splitAt <= 0) return false;
   const ghostId = linkName.slice(0, splitAt);
   const skillName = linkName.slice(splitAt + 2);
-  if (!isValidGhostId(ghostId) || !GHOST_SKILL_NAME_RE.test(skillName)) return false;
+  const identity = parsePluginStoragePart(ghostId);
+  if (!identity || !GHOST_SKILL_NAME_RE.test(skillName)) return false;
 
   // 目标结构必须命中**我们铺过的两种布局之一**,且布局里的 id 段必须等于链接名里
   // 的 ghostId —— 单看"路径里有个段叫 cindy-brain"会把用户指向自己项目目录
@@ -280,15 +324,20 @@ function targetLooksGhostManaged(
   //   新模型:                       .../<状态根名>/skill-snapshots/<ghostId>/<revision>/...
   const segments = target.split(/[\\/]/).map((segment) => segment.toLowerCase());
   const stateDirName = approvalStateDirName.toLowerCase();
-  const idLower = ghostId.toLowerCase();
+  const idLower = identity.ghostId.toLowerCase();
   const normalizedTarget = normalizeForCompare(target);
   if (!managedRoots.some((root) => isSameOrInside(normalizedTarget, root))) return false;
   return segments.some(
-    (segment, index) =>
-      (segment === 'cindy-brain' && segments[index + 1] === idLower) ||
-      (segment === stateDirName &&
-        segments[index + 1] === 'skill-snapshots' &&
-        segments[index + 2] === idLower),
+    (segment, index) => {
+      if (segment === 'cindy-brain' && segments[index + 1] === idLower) return true;
+      if (segment !== stateDirName || segments[index + 1] !== 'skill-snapshots') return false;
+      if (segments[index + 2] === idLower) return true;
+      const relId = segments.slice(index + 2, index + 5).join('/');
+      const targetIdentity = parsePluginInstallRelId(relId);
+      return targetIdentity !== null && targetIdentity.ghostId === identity.ghostId &&
+        (targetIdentity.namespace === null ? identity.namespace === null
+          : identity.namespace === null || targetIdentity.namespace === identity.namespace);
+    },
   );
 }
 
@@ -362,7 +411,9 @@ export async function reconcileGhostSkillLinks(
       a.name.localeCompare(b.name),
     );
     for (const item of sortedItems) {
-      const linkName = ghostSkillLinkName(ghost.manifest.id, item.name);
+      const linkName = ghostSkillLinkName(
+        installedGhostStoragePart(ghost), item.name,
+      );
       if (desired.has(linkName)) {
         warnings.push(`技能链接名冲突 ${linkName},保留先到者`);
         continue;

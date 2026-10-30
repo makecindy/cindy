@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startRemoteAgentSession } from '../controller/startRemote';
 import { createRemoteAgentHost } from '../host/runHost';
 import { hostedStartOptions } from '../host/service';
+import { exerciseConnectionPool } from './poolHarness';
 
 const REPO = path.resolve(__dirname, '../../../../../..');
 const ARCH = `${process.platform}-${process.arch}`;
@@ -182,6 +183,25 @@ describe.skipIf(!available)('remote agent with a real Codex', () => {
     expect(bodies[0]).toContain('Keep answers short.');
     const hostFiles = fs.readdirSync(hostRoot, { recursive: true }).map(String);
     expect(hostFiles.some((file) => file.endsWith('made-by-codex.txt'))).toBe(false);
+  });
+
+  it('releases an idle task under slot pressure and resumes the same Codex thread', { timeout: 300_000 }, async () => {
+    steps = [];
+    bodies.length = 0;
+    const agent = new CodexAgent(codexDeps(path.join(root, 'codex-home-pool')));
+    try {
+      await exerciseConnectionPool({
+        kind: 'codex',
+        root,
+        model: 'gpt-5.5',
+        rgPath: RG,
+        startHosted: (input) => agent.startSession(hostedStartOptions(input)),
+        deps: { codexPath: () => CODEX },
+        modelRequests: () => bodies,
+      });
+    } finally {
+      agent.dispose?.();
+    }
   });
 
   it('asks on this computer before Codex runs a risky command, and runs only what was approved', { timeout: 180_000 }, async () => {

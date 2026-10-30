@@ -25,17 +25,9 @@ const sourcePath = resolve(__dirname, '..', 'components', 'status', 'TodaySpendC
 // Windows CRLF 检出下 \n 字面量断言会失配,统一归一化成 LF 再断言。
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n/g, '\n');
 describe('TodaySpendChip dashboard routing', () => {
-  it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
-    expect(compact(source)).toContain(compact('https://chatgpt.com/codex/settings/usage'));
-    expect(compact(source)).toContain(compact('https://grok.com'));
-    expect(compact(source)).toContain(compact('https://claude.ai/settings/usage'));
-    // 网关 / 托管账号这一路 URL 落到 null(点击无跳转);其余三路指向各自公开看板。
-    expect(source).toMatch(
-      /usesXaiQuotaForm\s*\?\s*XAI_USAGE_DASHBOARD_URL\s*:\s*isCodexOauth \|\| isChatgptBridge\s*\?\s*CODEX_USAGE_DASHBOARD_URL\s*:\s*isClaudeSubscription\s*\?\s*CLAUDE_USAGE_DASHBOARD_URL\s*:\s*null/,
-    );
-    expect(compact(source)).toContain(compact('todaySpend.openCodexUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openXaiUsage'));
-    expect(compact(source)).toContain(compact('todaySpend.openClaudeUsage'));
+  it('reads Model Access quota only for actual gateway sessions', () => {
+    // Dashboard destinations are exercised through real component clicks in
+    // TodaySpendChip.popover.test.tsx rather than pinning the ternary's source shape.
     // 只有实际 Gateway 会话读取 Model Access quota；自定义供应商只保留本会话统计。
     expect(compact(source)).toContain(
       compact('const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;'),
@@ -44,7 +36,7 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('treats codex/ budget models + explicit XD selection as API usage on an oauth-bearer spawn', () => {
-    expect(compact(source)).toContain(compact("modelId.startsWith('codex/')"));
+    expect(compact(source)).toContain(compact('isCodexGatewayWireModel(modelId)'));
     expect(compact(source)).toContain(compact("codexAuthInjection === 'oauth-bearer'"));
     expect(compact(source)).toContain(compact("vendorKey === 'codex' && !isCodexXaiProvider"));
     expect(compact(source)).toContain(compact('isRemoteCodexSession ||'));

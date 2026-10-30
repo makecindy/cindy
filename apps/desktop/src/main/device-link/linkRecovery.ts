@@ -1,5 +1,17 @@
 import { DeviceLinkError, parseFsWatchTopic } from '@cindy/device-link';
 
+/** Recover before admitting a new request; never replay an already sent operation. */
+export async function ensureInvokeLinkReady(
+  needsRecovery: () => boolean,
+  reopen: () => Promise<unknown>,
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  if (!needsRecovery()) return;
+  await reopen();
+  assertCurrent();
+}
+
 /** 打开具体远程会话或文件树监听时必须先建立 streaming link；轻量 sessions 列表订阅不依赖。 */
 export function requiresSessionLink(topics: readonly string[]): boolean {
   return topics.some((topic) => (

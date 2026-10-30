@@ -106,7 +106,7 @@ describe('feature retirement upgrade', () => {
   it('detects legacy consumers without confusing independent Baguette', async () => {
     await seed(true, manifestFor('custom-simulator', true));
     expect(manager().list()[0].retirement?.eligible).toBe(true);
-    expect(findFeatureRetirement(manifestFor('baguette-simulator'))).toBeUndefined();
+    expect(findFeatureRetirement(manifestFor('cindy-simulator'))).toBeUndefined();
     expect(findFeatureRetirement({ id: 'legacy', slots: ['ios-simulator'] })?.id).toBe(
       'embedded-ios-simulator',
     );
@@ -155,4 +155,13 @@ describe('feature retirement upgrade', () => {
     });
     expect(manager().list()).toEqual([]);
   });
+  it('keeps same-name retirement receipts on separate instance keys', () => {
+    const store = new FeatureRetirementStore(() => state);
+    expect(store.observe('ios-simulator', '_root__helper', true).unread).toBe(true);
+    expect(store.observe('ios-simulator', '_ns__acme__helper', true).unread).toBe(true);
+    store.acknowledge('ios-simulator', '_root__helper');
+    expect(store.observe('ios-simulator', '_root__helper', true).unread).toBe(false);
+    expect(store.observe('ios-simulator', '_ns__acme__helper', true).unread).toBe(true);
+  });
+
 });

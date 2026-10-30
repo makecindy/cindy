@@ -1,5 +1,5 @@
 import { localizedModelDescription } from './modelDescriptions';
-import type { CatalogModel } from '@cindy/model-providers';
+import { isCindyAutoModelId, type CatalogModel } from '@cindy/model-providers';
 import type { ProviderLogoKind } from '@cindy/model-providers/branding';
 import type { TFunction } from 'i18next';
 
@@ -40,6 +40,8 @@ const namespaces: Record<string, string> = {
 
 /** Display identity only. Never use these labels to merge IDs, select a route or infer capabilities. */
 export function modelBrand(model: Pick<CatalogModel, 'id'>): ModelBrand | undefined {
+  // Cindy Auto is a server route, not a vendor: `auto/<groupId>` must group like the preset `auto`.
+  if (isCindyAutoModelId(model.id)) return undefined;
   const id = model.id.toLowerCase();
   const slash = id.indexOf('/');
   if (slash > 0) {

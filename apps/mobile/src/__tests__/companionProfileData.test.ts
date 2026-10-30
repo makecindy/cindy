@@ -73,3 +73,13 @@ it('preserves a host-disabled action rather than silently enabling it', () => {
   const input = { ...raw(), actions: [{ ...raw().actions[0], disabled: true }] };
   expect(parseCompanionProfileData(input, ref).panels[0].action?.disabled).toBe(true);
 });
+
+it('recognizes creation model support without exposing a raw JSON form field to legacy clients', () => {
+  const input = raw();
+  input.blocks[0].id = 'create';
+  Object.assign(input.blocks[0].data, { creationModelChain: '[]' });
+  const panel = parseCompanionProfileData(input, ref).panels[0];
+  expect(panel.creationModelChain).toBe('[]');
+  expect(panel.action?.fields?.map(field => field.id)).toEqual(['name']);
+  expect(parseCompanionProfileData(raw(), ref).panels[0].creationModelChain).toBeUndefined();
+});

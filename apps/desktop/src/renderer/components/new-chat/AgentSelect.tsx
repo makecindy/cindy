@@ -251,8 +251,7 @@ export function AgentSelect({
           ? cn('w-full min-w-0 px-3', dense ? 'h-9' : 'h-10')
           : cn(
               'shrink-0',
-              // 工具条高度是 CREATE AGENT 视觉契约锁定值(见
-              // newMakerCreateAgentVisualContract.test.ts), 保持独立字面量。
+              // 工具条高度是 CREATE AGENT 视觉契约锁定值，保持独立字面量。
               'h-[30px]',
               iconOnly ? 'w-[34px] min-w-[34px] justify-center px-0' : 'px-2.5',
             ),

@@ -28,6 +28,8 @@ const h = vi.hoisted(() => {
     scopeCurrent: true,
     activeStamp: { dataOwnerId: 'active-owner', ownerGeneration: 2 },
     deviceLinkInvoke: false,
+    sharedTask: false,
+    tapWindowBroadcast: vi.fn(),
     ownerScopeKey: 'owner-a:1',
   };
 });
@@ -56,9 +58,11 @@ vi.mock('../../../appSessionState.js', () => ({
 }));
 vi.mock('../../../device-link/invoke-context.js', () => ({
   isDeviceLinkInvoke: () => h.deviceLinkInvoke,
+  getDeviceLinkInvokeContext: () => (h.deviceLinkInvoke ? { sharedTask: h.sharedTask ? {} : undefined } : null),
 }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   isDataOwnerBroadcastScopeCurrent: () => h.scopeCurrent,
+  tapWindowBroadcast: h.tapWindowBroadcast,
 }));
 vi.mock('../../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
@@ -73,7 +77,7 @@ vi.mock('../../subagentRuns.js', () => ({
   persistSubagentTaskUpdate: h.persistSubagentTaskUpdate,
 }));
 
-import { SUBAGENT_RUNS_CHANGED_CHANNEL } from '@cindy/maker-shared/subagent-workspace';
+import { SUBAGENT_RUNS_CHANGED_CHANNEL, type SubagentRunDetailResponse } from '@cindy/maker-shared/subagent-workspace';
 import {
   __resetSubagentReconcileFingerprintsForTests,
   broadcastSubagentRunsChanged,
@@ -93,6 +97,7 @@ describe('Subagent runs broadcast boundary', () => {
     h.persistSubagentTaskUpdate.mockResolvedValue(null);
     h.scopeCurrent = true;
     h.deviceLinkInvoke = false;
+    h.sharedTask = false;
     h.ownerScopeKey = 'owner-a:1';
     __resetSubagentReconcileFingerprintsForTests();
   });
@@ -205,6 +210,35 @@ describe('Subagent runs broadcast boundary', () => {
         identityAliases: ['123e4567-e89b-42d3-a456-426614174080-2'],
       },
     ]);
+  });
+
+  it.each([false, true])('preserves explicit readiness and legacy absence in detail (remote=%s)', async (remote) => {
+    h.deviceLinkInvoke = remote;
+    registerSubagentRunsIpc();
+    h.getSubagentRunDetail.mockResolvedValue({
+      id: 'run-1', logicalAgentId: 'parent-tool', provider: 'pi', status: 'running',
+      providerRunIds: [], capabilities: { steer: true },
+    });
+    h.listPiSubagentRuns.mockResolvedValue([{
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174082', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'running',
+      startedAt: 1_000, updatedAt: 2_000,
+      tasks: [false, true, undefined].map((resultReady, index) => ({
+        childId: `child-${index}`, sessionId: `pi-session-${index}`, agent: 'worker', status: 'running',
+        output: 'Some output', ...(resultReady === undefined ? {} : { resultReady }),
+      })),
+    }]);
+    const handler = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+    const response = await handler({}, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+    }) as SubagentRunDetailResponse;
+    // Exercise the wire representation too: false must survive serialization,
+    // and a legacy record must not gain a fabricated readiness value.
+    const children = JSON.parse(JSON.stringify(response)).run.children;
+    expect(children).toHaveLength(3);
+    expect(children[0]).toMatchObject({ output: 'Some output', resultReady: false });
+    expect(children[1]).toMatchObject({ output: 'Some output', resultReady: true });
+    expect(children[2]).not.toHaveProperty('resultReady');
   });
 
   it('leaves a child that has only ever had one id without aliases', async () => {
@@ -728,6 +762,15 @@ describe('Subagent runs broadcast boundary', () => {
     );
   });
 
+  it('forwards the change to device-link controllers with the same owner stamp', () => {
+    broadcastSubagentRunsInvalidated('session-1');
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      SUBAGENT_RUNS_CHANGED_CHANNEL,
+      { sessionId: 'session-1', runId: null, created: false, firstForSession: false },
+    );
+  });
+
   it('broadcasts a session-level invalidation for clear and rewind boundaries', () => {
     broadcastSubagentRunsInvalidated('session-1');
 
@@ -950,6 +993,18 @@ describe('Subagent runs broadcast boundary', () => {
     })).resolves.toEqual({ supported: false, entries: [] });
     expect(h.getSubagentRunDetail).not.toHaveBeenCalled();
   });
+
+  it.each([[false, true], [true, undefined]])(
+    'declares the change push only to peers that can receive it (sharedTask=%s)', async (sharedTask, expected) => {
+      h.deviceLinkInvoke = true;
+      h.sharedTask = sharedTask;
+      h.listSubagentRuns.mockResolvedValue({ runs: [] });
+      registerSubagentRunsIpc();
+      const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+      const response = await list({}, { sessionId: 'session-1' }) as { changePush?: boolean };
+      expect(response.changePush).toBe(expected);
+    },
+  );
 
   it('validates and forwards provider-scoped detail lookups', async () => {
     registerSubagentRunsIpc();

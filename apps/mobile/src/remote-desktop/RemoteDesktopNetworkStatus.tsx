@@ -9,14 +9,17 @@ export function RemoteDesktopNetworkStatus({
   video,
   top,
   send,
+  foreground,
 }: {
   stats: DesktopNetworkStats | null;
   video: boolean;
   top: number;
   send: (message: object) => void;
+  foreground?: string;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const textColor = foreground ?? colors.textPrimary;
   const transport = stats?.transport ?? (video ? "video" : "screenshots");
   const label =
     !stats && !video
@@ -36,9 +39,9 @@ export function RemoteDesktopNetworkStatus({
       top,
       right: spacing.sm,
       fontSize: typeScale.caption,
-      color: colors.textPrimary,
+      color: textColor,
     });
-  }, [send, text, top, colors.textPrimary]);
+  }, [send, text, top, textColor]);
   useEffect(
     () => () => {
       send({ type: "networkStatus", text: "" });

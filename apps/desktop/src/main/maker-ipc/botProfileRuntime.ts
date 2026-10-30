@@ -27,6 +27,8 @@ import { createLogger } from '../logger.js';
 import { PROVIDER_NAME_TO_PLUGIN_ID } from '../maker-host/plugins/builtin-plugins.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
+import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botImConnection.js';
+import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
@@ -42,7 +44,7 @@ interface BotSkillCatalogItem {
 
 interface BotMcpCatalogItem {
   name: string;
-  source: 'builtin' | 'custom';
+  source: 'builtin' | 'custom' | 'harness';
   available?: boolean;
   generation?: string;
 }
@@ -111,6 +113,14 @@ export interface BotProfileRuntimeDeps {
   }) => Promise<BotToolsetCatalogItem[]>;
   readMemoryIndex?: (scopeKey: string) => Promise<string>;
   /**
+   * 这个伙伴绑定了哪些平台的机器人(Telegram / 飞书), 来自 bot-im-connections 记录(不含凭证)。
+   *
+   * 主人私聊进的是伙伴主任务, 它与桌面共用、不带专线的 `telegramChatId` / `feishuChatId`;
+   * 没有这份清单, 主任务上就挂不上 `cindy_telegram_bot` / `cindy_feishu_bot`, 主人在私聊里
+   * 让伙伴发投票 / 发文件时它只能说「没有这组工具」。远端会话同样适用: 出站走的是本机连接。
+   */
+  listBotImChannels?: (input: { botId: string }) => readonly BotImChannel[];
+  /**
    * 这个伙伴的队友们(除它自己之外、还启用着的伙伴)。
    *
    * 伙伴消息能力开着却不告诉它队友是谁，那条能力基本不会被触发 —— 见
@@ -129,7 +139,7 @@ export interface BotProfileRuntimeDeps {
   listOwnSkills?: (input: { botId: string }) => Promise<{
     pluginRoot: string;
     baseline?: { pluginRoot: string; skill: { name: string; description: string; path: string; filePath: string } };
-    skills: { name: string; description: string; path: string; filePath?: string }[];
+    skills: { name: string; description: string; path: string; filePath?: string; updatedAt?: string }[];
   }>;
   readSkillSource?: (input: {
     path: string;
@@ -286,6 +296,7 @@ export function buildBotProfileContextPrompt(displayName: string): string {
     `Active Cindy Bot profile: ${name}.`,
     'Your name is the active profile name; your personality, role, and relationship with the user come from the current SOUL and user profile. Keep them consistent across replies, context compaction, restarts, and model changes. Do not reverse who is the boss or invent a relationship from habitual forms of address. Correct earlier replies that conflict with the current profile instead of treating them as identity facts.',
     'The user is talking to this named teammate inside Cindy. Pi, Claude Code, and Codex are execution engines, not your personal identity or the user-facing application. Their native coding instructions describe how to use tools; they do not replace your profile. If asked about the engine or model, distinguish it from your identity and only state runtime facts you can verify.',
+    businessOwnershipPrompt.trim(),
     'Use available host tools for model changes and verify their results before claiming a change. Connecting a new model or signing in to a provider is managed in Cindy settings. Do not present terminal-only slash commands such as /login or /model as commands available in this chat or assume the user is in a Pi terminal. When the exact Cindy entry is unknown, say so rather than inventing steps. When the user asks about a native CLI, explain which instructions belong to that terminal. This distinction does not restrict native tools, Pi package management, extensions, or self-repair.',
   ].join('\n');
 }
@@ -425,7 +436,7 @@ export function resolveBotMcpReferences(input: {
 }): { resolved: string[]; unavailable: string[] } {
   const available = new Set(
     input.catalog
-      .filter((item) => item.source === 'custom' && item.available !== false)
+      .filter((item) => item.source !== 'builtin' && item.available !== false)
       .map((item) => item.name),
   );
   if (input.mode === 'inherit') {
@@ -494,8 +505,13 @@ export async function hydrateBotProfileRuntime(
     .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
     .where(and(eq(botSessionLinks.sessionId, opts.id), eq(sessions.source, 'bot')))
     .limit(1);
-  // Group lanes are long-lived like the canonical Chat and share its Profile/Home.
-  if (!row || !['canonical', 'delegation', 'group'].includes(row.role)) return null;
+  // Group lanes, IM channel lanes and private-chat topics are long-lived like the
+  // canonical Chat and share its Profile/Home. Channel lanes and topics are
+  // full-profile lanes (not chat-only).
+  if (!row || !['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(row.role)) return null;
+  // A private-chat topic is the owner's own conversation, so it carries the main
+  // Chat's owner-private abilities (cindy-bots-runtime.md「私聊话题」).
+  const ownerChat = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine';
   const [profile] = await db
     .select()
     .from(botProfiles)
@@ -703,16 +719,16 @@ export async function hydrateBotProfileRuntime(
     伙伴在任务里刚学会一个技能,紧接着要能续跑同一个任务;把自己写的文件也
     冻上,等于「一学会就再也 resume 不了」。
   */
-  let ownSkills: { name: string; description: string; path: string; filePath?: string }[] = [];
+  let ownSkills: { name: string; description: string; path: string; filePath?: string; updatedAt?: string }[] = [];
   let ownSkillPluginRoots: string[] = [];
   // SSH remote 会话的 harness 跑在远端文件系统上,本机 userData 里的技能目录
   // 在那边不存在 —— 与其挂一串打不开的路径,不如这类会话直接不挂。
   if (!chatOnly && deps.listOwnSkills && !opts.remoteHostId) {
     try {
       const own = await deps.listOwnSkills({ botId: row.botId });
-      ownSkills = [...(own.baseline && row.role === 'canonical' ? [own.baseline.skill] : []), ...own.skills];
+      ownSkills = [...(own.baseline && ownerChat ? [own.baseline.skill] : []), ...own.skills];
       ownSkillPluginRoots = [
-        ...(own.baseline && row.role === 'canonical' ? [own.baseline.pluginRoot] : []),
+        ...(own.baseline && ownerChat ? [own.baseline.pluginRoot] : []),
         ...(own.skills.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
@@ -793,6 +809,57 @@ export async function hydrateBotProfileRuntime(
       runtimeConfiguredMcpServers.push(serverName);
     }
   }
+  // 主任务(主人私聊落点)与桌面共用, 不带专线的 chat 字段; 它靠「伙伴绑了哪些渠道」的标记
+  // 挂渠道工具 —— 写进 vendorOptions, 让各 harness 的 MCP 门禁(mcp-providers isEnabled /
+  // codexEnvironment buildSessionMcpConfig / piEnvironment capabilityGated)按同一份标记放行。
+  // 轮次内原生 API 的目标仍由逐轮租约决定, 无租约时 fail closed。飞书 send_*_to_user
+  // 可在桌面/后台轮次由 feishuTransportRouting.ts 查询 canonical 归属, 经伙伴可用连接
+  // 通知已绑定主人; 伙伴连接不可用则拒绝发送, 不回落个人 bot, 也不授予轮次内 API 权限。
+  const boundImChannels: readonly BotImChannel[] =
+    ownerChat ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+  if (boundImChannels.length > 0) {
+    opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
+  }
+  // IM 专线(飞书连接交给伙伴后的群 / 话题)的渠道出站工具是这条专线回消息、回文件的
+  // 载体, 不是伙伴的可选能力: 会话带飞书渠道 vendorOptions 时始终挂上, 伙伴显式收窄的
+  // 工具集也不收掉它。只放行这一项, 不扩其它能力; 继承模式本来就包含它。
+  // 主任务同理: 伙伴绑了飞书机器人, 主人私聊里就该能直接发消息 / 发文件 / 调 Open API。
+  if (
+    (row.role === 'channel' && typeof opts.vendorOptions?.feishuChatId === 'string')
+    || boundImChannels.includes('feishu')
+  ) {
+    const imServer = 'cindy_feishu_bot';
+    const imToolset = PROVIDER_NAME_TO_PLUGIN_ID[imServer];
+    if (
+      !runtimeConfiguredMcpServers.includes(imServer)
+      && mcpCatalog.some((item) => item.name === imServer && item.available !== false)
+    ) {
+      runtimeConfiguredMcpServers.push(imServer);
+    }
+    if (
+      !runtimeConfiguredToolsets.includes(imToolset)
+      && toolsetCatalog.some((item) => item.id === imToolset && item.available !== false)
+    ) {
+      runtimeConfiguredToolsets.push(imToolset);
+    }
+    disabledToolsets = disabledToolsets.filter((id) => id !== imToolset);
+  }
+  // Telegram 专线同理: cindy_telegram_bot 是这条专线在 Telegram 里发媒体 / 投票 / 表情、下载
+  // 对方文件的载体, 不是伙伴可选能力; 会话带 Telegram 渠道 vendorOptions 时始终进 allowlist。
+  // 它不映射到工具集(无插件 id), 所以只动 MCP allowlist。能不能动哪个 chat 由逐轮作用域判定。
+  // 主任务同理: 伙伴绑了 Telegram 机器人, 主人私聊里就该能直接发投票 / 媒体 / 调 Bot API。
+  if (
+    (row.role === 'channel' && typeof opts.vendorOptions?.telegramChatId === 'string')
+    || boundImChannels.includes('telegram')
+  ) {
+    const imServer = 'cindy_telegram_bot';
+    if (
+      !runtimeConfiguredMcpServers.includes(imServer)
+      && mcpCatalog.some((item) => item.name === imServer && item.available !== false)
+    ) {
+      runtimeConfiguredMcpServers.push(imServer);
+    }
+  }
   const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,
@@ -814,12 +881,15 @@ export async function hydrateBotProfileRuntime(
     // the essential helper. It is not the generic Orca/team-worker surface and
     // therefore must not depend on optional toolset inheritance.
     partnerActionsEnabled: row.role === 'canonical' && helperAvailable,
-    routinesEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
-    botCreationEnabled: row.role === 'canonical' && helperAvailable,
+    routinesEnabled: ownerChat && helperAvailable && !opts.remoteHostId,
+    botCreationEnabled: ownerChat && helperAvailable,
     // Skill management is available before the first Skill exists. An empty
     // index must not hide the instructions for learning the first reusable method.
-    ownSkillsEnabled: row.role === 'canonical' && helperAvailable && !opts.remoteHostId,
-    botModeEnabled: row.role === 'canonical',
+    // IM 专线与主任务是同一个伙伴: 群 / 话题里学到的做法同样该沉淀成它自己的技能, 否则主人在
+    // 群里让它「记成技能」只能听到「当前任务只读」。写入仍只认主人触发的轮次(botSkillService
+    // 按逐轮渠道作用域判定), 其他成员触发时工具会说明原因。
+    ownSkillsEnabled: (ownerChat || row.role === 'channel') && helperAvailable && !opts.remoteHostId,
+    botModeEnabled: ownerChat,
     // Match the ordinary helper surface on this engine and transport.
     sessionControlEnabled: helperAvailable && (!opts.remoteHostId || opts.agentKind === 'pi'),
     // scheduler 是伙伴基线工具(maker-host/plugins/types.ts),与挂载 allowlist 同一份目录判定。
@@ -878,10 +948,10 @@ export async function hydrateBotProfileRuntime(
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
       buildBotProfileContextPrompt(profile.displayName),
-      // Hermes-style Bot Mode is a property of the permanent Bot Chat only.
-      // Delegation children keep Cindy's normal Session prompt plus their
-      // narrow task context.
-      ...(row.role === 'canonical'
+      // Hermes-style Bot Mode is a property of the owner's Bot Chat (the permanent
+      // Chat and its private topics). Delegation children keep Cindy's normal
+      // Session prompt plus their narrow task context.
+      ...(ownerChat
         ? [buildBotCapabilityContextPrompt({ helperAvailable, cindyAvailable,
           ownSkillsEnabled: promptCapabilities.ownSkillsEnabled,
           // Same local canonical boundary as isBotAuthorizationSession; remote Pi still has plugins.
@@ -955,7 +1025,7 @@ export async function hydrateBotProfileRuntime(
     model: opts.model,
     providerId: typeof opts.providerId === 'string' ? opts.providerId : null,
     effort: typeof opts.effort === 'string' ? opts.effort : null,
-    fastMode: opts.fastMode === true,
+    fastMode: (opts.fastMode === 'ultrafast' ? 'ultrafast' : opts.fastMode === true),
     permissionMode: opts.permissionMode,
     workspaceKind: opts.workspaceKind,
     remote: Boolean(opts.remoteHostId),
@@ -978,12 +1048,17 @@ export async function hydrateBotProfileRuntime(
     profilePrompt: opts.botProfilePrompt ?? '',
     contextPrompt: opts.botProfileContextPrompt ?? '',
     userProfilePrompt: opts.botUserProfilePrompt ?? '',
+    // All live chats compare this epoch before their next input. Shared learning
+    // must invalidate their frozen indexes even when the Profile did not change.
+    memoryIndex: opts.makerMemoryIndexSnapshot ?? '',
     skillResources: resolvedSkillEntries.map((entry) => ({
       name: entry.runtimeCommandName?.trim() || entry.name.trim(),
       path: entry.path?.trim() || null,
       sha256: entry.contentSha256 ?? null,
     })),
-    botOwnSkillResources: ownSkills.map((entry) => ({ name: entry.name, path: entry.path })),
+    botOwnSkillResources: ownSkills.map((entry) => ({
+      name: entry.name, path: entry.path, description: entry.description, updatedAt: entry.updatedAt ?? null,
+    })),
     mcpResources: resolvedMcpServers.map((name) => {
       const entry = mcpCatalog.find((item) => item.name === name);
       return { name, generation: entry?.generation ?? null };
@@ -1049,8 +1124,9 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  // Canonical Chats and group lanes follow Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'group';
+  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
+  // Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
   const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256

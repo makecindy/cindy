@@ -42,6 +42,7 @@ function task(deviceId: string, sessionId: string, title = sessionId): UsageHist
     title,
     model: 'gpt-5.5',
     providerId: null,
+    source: 'desktop',
     contextTokens: 0,
     contextWindow: 0,
     lastActiveAt: 1,
@@ -84,6 +85,91 @@ describe('buildUsageTaskRows', () => {
   it('keeps the same session id on two devices as separate tasks', () => {
     expect(buildUsageTaskRows(payload, 'all').map((r) => r.taskKey)).toContain('local:b');
     expect(buildUsageTaskRows(payload, 'all').map((r) => r.taskKey)).toContain('laptop:b');
+  });
+
+  it.each(['local', 'laptop'])(
+    'filters Make tasks on %s before ranking without changing usage records',
+    (deviceId) => {
+      const ordinary = Array.from({ length: 10 }, (_, index) => ({
+        ...task(deviceId, 'ordinary-' + index),
+        source: deviceId === 'local' ? (index % 2 === 0 ? null : undefined) : 'desktop',
+      }));
+      const hidden = ['cindy-make', 'cindy-make-merge'].map((source) => ({
+        ...task(deviceId, source),
+        source,
+      }));
+      const daily = [...hidden, ...ordinary].map((entry, index) => ({
+        day: '2026-09-26',
+        taskKey: entry.taskKey,
+        tokens: 100 - index,
+      }));
+      const input = history(daily, [...hidden, ...ordinary]);
+
+      expect(buildUsageTaskRows(input, 'today').map((row) => row.taskKey)).toEqual(
+        ordinary.slice(0, 8).map((entry) => entry.taskKey),
+      );
+      expect(input.taskDaily).toEqual(daily);
+      expect(input.tasks).toEqual([...hidden, ...ordinary]);
+    },
+  );
+
+  it.each([
+    { origin: 'legacy peer cache', source: null },
+    { origin: 'older peer sync', source: undefined },
+  ])('withholds source-less tasks from $origin before ranking', ({ source }) => {
+    const unconfirmed = Array.from({ length: 10 }, (_, index) => ({
+      ...task('laptop', 'legacy-' + index),
+      source,
+    }));
+    const confirmed = Array.from({ length: 10 }, (_, index) =>
+      task('laptop', 'confirmed-' + index),
+    );
+    const tasks = [...unconfirmed, ...confirmed];
+    const daily = tasks.map((entry, index) => ({
+      day: '2026-09-26',
+      taskKey: entry.taskKey,
+      tokens: 100 - index,
+    }));
+    const input = history(daily, tasks);
+
+    expect(buildUsageTaskRows(input, 'today').map((row) => row.taskKey)).toEqual(
+      confirmed.slice(0, 8).map((entry) => entry.taskKey),
+    );
+    expect(buildUsageTaskRows(input, 'all').map((row) => row.taskKey)).toEqual(
+      confirmed.slice(0, 8).map((entry) => entry.taskKey),
+    );
+    expect(input.taskDaily).toEqual(daily);
+    expect(input.tasks).toEqual(tasks);
+  });
+
+  it.each(['desktop', 'plugin', 'cindy-make', 'cindy-make-merge'])(
+    'reconsiders retained peer tasks only after their source is confirmed as %s',
+    (source) => {
+      const peerTask = { ...task('laptop', 'retained'), source: null };
+      const input = history(
+        [{ day: '2026-09-26', taskKey: peerTask.taskKey, tokens: 100 }],
+        [peerTask],
+      );
+      expect(buildUsageTaskRows(input, 'today')).toEqual([]);
+
+      const refreshed = { ...input, tasks: [{ ...peerTask, source }] };
+      expect(buildUsageTaskRows(refreshed, 'today').map((row) => row.taskKey)).toEqual(
+        source === 'desktop' || source === 'plugin' ? [peerTask.taskKey] : [],
+      );
+      expect(input.tasks).toEqual([peerTask]);
+    },
+  );
+
+  it.each([null, undefined])('preserves local task compatibility with source %s', (source) => {
+    const localTask = { ...task('local', 'ordinary'), source };
+    const input = history(
+      [{ day: '2026-09-26', taskKey: localTask.taskKey, tokens: 100 }],
+      [localTask],
+    );
+
+    expect(buildUsageTaskRows(input, 'today').map((row) => row.taskKey)).toEqual([
+      localTask.taskKey,
+    ]);
   });
 
   it('reports the coverage start only when the range reaches before the first record', () => {

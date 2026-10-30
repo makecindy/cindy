@@ -135,6 +135,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   let remoteCursor = null,
     lastLocalMove = 0,
     localCursorAwake = false;
+  // The lower native pad is always relative input, independently of the video
+  // surface's touch mode. Keep its contact alive while the finger pauses too.
+  let nativeTouchpad = null;
   let touchCursor = null,
     touchCursorTimer = null,
     touchCursorVisible = false;
@@ -143,6 +146,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   let pending = [],
     pendingSince = 0,
     sending = false,
+    // Deadline while a paste shortcut holds the queue (desktop only; 0 = open),
+    // and which modifier is copy/paste on the controlled computer.
+    inputGateUntil = 0,
+    clipboardModifier = "control",
     cx = 0.5,
     cy = 0.5,
     drag = false,
@@ -538,16 +545,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function panBounds(r) {
     const vw = viewportWidth(),
       vh = viewportHeight();
-    // Grow extra resting travel continuously from zero at fit to 180 screen
-    // points at maximum zoom. Never count the unused space of a fitting axis.
-    const clearance = 180 * zoomProgress(r);
-    const axis = (viewport, content) =>
-      content <= viewport
+    // Grow extra resting travel continuously from zero at fit to its full reach
+    // by 1.5x, so even a light zoom can pull edge content clear of the overlaid
+    // chrome. Never count the unused space of a fitting axis.
+    // Each axis reaches at most 240 points or 40% of its own viewport.
+    const ramp = Math.min(0.5, r.maxZoom - 1);
+    const grown = ramp > 0 ? clamp((zoom - 1) / ramp) : 0;
+    const axis = (viewport, content) => {
+      const clearance = grown * Math.min(240, viewport * 0.4);
+      return content <= viewport
         ? {
             min: (viewport - content) / 2 - clearance,
             max: (viewport - content) / 2 + clearance,
           }
         : { min: viewport - content - clearance, max: clearance };
+    };
     const x = axis(vw, r.width),
       y = axis(vh, r.height);
     const bounds = {
@@ -690,11 +702,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         post({ type: "scaleMode", mode: scaleMode });
       }
     }
-    const touchFeedback = control && mode === "touch" && touchCursorVisible;
-    const cursorX = mode === "touch" && touchCursor ? touchCursor.x : cx;
-    const cursorY = mode === "touch" && touchCursor ? touchCursor.y : cy;
+    const directTouch = mode === "touch" && !nativeTouchpad;
+    const touchFeedback = control && directTouch && touchCursorVisible;
+    const cursorX = directTouch && touchCursor ? touchCursor.x : cx;
+    const cursorY = directTouch && touchCursor ? touchCursor.y : cy;
     cursor.style.transition =
-      mode === "touch" && !touchFeedback && !reducedMotion.matches
+      directTouch && !touchFeedback && !reducedMotion.matches
         ? "opacity 120ms ease-out"
         : "none";
     for (const el of [image, video]) {
@@ -715,15 +728,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       cursor.style.top = r.y + cursorY * r.height - remoteCursor.hotY + "px";
       cursor.style.display = "block";
       cursor.style.opacity = (
-        mode === "touch"
+        directTouch
           ? touchFeedback
           : remoteCursor.visible ||
-            (control && mode === "pointer" && localCursorAwake)
+            (control && (mode === "pointer" || nativeTouchpad) && localCursorAwake)
       )
         ? "1"
         : "0";
     } else {
-      cursor.style.opacity = (mode === "touch" ? !touchFeedback : false)
+      cursor.style.opacity = (directTouch ? !touchFeedback : false)
         ? "0"
         : "1";
       cursor.style.width = "18px";
@@ -805,14 +818,17 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!remoteCursor || remoteCursor.png !== value.png)
       cursorImage.src = "data:image/png;base64," + value.png;
     // Keep delayed host coordinates from pulling the local touchpad backwards.
+    const nativeOwnsCursor = nativeTouchpad &&
+      (nativeTouchpad.down ||
+        performance.now() - Math.max(lastLocalMove, nativeTouchpad.endedAt ?? 0) <= 200);
     if (
-      !remoteCursor ||
       !control ||
-      mode !== "pointer" ||
-      (!pointers.size && performance.now() - lastLocalMove > 200)
+      (!nativeOwnsCursor && (!remoteCursor || mode !== "pointer" ||
+        (!pointers.size && performance.now() - lastLocalMove > 200)))
     ) {
       cx = value.x;
       cy = value.y;
+      nativeTouchpad = null;
     }
     if (value.visible) localCursorAwake = false;
     remoteCursor = value;
@@ -832,7 +848,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!pending.length) pendingSince = performance.now();
     // Remote visibility can remain hidden after synthetic mouse movement. Wake
     // the local touchpad cursor until the host reports a visible cursor again.
-    if (event.kind === "move" && mode === "pointer") localCursorAwake = true;
+    if (event.kind === "move" && (mode === "pointer" || nativeTouchpad)) localCursorAwake = true;
     if (event.kind === "key" || event.kind === "text") {
       localCursorAwake = false;
       render();
@@ -856,6 +872,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function flush() {
     if (!pending.length) return;
+    // A paste shortcut waits for the controller to push the local clipboard
+    // first. That hold is deliberate (and each further paste re-arms it), so
+    // the batch's freshness clock only starts once the gate opens.
+    if (inputGateUntil) {
+      if (performance.now() < inputGateUntil) return;
+      inputGateUntil = 0;
+      pendingSince = performance.now();
+    }
     // Input is an intent about the picture the user saw, not durable work.
     // Never replay old clicks/typing after a stalled ACK or data channel drains.
     if (performance.now() - pendingSince >= 2000) {
@@ -903,11 +927,18 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }, 33);
   cleanups.push(() => clearInterval(inputTimer));
   function release() {
+    nativeTouchpad = null;
     stopEdgePan();
     desktopPan = null;
     clearTimeout(hold);
     if (gestureFrame !== null) cancelAnimationFrame(gestureFrame);
     gestureFrame = null;
+    // A paste still waiting for its clipboard push is abandoned, never sent
+    // late; the release itself must reach the computer at once.
+    if (inputGateUntil) {
+      inputGateUntil = 0;
+      pending = [];
+    }
     if (control) {
       queue({ kind: "release" });
       flush();
@@ -1467,7 +1498,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           dx: Math.max(-2000, Math.min(2000, wx)),
           dy: Math.max(-2000, Math.min(2000, wy)),
         });
-        flush();
+        // Let the existing input tick coalesce trackpad bursts. Key/button
+        // edges still flush immediately, preserving their order with scrolls.
       },
       { passive: false },
     );
@@ -1513,6 +1545,19 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     hardwareKeys.clear();
     commandKeys.clear();
   }
+  // Desktop only. Cmd/Ctrl+V holds the queue until the controller has pushed
+  // the local clipboard (or `inputGate` / the deadline releases it); Cmd/Ctrl+C
+  // and +X ask it to pull the computer's new copy soon after. Both are intents:
+  // the keys themselves still reach the computer unchanged.
+  function clipboardShortcut(e, code) {
+    const chord = clipboardModifier === "meta" ? e.metaKey : e.ctrlKey;
+    if (!config.desktop || e.repeat || e.altKey || !chord) return;
+    if (code === "KeyV") {
+      inputGateUntil = performance.now() + 1200;
+      post({ type: "clipboardIntent", action: "paste" });
+    } else if (code === "KeyC" || code === "KeyX")
+      post({ type: "clipboardIntent", action: "copy" });
+  }
   listen(document, "keydown", (e) => {
     if (config.desktop) {
       if (e.ctrlKey && e.altKey && e.code === "Escape") {
@@ -1546,7 +1591,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
-      pressKey(normalizedKey(e.code));
+      const code = normalizedKey(e.code);
+      clipboardShortcut(e, code);
+      pressKey(code);
     }
   });
   listen(document, "keyup", (e) => {
@@ -2141,6 +2188,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       case "releaseInput":
         release();
         break;
+      case "inputGate":
+        if (inputGateUntil) pendingSince = performance.now();
+        inputGateUntil = 0;
+        flush();
+        break;
       case "theme":
         if (/^#[0-9a-f]{3,8}$/i.test(message.surface)) {
           document.body.style.background = config.nativeMedia
@@ -2180,15 +2232,25 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       }
       case "nativeTouchpad": {
         if (!nativeMouseControls || !control) break;
+        if (message.phase === "start") {
+          nativeTouchpad = { down: true };
+          break;
+        }
+        if (message.phase === "end") {
+          if (nativeTouchpad) {
+            nativeTouchpad.down = false;
+            nativeTouchpad.endedAt = performance.now();
+          }
+          break;
+        }
         if (message.tap === true) {
           if (!heldMouse.size) { click(); flush(); }
           break;
         }
         if (!Number.isFinite(message.dx) || !Number.isFinite(message.dy)) break;
+        nativeTouchpad ??= { down: false };
         moveTouchpad(message.dx, message.dy);
         queue({ kind: "move", x: cx, y: cy });
-        touchCursor = { x: cx, y: cy };
-        touchCursorVisible = true;
         render();
         break;
       }
@@ -2358,6 +2420,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         seq = 0;
         epoch = message.epoch;
         macKeyboard = config.desktop && message.macKeyboard === true;
+        clipboardModifier =
+          message.clipboardModifier === "meta" ? "meta" : "control";
+        inputGateUntil = 0;
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;
@@ -2423,6 +2488,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         // existing sequence fence so a late old ACK cannot unlock a new batch.
         seq++;
         sending = false;
+        inputGateUntil = 0;
         control = message.enabled;
         if (!control) showKeyboard(false);
         pending = [];

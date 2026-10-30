@@ -1,16 +1,18 @@
 {
   "id": "bilibili-hot",
-  "match": ["bilibili.com"],
-  "description": "读取 B 站综合热门视频列表(排名/标题/UP主/播放量/弹幕数/链接)。先落到 bilibili.com 域,再在页面内同源 fetch JSON——带上登录 cookie、不被风控挡(直接 navigate 到 api 子域会被喂 SPA HTML)。",
-  "inputs": { "limit": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://www.bilibili.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "videos",
-      "fn": "async () => { const r = await fetch('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=' + encodeURIComponent('{{limit|js}}'), { credentials: 'include' }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('B站返回非 JSON(被风控挡或未登录),请在持久浏览器里正常访问/登录该站后重试'); } return (d && d.data && d.data.list ? d.data.list : []).map((v, i) => ({ rank: i + 1, title: v.title, author: v.owner && v.owner.name, play: v.stat && v.stat.view, danmaku: v.stat && v.stat.danmaku, url: v.bvid ? 'https://www.bilibili.com/video/' + v.bvid : '' })); }"
-    }
+  "match": [
+    "bilibili.com"
   ],
-  "output": "{{videos}}"
+  "description": "B站热门视频",
+  "access": "read",
+  "adapter": "bilibili/hot",
+  "inputs": {
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "Number of videos"
+    }
+  },
+  "steps": []
 }

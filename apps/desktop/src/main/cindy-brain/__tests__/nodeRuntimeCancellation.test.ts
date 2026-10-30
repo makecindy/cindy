@@ -42,14 +42,18 @@ afterEach(() => {
   for (const b of brokers.splice(0)) b.destroyAll();
 });
 
-function harness(autoSpawn = true, extra: Partial<GhostNodeRuntimeBrokerDeps> = {}) {
+function harness(
+  autoSpawn = true,
+  extra: Partial<GhostNodeRuntimeBrokerDeps> = {},
+  identity?: { ghost?: InstalledGhost; requestId?: string },
+) {
   const worker = new Worker();
   const children: Worker[] = [];
   const calls = new Map([
     ['call-a', new AbortController()],
     ['call-b', new AbortController()],
   ]);
-  const ghost = {
+  const ghost = identity?.ghost ?? {
     manifest: {
       id: 'test-plugin',
       name: 'Test',
@@ -65,11 +69,12 @@ function harness(autoSpawn = true, extra: Partial<GhostNodeRuntimeBrokerDeps> = 
     dir: path.resolve('test-plugin'),
     enabled: true,
   } as InstalledGhost;
+  const requestId = identity?.requestId ?? ghost.manifest.id;
   const broker = new GhostNodeRuntimeBroker({
     ...extra,
-    getGhost: () => ghost,
-    getCallSignal: (id, callId) =>
-      id === 'test-plugin' ? (calls.get(callId)?.signal ?? null) : null,
+    getGhost: extra.getGhost ?? (() => ghost),
+    getCallSignal: extra.getCallSignal ?? ((id, callId) =>
+      id === requestId ? (calls.get(callId)?.signal ?? null) : null),
     spawnProcess: () => {
       queueMicrotask(() => worker.emit('spawn'));
       return worker as NodeWorkerProcess;
@@ -82,7 +87,7 @@ function harness(autoSpawn = true, extra: Partial<GhostNodeRuntimeBrokerDeps> = 
   });
   brokers.push(broker);
   const request = (callId?: string) =>
-    broker.handleRequest('test-plugin', {
+    broker.handleRequest(requestId, {
       type: 'node-request',
       method: 'tools/call',
       params: { name: 'login' },
@@ -96,7 +101,7 @@ function harness(autoSpawn = true, extra: Partial<GhostNodeRuntimeBrokerDeps> = 
       args: [],
       ...(rpcId ? { rpcId } : {}),
     });
-  return { worker, children, calls, broker, request, spawn };
+  return { worker, children, calls, broker, request, spawn, ghost };
 }
 
 async function until(check: () => boolean) {
@@ -368,6 +373,61 @@ describe('Node private authorization bridge', () => {
     );
     await second;
   });
+
+  it('looks up remote authorization by physical instance id, not manifest ghostId', async () => {
+    const storagePart = '_ns__acme__test-plugin';
+    const orgGhost = {
+      manifest: {
+        id: 'test-plugin',
+        name: 'Test',
+        version: '1.0.0',
+        network: { hosts: ['provider.example'] },
+        node: {
+          entry: 'worker.cjs',
+          entries: ['child.cjs'],
+          protocol: 'json-rpc-stdio',
+          childSpawn: true,
+        },
+      },
+      namespace: 'acme',
+      dir: '/fake/_ns/acme/test-plugin',
+      enabled: true,
+    } as InstalledGhost;
+    let input!: Parameters<NonNullable<GhostNodeRuntimeBrokerDeps['openDeviceAuthorization']>>[0];
+    const open = vi.fn((value: typeof input) => {
+      input = value;
+      return { opened: Promise.resolve(), finish: vi.fn(), dispose: vi.fn() };
+    });
+    const h = harness(
+      true,
+      {
+        getGhost: (id) => (id === storagePart ? orgGhost : null),
+        getCallSessionId: (g, id) =>
+          g === storagePart && id === 'call-a' ? 'trusted-session' : null,
+        openDeviceAuthorization: open,
+      },
+      { ghost: orgGhost, requestId: storagePart },
+    );
+    const result = h.request('call-a');
+    await until(() => h.worker.requests.length === 1);
+    h.worker.listener?.({
+      type: 'device-authorize',
+      reqId: 'authorize-ns',
+      rpcId: h.worker.requests[0].id,
+      url: 'https://provider.example/device',
+    });
+    await until(() => h.worker.controls.some((x) => x.reqId === 'authorize-ns'));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(h.worker.controls.find((x) => x.reqId === 'authorize-ns')).toMatchObject({ ok: true });
+    expect(input.ghost.id).toBe(storagePart);
+    expect(input.sessionId).toBe('trusted-session');
+    input.assertCurrent();
+    h.worker.stdout.write(
+      JSON.stringify({ jsonrpc: '2.0', id: h.worker.requests[0].id, result: { ok: true } }) + '\n',
+    );
+    expect(await result).toEqual({ ok: true, result: { ok: true } });
+  });
+
   it.each([true, false])(
     'finishes the authorization before invalidating its binding (CLI ok=%s)',
     async (ok) => {
@@ -405,4 +465,40 @@ describe('Node private authorization bridge', () => {
       expect(() => assertCurrent()).toThrow();
     },
   );
+});
+
+// Unit: upload uses its live RPC call and aborts at the tool boundary.
+describe('private upload lifetime', () => {
+  it('binds upload to the real call and aborts it when the tool ends', async () => {
+    let observedSignal!:AbortSignal;
+    let release!:(value:unknown)=>void;
+    const send=vi.fn<NonNullable<GhostNodeRuntimeBrokerDeps['authenticatedFetch']>>((_id, request, _auth, guard, signal)=>{guard();observedSignal=signal;expect(request.callId).toBe('call-a');return new Promise(resolve=>{release=resolve;});});
+    const h=harness(true,{authenticatedFetch:send});const request=h.request('call-a');await until(()=>h.worker.requests.length===1);
+    const rpcId=h.worker.requests[0].id;
+    h.worker.listener?.({type:'authenticated-fetch',reqId:'upload',rpcId,authorization:'Bearer synthetic',request:{url:'https://provider.example/u',callId:'forged'}});
+    await until(()=>send.mock.calls.length===1);
+    h.calls.get('call-a')!.abort();await request;expect(observedSignal.aborted).toBe(true);release({ok:true});
+    await new Promise(r=>setImmediate(r));expect(h.worker.controls.some(x=>x.reqId==='upload'&&x.ok)).toBe(false);
+  });
+});
+
+
+// Unit: upload authorization is bound to owner and approved installation, not just a live RPC.
+it.each(['owner','manifest','disabled','approval'] as const)('rejects private upload after %s changes', async mode => {
+  let current = true;
+  const send = vi.fn(async () => ({ok:true}));
+  const h = harness(true, {authenticatedFetch:send,
+    ownerScope:{capture:()=> 'owner',isCurrent:()=>current,isStable:()=>current}});
+  const request = h.request('call-a'); await until(()=>h.worker.requests.length===1);
+  if(mode==='owner')current=false;
+  if(mode==='manifest')h.ghost.manifest.version='changed';
+  if(mode==='disabled')h.ghost.enabled=false;
+  if(mode==='approval')h.ghost.approval={state:'approved',revision:'replacement'};
+  h.worker.listener?.({type:'authenticated-fetch',reqId:'upload',rpcId:h.worker.requests[0].id,
+    authorization:'Bearer synthetic',request:{url:'https://provider.example/u',method:'POST',uploadDir:{token:'ticket'}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  expect(send).not.toHaveBeenCalled();
+  if (mode === 'owner') expect(h.worker.controls).toContainEqual({type:'request-settled',rpcId:h.worker.requests[0].id});
+  else expect(h.worker.controls).toContainEqual({type:'node-host-result',reqId:'upload',ok:false});
+  h.calls.get('call-a')!.abort(); await request;
 });

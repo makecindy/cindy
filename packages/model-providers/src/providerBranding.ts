@@ -2,14 +2,20 @@
  * Provider branding is pure catalog metadata shared by desktop and mobile.
  *
  * Paths use a 24px viewBox. Simple Icons 16.27.0 paths are CC0-1.0; the xAI
- * and Zhipu Mono paths are from Lobe Icons 5.14.0 under MIT. The LiteLLM
+ * Zhipu Mono and SiliconCloud paths are from Lobe Icons 5.14.0 under MIT. The LiteLLM
  * mascot silhouette is adapted from litellm-docs/static/img/logo.svg under MIT.
  * Ollama / LM Studio / vLLM paths are Simple Icons (CC0-1.0). llama.cpp has no
  * official Simple Icons glyph; `llamacpp` is an original stack mark.
  */
 
+export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR } from './cindyMark.js';
+
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Agnes official foreground mark: https://platform.agnes-ai.com/images/biglogo.svg
+  // Preserve its two paths, uniformly scaled from the 284px canvas to 24px.
+  agnes: 'M3.60592 14.2175C3.60592 14.2175 2.17859 18.6203 4.8093 19.0639C7.44 19.5076 11.8014 18.2425 16.6225 9.01437C16.6225 9.01437 16.0276 11.9121 15.7039 13.5727C15.6059 14.078 15.1639 14.4439 14.6493 14.4482L14.0062 14.4524C13.8169 14.4541 13.7451 14.6958 13.9006 14.8039C14.5099 15.2256 15.2915 16.1392 15.4166 18.0752C15.4437 18.4885 15.878 18.7538 16.2558 18.5831C16.4248 18.507 16.5887 18.3752 16.7146 18.1538C16.8203 17.9687 16.8693 17.7558 16.8777 17.5428L16.7907 16.7358C16.7442 16.3082 17.0003 15.9101 17.4042 15.7639C17.9755 15.5569 18.747 15.1234 19.1248 14.2344C19.1696 14.1296 19.0656 14.0206 18.9583 14.0594C18.5763 14.1963 17.8504 14.4228 17.2192 14.4194C17.0315 14.4186 16.8896 14.2479 16.9166 14.062L17.793 7.93945C17.8437 7.58706 17.5766 7.26762 17.2208 7.26002C17.0231 7.25579 16.7839 7.2803 16.5093 7.36227C15.8949 7.54565 15.3135 7.85579 14.9949 8.46761C13.4907 11.3611 6.28732 20.0341 3.60592 14.2175Z M16.6766 6.02113C17.4943 6.02113 18.1572 5.35825 18.1572 4.54056C18.1572 3.72286 17.4943 3.06 16.6766 3.06C15.8589 3.06 15.1961 3.72286 15.1961 4.54056C15.1961 5.35825 15.8589 6.02113 16.6766 6.02113Z',
+  siliconflow: 'M22.956 6.521H12.522c-.577 0-1.044.468-1.044 1.044v3.13c0 .577-.466 1.044-1.043 1.044H1.044c-.577 0-1.044.467-1.044 1.044v4.174C0 17.533.467 18 1.044 18h10.434c.577 0 1.044-.467 1.044-1.043v-3.13c0-.578.466-1.044 1.043-1.044h9.391c.577 0 1.044-.467 1.044-1.044V7.565c0-.576-.467-1.044-1.044-1.044z',
   // Original S monogram for the self-hosted Sub2API connection (not upstream artwork).
   sub2api: 'M5 3h14v3H8v4h8a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H5v-3h11v-5H8a3 3 0 0 1-3-3V3z',
   antgroup: "M15.984 1.383c-.259.593-.877.914-1.334 1.348-.702.669-.998 1.726-1.218 2.682 3.37.775 5.995 3.532 6.486 7.025.566 4.016-1.85 7.859-5.744 9.134-3.894 1.276-8.153-.38-10.126-3.935A8.339 8.339 0 016.457 6.833a18.703 18.703 0 01-.376-.802l-.174-.408a8.698 8.698 0 01-.618-1.987 7.523 7.523 0 01-.051-.37 3.717 3.717 0 01-.024-.34 2.506 2.506 0 01.132-.872 1.26 1.26 0 01.384-.594.842.842 0 011.165.11c.694.82.169 2.078.142 3.02.009.575.111 1.144.301 1.684l-.103.052a8.404 8.404 0 001.318-.79c.28-.243.45-.742.781-.864.33-.121.682.146.946.297.278.145.587.219.901.214l.462.007c.076.002.152.005.226.011.212.01.422.026.63.05l.196-1.08c.04-.216.082-.43.126-.645l.141-.641c.14-.7.42-1.367.823-1.96.305-.431.75-.746 1.262-.89.877-.217 1.24.629.937 1.348zm-2.244 5.44c-2.841.002-4.898 2.532-4.628 5.64.27 3.11 2.781 5.642 5.613 5.666 2.832.024 4.932-2.512 4.658-5.644-.273-3.133-2.802-5.666-5.643-5.663zm.357.57a4.707 4.707 0 013.304 1.445 5.703 5.703 0 011.643 3.49 4.841 4.841 0 01-1.141 3.705v.015a3.923 3.923 0 01-2.808 1.303 4.664 4.664 0 01-3.367-1.387 5.678 5.678 0 01-1.71-3.518 4.832 4.832 0 011.14-3.753 3.923 3.923 0 012.813-1.3h.126z",
@@ -64,7 +70,7 @@ export const PROVIDER_LOGO_PATHS = {
   vllm: 'm23.6 0-8.721 4.59L9.829 24h7.41zM9.83 24V5.142H.4Z',
 } as const;
 
-export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd';
+export type ProviderLogoKind = keyof typeof PROVIDER_LOGO_PATHS | 'anthropic' | 'openai' | 'xd' | 'cindy';
 
 /** Device-link 等运行时边界不能信任静态 union；未知未来值应安全回退。 */
 export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
@@ -72,6 +78,7 @@ export function isProviderLogoKind(value: unknown): value is ProviderLogoKind {
     value === 'anthropic'
     || value === 'openai'
     || value === 'xd'
+    || value === 'cindy'
     || (
       typeof value === 'string'
       && Object.prototype.hasOwnProperty.call(PROVIDER_LOGO_PATHS, value)
@@ -85,6 +92,7 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  agnes: 'agnes',
   sub2api: 'sub2api',
   "antgroup": "antgroup",
   "baseten": "baseten",
@@ -120,7 +128,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
   anthropic: 'anthropic',
   openai: 'openai',
-  xd: 'xd',
+  xd: 'cindy',
   xai: 'xai',
   gemini: 'google',
   openrouter: 'openrouter',
@@ -146,6 +154,9 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'xiaomi-mimo-api-cn': 'xiaomimimo',
   'xiaomi-mimo-token-plan-cn': 'xiaomimimo',
   'volcengine-coding-plan': 'volcengine',
+  'volcengine-api': 'volcengine',
+  'siliconflow-cn': 'siliconflow',
+  'siliconflow-global': 'siliconflow',
   'volcengine-agent-plan': 'volcengine',
   'tencentcloud-coding-plan': 'tencentcloud',
   'opencode-go': 'opencode',
@@ -161,9 +172,12 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['apihub.agnes-ai.com', 'agnes'],
   ["api.ant-ling.com", "antgroup"],
   ["inference.baseten.co", "baseten"],
   ["api.cerebras.ai", "cerebras"],
+  ["api.siliconflow.cn", "siliconflow"],
+  ["api.siliconflow.com", "siliconflow"],
   ["api.fireworks.ai", "fireworks"],
   ["api.groq.com", "groq"],
   ["router.huggingface.co", "huggingface"],

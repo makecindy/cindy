@@ -1,3 +1,13 @@
+/**
+ * 测试价值
+ * - 生产入口与可观察结果:botWorkbenchService 的读取 / 云端搬家读写;旧 workbench.json 原样保留、
+ *   旧字段不再出现在工作台里,旧判断仍可作为 Todo 兼容来源,搬家不丢另一台电脑的旧数据。
+ * - 规则依据:2026-10-17 放弃「项目」思路(读旧文件忽略 directories/tasks,不迁移、不报错);
+ *   cloud-companions.md §2(损坏文件不得读成空、搬家不改写别的电脑的路径)。
+ * - 现有覆盖缺口:旧测试覆盖的是项目增删与判断写入,这两条入口已删除。
+ * - 最小失败输入:带 directories/tasks 的旧文件;损坏文件;写链中途失败。
+ * - tier:unit(临时目录真实文件 I/O,无 Electron)。
+ */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,18 +16,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => [] } }));
 
-import { BOT_WORKBENCH_MAX_DIRECTORIES } from '../../../shared/botWorkbench.js';
 import { botProfileDir } from '../botProfileFolder.js';
+import { LEGACY_MAX_DIRECTORIES, boundLegacyJudgments } from '../botWorkbenchLegacy.js';
 import {
-  addBotWorkbenchDirectory,
-  boundJudgments,
+  mergeCompanionWorkbench,
+  readBotLinkedProjects,
+  setBotLinkedProject,
   normalizeWorkbench,
-  readBotWorkbench,
-  readBotWorkbenchDirectoryPaths,
-  readBotWorkbenchState,
-  rekeyBotWorkbenchJudgment,
-  removeBotWorkbenchDirectory,
-  setBotWorkbenchJudgment,
+  readCompanionWorkbench,
+  readLegacyWorkbenchJudgments,
 } from '../botWorkbenchService.js';
 
 let root: string | null = null;
@@ -26,135 +33,60 @@ afterEach(async () => {
   root = null;
 });
 
-describe('bot workbench storage', () => {
-  it('records handed-over projects in the Bot home, newest first, and removes them', async () => {
+const judgment = (verdict: 'unfinished' | 'idea' | 'done', updatedAt: string, project = '/w/art') => ({
+  title: '导出图标',
+  verdict,
+  next: verdict === 'done' ? null : '补 xxhdpi',
+  project,
+  updatedAt,
+});
+
+async function writeLegacy(dir: string, value: unknown): Promise<string> {
+  const file = path.join(botProfileDir(dir, 'bot-1'), 'workbench.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
+  return file;
+}
+
+describe('legacy workbench file', () => {
+  it('ignores old projects and judgments without migrating, rewriting or failing', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    const filo = path.join(root, 'Filo');
-    const art = path.join(root, 'tapmon-art');
-    await mkdir(filo);
-    await mkdir(art);
-
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', filo, new Date('2026-10-01T01:00:00.000Z'))).toEqual({ ok: true });
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', art, new Date('2026-10-01T02:00:00.000Z'))).toEqual({ ok: true });
-    // Handing the same project over again only moves it to the front.
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', filo, new Date('2026-10-01T03:00:00.000Z'))).toEqual({ ok: true });
-
-    expect((await readBotWorkbench(root, 'bot-1')).directories).toEqual([
-      { path: filo, name: 'Filo', addedAt: '2026-10-01T03:00:00.000Z', exists: true },
-      { path: art, name: 'tapmon-art', addedAt: '2026-10-01T02:00:00.000Z', exists: true },
-    ]);
-    expect(await readBotWorkbenchDirectoryPaths(root, 'bot-1')).toEqual([filo, art]);
-
-    await removeBotWorkbenchDirectory(root, 'bot-1', filo);
-    expect(await readBotWorkbenchDirectoryPaths(root, 'bot-1')).toEqual([art]);
-    // Other Bots never see this Bot's projects.
-    expect(await readBotWorkbenchDirectoryPaths(root, 'bot-2')).toEqual([]);
+    const legacy = {
+      directories: [{ path: path.join(root, 'Filo'), addedAt: '2026-09-30T00:00:00.000Z' }],
+      tasks: { 'idea:icons': judgment('idea', '2026-10-01T00:00:00.000Z', path.join(root, 'Filo')) },
+    };
+    const file = await writeLegacy(root, legacy);
+    const before = await readFile(file, 'utf8');
+    // Todo still imports the old judgment by its stable id.
+    expect(Object.keys(await readLegacyWorkbenchJudgments(root, 'bot-1'))).toEqual(['idea:icons']);
+    expect(await readFile(file, 'utf8')).toBe(before);
   });
 
-  it('rejects missing folders and only stops at the sanity bound, well past six projects', async () => {
+  it('reads no judgments from a missing or corrupt file, and bounds malformed entries', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', path.join(root, 'missing'))).toEqual({
-      ok: false,
-      errorCode: 'NOT_A_DIRECTORY',
-    });
-    for (let index = 0; index < BOT_WORKBENCH_MAX_DIRECTORIES; index += 1) {
-      const dir = path.join(root, `p${index}`);
-      await mkdir(dir);
-      expect(await addBotWorkbenchDirectory(root, 'bot-1', dir)).toEqual({ ok: true });
-    }
-    const extra = path.join(root, 'extra');
-    await mkdir(extra);
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', extra)).toEqual({ ok: false, errorCode: 'TOO_MANY' });
-  });
-
-  it('reads an empty workbench when a Bot has none yet or the file is corrupt', async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [], tasks: {} });
-    await mkdir(botProfileDir(root, 'bot-1'), { recursive: true });
-    await writeFile(path.join(botProfileDir(root, 'bot-1'), 'workbench.json'), '{not json', 'utf8');
-    expect(await readBotWorkbench(root, 'bot-1')).toEqual({ directories: [], tasks: {} });
-  });
-
-  it('ignores cards written by the earlier draft and drops them on the next write', async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    const project = path.join(root, 'Filo');
-    await mkdir(project);
-    const file = path.join(botProfileDir(root, 'bot-1'), 'workbench.json');
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify({
-      cards: [{ title: '进度', rows: [{ title: '#4100', status: 'review' }] }],
-      updatedAt: '2026-09-30T00:00:00.000Z',
-      directories: [{ path: project, addedAt: '2026-09-30T00:00:00.000Z' }],
-    }), 'utf8');
-
-    expect(await readBotWorkbench(root, 'bot-1')).toEqual({
-      directories: [{ path: project, name: 'Filo', addedAt: '2026-09-30T00:00:00.000Z', exists: true }],
-      tasks: {},
-    });
-    await removeBotWorkbenchDirectory(root, 'bot-1', path.join(root, 'nothing'));
-    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
-      directories: [{ path: project, addedAt: '2026-09-30T00:00:00.000Z' }],
-      tasks: {},
-    });
-  });
-
-  it('bounds and drops malformed directory entries instead of trusting the file', () => {
+    expect(await readLegacyWorkbenchJudgments(root, 'bot-1')).toEqual({});
+    await writeLegacy(root, '{not json');
+    expect(await readLegacyWorkbenchJudgments(root, 'bot-1')).toEqual({});
     const normalized = normalizeWorkbench({
       directories: [
         null,
         { path: 'relative/path' },
         { path: '/a', addedAt: 7 },
         { path: '/a' },
-        ...Array.from({ length: BOT_WORKBENCH_MAX_DIRECTORIES + 5 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
+        ...Array.from({ length: LEGACY_MAX_DIRECTORIES + 5 }, (_, index) => ({ path: `/p${index}`, addedAt: 'x' })),
       ],
-    });
-    expect(normalized?.directories).toHaveLength(BOT_WORKBENCH_MAX_DIRECTORIES);
-    expect(normalized?.directories[0]).toEqual({ path: '/a', addedAt: new Date(0).toISOString() });
-  });
-});
-
-describe('bot workbench judgments', () => {
-  const judgment = (verdict: 'unfinished' | 'idea' | 'done', updatedAt: string) => ({
-    title: '导出图标',
-    verdict,
-    next: verdict === 'done' ? null : '补 xxhdpi',
-    project: '/w/art',
-    updatedAt,
-  });
-
-  it('stores, replaces and re-keys a judgment next to the handed-over projects', async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    const project = path.join(root, 'art');
-    await mkdir(project);
-    await addBotWorkbenchDirectory(root, 'bot-1', project);
-    await setBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', {
-      title: '导出图标',
-      verdict: 'unfinished',
-      next: '补 xxhdpi',
-      project,
-    }, new Date('2026-10-01T01:00:00.000Z'));
-    await setBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', {
-      title: '导出 Android 图标',
-      verdict: 'idea',
-      next: '先问要不要做 xxxhdpi',
-      project,
-    }, new Date('2026-10-01T02:00:00.000Z'));
-    expect((await readBotWorkbenchState(root, 'bot-1')).tasks).toEqual({
-      'claude:abc': {
-        title: '导出 Android 图标',
-        verdict: 'idea',
-        next: '先问要不要做 xxxhdpi',
-        project,
-        updatedAt: '2026-10-01T02:00:00.000Z',
+      tasks: {
+        ok: judgment('idea', '2026-10-01T00:00:00.000Z'),
+        badVerdict: { ...judgment('idea', 'x'), verdict: 'maybe' },
+        relativeProject: { ...judgment('idea', 'x'), project: 'art' },
+        long: { ...judgment('unfinished', 'x'), title: 'x'.repeat(80), next: 'y'.repeat(300) },
       },
     });
-    await rekeyBotWorkbenchJudgment(root, 'bot-1', 'claude:abc', 'claude-abc');
-    const state = await readBotWorkbenchState(root, 'bot-1');
-    expect(Object.keys(state.tasks)).toEqual(['claude-abc']);
-    expect(state.directories).toEqual([project]);
-    // Removing a project keeps the judgments; the projection hides them by project.
-    await removeBotWorkbenchDirectory(root, 'bot-1', project);
-    expect(Object.keys((await readBotWorkbenchState(root, 'bot-1')).tasks)).toEqual(['claude-abc']);
+    expect(normalized?.directories).toHaveLength(LEGACY_MAX_DIRECTORIES);
+    expect(normalized?.directories[0]).toEqual({ path: '/a', addedAt: new Date(0).toISOString() });
+    expect(Object.keys(normalized?.tasks ?? {})).toEqual(['ok', 'long']);
+    expect(normalized?.tasks.long.title).toHaveLength(40);
+    expect(normalized?.tasks.long.next).toHaveLength(120);
   });
 
   it('keeps at most the limit, evicting the oldest done judgments first', () => {
@@ -164,74 +96,104 @@ describe('bot workbench judgments', () => {
       c: judgment('done', '2026-10-01T00:00:02.000Z'),
       d: judgment('idea', '2026-10-01T00:00:03.000Z'),
     };
-    expect(Object.keys(boundJudgments(tasks, 3)).sort()).toEqual(['b', 'c', 'd']);
-    expect(Object.keys(boundJudgments(tasks, 2)).sort()).toEqual(['b', 'd']);
-    expect(Object.keys(boundJudgments(tasks, 1))).toEqual(['d']);
-  });
-
-  it('drops malformed judgments when reading', () => {
-    const normalized = normalizeWorkbench({
-      tasks: {
-        ok: judgment('idea', '2026-10-01T00:00:00.000Z'),
-        badVerdict: { ...judgment('idea', 'x'), verdict: 'maybe' },
-        noTitle: { ...judgment('idea', 'x'), title: '' },
-        relativeProject: { ...judgment('idea', 'x'), project: 'art' },
-        long: { ...judgment('unfinished', 'x'), title: 'x'.repeat(80), next: 'y'.repeat(300) },
-      },
-    });
-    expect(Object.keys(normalized?.tasks ?? {})).toEqual(['ok', 'long']);
-    expect(normalized?.tasks.long.title).toHaveLength(40);
-    expect(normalized?.tasks.long.next).toHaveLength(120);
+    expect(Object.keys(boundLegacyJudgments(tasks, 3)).sort()).toEqual(['b', 'c', 'd']);
+    expect(Object.keys(boundLegacyJudgments(tasks, 1))).toEqual(['d']);
   });
 });
 
-describe('bot workbench write-chain failure hygiene', () => {
-  it('absorbs the cleanup promise rejection when a write fails and keeps the chain usable', async () => {
+describe('legacy workbench moving with the companion', () => {
+  it('carries every computer\'s folders and portable judgments unchanged', async () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    const proj = path.join(root, 'proj');
-    await mkdir(proj);
-    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
+    const here = path.join(root, 'here');
+    await writeLegacy(root, { directories: [{ path: here, addedAt: '2026-10-01T00:00:00.000Z' }], tasks: {} });
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', {
+      directories: [{ path: 'C:\\Users\\dash\\game', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'laptop' },
+        { path: '/Users/dash/back-home', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'desk' }],
+      tasks: {
+        'pr:makecindy/cindy#1': judgment('unfinished', '2026-10-01T00:00:00.000Z', here),
+        'session:abc': judgment('unfinished', '2026-10-01T00:00:00.000Z', here),
+      },
+    });
+    const travelling = await readCompanionWorkbench(root, 'bot-1', 'desk');
+    expect(travelling.directories.map((dir) => `${dir.deviceId}:${dir.path}`).sort()).toEqual(
+      ['desk:/Users/dash/back-home', `desk:${here}`, 'laptop:C:\\Users\\dash\\game'].sort(),
+    );
+    expect(Object.keys(travelling.tasks)).toEqual(['pr:makecindy/cindy#1']);
+  });
 
-    // 把 workbench.json 换成目录 → 下一次 mutate 的 rename 失败。
+  it('lets the cloud replace what this computer synced before, keeping judgments that never travel', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    const here = path.join(root, 'here');
+    await writeLegacy(root, {
+      directories: [{ path: here, addedAt: '2026-10-01T00:00:00.000Z' }],
+      tasks: {
+        'session:abc': judgment('unfinished', '2026-10-01T00:00:00.000Z', here),
+        'pr:makecindy/cindy#1': judgment('unfinished', '2026-10-01T00:00:00.000Z', here),
+      },
+    });
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', null, { replace: true });
+    expect((await readCompanionWorkbench(root, 'bot-1', 'desk')).directories).toEqual([]);
+    expect(Object.keys(await readLegacyWorkbenchJudgments(root, 'bot-1'))).toEqual(['session:abc']);
+  });
+
+  it('reads a damaged workbench as unreadable for the cloud, never as an empty one', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
+    expect(await readCompanionWorkbench(root, 'bot-1', 'desk')).toEqual({ directories: [], tasks: {} });
+    await writeLegacy(root, '{not json');
+    await expect(readCompanionWorkbench(root, 'bot-1', 'desk')).rejects.toThrow();
+  });
+
+  it('absorbs the cleanup rejection when a write fails and keeps the chain usable', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
     const file = path.join(botProfileDir(root, 'bot-1'), 'workbench.json');
-    await rm(file);
-    await mkdir(file);
-
+    // workbench.json 是目录 → mutate 的 rename 失败。
+    await mkdir(file, { recursive: true });
     const rejections: unknown[] = [];
     const onUnhandled = (reason: unknown) => rejections.push(reason);
     process.on('unhandledRejection', onUnhandled);
     try {
-      // 第二次添加走同一条写链:run 本身按预期 reject(调用方拿到失败)。
-      await expect(
-        addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T02:00:00.000Z')),
-      ).rejects.toThrow();
+      await expect(mergeCompanionWorkbench(root, 'bot-1', 'desk', { directories: [], tasks: {} })).rejects.toThrow();
       await new Promise((resolve) => setImmediate(resolve));
-      // finally 派生的 cleanup promise 不得产生进程级 unhandledRejection。
       expect(rejections).toEqual([]);
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
-
-    // 写链未被失败污染:恢复文件后同一 bot 的下一次写入正常。
     await rm(file, { recursive: true });
-    expect(await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T03:00:00.000Z'))).toEqual({ ok: true });
-    const state = await readBotWorkbenchState(root, 'bot-1');
-    expect(state.directories[0]).toBe(path.resolve(proj));
+    await mergeCompanionWorkbench(root, 'bot-1', 'desk', {
+      directories: [{ path: '/elsewhere', addedAt: '2026-10-01T00:00:00.000Z', deviceId: 'laptop' }], tasks: {},
+    });
+    expect((await readCompanionWorkbench(root, 'bot-1', 'desk')).directories).toHaveLength(1);
   });
 });
 
-describe('bot workbench directory removal normalization', () => {
-  it('removes a handed-over project addressed by an equivalent, differently-spelled path', async () => {
-    // 回归:add 存 path.resolve 后的路径, remove 曾按原始串比较 —— 尾分隔符、
-    // ./、../ 等等价写法会静默漏删, 广播后 UI 里项目仍在。
-    root = await mkdtemp(path.join(os.tmpdir(), 'bot-workbench-'));
-    const proj = path.join(root, 'proj');
-    const nested = path.join(proj, 'inner');
-    await mkdir(nested, { recursive: true });
-    await addBotWorkbenchDirectory(root, 'bot-1', proj, new Date('2026-10-01T01:00:00.000Z'));
-
-    // 等价写法:inner/.. 投影回 proj, 再补一个尾分隔符。
-    await removeBotWorkbenchDirectory(root, 'bot-1', `${nested}${path.sep}..${path.sep}`);
-    expect((await readBotWorkbenchState(root, 'bot-1')).directories).toEqual([]);
+// Linked-project restoration: existing tests only cover legacy judgment/cloud transport.
+// Production storage must keep multiple associations, other computers and judgments; no task ownership is written.
+// Minimal regression: add/remove a second directory beside a legacy directory. Tier: unit, isolated temporary files.
+describe('linked projects', () => {
+  it('retains legacy links and judgments while independently adding and removing multiple projects', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-projects-'));
+    const first = path.join(root, 'first'); const second = path.join(root, 'second');
+    const legacy = { directories: [{ path: first, addedAt: 'old' }, { path: first, addedAt: 'remote', deviceId: 'other' }], tasks: { 'idea:icons': judgment('idea', '2026-10-01T00:00:00.000Z') } };
+    const file = await writeLegacy(root, legacy);
+    await setBotLinkedProject(root, 'bot-1', { path: second }, true, () => {});
+    await setBotLinkedProject(root, 'bot-1', { path: second }, true, () => {});
+    expect(await readBotLinkedProjects(root, 'bot-1')).toHaveLength(3);
+    expect(await readBotLinkedProjects(root, 'bot-2')).toEqual([]);
+    await setBotLinkedProject(root, 'bot-1', { path: first }, false, () => {});
+    expect((await readBotLinkedProjects(root, 'bot-1')).map(p => [p.path, p.deviceId])).toEqual([[first, 'other'], [second, undefined]]);
+    const saved = JSON.parse(await readFile(file, 'utf8'));
+    expect(saved.tasks).toEqual(legacy.tasks);
+    expect(saved.responsibleSessionIds).toBeUndefined();
+    expect((await readCompanionWorkbench(root, 'bot-1', 'self')).directories.map(p => p.deviceId)).toEqual(['other', 'self']);
+  });
+  it('refuses damaged data and revoked writes without losing the existing associations', async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'bot-projects-'));
+    const file = await writeLegacy(root, '{broken');
+    await expect(setBotLinkedProject(root, 'bot-1', { path: root }, true, () => {})).rejects.toThrow();
+    expect(await readFile(file, 'utf8')).toBe('{broken');
+    await writeLegacy(root, { directories: [{ path: root, addedAt: 'old' }], tasks: {} });
+    let checks = 0;
+    await expect(setBotLinkedProject(root, 'bot-1', { path: root }, false, () => { if (++checks === 4) throw Error('REVOKED'); })).rejects.toThrow('REVOKED');
+    expect(await readBotLinkedProjects(root, 'bot-1')).toEqual([{ path: root, addedAt: 'old' }]);
   });
 });

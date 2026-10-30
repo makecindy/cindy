@@ -246,6 +246,22 @@ describe('persistent history integration', () => {
     expect(view.getSnapshot().ready).toBe(false);
     expect(view.getSnapshot().items).toEqual([]);
   });
+  it('keeps a disk restore started while the page was hidden once it gains focus', async () => {
+    // The network page is still on its way; the disk copy is what the user sees first.
+    const view = new HistoryViewController<RemoteMessage>({
+      page: () => new Promise(() => {}),
+      details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+      expanded: async () => {},
+    });
+    view.setActive(false);
+    let resolve!: (value: HistoryViewSnapshot<RemoteMessage>) => void;
+    const reading = view.restoreCachedView(() => new Promise(done => { resolve = done; }));
+    view.setActive(true);
+    resolve(snapshot('prefetched disk')); await reading;
+    expect(JSON.stringify(view.getSnapshot())).toContain('prefetched disk');
+    expect(view.getSnapshot().stale).toBe(true);
+    view.setActive(false);
+  });
   it.each(['fresh', 'reset', 'deactivate'])('ignores late disk after %s', async (action) => {
     const view = controller();
     let resolve!: (value: HistoryViewSnapshot<RemoteMessage>) => void;

@@ -1,14 +1,20 @@
 import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, type RemoteActionDescriptor, type RemoteResource, type RemoteResourceRef, type RemoteText } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
+import { isBotDeliverableFile } from '@cindy/maker-shared/bot-deliverable';
+import type { BotDelegationListResult } from '@cindy/maker-shared/botDelegation';
 
 export type ProfileValues = Record<string, string | boolean>;
 export interface ProfilePanel {
+  invitationAvailable?: boolean;
+  dismissAction?: RemoteActionDescriptor;
   id: string;
   text: string;
   action?: RemoteActionDescriptor;
   values: ProfileValues;
   followsDefault?: boolean;
+  /** Optional creation capability; older hosts omit it. */
+  creationModelChain?: string;
   title?: RemoteText;
   entries?: Array<{ id: string; title: RemoteText; resourceId: string; subtitle?: RemoteText; timestamp?: number }>;
   portraits?: Array<{ value: string; uri: string }>;
@@ -92,7 +98,13 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
       return portrait && string(portrait.value, 160) && string(portrait.uri, 200_000) && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(portrait.uri)
         ? [{ value: portrait.value, uri: portrait.uri }] : [];
     }) : undefined;
-    panels.push({ id: block.id, text: block.fallbackMarkdown, action: formAction, values, entries, portraits,
+    panels.push({
+      ...(block.id === 'follow-up' ? {
+        invitationAvailable: payload?.invitationAvailable === true,
+        dismissAction: actions.get(String(record(payload?.operationActions)?.dismiss ?? '')),
+      } : {}),
+      id: block.id, text: block.fallbackMarkdown, action: formAction, values, entries, portraits,
+      ...(block.id === 'create' && string(payload?.creationModelChain, 4000) ? { creationModelChain: payload.creationModelChain as string } : {}),
       ...(string(block.primitive, 64) ? { primitive: block.primitive } : {}),
       ...(Number.isSafeInteger(payload?.count) && Number(payload?.count) >= 0 ? { count: Number(payload?.count) } : {}),
       ...(block.primitive === 'search' && string(payload?.query, 1_000) ? { query: payload?.query as string } : {}),
@@ -125,6 +137,31 @@ export function companionArtifactRows(value: unknown, botId: string): Array<{ id
     return files.length ? [{ id: row.id, title: string(row.title, 2000) ? row.title : '', childSessionId: string(row.childSessionId, 160) ? row.childSessionId : null, files }] : [];
   });
 }
+const GLANCE_OUTPUT_LIMIT = 30;
+export interface GlanceOutput { key: string; name: string; childSessionId: string; taskTitle: string; at: number }
+
+/** Finished deliverables of this teammate's own delegated tasks, newest first (same rule as Desktop). */
+export function companionGlanceOutputs(value: BotDelegationListResult | null | undefined, botId: string): GlanceOutput[] {
+  if (!value?.ok) return [];
+  const files: GlanceOutput[] = [];
+  for (const delegation of value.delegations) {
+    if (delegation.requestingBotId !== botId || delegation.status !== 'completed' || !delegation.childSessionId) continue;
+    for (const artifact of delegation.artifacts ?? []) {
+      if (artifact.status === 'deleted') continue;
+      const name = artifact.path.split(/[\\/]/).at(-1) || artifact.path;
+      if (!isBotDeliverableFile({ path: artifact.path, name })) continue;
+      files.push({
+        key: `${delegation.id}:${artifact.path}`,
+        name,
+        childSessionId: delegation.childSessionId,
+        taskTitle: delegation.title,
+        at: delegation.completedAt ?? delegation.updatedAt,
+      });
+    }
+  }
+  return files.sort((a, b) => b.at - a.at).slice(0, GLANCE_OUTPUT_LIMIT);
+}
+
 export function profileFormDirty(panel: ProfilePanel | undefined, values: ProfileValues): boolean {
   return !!panel?.action?.fields?.some(field => (values[field.id] ?? '') !== (panel.values[field.id] ?? ''));
 }

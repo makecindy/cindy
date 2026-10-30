@@ -10,9 +10,14 @@
 import type {
   InteractionDecision,
   InteractionRequest,
+  InteractionResolver,
   TurnPermissionOrigin,
 } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from './sharedPermission';
+import {
+  isUnattendedTurn,
+  noteUnattendedPlanReviewDeclined,
+} from '../mcp-integrations/unattendedTurn.js';
 
 export type TurnOrigin = TurnPermissionOrigin;
 
@@ -27,6 +32,11 @@ export interface InteractionRoute {
   timeoutMs?: number;
   /** Main-owned source text, shared by Desktop and channel presentations. */
   sourceDescription?: string;
+  /**
+   * Main-verified sender of the turn's triggering message. Only 'owner' unlocks
+   * owner-only Host actions; channels that cannot prove it leave it unset.
+   */
+  requesterAuthority?: 'owner' | 'guest' | 'unknown';
   onStateChange?(state: InteractionRouteState): void;
 }
 
@@ -42,7 +52,7 @@ export interface InteractionLifecycleObserver {
 
 export interface InteractionSession {
   readonly id: string;
-  setInteractionListener(listener: InteractionHandler | null): void;
+  setInteractionListener(listener: InteractionResolver | null): void;
 }
 
 type RouteRegistration =
@@ -63,7 +73,11 @@ type RouteRegistration =
       onCancel?: (requestId: string, decision: InteractionDecision) => boolean | void;
     };
 
-type ActiveRoute = RouteRegistration & { token: symbol };
+type ActiveRoute = RouteRegistration & {
+  token: symbol;
+  /** Other input was steered into this turn; the triggering sender no longer speaks for it. */
+  steered?: boolean;
+};
 
 interface PendingRequest {
   shared?: SharedPermission;
@@ -111,7 +125,7 @@ class SessionInteractionRouter {
   private readonly pending = new Map<string, PendingRequest>();
 
   constructor(private readonly session: InteractionSession) {
-    session.setInteractionListener((request) => this.dispatch(request));
+    session.setInteractionListener((request, signal) => this.dispatch(request, signal));
   }
 
   setDesktopHandler(handler: InteractionHandler, cancel?: (requestId: string, decision: InteractionDecision) => void): void {
@@ -121,6 +135,18 @@ class SessionInteractionRouter {
 
   setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
     this.lifecycleObserver = observer;
+  }
+
+  getActiveRoute(): InteractionRoute | null {
+    const active = this.activeRoute;
+    if (!active) return null;
+    return active.steered && active.route.requesterAuthority !== undefined
+      ? { ...active.route, requesterAuthority: 'unknown' }
+      : active.route;
+  }
+
+  noteSteer(): void {
+    if (this.activeRoute) this.activeRoute.steered = true;
   }
 
   private notifyState(route: InteractionRoute | undefined, state: InteractionRouteState): void {
@@ -176,6 +202,20 @@ class SessionInteractionRouter {
     if (signal?.aborted) return safeDecision(request, 'session_aborted');
     if (this.pending.has(request.requestId)) {
       return safeDecision(request, 'duplicate_request_id');
+    }
+    // Scheduled fires have no one to answer. Resolve as a system dismissal
+    // instead of opening a card nothing can resolve: ask/plan deliberately have
+    // no timeout, so the run would otherwise hang until the 60min stall guard.
+    if (isUnattendedTurn(this.session.id)) {
+      if (request.kind === 'ask_user_question') {
+        return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      }
+      if (request.kind === 'plan_review') {
+        // Deny, not allow: plan mode means "act only after the owner approves".
+        // The runner surfaces this in the run result so the empty run is legible.
+        noteUnattendedPlanReviewDeclined(this.session.id);
+        return { kind: 'plan_review', behavior: 'deny', dismissed: true, reason: 'unattended_scheduled_run' };
+      }
     }
 
     const active = this.activeRoute;
@@ -313,6 +353,19 @@ export function requestHostInteraction(
   signal: AbortSignal,
 ): Promise<InteractionDecision> {
   return routerFor(session).dispatch(request, signal);
+}
+
+/**
+ * Read-only view of the live non-Desktop route; null for ordinary Desktop turns.
+ * Once other input is steered into the turn, `requesterAuthority` reads 'unknown'.
+ */
+export function getActiveInteractionRoute(session: InteractionSession): InteractionRoute | null {
+  return routers.get(session as object)?.getActiveRoute() ?? null;
+}
+
+/** Called before a steer reaches the provider; the route stops vouching for the sender. */
+export function noteInteractionRouteSteer(session: InteractionSession): void {
+  routers.get(session as object)?.noteSteer();
 }
 
 export function installInteractionLifecycleObserver(

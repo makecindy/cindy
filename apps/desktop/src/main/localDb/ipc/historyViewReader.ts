@@ -1,17 +1,48 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
-  projectHistoryView, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries, type HistoryMessageSource, type HistoryViewItem,
-  type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
+  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries,
+  type HistoryMessageSource, type HistoryWorkLine, type HistoryViewItem, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
 } from '@cindy/maker-shared/message-window';
 
 export const MAX_HISTORY_SCAN_ROWS = 2000;
 const MAX_HISTORY_SCAN_BYTES = 8 * 1024 * 1024;
+const WORK_LINE_SOURCE_BATCH = 24;
+/** Bounds the bodies read for one running preview; a longer duplicate run shows fewer lines. */
+const MAX_WORK_LINE_SOURCE_ROWS = 384;
 
 interface ReadOptions { limit: number; before?: string; after?: string }
+
+/**
+ * What a latest page looked like when it was delivered. Each top-level item has a
+ * fingerprint taken before the outline revision suffix (a DB-wide write counter that
+ * changes on every write); a running leaf work item is identified only by its start,
+ * because its contents are exactly what a work patch replaces.
+ */
+export interface HistoryPageShape {
+  keys: string[];
+  fingerprints: string[];
+  /** Running top-level leaf work items, key → revision exactly as delivered. */
+  running: Map<string, string>;
+}
+
+export interface HistoryPageOptions {
+  /** Attach Host-projected single-line activities to running top-level work items. */
+  workLines?: boolean;
+  /** Receives the latest page's shape; never serialized. */
+  onShape?: (shape: HistoryPageShape) => void;
+}
+
+function isRunningLeafWork<T extends HistoryMessageSource>(item: HistoryViewItem<T>): item is Extract<HistoryViewItem<T>, { type: 'work' }> {
+  return item.type === 'work' && !item.children && item.summary.isStreaming;
+}
+
+function fingerprint(value: unknown): string {
+  return createHash('sha1').update(JSON.stringify(value)).digest('base64');
+}
 export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   list(sessionId: string, opts: ReadOptions, skipImport: boolean): Promise<T[]>;
   /** Lightweight rows sufficient for grouping, never used as message bodies. */
@@ -61,6 +92,49 @@ function cutsHistoryToolContext(rows: readonly HistoryMessageSource[], start: nu
   return false;
 }
 
+/** Legal source cursors keep every deferred child with its owning Agent header. */
+function historyPageSafeStarts(rows: readonly HistoryMessageSource[]): Set<string> {
+  const scopes = historySubagentScopes(rows);
+  const headers = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.role === 'tool_use') {
+      const id = parseMessageToolUse(row).toolUseId;
+      if (id) headers.set(id, index);
+    }
+  });
+  const safe = new Set<string>();
+  let requiredStart = rows.length;
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const parent = scopes.get(rows[index].id);
+    if (parent) requiredStart = Math.min(requiredStart, headers.get(parent) ?? index);
+    if (requiredStart >= index) safe.add(rows[index].id);
+  }
+  return safe;
+}
+
+/** Twenty items is a target; the byte limit still bounds an intact tool span. */
+function historyPageStart<T extends HistoryMessageSource>(
+  items: readonly HistoryViewItem<T>[], safeStarts: ReadonlySet<string>, measureBytes: boolean,
+): number {
+  let start = items.length;
+  let bytes = 1024;
+  for (let index = items.length - 1; index >= 0; index--) {
+    if (measureBytes) {
+      bytes += Buffer.byteLength(JSON.stringify(items[index]), 'utf8');
+      // Preserve the existing single-item delivery exception. A multi-item
+      // Agent span may not bypass the page byte budget.
+      if (index < items.length - 1 && bytes > HISTORY_VIEW_PAGE_BYTES) break;
+    }
+    if (!safeStarts.has(firstId(items[index]))) continue;
+    start = index;
+    if (items.length - index >= HISTORY_VIEW_PAGE_ITEMS) break;
+  }
+  if (items.length && start === items.length) {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'History page would split tool context');
+  }
+  return start;
+}
+
 export function createHistoryViewReader<T extends HistoryMessageSource>(deps: HistoryViewReaderDependencies<T>) {
   let readRevision = 0;
   const readerEpoch = randomUUID();
@@ -70,7 +144,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
   let detailRevision: string | undefined;
   let detailCacheBytes = 0;
   return {
-    async page(sessionId: string, before?: string, lazyDetails = false): Promise<HistoryViewPage<T>> {
+    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
       const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
       const batchSize = outlined ? 1000 : 100;
       const rowBudget = outlined ? 100000 : MAX_HISTORY_SCAN_ROWS;
@@ -94,8 +168,9 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         // A page may start at a sealed answer. Keep that answer as right-hand
         // context when reading the preceding page, or an older progress seal
         // would become the "last answer" and escape its completed work group.
-        const context = beforeAnchor?.role === 'assistant'
-          && (beforeAnchor.agentMeta as { turnCompleted?: unknown } | null)?.turnCompleted === true
+        // Uses the projection's seal, so a cost-stamped interrupted answer still
+        // closes its turn when it is the first item of the newer page.
+        const context = beforeAnchor?.role === 'assistant' && completesHistoryTurn(beforeAnchor)
           ? beforeAnchor : undefined;
         const projected = projectHistoryView(
           [...raw.slice(boundary), ...live, ...(context ? [context] : [])],
@@ -146,10 +221,11 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       raw = chunks.slice().reverse().flat();
       const live = liveRows(raw);
       items = project(live);
+      const safeStarts = historyPageSafeStarts([...raw, ...live]);
       if (outlined) {
         // Select by visible objects before reading any hidden payloads. Every
         // hydrated row is rechecked against the current session/rewind epoch.
-        const candidate = items.slice(-HISTORY_VIEW_PAGE_ITEMS);
+        const candidate = items.slice(historyPageStart(items, safeStarts, false));
         const ids: string[] = [];
         mapHistoryViewMessages(candidate, (rows) => {
           ids.push(...rows.filter((row) => !row.id.startsWith('history-live:')).map((row) => row.id));
@@ -158,35 +234,57 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         const hydrated = new Map((await deps.hydrate!(sessionId, [...new Set(ids)])).map((row) => [row.id, row]));
         items.splice(items.length - candidate.length, candidate.length,
           ...mapHistoryViewMessages(candidate, (rows) => rows.map((row) => hydrated.get(row.id) ?? row)));
+      }
+      if (options.workLines && !before) {
+        const rows = [...raw, ...live];
+        for (const item of items.filter(isRunningLeafWork)) {
+          const start = rows.findIndex((row) => row.id === item.summary.firstMessageId);
+          const end = rows.findIndex((row) => row.id === item.summary.lastMessageId);
+          try {
+            // Repeated reads and empty thoughts are dropped by the projection, so a fixed
+            // source tail can yield fewer lines than are visible. Widen from the end until
+            // five display lines exist or the group starts, hydrating each row only once.
+            const full = new Map<string, T>();
+            let lines: HistoryWorkLine[] = [];
+            for (let take = WORK_LINE_SOURCE_BATCH; start >= 0 && end >= start; take *= 2) {
+              const from = Math.max(start, end + 1 - Math.min(take, MAX_WORK_LINE_SOURCE_ROWS));
+              const tail = rows.slice(from, end + 1);
+              const missing = outlined ? tail.filter((row) => !row.id.startsWith('history-live:') && !full.has(row.id)) : [];
+              if (missing.length) for (const row of await deps.hydrate!(sessionId, missing.map((row) => row.id))) full.set(row.id, row);
+              lines = projectHistoryWorkLines(tail.map((row) => full.get(row.id) ?? row), true);
+              if (lines.length >= HISTORY_WORK_LINE_LIMIT || from === start || take >= MAX_WORK_LINE_SOURCE_ROWS) break;
+            }
+            item.summary.lines = lines;
+          } catch {
+            // Lines are a display hint. A range changing mid-read keeps the page usable;
+            // the next activity notice recomputes them.
+            item.summary.lines = [];
+          }
+        }
+      }
+      const fingerprints = options.onShape && !before ? new Map(items.map((item) => [item,
+        isRunningLeafWork(item) ? `running:${item.summary.firstMessageId}` : fingerprint(item)])) : undefined;
+      if (outlined) {
         // The outline deliberately omits bodies, so it cannot hash their bytes.
         // SQLite change counters also cover edits to hidden bodies without
         // reading them. Unchanged snapshots retain their rendering identities.
         for (const summary of historyWorkSummaries(items)) summary.revision += `:${outlineRevision}`;
       }
-      const selected: HistoryViewItem<T>[] = [];
-      let bytes = 1024;
-      for (let index = items.length - 1; index >= 0; index--) {
-        const size = Buffer.byteLength(JSON.stringify(items[index]), 'utf8');
-        if (selected.length > 0 && (selected.length >= HISTORY_VIEW_PAGE_ITEMS || bytes + size > HISTORY_VIEW_PAGE_BYTES)) break;
-        selected.unshift(items[index]);
-        bytes += size;
-      }
+      const selected = items.slice(historyPageStart(items, safeStarts, true));
       const hasMore = !exhausted || selected.length < items.length;
-      if (hasMore && selected.length) {
-        const rows = [...raw, ...live];
-        const start = rows.findIndex((row) => row.id === firstId(selected[0]));
-        // A deferred card can own rows newer than its own header. A cursor inside
-        // that span would lose them on the older page; use the existing raw path.
-        if (start >= 0 && cutsHistoryToolContext(rows, start, historySubagentScopes(rows))) {
-          throwIpcError('UNSUPPORTED_CAPABILITY', 'History page would split tool context');
-        }
-      }
       // A clear/rewind during the scan invalidates the whole snapshot, including
       // already-read rows. Never publish a prefix from the previous history epoch.
       // The cursor can also supply grouping context without appearing in raw.
       const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
       if (beforeAnchor) anchors.push(beforeAnchor.id);
       await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
+      if (fingerprints) {
+        options.onShape!({
+          keys: selected.map((item) => item.key),
+          fingerprints: selected.map((item) => fingerprints.get(item)!),
+          running: new Map(selected.filter(isRunningLeafWork).map((item) => [item.key, item.summary.revision])),
+        });
+      }
       return { version: 1, items: selected, hasMore,
         nextCursor: hasMore && selected.length ? firstId(selected[0]) : null };
     },
@@ -200,15 +298,17 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         else for (const id of ids) await deps.anchor(sessionId, id, true);
         return page;
       };
-      if (ref.parentToolUseId && deps.outline && deps.hydrate) {
-        const first = await deps.anchor(sessionId, ref.firstMessageId, true);
-        const last = await deps.anchor(sessionId, ref.lastMessageId, true);
+      if (ref.parentToolUseId) {
+        const outlined = !!deps.outline && !!deps.hydrate;
+        const read = outlined ? deps.outline! : deps.list;
+        const first = await deps.anchor(sessionId, ref.firstMessageId, outlined);
+        const last = await deps.anchor(sessionId, ref.lastMessageId, outlined);
         if (compareRows(first, last) > 0) throwIpcError('INVALID_PARAMS', 'Invalid history range');
-        const cursorAnchor = after ? await deps.anchor(sessionId, after, true) : undefined;
+        const cursorAnchor = after ? await deps.anchor(sessionId, after, outlined) : undefined;
         if (cursorAnchor && (compareRows(cursorAnchor, first) < 0 || compareRows(cursorAnchor, last) > 0)) {
           throwIpcError('INVALID_PARAMS', 'Invalid detail cursor');
         }
-        const revision = !ref.liveMessageIds?.length && deps.revision ? await deps.revision() : undefined;
+        const revision = outlined && !ref.liveMessageIds?.length && deps.revision ? await deps.revision() : undefined;
         if (revision !== detailRevision) {
           detailRanges.clear(); detailCacheBytes = 0; detailRevision = revision;
         }
@@ -220,24 +320,31 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         }
         if (!scoped) {
           const headers: T[] = [];
+          let fullBytes = 0;
+          const append = (rows: T[]) => {
+            if (!outlined) fullBytes += Buffer.byteLength(JSON.stringify(rows), 'utf8');
+            if (headers.length + rows.length > (outlined ? 100000 : MAX_HISTORY_SCAN_ROWS)
+              || fullBytes > MAX_HISTORY_SCAN_BYTES) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
+            headers.push(...rows);
+          };
           if (!first.id.startsWith('history-live:')) {
-            headers.push(first);
+            append([first]);
             let cursor = first.id;
+            const limit = outlined ? 1000 : 100;
             while (cursor !== (ref.lastStoredMessageId ?? last.id)) {
-              const batch = (await deps.outline(sessionId, { limit: 1000, after: cursor }, true)).slice().reverse();
+              const batch = (await read(sessionId, { limit, after: cursor }, true)).slice().reverse();
               if (!batch.length) break;
               const bounded = batch.filter((row) => compareRows(row, last) <= 0);
-              headers.push(...bounded);
-              if (headers.length > 100000) throwIpcError('INVALID_PARAMS', 'History detail range is too large');
+              append(bounded);
               const next = batch.at(-1)!.id;
               if (next === cursor) throwIpcError('INTERNAL', 'History detail cursor did not advance');
               cursor = next;
-              if (bounded.length < batch.length || batch.length < 1000) break;
+              if (bounded.length < batch.length || batch.length < limit) break;
             }
           }
           for (const id of ref.liveMessageIds ?? []) {
             const row = await deps.anchor(sessionId, id);
-            if (!headers.some((stored) => stored.clientId === row.clientId)) headers.push(row);
+            if (!headers.some((stored) => stored.clientId === row.clientId)) append([row]);
           }
           const scopes = historySubagentScopes(headers, ref.parentToolUseId);
           scoped = headers.filter((row) => scopes.get(row.id) === ref.parentToolUseId);
@@ -262,7 +369,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         for (let offset = 0; offset < candidates.length; offset += 100) {
           const batch = candidates.slice(offset, offset + 100);
           const stored = batch.filter((row) => !row.id.startsWith('history-live:'));
-          const full = new Map((await deps.hydrate(sessionId, stored.map((row) => row.id))).map((row) => [row.id, row]));
+          const full = new Map((outlined ? await deps.hydrate!(sessionId, stored.map((row) => row.id)) : stored).map((row) => [row.id, row]));
           for (const header of batch) {
             const row = full.get(header.id) ?? header;
             const size = Buffer.byteLength(JSON.stringify(row), 'utf8');

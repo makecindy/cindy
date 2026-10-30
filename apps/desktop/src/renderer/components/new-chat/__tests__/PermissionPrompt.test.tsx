@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PendingPermission } from '@/lib/makerChatStore';
+import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
 
 // 仓库同款 i18n mock:t 返回 key(带参时拼上参数便于断言)。
 vi.mock('react-i18next', () => ({
@@ -52,6 +53,16 @@ function permission(suggestions?: unknown[]): PendingPermission {
 }
 
 describe('PermissionPrompt 的会话级授权按钮', () => {
+  it('供应商分享的凭证确认提供本任务允许，并回传本机提供的授权标记', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission([PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL])} onRespond={onRespond} />);
+    fireEvent.click(screen.getByRole('button', { name: /alwaysAllowForSession/ }));
+    expect(onRespond).toHaveBeenCalledWith({
+      behavior: 'allow',
+      updatedPermissions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+      decisionClassification: 'user_permanent',
+    });
+  });
   it('提交中禁用按钮和快捷键，失败后允许重试', () => {
     const onRespond = vi.fn();
     const request = permission([bashRule]);

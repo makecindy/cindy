@@ -5,7 +5,7 @@ use napi_derive::napi;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
-        Foundation::{HWND, RPC_E_CHANGED_MODE},
+        Foundation::{HWND, POINT, RECT, RPC_E_CHANGED_MODE},
         System::{
             Com::{
                 CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
@@ -13,11 +13,13 @@ use windows::{
             },
             Threading::GetCurrentProcessId,
         },
+        Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST},
         UI::{
             Shell::{ITaskbarList3, TaskbarList},
             WindowsAndMessaging::{
                 CreateIconFromResourceEx, DestroyIcon, GetWindowThreadProcessId, IsWindow,
-                RegisterWindowMessageW, HICON, LR_DEFAULTCOLOR,
+                RegisterWindowMessageW, GetCursorPos, GetWindowRect, SetWindowPos, HICON, LR_DEFAULTCOLOR,
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
             },
         },
     },
@@ -116,6 +118,47 @@ pub fn set_overlay_icon(
         taskbar
             .SetOverlayIcon(window, icon.0, PCWSTR(description.as_ptr()))
             .map_err(failure)
+    }
+}
+
+// Keep drag geometry in physical pixels. Electron's DIP bounds round-trip is
+// not idempotent at fractional DPI, even when the logical size is held fixed.
+#[napi(object)]
+pub struct WindowDragOffset {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[napi]
+pub fn window_drag_offset(handle: Buffer) -> napi::Result<WindowDragOffset> {
+    let window = window_from_bytes(&handle)?;
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        GetCursorPos(&mut cursor).map_err(failure)?;
+        GetWindowRect(window, &mut bounds).map_err(failure)?;
+    }
+    Ok(WindowDragOffset { x: cursor.x - bounds.left, y: cursor.y - bounds.top })
+}
+
+#[napi]
+pub fn move_window_at_cursor(handle: Buffer, offset_x: i32, offset_y: i32) -> bool {
+    let Ok(window) = window_from_bytes(&handle) else { return false; };
+    let mut cursor = POINT::default();
+    let mut bounds = RECT::default();
+    unsafe {
+        if GetCursorPos(&mut cursor).is_err() || GetWindowRect(window, &mut bounds).is_err() {
+            return false;
+        }
+        let x = cursor.x - offset_x;
+        let mut y = cursor.y - offset_y;
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            y = y.max(info.rcWork.top);
+        }
+        if x == bounds.left && y == bounds.top { return true; }
+        SetWindowPos(window, HWND::default(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).is_ok()
     }
 }
 

@@ -1,0 +1,32 @@
+diff --git a/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js b/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
+index c9610599791ea4f624ac4fe42fb6b0d813d45286..dc1edcf46a7870d143729ce3fd0fdd800492ec8f 100644
+--- a/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
++++ b/build/layouts/stack-utils/toolbar/StackToolbarMenu/index.js
+@@ -155,6 +155,10 @@ function convertStackToolbarSubmenuMenuPropsToRNHeaderItem(props) {
+     if (props.inline !== undefined) {
+         item.inline = props.inline;
+     }
++    // Cindy patch: let a submenu carry its current value as a subtitle (UIMenuElement.subtitle).
++    if (props.subtitle !== undefined) {
++        item.subtitle = props.subtitle;
++    }
+     if (props.palette !== undefined) {
+         item.layout = props.palette ? 'palette' : 'default';
+     }
+diff --git a/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts b/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
+index 85442da99aef167a44ca5a0352c88f4fb79dce05..b34ccf982ea60bf9d9e297e367cf75959311642f 100644
+--- a/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
++++ b/build/layouts/stack-utils/toolbar/StackToolbarMenu/types.d.ts
+@@ -162,6 +162,12 @@ export interface StackToolbarMenuProps {
+      * @platform ios
+      */
+     title?: string;
++    /**
++     * Cindy patch: subtitle shown under a submenu's title (iOS 15+).
++     *
++     * @platform ios
++     */
++    subtitle?: string;
+     /**
+      * @default 'plain'
+      *

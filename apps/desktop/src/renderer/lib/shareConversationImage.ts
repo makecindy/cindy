@@ -46,6 +46,11 @@ export const SHARE_EXCLUDE_ATTR = 'data-share-exclude';
  * 发给别人既无意义又可能泄露身份;正文保留。
  */
 export const SHARE_SOURCE_ATTR = 'data-share-source';
+/**
+ * 流里尚未加载完、暂时隐藏的图片(ChatLoadingImage)。分享管线自己读图片字节,
+ * 克隆时恢复显示,不能因为流里还在转圈就让图从产物里消失。
+ */
+export const SHARE_PENDING_IMAGE_ATTR = 'data-share-image-pending';
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -127,12 +132,46 @@ export function stripMessageSources(root: HTMLElement): void {
   root.querySelectorAll(`[${SHARE_SOURCE_ATTR}]`).forEach((el) => el.remove());
 }
 
+/** 恢复流里仍在加载、被隐藏的图片(见 SHARE_PENDING_IMAGE_ATTR)。 */
+export function revealPendingImages(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>(`[${SHARE_PENDING_IMAGE_ATTR}]`).forEach((el) => {
+    el.removeAttribute(SHARE_PENDING_IMAGE_ATTR);
+    el.style.removeProperty('display');
+  });
+}
+
 /** 清掉会污染全局 querySelector 的锚点属性(见 CLONE_STRIPPED_ATTRS 注释)。 */
 export function stripCloneAnchors(root: HTMLElement): void {
   for (const attr of CLONE_STRIPPED_ATTRS) {
     if (root.hasAttribute(attr)) root.removeAttribute(attr);
     root.querySelectorAll(`[${attr}]`).forEach((el) => el.removeAttribute(attr));
   }
+}
+
+/**
+ * 纯布局容器标签:清洗后若只剩这些且没有文字,就是空壳。判空用「只剩容器」而不是
+ * 「有某几种媒体」—— 音频播放器、分隔线等非文字元素种类多且会增加,白名单漏一种
+ * 就会把整条有内容的消息误删。
+ */
+const SHARE_LAYOUT_ONLY_TAGS = new Set(['DIV', 'SPAN', 'P', 'SECTION', 'BR']);
+
+/**
+ * 克隆一条消息并做完全部清洗(交互件、来源标注、收起态、锚点)。清洗后没有文字、
+ * 也只剩纯布局容器时返回 null:例如只发了 `$指令` 的消息,插件标注被剥掉后只剩
+ * 空壳,留着会在图里占一段空白,单独分享时更会生成只有页脚的空图。
+ */
+export function prepareShareMessageClone(node: HTMLElement): HTMLElement | null {
+  const clone = node.cloneNode(true) as HTMLElement;
+  stripInteractiveElements(clone);
+  stripMessageSources(clone);
+  revealPendingImages(clone);
+  expandCollapsedMessages(clone);
+  stripCloneAnchors(clone);
+  if ((clone.textContent ?? '').trim().length > 0) return clone;
+  const hasNonLayoutElement = Array.from(clone.querySelectorAll('*')).some(
+    (el) => !SHARE_LAYOUT_ONLY_TAGS.has(el.tagName),
+  );
+  return hasNonLayoutElement ? clone : null;
 }
 
 const REDACTION_SCOPE_TAGS = new Set([
@@ -388,6 +427,38 @@ export function expandCollapsedMessages(root: HTMLElement): void {
 }
 
 /**
+ * 按选中顺序把清洗后的消息放进 stage,返回实际放入的条数。
+ *
+ * 跳选断点按「选中序列」判定(orderInAll 为当前已渲染可选序列的位置);清洗后为空的
+ * 消息(本身是选中项)不放进图里,但它之前出现的断点要延续到下一条实际放进图里的
+ * 消息,不能被吞掉。图首不放断点标记:前面没有内容可与之区隔。
+ */
+export function appendShareMessages(
+  stage: HTMLElement,
+  sourceNodes: readonly HTMLElement[],
+  orderedSelectedIds: readonly string[],
+  orderInAll: ReadonlyMap<string, number>,
+): number {
+  let prevIndex: number | null = null;
+  let appendedCount = 0;
+  let gapPending = false;
+  for (const [i, node] of sourceNodes.entries()) {
+    const currentIndex = orderInAll.get(orderedSelectedIds[i]) ?? null;
+    if (prevIndex !== null && currentIndex !== null && currentIndex - prevIndex > 1) {
+      gapPending = true;
+    }
+    prevIndex = currentIndex;
+    const clone = prepareShareMessageClone(node);
+    if (!clone) continue;
+    if (gapPending && appendedCount > 0) stage.appendChild(buildShareImageGapMarker());
+    gapPending = false;
+    stage.appendChild(clone);
+    appendedCount += 1;
+  }
+  return appendedCount;
+}
+
+/**
  * 跳选断点处的省略标记。
  *
  * 选了第 1、第 5 条时,两条在图里直接相邻 —— 接收方看不出中间还有对话被跳过,
@@ -403,6 +474,20 @@ export function buildShareImageGapMarker(): HTMLElement {
   marker.style.color = 'var(--text-tertiary)';
   marker.setAttribute('data-share-gap', '');
   return marker;
+}
+
+/**
+ * 冻结 stage 内的入场动画。克隆体挂进 document 时,图片淡入、消息浮入等动画会
+ * 从头重播,html-to-image 按动画中途的 computed style 内联。2026-10-14 实测:聊天
+ * 图片带 ChatLoadingImage 的 `animate-fade-in` 时,产物里整块留白、图片不见;
+ * 冻结后正常。样式表挂在 host 上、不在 stage 内,不会被序列化进产物。
+ */
+export function buildShareStageMotionFreeze(): HTMLStyleElement {
+  const style = document.createElement('style');
+  style.textContent =
+    '[data-share-export],[data-share-export] *,[data-share-export] *::before,' +
+    '[data-share-export] *::after{animation:none!important;transition:none!important}';
+  return style;
 }
 
 /**
@@ -517,6 +602,7 @@ export async function buildShareImageBlob({
   host.style.top = '0';
   host.style.zIndex = '-1';
   host.style.pointerEvents = 'none';
+  host.appendChild(buildShareStageMotionFreeze());
 
   const stage = document.createElement('div');
   stage.setAttribute('data-share-export', '');
@@ -541,19 +627,8 @@ export async function buildShareImageBlob({
   const orderInAll = new Map(allIds.map((id, index) => [id, index]));
 
   try {
-    let prevIndex: number | null = null;
-    for (const [i, node] of sourceNodes.entries()) {
-      const currentIndex = orderInAll.get(orderedSelectedIds[i]) ?? null;
-      if (prevIndex !== null && currentIndex !== null && currentIndex - prevIndex > 1) {
-        stage.appendChild(buildShareImageGapMarker());
-      }
-      stage.appendChild(node.cloneNode(true) as HTMLElement);
-      prevIndex = currentIndex;
-    }
-    stripInteractiveElements(stage);
-    stripMessageSources(stage);
-    expandCollapsedMessages(stage);
-    stripCloneAnchors(stage);
+    const appendedCount = appendShareMessages(stage, sourceNodes, orderedSelectedIds, orderInAll);
+    if (appendedCount === 0) throw new ShareImageNoContentError();
     redactTextNodes(stage);
 
     // 品牌素材是同源打包资源,html-to-image 本可自行内联;预先转掉是为了把
