@@ -1,3 +1,4 @@
+import { canPinInProject } from './swipeRowRegistry';
 import { CodexResetAutoUseControl } from './CodexResetAutoUseControl';
 import { TaskTagLabels, TaskTagsPanel } from './TaskTags';
 import { TaskTagsSheet, useTaskTagsSheet } from './TaskTagsSheet';
@@ -168,6 +169,7 @@ export interface SessionMenuSheetProps {
   worker?: SessionMenuWorkerActions;
   leavingSharing?: boolean;
   onTogglePinned(): void;
+  onToggleProjectPinned?(): void;
   /** 由调用方在列表预览事务内等待确认，再提交归档。 */
   onArchive(prepare: (isCurrent: () => boolean) => Promise<boolean>): void;
   /** 菜单收起后执行归档确认(如绑定了自动化);返回 false 时留在当前任务、不归档。 */
@@ -212,6 +214,7 @@ export function SessionMenuSheet({
   worker,
   leavingSharing = false,
   onTogglePinned,
+  onToggleProjectPinned,
   onArchive,
   confirmArchive,
   onRestore,
@@ -416,6 +419,8 @@ export function SessionMenuSheet({
   const actions = buildSessionMenuActions({
     archived: session.status === 'archived',
     pinned: !!session.pinnedAt,
+    canProjectPin: !!onToggleProjectPinned && canPinInProject(session),
+    projectPinned: !!session.projectPinnedAt,
     busy,
     writeDisabled: busy,
   });
@@ -497,6 +502,10 @@ export function SessionMenuSheet({
       case 'copyLink':
         copyValue('copyLink', sessionMenuCopyLink(session));
         return;
+      case 'projectPin':
+        onToggleProjectPinned?.();
+        onClose();
+        return;
       case 'pin':
         onTogglePinned();
         onClose();
@@ -517,7 +526,7 @@ export function SessionMenuSheet({
       default:
         return;
     }
-  }, [confirmArchive, confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, renamePrefill, session]);
+  }, [confirmArchive, confirmDelete, copyValue, onArchive, onClose, onRestore, onTogglePinned, onToggleProjectPinned, renamePrefill, session]);
 
   const currentExtraDirs = normalizeExtraDirs(session.extraDirs ?? undefined);
   const addExtraDir = useCallback((path: string) => {
@@ -1111,11 +1120,12 @@ export function SessionMenuSheet({
 
 type MenuIcon = typeof Pencil;
 
-function menuActionIcon(action: SessionMenuAction, session: Pick<RemoteSession, 'pinnedAt' | 'status'>): MenuIcon {
+function menuActionIcon(action: SessionMenuAction, session: Pick<RemoteSession, 'pinnedAt' | 'projectPinnedAt' | 'status'>): MenuIcon {
   switch (action.id) {
     case 'rename': return Pencil;
     case 'copyLink': return Link2;
     case 'pin': return session.pinnedAt ? PinOff : Pin;
+    case 'projectPin': return session.projectPinnedAt ? PinOff : Pin;
     case 'archive': return session.status === 'archived' ? ArchiveRestore : Archive;
     case 'delete': return Trash2;
     default: return Copy;

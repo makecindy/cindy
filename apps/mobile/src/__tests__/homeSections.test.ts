@@ -308,3 +308,17 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
     }
   });
 });
+
+// #7402, unit: production section builder; old tests have no project pins.
+// One older dual pin and a newer ordinary task distinguish group sorting and flat de-duplication.
+it('keeps project pins first in groups and avoids dual pins in the flat list', () => {
+  const old = listItem('pin', '2026-01-01T00:00:00Z');
+  old.session.projectPinnedAt = '2026-10-27T00:00:00Z';
+  old.session.pinnedAt = '2026-10-27T00:00:00Z';
+  const fresh = listItem('ordinary', '2026-10-27T01:00:00Z');
+  const home = presentation({ pinned: [old], projects: [projectGroup('p', fresh.lastActivityAt, [fresh, old])] });
+  const grouped = buildGroupedHomeRows(home)[0];
+  if (grouped.kind !== 'project') throw new Error('Expected project');
+  expect(grouped.project.sessions.map(i => i.session.id)).toEqual(['pin', 'ordinary']);
+  expect(buildMixedHomeRows(home).map(row => row.kind === 'session' && row.item.session.id)).toEqual(['ordinary']);
+});

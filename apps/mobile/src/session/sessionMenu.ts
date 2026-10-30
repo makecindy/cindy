@@ -44,7 +44,7 @@ export interface SessionMenuHeaderModel {
   usageSummary: string | null;
 }
 
-export type SessionMenuActionId = 'rename' | 'copyLink' | 'pin' | 'archive' | 'delete';
+export type SessionMenuActionId = 'rename' | 'copyLink' | 'pin' | 'projectPin' | 'archive' | 'delete';
 
 export interface SessionMenuAction {
   id: SessionMenuActionId;
@@ -77,6 +77,8 @@ export function buildSessionMenuHeader(session: RemoteSession): SessionMenuHeade
 export function buildSessionMenuActions(input: {
   archived: boolean;
   pinned: boolean;
+  canProjectPin?: boolean;
+  projectPinned?: boolean;
   busy: boolean;
   writeDisabled: boolean;
 }): SessionMenuAction[] {
@@ -97,11 +99,20 @@ export function buildSessionMenuActions(input: {
     },
     {
       id: 'pin',
-      label: input.pinned ? i18n.t('session.menu.unpin') : i18n.t('session.menu.pin'),
+      label: input.canProjectPin
+        ? i18n.t(input.pinned ? 'session.menu.unpinGlobally' : 'session.menu.pinGlobally')
+        : i18n.t(input.pinned ? 'session.menu.unpin' : 'session.menu.pin'),
       tone: 'default',
       disabled: input.writeDisabled,
       testID: 'session.pinButton',
     },
+    ...(input.canProjectPin && !input.archived ? [{
+      id: 'projectPin' as const,
+      label: i18n.t(input.projectPinned ? 'session.menu.unpinInProject' : 'session.menu.pinInProject'),
+      tone: 'default' as const,
+      disabled: input.writeDisabled,
+      testID: 'session.projectPinButton',
+    }] : []),
     {
       id: 'archive',
       label: input.archived ? i18n.t('session.menu.restore') : i18n.t('session.menu.archive'),

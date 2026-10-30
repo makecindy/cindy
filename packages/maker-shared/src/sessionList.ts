@@ -41,6 +41,8 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   orcaRole?: 'lead' | 'worker' | string | null;
   permissionMode?: string | null;
   pinnedAt?: string | null;
+  /** Absent on older hosts; independent from the global pin. */
+  projectPinnedAt?: string | null;
   source?: string | null;
   status: 'active' | 'archived' | 'deleted' | string;
   title: string;
@@ -68,6 +70,22 @@ export interface RemoteSessionListMessageLike {
   role: string;
   sessionId?: string;
   toolUseId?: string | null;
+}
+
+/** Project-only pins precede an already sorted list; ordinary order stays intact. */
+export function sortProjectPinnedSessions<T extends { id: string; projectPinnedAt?: string | null }>(
+  sessions: readonly T[],
+): T[] {
+  const at = (session: T) => {
+    const value = session.projectPinnedAt ? Date.parse(session.projectPinnedAt) : NaN;
+    return Number.isFinite(value) ? value : -Infinity;
+  };
+  return sessions.slice().sort((a, b) => {
+    const left = at(a);
+    const right = at(b);
+    if (left === right) return left === -Infinity ? 0 : a.id.localeCompare(b.id);
+    return left < right ? 1 : -1;
+  });
 }
 
 export type RemoteSessionListSession = RemoteSessionListSessionLike;
@@ -189,6 +207,8 @@ export interface RemoteSessionListOptions {
    * 折叠会让被计入「查看全部 N 条」的其余 run 无法点开,故那里传 false 让每个 run 各自成行。
    */
   groupAutomations?: boolean;
+  /** Disabled for an automation's chronological run-history view. */
+  projectPins?: boolean;
   /**
    * 「尚未起名」任务的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名任务」;
    * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
@@ -228,7 +248,8 @@ export function buildRemoteSessionSections(
     ));
 
   const pinned = items.filter((item) => !!item.session.pinnedAt);
-  const rest = items.filter((item) => !item.session.pinnedAt);
+  const rest = items.filter((item) => !item.session.pinnedAt ||
+    (options.projectPins !== false && item.session.projectPinnedAt != null && !isDialogueSession(item.session)));
   const sections: RemoteSessionSection[] = [];
 
   if (pinned.length > 0) {
@@ -430,11 +451,19 @@ function buildProjectSections(
     projectGroups.set(key, list);
   }
   for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => compareSessionListStrings(a, b))) {
+    const byId = new Map(data.map(item => [item.session.id, item]));
     sections.push({
       key: `project:${workingDir}`,
       title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
         ?? projectTitle(workingDir),
-      data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
+      data: options.projectPins === false
+        ? groupAutomationListItems(data, now, groupAutomations, undefined, localizer)
+        : [
+            ...sortProjectPinnedSessions(data.filter(item => item.session.projectPinnedAt != null)
+              .map(item => item.session)).map(session => byId.get(session.id)!),
+            ...groupAutomationListItems(data.filter(item => item.session.projectPinnedAt == null),
+              now, groupAutomations, undefined, localizer),
+          ],
     });
   }
   return sections;
@@ -528,11 +557,13 @@ export function getRemoteSessionPreviewCollapse(
     limit: number;
     nowMs?: number;
     isSessionRunning?: (sessionId: string) => boolean;
+    projectScope?: boolean;
   },
 ): RemoteSessionPreviewCollapseView {
   const { visibleEntries, hiddenCount, totalCount } = getSessionListCollapseView({
     entries: items,
     minVisibleCount: options.limit,
+    isPinnedEntry: options.projectScope ? item => item.session.projectPinnedAt != null : undefined,
     nowMs: options.nowMs ?? Date.now(),
     getActivityMs: (item) => toMillis(item.lastActivityAt),
     showAll: false,

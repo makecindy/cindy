@@ -3961,6 +3961,7 @@ function ProjectRow({
     project.sessions,
     {
       limit: showAll ? project.sessions.length : PROJECT_PREVIEW_LIMIT,
+      projectScope: kind === 'project',
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
@@ -4508,7 +4509,7 @@ function HomeSessionRowInner({
   // 对齐桌面多绑定语义:只有同一会话的所有 schedule 都 paused / expired，
   // 才在 Timer 固定槽位叠 Pause 角标；任一 active 绑定仍保留普通 Timer。
   const scheduleStopped = item.scheduleInfo?.allSchedulesStopped === true;
-  const showPinned = !!item.session.pinnedAt;
+  const showPinned = !!item.session.pinnedAt || !!item.session.projectPinnedAt;
   // 显示形态(显示菜单「文字 / 列表」):文字形态不画预览行,定时 / 置顶标记并到标题行尾。
   const textMode = useHomeRowDisplay().viewMode === 'text';
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。

@@ -98,6 +98,8 @@ export interface RemoteSession {
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
+  /** Absent on older Hosts; independent of the global pin. */
+  projectPinnedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;

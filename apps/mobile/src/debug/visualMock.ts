@@ -53,6 +53,7 @@ interface VisualRealDataSnapshot {
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
+const mockSessionMeta = new Map<string, Partial<RemoteSession>>();
 let uiMockRows: ReturnType<typeof buildUiMockRows> | null = null;
 const getUiMockRows = () => uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' });
 const IMAGE_DATA_URL =
@@ -307,6 +308,16 @@ async function visualMockInvoke<T = unknown>(
       return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
       return visualMockSession(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
+    case 'local-db:sessions:patch-meta': {
+      if (realData) throw new ApiError('READ_ONLY', 403, 'Real-data snapshots are read-only');
+      const id = String(args[0]);
+      const patch = args[1] as Partial<RemoteSession>;
+      const current = visualMockSession(id);
+      const next = { ...mockSessionMeta.get(id), ...patch };
+      if (patch.status === 'archived' || patch.status === 'deleted') next.projectPinnedAt = null;
+      mockSessionMeta.set(id, next);
+      return { ...current, ...next } as T;
+    }
     case 'local-db:messages:list':
       return visualMockMessages(String(args[0] ?? VISUAL_MOCK_SESSION_ID)) as T;
     case 'local-db:messages:view': {
@@ -536,12 +547,14 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
     ...(row.id === 'visual-automation-running' ? { source: 'bot', companion: { id: 'cindy-default', role: 'routine' } } : {}),
     ...(row.id === 'ui-mock-long-title' ? { source: 'bot', companion: { id: 'visual-bot-lizi', role: 'channel', channel: 'telegram' } } : {}),
     pinnedAt: row.pinnedAt === null ? null : iso(row.pinnedAt),
+    projectPinnedAt: null,
     userSendAt: iso(row.userSendAt),
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
     preview: row.preview,
     _count: { messages: row.messageCount },
     ...(row.id === 'visual-prompt-recommendation' ? { lastTurnEndedAt: row.updatedAt } : {}),
+    ...mockSessionMeta.get(row.id),
   };
 }
 
@@ -561,11 +574,13 @@ function sessionFromShared(
     userId: visualMockUser.id,
     source: source.orcaRole ? 'orca' : 'desktop',
     pinnedAt: null,
+    projectPinnedAt: null,
     userSendAt: new Date(NOW - 30_000).toISOString(),
     createdAt: new Date(NOW - 300_000).toISOString(),
     updatedAt: new Date(NOW - 20_000).toISOString(),
     _count: { messages: source.id === VISUAL_MOCK_SESSION_ID ? SHARED_REMOTE_CONTROL_FIXTURE.rawMessages.length : 2 },
     ...patch,
+    ...mockSessionMeta.get(source.id),
   };
 }
 

@@ -471,6 +471,7 @@ function DeviceDetailScreenContent() {
       // 项目作用域精简页与完整设备详情页都折叠自动化组(HomeSessionRow 支持组行
       // 展开,与首页交互一致);自动化任务作用域页本身就是"某任务的全部运行",必须平铺不折叠。
       groupAutomations: !automationScopeKey,
+      projectPins: !automationScopeKey,
     }),
     [
       automationScopeKey,

@@ -199,7 +199,8 @@ export function buildMobileHomePresentation({
     localizer,
   ));
   const pinned = items.filter((item) => !!item.session.pinnedAt);
-  const rest = items.filter((item) => !item.session.pinnedAt);
+  const rest = items.filter((item) => !item.session.pinnedAt ||
+    (item.session.projectPinnedAt != null && !isDialogueSession(item.session)));
   // 同一自动化任务的多次运行折叠成一个组行(与设备详情页 buildRemoteSessionSections 同一套折叠,
   // 置顶行不参与,口径一致)。首页是多设备聚合列表,scopeKey 按维度隔离分组:
   // - chats(dialogue)按展示设备隔离 —— 防止 legacy fallback 键(仅 workingDir + 标题,无
@@ -214,13 +215,13 @@ export function buildMobileHomePresentation({
     localizer,
   );
   const projects = buildProjectGroups(
-    groupAutomationListItems(
-      rest.filter((item) => !isDialogueSession(item.session)),
-      now,
-      true,
-      (item) => projectGroupKey(item.session),
-      localizer,
-    ),
+    [
+      ...rest.filter(item => !isDialogueSession(item.session) && item.session.projectPinnedAt != null),
+      ...groupAutomationListItems(
+        rest.filter(item => !isDialogueSession(item.session) && item.session.projectPinnedAt == null),
+        now, true, item => projectGroupKey(item.session), localizer,
+      ),
+    ],
     devices,
     normalizedSessions,
     projectAliases,

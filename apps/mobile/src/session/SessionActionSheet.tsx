@@ -18,7 +18,7 @@ import { Text } from "@/components/AppText";
 import { BlurBackdrop } from "@/session/BlurBackdrop";
 import {
   buildSessionActionMenu,
-  type SessionSwipeAction,
+  type SessionOptionAction,
 } from "@/session/swipeRowRegistry";
 import {
   iconSize,
@@ -35,10 +35,12 @@ import {
   typeScale,
 } from "@/theme/tokens";
 
-const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
+const ACTION_ICONS: Record<SessionOptionAction, LucideIcon> = {
   archive: Archive,
   delete: Trash2,
   pin: Pin,
+  'pin-project': Pin,
+  'unpin-project': PinOff,
   rename: Pencil,
   restore: ArchiveRestore,
   unpin: PinOff,
@@ -55,7 +57,7 @@ export function SessionActionSheet({
 }: {
   session?: RemoteSession | null;
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
-  onAction(action: SessionSwipeAction): void;
+  onAction(action: SessionOptionAction): void;
   onClose(): void;
   /** 关闭动画完成、Modal 真正卸载后触发(兄弟 Modal 时序,同 DeviceMenuModal.onClosed)。 */
   onClosed?(): void;
@@ -71,7 +73,7 @@ export function SessionActionSheet({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const nativeSheet = Platform.OS === "android";
-  const menu = buildSessionActionMenu(pinnedAt, status);
+  const menu = buildSessionActionMenu(pinnedAt, status, session);
 
   return (
     <SessionActionSheetFrame
