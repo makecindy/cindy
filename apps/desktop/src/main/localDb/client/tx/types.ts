@@ -39,6 +39,7 @@ export type DbTxName =
   | 'message.updateContent'
   | 'message.leaseMutate'
   | 'message.rewindUserAfterClear'
+  | 'message.purgeRewoundSchedulerPrompts'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -475,6 +476,11 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  discard?: boolean;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsArgs {
+  limit: number;
 }
 
 /**
@@ -1434,6 +1440,7 @@ export type DbTxArgsByName = {
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
   'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -1536,6 +1543,7 @@ export type DbTxResultByName = {
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
   'message.rewindUserAfterClear': { changes: number };
+  'message.purgeRewoundSchedulerPrompts': { deleted: number; sessionIds: string[] };
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

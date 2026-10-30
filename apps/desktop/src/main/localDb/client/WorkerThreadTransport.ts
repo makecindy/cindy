@@ -501,6 +501,8 @@ function dispatchTransaction(readyDb, payload) {
       return messageLeaseMutate(readyDb, request.args);
     case 'message.rewindUserAfterClear':
       return messageRewindUserAfterClear(readyDb, request.args);
+    case 'message.purgeRewoundSchedulerPrompts':
+      return messagePurgeRewoundSchedulerPrompts(readyDb, request.args);
     case 'message.delete':
       return messageDelete(readyDb, request.args);
     case 'im.deleteBindings':
@@ -901,11 +903,19 @@ function messageRewindUserAfterClear(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   return readyDb.transaction(() => {
     const changes = readyDb.prepare(
       "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
     ).run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      readyDb.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       readyDb.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);
@@ -914,7 +924,34 @@ function messageRewindUserAfterClear(readyDb, args) {
   })();
 }
 
-// ⚠️ 与 worker/opHandlers/tx.ts 的同名事务保持一致。
+function messagePurgeRewoundSchedulerPrompts(readyDb, args) {
+  const payload = asRecord(args, 'message.purgeRewoundSchedulerPrompts args');
+  const limit = expectNumber(payload.limit, 'limit');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw Object.assign(new Error('limit must be an integer from 1 to 200'), { code: 'INVALID_ARGS' });
+  }
+  const selectSql = (
+    "SELECT id, session_id AS sessionId FROM messages "
+    + "WHERE role = 'user' AND rewind_at IS NOT NULL AND json_valid(agent_meta) "
+    + "AND json_extract(agent_meta, '$.origin.kind') = 'scheduler' "
+    + "ORDER BY rewind_at LIMIT ?"
+  );
+  return readyDb.transaction(() => {
+    const rows = readyDb.prepare(selectSql).all(limit);
+    if (rows.length === 0) return { deleted: 0, sessionIds: [] };
+    const remove = readyDb.prepare(
+      "DELETE FROM messages WHERE id = ? AND role = 'user' AND rewind_at IS NOT NULL",
+    );
+    for (const row of rows) remove.run(row.id);
+    const sessionIds = [...new Set(rows.map((row) => row.sessionId))];
+    const clearPreview = readyDb.prepare(
+      'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+    );
+    for (const sessionId of sessionIds) clearPreview.run(sessionId);
+    return { deleted: rows.length, sessionIds };
+  })();
+}
+
 function messageDelete(readyDb, args) {
   const payload = asRecord(args, 'message.delete args');
   const sessionId = expectString(payload.sessionId, 'sessionId');

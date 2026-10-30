@@ -142,6 +142,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return messageLeaseMutate(db, txArgs);
     case 'message.rewindUserAfterClear':
       return messageRewindUserAfterClear(db, txArgs);
+    case 'message.purgeRewoundSchedulerPrompts':
+      return messagePurgeRewoundSchedulerPrompts(db, txArgs);
     case 'message.delete':
       return messageDelete(db, txArgs);
     case 'im.deleteBindings':
@@ -1951,23 +1953,58 @@ function messageRewindUserAfterClear(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   const transaction = db.transaction(() => {
     const changes = db
       .prepare(
-        `UPDATE messages
-            SET rewind_at = ?
-          WHERE session_id = ?
-            AND client_id = ?
-            AND role = 'user'
-            AND rewind_at IS NULL`,
+        "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
       )
       .run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      db.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      db.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       db.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);
     }
     return { changes };
+  });
+  return transaction();
+}
+
+function messagePurgeRewoundSchedulerPrompts(
+  db: Database.Database,
+  args: unknown,
+): { deleted: number; sessionIds: string[] } {
+  const payload = asRecord(args, 'message.purgeRewoundSchedulerPrompts args');
+  const limit = expectNumber(payload.limit, 'limit');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw invalidArgs('limit must be an integer from 1 to 200');
+  }
+  const selectSql = (
+    "SELECT id, session_id AS sessionId FROM messages "
+    + "WHERE role = 'user' AND rewind_at IS NOT NULL AND json_valid(agent_meta) "
+    + "AND json_extract(agent_meta, '$.origin.kind') = 'scheduler' "
+    + "ORDER BY rewind_at LIMIT ?"
+  );
+  const transaction = db.transaction(() => {
+    const rows = db.prepare(selectSql).all(limit) as Array<{ id: string; sessionId: string }>;
+    if (rows.length === 0) return { deleted: 0, sessionIds: [] as string[] };
+    const remove = db.prepare(
+      "DELETE FROM messages WHERE id = ? AND role = 'user' AND rewind_at IS NOT NULL",
+    );
+    for (const row of rows) remove.run(row.id);
+    const sessionIds = [...new Set(rows.map((row) => row.sessionId))];
+    const clearPreview = db.prepare(
+      'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+    );
+    for (const sessionId of sessionIds) clearPreview.run(sessionId);
+    return { deleted: rows.length, sessionIds };
   });
   return transaction();
 }
