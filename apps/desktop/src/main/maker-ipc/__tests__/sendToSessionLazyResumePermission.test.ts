@@ -245,6 +245,7 @@ function botTaskDispatchHarness(
       await callback?.();
     },
     contextOverflowRolloverHolder: undefined,
+    taskCompletionDeliveryForOwner: () => null,
     buildCreateOptsWithStderr: (opts: Record<string, unknown>) => ({ ...opts }),
     synthesizeOrcaVendorOptionsFromDb: asyncNoop,
     readSessionExtraDirsFromDb: async () => [],

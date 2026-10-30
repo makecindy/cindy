@@ -7229,6 +7229,28 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
+  // Integration, PR #8026: a same-bot routine can reopen private work. Existing continuation
+  // tests used the original caller, hiding the mutable parent destination bug.
+  it('keeps private completion in the original chat when a routine reopens the task', async () => {
+    await seedPair();
+    seedGroupLane('routine-caller', 'routine:fixture');
+    h.sqlite!.prepare("UPDATE bot_session_links SET role='routine' WHERE session_id='routine-caller'").run();
+    let execution = { instanceId: 'native', generation: 1 };
+    const runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Original private task.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.settleChild(task.childSessionId, 'First result.', execution);
+      execution = { ...execution, generation: 2 };
+      expect(await runtime.delegation.messageSessionTask('routine-caller', task.delegationId, { kind: 'message', text: 'Continue.' }))
+        .toMatchObject({ ok: true, resumed: true });
+      await runtime.settleChild(task.childSessionId, 'Next result.', execution);
+      const completions = runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.startsWith(`bot-delegation-completion:${task.delegationId}`));
+      expect(completions).toHaveLength(2);
+      expect(completions.map(([params]) => params.targetSessionId)).toEqual(['session-1', 'session-1']);
+    } finally { runtime.dispose(); }
+  });
+
   it('collects artifacts using only inputs accepted in the reopened run', async () => {
     await seedPair();
     let execution = { instanceId: 'native', generation: 1 };

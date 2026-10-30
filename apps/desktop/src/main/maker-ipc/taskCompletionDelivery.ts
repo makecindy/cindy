@@ -28,12 +28,14 @@ interface TaskCompletionTerminal {
   execution: BotAutonomyExecution;
   successful: boolean;
   text: string;
+  messageClientId?: string;
 }
 
 export interface TaskCompletionDeliveryDeps {
   read(sessionId: string): Promise<TaskCompletionRecord | null>;
   update(sessionId: string, change: (record: TaskCompletionRecord) => void): Promise<void>;
   pending(): Promise<string[]>;
+  resolveText?(input: TaskCompletionTerminal): Promise<string>;
   post(sessionId: string, origin: TaskCompletionOrigin, receipt: TaskCompletionReceipt,
     freeze: (prepare: () => Promise<unknown>) => Promise<unknown>): Promise<
       { ok: true } | { ok: false; errorCode: string; retryable: boolean }>;
@@ -52,6 +54,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   const current = () => !disposed && deps.isCurrent();
   const same = (a: BotAutonomyExecution, b: BotAutonomyExecution) =>
     a.instanceId === b.instanceId && a.generation === b.generation;
+  const executionKey = (id: string, execution: BotAutonomyExecution) =>
+    JSON.stringify([id, execution.instanceId, execution.generation]);
   const serial = async <T>(id: string, action: () => Promise<T>): Promise<T> => {
     const run = (operations.get(id) ?? Promise.resolve()).catch(() => {}).then(action);
     operations.set(id, run);
@@ -62,8 +66,10 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
     if (!current() || timers.has(id)) return;
     const timer = setTimeout(() => {
       timers.delete(id);
-      const terminal = unsettled.get(id);
-      void (terminal ? settle(terminal) : deliver(id)).catch(deps.log);
+      void (async () => {
+        for (const terminal of [...unsettled.values()].filter(input => input.sessionId === id)) await settle(terminal);
+        await deliver(id);
+      })().catch(error => { deps.log(error); retry(id); });
     }, 60_000);
     timer.unref?.();
     timers.set(id, timer);
@@ -119,30 +125,35 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   };
   const deliver = (id: string) => serial(id, () => deliverUnserialized(id));
   async function settle(input: TaskCompletionTerminal) {
-    const report = reports.get(input.sessionId);
-    if (!report || !same(report.execution, input.execution)) return;
+    const key = executionKey(input.sessionId, input.execution);
+    const report = reports.get(key);
+    if (!report) return;
     if (!report.final || !input.successful || !current()) {
-      reports.delete(input.sessionId);
+      reports.delete(key);
+      unsettled.delete(key);
       return;
     }
+    // Retain the original execution before any origin/message reads can fail or yield.
+    unsettled.set(key, input);
     try {
       await serial(input.sessionId, async () => {
         const saved = await deps.read(input.sessionId);
         if (!saved || !current()) return;
         if (!saved.receipts.some(receipt => same(receipt.execution, input.execution))) {
+          const text = deps.resolveText ? await deps.resolveText(input) : input.text;
+          if (!current()) return;
           await deps.update(input.sessionId, record => {
             record.receipts.push({ id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
-              execution: input.execution, text: input.text, status: 'pending' });
+              execution: input.execution, text, status: 'pending' });
           });
         }
-        unsettled.delete(input.sessionId);
-        if (reports.get(input.sessionId) === report) reports.delete(input.sessionId);
+        unsettled.delete(key);
+        if (reports.get(key) === report) reports.delete(key);
         await deliverUnserialized(input.sessionId);
       });
     } catch (error) {
       deps.log(error);
       if (!current()) return;
-      unsettled.set(input.sessionId, input);
       retry(input.sessionId);
       try {
         await deps.showFailure(input.sessionId, { id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
@@ -152,7 +163,7 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   }
   return {
     report(id: string, execution: BotAutonomyExecution, final: boolean) {
-      if (current()) reports.set(id, { execution: { ...execution }, final });
+      if (current()) reports.set(executionKey(id, execution), { execution: { ...execution }, final });
     },
     hasOrigin: async (id: string) => current() && !!await deps.read(id),
     settle,

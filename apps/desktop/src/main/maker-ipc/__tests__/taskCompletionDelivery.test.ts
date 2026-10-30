@@ -9,11 +9,11 @@ function fixture(origin: TaskCompletionRecord['origin']) {
   const post = vi.fn<TaskCompletionDeliveryDeps['post']>(async () => ({ ok: true }));
   const failed = vi.fn(async () => {});
   let current = true;
-  const deps = { read: async () => structuredClone(record),
+  const deps: TaskCompletionDeliveryDeps = { read: async () => structuredClone(record),
     update: async (_: string, change: (value: TaskCompletionRecord) => void) => { change(record); },
     pending: async () => ['task'], post, showFailure: failed, isCurrent: () => current, log: vi.fn() };
   const start = () => createTaskCompletionDelivery(deps);
-  return { record, post, failed, start, stopOwner: () => { current = false; } };
+  return { record, post, failed, deps, start, stopOwner: () => { current = false; } };
 }
 const execution = { instanceId: 'native', generation: 1 };
 
@@ -103,4 +103,33 @@ it('restores an unsaved failure notice without reposting a permanently refused r
     expect(f.post).toHaveBeenCalledTimes(1);
     expect(f.record.receipts[0]).toMatchObject({ status: 'failed', failureShown: true, text: 'Retained result' });
   } finally { second.dispose(); }
+});
+
+// Unit, PR #8026 review: two executions can finish while origin/message reads or receipt
+// writes fail. Existing tests only failed after persistence; neither result may be overwritten.
+it.each(['read', 'resolveText', 'update'] as const)('retains both original executions when %s fails before persistence', async stage => {
+  vi.useFakeTimers();
+  const f = fixture({ botId: 'creator', sessionId: 'lane', groupId: 'group', threadRootId: 'root' });
+  f.deps.resolveText = async input => `Saved ${input.messageClientId}`;
+  const original = f.deps[stage]!;
+  const failure = vi.fn(original).mockRejectedValueOnce(new Error('BUSY')).mockRejectedValueOnce(new Error('BUSY'));
+  Object.assign(f.deps, { [stage]: failure });
+  const service = f.start();
+  try {
+    const next = { ...execution, generation: 2 };
+    service.report('task', execution, true);
+    const first = service.settle({ sessionId: 'task', execution, successful: true, text: 'Fallback 1', messageClientId: 'message-1' });
+    service.report('task', next, true);
+    const second = service.settle({ sessionId: 'task', execution: next, successful: true, text: 'Fallback 2', messageClientId: 'message-2' });
+    await Promise.all([first, second]);
+    expect(f.failed).toHaveBeenCalledTimes(2);
+    expect(f.post).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.record.receipts.map(receipt => ({ execution: receipt.execution, text: receipt.text, status: receipt.status }))).toEqual([
+      { execution, text: 'Saved message-1', status: 'delivered' },
+      { execution: next, text: 'Saved message-2', status: 'delivered' },
+    ]);
+    expect(f.post).toHaveBeenCalledTimes(2);
+    expect(f.post.mock.calls.every(call => call[1].threadRootId === 'root')).toBe(true);
+  } finally { service.dispose(); vi.useRealTimers(); }
 });

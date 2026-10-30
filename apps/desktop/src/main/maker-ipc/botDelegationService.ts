@@ -1217,7 +1217,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       // Completion routing is the creation snapshot, not the current follower/canonical task.
       const targetSessionId = privateChat
-        ? await requesterLiveSessionId(params.requestingBotId, params.parentSessionId) : originalSessionId;
+        ? await requesterLiveSessionId(params.requestingBotId, originalSessionId) : originalSessionId;
       if (!targetSessionId && privateChat && await holdCompletionForStoppedRequester(params)) return false;
       if (!targetSessionId || await requesterLiveSessionId(params.requestingBotId, targetSessionId) !== targetSessionId) {
         await persistDeliveryFailure(params, 'ORIGIN_UNAVAILABLE');

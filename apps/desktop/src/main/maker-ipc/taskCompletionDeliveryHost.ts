@@ -81,6 +81,14 @@ export function createTaskCompletionDeliveryHost(post: (input: BotGroupTaskPostI
   };
   const delivery = createTaskCompletionDelivery({
     read,
+    resolveText: async input => {
+      assertCurrent();
+      if (!input.messageClientId) return input.text;
+      const message = await getDbClient().drizzle.select({ content: messages.content })
+        .from(messages).where(and(eq(messages.sessionId, input.sessionId), eq(messages.clientId, input.messageClientId))).get();
+      assertCurrent();
+      return (message && visibleMessageText('assistant', message.content)) || input.text;
+    },
     update: (id, change) => write(id, record => {
       if (!record) throw new Error('TASK_DELIVERY_ORIGIN_MISSING');
       change(record);
@@ -166,16 +174,9 @@ export function createTaskCompletionDeliveryHost(post: (input: BotGroupTaskPostI
         ...(thread ? { threadRootId: thread.threadRootId } : {}) };
     },
     saveOrigin: (id: string, origin: TaskCompletionOrigin) => write(id, record => record ?? { origin, receipts: [] }),
-    async settleTerminal(input: { sessionId: string; execution: { instanceId: string; generation: number };
+    settleTerminal(input: { sessionId: string; execution: { instanceId: string; generation: number };
       successful: boolean; text: string; messageClientId?: string }) {
-      if (!isCurrent() || !await read(input.sessionId)) return;
-      let text = input.text;
-      if (input.messageClientId) {
-        const message = await getDbClient().drizzle.select({ content: messages.content, agentMeta: messages.agentMeta })
-          .from(messages).where(and(eq(messages.sessionId, input.sessionId), eq(messages.clientId, input.messageClientId))).get();
-        if (message) text = visibleMessageText('assistant', message.content) || text;
-      }
-      await delivery.settle({ ...input, text });
+      return delivery.settle(input);
     },
   };
 }
