@@ -178,3 +178,22 @@ it('waits for pending recommendations to settle before teaching, without competi
   await wait(2000);
   expect(shown()).toBe(true);
 });
+
+it.each([false, true])(
+  'requires a fresh click after work interrupts the teaching delay (prediction pending: %s)',
+  async (recommendationPending) => {
+    const view = render(<Fixture recommendationPending={recommendationPending} />);
+    intend();
+    await wait(1000);
+    state.busy = true;
+    view.rerender(<Fixture recommendationPending={recommendationPending} />);
+    state.busy = false;
+    view.rerender(<Fixture />);
+    await wait(2500);
+    expect(shown()).toBe(false);
+    expect(localStorage.getItem('cindy.composer-voice-guidance.v1')).toBeNull();
+    intend();
+    await wait(2000);
+    expect(shown()).toBe(true);
+  },
+);

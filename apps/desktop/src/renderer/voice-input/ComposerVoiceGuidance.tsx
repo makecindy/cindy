@@ -144,6 +144,7 @@ export function ComposerVoiceGuidance({
   }, [editor, sessionId]);
 
   useEffect(() => {
+    if (!canIntend) setIntended(false);
     if (!canShow) {
       setVisible(false);
       return;
@@ -168,7 +169,7 @@ export function ComposerVoiceGuidance({
       clearTimeout(timer);
       clearTimeout(hide);
     };
-  }, [canShow, intended, editor, sessionId]);
+  }, [canIntend, canShow, intended, editor, sessionId]);
 
   return (
     <span
