@@ -34,9 +34,11 @@ For a change that will become a pull request (not for a question or a read-only 
 
 ## 2. Open the pull request
 
-- When the work is done and verified and the user has not said whether to publish, it is usually right to ask in one short sentence. If they already asked you to open it, just do it.
-- Commit only related files, following the repository's rules. Push the branch, then `gh pr create` (ready for review unless the user wants a draft), filling the repository's PR template truthfully: what changed, how it was verified, risks.
-- Report the PR link in one line. Rename the task only when the user asks.
+- When the work is done and verified and the user has not said whether to publish, it is usually right to ask once. If they already asked you to open it, just do it.
+- **Ask with the PR card** when Cindy's GitHub plugin offers it: `ghost_call` with `ghost_id` `"cindy-github"`, `namespace` `null`, `tool` `"pr_card"` and args `repo`, `head`, `base`, plus `commits` and `files` (`{path, additions, deletions}`, at most 50, with `files_total`) from `git rev-list --count` and `git diff --numstat` against `origin/<base>`. The title and description are not needed yet. Keep the returned `card_id`, end your reply with one short line pointing at the card, and do not ask again in text. The user answers by clicking (a hidden message from the plugin arrives with the choice and the card's `settings`) or by saying so. Ask in one short sentence instead when the plugin is unavailable or the user is talking to you through an IM channel, where cards are not shown.
+- Commit only related files, following the repository's rules. Push the branch, then `gh pr create` (ready for review unless the user chose a draft), filling the repository's PR template truthfully: what changed, how it was verified, risks.
+- Right after creating it, apply the card settings: `auto_rename` → `cindy_helper` → `set_current_session_title` with `#<number> <PR title>`; `auto_follow` (not for drafts) → start following (section 4). Then update the same card: `pr_card` with `card_id`, `pr` (the PR URL), and `renamed` / `following` set only for what you actually did. If no card was shown, call `pr_card` with `repo` and `pr` now so the user gets its rename and follow buttons, and do what its `todo` lists.
+- Report the PR link in one line. Otherwise rename the task only when the user asks.
 - Then decide about following it (section 4).
 
 ## 3. A fix round
@@ -63,7 +65,7 @@ Hard convergence lines (the check output repeats them with the current round num
 
 ## 4. Following in the background
 
-**When to follow:** when the user asked you to (including `/pr <link>`), or when their saved preference says to follow PRs automatically. Otherwise, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked.
+**When to follow:** when the user asked you to (including `/pr <link>` and the PR card's Auto-follow button), or when the card's "Follow after opening" setting or their saved preference says so. With a PR card, its button and setting are the offer: do not also ask in text. Without one, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked.
 
 Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`). First `schedule_list` without a status filter and look for a schedule whose prompt or `preRunHook.command` contains this exact PR URL (host, owner/repo and number). If one exists, keep it; do not create a second. Otherwise call `schedule_create`, filling only the placeholders:
 
@@ -86,10 +88,10 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 }
 ```
 
-- Add a line to the prompt only for facts specific to this PR that cannot be derived (for example a reviewer the user named). General procedure lives in this Skill, not in the prompt.
+- Add a line to the prompt only for facts specific to this PR that cannot be derived (for example a reviewer the user named), and `PR card: <card_id>.` when there is one. General procedure lives in this Skill, not in the prompt.
 - The hook is a check that ships with Cindy: mount it directly, never generate one with `schedule_set_pre_run_hook` or copy the script. Do not pass `workingDir`, `model` or `effort`.
 - `notify` values are JSON booleans. On `INVALID_ARGS`, fix the arguments once from the returned schema; if it fails again, report it.
-- A returned id is not proof. Read it back with `schedule_get` and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following").
+- A returned id is not proof. Read it back with `schedule_get` and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following", or the card's Stop button), and update the card with `following: true`.
 - Leave `cronExpr` and `intervalMs` alone afterwards. The check paces itself: it looks at GitHub less often the longer the PR stays quiet and returns to every 10 minutes as soon as anything changes. How the check decides is described in `references/follow-up.md`.
 
 ## 5. Background round
@@ -103,11 +105,12 @@ The schedule wakes this task only when the check found something worth a look. E
    - **Draft:** fix technical problems that do not change what is being discussed; tell the user once what the draft is waiting for, then `--defer 240`.
    - **`silence-guard`:** a periodic look at what the check cannot see. Decide whether to merge in the base, re-run, close or nudge, rather than staying silent just because nothing changed.
    - **Merged or closed:** report it in one line, then `schedule_delete` this schedule (delete, never pause), then clean up (section 6).
-3. Finish every round with `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --ack`, or `--defer <minutes>` (which implies `--ack`) only in these cases: waiting for a user decision (240, after asking), blocked on something you cannot move (240, say what you are waiting for), or waiting for this push's bot reviewers (15, at most once per push).
+3. If the prompt names a PR card, refresh it before finishing: `pr_card` with `card_id`, `repo` and `pr`. It reads the current CI, review and merge state itself.
+4. Finish every round with `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --ack`, or `--defer <minutes>` (which implies `--ack`) only in these cases: waiting for a user decision (240, after asking), blocked on something you cannot move (240, say what you are waiting for), or waiting for this push's bot reviewers (15, at most once per push).
 
 **Notifications.** The schedule runs silently. Call `schedule_notify_current_run` (then write one short message) only when the user should know now: the PR became ready to merge for the first time, it was merged or closed, you need their decision, or the check reports a problem stuck for several backoff cycles. Never notify to say nothing changed, and never nag about pending approval or merge.
 
-If the user asks to stop, delete the schedule.
+If the user asks to stop (the card's Stop button sends this request too), delete the schedule and update the card with `following: false`.
 
 ## 6. Cleanup after merge or close
 
