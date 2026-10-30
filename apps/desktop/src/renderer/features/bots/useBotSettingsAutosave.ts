@@ -49,6 +49,8 @@ export interface BotSettingsAutosaveController {
   flush: () => Promise<void>;
   /** 失败后重发。 */
   retry: () => Promise<void>;
+  /** Drop a pending save without submitting. */
+  cancel: () => void;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
@@ -163,5 +165,7 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, onEdit, flush, retry, isDirty, composition };
+  const cancel = useCallback(() => autosave.cancel(), [autosave]);
+
+  return { status, onEdit, flush, retry, cancel, isDirty, composition };
 }

@@ -235,15 +235,34 @@ export function BotSettings({
     commit: commitProfile,
   });
 
+  const restoreSavedSettings = useCallback(() => {
+    const saved = savedSettingsRef.current;
+    setName(saved.name);
+    setDescription(saved.description);
+    setIdentitySource(saved.identitySource);
+    setUserContextSource(saved.userContextSource);
+    setAvatar(saved.avatar);
+    setAvatarColor(saved.avatarColor);
+    setSelectedSkills(saved.skills);
+    setCapabilities(saved.capabilities);
+  }, []);
   const canLeave = useCallback(async () => {
     if (avatarInFlight.current) return false;
-    await autosave.flush();
-    if (autosave.isDirty()) return false;
+    // A failed or hung save must not trap the user on this page. Drop the
+    // unsaved draft and still allow going back.
+    await Promise.race([
+      autosave.flush(),
+      new Promise((resolve) => setTimeout(resolve, 8_000)),
+    ]);
+    if (autosave.isDirty()) {
+      autosave.cancel();
+      restoreSavedSettings();
+    }
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     if (!((await capabilityLeaveRef.current?.()) ?? true)) return false;
     return (await routineLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty]);
+  }, [autosave, restoreSavedSettings]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;

@@ -583,6 +583,16 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
   });
 
+  it('returns to the previous settings page when saving fails', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('save unavailable'));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.settingsTabs.model' })).toBeTruthy());
+    expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalled();
+  });
   it('lists messaging platforms after capabilities and opens it from the home row or a deep link', () => {
     const view = renderSettings();
     const rows = screen
