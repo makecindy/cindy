@@ -233,7 +233,6 @@ import {
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
   mobileMarkdownInlineImageSize,
-  parseMobileMarkdown,
   parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   type MobileMarkdownParseResult,
@@ -282,11 +281,7 @@ import {
   mobileSessionMessageDisplayText,
   sentSessionMessageChipLabel,
 } from '@/session/sessionMessageText';
-import {
-  buildMobileMarkdownTableColumnWidths,
-  MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
-  mobileMarkdownTableCellCount,
-} from '@/session/messageTableLayout';
+import { buildMobileMarkdownTableColumnWidths } from '@/session/messageTableLayout';
 import { buildPayloadHeaderLayout, buildPayloadModalSafeArea } from '@/session/payloadHeaderLayout';
 import { buildPayloadBodyLayout, type PayloadBodyLayout } from '@/session/payloadBodyLayout';
 import {
@@ -5810,7 +5805,6 @@ function MarkdownBodyBase({
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
-  lightweightTableCells: lightweightTableCellsOverride,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -5827,11 +5821,6 @@ function MarkdownBodyBase({
   allowIosUITextView?: boolean;
   /** Reuse bounded native text runs for expanded companion messages on iOS. */
   boundTextRuns?: boolean;
-  /**
-   * Whole-message table-cell budget decision, set by MarkdownBody when rich content
-   * splits one reply into several bodies; omitted = decide from this body's own tables.
-   */
-  lightweightTableCells?: boolean;
   /** 本地 Markdown 图片的稳定消息身份,避免后续消息复用同一路径的旧媒体缓存。 */
   markdownImageCacheKey?: string;
   layout: MessageContentLayout;
@@ -5893,11 +5882,6 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
-  const lightweightTableCells = useMemo(
-    () => lightweightTableCellsOverride
-      ?? mobileMarkdownTableCellCount(blocks) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD,
-    [blocks, lightweightTableCellsOverride],
-  );
   const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
@@ -6190,34 +6174,6 @@ function MarkdownBodyBase({
         availableWidth: layout.markdownTableAvailableWidth,
         minWidth: layout.markdownTableCellMinWidth,
       });
-      // Table-heavy messages: hundreds of native selectable cells (UITextView on iOS, a
-      // selection-menu registration each on Android) make scrolling stutter. Cells keep
-      // system long-press copy but lose partial selection / the add-to-chat item.
-      const renderTableCell = (
-        cell: MobileMarkdownInline[],
-        key: string,
-        cellStyle: StyleProp<TextStyle>,
-      ) => {
-        const cellSelectable = inlinesSelectable(cell);
-        if (lightweightTableCells) {
-          return (
-            <Text key={key} selectable={cellSelectable} style={cellStyle}>
-              {renderInlines(cell, undefined)}
-            </Text>
-          );
-        }
-        return (
-          <MarkdownSelectableText
-            adjustVerticalAlignment={false}
-            allowIosUITextView={singleBlockAllowsIosUITextView}
-            key={key}
-            selectable={cellSelectable}
-            style={cellStyle}
-          >
-            {renderInlines(cell, singleBlockSpanFor(cellSelectable))}
-          </MarkdownSelectableText>
-        );
-      };
       return (
         <ScrollView
           horizontal
@@ -6227,19 +6183,41 @@ function MarkdownBodyBase({
         >
           <View style={styles.markdownTable}>
             <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
-              {columnWidths.map((columnWidth, index) => renderTableCell(
-                block.header[index] ?? [],
-                `${block.key}:th:${index}`,
-                [styles.markdownTableCell, { width: columnWidth }, styles.markdownTableHeaderCell],
-              ))}
+              {columnWidths.map((columnWidth, index) => {
+                const cell = block.header[index] ?? [];
+                return (
+                  <MarkdownSelectableText
+                    adjustVerticalAlignment={false}
+                    allowIosUITextView={singleBlockAllowsIosUITextView}
+                    key={`${block.key}:th:${index}`}
+                    selectable={inlinesSelectable(cell)}
+                    style={[
+                      styles.markdownTableCell,
+                      { width: columnWidth },
+                      styles.markdownTableHeaderCell,
+                    ]}
+                  >
+                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                  </MarkdownSelectableText>
+                );
+              })}
             </View>
             {block.rows.map((row) => (
               <View key={row.key} style={styles.markdownTableRow}>
-                {columnWidths.map((columnWidth, index) => renderTableCell(
-                  row.cells[index] ?? [],
-                  `${row.key}:td:${index}`,
-                  [styles.markdownTableCell, { width: columnWidth }],
-                ))}
+                {columnWidths.map((columnWidth, index) => {
+                  const cell = row.cells[index] ?? [];
+                  return (
+                    <MarkdownSelectableText
+                      adjustVerticalAlignment={false}
+                      allowIosUITextView={singleBlockAllowsIosUITextView}
+                      key={`${row.key}:td:${index}`}
+                      selectable={inlinesSelectable(cell)}
+                      style={[styles.markdownTableCell, { width: columnWidth }]}
+                    >
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)))}
+                    </MarkdownSelectableText>
+                  );
+                })}
               </View>
             ))}
           </View>
@@ -6256,7 +6234,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, lightweightTableCells, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}
@@ -9997,18 +9975,12 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const origin = useContext(ChatFilePathContext);
   const renderMedia = (node: RichNode) => <RichAnswerMedia node={node} body={props} />;
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
-  // Rich content splits one reply into several bodies; apply the table-cell budget to the
-  // whole reply so separated tables still switch to lightweight cells together.
-  const lightweightTableCells = useMemo(() => parts.some(part => part.kind === 'rich')
-    ? parts.reduce((count, part) => part.kind === 'rich' ? count
-      : count + mobileMarkdownTableCellCount(parseMobileMarkdown(part.source)), 0) > MOBILE_HEAVY_TABLE_CELL_THRESHOLD
-    : undefined, [parts]);
-  if (lightweightTableCells === undefined) return <MarkdownBodyBase {...props} />;
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
   return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} lightweightTableCells={lightweightTableCells || undefined} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
-    : <MarkdownBodyBase {...props} lightweightTableCells={lightweightTableCells || undefined} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
+        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
+    : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
 }
 
 /** Each composed column supplies its actual width; media never assumes a full message row. */

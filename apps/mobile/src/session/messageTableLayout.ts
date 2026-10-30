@@ -1,8 +1,4 @@
-import type {
-  MobileMarkdownBlock,
-  MobileMarkdownInline,
-  MobileMarkdownTableRow,
-} from '@/session/messageMarkdown';
+import type { MobileMarkdownInline, MobileMarkdownTableRow } from '@/session/messageMarkdown';
 
 export interface MobileMarkdownTableColumnWidthInput {
   header: readonly MobileMarkdownInline[][];
@@ -96,21 +92,4 @@ function clampWidth(value: number, min: number, max: number): number {
 
 function sum(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0);
-}
-
-/**
- * 一条消息里表格单元格超过这个数时，单元格改用轻量文本：iOS 不再逐格创建 UITextView，
- * Android 不再逐格注册「添加到对话」菜单。数百个原生可选文本视图会让长表格消息滑动卡顿。
- */
-export const MOBILE_HEAVY_TABLE_CELL_THRESHOLD = 120;
-
-export function mobileMarkdownTableCellCount(blocks: readonly MobileMarkdownBlock[]): number {
-  let count = 0;
-  for (const block of blocks) {
-    if (block.type !== 'table') continue;
-    // Rendering pads every row to the widest row, so count the grid, not the source cells.
-    const columns = Math.max(block.header.length, ...block.rows.map((row) => row.cells.length));
-    count += columns * (block.rows.length + 1);
-  }
-  return count;
 }

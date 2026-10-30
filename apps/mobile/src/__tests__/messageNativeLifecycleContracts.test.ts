@@ -365,8 +365,7 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     expect(markdownBodySource).toContain('height: layout.markdownBodyGap');
     expect(markdownBodySource).not.toContain('{ gap: layout.markdownBodyGap }');
     expect(source).toContain('mobileMarkdownImageAltChipText(inline.alt)');
-    expect(markdownBodySource).toContain('const cellSelectable = inlinesSelectable(cell);');
-    expect(markdownBodySource).toContain('selectable={cellSelectable}');
+    expect(markdownBodySource).toContain('selectable={inlinesSelectable(cell)}');
     expect(markdownBodySource).toContain('selectable={selectable === true}');
 
     // WebView 独有的用户气泡宽度估算 hack 不复活(原生 Text 自适应宽度)。
