@@ -55,6 +55,7 @@ import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { WorktreeChipsRow } from '@/components/new-chat/WorktreeChipsRow';
+import { applyWorktreeCreateMode } from '@/components/new-chat/branchPick';
 import {
   FolderPickerPopover,
   type FolderPickerDeviceScope,
@@ -245,6 +246,7 @@ import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fil
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
+  checkoutSourceBranchIgnoredByHost,
   createRemoteSessionWithPrecreatedWorktree,
   forgetPendingRemotePrecreatedWorktree,
   isRemotePrecreatedWorktreeCleanupPendingError,
@@ -906,6 +908,7 @@ export function NewMakerDraftRoute() {
   // 发送门放行普通会话(2026-08-07 裁决,勾选记忆只对合格目录生效)。null = 探测中或
   // 失败,维持 fail closed——「确认不是 git」和「探测不出来」不是一回事。
   const [wtConfirmedIneligible, setWtConfirmedIneligible] = useState<boolean | null>(null);
+  const [wtCurrentBranch, setWtCurrentBranch] = useState<string | null>(null);
   // repo-scoped 分支偏好以工作端 main 为权威。target ref 在换设备 / repo 的同步动作里先行
   // 改写，挡住 React commit 前一瞬间到达的旧 GET / APPLY / push；seq 另挡异步 GET 晚到。
   const wtBranchTargetRef = useRef<DraftWorktreeBranchTarget>({
@@ -2103,7 +2106,13 @@ export function NewMakerDraftRoute() {
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。
   const provisionalDraftArgs = useMemo<ProvisionalDraftCreateArgs | null>(() => {
     if (isDeviceLinkDraft || usesDeviceCatalog) return null;
-    if (wtEnabled && wtConfirmedIneligible !== true) return null;
+    // 发送时会建 worktree(勾选，或未勾选但选了另一条本地分支)就不能预先建在主目录里。
+    const wtWillCreate = applyWorktreeCreateMode({
+      enabled: wtEnabled,
+      currentBranch: wtCurrentBranch,
+      sourceBranch: wtSourceBranch,
+    }).enabled;
+    if (wtWillCreate && wtConfirmedIneligible !== true) return null;
     const workingDir = effectiveWorkingDir?.trim() || undefined;
     return {
       id: localDraftSessionIdRef.current,
@@ -2126,6 +2135,8 @@ export function NewMakerDraftRoute() {
     isDeviceLinkDraft,
     usesDeviceCatalog,
     wtEnabled,
+    wtCurrentBranch,
+    wtSourceBranch,
     wtConfirmedIneligible,
     effectiveWorkingDir,
     persistedAgentKind,
@@ -2407,6 +2418,7 @@ export function NewMakerDraftRoute() {
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
         setWtConfirmedIneligible(null);
+        setWtCurrentBranch(null);
       }
       if (deviceChanged) {
         // A checkbox write belongs to the previous work device. Invalidate its
@@ -3562,6 +3574,7 @@ export function NewMakerDraftRoute() {
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    currentBranch: wtCurrentBranch,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
@@ -3573,6 +3586,7 @@ export function NewMakerDraftRoute() {
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    currentBranch: wtCurrentBranch,
     supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
     confirmedIneligible: wtConfirmedIneligible,
     branchPreferenceReady: wtBranchPreferenceReady,
@@ -3694,19 +3708,21 @@ export function NewMakerDraftRoute() {
       // 发送语义以用户按下 Send 的那一帧为准。鉴权检查期间项目/分支仍可能被 UI
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
-      const selectedWorktree = { ...wtRef.current };
+      // 未勾选但选了另一条本地分支时折叠成「直接检出该分支」的 worktree，与勾选共用下方全部门。
+      const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
-      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 则只在
-      // Worktree ON 时阻塞；OFF 仍可直接创建普通 session，保持两条轴独立。
+      // 工作端确认，否则会把旧状态误当成这次用户意图。分支 APPLY 同样双向阻塞：
+      // 未勾选时所选分支也决定建不建 worktree(applyWorktreeCreateMode)，用写入前的
+      // 旧值判定会把刚选的分支静默落在当前分支上。
       // 确认不合格(2026-08-07 裁决)时控件隐藏、勾选不生效，偏好写入在途不应
       // 卡住普通会话创建——确认不合格目录永远不会创建 worktree。
       if (
         selectedWorktree.confirmedIneligible !== true &&
         (wtPreferenceSavingRef.current ||
           wtPreferenceAuthorityUnknownRef.current ||
-          (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+          wtBranchPreferenceSavingRef.current)
       ) {
         toast.warning(t('ccAgent.draft.deviceStillLoading'));
         return false;
@@ -3731,6 +3747,20 @@ export function NewMakerDraftRoute() {
           toast.error(t('ccAgent.draft.deviceStillLoading'));
           return false;
         }
+      }
+      // 未勾 worktree 且源分支是远端引用：无法直接在上面工作，保留草稿并提示，
+      // 不能静默建在当前分支上(远程电脑与本机同一口径)。
+      if (
+        selectedWorkingDir
+        && !isRemoteProjectDraft
+        && selectedWorktree.confirmedIneligible !== true
+        && selectedWorktree.sourceBranchUnsupported
+      ) {
+        toast.error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
+          branch: selectedWorktree.sourceBranch.trim(),
+          current: selectedWorktree.currentBranch,
+        }));
+        return false;
       }
       const dataOwnerAtSend = getDataOwnerGeneration();
       const builtInSkillIntent = getComposerDraft(NEW_MAKER_DRAFT_KEY)?.builtInSkillIntent;
@@ -3909,6 +3939,7 @@ export function NewMakerDraftRoute() {
                   baseRepo,
                   name,
                   sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                  ...(wt.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                   recoveryKey,
                 };
                 const resp = parseRemoteWorktreeCreateResult(
@@ -3930,6 +3961,12 @@ export function NewMakerDraftRoute() {
                   return;
                 }
                 remoteWorkingDir = resp.meta.path;
+                if (checkoutSourceBranchIgnoredByHost(wt.checkoutSourceBranch, resp.meta)) {
+                  toast.warning(t('ccAgent.draft.worktreeCheckoutBranchOldHost', {
+                    branch: resp.meta.branch,
+                    source: resp.meta.sourceBranch,
+                  }));
+                }
                 precreatedWorktree = {
                   path: resp.meta.path,
                   recoveryKey,
@@ -4291,7 +4328,7 @@ export function NewMakerDraftRoute() {
             }
             if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
 
-            let branchName = getBranchName(name);
+            let branchName = wt.checkoutSourceBranch ? wt.sourceBranch.trim() : getBranchName(name);
             const newSession = await createSession({
               id: sessionId,
               agentKind: persistedAgentKind,
@@ -4392,6 +4429,7 @@ export function NewMakerDraftRoute() {
                   baseRepo,
                   name,
                   sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                  ...(wt.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                 });
                 if (!resp.ok) {
                   worktreeCreationStore.set(newSession.id, {
@@ -4902,18 +4940,17 @@ export function NewMakerDraftRoute() {
       let optimisticGoalTitle: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
-        const selectedWorktree = { ...wtRef.current };
+        const selectedWorktree = applyWorktreeCreateMode({ ...wtRef.current });
         // Keep Goal on the exact same worktree contract as Send.  In
-        // particular, an in-flight checkbox write blocks both directions,
-        // while an in-flight branch write only blocks a Worktree-enabled
-        // project.  OFF remains an ordinary base-repo create even if the
-        // independent branch preference transaction is still settling.
+        // particular, in-flight checkbox and branch writes both block: with
+        // Worktree OFF the picked branch still decides whether a checkout
+        // worktree is created, so the pre-write value must not be used.
         // 确认不合格(2026-08-07 裁决)时跳过偏好写入守卫,与 Send 同口径。
         if (
           selectedWorktree.confirmedIneligible !== true &&
           (wtPreferenceSavingRef.current ||
             wtPreferenceAuthorityUnknownRef.current ||
-            (selectedWorktree.enabled && wtBranchPreferenceSavingRef.current))
+            wtBranchPreferenceSavingRef.current)
         ) {
           throw new Error(t('ccAgent.draft.deviceStillLoading'));
         }
@@ -4935,6 +4972,18 @@ export function NewMakerDraftRoute() {
           ) {
             throw new Error(t('ccAgent.draft.deviceStillLoading'));
           }
+        }
+        // 与 handleSend 同口径：远端引用作源分支时未勾选无法直接工作，不能静默开工。
+        if (
+          selectedWorkingDir
+          && !isRemoteProjectDraft
+          && selectedWorktree.confirmedIneligible !== true
+          && selectedWorktree.sourceBranchUnsupported
+        ) {
+          throw new Error(t('ccAgent.draft.worktreeBranchNeedsWorktree', {
+            branch: selectedWorktree.sourceBranch.trim(),
+            current: selectedWorktree.currentBranch,
+          }));
         }
         const dataOwnerAtGoal = getDataOwnerGeneration();
         const isCurrentDataOwner = () =>
@@ -5061,6 +5110,7 @@ export function NewMakerDraftRoute() {
                   baseRepo: selectedWorktree.baseRepo,
                   name,
                   sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+                  ...(selectedWorktree.checkoutSourceBranch ? { checkoutSourceBranch: true } : {}),
                   recoveryKey,
                 };
                 resp = parseRemoteWorktreeCreateResult(
@@ -5082,6 +5132,12 @@ export function NewMakerDraftRoute() {
                 throw new Error(resp.error.message ?? resp.error.kind);
               }
               remoteWorkingDir = resp.meta.path;
+              if (checkoutSourceBranchIgnoredByHost(selectedWorktree.checkoutSourceBranch, resp.meta)) {
+                toast.warning(t('ccAgent.draft.worktreeCheckoutBranchOldHost', {
+                  branch: resp.meta.branch,
+                  source: resp.meta.sourceBranch,
+                }));
+              }
               precreatedWorktree = { path: resp.meta.path, recoveryKey, createdAt };
               await registerPendingRemotePrecreatedWorktree(
                 { ...reservation, path: resp.meta.path, phase: 'precreated' },
@@ -5309,7 +5365,9 @@ export function NewMakerDraftRoute() {
             goalWorktreeName = (suggestResp.name ?? '').trim();
           }
           if (!goalWorktreeName) goalWorktreeName = `auto-${Date.now().toString(36).slice(-6)}`;
-          goalWorktreeBranchName = getBranchName(goalWorktreeName);
+          goalWorktreeBranchName = selectedWorktree.checkoutSourceBranch
+            ? selectedWorktree.sourceBranch.trim()
+            : getBranchName(goalWorktreeName);
           // The local API needs a session id, so this is a compensated saga:
           // create an empty base-repo session, then create the worktree and move
           // workingDir. Any setup failure soft-deletes that empty session before
@@ -5354,6 +5412,7 @@ export function NewMakerDraftRoute() {
             name: goalWorktreeName,
             initialBranchName: goalWorktreeBranchName,
             sourceBranch: selectedWorktree.sourceBranch.trim() || 'HEAD',
+            checkoutSourceBranch: selectedWorktree.checkoutSourceBranch,
             createWorktree: (request) => window.electronAPI.worktreeCreate(request),
             updateWorkingDir: (managedDir) =>
               sessionService
@@ -5911,6 +5970,7 @@ export function NewMakerDraftRoute() {
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
+                  onCurrentBranchChange={setWtCurrentBranch}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
                   onSuggestedNameChange={handleWtNameChange}

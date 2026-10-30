@@ -9,7 +9,8 @@ import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
 import * as draftEffort from '../newMakerDraftModelPrefs';
 import { resolveDeviceLinkSubmission } from '../deviceLinkCreateArgs';
-import { parseRemoteWorktreeCreateResult } from '../remotePrecreatedWorktree';
+import { checkoutSourceBranchIgnoredByHost, parseRemoteWorktreeCreateResult } from '../remotePrecreatedWorktree';
+import { applyWorktreeCreateMode } from '@/components/new-chat/branchPick';
 import { create as createSessionViaIpc } from '@/lib/sessionService';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { AgentSkillCommand } from '@cindy/maker-core';
@@ -113,6 +114,8 @@ async function submit(options: {
   worktreeSkillsAfterCollab?: AgentSkillCommand[];
   collab?: CollabDraft;
   slashCommandRanges?: Array<{ start: number; end: number }>;
+  wt?: Record<string, unknown>;
+  branchWriteInFlight?: boolean;
 } = {}) {
   const providers = options.providers ?? [provider()];
   const backend = options.backendProviders ?? providers;
@@ -212,11 +215,11 @@ async function submit(options: {
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId, catalogDeviceId: options.deviceId,
     agentCatalogProviders: providers, deviceProvidersLoading: false,
     matchNavigationCommandName: () => null,
-    wtRef: { current: hasWorktree
+    wtRef: { current: options.wt ?? (hasWorktree
       ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
-      : { enabled: false, confirmedIneligible: true } },
+      : { enabled: false, confirmedIneligible: true }) },
     wtPreferenceSavingRef: { current: false }, wtPreferenceAuthorityUnknownRef: { current: false },
-    wtBranchPreferenceSavingRef: { current: false },
+    wtBranchPreferenceSavingRef: { current: options.branchWriteInFlight ?? false },
     getDataOwnerGeneration: () => ({ dataOwnerId: 'fixture' }), dataOwnerId: 'fixture',
     isDataOwnerGenerationCurrent: () => true,
     markSendInFlight: (value: boolean) => { if (!value) done(); },
@@ -234,6 +237,7 @@ async function submit(options: {
     clearComposerDraftAndNotify: noop, attachmentState: { clearFiles: noop },
     resetDraftWorkspaceAfterSend: noop, navigate: vi.fn(), setWtCreating: noop,
     makeDraftSessionId: () => 'remote-created', resolveDeviceLinkSubmission, parseRemoteWorktreeCreateResult,
+    applyWorktreeCreateMode, checkoutSourceBranchIgnoredByHost,
     recoverPendingRemotePrecreatedWorktrees: vi.fn(async () => ({ storageReadable: true, retained: 0 })),
     registerPendingRemotePrecreatedWorktree: async () => true,
     createRemoteSessionWithPrecreatedWorktree: async ({ invoke, createArgs }: {
@@ -285,6 +289,20 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // PR #7600 review, unit: with Worktree OFF the picked branch decides whether a
+  // checkout worktree is created. While that branch write is still unconfirmed the
+  // draft still holds the old (current) branch; creating then would start on the
+  // current branch. The production Goal callback must wait instead of creating.
+  it('waits for an in-flight branch write even with Worktree off', async () => {
+    const result = await submit({
+      entry: 'goal', branchWriteInFlight: true,
+      wt: { enabled: false, confirmedIneligible: false, baseRepo: '/fixture/repo', name: '',
+        currentBranch: 'main', sourceBranch: 'main', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true },
+    });
+    expect(result.errors.map((error) => (error as Error).message)).toEqual(['ccAgent.draft.deviceStillLoading']);
+    expect(result.ipcCreate).not.toHaveBeenCalled();
+    expect(result.setGoal).not.toHaveBeenCalled();
+  });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use
   // the same production callback harness with the actual builder and assert IPC.

@@ -5373,6 +5373,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     baseRepo: string;
     name: string;
     sourceBranch: string;
+    checkoutSourceBranch?: boolean;
   }): Promise<unknown> => ipcRenderer.invoke('worktree:create', req),
   worktreeDetectCwd: (req: { cwd: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:detect-cwd', req),

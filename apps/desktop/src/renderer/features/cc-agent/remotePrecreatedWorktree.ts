@@ -50,6 +50,8 @@ export interface RemoteWorktreeCreateRequest {
   name: string;
   sourceBranch: string;
   recoveryKey: string;
+  /** 直接检出 sourceBranch；旧版被控端忽略并退回新建托管分支(meta.branch 不等于它)。 */
+  checkoutSourceBranch?: boolean;
 }
 
 export type ConfirmedRemoteWorktreeCreateResult =
@@ -345,6 +347,17 @@ export function parseRemoteWorktreeCreateResult(
       recoveryKey: meta.recoveryKey,
     },
   };
+}
+
+/**
+ * 请求了直接检出源分支，被控端却建了别的分支：旧版 Desktop 不认识 checkoutSourceBranch，
+ * 退回从源分支新建托管分支。会话仍可用，但改动不会落在所选分支本身，需要告诉用户。
+ */
+export function checkoutSourceBranchIgnoredByHost(
+  requested: boolean,
+  meta: Pick<WorktreeMeta, 'branch' | 'sourceBranch'>,
+): boolean {
+  return requested && meta.branch !== meta.sourceBranch;
 }
 
 export function parseRemoteDiscardPrecreatedAck(value: unknown): {

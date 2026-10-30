@@ -1012,6 +1012,20 @@ export function buildWorktreeAddArgs(
   ];
 }
 
+/**
+ * 直接检出用户已有本地分支的 git worktree add 参数(导出仅供单测断言)。不带 -b：
+ * 改动落在该分支本身；同一分支已在别处检出时由 Git 自身拒绝，绝不加 --force。
+ */
+export function buildCheckoutWorktreeAddArgs(worktreePath: string, branch: string): string[] {
+  return ['-c', 'core.longpaths=true', 'worktree', 'add', '--no-checkout', worktreePath, branch];
+}
+
+/** Git 拒绝重复检出时的输出(各版本措辞不同)里取出占用该分支的目录。 */
+function branchCheckedOutElsewhere(stderr: string): string | null {
+  const match = /is already (?:checked out|used by worktree) at '([^']+)'/.exec(stderr);
+  return match ? match[1] : null;
+}
+
 export async function copyClaudeSiviDirs(
   baseRepo: string,
   worktreePath: string,
@@ -1131,6 +1145,19 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
     //    任意 commit-ish。
     //    本地分支命中优先,否则用 rev-parse 校验是不是合法 commit-ish。
     const { branches } = await timed('list branches', () => listBranches(baseRepo));
+    const checkoutSourceBranch = req.checkoutSourceBranch === true;
+    if (checkoutSourceBranch && !branches.includes(req.sourceBranch)) {
+      // 直接检出只接受本地分支：远端引用或任意 commit-ish 会得到 detached HEAD，
+      // 改动无处落地。
+      return {
+        ok: false,
+        error: {
+          kind: 'unknown',
+          message: `"${req.sourceBranch}" 不是本地分支，无法直接在它上面工作`,
+          hint: '请选择一个本地分支，或勾选 worktree 以基于它新建分支',
+        },
+      };
+    }
     if (!branches.includes(req.sourceBranch)) {
       try {
         await gitExec(['rev-parse', '--verify', `${req.sourceBranch}^{commit}`], baseRepo);
@@ -1182,11 +1209,24 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
       // 5. git worktree add(--no-checkout 跳过文件解压, 加速主流程; longpaths 自动重试)
       //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
       //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
-      const branch = getBranchName(name);
-      const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
+      const branch = checkoutSourceBranch ? req.sourceBranch : getBranchName(name);
+      const addArgs = checkoutSourceBranch
+        ? buildCheckoutWorktreeAddArgs(worktreePath, req.sourceBranch)
+        : buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
       try {
         await timed('git worktree add', () => gitExec(addArgs, baseRepo));
       } catch (err) {
+        const occupiedAt = err instanceof GitExecError ? branchCheckedOutElsewhere(err.stderr) : null;
+        if (checkoutSourceBranch && occupiedAt) {
+          return {
+            ok: false,
+            error: {
+              kind: 'unknown',
+              message: `分支 "${req.sourceBranch}" 已在 ${occupiedAt} 检出`,
+              hint: '同一分支只能在一处检出：请到该目录继续，或勾选 worktree 以基于它新建分支',
+            },
+          };
+        }
         if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
           // 启用 core.longpaths 后重试一次
           try {
@@ -1291,6 +1331,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
         generation: randomUUID(),
         ...(recoveryKey ? { recoveryKey } : {}),
         ephemeral: req.ephemeral ?? false,
+        ...(checkoutSourceBranch ? { checksOutSourceBranch: true } : {}),
       };
       await timed('persist metadata', () => store.set(req.sessionId, meta));
 
@@ -1473,7 +1514,12 @@ async function removeWorktreeForSessionInner(
   // Store 只持久化创建时的托管分支；若用户/Agent 后来切到其它分支或 detached
   // HEAD，当前恢复协议无法在目录删除后可靠重建那个基底。必须在任何 snapshot、
   // quarantine 或 remove 前 fail closed，保留完整 worktree。
-  if (!isManagedWorktreeBranchForName(meta.branch, meta.name)) {
+  // 直接检出用户分支的 worktree 登记的就是该分支本身：目录可回收，分支永不删除
+  // (下方 discardPrecreatedWorktree 只删托管分支)。
+  const registeredBranchIsExpected = meta.checksOutSourceBranch
+    ? meta.branch === meta.sourceBranch
+    : isManagedWorktreeBranchForName(meta.branch, meta.name);
+  if (!registeredBranchIsExpected) {
     log.warn(
       `[worktree] preserved worktree at ${worktreePath}: registered branch ${meta.branch} ` +
         `is not a managed branch for ${meta.name}`,
@@ -1770,7 +1816,8 @@ export async function discardPrecreatedWorktree(
 
   // 目录成功移除后再读分支，封住用户在 dirty check 与 worktree remove 之间刚完成
   // commit 的窗口。store 元数据损坏时也绝不删除非本记录自动推导出的分支。
-  const isGeneratedBranch = isManagedWorktreeBranchForName(meta.branch, meta.name);
+  const isGeneratedBranch =
+    !meta.checksOutSourceBranch && isManagedWorktreeBranchForName(meta.branch, meta.name);
   let branchTipToDelete: string | null = null;
   if (isGeneratedBranch) {
     try {
