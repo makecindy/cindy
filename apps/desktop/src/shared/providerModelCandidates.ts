@@ -37,6 +37,8 @@ export function presetModelCandidate(
   requireDeclaration = false,
 ): ProviderRuntimeModelConfig | undefined {
   if (preset.runtimes[agent]?.models.some(candidate => candidate.id === model.id)) return model;
+  if (runtimeRoute.requestPath) return requireDeclaration ? undefined
+    : sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
   const entries = registry?.models.filter(entry => entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id)) ?? [];
   if (entries.some(entry => entry.status === 'retired' || entry.routes.some(route => route.providerId === preset.id && route.modelId === model.id && route.interfaces?.length === 0))) return undefined;
   const choices = availableModelInterfaces(registry, preset.id, model.id, runtimeRoute.baseUrl, agent);

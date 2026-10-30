@@ -1203,11 +1203,11 @@ export function AddProviderWizard({
           const existing = next.get(m.id);
           const candidate = presetModelCandidate(preset, agent, m, modelRegistry,
             presetCandidateRoute(preset, agent, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)),
-            route, !!modelsUrl && sharedProtocolUrls.has(modelsUrl));
+            route, preservePresetOwnership || (!!modelsUrl && sharedProtocolUrls.has(modelsUrl)));
           if (!candidate && !existing?.agents.includes(agent)) continue;
           if (existing) {
             const mergedAgents =
-              !preservePresetOwnership && !existing.agents.includes(agent)
+              candidate && !existing.agents.includes(agent)
                 ? [...existing.agents, agent]
                 : existing.agents;
             // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
@@ -1258,7 +1258,7 @@ export function AddProviderWizard({
                   : {}),
               });
             }
-          } else if (!preservePresetOwnership) {
+          } else {
             next.set(m.id, {
               name: m.name,
               ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),

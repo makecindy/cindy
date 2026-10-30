@@ -1255,6 +1255,53 @@ it('keeps supplemental DeepSeek candidates in every declared engine before disco
   }
 });
 
+it('keeps an explicit tenant path through online discovery, saving and runtime projection', async () => {
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({
+    presets: [liteLlmPreset], modelRegistry: BUNDLED_CATALOG.modelRegistry,
+  }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
+    models: [{ id: 'tenant-only-model', name: 'Tenant-only model' }] }));
+  renderWizard('litellm');
+  await screen.findByDisplayValue('LiteLLM Proxy');
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('Tenant-only model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const provider = buildUserProvider(saved, { presets: [liteLlmPreset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  expect(provider.routing.codex).toMatchObject({ upstream: 'http://127.0.0.1:4000/v1', requestPath: '/tenant/acme/infer' });
+  expect(provider.models.codex?.find(model => model.id === 'tenant-only-model')).toMatchObject({ id: 'tenant-only-model' });
+  expect(provider.models.codex?.find(model => model.id === 'tenant-only-model')?.route).toBeUndefined();
+  expect(saved.runtimes.codex?.models[0].interfaceId).toBeUndefined();
+});
+
+it.each([false, true])('honors exact online declarations with different preset memberships, existing row=%s', async existingRow => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: 'account-new-chat-only', name: 'Account new Chat-only' };
+  preset.runtimes['claude-code']!.models = [{ id: 'cc-known', name: 'CC known' }];
+  preset.runtimes.codex!.models = [existingRow ? model : { id: 'codex-known', name: 'Codex known' }];
+  delete preset.runtimes.pi;
+  registry.models.push({ id: 'review/online-chat-only', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [model] }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  const row = await screen.findByText(model.name);
+  if (!existingRow) fireEvent.click(row);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)).toMatchObject({ interfaceId: 'deepseek-openai-completions' });
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({ api: 'openai-completions',
+    route: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } });
+});
+
 it('does not infer a second protocol from identical preset membership at a shared models URL', async () => {
   const preset = structuredClone(openCodePreset);
   for (const runtime of Object.values(preset.runtimes)) runtime.models = [{ id: 'known', name: 'Known model' }];
