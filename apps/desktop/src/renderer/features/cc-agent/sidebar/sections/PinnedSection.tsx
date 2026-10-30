@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { sidebarTaskPresentation } from '../sidebarTaskPresentation';
 import {
   AlignJustify,
   ChevronDown,
@@ -185,7 +186,11 @@ export interface PinnedSectionProps {
   onReorder: (newOrderIds: string[]) => void;
 }
 
-export function PinnedSection({
+export function PinnedSection(props: PinnedSectionProps) {
+  return <sidebarTaskPresentation.Pinned {...props} Original={PinnedSectionContent} />;
+}
+
+function PinnedSectionContent({
   entries,
   allKnownProjects,
   renderProject,

@@ -55,6 +55,7 @@ vi.mock('../SessionStatusIcon', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { language: 'en', resolvedLanguage: 'en' },
     t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
   }),
   // 某些传递依赖(renderer/i18n/index.ts)在 import 期就调 initReactI18next,

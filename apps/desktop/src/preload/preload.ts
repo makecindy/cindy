@@ -3289,8 +3289,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API Key test connection
 
   // Show native directory picker dialog
-  showOpenDirectoryDialog: (): Promise<{ canceled: boolean; path?: string }> =>
-    ipcRenderer.invoke('show-open-directory-dialog'),
+  showOpenDirectoryDialog: (options?: { registerProject?: boolean }): Promise<{ canceled: boolean; path?: string }> =>
+    ipcRenderer.invoke('show-open-directory-dialog', options),
 
   // ── Command Palette (F1/F2 @mention + / slash) workspace scans ──
 

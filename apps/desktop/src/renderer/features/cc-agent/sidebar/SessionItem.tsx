@@ -1,3 +1,4 @@
+import { sidebarTaskPresentation } from './sidebarTaskPresentation';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -1315,14 +1316,14 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // (insideAutomationGroup=true)由组头承担,这里不再挂 automation 浮层。
   const showAutomationTooltip = isAutomationGenerated && !insideAutomationGroup;
   return (
-    <SessionTooltip
+    sidebarTaskPresentation.wrapRow(<SessionTooltip
       sessionId={session.id}
       prRefs={prRefs}
       isAutomationSession={showAutomationTooltip}
       controlledOpen={rowTooltipOpen}
     >
       {row}
-    </SessionTooltip>
+    </SessionTooltip>, { session, navigate, onClick })
   );
 });
 

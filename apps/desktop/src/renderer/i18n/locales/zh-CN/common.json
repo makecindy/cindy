@@ -13911,6 +13911,7 @@
       },
       "projects": "项目",
       "newProject": "新建项目",
+      "addProjectFolder": "添加项目文件夹",
       "createProjectFailed": "新建项目失败",
       "selectFolderFailed": "选择目录失败，请重试",
       "projectsToggleExpand": "展开所有项目任务",

@@ -1,3 +1,4 @@
+import { pickProjectDirectory } from './projectDirectoryPicker.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
@@ -6810,21 +6811,15 @@ const registerIpcHandlers = () => {
     }),
   );
 
-  // Show native directory picker dialog
-  ipcMain.handle(
-    'show-open-directory-dialog',
-    async (): Promise<{ canceled: boolean; path?: string }> => {
-      const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
-      if (!targetWin) return { canceled: true };
-      const result = await dialog.showOpenDialog(targetWin, {
-        properties: ['openDirectory', 'createDirectory'],
-      });
-      if (result.canceled || result.filePaths.length === 0) {
-        return { canceled: true };
-      }
-      return { canceled: false, path: result.filePaths[0] };
-    },
-  );
+  // Optional project registration is local UI only; ordinary pickers remain read-only.
+  ipcMain.handle('show-open-directory-dialog', async (event, options?: { registerProject?: boolean }) => {
+    if (options?.registerProject === true) assertTrustedAppRendererEvent(event);
+    const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
+    if (!targetWin) return { canceled: true };
+    return pickProjectDirectory(() => dialog.showOpenDialog(targetWin, {
+      properties: ['openDirectory', 'createDirectory'],
+    }), options?.registerProject === true);
+  });
 
   // ── Workspace scanning for @ mention panel (command-palette F2 / F5) ──
   //

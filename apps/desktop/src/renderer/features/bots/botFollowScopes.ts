@@ -115,6 +115,15 @@ function getSnapshot(): readonly BotFollowScope[] {
   return scopes;
 }
 
+/** The same owner-guarded snapshot as the existing follow marks; presentation must
+ * distinguish exact delegation from general responsibility and preserve Bot routes. */
+export function useSidebarPresentationSnapshot() {
+  const followScopes = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const profiles = useBotProfiles();
+  const currentOwner = getDataOwnerGeneration();
+  return useMemo(() => ({ scopes: followScopes, profiles, owner: currentOwner }), [followScopes, profiles, currentOwner]);
+}
+
 /** 本机普通任务:不是远程任务、伙伴自己的主任务或 Orca worker。 */
 function isLocalPlainSession(session: Session): boolean {
   if (session.remoteHostId || session.deviceLinkDeviceId) return false;

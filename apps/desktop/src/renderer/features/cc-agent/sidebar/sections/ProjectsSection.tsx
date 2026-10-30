@@ -1,4 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import { sidebarTaskPresentation } from '../sidebarTaskPresentation';
+import type { PresentationPinnedEntry } from '../../lib/sidebarTaskPresentation';
 import { isCindyMakeFamilySource } from '../../../../../shared/cindyMakeMerge';
 /**
  * ProjectsSection — Sidebar 中部的 Projects 段
@@ -190,6 +192,9 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
 }
 
 export interface ProjectsSectionProps {
+  /** Internal collected pins remain reachable under a specific project filter. */
+  showUnclassified?: boolean;
+  pinnedEntries?: readonly PresentationPinnedEntry[];
   unclassified: Session[];
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
@@ -295,8 +300,13 @@ export interface ProjectsSectionProps {
   isCreateDialogueDisabled?: boolean;
 }
 
-export function ProjectsSection({
+export function ProjectsSection(props: ProjectsSectionProps) {
+  return <sidebarTaskPresentation.Section {...props} Original={ProjectsSectionContent} />;
+}
+
+function ProjectsSectionContent({
   unclassified,
+  showUnclassified = false,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -329,6 +339,7 @@ export function ProjectsSection({
   onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
@@ -626,7 +637,7 @@ export function ProjectsSection({
   const deviceGroupingAvailable = hasRemoteDevices;
   const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;
   // F-PJ-10：未分类区在 projects 为具体多选状态时不渲染（spec 验收第 14 条）
-  const unclassifiedHidden = filter.projects !== 'all';
+  const unclassifiedHidden = filter.projects !== 'all' && !showUnclassified;
 
   // 混排模型(D 期):项目行 / 散排对话 / 对话组统一为顶层条目并按同一口径排序。
   // 这有意推翻旧「Dialogue 固定段在 Projects 之后」的裁决(mainListModel.ts 文件头)。
@@ -1162,6 +1173,7 @@ export function ProjectsSection({
         allKnownProjects={allKnownProjects}
         dialogueCount={dialogueCount}
         hasRemoteDevices={deviceGroupingAvailable}
+        onCreateProject={onCreateProject}
         fold={
           hasMainListContent && foldState !== null
             ? {

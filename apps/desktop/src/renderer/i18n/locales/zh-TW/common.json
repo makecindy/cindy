@@ -13911,6 +13911,7 @@
       },
       "projects": "專案",
       "newProject": "新建專案",
+      "addProjectFolder": "加入專案資料夾",
       "createProjectFailed": "新建專案失敗",
       "selectFolderFailed": "選擇目錄失敗，請重試",
       "projectsToggleExpand": "展開所有專案任務",

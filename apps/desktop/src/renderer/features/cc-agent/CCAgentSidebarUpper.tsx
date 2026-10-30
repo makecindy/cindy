@@ -53,7 +53,7 @@ import { cn } from '@/lib/utils';
 import { provisionalDraftTaskId, subscribeProvisionalDraftTask } from './provisionalDraftTask';
 import { useProvisionalDraftProjectTaskId } from './hooks/useProvisionalDraftProjectTaskId';
 import { toast } from '@/lib/toast';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
@@ -187,7 +187,6 @@ import {
 import {
   collectRestorableProjectKeys,
   registerSidebarProjectRestoreHandler,
-  restoreHiddenProjectIfPresent,
   restoreSelectedHiddenProject,
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
@@ -2768,41 +2767,23 @@ function ExpandedView({
   );
 
   const handleCreateProject = useCallback(async () => {
-    const hiddenProjectKeysAtPickerOpen = new Set(hiddenProjectKeys);
+    const owner = getDataOwnerGeneration();
     try {
-      const result = await window.electronAPI.showOpenDirectoryDialog();
-      if (result.canceled || !result.path) return;
-      const localProjectKey = normalizeProjectKey(result.path);
-      if (localProjectKey?.startsWith('local:')) {
-        const restored = await restoreHiddenProjectIfPresent({
-          projectKey: localProjectKey,
-          wasHiddenAtPickerOpen: isProjectHidden(
-            localProjectKey,
-            hiddenProjectKeysAtPickerOpen,
-            localPlatform,
-          ),
-          setProjectHidden,
-          getCurrentProjectKeys: () => restorableProjectKeysRef.current(),
-          ensureProjectIncluded: filter.ensureProjectIncluded,
-          localPlatform,
-        });
-        if (restored) return;
-      }
+      const result = await window.electronAPI.showOpenDirectoryDialog({ registerProject: true });
+      if (result.canceled || !result.path || !isDataOwnerGenerationCurrent(owner)) return;
+      await recentWorkdirsStore.forceRefresh();
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      const key = normalizeProjectKey(result.path);
+      if (key) filter.ensureProjectIncluded(key);
+      // Selecting a folder registers a project; it must not create or replace a task draft.
       handleClearSelection();
-      patchNewMakerDraft({ workingDir: result.path, remoteHostId: null });
-      navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+      setSelectedMachineIdTransient(MACHINE_ALL);
     } catch (err) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
       log.warn('create project directory picker failed', err);
       toast.error(t('ccAgent.sidebar.createProjectFailed'));
     }
-  }, [
-    filter.ensureProjectIncluded,
-    handleClearSelection,
-    hiddenProjectKeys,
-    navigate,
-    setProjectHidden,
-    t,
-  ]);
+  }, [filter.ensureProjectIncluded, handleClearSelection, t]);
 
   /**
    * 新建对话。目标设备两种来源:
@@ -3794,6 +3775,7 @@ function ExpandedView({
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   hasRemoteDevices={deviceGroupingAvailable}
+                  onCreateProject={handleCreateProject}
                 />
                 <RemoteSidebarLoadNotice
                   kind="tasks"
@@ -3809,6 +3791,7 @@ function ExpandedView({
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   hasRemoteDevices={deviceGroupingAvailable}
+                  onCreateProject={handleCreateProject}
                 />
                 <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
               </>
@@ -3819,6 +3802,7 @@ function ExpandedView({
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   hasRemoteDevices={deviceGroupingAvailable}
+                  onCreateProject={handleCreateProject}
                 />
                 <RemoteSidebarLoadNotice
                   kind="tasks"
@@ -3836,6 +3820,7 @@ function ExpandedView({
                   allKnownProjects={visibleProjectUniverse}
                   dialogueCount={allGroups.dialogues.length}
                   hasRemoteDevices={deviceGroupingAvailable}
+                  onCreateProject={handleCreateProject}
                 />
                 <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
                   <span className="animate-pulse text-xs text-[var(--text-tertiary)]">
@@ -3926,6 +3911,7 @@ function ExpandedView({
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
+                  pinnedEntries={sortedPinnedEntries}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}

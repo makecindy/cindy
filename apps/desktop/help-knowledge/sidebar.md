@@ -82,3 +82,10 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 - Click the sidebar collapse arrow to shrink it to an icon-only strip; nothing is lost.
 - Pins, pin order, hidden projects, project filters, and collapse state are kept separately for each Cindy account. Display preferences (list style, grouping, sorting, session info) are local to each installation.
+
+
+## Add a project folder
+
+- Use **Add project folder** beside the task-list scope header. The action stays visible even when the list is empty.
+- Choose an existing folder, or use the native picker's New Folder action. Selecting it registers the project immediately without starting a task or changing the current conversation. Selecting the same folder again keeps one project; cancel leaves the list unchanged.
+- Local folder registration uses the same account-scoped project catalogue and visibility restoration as the Agent's project tools. It does not create a remote project on another computer.
