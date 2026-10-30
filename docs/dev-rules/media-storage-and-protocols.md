@@ -168,6 +168,35 @@
 异步入仓捕获账号与数据库，预览失效或账号变化时不发起剪贴板写入；操作不把仓内路径暴露给 Renderer。
 Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按文件复制以保留完整内容。
 
+## 3D 模型的识别与存放
+
+- 3D 模型文件的识别只有一个来源：`packages/maker-shared/src/model3d.ts`
+  （`getModel3DFormat`、`isModel3DPath`、`isManagedModel3DUrl`）。Desktop 与 Mobile
+  不再各写扩展名正则；要支持新格式，先改这里并补测试。ZIP 不是 3D 模型，不按模型处理。
+  只有 URL 才去掉 `?query` / `#hash` 再取扩展名；磁盘路径（含 `xdt-file://…?path=` 解码后的路径）里的
+  `#`、`?` 是文件名的字面字符，`/work/project#1/chair.glb` 照常识别。
+- 存放分两条通道，规则不同：
+  - **媒体总仓**只收 GLB。总仓格式必须由 `sniffMediaMime` 按字节核验，GLB 有可靠文件头；
+    OBJ、二进制 STL 没有魔数，扩展名又不能单独作为可信依据，因此不进总仓。`sniffMediaMime` 与
+    `supportedMime` 被插件媒体、IM 入站附件、会话导入、用户附件和远程文件缓存等多处共用，
+    新增总仓格式会同时改变这些流程的行为，必须逐一评估后再加，不能为 3D 预览顺手扩白名单。
+  - **用户磁盘上的原始 3D 文件**就地读取（`xdt-file`），不复制进总仓。
+- 聊天里的 3D 展示链路（Renderer）：
+  - **查看器**是 `mivo-model-viewer`（`ModelLightbox`），支持 GLB / glTF / OBJ / FBX / STL / PLY / DAE /
+    3MF / 3DS；SDK 动态 `import()`，加载后用 `setEnabledFormats` 限定为 maker-shared 的识别范围，
+    ZIP 资源包与实验性 VRML / STEP 都不在其中。
+  - **字节读取**统一走 `renderer/lib/model3d/readModel3DBlob.ts`：总仓 GLB 经 `cindy-media://` `fetch`
+    （先看 Content-Length）；本地模型文件**不能**让 Renderer 直接 `fetch xdt-file://`（CSP
+    `connect-src` 刻意不含 `xdt-file:`，有测试锁定），一律经主进程 `read-model-file-bytes` IPC。
+  - `read-model-file-bytes` 与 `read-file-bytes` 分开：上限 128 MB（后者硬上限 30 MB），且请求路径与
+    符号链接解析后的真实路径都必须是 3D 模型扩展名；渲染进程自报的 `maxSize` 不被采用。实现与测试见
+    `main/fileReadBytes.ts` 的 `readModelFileBytes`。
+  - **缩略图**在 Renderer 用 SDK 的 `createThumbnailRenderer` 生成（共用一个 WebGL 上下文、任务串行、
+    空闲 30 秒释放），结果只缓存在内存里（data URL，LRU 48 张；本地文件的缓存键含修改时间与大小；
+    失败短暂缓存），**不写入媒体总仓**，应用重启后重新生成。缩略图只对 ≤32 MB 的模型生成——Three
+    加载器在主线程同步解析，更大的文件会卡界面，卡片退化成一行「图标 + 文件名」，点击预览不受影响。
+  - `xdt-model://` 与 `modelCacheStore` 仍是冻结的历史兼容层：不再有新功能使用，但保留已有地址的读取。
+
 ## 读取、协议与边界
 
 - 持久地址统一使用 `cindy-media://blobs/<sha256>.<ext>`。路径解析必须走

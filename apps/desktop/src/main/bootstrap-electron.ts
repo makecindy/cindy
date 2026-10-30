@@ -594,7 +594,12 @@ import {
 } from './security/trustedAppRenderer.js';
 
 import { isIpcError } from '../shared/ipc-errors';
-import { readFileBytesForPreview } from './fileReadBytes.js';
+import {
+  readFileBytesForPreview,
+  readModelFileBytes,
+  readModelFileResourceBytes,
+  type ReadFileBytesDeps,
+} from './fileReadBytes.js';
 import { copyPngToClipboard } from './pngClipboard.js';
 import { COPY_PNG_TO_CLIPBOARD_CHANNEL } from '../shared/pngClipboard.js';
 import { copyTextToClipboard } from './textClipboard.js';
@@ -7372,6 +7377,31 @@ const registerIpcHandlers = () => {
     },
   );
 
+  // Shared fs/policy deps for the local-file byte-read IPCs. O_NOFOLLOW on the final
+  // component: the core opens the realpath'd target, whose last segment is a real
+  // file — so a legit open succeeds, but if the final component was swapped to a
+  // symlink in the realpath→open race it fails (ELOOP) instead of following into a
+  // denied file. Falls back to 0 where the platform lacks the flag (Windows),
+  // matching saveChatAttachment.
+  const buildLocalFileReadDeps = (): ReadFileBytesDeps => {
+    const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+    return {
+      isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
+      realpath: (p) => fs.promises.realpath(p),
+      // bigint stats: dev/ino identity must not be rounded (see FileIdentityStat).
+      stat: (p) => fs.promises.stat(p, { bigint: true }),
+      open: async (p) => {
+        const handle = await fs.promises.open(p, fs.constants.O_RDONLY | noFollow);
+        return {
+          stat: () => handle.stat({ bigint: true }),
+          read: (buffer, offset, length, position) =>
+            handle.read(buffer, offset, length, position),
+          close: () => handle.close(),
+        };
+      },
+    };
+  };
+
   // Read a local file's raw bytes for in-app rendering (currently PDF preview).
   // Returns a Uint8Array over structured clone instead of base64: pdf.js
   // getDocument({ data }) wants bytes, and skipping base64 avoids a large
@@ -7406,22 +7436,36 @@ const registerIpcHandlers = () => {
       // final component was swapped to a symlink in the realpath→open race it
       // fails (ELOOP) instead of following into a denied file. Falls back to 0
       // where the platform lacks the flag (Windows), matching saveChatAttachment.
-      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
-      return readFileBytesForPreview(params, {
-        isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
-        realpath: (p) => fs.promises.realpath(p),
-        // bigint stats: dev/ino identity must not be rounded (see FileIdentityStat).
-        stat: (p) => fs.promises.stat(p, { bigint: true }),
-        open: async (p) => {
-          const handle = await fs.promises.open(p, fs.constants.O_RDONLY | noFollow);
-          return {
-            stat: () => handle.stat({ bigint: true }),
-            read: (buffer, offset, length, position) =>
-              handle.read(buffer, offset, length, position),
-            close: () => handle.close(),
-          };
-        },
-      });
+      return readFileBytesForPreview(params, buildLocalFileReadDeps());
+    },
+  );
+
+  // Read a local 3D model's raw bytes for the in-app model viewer and the chat
+  // thumbnail service. Same trusted-renderer gate and sensitive-media policy as
+  // `read-file-bytes`, but with a 128MB ceiling and a hard requirement that both
+  // the requested path and its symlink-resolved target carry a 3D model
+  // extension (see readModelFileBytes). The renderer cannot fetch xdt-file://
+  // directly (CSP connect-src deliberately excludes it), so this is the byte
+  // source for local models; managed GLBs still load over cindy-media://.
+  ipcMain.handle(
+    'read-model-file-bytes',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { filePath: string },
+    ): Promise<{ bytes: Uint8Array; size: number }> => {
+      assertTrustedAppRendererEvent(event);
+      return readModelFileBytes(params, buildLocalFileReadDeps());
+    },
+  );
+
+  ipcMain.handle(
+    'read-model-file-resource-bytes',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { modelPath: string; relativePath: string },
+    ): Promise<{ bytes: Uint8Array; size: number }> => {
+      assertTrustedAppRendererEvent(event);
+      return readModelFileResourceBytes(params, buildLocalFileReadDeps());
     },
   );
 

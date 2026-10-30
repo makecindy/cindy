@@ -3426,6 +3426,18 @@ interface ElectronAPI {
     maxSize?: number;
   }) => Promise<{ bytes: Uint8Array; size: number }>;
 
+  /** Raw bytes (≤128MB) of a local 3D model file for the model viewer / thumbnails.
+   *  The path and its symlink-resolved target must both be a 3D model file
+   *  (glb/gltf/obj/fbx/stl/ply/dae/3mf/3ds). Rejects with an IpcError on failure. */
+  readModelFileBytes: (params: {
+    filePath: string;
+  }) => Promise<{ bytes: Uint8Array; size: number }>;
+
+  readModelFileResourceBytes: (params: {
+    modelPath: string;
+    relativePath: string;
+  }) => Promise<{ bytes: Uint8Array; size: number }>;
+
   // ── File header peek IPC (F-FI-8 fallback inference) ──
   /**
    * Read at most `bytes` (default 8192, hard-cap 64KB) from the head of a

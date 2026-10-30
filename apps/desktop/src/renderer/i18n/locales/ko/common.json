@@ -12811,6 +12811,7 @@
       "openModelFailed": "모델을 열지 못했습니다",
       "modelLoading": "3D 모델 로딩 중…",
       "modelLoadFailed": "3D 모델을 불러오지 못했습니다",
+      "modelTooLarge": "3D 모델이 너무 커서 미리 볼 수 없습니다",
       "videoCopied": "동영상을 복사했습니다",
       "copyVideo": "동영상 복사",
       "revealVideo": "동영상 폴더 열기",

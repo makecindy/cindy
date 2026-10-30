@@ -28,10 +28,25 @@
 
 import * as nodePath from 'node:path';
 
+import { isModel3DPath } from '@cindy/maker-shared/model3d';
+
 import { throwIpcError } from './utils/ipcValidate.js';
 
 /** Hard ceiling regardless of the caller-requested maxSize. */
 export const READ_FILE_BYTES_CAP = 30 * 1024 * 1024;
+
+/**
+ * Ceiling for the dedicated 3D-model read (`readModelFileBytes`). Game-grade
+ * FBX / GLB assets routinely exceed the 30 MB preview cap; this larger ceiling
+ * is only reachable through the model entry point, which also pins the file
+ * (and its resolved target) to a 3D model extension.
+ */
+export const READ_MODEL_BYTES_CAP = 128 * 1024 * 1024;
+
+export interface ReadFileBytesOptions {
+  /** Overrides the default 30 MB hard ceiling (callers can still request less). */
+  hardCap?: number;
+}
 
 /**
  * The stat fields this module needs. `dev`/`ino`/`size` are bigint because the
@@ -82,6 +97,7 @@ function isSameFileObject(expected: FileIdentityStat, actual: FileIdentityStat):
 export async function readFileBytesForPreview(
   params: unknown,
   deps: ReadFileBytesDeps,
+  options: ReadFileBytesOptions = {},
 ): Promise<{ bytes: Uint8Array; size: number }> {
   // Validate the payload shape BEFORE destructuring: a null / non-object
   // params from a buggy or hostile renderer must land on INVALID_PARAMS, not
@@ -94,11 +110,10 @@ export async function readFileBytesForPreview(
   // Coerce defensively: a NaN / non-finite / non-positive maxSize must fall
   // back to the hard cap, never make Math.min return NaN (which would make the
   // size comparisons below vacuously false and drop the cap entirely).
+  const hardCap = options.hardCap ?? READ_FILE_BYTES_CAP;
   const requested = Number(rawMaxSize);
   const maxSize =
-    Number.isFinite(requested) && requested > 0
-      ? Math.min(requested, READ_FILE_BYTES_CAP)
-      : READ_FILE_BYTES_CAP;
+    Number.isFinite(requested) && requested > 0 ? Math.min(requested, hardCap) : hardCap;
 
   if (typeof filePath !== 'string' || !nodePath.isAbsolute(filePath)) {
     throwIpcError('INVALID_PARAMS', 'filePath must be an absolute path');
@@ -150,7 +165,7 @@ export async function readFileBytesForPreview(
       throwIpcError('PRECONDITION_FAILED', 'file changed during read');
     }
     // Down to Number only after the identity check: the size ceiling is a plain
-    // number and a 30MB cap is far below Number.MAX_SAFE_INTEGER.
+    // number and any cap here is far below Number.MAX_SAFE_INTEGER.
     const size = Number(st.size);
     if (size > maxSize) {
       throwIpcError('PRECONDITION_FAILED', 'file exceeds the preview size limit');
@@ -175,4 +190,105 @@ export async function readFileBytesForPreview(
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * Read a local 3D model file's bytes for the in-app viewer / thumbnail service.
+ *
+ * Same validation, path policy and descriptor-bound read as
+ * `readFileBytesForPreview`, with two differences: the ceiling is
+ * `READ_MODEL_BYTES_CAP`, and both the requested path AND its resolved target
+ * must carry a 3D model extension — a `model.glb -> ~/notes.txt` symlink cannot
+ * be used to pull an arbitrary file through the larger-cap channel.
+ */
+export async function readModelFileBytes(
+  params: unknown,
+  deps: ReadFileBytesDeps,
+): Promise<{ bytes: Uint8Array; size: number }> {
+  if (typeof params !== 'object' || params === null) {
+    throwIpcError('INVALID_PARAMS', 'params must be an object');
+  }
+  const { filePath } = params as { filePath?: unknown };
+  if (typeof filePath !== 'string' || !isModel3DPath(filePath) || /^[a-z][a-z0-9+.-]*:\/\//i.test(filePath)) {
+    throwIpcError('INVALID_PARAMS', 'filePath must be an absolute path to a 3D model file');
+  }
+  return readFileBytesForPreview(
+    // maxSize is intentionally not forwarded: the cap is decided here, not by the renderer.
+    { filePath },
+    {
+      ...deps,
+      // The core runs the policy on both the requested path and its realpath, so
+      // folding the extension rule in here also pins the symlink-resolved target.
+      isPathAllowed: (target) => isModel3DPath(target) && deps.isPathAllowed(target),
+    },
+    { hardCap: READ_MODEL_BYTES_CAP },
+  );
+}
+
+/**
+ * Read one external resource referenced by a local glTF file.
+ *
+ * The renderer supplies only a relative URI from the model JSON.  Resolve it
+ * below the model's real directory, then reuse the bounded descriptor reader
+ * with the same path policy.  This keeps `.bin` files and textures out of the
+ * broad arbitrary-file surface while still allowing normal multi-file glTF.
+ */
+export async function readModelFileResourceBytes(
+  params: unknown,
+  deps: ReadFileBytesDeps,
+): Promise<{ bytes: Uint8Array; size: number }> {
+  if (typeof params !== 'object' || params === null) {
+    throwIpcError('INVALID_PARAMS', 'params must be an object');
+  }
+  const { modelPath, relativePath } = params as { modelPath?: unknown; relativePath?: unknown };
+  if (
+    typeof modelPath !== 'string' ||
+    !nodePath.isAbsolute(modelPath) ||
+    !isModel3DPath(modelPath) ||
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(modelPath) ||
+    typeof relativePath !== 'string' ||
+    !relativePath ||
+    relativePath.includes('\0') ||
+    /^[a-z][a-z0-9+.-]*:/i.test(relativePath) ||
+    nodePath.isAbsolute(relativePath)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'invalid model resource path');
+  }
+  if (!deps.isPathAllowed(modelPath)) {
+    throwIpcError('PERMISSION_DENIED', 'path is not allowed');
+  }
+
+  const realModelPath = await deps
+    .realpath(modelPath)
+    .catch(() => throwIpcError('NOT_FOUND', 'file not found'));
+  if (!isModel3DPath(realModelPath) || !deps.isPathAllowed(realModelPath)) {
+    throwIpcError('PERMISSION_DENIED', 'path is not allowed');
+  }
+
+  // Normalize the directory before resolving the relative URI. On Windows a
+  // POSIX-looking path from a test or an IPC boundary can otherwise leave the
+  // root with `/` while `path.resolve()` returns `\`, making the containment
+  // check reject a resource that is actually below the model directory.
+  const root = nodePath.resolve(nodePath.dirname(realModelPath));
+  const resourcePath = nodePath.resolve(root, relativePath);
+  const relativeToRoot = nodePath.relative(root, resourcePath);
+  if (
+    !relativeToRoot ||
+    relativeToRoot === '..' ||
+    relativeToRoot.startsWith(`..${nodePath.sep}`) ||
+    nodePath.isAbsolute(relativeToRoot)
+  ) {
+    throwIpcError('PERMISSION_DENIED', 'model resource is outside the model directory');
+  }
+
+  const isWithinRoot = (candidate: string) =>
+    candidate === root || candidate.startsWith(`${root}${nodePath.sep}`);
+  return readFileBytesForPreview(
+    { filePath: resourcePath },
+    {
+      ...deps,
+      isPathAllowed: (candidate) => isWithinRoot(candidate) && deps.isPathAllowed(candidate),
+    },
+    { hardCap: READ_MODEL_BYTES_CAP },
+  );
 }

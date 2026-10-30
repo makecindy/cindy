@@ -3,11 +3,16 @@
  *  trustedAppRenderer.test; here we exercise every validation / policy /
  *  symlink / size-cap / sanitized-error path of the injectable core. */
 
+import * as nodePath from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   readFileBytesForPreview,
+  readModelFileBytes,
+  readModelFileResourceBytes,
   READ_FILE_BYTES_CAP,
+  READ_MODEL_BYTES_CAP,
   type FileHandleLike,
   type FileIdentityStat,
   type ReadFileBytesDeps,
@@ -247,5 +252,135 @@ describe('readFileBytesForPreview', () => {
     expect(
       await codeOf(readFileBytesForPreview({ filePath: ABS }, deps({ open: async () => handle }))),
     ).toBe('INTERNAL');
+  });
+});
+
+
+describe('readModelFileBytes', () => {
+  const MODEL = ABS.replace(/paper\.pdf$/, 'chair.GLB');
+
+  it('reads a model file and returns exact bytes', async () => {
+    const res = await readModelFileBytes({ filePath: MODEL }, deps());
+    expect(Array.from(res.bytes)).toEqual([1, 2, 3, 4]);
+    expect(res.size).toBe(4);
+  });
+
+  it('accepts every recognised 3D extension', async () => {
+    for (const ext of ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae', '3mf', '3ds']) {
+      const res = await readModelFileBytes({ filePath: ABS.replace(/paper\.pdf$/, `m.${ext}`) }, deps());
+      expect(res.size).toBe(4);
+    }
+  });
+
+  it('rejects non-model extensions, archives and non-string paths before touching the fs', async () => {
+    const realpath = vi.fn(async (p: string) => p);
+    for (const filePath of [ABS, ABS.replace(/paper\.pdf$/, 'pack.zip'), ABS.replace(/paper\.pdf$/, 'notes.txt'), 42, undefined, null]) {
+      expect(await codeOf(readModelFileBytes({ filePath }, deps({ realpath })))).toBe('INVALID_PARAMS');
+    }
+    expect(await codeOf(readModelFileBytes(null, deps({ realpath })))).toBe('INVALID_PARAMS');
+    expect(realpath).not.toHaveBeenCalled();
+  });
+
+  it('rejects url-shaped and relative paths', async () => {
+    for (const filePath of ['xdt-file://local/?path=%2Ftmp%2Fa.glb', 'cindy-media://blobs/' + 'a'.repeat(64) + '.glb', 'file:///tmp/a.glb', 'rel/a.glb']) {
+      expect(await codeOf(readModelFileBytes({ filePath }, deps()))).toBe('INVALID_PARAMS');
+    }
+  });
+
+  it('denies a model-named symlink that resolves to a non-model file', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4, data: Buffer.from([1, 2, 3, 4]) }));
+    const code = await codeOf(
+      readModelFileBytes({ filePath: MODEL }, deps({ realpath: async () => '/home/user/notes.txt', open })),
+    );
+    expect(code).toBe('PERMISSION_DENIED');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('still applies the path policy', async () => {
+    expect(await codeOf(readModelFileBytes({ filePath: MODEL }, deps({ isPathAllowed: () => false })))).toBe(
+      'PERMISSION_DENIED',
+    );
+  });
+
+  it('allows files above the 30MB preview cap up to the 128MB model cap', async () => {
+    expect(READ_MODEL_BYTES_CAP).toBeGreaterThan(READ_FILE_BYTES_CAP);
+    const size = READ_FILE_BYTES_CAP + 1;
+    const ok = await readModelFileBytes(
+      { filePath: MODEL },
+      deps({
+        stat: async () => statStub(size),
+        open: async () => fakeHandle({ statSize: size, data: Buffer.alloc(size) }),
+      }),
+    );
+    expect(ok.size).toBe(size);
+  });
+
+  it('rejects files over the model cap, and ignores a renderer-supplied maxSize', async () => {
+    const over = READ_MODEL_BYTES_CAP + 1;
+    const overDeps = deps({
+      stat: async () => statStub(over),
+      open: async () => fakeHandle({ statSize: over }),
+    });
+    expect(await codeOf(readModelFileBytes({ filePath: MODEL, maxSize: Number.MAX_SAFE_INTEGER }, overDeps))).toBe(
+      'PRECONDITION_FAILED',
+    );
+    // A smaller requested maxSize must not be honoured either: the cap is decided in main.
+    const mid = READ_FILE_BYTES_CAP + 1;
+    const ok = await readModelFileBytes(
+      { filePath: MODEL, maxSize: 8 },
+      deps({
+        stat: async () => statStub(mid),
+        open: async () => fakeHandle({ statSize: mid, data: Buffer.alloc(mid) }),
+      }),
+    );
+    expect(ok.size).toBe(mid);
+  });
+
+  it('the preview reader keeps its 30MB ceiling', async () => {
+    const over = READ_FILE_BYTES_CAP + 1;
+    expect(
+      await codeOf(
+        readFileBytesForPreview(
+          { filePath: MODEL, maxSize: READ_MODEL_BYTES_CAP },
+          deps({ stat: async () => statStub(over), open: async () => fakeHandle({ statSize: over }) }),
+        ),
+      ),
+    ).toBe('PRECONDITION_FAILED');
+  });
+});
+
+describe('readModelFileResourceBytes', () => {
+  const modelPath = '/home/user/models/ship.gltf';
+
+  it('reads a relative companion resource below the model directory', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4, data: Buffer.from([1, 2, 3, 4]) }));
+    const result = await readModelFileResourceBytes(
+      { modelPath, relativePath: 'textures/albedo.png' },
+      deps({ open }),
+    );
+    expect(Array.from(result.bytes)).toEqual([1, 2, 3, 4]);
+    expect(open).toHaveBeenCalledWith(nodePath.resolve('/home/user/models', 'textures/albedo.png'));
+  });
+
+  it('rejects traversal and absolute or URL-shaped resource paths', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4 }));
+    for (const relativePath of ['../secret.bin', '/tmp/secret.bin', 'https://example.com/a.bin', '']) {
+      expect(
+        await codeOf(readModelFileResourceBytes({ modelPath, relativePath }, deps({ open }))),
+      ).toBe(relativePath === '../secret.bin' ? 'PERMISSION_DENIED' : 'INVALID_PARAMS');
+    }
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('rejects a companion symlink that resolves outside the model directory', async () => {
+    const open = vi.fn(async () => fakeHandle({ statSize: 4 }));
+    const result = await codeOf(
+      readModelFileResourceBytes(
+        { modelPath, relativePath: 'textures/albedo.png' },
+        deps({ realpath: async (p) => (p === modelPath ? p : '/outside/albedo.png'), open }),
+      ),
+    );
+    expect(result).toBe('PERMISSION_DENIED');
+    expect(open).not.toHaveBeenCalled();
   });
 });

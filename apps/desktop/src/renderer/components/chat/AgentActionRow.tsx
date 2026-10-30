@@ -152,7 +152,7 @@ const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read', 'edit', '
  *
  * 安全:每个 URL 必须带正确 scheme 前缀(xdt-image:// 或 xdt-video://),否则丢弃。
  */
-export type ToolMediaKind = 'image' | 'video' | 'audio';
+export type ToolMediaKind = 'image' | 'video' | 'audio' | 'model';
 
 /**
  * 3D 模型文件元数据 (来自 poll_3d_result 的 _xdt_model_files)。
@@ -168,7 +168,7 @@ export type ToolMediaKind = 'image' | 'video' | 'audio';
  */
 export interface ToolMediaModelFileCindy {
   provider: 'cindy';
-  /** cindy-media://blobs/<指纹>.glb — <model-viewer> 可直接 fetch 的总仓地址。 */
+  /** cindy-media://blobs/<指纹>.glb — 3D 查看器可直接 fetch 的总仓地址。 */
   url: string;
   /** 模型格式(意识链路当前总是 'GLB')。 */
   format: string;
@@ -235,7 +235,7 @@ function parseModelFiles(raw: unknown): ToolMediaModelFile[] {
     const mo = m as Record<string, unknown>;
     if (mo.provider === 'cindy') {
       // 意识链路:模型已在媒体总仓。只认 cindy-media 的 .glb 地址 —
-      // model-viewer 仅原生支持 glTF 系,且总仓扩展名白名单当前只收 .glb
+      // 总仓扩展名白名单当前只收 .glb
       // (.gltf 不在白名单,协议取件必失败,放行只会产出坏查看器)。
       const url = typeof mo.url === 'string' ? mo.url : null;
       if (!url?.startsWith('cindy-media://')) continue;
@@ -360,7 +360,7 @@ function getToolResultMetadata(toolResult: string): ToolResultMetadata {
     return cached;
   }
   let metadata = EMPTY_TOOL_METADATA;
-  if (/xdt_(?:card_id|anchor_card_id|image_url|video_url|audio_url)/.test(toolResult)) {
+  if (/xdt_(?:card_id|anchor_card_id|image_url|video_url|audio_url|model_files)/.test(toolResult)) {
     try {
       const parsed = JSON.parse(toolResult) as Record<string, unknown> | null;
       if (parsed && typeof parsed === 'object') {
@@ -394,7 +394,8 @@ function extractParsedToolResultMedia(toolResult: string, parsed: Record<string,
   if (
     !toolResult.includes('xdt_image_url') &&
     !toolResult.includes('xdt_video_url') &&
-    !toolResult.includes('xdt_audio_url')
+    !toolResult.includes('xdt_audio_url') &&
+    !toolResult.includes('xdt_model_files')
   ) {
     return [];
   }
@@ -435,6 +436,11 @@ function extractParsedToolResultMedia(toolResult: string, parsed: Record<string,
           });
         }
       }
+    }
+    // 没有配对预览图的模型文件(imageIdx 之后剩下的)单独成项:聊天里直接显示成
+    // 3D 模型卡片(缩略图由渲染进程生成),不再要求插件额外提供一张预览图。
+    for (const m of modelFiles.slice(imageIdx)) {
+      items.push({ kind: 'model', url: m.url, modelFile: m });
     }
     // 协议白名单与图卡同款双世界:老 xdt-video://(遗产只读)+ 新
     // cindy-media://(意识 gen_video 等新链路产物)。

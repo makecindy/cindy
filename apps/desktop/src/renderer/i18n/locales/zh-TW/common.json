@@ -12810,6 +12810,7 @@
       "openModelFailed": "開啟模型失敗",
       "modelLoading": "正在載入 3D 模型…",
       "modelLoadFailed": "載入 3D 模型失敗",
+      "modelTooLarge": "這個 3D 模型太大，無法預覽",
       "videoCopied": "影片已複製",
       "copyVideo": "複製影片",
       "revealVideo": "開啟影片所在目錄",

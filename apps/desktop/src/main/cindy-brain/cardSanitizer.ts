@@ -14,6 +14,7 @@
  */
 
 import { parseGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { isManagedModel3DUrl } from '@cindy/maker-shared/model3d';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
@@ -55,10 +56,10 @@ const DROP_WITH_CONTENT = new Set([
 /** img.src 唯一放行形态:本机媒体总仓图片地址(整串精确匹配)。 */
 const IMG_SRC_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.(?:png|jpe?g|gif|webp)$/;
 
-/** img 的 data-ghost-model 唯一放行形态:媒体总仓 GLB 地址(整串精确匹配,
- *  与 img src 同一信任边界——内容寻址、只读协议)。声明后宿主点击桥把该
- *  预览图路由到应用内 3D 查看器(ModelLightbox)而非图片 lightbox。 */
-const IMG_MODEL_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb$/;
+/* img 的 data-ghost-model 唯一放行形态:媒体总仓 GLB 地址(整串精确匹配,
+ * 与 img src 同一信任边界——内容寻址、只读协议),判定见 maker-shared 的
+ * isManagedModel3DUrl。声明后宿主点击桥把该预览图路由到应用内 3D 查看器
+ * (ModelLightbox)而非图片 lightbox。 */
 
 /** div 的 data-ghost-audio 唯一放行形态:媒体总仓音频地址(扩展名对齐
  *  blobStore 音频白名单)。声明后该 div 成为宿主托管的播放器插槽:宿主受信桥
@@ -260,7 +261,7 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
     // 3D 预览声明:点击该图 → 应用内 3D 查看器加载所指 GLB。不合法只丢
     // 属性(图退化为普通看大图),不牵连元素。
     const model = (attrs['data-ghost-model'] ?? '').trim();
-    if (IMG_MODEL_RE.test(model)) parts.push(` data-ghost-model="${escapeAttr(model)}"`);
+    if (isManagedModel3DUrl(model)) parts.push(` data-ghost-model="${escapeAttr(model)}"`);
   }
   if (tag === 'td' || tag === 'th') {
     for (const span of ['colspan', 'rowspan'] as const) {

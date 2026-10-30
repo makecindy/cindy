@@ -118,7 +118,7 @@ export function ChatImageView({
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
   // gallery + lightbox + 动作判定),保留远端归属。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
-  // 'image' = 2D 预览图 lightbox; 'model' = `<model-viewer>` 3D lightbox。
+  // 'image' = 2D 预览图 lightbox; 'model' = 3D 查看器(mivo-model-viewer)lightbox。
   // 同一个 state 槽位避免两种 lightbox 同时出现 (且统一受 scroll-lock 影响)。
   const [lightboxOpen, setLightboxOpen] = useState<'image' | 'model' | null>(null);
   const previewTriggerRef = useRef<HTMLImageElement>(null);
@@ -233,7 +233,7 @@ export function ChatImageView({
           // 顺序拼成可左右翻页的列表。见 ImageLightbox.collectGallery。
           data-gallery-src={displaySrc}
           // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
-          // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
+          // 配对的模型文件目前只会是总仓 GLB;非 GLB / GLTF 退回 2D 预览,
           // 用户仍可右键 "打开模型" 用系统程序打开。
           onClick={(e) => {
             const next =

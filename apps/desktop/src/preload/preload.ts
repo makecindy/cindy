@@ -4591,6 +4591,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maxSize?: number;
   }): Promise<{ bytes: Uint8Array; size: number }> => ipcRenderer.invoke('read-file-bytes', params),
 
+  /**
+   * Read a local 3D model file's raw bytes (≤128MB) for the in-app model viewer and
+   * chat thumbnails. Only accepts absolute paths to a 3D model file (glb / gltf /
+   * obj / fbx / stl / ply / dae / 3mf / 3ds), and the symlink-resolved target must
+   * also be one. Rejects with an IpcError on failure — no partial payload.
+   */
+  readModelFileBytes: (params: {
+    filePath: string;
+  }): Promise<{ bytes: Uint8Array; size: number }> =>
+    ipcRenderer.invoke('read-model-file-bytes', params),
+
+  /** Read one relative `.gltf` companion resource under the model directory. */
+  readModelFileResourceBytes: (params: {
+    modelPath: string;
+    relativePath: string;
+  }): Promise<{ bytes: Uint8Array; size: number }> =>
+    ipcRenderer.invoke('read-model-file-resource-bytes', params),
+
   // File header peek IPC (F-FI-8 fallback inference)
   peekFileHeader: (params: {
     filePath: string;
