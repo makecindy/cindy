@@ -311,10 +311,11 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
   const routines = new Map<string, { enabled: boolean; revision: number; prompt?: string; preRunCommand?: string }>();
   const schedules = new Map<string, TaskActionScheduleDefinition>();
   const workDirs = new Map([['companion', '/companion']]);
+  const getScheduleDefinition = vi.fn(async (id: string) => structuredClone(schedules.get(id) ?? null));
   const authorize = createDesktopTaskActionAuthorizer({
     input: () => ({ ...activeInput }), confirm, getSession,
     capturePermissionRequest,
-    getScheduleDefinition: async id => structuredClone(schedules.get(id) ?? null),
+    getScheduleDefinition,
     getSessionWorkDir: async id => workDirs.get(id),
     captureRoutine: async (_botId, id, forExecution) => {
       const row = routines.get(id);
@@ -330,7 +331,7 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     },
   });
   return { authorize, confirm, activeInput, caller, rows, runtime, getSession,
-    permissionRequest, capturePermissionRequest, routines, schedules, workDirs };
+    permissionRequest, capturePermissionRequest, routines, schedules, workDirs, getScheduleDefinition };
 }
 const ownerWrites = [
   ['cindy_helper', 'start_session_task'],
@@ -1061,6 +1062,46 @@ describe('teammate turn principal', () => {
     },
   );
 
+  // #7912: the ordinary cross-device route remains available, but a remote
+  // schedule that starts an independent Full Access Agent is the same command
+  // risk as the local route and must show the same visible decision.
+  it('applies the command decision to remote independent Agent schedules without blacklisting ordinary edits', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const definition = { id: 'remote-agent', name: 'Remote agent', useWorktree: false,
+      prompt: 'Run the saved work', executionMode: 'agent' as const, workingDir: '/remote/work' };
+    h.schedules.set(definition.id, definition);
+    const effect = vi.fn(async () => 'started');
+    const runRequest = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_run_now', args: { id: definition.id, device: 'remote-mac' } };
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, runRequest, effect))).toContain('USER_CANCELLED');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', runRequest.tool, runRequest.args,
+      expect.objectContaining({ risk: 'command', details: expect.objectContaining({
+        schedule: expect.objectContaining({ id: definition.id, workingDir: '/remote/work' }),
+        execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' },
+      }) }));
+
+    h.confirm.mockClear();
+    const metadataEdit = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_update', args: { id: definition.id, device: 'remote-mac', name: 'Renamed' } };
+    expect(await withToolCallAuthority(h.authorize, metadataEdit, effect)).toBe('started');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the remote schedule definition cannot be read', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.getScheduleDefinition.mockRejectedValueOnce(new Error('SCHEDULE_DEFINITION_UNAVAILABLE'));
+    const effect = vi.fn(async () => 'started');
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_run_now', args: { id: 'remote-agent', device: 'remote-mac' } };
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('CAPABILITY_NOT_AVAILABLE');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
   // r4409663577: helper create starts Full Access without a directory override.
   // Unit, real admission/effect: ordinary task sends must not mint silent authority.
   it('confirms a new Full Access handoff without changing existing sends or inherited-permission creates', async () => {
@@ -1126,7 +1167,7 @@ describe('teammate turn principal', () => {
     expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, resume))).toContain('AUTHORIZATION_EXPIRED');
     expect(resume).not.toHaveBeenCalled();
     expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
-      { server: 'cindy_scheduler', risk: 'resume', details: { schedule: expect.objectContaining({
+      { server: 'cindy_scheduler', risk: 'command', details: { schedule: expect.objectContaining({
         workingDir: '/work', scriptConfig: { command: 'printf reviewed', capabilities: [] },
       }) } });
     h.confirm.mockResolvedValue(true);

@@ -383,9 +383,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
     requireObject(patch, 'patch');
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
     // JSON must keep null until this receiving boundary; undefined keys disappear
     // in transit. Only model-selection axes gain explicit clearing semantics.
     const normalizedPatch = { ...patch as Record<string, unknown> };
@@ -393,8 +394,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       if (normalizedPatch[key] === null) normalizedPatch[key] = undefined;
     }
     return withScheduler(({ scheduler }) =>
-      scheduler.updateFromCurrent(scheduleId, (existing) =>
-        stabilizePreRunHookForUpdate(
+      scheduler.updateFromCurrent(
+        scheduleId,
+        (existing) => stabilizePreRunHookForUpdate(
           existing,
           normalizeLegacyDeviceLinkModelSelection(
             existing,
@@ -408,6 +410,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
           ),
           hookPathDeps,
         ),
+        expected,
       ),
     );
   });
@@ -449,14 +452,18 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId));
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
+    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId, expected));
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown, optionsRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId));
+    const options = optionsRaw && typeof optionsRaw === 'object' && !Array.isArray(optionsRaw)
+      ? optionsRaw as { expectedSchedule?: Schedule } : undefined;
+    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId,
+      options?.expectedSchedule ? { expectedSchedule: options.expectedSchedule } : undefined));
   });
 
   // 表单「AI 生成」:按用户自然语言描述生成前置检查脚本(utility model 单次生成,

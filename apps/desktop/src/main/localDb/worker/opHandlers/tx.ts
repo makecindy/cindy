@@ -1,4 +1,5 @@
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
@@ -2389,6 +2390,12 @@ function compactSessionToolResults(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
 
+  // Runtime-only function; no persisted schema/trigger depends on it.
+  db.function('tool_result_diagnostics', { deterministic: true }, (content: unknown) => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
+
   const selectSession = db.prepare(`
     SELECT id
       FROM sessions
@@ -2397,7 +2404,7 @@ function compactSessionToolResults(
      LIMIT 1
   `);
   // Archived/deleted tool results are intentionally treated uniformly. Ordinary
-  // rows only pay for the fixed-prefix check. JSON validation runs solely for
+  // rows only pay for the fixed-prefix check when selecting candidates. JSON validation runs solely for
   // the tiny set of rows that look like our marker, preventing an unrelated
   // tool result with the same prefix from being skipped forever.
   const uncompactedContentPredicate = `
@@ -2423,12 +2430,12 @@ function compactSessionToolResults(
   `);
   const compactMessages = db.prepare(`
     UPDATE messages
-       SET content = json_object(
+       SET content = json_patch(json_object(
          'type', 'tool_result_compacted',
          'version', 1,
          'originalBytes', octet_length(content),
          'compactedAt', ?
-       )
+       ), json_object('diagnostics', json(tool_result_diagnostics(content))))
      WHERE session_id = ?
        AND role = 'tool_result'
        AND (${uncompactedContentPredicate}) = 1

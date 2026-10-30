@@ -595,7 +595,9 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
   return (
     <>
       {sending && slow ? (
-        <p role="status" className="select-none text-12 leading-[1.33] text-[var(--text-tertiary)]">
+        // Pending opacity already conveys sending. Keep the delayed announcement
+        // out of layout so a receipt cannot add/remove a line under the bubble.
+        <p role="status" className="sr-only">
           {t('bots.groupChat.outbox.sending')}
         </p>
       ) : null}

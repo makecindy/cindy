@@ -32,6 +32,7 @@ import {
   type SshHostSnapshotLike,
 } from '@cindy/mcps';
 import type { OrcaMcpDeps } from '@cindy/mcps';
+import type { Schedule } from '@cindy/maker-scheduler';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
@@ -103,7 +104,7 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, taskActionScheduleGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -313,8 +314,46 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
   }));
 
+  const remoteSessionId = (sessionId: string, device?: string): string => {
+    if (!device || device === 'local') return sessionId;
+    const separator = sessionId.indexOf('::');
+    if (separator < 0) return sessionId;
+    const prefix = sessionId.slice(0, separator);
+    const localId = sessionId.slice(separator + 2);
+    return prefix === device && localId ? localId : sessionId;
+  };
+
   // Share the installer's directory resolver with its reviewed target snapshot.
-  const resolveHookSessionWorkDir = async (sessionId: string) => {
+  // A remote target must be read from that computer; resolving its session id
+  // against this Mac would approve the wrong cwd.
+  const resolveHookSessionWorkDir = async (sessionId: string, device?: string) => {
+    if (device && device !== 'local') {
+      if (!deps.historyRemote) throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+      let assertAccess: (() => void) | undefined;
+      try {
+        assertAccess = deps.historyRemote.captureAccess();
+        const response = await deps.invokeRemote(
+          device,
+          'local-db:sessions:get',
+          [remoteSessionId(sessionId, device)],
+          { preSend: assertAccess },
+        );
+        assertAccess();
+        if (!response.ok) {
+          const code = response.error && typeof response.error === 'object' && 'code' in response.error
+            ? String((response.error as { code?: unknown }).code ?? '') : '';
+          if (code === 'NOT_FOUND') return undefined;
+          throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+        }
+        const row = response.result && typeof response.result === 'object' && !Array.isArray(response.result)
+          ? response.result as { workingDir?: unknown }
+          : null;
+        return typeof row?.workingDir === 'string' && row.workingDir.trim() ? row.workingDir : undefined;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'SCHEDULE_DEFINITION_UNAVAILABLE') throw error;
+        throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+      }
+    }
     try {
       const { getMaker } = await import('../maker-host/index.js');
       const meta = await getMaker().getSessionMeta(sessionId);
@@ -331,19 +370,43 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
       capturePermissionRequest: captureTaskActionPermissionRequest,
       getSessionWorkDir: resolveHookSessionWorkDir,
-      getScheduleDefinition: async (id, hookInstallation) => {
-        const schedule = await getScheduler().get(id);
+      getScheduleDefinition: async (id, hookInstallation, device) => {
+        let schedule: Schedule | null;
+        if (device && device !== 'local') {
+          if (!deps.historyRemote) throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+          let assertAccess: (() => void) | undefined;
+          try {
+            assertAccess = deps.historyRemote.captureAccess();
+            const response = await deps.invokeRemote(device, 'maker:schedule:get', [id], { preSend: assertAccess });
+            assertAccess();
+            if (!response.ok) {
+              const code = response.error && typeof response.error === 'object' && 'code' in response.error
+                ? String((response.error as { code?: unknown }).code ?? '') : '';
+              if (code === 'NOT_FOUND') return null;
+              throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+            }
+            schedule = response.result as Schedule | null;
+          } catch {
+            throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+          }
+        } else {
+          schedule = await getScheduler().get(id);
+        }
         if (!schedule) return null;
         const { name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId } = schedule;
         const preRunWorkingDir = preRunHook?.command?.trim()
-          ? (targetSessionId ? await resolveHookSessionWorkDir(targetSessionId) : undefined) ?? workingDir
+          ? (targetSessionId ? await resolveHookSessionWorkDir(targetSessionId, device) : undefined) ?? workingDir
           : undefined;
+        const mutationGuard = preRunWorkingDir?.trim()
+          ? { ...schedule, effectiveWorkingDir: preRunWorkingDir }
+          : schedule;
         const definition = { id, name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId,
+          mutationGuard,
           ...(preRunHook?.command?.trim() ? { preRunWorkingDir: preRunWorkingDir?.trim() ? preRunWorkingDir : homedir() } : {}) };
         if (!hookInstallation) return definition;
         let installWorkingDir = hookInstallation.workingDir;
         if (!installWorkingDir && executionMode !== 'script' && targetSessionId)
-          installWorkingDir = await resolveHookSessionWorkDir(targetSessionId) ?? installWorkingDir;
+          installWorkingDir = await resolveHookSessionWorkDir(targetSessionId, device) ?? installWorkingDir;
         return { ...definition, hookInstallation: { workingDir: installWorkingDir ?? workingDir,
           fallbackDir: pathJoin(app.getPath('userData'), 'schedule-hooks') } };
       },
@@ -545,6 +608,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
+      getApprovedScheduleGuard: taskActionScheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {

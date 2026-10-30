@@ -124,6 +124,7 @@ export function registerScheduleUpdateTool(
       ...writeDeviceShape,
     },
     handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
+      const expected = deps.getApprovedScheduleGuard?.();
       if (!isLocalDevice(device)) {
         // 对方电脑的 IPC 入口自己做校验与 hook 路径稳定化;这里只拦跨 JSON 边界
         // 表达不了、或只对本机有意义的写法,明确报错而不是写出与意图不符的任务。
@@ -176,7 +177,7 @@ export function registerScheduleUpdateTool(
           : patch;
         return runOnDevice(deps, device, async () => undefined, {
           op: 'update',
-          args: [id, remotePatch],
+          args: expected ? [id, remotePatch, expected] : [id, remotePatch],
         });
       }
       return withScheduler(deps, async (scheduler) => {
@@ -277,7 +278,7 @@ export function registerScheduleUpdateTool(
               deps.hookScript.resolveSessionWorkDir ?? (async () => undefined),
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
-        });
+        }, expected);
       });
     },
   });

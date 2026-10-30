@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { Schedule, ScheduleMutationGuard } from '@cindy/maker-scheduler';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 type Call = Parameters<ToolCallAuthorizer>[0];
@@ -66,6 +66,8 @@ export interface TaskActionScope {
   ownerInput: boolean;
   principal?: TaskActionPrincipal;
   routine?: { botId: string; id: string; revision: number };
+  /** Complete persisted schedule captured for an approved command/resume action. */
+  scheduleGuard?: ScheduleMutationGuard;
   /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
   delegated: boolean;
   /** Rechecked at mutation; includes account, target and delegation revocation. */
@@ -82,6 +84,7 @@ interface ActionContext {
   fingerprint: string;
   principal?: TaskActionPrincipal;
   routine?: TaskActionScope['routine'];
+  scheduleGuard?: ScheduleMutationGuard;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
@@ -118,9 +121,10 @@ export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
 export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority';
 export type TaskActionScheduleDefinition = Pick<Schedule,
   'id' | 'name' | 'prompt' | 'persistentSession' | 'useWorktree' | 'executionMode' | 'scriptConfig' | 'preRunHook' | 'workingDir' | 'targetSessionId'> & {
-    hookInstallation?: { workingDir?: string; fallbackDir: string };
-    preRunWorkingDir?: string;
-  };
+  hookInstallation?: { workingDir?: string; fallbackDir: string };
+  preRunWorkingDir?: string;
+  mutationGuard?: ScheduleMutationGuard;
+};
 export interface TaskActionConfirmation {
   server: string;
   risk?: TaskActionRisk;
@@ -146,12 +150,11 @@ export interface TaskActionRoutineSnapshot {
  * continuations inherit their target permissions. Persistent runs may create a replacement. */
 export function taskActionStartsIndependentAgent(call: Pick<Call, 'server' | 'tool' | 'args'>,
   schedule?: TaskActionScheduleDefinition | null): boolean {
-  if (call.server !== 'cindy_scheduler' || !['schedule_create', 'schedule_update', 'schedule_run_now'].includes(call.tool))
+  if (call.server !== 'cindy_scheduler' || !['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool))
     return false;
   const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
     ? call.args as Record<string, unknown> : {};
-  if (call.tool !== 'schedule_create' && args.device && args.device !== 'local') return false;
-  const definition = call.tool === 'schedule_run_now' ? schedule : { ...schedule, ...args };
+  const definition = ['schedule_run_now', 'schedule_resume'].includes(call.tool) ? schedule : { ...schedule, ...args };
   const bindsCurrent = call.tool !== 'schedule_run_now' && args.bindToCurrentSession === true;
   return (definition?.executionMode ?? 'agent') === 'agent' &&
     typeof definition?.prompt === 'string' && !!definition.prompt.trim() &&
@@ -180,7 +183,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
     [args.script, args.description].some(value => typeof value === 'string' && value.trim()))
     return 'command'; // both surfaces install and self-test through the same handler
   if (call.server === 'cindy_scheduler') {
-    if (['schedule_create', 'schedule_update', 'schedule_run_now'].includes(call.tool)) {
+    if (['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) {
       const definition = call.tool === 'schedule_run_now' ? facts?.schedule
         : { ...facts?.schedule, ...args };
       const hook = definition?.preRunHook;
@@ -189,6 +192,8 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
         return 'command';
     }
   }
+  if (call.tool === 'schedule_resume' && (taskActionStartsIndependentAgent(call, facts?.schedule) || facts?.schedule?.executionMode === 'script' || facts?.schedule?.preRunHook?.command?.trim()))
+    return 'command';
   if (taskActionStartsIndependentAgent(call, facts?.schedule) &&
     (call.tool !== 'schedule_update' ||
       (['prompt', 'workingDir', 'useWorktree', 'executionMode', 'targetSessionId', 'persistentSession'] as const)
@@ -273,6 +278,7 @@ export async function admitTaskAction(
           fingerprint,
           principal: scope.principal,
           routine: scope.routine,
+          ...(scope.scheduleGuard ? { scheduleGuard: scope.scheduleGuard } : {}),
           assertCurrent: scope.assertCurrent,
           assertCurrentSync: scope.assertCurrentSync,
           assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
@@ -304,6 +310,11 @@ export function taskActionRoutineRevision(botId: string, id?: string): number | 
   const current = actionContext.getStore();
   return current && ['routine_save', 'routine_run_now'].includes(current.tool) && current.routine?.botId === botId && current.routine.id === id
     ? current.routine.revision : undefined;
+}
+
+/** Host-only schedule snapshot for the scheduler mutation guard. */
+export function taskActionScheduleGuard(): ScheduleMutationGuard | undefined {
+  return actionContext.getStore()?.scheduleGuard;
 }
 
 export async function assertTaskActionCurrent(): Promise<void> {

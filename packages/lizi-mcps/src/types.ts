@@ -315,6 +315,8 @@ export interface SchedulerMcpDeps {
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
+  /** Host approval snapshot for the current schedule mutation, if one exists. */
+  getApprovedScheduleGuard?: () => import('@cindy/maker-scheduler').ScheduleMutationGuard | undefined;
   /**
    * 同账号其它电脑上的定时任务(host 注入,desktop 经既有 `maker:schedule:*` 远程控制通道)。
    * 缺省 = host 未接 → 工具的 `device` 只接受 local,其它值返 REMOTE_UNSUPPORTED。

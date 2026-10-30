@@ -14,6 +14,8 @@ export interface FireContext {
   deferToCaller?: boolean;
   /** Internal caller validity, checked at the accepted -> vendor-dispatch boundary. Never persisted. */
   canDispatch?: () => boolean;
+  /** Bound pre-run hooks must execute in the directory shown in the approval card. */
+  expectedPreRunWorkingDir?: string;
   /**
    * 由 Scheduler 创建并 own 的 AbortSignal。当用户在 UI 上 delete/pause 这条 schedule 时,
    * Scheduler 会对所有 in-flight 的 runner.fire() 触发 abort。
