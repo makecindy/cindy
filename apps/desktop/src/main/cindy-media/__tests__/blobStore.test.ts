@@ -131,6 +131,48 @@ describe('writeBlob(内容寻址写入)', () => {
   });
 });
 
+// #7163: the Host may redirect userData, but links inside the media store
+// must still fail closed. Use a Junction on Windows without symlink privileges.
+describe('redirected Host userData', () => {
+  async function withRedirectedRoot(run: (target: string) => Promise<void>) {
+    const previous = tmpUserData;
+    const target = scratchDir('redirected-target');
+    const link = path.join(scratchDir('redirected-parent'), 'userData');
+    fs.symlinkSync(target, link, directoryLinkType);
+    tmpUserData = link;
+    try {
+      await run(target);
+    } finally {
+      tmpUserData = previous;
+    }
+  }
+
+  it.each(['blobs', 'client-wallpaper'] as const)('%s persists, deduplicates and reads through the Host link', async (scope) => {
+    await withRedirectedRoot(async (target) => {
+      const params = { buffer: PNG_BYTES, mimeType: 'image/webp', scope };
+      const written = await blobStore.writeBlob(params);
+      expect(written.deduplicated).toBe(false);
+      expect(fs.readFileSync(path.join(target, 'cindy-media', scope, written.hash.slice(0, 2), `${written.hash}.webp`))).toEqual(PNG_BYTES);
+      expect((await blobStore.writeBlob(params)).deduplicated).toBe(true);
+      const read = scope === 'blobs' ? blobStore.readFile : blobStore.readClientWallpaperFile;
+      expect((await read(written.url)).buffer).toEqual(PNG_BYTES);
+    });
+  });
+
+  it.each(['cindy-media', 'blobs', 'shard'] as const)('rejects an inner %s link beneath redirected userData', async (kind) => {
+    await withRedirectedRoot(async () => {
+      const components = ['cindy-media', 'blobs', PNG_HASH.slice(0, 2)];
+      const count = kind === 'cindy-media' ? 1 : kind === 'blobs' ? 2 : 3;
+      const inner = path.join(tmpUserData, ...components.slice(0, count));
+      fs.mkdirSync(path.dirname(inner), { recursive: true });
+      const outside = scratchDir('redirected-inner-outside');
+      fs.symlinkSync(outside, inner, directoryLinkType);
+      await expect(blobStore.writeBlob({ buffer: PNG_BYTES, mimeType: 'image/png' })).rejects.toMatchObject({ code: 'ELOOP' });
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+  });
+});
+
 describe('writeBlob(已存在副本核验与自愈)', () => {
   it.each(['link', 'rename'] as const)('%s 分支:正确副本去重不重写', async (mode) => {
     const sample = hashedPng(`ok-${mode}`);

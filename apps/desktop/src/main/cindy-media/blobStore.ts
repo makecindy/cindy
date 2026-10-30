@@ -247,6 +247,14 @@ async function lstatRegularDir(absPath: string): Promise<Stats> {
   return st;
 }
 
+// userData is a Host-selected boundary and may itself be a Junction/symlink.
+// Follow only that root; every directory inside the media store still uses lstat.
+async function statUserDataDir(absPath: string): Promise<void> {
+  if (!(await fs.stat(absPath)).isDirectory()) {
+    throw Object.assign(new Error('cindy-media: blob ancestor is not a directory'), { code: 'ENOTDIR' });
+  }
+}
+
 async function ensureContainedDir(absPath: string, parent: string): Promise<Stats> {
   const st = await lstatRegularDir(absPath);
   const resolvedParent = path.resolve(parent);
@@ -274,7 +282,7 @@ async function ensureChildDir(parent: string, name: string): Promise<string> {
 async function prepareBlobDestination(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<{ dir: string; dest: string }> {
   getBlobsRoot(scope); // Validate before using the scope as a directory name.
   const userData = path.resolve(app.getPath('userData'));
-  await lstatRegularDir(userData);
+  await statUserDataDir(userData);
   const mediaRoot = await ensureChildDir(userData, 'cindy-media');
   const root = await ensureChildDir(mediaRoot, scope);
   const dir = await ensureChildDir(root, hash.slice(0, 2));
@@ -297,9 +305,11 @@ async function assertBlobPathContained(absPath: string, scope: BlobScope = 'blob
   while (current !== userData) {
     const parent = path.dirname(current);
     if (parent === current) break;
+    if (parent === userData) break;
     await lstatRegularDir(parent);
     current = parent;
   }
+  await statUserDataDir(userData);
 }
 
 function noFollowReadFlags(): number {
