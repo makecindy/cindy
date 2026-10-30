@@ -15,6 +15,22 @@ import { reloadPage } from './registry.mjs';
 
 const require = createRequire(import.meta.url);
 export const origin = 'http://cindy-ui.test';
+
+/**
+ * 请求的视口与实际窗口尺寸对得上吗。
+ *
+ * 操作系统窗口管理器会把窗口钳制到工作区（小屏笔记本、远程桌面、特定缩放下很常见），
+ * 也会因 DPI 取整产生 1px 偏差。钳制不是被测页面的问题：按实际尺寸截图、继续审计，
+ * 只记一条 warning；只有“实际比请求还大”才说明尺寸配置真的错了。
+ */
+export function classifyViewport(expected, actual) {
+  const dw = actual.width - expected.width;
+  const dh = actual.height - expected.height;
+  // DPI 取整：±1px 视为命中，不报警也不算钳制。
+  if (Math.abs(dw) <= 1 && Math.abs(dh) <= 1) return 'match';
+  if (dw <= 0 && dh <= 0) return 'clamped';
+  return 'mismatch';
+}
 const csp =
   "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 
@@ -473,8 +489,23 @@ export async function runPlan(plan, options, externalSignal) {
         await Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {})));
       });
       if (app) {
-        const actual = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-        assert.deepEqual(actual, variant.viewport, 'Electron window matches the variant viewport');
+        const measured = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+        // 测试钩子：真机上隐藏窗口往往能拿到超大尺寸，钳制不可复现。设了这个环境变量就模拟
+        // “窗口管理器把窗口钳到工作区”，让 warning / summary 这段管线能被确定性地测到。
+        const simulated = process.env.CINDY_UI_SIMULATE_VIEWPORT_CLAMP;
+        const actual = simulated
+          ? {
+              width: Math.min(measured.width, Number(simulated.split('x')[0]) || measured.width),
+              height: Math.min(measured.height, Number(simulated.split('x')[1]) || measured.height),
+            }
+          : measured;
+        const verdict = classifyViewport(variant.viewport, actual);
+        if (verdict === 'clamped') {
+          // 记在变体上，由 runVariant 落成 warning + summary.viewportClamped。
+          opened.viewportClamp = { expected: { ...variant.viewport }, actual };
+        } else if (verdict === 'mismatch') {
+          assert.deepEqual(actual, variant.viewport, 'Electron window matches the variant viewport');
+        }
       }
       return opened;
     };
@@ -662,6 +693,14 @@ export async function runPlan(plan, options, externalSignal) {
         ]);
         mergeAudits();
         if (opened?.errors) result.errors.push(...opened.errors);
+        if (opened?.viewportClamp) {
+          // 窗口被系统钳制：按实际尺寸截图与审计，但不当失败。
+          result.viewportClamped = opened.viewportClamp;
+          const { expected, actual } = opened.viewportClamp;
+          result.warnings.push(
+            `viewport clamped by the window manager: requested ${expected.width}×${expected.height}, got ${actual.width}×${actual.height}`,
+          );
+        }
         if (options.focus && !result.focus.length)
           result.warnings.push(`focus ${options.focus} was not visible at any capture`);
         if (current.blocked.length)
@@ -672,6 +711,7 @@ export async function runPlan(plan, options, externalSignal) {
         result.errors.unshift(String(error?.stack ?? error));
         mergeAudits();
         if (opened?.errors) result.errors.push(...opened.errors);
+        if (opened?.viewportClamp) result.viewportClamped = opened.viewportClamp;
         if (result.hostMissing.length === 0 && opened?.page && !opened.page.isClosed())
           result.hostMissing = await opened.page
             .evaluate(() => window.__uiPage?.hostMissing ?? [])
