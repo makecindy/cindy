@@ -18984,9 +18984,12 @@ function oldestServerMessageIdForWindow(
 /**
  * 把一条窗口内消息换算回"落库那条时间线"上的可比对象(与原始 DB 行同口径)。
  *
- * 只有 thinking 需要换算:mapServerMessages 会把它的 createdAt 改写成 `finishedAt - durationMs`
- * (渲染层拿它当块的开始时刻算时长)。拿改写后的值去跟原始 DB 行比大小,就是在混两条时间线。
- * 换算不出来(没有 thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ * thinking 的锚点是块的开始时刻(`finishedAt - durationMs`):mapServerMessages 按它改写
+ * createdAt,main 落库也按它写 createdAt,两条时间线已经重合。换算不出来(没有
+ * thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ *
+ * 存量行(锚点仍是 finishedAt)用开始时刻比会偏早:只会多判一次脱离、多做一次补齐,
+ * 不会把有损通道造成的缺口当成连续。
  */
 function thinkingSafeTimelineRow(
   message: ChatMessage,
@@ -18994,10 +18997,7 @@ function thinkingSafeTimelineRow(
   if (message.role !== 'thinking') return message;
   if (typeof message.thinkingFinishedAtMs !== 'number') return null;
   if (!Number.isFinite(message.thinkingFinishedAtMs)) return null;
-  return {
-    createdAt: new Date(message.thinkingFinishedAtMs).toISOString(),
-    rowid: message.rowid,
-  };
+  return { createdAt: message.createdAt, rowid: message.rowid };
 }
 
 /**

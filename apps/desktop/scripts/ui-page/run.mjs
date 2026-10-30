@@ -401,6 +401,19 @@ export async function runPlan(plan, options, externalSignal) {
       let page, context;
       if (app) {
         page = electronPage;
+        if (page.viewportSize()) {
+          // A scenario may resize its editor through Playwright. That installs
+          // a persistent CDP viewport override, independent of BrowserWindow.
+          // Reset both Playwright's recorded size and the override, so the next
+          // variant measures the native content size at the host's 2x density.
+          await page.setViewportSize(variant.viewport);
+          const metrics = await page.context().newCDPSession(page);
+          try {
+            await metrics.send('Emulation.clearDeviceMetricsOverride');
+          } finally {
+            await metrics.detach();
+          }
+        }
         await app.evaluate(({ BrowserWindow }, size) => {
           BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height);
         }, variant.viewport);

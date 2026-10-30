@@ -13,6 +13,7 @@ const mock = vi.hoisted(() => ({
   save: vi.fn<(state: RoutineState) => Promise<void>>(async () => {}),
   ensureRoutineSession: vi.fn(async ({ routineId }: { routineId: string }) => ({ ok: true as const, sessionId: `lane-${routineId}`, created: false })),
   closeRoutineSession: vi.fn(async () => {}),
+  deleteRoutineSession: vi.fn(async () => {}),
   getBot: vi.fn(async () => ({ status: 'active', canonicalSessionId: 'canonical-task' })),
   storage: {
     get: vi.fn<(id: string) => Promise<Schedule | null>>(async () => null),
@@ -71,6 +72,7 @@ beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profile
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
   closeRoutineSession: mock.closeRoutineSession,
+  deleteRoutineSession: mock.deleteRoutineSession,
   getScheduler: () => mock.schedulerReady ? mock.scheduler : null,
   getScheduleStorage: () => mock.storage,
 }));
@@ -110,6 +112,8 @@ it('dispatches into the routine lane and records its task for inspection', async
     }),
   );
   expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ resultText: 'Reviewed PR', sessionId: `lane-${routine.id}` });
+  // persistent 专线承载上下文，永不自动删（只归档）。
+  expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
   expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ botId: 'bot', routineId: routine.id }));
 });
 
@@ -142,9 +146,76 @@ it('creates and closes an isolated lane for each fresh routine trigger', async (
     routineId: expect.stringMatching(new RegExp(`^${routine.id}:`)),
   }));
   expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  // 真实跑过的 fresh 任务保留：自动化文件夹和「查看任务」要能回放完整过程。
+  expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
+  expect((await routineTools.history('bot', routine.id))[0].sessionId)
+    .toMatch(new RegExp(`^lane-${routine.id}:`));
   // The per-trigger lane must still send with the routine's own model, not the companion's.
   const laneRoutineId = mock.ensureRoutineSession.mock.calls[0][0].routineId;
   expect(await readRoutineLaneModel('bot', `routine:${laneRoutineId}`)).toMatchObject({ agentKind: 'codex', model: 'budget' });
+});
+
+it('deletes a fresh lane skipped by its pre-run hook instead of leaving an empty shell', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh', triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  // pre-run hook exit 2：本轮没有任何模型轮次，任务永远不会有过程内容。
+  mock.storage.listRuns.mockResolvedValueOnce([
+    { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'skipped', resultText: 'pre-run hook exit 2 — 4780ms' },
+  ]);
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect(mock.deleteRoutineSession).toHaveBeenCalled());
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  // 空壳已回收，历史不挂「查看任务」死链，结果文字照常保留。
+  const run = (await routineTools.history('bot', routine.id))[0];
+  expect(run.sessionId).toBeUndefined();
+  expect(run.resultText).toBe('pre-run hook exit 2 — 4780ms');
+});
+
+it('keeps a persistent lane and its history entry when the pre-run hook skips', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Review', prompt: 'Check the PR', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  // persistent 被 hook 跳过：任务保留，历史入口照常（不随 fresh 的空壳回收省略 sessionId）。
+  mock.storage.listRuns.mockResolvedValueOnce([
+    { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'skipped', resultText: 'pre-run hook exit 2 — 4780ms' },
+  ]);
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0].status).toBe('skipped'));
+  expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
+  expect((await routineTools.history('bot', routine.id))[0].sessionId).toBe(`lane-${routine.id}`);
+});
+
+it('deletes a fresh lane when the backing storage write fails', async () => {
+  const routine = await routineTools.save('bot', {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh', triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  });
+  // backing 写入失败：本轮不可能派发给模型，空壳任务仍必须被关掉并删掉。
+  mock.storage.get.mockRejectedValueOnce(new Error('storage unavailable'));
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect(mock.deleteRoutineSession).toHaveBeenCalled());
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+  expect(mock.closeRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
+});
+
+it('deletes a fresh lane deferred before dispatch', async () => {
+  const input = {
+    name: 'Fresh review', prompt: 'Check only this trigger', enabled: true,
+    sessionMode: 'fresh' as const, triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }],
+  };
+  const routine = await routineTools.save('bot', input);
+  // 触发途中改了这条例行任务：这轮不会真跑，fresh 的空壳任务同样不能留下。
+  mock.ensureRoutineSession.mockImplementationOnce(async ({ routineId }: { routineId: string }) => {
+    await routineTools.save('bot', { ...input, prompt: 'Edited mid-flight' }, routine.id);
+    return { ok: true as const, sessionId: `lane-${routineId}`, created: false };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect(mock.deleteRoutineSession).toHaveBeenCalled());
+  expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
 });
 
 it('turns the teammate\'s weekday todo check on and off as one built-in routine', async () => {

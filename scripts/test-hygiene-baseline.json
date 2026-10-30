@@ -311,7 +311,7 @@
       "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts": {
-      "sourceReads": 2
+      "sourceReads": 1
     },
     "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
       "sourceReads": 1

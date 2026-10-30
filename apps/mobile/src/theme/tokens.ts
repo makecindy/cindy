@@ -157,9 +157,11 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,只用于伙伴列表行(伙伴与群聊)的未读点,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口的未读提示,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
+  /** 话题内新回复分界线及标签；列表与摘要继续使用 botUnread。 */
+  threadUnreadDivider: string;
   /**
    * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
    * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
@@ -475,6 +477,7 @@ export const lightColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#D91F37',
   prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
@@ -569,6 +572,7 @@ export const darkColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
+  threadUnreadDivider: '#FF667A',
   prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',

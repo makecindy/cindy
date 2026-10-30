@@ -1,3 +1,4 @@
+import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
@@ -5276,11 +5277,13 @@ function CCAgentSessionContent({
       requestChatTaskFocus(sessionId, clientId);
     }
   }, [pendingQueue, sessionId, setQueueExpanded]);
+  const pendingMcpSetup = useMcpSetupRequest(sessionId ?? null, !remoteDeviceId && !readOnly);
   const messageStreamEl = (
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
+      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} /> : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}

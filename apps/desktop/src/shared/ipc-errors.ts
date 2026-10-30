@@ -1,4 +1,5 @@
 import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
+import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
 /** main / preload / renderer 共用的 IPC 错误类型。 */
@@ -71,6 +72,7 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | WritableDirectoryGrantErrorCode
   | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
@@ -345,6 +347,7 @@ export interface IpcError {
 }
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
+  ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
   ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',

@@ -1,4 +1,5 @@
 import { materializeToolProcessMedia } from './cindy-media/toolProcessMedia.js';
+import { importExternalCodexMessagesForSession } from './maker-host/codex-local-sessions.js';
 import { withToolProcessMedia, type ProcessMediaRef, type NativeToolMedia } from '@cindy/maker-shared/tool-process-media';
 import { readTaskResultsForReply } from './botTaskReplyResults.js';
 /**
@@ -769,6 +770,45 @@ function enqueueTurnErrorWrite(
     });
 }
 
+const pendingCodexReconciliation = new Map<string, {
+  ownerScope: OwnerScope;
+  rows: Map<string, number | undefined>;
+}>();
+
+function requestCodexReconciliation(sessionId: string, clientId: string, createdAt: number | undefined, ownerScope: OwnerScope): void {
+  const pending = pendingCodexReconciliation.get(sessionId);
+  if (pending && isOwnerScopeCurrent(pending.ownerScope)) {
+    pending.rows.set(clientId, createdAt);
+    return;
+  }
+  const work = { ownerScope, rows: new Map([[clientId, createdAt]]) };
+  pendingCodexReconciliation.set(sessionId, work);
+  // Background per-session work: unrelated writes and sequence cursor commits
+  // never wait on history reconciliation. Writes during a pass form one batch.
+  void Promise.resolve().then(async () => {
+    try {
+      while (work.rows.size && isOwnerScopeCurrent(ownerScope) && pendingCodexReconciliation.get(sessionId) === work) {
+        const batch = [...work.rows].slice(0, 400);
+        for (const [id] of batch) work.rows.delete(id);
+        const ids = batch.filter(([, at]) => !backgroundTurnPredatesSessionClear(sessionId, at)).map(([id]) => id);
+        if (ids.length) await importExternalCodexMessagesForSession(sessionId, { localWrite: ids });
+      }
+    } finally {
+      if (pendingCodexReconciliation.get(sessionId) === work) pendingCodexReconciliation.delete(sessionId);
+    }
+  }).catch((error) => {
+    log.warn('Codex import reconciliation failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
+  });
+}
+
+function reconcileCalibratedCodexReply(
+  sessionId: string, updated: NonNullable<Awaited<ReturnType<typeof updateDbMessageContent>>>, ownerScope: OwnerScope,
+): void {
+  if (updated.agentKind === 'codex' && sessionId.startsWith('codex-') && isOwnerScopeCurrent(ownerScope)) {
+    requestCodexReconciliation(sessionId, updated.clientId, Date.parse(updated.createdAt), ownerScope);
+  }
+}
+
 /** 在事件入队时冻结 agent_kind，避免 writeChain 延迟执行时读到切换后的可变 Map。 */
 function enqueueVisibleDbMessage(
   label: string,
@@ -780,6 +820,13 @@ function enqueueVisibleDbMessage(
   enqueueWrite(label, async (ownerScope) => {
     const result = await createVisibleDbMessage(sessionId, stamped, ownerScope);
     onPersisted?.();
+    if (stamped.role === 'assistant' && stamped.agentKind === 'codex'
+      && sessionId.startsWith('codex-') && isOwnerScopeCurrent(ownerScope)
+      && !backgroundTurnPredatesSessionClear(sessionId, stamped.createdAt)) {
+      // A list read may have imported this reply before the live write. Repair
+      // it now; an already open local window need not request history again.
+      requestCodexReconciliation(sessionId, stamped.clientId, stamped.createdAt, ownerScope);
+    }
     return result;
   });
 }
@@ -863,7 +910,8 @@ function enqueuePersistAssistant(
     clientId,
     role: 'assistant',
     content,
-    agentMeta: agentMeta ?? null,
+    // Add identity only after the caller has resolved model/usage fallbacks.
+    agentMeta: agentMessageId ? { ...agentMeta, agentMessageId } : agentMeta ?? null,
     createdAt,
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content, agentMessageId);
@@ -1620,7 +1668,9 @@ export function onThinkingEvent(
       role: 'thinking',
       content: { kind: 'thinking', text, durationMs, isRedacted: false, finishedAt },
       agentMeta: meta,
-      createdAt: finishedAt,
+      // 行在此刻才写入,但排序锚点用块的真实起点:按落库时刻排的话,一个跨过最终
+      // 回复的思考块会落到回复之后,渲染层就为它多折出一段「已工作」。
+      createdAt: finishedAt - Math.max(0, durationMs),
     }, releaseSnapshot);
     notePersistedMessage(sessionId, 'thinking', blockId);
   } else if (data.stage === 'redacted') {
@@ -2260,7 +2310,10 @@ function assembleAssistantTextEvent(
         isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope),
       });
       if (!isCurrentBoundary() || !isOwnerScopeCurrent(ownerScope)) return;
-      if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+      if (updated) {
+        broadcastMessageRow(sessionId, updated, ownerScope);
+        reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
+      }
       if (agentMeta) {
         const patched = await patchMessageAgentMetaWithResult(sessionId, linkedPersistId, { ...agentMeta });
         if (patched && isCurrentBoundary()) {
@@ -2314,6 +2367,7 @@ function assembleAssistantTextEvent(
             if (updated && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
               lateFinalCandidate.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);
+              reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
             }
           },
         );
@@ -2387,10 +2441,11 @@ function assembleAssistantTextEvent(
               undefined,
               { isCurrent: () => isCurrentBoundary() && isOwnerScopeCurrent(ownerScope) },
             );
-            if (updated) {
+            if (updated && isCurrentBoundary() && isOwnerScopeCurrent(ownerScope)) {
               // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
               boundaryFlushed.text = visible;
               broadcastMessageRow(sessionId, updated, ownerScope);
+              reconcileCalibratedCodexReply(sessionId, updated, ownerScope);
             }
           },
         );

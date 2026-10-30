@@ -2555,6 +2555,8 @@ interface ElectronAPI {
   /** Renderer localStorage workerCreationPrefs → main 内存镜像。 */
   syncWorkerCreationPrefs: (snapshot: {
     workerPermissionMode: 'auto' | 'bypassPermissions';
+    selection?: import('../shared/workerCreationSelection').WorkerCreationSelection | null;
+    ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */

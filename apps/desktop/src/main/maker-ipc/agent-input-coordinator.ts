@@ -1194,11 +1194,22 @@ function isScheduledQuotaRecovery(
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  return isAutomaticInputOriginKind(item?.origin?.kind);
+  return !isManualSchedulerContinuation(item) && isAutomaticInputOriginKind(item?.origin?.kind);
+}
+
+// A same-process receipt: wire input and restored automation cannot impersonate
+// a fresh Continue click. Object spreads preserve it; JSON persistence does not.
+const manualSchedulerContinuation = Symbol('manual-scheduler-continuation');
+export function markManualSchedulerContinuation(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  return Object.assign(item, { [manualSchedulerContinuation]: true as const });
+}
+function isManualSchedulerContinuation(item: AgentInputQueuedMessage | null | undefined): boolean {
+  return (item as (AgentInputQueuedMessage & { [manualSchedulerContinuation]?: true }) | undefined)?.[manualSchedulerContinuation] === true;
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
+  return (!isSchedulerOriginItem(item) || isManualSchedulerContinuation(item))
+    && item.originalSyntheticTrigger === 'continue';
 }
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
@@ -1926,7 +1937,7 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
+    const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它

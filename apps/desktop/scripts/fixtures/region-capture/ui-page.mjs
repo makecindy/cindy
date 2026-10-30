@@ -322,10 +322,10 @@ export default {
       await (await button('regionScreenshot.save')).click();
       await page.waitForFunction(() => window.captureQa.saved?.length > 0);
       const clip = await page.evaluate(() => ({ saved: Array.from(window.captureQa.saved), format: window.captureQa.format }));
-      // Decode the exported bytes independently from the preview window.
-      const playback = await page.context().newPage();
-      let decoded;
-      try { decoded = await playback.evaluate(async ({ saved, format }) => {
+      // Decode the saved bytes with a fresh image/video element and Blob URL,
+      // independently of the preview's URL, element and decoded state. Electron
+      // contexts cannot create browser tabs through Target.createTarget.
+      const decoded = await page.evaluate(async ({ saved, format }) => {
         saved = new Uint8Array(saved);
         const url = URL.createObjectURL(new Blob([saved], { type: format === 'gif' ? 'image/gif' : 'video/webm' }));
         try {
@@ -340,7 +340,7 @@ export default {
           video.removeAttribute('src'); video.load();
           return size;
         } finally { URL.revokeObjectURL(url); }
-      }, clip); } finally { await playback.close(); }
+      }, clip);
       assert.deepEqual(decoded, { width: 480, height: 240 });
     }
   },

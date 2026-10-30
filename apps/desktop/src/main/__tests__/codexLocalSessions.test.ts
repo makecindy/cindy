@@ -7,6 +7,16 @@ import path from 'node:path';
 
 const electronMock = vi.hoisted(() => ({ userData: '', region: 'global' as 'global' | 'cn' }));
 const dbMock = vi.hoisted(() => ({ current: null as Database.Database | null }));
+const deletionMock = vi.hoisted(() => ({
+  broadcast: vi.fn(),
+  row: vi.fn(),
+  scope: { ownerScopeKey: 'test-owner', ownerStamp: { dataOwnerId: 'test-user', ownerGeneration: 1 } },
+}));
+
+vi.mock('../localDb/ipc/messages.js', () => ({ broadcastMessageDeleted: deletionMock.broadcast, broadcastMessageRow: deletionMock.row }));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => deletionMock.scope,
+}));
 
 vi.mock('../../shared/brandRegion.js', () => ({
   get CURRENT_CINDY_REGION() { return electronMock.region; },
@@ -115,6 +125,7 @@ function createLocalDb(): Database.Database {
       content TEXT NOT NULL,
       tool_use_id TEXT,
       agent_meta TEXT,
+      agent_kind TEXT,
       created_at INTEGER NOT NULL,
       rewind_at INTEGER
     );
@@ -1123,6 +1134,86 @@ describe('Codex local session import', () => {
 });
 
 describe('importExternalCodexMessagesForSession', () => {
+  // #8005, unit integration: use actual rollout files, session discovery/import
+  // and the production SQLite transaction. Earlier cases only covered offline
+  // imports, not live rows followed by citation-enriched rollout copies.
+  it('imports offline history and reconciles continued replies, commentary and late local writes', async () => {
+    const dbPath = createStateDb(externalHome);
+    const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
+    fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+    const time = Date.parse('2026-05-13T00:00:01.000Z');
+    const citation = '\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2[note]\n</citation_entries>\n<rollout_ids>\nsource-id\n</rollout_ids>\n</oai-mem-citation>';
+    const line = (id: string, text: string, offset: number, phase: 'commentary' | 'final_answer') => {
+      const row = JSON.parse(rolloutLine(id, 'assistant', text, new Date(time + offset).toISOString()));
+      row.payload.phase = phase;
+      return JSON.stringify(row) + '\n';
+    };
+    fs.writeFileSync(rolloutPath, rolloutLine('old', 'user', 'Offline question', new Date(time).toISOString()) + '\n'
+      + line('old-answer', 'Offline answer' + citation, 1, 'final_answer'));
+    insertThread(dbPath, threadId, rolloutPath, { updatedAt: 2000 });
+    const scan = await scanExternalCodexSessions();
+    expect(scan.candidates.some((candidate) => candidate.id === threadId)).toBe(true);
+    await importExternalCodexSessions([threadId]);
+    const sid = `codex-${threadId}`;
+    await importExternalCodexMessagesForSession(sid);
+    const db = currentTestDb();
+    const visible = () => db.prepare('SELECT content, agent_meta FROM messages WHERE session_id = ? AND rewind_at IS NULL ORDER BY created_at, rowid').all(sid) as Array<{ content: string; agent_meta: string }>;
+    expect(visible()).toHaveLength(2);
+    expect(JSON.parse(visible()[1]!.content)).toBe('Offline answer' + citation);
+    const live = (id: string, text: string, offset: number, phase: string) => db.prepare(
+      'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, id, sid, 'assistant', JSON.stringify(text), JSON.stringify({ sdkSessionId: threadId, agentMessageId: `${id}-assistant`, assistantPhase: phase, totalCostUsd: 1 }), time + offset);
+    live('progress', 'Checking files', 1000, 'commentary');
+    live('answer', 'Fixed', 2000, 'final_answer');
+    fs.appendFileSync(rolloutPath, line('progress', 'Checking files', 1100, 'commentary') + line('answer', 'Fixed' + citation, 2100, 'final_answer'));
+    await importExternalCodexMessagesForSession(sid);
+    await importExternalCodexMessagesForSession(sid);
+    expect(visible()).toHaveLength(4);
+    expect(JSON.parse(visible()[2]!.agent_meta)).toMatchObject({ assistantPhase: 'commentary', totalCostUsd: 1 });
+    expect(JSON.parse(visible()[3]!.content)).toBe('Fixed' + citation);
+
+    // Rollout can reach the importer before the live writer finishes. An
+    // unchanged source file must not prevent the later reconciliation.
+    fs.appendFileSync(rolloutPath, line('late-progress', 'Looking', 603000, 'commentary')
+      + line('late', 'Second answer' + citation, 603100, 'final_answer'));
+    await importExternalCodexMessagesForSession(sid);
+    // #8005: the old copy may already be displayed by remote clients. A DB-only
+    // assertion misses the deletion push needed by their additive history merge.
+    const importedCopy = db.prepare('SELECT client_id FROM messages WHERE session_id = ? AND content = ?').get(sid, JSON.stringify('Second answer' + citation)) as { client_id: string };
+    const progressCopy = db.prepare('SELECT client_id FROM messages WHERE session_id = ? AND content = ?').get(sid, JSON.stringify('Looking')) as { client_id: string };
+    deletionMock.broadcast.mockClear();
+    deletionMock.row.mockClear();
+    live('late', 'Second answer', 3000, 'final_answer');
+    live('late-progress', 'Looking', 3020, 'commentary');
+    db.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?').run(
+      JSON.stringify({ agentMessageId: 'late-assistant', assistantPhase: 'final_answer', totalCostUsd: 1 }), 'late');
+    // Reconciliation must work from durable imported rows even if the native
+    // writer has rotated/removed its rollout; no full file read per live reply.
+    fs.renameSync(rolloutPath, rolloutPath + '.retained');
+    const stat = vi.spyOn(fs.promises, 'stat');
+    await importExternalCodexMessagesForSession(sid, { localWrite: ['late', 'late-progress'] });
+    expect(stat).not.toHaveBeenCalled();
+    stat.mockRestore();
+    fs.renameSync(rolloutPath + '.retained', rolloutPath);
+    await importExternalCodexMessagesForSession(sid);
+    // #8025: old viewers only consume clientId. Each hidden copy must appear
+    // in its own deletion event, including a batched commentary + final pair.
+    expect(deletionMock.broadcast).toHaveBeenCalledTimes(2);
+    for (const copy of [progressCopy, importedCopy]) {
+      expect(deletionMock.broadcast).toHaveBeenCalledWith({
+        sessionId: sid, clientId: copy.client_id, clientIds: [copy.client_id],
+      }, deletionMock.scope);
+    }
+    expect(deletionMock.row).toHaveBeenCalledExactlyOnceWith(sid, expect.objectContaining({
+      clientId: 'late', content: 'Second answer' + citation,
+      agentMeta: expect.objectContaining({ totalCostUsd: 1, assistantPhase: 'final_answer' }),
+    }), deletionMock.scope);
+    expect(visible()).toHaveLength(6);
+    expect(JSON.parse(visible()[4]!.content)).toBe('Second answer' + citation);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE session_id = ? AND rewind_at IS NOT NULL').get(sid)).toEqual({ n: 2 });
+    expect(fs.readFileSync(rolloutPath, 'utf8')).toContain('Offline answer' + citation.replace(/\n/g, '\\n'));
+  });
+
   it('skips unchanged rollout files after importing them once', async () => {
     const dbPath = createStateDb(externalHome);
     const rolloutPath = path.join(externalHome, 'sessions', `rollout-2026-05-13-${threadId}.jsonl`);
@@ -1139,12 +1230,17 @@ describe('importExternalCodexMessagesForSession', () => {
     const tx = vi.fn(
       async (name: string, args: unknown) => runInprocTx(db, { name, args }) as never,
     );
-    setCurrentDbClient({ ...makeTestDbClient(db), tx }, 'test-user');
+    const client = makeTestDbClient(db);
+    const query = vi.spyOn(client, 'query');
+    setCurrentDbClient({ ...client, tx }, 'test-user');
 
     await importExternalCodexMessagesForSession(`codex-${threadId}`);
+    query.mockClear();
     await importExternalCodexMessagesForSession(`codex-${threadId}`);
 
     expect(tx).toHaveBeenCalledTimes(1);
+    // Cache hits must not fetch/serialize the full local transcript on each page.
+    expect(query).not.toHaveBeenCalled();
     const count = db.prepare('SELECT COUNT(*) AS count FROM messages').get() as { count: number };
     expect(count.count).toBe(1);
   });

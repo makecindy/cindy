@@ -105,6 +105,10 @@ export interface CodexImportMessagesArgs {
     text: string;
     content: unknown;
     createdAt: number;
+    /** Rollout timestamp without the line-number ordering offset. */
+    sourceCreatedAt?: number;
+    phase?: 'commentary' | 'final_answer';
+    agentMessageId?: string;
   }>;
 }
 
@@ -1498,7 +1502,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'codex.importMessages': { changed: number };
+  'codex.importMessages': { changed: number; hiddenClientIds?: string[]; updatedLocalIds?: string[] };
   'claude.importMessages': { changed: number };
   'rewind.commit': undefined;
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };

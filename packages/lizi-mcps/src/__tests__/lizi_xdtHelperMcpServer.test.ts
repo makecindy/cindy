@@ -1336,3 +1336,27 @@ describe("direct Bot MCP tools", () => {
     }
   });
 });
+
+// Unit: discover and invoke the same local Settings form for all three harnesses.
+it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the %s helper and returns only metadata', async agentKind => {
+  const request = vi.fn(async () => ({ status: 'saved' as const, serverId: 'custom_example' }));
+  const context = { agentKind, workingDir: '/repo', sessionId: 'task', sessionInstanceId: 'instance' };
+  const server = createXdtHelperMcpServer({ mcpSetup: request }, { ...context, getSessionContext: () => context });
+  const client = new Client({ name: 'mcp-form-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'auth' } }));
+    expect(catalog.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'request_mcp_setup' })]));
+    const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: { name: 'Example', url: 'https://example.test/mcp', transport: 'sse' },
+    } }));
+    expect(result).toEqual({ ok: true, status: 'saved', serverId: 'custom_example' });
+    expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(context), {
+      name: 'Example', url: 'https://example.test/mcp', transport: 'sse',
+    });
+    request.mockClear();
+    await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
+    expect(request).not.toHaveBeenCalled();
+  } finally { await client.close(); await server.close(); }
+});

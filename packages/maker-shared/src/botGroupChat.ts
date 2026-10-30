@@ -303,6 +303,10 @@ export interface BotGroupThreadShareView {
   attachments: BotGroupAttachment[];
   createdAt: number | null;
   edited: boolean;
+  /** The same thread summary shown under a thread root in the main timeline. */
+  replyCount?: number;
+  threadPreview?: BotGroupThreadPreview;
+  threadUnread?: BotGroupThreadUnread;
   /** Cache version this view was checked at; compare with `BotGroupDetail.threadShareVersion`. */
   version?: number;
 }

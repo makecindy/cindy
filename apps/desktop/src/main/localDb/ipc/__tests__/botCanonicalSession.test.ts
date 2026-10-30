@@ -2197,7 +2197,10 @@ describe('Bot canonical Session lifecycle', () => {
     expect(fresh.ok && fresh.sessionId).not.toBe(first.sessionId);
   });
 
-  it('opens one private-chat topic per main-chat message, with its own context note and timeline entry', async () => {
+  // Same topic contract through the authorized mobile channel, including empty lanes and roots with colons (unit).
+  it.each(['local', 'remote'])('opens one private-chat topic per main-chat message via %s, with its own context note and timeline entry', async (entry) => {
+    const topicInvoke = async (channel: string, body: unknown): Promise<any> => entry === 'local' ? invoke(channel, body)
+      : runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile-1', channel }, () => h.handlers.get(channel)!({}, body));
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
     });
@@ -2208,11 +2211,11 @@ describe('Bot canonical Session lifecycle', () => {
     const root = { botId: 'bot-1', rootSessionId: chatId, rootClientId: 'bot-opening:inv-1' };
 
     // A root outside the companion's main Chat cannot carry a topic.
-    await expect(invoke('local-db:bots:dm-thread:ensure', { ...root, rootClientId: 'missing' }))
+    await expect(topicInvoke('local-db:bots:dm-thread:ensure', { ...root, rootClientId: 'missing' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'ROOT_UNAVAILABLE' });
-    const first = await invoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
+    const first = await topicInvoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
     expect(first).toMatchObject({ ok: true, created: true });
-    await expect(invoke('local-db:bots:dm-thread:ensure', root))
+    await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
     const canonical = h.sqlite!.prepare('SELECT working_dir AS workingDir, permission_mode AS permissionMode FROM sessions WHERE id = ?')
       .get(chatId);
@@ -2224,11 +2227,17 @@ describe('Bot canonical Session lifecycle', () => {
       id: first.sessionId, kind: 'thread', threadRoot: { rootSessionId: chatId, rootClientId: 'bot-opening:inv-1' },
     })]));
 
+    const remoteProfile = await runDeviceLinkInvokeContext({ controllerDeviceId: 'mobile-1', channel: 'local-db:bots:get' },
+      () => h.handlers.get('local-db:bots:get')!({}, 'bot-1'));
+    expect(remoteProfile).toMatchObject({ dmThreadsSupported: true, sessions: expect.arrayContaining([
+      { id: first.sessionId, role: 'thread', status: 'active', threadRoot: { rootSessionId: chatId, rootClientId: 'bot-opening:inv-1' } },
+    ]) });
+
     // Opened and left empty: no entry under the root yet.
-    await expect(invoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: chatId })).resolves.toEqual([]);
+    await expect(topicInvoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: chatId })).resolves.toEqual([]);
     insert.run('t-1', 'topic-1', first.sessionId, 'user', JSON.stringify({ text: 'Shorter, please' }), 2_000);
     insert.run('t-2', 'topic-2', first.sessionId, 'assistant', JSON.stringify('Here is a shorter draft.'), 3_000);
-    await expect(invoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: chatId })).resolves.toEqual([{
+    await expect(topicInvoke('local-db:bots:dm-thread:list', { botId: 'bot-1', rootSessionId: chatId })).resolves.toEqual([{
       sessionId: first.sessionId, rootSessionId: chatId, rootClientId: 'bot-opening:inv-1',
       replyCount: 2, lastReplyAt: 3_000, lastAssistantAt: 3_000, createdAt: expect.any(Number),
     }]);

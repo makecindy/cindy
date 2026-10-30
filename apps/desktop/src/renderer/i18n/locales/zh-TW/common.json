@@ -12781,6 +12781,7 @@
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
       "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
       "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。",
+      "remoteCompactEncryptedContent": "整理上下文失敗：模型無法讀取歷史中的加密內容。自動接續未完成，可重試恢復。",
       "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。",
       "attachmentAccessDeniedTitle": "Cindy 無法讀取來源附件，訊息未傳送。",
       "attachmentAccessDeniedRecovery": "請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
@@ -13840,6 +13841,20 @@
       }
     },
     "draft": {
+      "directoryRecovery": {
+        "required": "部分關聯目錄需要重新授權，請依序重新選擇全部 {{count}} 個關聯目錄",
+        "changed": "關聯目錄已變更，請檢查後重新選擇全部 {{count}} 個關聯目錄",
+        "unavailable": "無法存取關聯目錄，請檢查目錄或系統權限，也可返回編輯後移除該目錄",
+        "selecting": "正在重新選擇目錄 {{index}}/{{count}}：{{directory}}",
+        "cancelled": "已取消重新選擇，提示詞與關聯目錄已保留",
+        "mismatch": "所選目錄與原目錄不同，原目錄清單未變更",
+        "failed": "未能完成目錄重新選擇，提示詞與關聯目錄已保留",
+        "ready": "目錄已重新選擇，請再次傳送任務",
+        "readyGoal": "目錄已重新選擇，請再次建立目標",
+        "reselect": "重新選擇目錄",
+        "cancel": "取消重新選擇",
+        "edit": "返回編輯"
+      },
       "createSessionFailed": "建立任務失敗，請重試",
       "piRemoteUnsupported": "Pi 僅在本地執行，無法使用 SSH 遠端主機。請切換到 Claude 或 Codex 來使用該主機。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任務仍待回收，請等待清理完成後再試。",

@@ -872,7 +872,7 @@ describe('translateErrorNotification', () => {
     expect(events[0]!.data).not.toHaveProperty('reason');
   });
 
-  it('Codex 远端 compact 密文 400 走 context-overflow，交给 host 换窗而不是原样重试', async () => {
+  it('Codex 远端 compact 密文 400 保留独立原因并交给 host 换窗', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     translateErrorNotification(
@@ -886,7 +886,7 @@ describe('translateErrorNotification', () => {
     );
     const events = await collect(q);
     expect(events[0]!.data).toMatchObject({
-      reason: 'context-overflow',
+      reason: 'remote-compact-encrypted-content',
       isTerminal: true,
     });
   });
@@ -947,13 +947,13 @@ describe('translateErrorNotification', () => {
         message:
           'Error running remote compact task: { "type": "error", "error": { "code": "invalid_encrypted_content" } }',
       }).reason,
-    ).toBe('context-overflow');
+    ).toBe('remote-compact-encrypted-content');
     expect(
       classifyCodexError({
         message: 'Error running remote compact task',
         additionalDetails: 'code=invalid_encrypted_content',
       }).reason,
-    ).toBe('context-overflow');
+    ).toBe('remote-compact-encrypted-content');
     expect(
       classifyCodexError({
         message: 'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',

@@ -62,6 +62,44 @@ describe('history reading projection', () => {
     expect(rows[1].content).toBe('detail '.repeat(1000));
   });
 
+  it('ends a work summary at the latest child finish, not the last row start', () => {
+    // thinking 行按块起点落库,结束时刻只在 content.finishedAt。并行的动作会乱序完成:
+    // 「15s 思考 + 之后 1s 内结束的工具」里最后一行是工具,拿它的时刻收口会丢掉思考区间。
+    const base = 1_700_000_000_000;
+    const at = (ms: number) => new Date(base + ms).toISOString();
+    const rows: HistoryMessageSource[] = [
+      { id: '0', clientId: 'c0', role: 'user', content: 'Work', createdAt: at(0) },
+      { id: '1', clientId: 'c1', role: 'thinking',
+        content: { text: 'reasoning', durationMs: 15_000, finishedAt: base + 15_000 }, createdAt: at(500) },
+      { ...row(2, 'tool_use', { toolName: 'Read', input: {} }), createdAt: at(800), toolUseId: 'read' },
+      { ...row(3, 'tool_result', 'ok'), createdAt: at(900), toolUseId: 'read' },
+      { id: '4', clientId: 'c4', role: 'assistant', content: 'Done', agentMeta: { turnCompleted: true }, createdAt: at(20_000) },
+    ];
+    const projected = projectHistoryView(rows, false);
+
+    expect(projected[1]).toMatchObject({ summary: { startedAtMs: base, endedAtMs: base + 15_000 } });
+  });
+
+  it('keeps work ranges monotonic when a legacy thinking row is ordered after the answer', () => {
+    // 存量行(锚点是块结束时刻)会排在回答之后。投影不能把它并进回答上方那一组:分页游标
+    // 按消息 id 切点(nextCursor = 首项首条),work 的 lastMessageId 越过回答后,尾随行会
+    // 两页都取不到。渲染端拿到行后自行重新分组。
+    const base = 1_700_000_000_000;
+    const at = (ms: number) => new Date(base + ms).toISOString();
+    const rows: HistoryMessageSource[] = [
+      { id: '0', clientId: 'c0', role: 'user', content: 'Work', createdAt: at(0) },
+      { id: '1', clientId: 'c1', role: 'thinking', content: { text: 'reasoning', durationMs: 3_000 }, createdAt: at(5_000) },
+      { id: '2', clientId: 'c2', role: 'assistant', content: 'Done', agentMeta: { turnCompleted: true }, createdAt: at(9_000) },
+      { id: '3', clientId: 'c3', role: 'thinking',
+        content: { text: 'signing off', durationMs: 1_200, finishedAt: base + 9_700 }, createdAt: at(9_700) },
+    ];
+    const projected = projectHistoryView(rows, false);
+
+    expect(projected.map(item => item.type)).toEqual(['messages', 'work', 'messages', 'work']);
+    expect(historyWorkSummaries(projected).map(({ firstMessageId, lastMessageId }) => [firstMessageId, lastMessageId]))
+      .toEqual([['1', '1'], ['3', '3']]);
+  });
+
   it('keeps delivery prose, interaction tools and reference-bearing results outside summaries', () => {
     const rows = [row(0, 'user', 'Work'), row(1, 'thinking', 'reasoning'),
       row(2, 'assistant', '# Deliverable\nA useful result'),

@@ -1,3 +1,4 @@
+import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -428,61 +429,145 @@ describe('MCP App queued message grants', () => {
 });
 
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
-  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-  const start = source.indexOf('    MAKER_INVOKE.INPUT_ENQUEUE,');
-  const handlerStart = source.indexOf('    async (event, sessionId: unknown, item: unknown, opts?: unknown) => {', start);
-  const handlerEnd = source.indexOf('\n  );', handlerStart);
-  const handler = source.slice(handlerStart, handlerEnd).trim().replace(/,$/, '');
-  const compiled = transpileModule(`return (${handler});`, {
-    compilerOptions: { target: ScriptTarget.ES2022 },
-  }).outputText;
-
-  function hostInput(h: ReturnType<typeof createHarness>, remote = true, mobile = false) {
-    const noop = () => undefined;
-    const sameItem = (item: AgentInputQueuedMessage) => item;
-    const owner = {};
-    const bindings = {
-      inputCoordinator: h.coordinator,
-      requireSessionId: (id: string) => id,
-      requireQueuedMessage: sameItem,
-      prepareSharedTaskInput: (_sid: string, item: AgentInputQueuedMessage) => item,
-      getCurrentDbClientSnapshot: () => owner,
-      isDeviceLinkInvoke: () => remote,
-      isMobileControllerInvoke: () => mobile,
-      readDeviceLinkInvokeSourceDevice: () => mobile
-        ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
-        : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
-      readClaimedUiLanguage: noop,
-      getResolvedMainLocale: () => 'zh-CN',
-      getInputSessionRow: async () => ({ clearedAt: null }),
-      getMakerIfReady: () => null,
-      beginRemoteSendTrace: noop,
-      remoteInputClientIdWasPersisted: () => false,
-      hasInputDeliveryCancellation: () => false,
-      materializeQueuedOssAttachmentsDeferred: (_sid: string, item: AgentInputQueuedMessage) => ({ item }),
-      hydrateQueuedAgentReferences: sameItem,
-      stampTurnUiLanguage: sameItem,
-      stampTrustedDesktopQueuedOrigin,
-      stampTrustedDeviceLinkQueuedOrigin,
-      stampMobileClientOrigin,
-      isAutomaticInputOriginKind,
-      prepareDeviceLinkAutoTitle: async () => noop,
-      queuedAttachmentOwnership: { activateCurrentOwner: noop },
-      throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
-      ...Object.fromEntries([
-        'assertReviewExternalInputAllowed', 'assertTrustedAppRendererEvent', 'withSessionPermissionChange',
-        'awaitAgentInputQueueSnapshotPersistence', 'assertRemoteInputClearNotInFlight',
-        'readRemoteInputClearBoundaryPrecondition', 'observeLocalInputClearBoundary',
-        'assertExpectedRemoteInputClearBoundary', 'registerQueuedAttachmentOwnership',
-        'discardSpecificQueuedAttachmentOwnership', 'markQueuedAttachmentDurableAfterSnapshot',
-      ].map(name => [name, noop])),
-    };
-    expect(start).toBeGreaterThan(0);
-    expect(handlerStart).toBeGreaterThan(start);
-    expect(handlerEnd).toBeGreaterThan(handlerStart);
-    return new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
-      (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
+  function hostInput(
+    h: ReturnType<typeof createHarness>, remote = true, mobile = false,
+    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async () => null,
+  ) {
+    return createInputEnqueueHarness(h.coordinator, { remote, mobile, resumeInterruptedScheduleRun }).enqueue;
   }
+
+  // Execute the actual shared Desktop/device-link handler with the real queue.
+  // The scheduler runner is stubbed so no provider or GitHub code executes.
+  it.each([['phone', true, true], ['remote desktop', true, false], ['local desktop', false, false]] as const)(
+    'reconnects an explicit %s Continue to its run without waiting for completion', async (_name, remote, mobile) => {
+      const h = createHarness();
+      const sid = 'interrupted-scheduled-task';
+      h.setLoadQueueSnapshot(async () => [makeItem('later', 'queued later task')]);
+      const done = deferred<void>();
+      const resume = vi.fn<typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
+        completion: Promise.resolve().then(async () => {
+          await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+            persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
+            origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original-run' },
+            onAccepted: vi.fn(),
+          });
+          await done.promise;
+          return { runId: 'original-run' };
+        }),
+      }));
+      const enqueue = hostInput(h, remote, mobile, resume);
+      const input = makeItem('manual-click', CONTINUE_AFTER_APP_EXIT_PROMPT);
+      await enqueue({}, sid, input);
+      await flush();
+      expect(resume).toHaveBeenCalledOnce();
+      expect(h.sendToAgent).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage).toMatchObject({
+        clientId: 'manual-click', content: CONTINUE_AFTER_APP_EXIT_PROMPT,
+        origin: { kind: 'scheduler', runId: 'original-run' },
+      });
+      expect(h.coordinator.getProjection(sid)).toMatchObject({
+        queuePaused: false, continuationInFlightClientId: 'manual-click',
+      });
+      expect(h.coordinator.getProjection(sid).pendingQueue.map(item => item.clientId)).toEqual(['later']);
+      // A weak-link resend acknowledges the same input without claiming again.
+      await enqueue({}, sid, input);
+      expect(resume).toHaveBeenCalledOnce();
+      done.resolve();
+    },
+  );
+
+  it('does not send an untracked continuation when the scheduler cannot prepare it', async () => {
+    const h = createHarness();
+    const resume = vi.fn(async () => ({ completion: Promise.resolve({ runId: 'original', deferred: true }) }));
+    await expect(hostInput(h, false, false, resume)(
+      {}, 'task', makeItem('click', CONTINUE_AFTER_APP_EXIT_PROMPT),
+    )).rejects.toThrow('could not be queued');
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  // discussion_r4420666505 / unit: enqueue can consume UI Continue by retrying
+  // a failed head instead. The real handler must reject that scheduler claim
+  // immediately, including a recovery created during its plan-mode read.
+  it.each(['before Continue', 'during preparation'] as const)(
+    'rejects the scheduled claim when queue-head recovery consumes Continue (%s)', async (timing) => {
+      const h = createHarness();
+      const sid = 'scheduled-continue-queue-head';
+      const onAccepted = vi.fn();
+      const createRecovery = async () => {
+        h.sendToAgent.mockResolvedValueOnce(hostSendFailure('SEND_FAILED', 'not dispatched'));
+        h.coordinator.enqueue(sid, makeItem('original-head', 'never dispatched'));
+        await flush();
+        expect(h.coordinator.getProjection(sid).recovery?.kind).toBe('queue-head');
+      };
+      if (timing === 'before Continue') await createRecovery();
+      const input = createInputEnqueueHarness(h.coordinator, {
+        remote: false,
+        getSessionFsSnapshot: async () => {
+          if (timing === 'during preparation') await createRecovery();
+          return { planModeEnabled: false };
+        },
+        resumeInterruptedScheduleRun: async (sessionId, enqueue) => ({
+          completion: Promise.resolve().then(async () => {
+            await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+              persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT, inheritTargetPlanMode: true,
+              origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original-run' },
+              onPreparing: async () => {}, onDiscarded: vi.fn(), onAccepted,
+            });
+            return { runId: 'original-run' };
+          }),
+        }),
+      });
+      await expect(input.enqueue({}, sid, makeItem('manual-click', CONTINUE_AFTER_APP_EXIT_PROMPT)))
+        .rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await flush();
+      expect(h.sendToAgent.mock.calls.map(call => call[1])).toEqual([
+        { type: 'user', content: 'never dispatched' },
+        { type: 'user', content: 'never dispatched' },
+      ]);
+      expect(onAccepted).not.toHaveBeenCalled();
+      expect(input.acceptedCallbacks.size).toBe(0);
+      expect(input.preparations.size).toBe(0);
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+    },
+  );
+
+  it('rejects a continuation if the task is cleared while its scheduled run is being prepared', async () => {
+    const h = createHarness();
+    const entered = deferred<void>();
+    const prepare = deferred<void>();
+    const resume: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
+      completion: Promise.resolve().then(async () => {
+        entered.resolve();
+        await prepare.promise;
+        await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
+          persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
+          origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Review', runId: 'original' },
+          onAccepted: vi.fn(),
+        });
+        return { runId: 'original' };
+      }),
+    });
+    const pending = hostInput(h, false, false, resume)({}, 'task', makeItem('click', CONTINUE_AFTER_APP_EXIT_PROMPT));
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    await entered.promise;
+    h.coordinator.clearSession('task');
+    prepare.resolve();
+    await rejected;
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an automatic remote delivery as a manual scheduled continuation', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [makeItem('restored', 'existing work')]);
+    const resume = vi.fn(async () => null);
+    const input = { ...makeItem('automatic', CONTINUE_AFTER_APP_EXIT_PROMPT),
+      origin: { kind: 'scheduler' as const, scheduleId: 'schedule', scheduleName: 'Review' },
+    };
+    await hostInput(h, true, false, resume)({}, 'task', input);
+    expect(resume).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('task').queuePaused).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
 
   function leadInput(clientId = 'lead-input') {
     return buildRemoteWorkerQueuedMessage({

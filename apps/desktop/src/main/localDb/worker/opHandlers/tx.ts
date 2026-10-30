@@ -2536,19 +2536,13 @@ function imRotateSession(
   })();
 }
 
-function codexImportMessages(db: Database.Database, args: unknown): { changed: number } {
+function codexImportMessages(db: Database.Database, args: unknown): { changed: number; hiddenClientIds?: string[]; updatedLocalIds?: string[] } {
   const payload = asRecord(args, 'codex.importMessages args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
   const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
   const model = expectString(payload.model, 'model');
   const rows = expectArray(payload.rows, 'rows');
-  const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(
-    db,
-    sessionId,
-    importClientIdPrefix,
-  );
   const upsert = db.prepare(`
     INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
@@ -2570,6 +2564,33 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
       )
   `);
   const transaction = db.transaction(() => {
+    const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
+    const importedRows = new Map((db.prepare(`
+      SELECT client_id AS clientId, role, content, created_at AS createdAt, rewind_at AS rewindAt
+      FROM messages WHERE session_id = ? AND client_id LIKE ?
+    `).all(sessionId, `${importClientIdPrefix}%`) as Array<{
+      clientId: string; role: string; content: string; createdAt: number; rewindAt: number | null;
+    }>).map((row) => [row.clientId, row]));
+    const consumed = new Set<string>();
+    const hiddenClientIds: string[] = [];
+    const updatedLocalIds: string[] = [];
+    // Text fallback must not match an earlier turn that happened to say the
+    // same thing. Include external user turns as well as Cindy's local rows.
+    const userTimes = existing.filter((row) => row.role === 'user').map((row) => row.createdAt);
+    for (const row of importedRows.values()) {
+      if (row.role !== 'user') continue;
+      const lineNo = Number(row.clientId.slice(importClientIdPrefix.length));
+      if (Number.isInteger(lineNo) && lineNo >= 0) userTimes.push(row.createdAt - lineNo);
+    }
+    for (const value of rows) {
+      const row = asRecord(value, 'codex row');
+      if (row.role === 'user') userTimes.push(expectNumber(row.sourceCreatedAt ?? row.createdAt, 'row.createdAt'));
+    }
+    const hideDuplicate = db.prepare(`UPDATE messages SET rewind_at = ?
+      WHERE session_id = ? AND client_id = ? AND role = 'assistant' AND rewind_at IS NULL`);
+    const enrichLocal = db.prepare(`UPDATE messages SET content = ?, agent_meta = ?
+      WHERE session_id = ? AND id = ? AND role = 'assistant' AND rewind_at IS NULL
+      AND (content IS NOT ? OR agent_meta IS NOT ?)`);
     let changed = 0;
     for (const rawRow of rows) {
       const row = asRecord(rawRow, 'codex row');
@@ -2577,11 +2598,38 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
       const role = expectString(row.role, 'row.role') as 'user' | 'assistant';
       const text = expectString(row.text, 'row.text');
       const createdAt = expectNumber(row.createdAt, 'row.createdAt');
+      const sourceCreatedAt = row.sourceCreatedAt == null ? createdAt : expectNumber(row.sourceCreatedAt, 'row.sourceCreatedAt');
       const clientId = `${importClientIdPrefix}${lineNo}`;
-      if (
-        !existingImportedClientIds.has(clientId) &&
-        isLikelyLocalDuplicate(existing, { role, text, createdAt })
-      ) {
+      const phase = row.phase === 'commentary' || row.phase === 'final_answer' ? row.phase : undefined;
+      const agentMessageId = typeof row.agentMessageId === 'string' && row.agentMessageId ? row.agentMessageId : undefined;
+      const previous = importedRows.get(clientId);
+      // Deleted/rewound rows never become visible again. Their local match is
+      // still consumed so a second, legitimate identical item is not swallowed.
+      const duplicate = findLocalDuplicate(existing, { role, text, createdAt: sourceCreatedAt, phase, agentMessageId, sdkSessionId }, consumed, userTimes);
+      if (duplicate) consumed.add(duplicate.id);
+      if (previous && (previous.role === 'message_tombstone' || previous.rewindAt !== null)) continue;
+      if (duplicate && (!previous || role === 'assistant' && normalizeStoredMessageText(previous.content) === text)) {
+        if (role === 'assistant') {
+          // Keep the stable live row and its usage/fork metadata. Only append a
+          // recognized citation tail; never replace ordinary prose with rollout.
+          const tail = !duplicate.memoryTail ? memoryCitationTail(text) : '';
+          if (tail || phase && !duplicate.meta.assistantPhase || agentMessageId && !duplicate.meta.agentMessageId) {
+            const content = JSON.stringify(duplicate.text + tail);
+            const meta = JSON.stringify({ ...duplicate.meta,
+              ...(phase && !duplicate.meta.assistantPhase ? { assistantPhase: phase } : {}),
+              ...(agentMessageId && !duplicate.meta.agentMessageId ? { agentMessageId, sdkSessionId } : {}),
+            });
+            const updated = enrichLocal.run(content, meta, sessionId, duplicate.id, content, meta).changes;
+            changed += updated;
+            if (updated > 0) updatedLocalIds.push(duplicate.id);
+          }
+          // Soft-hide only verified import copies; preserve their original data.
+          if (previous) {
+            const hidden = hideDuplicate.run(Date.now(), sessionId, clientId).changes;
+            changed += hidden;
+            if (hidden > 0) hiddenClientIds.push(clientId);
+          }
+        }
         continue;
       }
       changed += upsert.run({
@@ -2590,14 +2638,18 @@ function codexImportMessages(db: Database.Database, args: unknown): { changed: n
         sessionId,
         role,
         content: stringifyImportedContent(role, row.content),
-        agentMeta: JSON.stringify({ sdkSessionId, model }),
+        agentMeta: JSON.stringify({ sdkSessionId, model,
+          ...(phase ? { assistantPhase: phase } : {}),
+          ...(agentMessageId ? { agentMessageId } : {}),
+        }),
         createdAt,
       }).changes;
     }
     if (changed > 0) invalidateSessionListProjection(db, sessionId);
-    return changed;
+    return { changed, ...(hiddenClientIds.length > 0 ? { hiddenClientIds } : {}),
+      ...(updatedLocalIds.length > 0 ? { updatedLocalIds } : {}) };
   });
-  return { changed: transaction() as number };
+  return transaction();
 }
 
 function claudeImportMessages(db: Database.Database, args: unknown): { changed: number } {
@@ -3845,69 +3897,82 @@ function orcaReleaseWorkerCreationReservation(db: Database.Database, args: unkno
   );
 }
 
-function readExistingImportedClientIds(
-  db: Database.Database,
-  sessionId: string,
-  importClientIdPrefix: string,
-): Set<string> {
-  const rows = db.prepare(`
-    SELECT client_id AS clientId
-    FROM messages
-    WHERE session_id = ? AND client_id LIKE ?
-  `).all(sessionId, `${importClientIdPrefix}%`) as Array<{ clientId: string }>;
-  return new Set(rows.map((row) => row.clientId));
-}
-
 interface MessageFingerprint {
   role: 'user' | 'assistant';
   /** 原文指纹(仅换行归一 + trim),普通消息只用它精确比较。 */
   plain: string;
   /**
    * citation 规范形指纹(有损:标记→路径、去反引号、折叠空白)。只在 canon 比较
-   * 门放行时参与(见 isLikelyLocalDuplicate),避免「仅 Markdown 格式不同」的两条
+   * 门放行时参与(见 findLocalDuplicate),避免「仅 Markdown 格式不同」的两条
    * 正常回复被误判成重复(review 反馈)。
    */
   canonical?: string;
   /** 原文是否含原始标记字面量——canon 比较的门:至少一侧为真才启用有损比较。 */
   hasMarker: boolean;
   createdAt: number;
+  memoryTail: string;
+}
+
+interface LocalMessageFingerprint extends MessageFingerprint {
+  id: string;
+  text: string;
+  meta: Record<string, unknown>;
 }
 
 function readExistingMessageFingerprints(
   db: Database.Database,
   sessionId: string,
   importClientIdPrefix: string,
-): MessageFingerprint[] {
+): LocalMessageFingerprint[] {
+  // Rewound local rows still suppress their retained rollout copies. Enrichment
+  // below only writes visible rows, so matching never changes a rewind record.
   const rows = db.prepare(`
-    SELECT role, content, created_at AS createdAt
+    SELECT id, role, content, agent_meta AS agentMeta, created_at AS createdAt
     FROM messages
     WHERE session_id = ?
       AND role IN ('user', 'assistant')
       AND client_id NOT LIKE ?
   `).all(sessionId, `${importClientIdPrefix}%`) as Array<{
     role: string;
+    id: string;
     content: string;
+    agentMeta: string | null;
     createdAt: number;
   }>;
-  const out: MessageFingerprint[] = [];
+  const out: LocalMessageFingerprint[] = [];
   for (const row of rows) {
     if (row.role !== 'user' && row.role !== 'assistant') continue;
     const text = normalizeStoredMessageText(row.content);
     if (!text) continue;
-    out.push(messageFingerprint(row.role, text, row.createdAt));
+    let meta: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(row.agentMeta ?? '{}');
+      if (isRecord(parsed)) meta = parsed;
+    } catch { /* Legacy rows may have no usable metadata. */ }
+    out.push({ ...messageFingerprint(row.role, text, row.createdAt), id: row.id, text, meta });
   }
   return out;
 }
 
-function isLikelyLocalDuplicate(
-  existing: MessageFingerprint[],
-  row: { role: 'user' | 'assistant'; text: string; createdAt: number },
-): boolean {
+function findLocalDuplicate(
+  existing: LocalMessageFingerprint[],
+  row: { role: 'user' | 'assistant'; text: string; createdAt: number; phase?: string; agentMessageId?: string; sdkSessionId: string },
+  consumed: Set<string>,
+  userTimes: number[],
+): LocalMessageFingerprint | undefined {
   const next = messageFingerprint(row.role, row.text, row.createdAt);
-  return existing.some(
+  const candidates = existing.filter(
     (prev) =>
+      !consumed.has(prev.id) &&
       prev.role === next.role &&
-      Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS &&
+      (!row.phase || !prev.meta.assistantPhase || row.phase === prev.meta.assistantPhase) &&
+      (!prev.meta.sdkSessionId || prev.meta.sdkSessionId === row.sdkSessionId) &&
+      (!row.agentMessageId || !prev.meta.agentMessageId || row.agentMessageId === prev.meta.agentMessageId) &&
+      ((row.agentMessageId && row.agentMessageId === prev.meta.agentMessageId)
+        || Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS
+          && (row.role !== 'assistant' || !userTimes.some((time) => time > Math.min(prev.createdAt, next.createdAt)
+            && time <= Math.max(prev.createdAt, next.createdAt)))) &&
+      (!prev.memoryTail || !next.memoryTail || prev.memoryTail === next.memoryTail) &&
       // 普通消息:原文精确比较。canon 有损比较只在「至少一侧含原始标记字面量」时
       // 启用——即升级前的旧标记行 vs 已归一化的导入行;两条都不含标记的正常回复
       // (如 `Use \`foo\`` vs `Use foo`)绝不走有损比较(review 反馈)。
@@ -3917,6 +3982,33 @@ function isLikelyLocalDuplicate(
           (prev.hasMarker || next.hasMarker) &&
           prev.canonical === next.canonical)),
   );
+  // Ambiguous repeated prose is not proof of identity. Exact native item IDs
+  // take precedence; legacy fallback must have one unclaimed local candidate.
+  const exact = candidates.filter((candidate) => row.agentMessageId && candidate.meta.agentMessageId === row.agentMessageId);
+  return exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/** Only a complete terminal memory citation is metadata, never a prose substring or code example. */
+function memoryCitationTail(text: string): string {
+  const open = text.lastIndexOf('<oai-mem-citation>');
+  if (open <= 0) return '';
+  const body = text.slice(0, open);
+  if (!body.trim()) return '';
+  let fence: { char: string; length: number } | undefined;
+  for (const line of body.split(/\r?\n/)) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!match) continue;
+    const marker = match[1]!;
+    if (fence) {
+      if (marker[0] === fence.char && marker.length >= fence.length && !match[2]!.trim()) fence = undefined;
+    } else if (marker[0] !== '`' || !match[2]!.includes('`')) {
+      fence = { char: marker[0]!, length: marker.length };
+    }
+  }
+  if (fence) return '';
+  const tail = text.slice(open);
+  if (!/^<oai-mem-citation>\s*<citation_entries>[\s\S]+?<\/citation_entries>\s*(?:<rollout_ids>[\s\S]*?<\/rollout_ids>\s*)?<\/oai-mem-citation>\s*$/.test(tail)) return '';
+  return text.slice(body.trimEnd().length);
 }
 
 function messageFingerprint(
@@ -3927,13 +4019,15 @@ function messageFingerprint(
   // 升级前落库的旧行仍带原始 `:codex-file-citation{...}` 标记,导入侧新文本已
   // 归一化(标记换成 code span,截断残尾则被整段剥掉——此时是**不含任何标记/
   // 反引号的纯文本**)。因此 assistant 一律算出规范形候选指纹,是否参与比较由
-  // isLikelyLocalDuplicate 的标记门决定(review 反馈:残尾行的规范形是纯文本,
+  // findLocalDuplicate 的标记门决定(review 反馈:残尾行的规范形是纯文本,
   // 导入侧若不给纯文本算规范形就永远配不上)。只影响比较,不改落库内容。
-  const plain = normalizeFingerprintText(text);
+  const memoryTail = role === 'assistant' ? memoryCitationTail(text) : '';
+  const body = memoryTail ? text.slice(0, -memoryTail.length) : text;
+  const plain = normalizeFingerprintText(body);
   const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
   const canonical =
-    role === 'assistant' ? normalizeFingerprintText(canonicalizeCodexCitations(text)) : undefined;
-  return { role, plain, ...(canonical !== undefined ? { canonical } : {}), hasMarker, createdAt };
+    role === 'assistant' ? normalizeFingerprintText(canonicalizeCodexCitations(body)) : undefined;
+  return { role, plain, ...(canonical !== undefined ? { canonical } : {}), hasMarker, createdAt, memoryTail };
 }
 
 // 指纹专用规范形——与展示形(maker-core finalizeCodexCitationText)**刻意不同**:
