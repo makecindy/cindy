@@ -21,7 +21,7 @@ vi.mock('../components/chat/ModelLightbox', () => ({
     React.createElement('div', { 'data-testid': 'model-lightbox', 'data-source': JSON.stringify(source) }),
 }));
 
-import { Model3DCard, Model3DCardContent } from '../components/chat/Model3DCard';
+import { Model3DCard, Model3DCardContent, Model3DFileRow } from '../components/chat/Model3DCard';
 
 /** Controllable IntersectionObserver: nothing is visible until `reveal()` is called. */
 let observers: Array<{ cb: IntersectionObserverCallback; el: Element | null; disconnected: boolean }> = [];
@@ -58,6 +58,13 @@ afterEach(() => {
 });
 
 describe('Model3DCardContent', () => {
+  it('renders a compact file row for sources without a local preview path', () => {
+    render(React.createElement(Model3DFileRow, { fileName: 'remote.glb', format: 'glb' }));
+    expect(screen.getByText('remote.glb')).toBeTruthy();
+    expect(screen.getByText('GLB')).toBeTruthy();
+    expect(document.querySelector('.aspect-square')).toBeNull();
+  });
+
   it('does not read or render the model until the card scrolls into view', async () => {
     render(React.createElement(Model3DCardContent, { source: localSource }));
     expect(getModel3DThumbnail).not.toHaveBeenCalled();

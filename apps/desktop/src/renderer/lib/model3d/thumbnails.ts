@@ -39,6 +39,12 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 let rendererPromise: Promise<import('mivo-model-viewer').ThumbnailRenderer> | null = null;
+// Keep model byte reads behind the same single-consumer queue as rendering. A
+// renderer context can only process one model at a time, and reading the next
+// model before that slot is free would still keep several large model blobs in
+// memory at once.
+let generationTail: Promise<void> = Promise.resolve();
+let generationController = new AbortController();
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -87,10 +93,13 @@ async function cacheKeyFor(source: Model3DSource): Promise<string> {
   return `local:${source.absPath}`;
 }
 
-async function generate(source: Model3DSource): Promise<string> {
-  const model = await readModel3DBlob(source, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES });
+async function generate(source: Model3DSource, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted();
+  const model = await readModel3DBlob(source, { maxBytes: MODEL3D_THUMBNAIL_MAX_BYTES, signal });
   try {
+    signal.throwIfAborted();
     const renderer = await getRenderer();
+    signal.throwIfAborted();
     const image = await renderer.render({
       model: model.blob,
       fileName: model.fileName || model3DFileName(source),
@@ -103,6 +112,16 @@ async function generate(source: Model3DSource): Promise<string> {
   } finally {
     model.dispose();
   }
+}
+
+function enqueueGeneration(source: Model3DSource): Promise<string> {
+  const { signal } = generationController;
+  const generation = generationTail.then(() => generate(source, signal));
+  generationTail = generation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return generation;
 }
 
 function touch(key: string, entry: CacheEntry): void {
@@ -129,7 +148,7 @@ export async function getModel3DThumbnail(source: Model3DSource): Promise<string
     }
     cache.delete(key);
   }
-  const entry: CacheEntry = { promise: generate(source), failedAt: null };
+  const entry: CacheEntry = { promise: enqueueGeneration(source), failedAt: null };
   entry.promise.catch(() => {
     entry.failedAt = Date.now();
   });
@@ -139,6 +158,8 @@ export async function getModel3DThumbnail(source: Model3DSource): Promise<string
 
 /** 释放 WebGL 上下文并清空缓存（账号切换、测试隔离）。 */
 export function resetModel3DThumbnails(): void {
+  generationController.abort();
+  generationController = new AbortController();
   cache.clear();
   const pending = rendererPromise;
   rendererPromise = null;

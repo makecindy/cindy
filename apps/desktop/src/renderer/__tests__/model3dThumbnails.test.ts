@@ -73,6 +73,60 @@ describe('getModel3DThumbnail', () => {
     expect(render).toHaveBeenCalledTimes(1);
   });
 
+  it('queues model reads behind the active thumbnail generation', async () => {
+    let releaseFirstRender!: () => void;
+    const firstRenderFinished = new Promise<void>((resolve) => {
+      releaseFirstRender = resolve;
+    });
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith('/1.glb')) {
+        return Promise.resolve(new Response(new Uint8Array([1]), { status: 200 }));
+      }
+      return firstRenderFinished.then(() => new Response(new Uint8Array([2]), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render.mockImplementation(async ({ model }: { model: Blob }) => {
+      if (model.size === 1) {
+        await firstRenderFinished;
+      }
+      return { blob: PNG() };
+    });
+
+    const first = getModel3DThumbnail(blobSource(1));
+    await Promise.resolve();
+    const second = getModel3DThumbnail(blobSource(2));
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    releaseFirstRender();
+    await Promise.all([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels queued generations on reset before their model bytes are read', async () => {
+    let releaseFirstRender!: () => void;
+    const firstRenderFinished = new Promise<void>((resolve) => {
+      releaseFirstRender = resolve;
+    });
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1]), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    render.mockImplementation(async () => {
+      await firstRenderFinished;
+      return { blob: PNG() };
+    });
+
+    const first = getModel3DThumbnail(blobSource(1));
+    await Promise.resolve();
+    const second = getModel3DThumbnail(blobSource(2));
+    await Promise.resolve();
+    resetModel3DThumbnails();
+    releaseFirstRender();
+
+    await expect(first).rejects.toThrow();
+    await expect(second).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('serves repeat requests from the cache', async () => {
     await getModel3DThumbnail(blobSource(1));
     await getModel3DThumbnail(blobSource(1));

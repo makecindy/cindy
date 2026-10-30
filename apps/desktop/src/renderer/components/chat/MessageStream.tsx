@@ -366,12 +366,12 @@ import {
   collectGhostCardGalleryImages,
   createGhostCardSpawnIndex,
 } from '@/cindy-brain/ghostCardGallery';
-import { Model3DCard } from './Model3DCard';
+import { Model3DCard, Model3DFileRow } from './Model3DCard';
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
-import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
+import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
 import { isGhostCallToolName } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
@@ -2731,7 +2731,15 @@ function renderItemKeyForClientId(items: readonly RenderItem[], clientId: string
  * 'tool_media' item(工具段外的产物流)与 'ghost_card' item 的回锚媒体
  * (卡正下方)。加新 kind 只需改 extractToolResultMedia + 这里加分支。
  */
-function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId?: string }) {
+function ToolMediaList({
+  items,
+  sessionId,
+  remoteModelFallback,
+}: {
+  items: ToolMediaItem[];
+  sessionId?: string;
+  remoteModelFallback: boolean;
+}) {
   const mediaKeyCounts = new Map<string, number>();
   return (
     <>
@@ -2756,6 +2764,12 @@ function ToolMediaList({ items, sessionId }: { items: ToolMediaItem[]; sessionId
         }
         // 没有预览图的 3D 模型:模型卡片(缩略图 + 点击打开 3D 查看器)。
         if (m.kind === 'model' && m.modelFile) {
+          if (remoteModelFallback) {
+            const fileName = m.modelFile.url.split('/').pop() || '3D model';
+            return (
+              <Model3DFileRow key={mediaKey} fileName={fileName} format={m.modelFile.format} />
+            );
+          }
           return (
             <div key={mediaKey} className="flex flex-col gap-1.5">
               <Model3DCard source={{ kind: 'blob', url: m.modelFile.url }} />
@@ -2813,12 +2827,14 @@ function ShareableToolMedia({
   renderItemKey,
   items,
   sessionId,
+  remoteModelFallback,
   selectionActive,
 }: {
   shareId: string;
   renderItemKey?: string;
   items: ToolMediaItem[];
   sessionId?: string;
+  remoteModelFallback: boolean;
   selectionActive: boolean;
 }) {
   const shareable = Boolean(sessionId) && isShareableToolMedia(items);
@@ -2831,7 +2847,7 @@ function ShareableToolMedia({
       className={cn('flex flex-col gap-2', shareable && 'relative')}
     >
       {shareable && selectionActive ? <ShareMessageCheckbox clientId={shareId} /> : null}
-      <ToolMediaList items={items} sessionId={sessionId} />
+      <ToolMediaList items={items} sessionId={sessionId} remoteModelFallback={remoteModelFallback} />
     </div>
   );
 }
@@ -6673,6 +6689,7 @@ export function MessageStream({
                               shareId={`${item.key}:media`}
                               items={item.media}
                               sessionId={sessionId}
+                              remoteModelFallback={isRemoteFileOrigin(sessionFileValue.origin)}
                               selectionActive={shareSelectionActive}
                             />
                           ) : null}
@@ -6690,6 +6707,7 @@ export function MessageStream({
                           shareId={item.key}
                           items={item.items}
                           sessionId={sessionId}
+                          remoteModelFallback={isRemoteFileOrigin(sessionFileValue.origin)}
                           selectionActive={shareSelectionActive}
                         />
                       );

@@ -89,6 +89,17 @@ interface Model3DCardContentProps {
   revision?: number;
 }
 
+/** Compact file row used when a model source cannot be previewed in this session. */
+export function Model3DFileRow({ fileName, format }: { fileName: string; format: string }) {
+  return (
+    <span className="flex min-w-0 max-w-[420px] items-center gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2.5 text-[var(--text-tertiary)]">
+      <Box size={16} aria-hidden="true" className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">{fileName}</span>
+      <span className="shrink-0 text-11">{format.toUpperCase()}</span>
+    </span>
+  );
+}
+
 /** 缩略图区域 + 页脚。外层容器（按钮）负责边框、圆角、点击与右键菜单。 */
 export function Model3DCardContent({ source, fileName, enabled = true, revision = 1 }: Model3DCardContentProps) {
   const { t } = useTranslation();
