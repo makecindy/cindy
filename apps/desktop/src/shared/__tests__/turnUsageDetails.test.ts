@@ -81,7 +81,7 @@ describe('aggregateTurnUsageDetails', () => {
     });
   });
 
-  it('uses the default usage currency when the same model has mixed segment currencies', () => {
+  it('preserves separate currency rows when the same model has mixed segment currencies', () => {
     const staleCurrency = DEFAULT_USAGE_CURRENCY === 'USD' ? 'CNY' : 'USD';
     const first = buildTurnUsageDetails({
       inputTokens: 1,
@@ -98,6 +98,7 @@ describe('aggregateTurnUsageDetails', () => {
     });
 
     expect(aggregateTurnUsageDetails([first, second])?.perModelCost).toEqual([
+      { model: 'claude-fable-5', money: gatewayMoney(4, staleCurrency) },
       {
         model: 'claude-fable-5',
         money: gatewayMoney(6, DEFAULT_USAGE_CURRENCY),

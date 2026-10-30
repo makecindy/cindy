@@ -117,7 +117,7 @@ describe('built-in Skills', () => {
       expect(fs.statSync(path.join(plugin.absolutePath, relative)).isFile()).toBe(true);
     }
     const references = path.join(plugin.absolutePath, 'references');
-    const chapters = fs.readdirSync(references).sort();
+    const chapters = fs.readdirSync(references).filter(file => file.endsWith('.md')).sort();
     // The legacy tool and native Skill loaders consume the same shipped bytes,
     // even though capability filenames no longer encode the legacy chapter order.
     let remainingGuide = FORGE_GUIDE;
@@ -125,6 +125,11 @@ describe('built-in Skills', () => {
       const chapter = fs.readFileSync(path.join(references, file), 'utf8');
       expect(remainingGuide).toContain(chapter);
       remainingGuide = remainingGuide.replace(chapter, '');
+    }
+    // Shipped examples are executable assets, not guide chapters. They must also
+    // survive the production Skill copy (a link to a missing example is unusable).
+    for (const example of ['minimal/ghost.json', 'minimal/main.js', 'minimal/ui/page.html', 'sdk/build.mjs', 'files/main.js']) {
+      expect(fs.statSync(path.join(references, 'examples/interactive-pages', example)).isFile()).toBe(true);
     }
     expect(remainingGuide.trim()).toBe('');
     expect(new Set(referencePaths.map((file) => path.basename(file)))).toEqual(new Set(chapters));

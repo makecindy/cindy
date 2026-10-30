@@ -32,6 +32,7 @@ export interface ApplicationMenuLabels {
   toggleSidebar: string;
   windowMenu: string;
   helpMenu: string;
+  performanceTrace: string;
   help: string;
   releaseNotes: string;
   issues: string;
@@ -66,6 +67,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     toggleSidebar: '切换侧边栏',
     windowMenu: '窗口',
     helpMenu: '帮助',
+    performanceTrace: '性能跟踪…',
     help: '帮助',
     releaseNotes: '最新更新介绍',
     issues: '问题反馈',
@@ -102,6 +104,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     toggleSidebar: '切換側邊欄',
     windowMenu: '視窗',
     helpMenu: '輔助說明',
+    performanceTrace: '效能追蹤…',
     help: '輔助說明',
     releaseNotes: '最新更新',
     issues: '問題回報',
@@ -138,6 +141,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     toggleSidebar: 'Toggle Sidebar',
     windowMenu: 'Window',
     helpMenu: 'Help',
+    performanceTrace: 'Performance Trace…',
     help: 'Help',
     releaseNotes: "What's New",
     issues: 'Issues',
@@ -174,6 +178,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     toggleSidebar: 'サイドバーを切り替え',
     windowMenu: 'ウインドウ',
     helpMenu: 'ヘルプ',
+    performanceTrace: 'パフォーマンスの記録…',
     help: 'ヘルプ',
     releaseNotes: '最新情報',
     issues: 'フィードバック',
@@ -210,6 +215,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     toggleSidebar: '사이드바 토글',
     windowMenu: '윈도우',
     helpMenu: '도움말',
+    performanceTrace: '성능 기록…',
     help: '도움말',
     releaseNotes: '최신 업데이트',
     issues: '이슈',

@@ -25,6 +25,7 @@ import {
   sessionUsageAmounts,
 } from "./sessionUsagePresentation";
 import { formatModelShortLabel } from "./messageActions";
+import { UsageCostDetails } from './UsageCostDetails';
 
 /**
  * 用量卡上的模型名:优先调用方从模型目录解析出的展示名;目录里找不到时把原始 id
@@ -180,6 +181,7 @@ export function SessionUsageSummary({
       ) : null}
       {detail ? (
         <>
+          <UsageCostDetails rows={usage.costBreakdown} />
           {amounts.actual && amounts.actual.amount > 0 ? (
             <View style={styles.row}>
               <Text style={styles.label}>

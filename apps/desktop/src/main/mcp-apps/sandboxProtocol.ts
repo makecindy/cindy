@@ -14,6 +14,8 @@ export const mcpAppSchemePrivilege = {
   privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
 };
 const frameHeader = 'X-Cindy-Mcp-App-Frame';
+let fileReader: ((id: string, token: string, request: Request) => Promise<Response>) | undefined;
+export function setMcpAppFileReader(read: typeof fileReader): void { fileReader = read; }
 let callerCleanup: ((caller: string) => Promise<void>) | undefined;
 export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<void>): void {
   callerCleanup = cleanup;
@@ -21,7 +23,7 @@ export function setMcpAppCallerCleanup(cleanup?: (caller: string) => Promise<voi
 const documents = new Map<
   string,
   {
-    document: McpAppDocument; owner: object | null; caller?: string;
+    fileKey: string; document: McpAppDocument; owner: object | null; caller?: string;
     dispose?: () => void;
     bridge?: { key: string; frame?: WebFrameMain; invoke(input: unknown): Promise<unknown> };
   }
@@ -57,7 +59,7 @@ export function supplyMcpAppDocument(
   dispose?: () => void,
 ): void {
   documents.set(document.viewId, {
-    document, owner: getCurrentDbClientSnapshot(), caller, dispose,
+    fileKey: randomUUID(), document, owner: getCurrentDbClientSnapshot(), caller, dispose,
     bridge: invoke ? { key: randomUUID(), invoke } : undefined,
   });
 }
@@ -103,6 +105,22 @@ export function registerMcpAppProtocol(): void {
     { urls: ['cindy-mcp-app://*/*'] },
     (details, callback) => {
       const url = new URL(details.url);
+      if (url.hostname.endsWith('-view') && url.pathname.startsWith('/__cindy/files/')) {
+        const entry = documents.get(url.hostname.slice(0, -5));
+        const frame = details.frame;
+        try {
+          if (!entry || !frame || entry.owner !== getCurrentDbClientSnapshot() ||
+              entry.caller !== `renderer:${details.webContentsId}` ||
+              frame.url !== `cindy-mcp-app://${url.hostname}/resource` ||
+              !['GET', 'HEAD'].includes(details.method)) { callback({ cancel: true }); return; }
+        } catch (error) {
+          if (!isDisposedFrameError(error)) throw error;
+          callback({ cancel: true }); return;
+        }
+        const headers = Object.fromEntries(Object.entries(details.requestHeaders)
+          .filter(([key]) => key.toLowerCase() !== frameHeader.toLowerCase()));
+        callback({ requestHeaders: { ...headers, [frameHeader]: entry.fileKey } }); return;
+      }
       if (url.pathname !== '/bridge') { callback({ requestHeaders: details.requestHeaders }); return; }
       const entry = documents.get(url.hostname);
       const frame = details.frame;
@@ -212,6 +230,11 @@ export function registerMcpAppProtocol(): void {
     const doc = entry?.document;
     if (!doc || entry?.owner !== getCurrentDbClientSnapshot())
       return new Response(null, { status: 404 });
+    if (url.hostname === `${id}-view` && url.pathname.startsWith('/__cindy/files/')) {
+      if (!fileReader || request.headers.get(frameHeader) !== entry.fileKey || url.search || url.hash)
+        return new Response(null, { status: 404 });
+      return fileReader(id, url.pathname.slice('/__cindy/files/'.length), request);
+    }
     if (url.pathname === '/bridge' && url.hostname === id) {
       const bridge = entry.bridge;
       if (request.method !== 'POST' || !bridge ||

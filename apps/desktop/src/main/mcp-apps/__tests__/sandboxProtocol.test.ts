@@ -36,11 +36,13 @@ import {
   isMcpAppPermissionRequest,
   supplyMcpAppDocument,
   setMcpAppCallerCleanup,
+  setMcpAppFileReader,
   unmountRemoteAppDocument,
 } from '../sandboxProtocol.js';
 afterEach(() => {
   clearMcpAppDocuments();
   setMcpAppCallerCleanup();
+  setMcpAppFileReader(undefined);
   app.removeAllListeners('web-contents-created');
   vi.restoreAllMocks();
   state.owner = {};
@@ -339,4 +341,28 @@ describe('MCP App local protocol isolation', () => {
     // Declaring a domain does not allow the App document itself to leave its origin.
     expect(isMcpAppFrameNavigationAllowed(source, 'https://frames.example.org')).toBe(false);
   });
+});
+
+// A2: knowing a file token must not let another card/frame or a top-level Renderer
+// read it. Exercise the production Electron protocol hook, not URL string guards.
+it('serves granted files only to their own real App frame', async () => {
+  let handler!: (request: Request) => Promise<Response> | Response;
+  vi.spyOn(protocol, 'handle').mockImplementation((_scheme, callback) => { handler = callback; });
+  registerMcpAppProtocol();
+  supplyMcpAppDocument(document, 'renderer:1');
+  const read = vi.fn(async () => new Response('file'));
+  setMcpAppFileReader(read);
+  const url = 'cindy-mcp-app://untrusted-id-view/__cindy/files/token';
+  const details = { url, method: 'GET', webContentsId: 1,
+    frame: { url: 'cindy-mcp-app://untrusted-id-view/resource' }, requestHeaders: {} };
+  for (const altered of [{ frame: { url: 'file:///host.html' } }, { frame: { url: 'cindy-mcp-app://other-view/resource' } }, { webContentsId: 2 }, { method: 'POST' }]) {
+    const cb = vi.fn(); state.beforeHeaders!({ ...details, ...altered } as never, cb);
+    expect(cb).toHaveBeenCalledWith({ cancel: true });
+  }
+  expect((await handler(new Request(url))).status).toBe(404);
+  const cb = vi.fn(); state.beforeHeaders!(details as never, cb);
+  expect(await (await handler(new Request(url, { headers: cb.mock.calls[0][0].requestHeaders }))).text()).toBe('file');
+  expect(read).toHaveBeenCalledExactlyOnceWith('untrusted-id', 'token', expect.any(Request));
+  clearMcpAppDocuments();
+  expect((await handler(new Request(url, { headers: cb.mock.calls[0][0].requestHeaders }))).status).toBe(404);
 });

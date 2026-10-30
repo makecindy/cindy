@@ -250,7 +250,7 @@ describe('searchConversationsAcrossDevices', () => {
       {
         invoke,
         getCachedSessions: () => [
-          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/repo' }),
+          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/tmp/checkout', projectDir: '/repo' }),
           session({ id: 'out', title: 'Planning elsewhere', workingDir: '/other' }),
         ],
       },
@@ -352,7 +352,7 @@ describe('searchCachedDeviceSessions', () => {
 
 describe('helpers', () => {
   it('shows project aliases in search filters without changing their stable keys or mixing SSH identities', () => {
-    const local = session({ id: 'local', title: 'Local', workingDir: '/repo/app' });
+    const local = session({ id: 'local', title: 'Local', workingDir: '/tmp/checkout', projectDir: '/repo/app' });
     const projectAliases = new Map([['dev-a', {
       platform: 'darwin',
       aliases: [{ projectKey: 'local:/repo/app', alias: '黑盒自动化' }],

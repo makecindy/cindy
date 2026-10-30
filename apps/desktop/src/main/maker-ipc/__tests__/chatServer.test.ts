@@ -85,7 +85,7 @@ import { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageTex
 import { t } from '../../i18n.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
-import { botGroupRuntimeFailureCode, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
+import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
@@ -884,6 +884,25 @@ describe('Chat Server result delivery and refresh', () => {
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
+  // #7583, unit: runtime close without an SDK terminal left the leased execution
+  // alive. Existing cases start from done/error; exercise the close adapter with
+  // the real Chat Server service and assert the terminal wire result and lease retirement.
+  it('retires a closed group turn without terminating recovery or a different input', async () => {
+    await start();
+    const inputId = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, true)).toBe(false);
+    expect(await settleClosedBotGroupTurn(service, 'lane', 'bot-group:old-input', false)).toBe(false);
+    expect(failures()).toHaveLength(0);
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, false)).toBe(true);
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0][2]).toMatchObject({ action: 'fail', detail: 'cindy-runtime-error:RUNTIME_ERROR', epoch: execution.epoch });
+    const heartbeats = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat').length;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat')).toHaveLength(heartbeats);
+    expect(deliveries()).toHaveLength(0);
+  });
+
   // #6418: media visibility changes, but the original reply still determines
   // continuation. The helper mock isolates import/ledger tests from settlement.
   const replyImage = { id: 'image', name: 'image.png', category: 'image' as const,
@@ -1415,6 +1434,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(posts.every(([, , body]) => (body as { threadRootId?: string }).threadRootId === rootId)).toBe(true);
     });
 
+    // Unit: the generic creation entry has no delegation card; its outbox still freezes
+    // every wire part and receives the authenticated destination used for the actual POST.
+    it('posts a generic task result into its original Thread through its own durable outbox', async () => {
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      const rootId = '90000000-0000-4000-8000-0000000000aa';
+      fixture.handle.mockImplementation((route, method) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
+        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000002' } };
+        return response(route);
+      });
+      const preparePost = vi.fn(async (prepare: () => Promise<import('../botGroupTaskPostSnapshot').BotGroupTaskPostSnapshot>) => prepare());
+      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'generic-result',
+        text: 'Finished', threadRootId: rootId, preparePost })).toMatchObject({ ok: true });
+      expect(preparePost).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ roomId, selfId, clientId: 'generic-result' }));
+      const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.[2]).toMatchObject({ threadRootId: rootId, content: [{ type: 'text', text: 'Finished' }] });
+    });
+
     it('leaves out one file this computer cannot send and still posts the result with the others', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       const files = await deliveryFiles(3);
@@ -1545,7 +1583,7 @@ describe('Chat Server result delivery and refresh', () => {
       } finally { legacy.dispose(); }
     });
 
-    it.each(['channel', 'started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
+    it.each(['started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
       const target = '10000000-0000-4000-8000-000000000099';
       migration.read.mockReturnValue({ roomId: target, sequence: 12, version: 2 });
       const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
@@ -1558,8 +1596,7 @@ describe('Chat Server result delivery and refresh', () => {
       });
       try {
         // A fresh service has an empty in-memory map; no timer/list read has started its migration.
-        if (state === 'channel') expect(await legacy.hasCompanionTaskChannel(roomId)).toBe(true);
-        else {
+        {
           expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: `task-restart:${state}`,
             text: '', card: { ...taskCard, data: { ...taskCard.data, state } } })).toEqual({ ok: true, messageId: 'posted-task' });
           expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${target}/messages`))?.actor).toBe(botId);
@@ -4394,6 +4431,30 @@ describe('Chat Server directed sends', () => {
     const result = await service.chatServer!.ownedBots();
     expect(result).toMatchObject({ ok: true });
     expect(result.ok && result.bots.some(bot => bot.botId === 'local-bot' && typeof bot.actorId === 'string')).toBe(true);
+  });
+
+  it('lists owned companions on other devices without importing them locally, excluding disabled actors', async () => {
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' ? { body: [
+      { id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+      { id: humanId, kind: 'bot', externalId: 'linux-bot', name: 'Linux', homeDeviceId: 'linux', avatar: '🐧' },
+      { id: rootId, kind: 'bot', externalId: 'deleted-bot', name: 'Deleted', disabled: true },
+    ] } : original(route, method, body));
+    expect(await service.chatServer!.ownedBots()).toMatchObject({ ok: true, bots: [
+      { actorId: botId, botId: 'local-bot' },
+      { actorId: humanId, botId: 'linux-bot', name: 'Linux', homeDeviceId: 'linux', avatar: '🐧' },
+    ] });
+    expect(fixture.profiles).toHaveLength(1);
+  });
+
+  it.each([null, 'another-device'])('respects local pause only while this computer owns execution (home=%s)', async homeDeviceId => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'paused' }];
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' ? { body: [
+      { id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot', homeDeviceId },
+    ] } : original(route, method, body));
+    const result = await service.chatServer!.ownedBots();
+    expect(result.ok && result.bots.map(bot => bot.botId)).toEqual(homeDeviceId ? ['local-bot'] : []);
   });
 
   it.each(['main', 'thread'])('rejects a selected bot that left before the %s send instead of posting empty mentions', async entry => {

@@ -16,12 +16,17 @@ export function BotGroupSidebarAvatar({
   members,
   selected = false,
   compact = false,
+  surface = 'sidebar',
 }: {
   members: readonly AvatarMember[];
   selected?: boolean;
   compact?: boolean;
+  /** `panel`: the same mark on a page surface (group settings), outlined in that surface. */
+  surface?: 'sidebar' | 'panel';
 }) {
   const frameClass = compact ? 'h-12 w-12' : 'h-11 w-11';
+  const outline = surface === 'panel' ? 'border-[var(--surface)]'
+    : selected ? 'border-sidebar' : 'border-sidebar group-hover:border-sidebar-item-hover';
   const [first, second] = members;
   if (!first) {
     return (
@@ -53,9 +58,7 @@ export function BotGroupSidebarAvatar({
               className={cn(
                 'absolute flex rounded-full',
                 'border-2',
-                selected
-                  ? 'border-sidebar'
-                  : 'border-sidebar group-hover:border-sidebar-item-hover',
+                outline,
               )}
               style={{
                 width: `${diameter}%`,
@@ -85,9 +88,7 @@ export function BotGroupSidebarAvatar({
         className={cn(
           'absolute bottom-0 right-0 flex rounded-full',
           'border-2',
-          selected
-            ? 'border-sidebar'
-            : 'border-sidebar group-hover:border-sidebar-item-hover',
+          outline,
         )}
       >
         <BotAvatar

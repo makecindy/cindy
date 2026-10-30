@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:light dark;--bg:var(--color-background-primary,Canvas);--fg:var(--color-text-primary,CanvasText);--muted:var(--color-text-secondary,GrayText);--panel:var(--color-background-secondary,color-mix(in srgb,CanvasText 5%,Canvas));--line:var(--color-border-primary,color-mix(in srgb,CanvasText 18%,Canvas));--radius:var(--border-radius-md,12px)}
+*{box-sizing:border-box}body{margin:0;padding:24px;font:14px/1.5 var(--font-sans,system-ui);color:var(--fg);background:var(--bg);overflow-wrap:anywhere}main{max-width:640px;margin:auto;min-width:0}h1{font-size:24px;line-height:1.3;font-weight:550;margin:8px 0}p,label{color:var(--muted)}label{display:block;margin-top:24px}input,button{font:inherit;color:var(--fg);min-height:36px;padding:9px 12px;max-width:100%}input{width:100%;margin:8px 0 12px;background:var(--bg);border:1px solid var(--line);border-radius:8px}button{border:0;border-radius:9999px;background:var(--panel);font-weight:550;cursor:pointer}button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible{outline:2px solid var(--color-border-info,var(--fg));outline-offset:2px}#status{padding:12px;background:var(--panel);border-radius:var(--radius);white-space:pre-wrap}@media(max-width:600px){body{padding:16px}h1{font-size:22px}}
+</style>
+<!-- 能力全集：references/examples/interactive-pages/files/ui/page.html；按需复制，不需要的块可以删。 -->
+<main><h1>交互计划</h1>
+<p>在页面暂存计划，内容较多时可切换全屏。</p>
+<label>计划标题<input id="title" value="我的计划"></label>
+<button id="save" disabled>暂存计划</button>
+<p id="status" role="status">正在连接…</p>
+</main>
+<script>
+(() => {
+  let nextId = 0;
+  const pending = new Map();
+  const post = message => parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+  const notify = (method, params = {}) => post({ method, params });
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        notify('notifications/cancelled', { requestId: id, reason: '页面等待超时' });
+        reject(new Error('等待超时，请核对操作结果，勿自动重试写入。'));
+      }, 30 * 60 * 1000);
+      pending.set(id, { resolve, reject, timer });
+      post({ id, method, params });
+    });
+  }
+  const status = document.querySelector('#status');
+  function theme(context) {
+    if (context.theme) document.documentElement.style.colorScheme = context.theme;
+    for (const [key, value] of Object.entries(context.styles?.variables ?? {}))
+      document.documentElement.style.setProperty(key, value);
+  }
+  function render(result) {
+    const data = result.structuredContent;
+    if (data) document.querySelector('#title').value = data.title;
+    status.textContent = (result.content ?? []).filter(x => x.type === 'text').map(x => x.text).join('\n');
+  }
+  addEventListener('message', event => {
+    if (event.source !== parent || event.data?.jsonrpc !== '2.0') return;
+    const message = event.data;
+    if (pending.has(message.id)) {
+      const call = pending.get(message.id); pending.delete(message.id); clearTimeout(call.timer);
+      if (message.error) call.reject(new Error(message.error.message)); else call.resolve(message.result);
+    } else if (message.method === 'ui/notifications/tool-result') render(message.params);
+    else if (message.method === 'ui/notifications/host-context-changed') theme(message.params);
+    else if (message.method === 'ui/notifications/tool-cancelled') status.textContent = '调用已取消';
+    else if (message.method === 'ui/resource-teardown') post({ id: message.id, result: {} });
+  });
+  document.querySelector('#save').onclick = async () => {
+    const button = document.querySelector('#save'); button.disabled = true;
+    try { render(await request('tools/call', { name: 'save_plan', arguments: { title: document.querySelector('#title').value } })); }
+    catch (error) { status.textContent = error.message; }
+    finally { button.disabled = false; }
+  };
+  request('ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: '计划示例', version: '1.0.0' }, appCapabilities: {} })
+    .then(result => {
+      theme(result.hostContext ?? {});
+      notify('ui/notifications/initialized');
+      document.querySelector('#save').disabled = false;
+      new ResizeObserver(() => notify('ui/notifications/size-changed', { height: document.body.getBoundingClientRect().height }))
+        .observe(document.body);
+    }).catch(error => { status.textContent = error.message; });
+})();
+</script>
+</html>

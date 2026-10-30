@@ -55,6 +55,7 @@ export function ComposerSheet({
   onBack,
   backDisabled = false,
   backLabel,
+  headerTrailing,
   children,
   aboveContent,
   aboveContentTitle,
@@ -121,7 +122,7 @@ export function ComposerSheet({
               <Spacer />
               <Text modifiers={[font({ textStyle: "headline" })]}>{title}</Text>
               <Spacer />
-              {onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null}
+              {headerTrailing ?? (onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null)}
             </HStack> : null}
             {!nativeRoot && nativeHeader}
             {aboveContent && aboveContentTitle ? (

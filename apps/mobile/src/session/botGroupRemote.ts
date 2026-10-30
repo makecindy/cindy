@@ -392,6 +392,9 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsGroupLeave: record.supportsGroupLeave === true,
     supportsListRemoval: record.supportsListRemoval === true,
     ...(Number.isSafeInteger(record.revision) && Number(record.revision) > 0 ? { revision: Number(record.revision) } : {}),
+    // 群介绍 shows on the phone; this path only renames (the computer ignores the rest).
+    ...(text(record.topic, 250) ? { topic: text(record.topic, 250)! } : {}),
+    ...(text(record.description, 2_000) ? { description: text(record.description, 2_000)! } : {}),
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
     supportsReadReceipts: record.supportsReadReceipts === true,

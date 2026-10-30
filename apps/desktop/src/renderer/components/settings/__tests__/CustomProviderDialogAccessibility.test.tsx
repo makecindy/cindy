@@ -2389,7 +2389,8 @@ describe('new-connection identification', () => {
     await act(async () => {});
     const value = onDetected.mock.calls[0][0];
     expect(value.preset.runtimes['claude-code']).toMatchObject({ baseUrl: 'https://api.deepseek.com/anthropic', wireProtocol: 'anthropic-messages' });
-    expect(value.preset.runtimes.codex.wireProtocol).toBe('openai-chat');
+    // DeepSeek's catalog interfaces give Codex its Responses API rather than the copied preset Chat wire.
+    expect(value.preset.runtimes.codex.wireProtocol).toBe('openai-responses');
     expect(value.preset.runtimes.pi.wireProtocol).toBe('openai-chat');
   });
   it('identifies a provider supported only by another engine without asking the user to choose an engine', async () => {

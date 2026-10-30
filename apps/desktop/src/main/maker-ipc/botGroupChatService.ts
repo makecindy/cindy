@@ -2247,7 +2247,6 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     /** Only a server room has a message channel a teammate can post into outside a turn. */
     postCompanionTaskMessage: async (_input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> =>
       ({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }),
-    hasCompanionTaskChannel: async (_groupId: string): Promise<boolean> => false,
     dispose,
   };
 }
@@ -2259,7 +2258,10 @@ export interface BotGroupTaskPostInput {
   /** Idempotent per event: retries return the message the server already stored. */
   clientId: string;
   text: string;
-  card: BotGroupTaskCard;
+  card?: BotGroupTaskCard;
+  /** Generic task outboxes freeze the same wire payload without a delegation row. */
+  preparePost?: (prepare: () => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>,
+    destination: { endpoint: string; selfId: string; roomId: string; clientId: string }) => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>;
   /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
   files?: Array<{ absolutePath: string }>;
   /** A task started in a Thread reports back into that Thread. */

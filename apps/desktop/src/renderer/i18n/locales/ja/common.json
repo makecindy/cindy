@@ -1674,7 +1674,9 @@
     }
   },
   "settings": {
-    "newChatDefaults": { "title": "新しいタスクのデフォルト権限" },
+    "newChatDefaults": {
+      "title": "新しいタスクのデフォルト権限"
+    },
     "imConnection": {
       "reconnect": "再接続",
       "savedNote": "連携情報は保存されています。そのまま再接続できます。",
@@ -2269,7 +2271,7 @@
         "title": "Cindy を閉じる",
         "message": "メインウィンドウを閉じるときの動作を選択してください。",
         "detail": "システムトレイに最小化すると、タスクは実行を続けます。終了するにはトレイアイコンを右クリックします。後から設定で変更できます。",
-        "linuxDetail": "ウィンドウを最小化しても、タスクは実行を続けます。タスクバーまたはウィンドウ一覧から Cindy を復元できます。後から設定で変更することもできます。"
+        "linuxDetail": "ウィンドウを画面から消しても、タスクは実行を続けます。Cindy をもう一度開けばウィンドウが戻ります。後から設定で変更することもできます。"
       },
       "trayMenu": {
         "show": "Cindy を開く",
@@ -2463,7 +2465,7 @@
         "description": "Ubuntu はシステムの .deb パッケージを使用します。Arch Linux と Omarchy は、同じ検証済み .deb の内容をユーザーディレクトリにインストールします。Debian のパッケージマネージャーは不要です。",
         "item1": "Ubuntu：sudo apt install ./cindy-<version>-<arch>.deb を実行します。Arch/Omarchy：docs/linux.md のユーザーインストール手順に従ってください。",
         "item2": "更新時、システムの .deb インストールは認証を要求します。ユーザーインストールはシステムパスワードなしでバージョンを切り替えます。それ以外は対応するパッケージマネージャーで更新してください。",
-        "item3": "Linux x64 は Beta チャネルに対応し、arm64 は未対応です。更新は再起動を選択したときのみ適用され、アイドル時には自動適用されません。"
+        "item3": "Linux x64 と arm64 は Beta チャネルに対応しています。更新は再起動を選択したときのみ適用され、アイドル時には自動適用されません。"
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "答えが見つからなければ、やりたいことを質問してください。",
@@ -3842,7 +3844,7 @@
           "contextLimitOverWindow": "プロバイダーが宣言した上限を超えています。リクエストが失敗する可能性があります。",
           "restoreDefault": "既定に戻す",
           "engines": "エンジン対応",
-          "enginesHint": "互換モードはリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
+          "enginesHint": "互換モードでは Cindy がローカルでリクエストを変換します。初期状態ではオフですが、必要に応じて有効にできます。",
           "engineUnsupported": "非対応",
           "engineNotConfigured": "未設定",
           "engineNoFast": "Fast なし",
@@ -3881,10 +3883,10 @@
           "protocol": {
             "reference": "ネイティブAPI",
             "compatibility": "互換モード",
-            "compatibilityHint": "互換モードでは動作が不安定になったり、一部の機能が正常に動作しない場合があります。経験のあるユーザー向けです。",
-            "matching": "ネイティブ対応",
+            "compatibilityHint": "Cindy がローカルでリクエストを変換します。動作が不安定になったり、一部の機能が正常に動作しない場合があります。経験のあるユーザー向けです。",
             "unknown": "プロトコル未確認",
-            "automatic": "自動選択"
+            "automatic": "自動選択",
+            "upstream": "上流 API"
           },
           "lifecycle": {
             "alpha": "試用版",
@@ -4010,9 +4012,7 @@
         "metaOAuth": "サブスクリプションアカウント",
         "metaApiKey": "API key",
         "metaNoAuth": "ローカル / セルフホスト · 認証なし",
-        "customTitle": "カスタムエンドポイント",
-        "customMeta": "OpenAI / Anthropic 互換の任意のモデルソースを接続",
-        "pickHint": "接続するアカウントまたはサービスを選択してください。",
+        "customAction": "見つかりませんか？カスタム追加",
         "oauthDesc": "ブラウザーでログインします。API key は不要です。",
         "deviceOAuthDesc": "ワンタイムデバイスコードを使い、プロバイダーの認証ページで認証します",
         "authorizeInBrowser": "ブラウザで認証",
@@ -5684,7 +5684,7 @@
         },
         "host": {
           "title": "このコンピュータでリレーを開始",
-          "hint": "他のデバイスからこのコンピュータに接続できる必要があります。同じローカルネットワーク、ルーターのポート転送、トンネル、メッシュ VPN などで、ご自身で確保してください。このコンピュータがスリープしたり Cindy を終了したりすると全デバイスが切断されるため、「コンピュータをスリープさせない」をオンにします。",
+          "hint": "他のデバイスからこのコンピュータに接続できる必要があります。同じローカルネットワーク、ルーターのポート転送、トンネル、メッシュ VPN などで、ご自身で確保してください。このコンピュータがスリープしたり Cindy を終了したりすると全デバイスが切断されるため、「パソコンをスリープさせない」をオンにします。",
           "port": "ポート",
           "scope": "接続を許可する範囲",
           "scopeLocal": "このコンピュータのみ",
@@ -7513,8 +7513,8 @@
         "updated": "更新",
         "unchanged": "他 {{count}} 件の権限は変更なし",
         "noChange": "権限に変更はありません。",
-        "pick": "フォルダの選択をあなたに依頼できます",
-        "pickDetail": "依頼があると、Cindy がシステムのフォルダ選択ウィンドウを表示します。どのフォルダを渡すかはあなたが直接決め、キャンセルすれば何も渡りません。",
+        "pick": "ファイルやフォルダーの選択を依頼できます",
+        "pickDetail": "プラグインから依頼されると、Cindy がシステムの選択画面を開きます。共有する対象は自分で選び、キャンセルすると何も渡されません。",
         "workspace": "プロジェクトフォルダのセッション入口をサイドバーに作成するよう依頼できます",
         "workspaceDetail": "依頼があると、あなたが直接フォルダを選ぶか、確認カードでフルパスを見てから許可を決めます。あなたが開始した呼び出しの処理中は、現在のセッションの作業ディレクトリ内のサブフォルダは追加確認なしで使用されます。既にセッションがあるフォルダは再利用され、重複作成はされません。作成されるのは空のセッションだけで、勝手にタスクが始まることはありません。",
         "sessionContext": "現在のセッションが使用中のプロジェクトフォルダの場所を知ることができます",
@@ -7528,7 +7528,11 @@
         "nodeChildSpawnDetail": "起動できるのは自身のパッケージ内で申告済みの JS ファイルだけです(メインプログラムと同じローカル権限)。任意のコマンドは実行できません。プラグインの無効化や終了時にはサブプロセスも一緒に閉じられます。",
         "skill": "AI アシスタントにスキル「{{name}}」を追加します",
         "skillDetail": "スキルは AI が自分の指示として読み込んで実行する指示ファイルです。あなたの全権限で、Claude Code と Codex のすべてのプロジェクトに適用され、このプラグインのサンドボックスには制限されません。プラグインが有効な間は利用可能で、無効化またはアンインストールすると削除されます。特定のフォルダーだけでプラグインをオフにしても非表示にはなりません。ここではスキルの全文をプレビューできません——信頼できるプラグインのみをインストールしてください。",
-        "routineEvents": "ルーティンイベント"
+        "routineEvents": "ルーティンイベント",
+        "mcpUi": "会話にインタラクティブなページを表示",
+        "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
+        "mcpAppOnly": "ページ専用",
+        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -7907,8 +7911,9 @@
         "usesExplanation": "許可された共有範囲の全バージョンにおける累計ツール呼び出し数です。下の個人の呼び出しは、この端末の現在のアカウントのみを集計します。"
       },
       "contribution": {
-        "unreadReview": "新しい審査結果があります",
+        "unreadReview": "新しい処理結果があります",
         "viewReviewResult": "{{version}} の審査結果を見る",
+        "viewMarketResult": "マーケットの対応結果を見る",
         "anonymous": "匿名で公開",
         "anonymousHint": "プラグイン全体の公開作者名を非表示にします。オフにすると、各バージョンの審査提出時に保存された元の作者名が表示されます。",
         "anonymousAuthorOnly": "変更できるのは元の作者のみです",
@@ -8004,6 +8009,7 @@
           "rejected": "差し戻し",
           "enabled": "公開を開始",
           "disabled": "公開を停止",
+          "archived": "アーカイブ済み",
           "current_changed": "公開バージョンを変更",
           "revoked": "バージョンを取り消し",
           "cancelled": "取り消し済み"
@@ -8101,6 +8107,14 @@
         "viewPendingVersion": "審査中のバージョンを表示",
         "submitFailed": "提出に失敗",
         "viewDetails": "詳細を見る"
+      },
+      "fileTransfer": {
+        "reading": "ファイルを読み込み中",
+        "uploading": "アップロード中",
+        "saving": "ファイルを保存中",
+        "importing": "ファイルをインポート中",
+        "finished": "ファイル処理が終了しました",
+        "importFinished": "ファイルのインポートが終了しました"
       }
     },
     "mcp": {
@@ -10266,6 +10280,7 @@
       "backToBot": "{{name}} に戻る"
     },
     "collab": {
+      "deliveryFailed": "元のチャットに結果を送信できませんでした。結果はこのセッションに保存されています。",
       "backgroundTask": "バックグラウンドタスク",
       "trackedTask": "独立して実行し、結果を自動で返します",
       "stopTask": "タスクを停止",
@@ -10400,7 +10415,9 @@
         "digestSent": "パートナーとのチャットに送信済み",
         "digestFailed": "整理できませんでした。再試行してください。",
         "digestEmpty": "新しく整理する内容はありません",
-        "joinSetup": "参加後にAI代理返信を設定"
+        "joinSetup": "参加後にAI代理返信を設定",
+        "hours": "代理返信の時間帯",
+        "ownerOnly": "この設定を見て変更できるのはあなただけです。"
       },
       "migrationPending": "過去の履歴の一部をアップロード中です。自動的に再試行します。このチャットは引き続き利用できます。",
       "memberSeparator": "、",
@@ -10597,8 +10614,6 @@
         "projectDirChange": "フォルダを変更",
         "projectDirClear": "クリア",
         "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
-        "handoff": "ステップの引き継ぎ",
-        "autoContinueNote": "オンにすると、このグループであなたが始めた役割分担は、1 ステップ終わるたびに自動で次へ進みます。オフのときは各ステップで「次へ進む」を押すまで待ちます。このコンピュータでのみ有効です。",
         "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください"
       },
@@ -10794,12 +10809,7 @@
           "member": "メンバー",
           "guest": "ゲスト",
           "companionOf": "{{name}} のパートナー",
-          "guestAccess": "他のメンバーの利用権限",
           "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
-          "chatHint": "グループ内のメッセージのみを使用し、オーナーの記憶、個人情報、ツールは使用しません。",
-          "none": "オーナーのみ",
-          "chat": "グループ内の会話のみ",
-          "tools": "ツールと情報の利用を許可済み",
           "ownerOnly": "この権限を変更できるのはパートナーのオーナーだけです。",
           "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
           "makeAdmin": "管理者にする",
@@ -10809,7 +10819,6 @@
           "transferHint": "相手がオーナーになり、あなたは管理者になります。",
           "removeTitle": "{{name}} をグループから削除しますか？",
           "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーのパートナーも退出します。",
-          "addCompanion": "自分のパートナーを招待",
           "leave": "グループを退出",
           "leaveHint": "あなたとあなたの仲間がグループから退出します。新しいメッセージは届かなくなり、グループの履歴を閲覧できなくなります。",
           "soleOwnerHint": "メンバーはあなただけです。グループをアーカイブすると履歴が残り、後で再開できます。",
@@ -10821,10 +10830,78 @@
           "unarchive": "アーカイブを解除",
           "unarchiveHint": "アーカイブを解除すると、すべてのメンバーに対してメッセージとパートナーの実行が再開します。",
           "archived": "アーカイブ済みです。履歴は引き続き閲覧できます。",
-          "noneHint": "このグループでは仲間の所有者だけが応答を依頼できます。",
-          "companionPermissions": "仲間の権限",
-          "configureCapabilities": "ツールと利用権限の設定",
-          "capabilityScope": "これは{{name}}自身のツールと利用権限で、このグループだけの設定ではありません。"
+          "capabilityScope": "これは{{name}}自身のツールと利用権限で、このグループだけの設定ではありません。",
+          "tabSettings": "設定",
+          "youAreOwner": "あなたはオーナーです",
+          "youAreAdmin": "あなたは管理者です",
+          "inviteEntry": "招待",
+          "inviteFriendsItem": "友だちを招待",
+          "inviteFriendsItemHint": "共有用のリンクを作成",
+          "inviteFriendsLocked": "友だちを招待できるのはオーナーと管理者だけです",
+          "inviteBotsItem": "仲間を追加",
+          "inviteBotsItemHint": "自分の仲間を選んで追加",
+          "searchTeammates": "仲間を検索",
+          "inviteBotsCount": "追加できる仲間 {{count}} 人",
+          "inviteBotsAllIn": "自分の仲間はすべて参加済みです",
+          "inviteBotsNoMatch": "「{{query}}」に一致する仲間はいません",
+          "inviteBotsAdded": "{{name}} をグループに追加しました",
+          "noTeammates": "まだ仲間がいません",
+          "createTeammate": "仲間を作成",
+          "back": "グループ設定に戻る",
+          "about": "グループについて",
+          "edit": "編集",
+          "add": "追加",
+          "aboutEmpty": "トピックと説明を追加すると、新しいメンバーがこのグループの目的をすぐに分かります。",
+          "showMore": "もっと見る",
+          "showLess": "閉じる",
+          "you": "あなた",
+          "searchMembers": "メンバーを検索",
+          "membersNoMatch": "「{{query}}」に一致するメンバーはいません",
+          "teammateTag": "仲間",
+          "paused": "一時停止中",
+          "accessNone": "オーナーのみ",
+          "accessChat": "グループ内の会話のみ",
+          "accessTools": "ツールと情報を利用可",
+          "replies": "仲間の返信",
+          "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
+          "work": "役割分担",
+          "ownFolder": "グループ専用フォルダ",
+          "projectDirHint": "役割分担のとき、仲間がここで作業します。",
+          "projectDirClearHint": "グループ専用フォルダに戻します",
+          "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",
+          "autoContinueHint": "オフのときは、各ステップで「続ける」を押すまで待ちます。",
+          "workCaption": "git プロジェクトを選ぶと、役割分担ごとに新しいブランチを作るので手元のコードには触れません。プロジェクトフォルダと自動の引き継ぎは、このコンピュータでのみ有効です。",
+          "me": "このグループでの自分",
+          "profileHint": "このグループだけのニックネームと写真",
+          "maskHint": "@ されたとき、仲間が代わりに返信します",
+          "myTeammates": "自分の仲間",
+          "myTeammatesCaption": "ほかのメンバーが自分の仲間をどう使えるかを決めます。",
+          "manage": "グループ管理",
+          "manageHintOwner": "返信のしかた、まとめ役、役割分担、アーカイブと解散",
+          "manageHintAdmin": "返信のしかた、まとめ役、役割分担、アーカイブ",
+          "manageCaption": "このページはオーナーと管理者にだけ表示されます。",
+          "hideHint": "退出せず、リストから非表示にします",
+          "leaveRowHint": "自分の仲間も一緒に退出します",
+          "leaveRowHintAlone": "新しいメッセージを受け取れず、履歴も見られなくなります",
+          "leaveBlocked": "退出する前にオーナーを譲渡してください",
+          "archiveRowHint": "全員に対して停止し、履歴は残ります",
+          "unarchiveRowHint": "メッセージと仲間の作業を再開します",
+          "dissolveRowHint": "元に戻せません。誰もメッセージを送れなくなります",
+          "editTitle": "グループ情報を編集",
+          "topicHint": "「グループについて」の最初に表示されます",
+          "descriptionHint": "仲間は返信のたびに最新の説明を参照します。",
+          "companionTitle": "このグループでの {{name}}",
+          "yourTeammate": "あなたの仲間",
+          "accessQuestion": "ほかのメンバーは {{name}} をどう使えますか？",
+          "defaultTag": "デフォルト",
+          "accessNoneTitle": "自分だけ",
+          "accessNoneHint": "このグループで {{name}} を呼べるのは自分だけです。",
+          "accessChatTitle": "グループ内の会話のみ",
+          "accessChatHint": "グループのメッセージだけを元に答えます。あなたの記憶や個人情報は読まず、ツールも使いません。",
+          "accessToolsTitle": "ツールと情報も使える",
+          "accessToolsHint": "{{name}} の既存ツールとあなたの個人情報を使えます。結果は全員に表示されます。既存の承認ルールは有効で、取り消しても完了した操作は元に戻せません。",
+          "capabilitiesRow": "{{name}} のツールと権限",
+          "accessMenu": "このグループでの権限"
         }
       },
       "lifecycle": {
@@ -12412,6 +12489,13 @@
         "busy": "リポジトリは使用中です。後で再試行してください",
         "changed": "チェックアウト中のブランチが変更されました。再試行してください。"
       }
+    },
+    "pluginUi": {
+      "title": "プラグイン「{{name}}」に操作可能なページが追加されました。利用するには確認が必要です。",
+      "enable": "確認して有効にする",
+      "later": "後で",
+      "ready": "操作可能なページを有効にしました。次のプラグインツール呼び出しから表示できます。",
+      "updateHost": "ここで対話ページを承認するには、実行側のコンピューターで Cindy を更新してください。"
     }
   },
   "onboarding": {
@@ -14331,8 +14415,8 @@
         "ghMissing": "GitHub CLI（gh）が見つからないため、PR の状態を表示できません",
         "notFound": "PR が存在しないか、現在のアカウントでは閲覧できません",
         "statusUnknown": "状態の取得に失敗しました",
+        "statusNotFetched": "ステータスはまだ取得していません",
         "openAria": "PR #{{number}} をブラウザで開く",
-        "clickToOpen": "クリックしてブラウザで PR を開く",
         "guidance": {
           "login": {
             "hint": "クリックして GitHub に接続",
@@ -14420,7 +14504,40 @@
             "otherMethods": "その他の接続方法"
           }
         },
-        "unresolved": "未解決のレビューコメント: {{count}} 件"
+        "unresolved": "未解決のレビューコメント: {{count}} 件",
+        "summaryAria": "PR #{{number}} の概要を表示",
+        "unresolvedLabel": "未解決のレビューコメント",
+        "checks": "チェック",
+        "checksTotal": "全 {{count}} 件",
+        "failed": "失敗",
+        "passed": "成功",
+        "pending": "進行中",
+        "skippedLabel": "スキップまたは中立",
+        "manage": {
+          "title": "PR リンクを管理",
+          "hint": "上部に最大 3 件表示。固定した PR を優先します",
+          "empty": "GitHub PR のリンクを貼り付けて追加",
+          "removed": "削除済み：{{count}} 件",
+          "addLabel": "PR リンクを追加",
+          "add": "PR を追加",
+          "loading": "読み込み中…",
+          "restore": "PR を復元",
+          "pin": "上部に固定",
+          "unpin": "固定を解除",
+          "pinLimit": "固定できる PR は最大 3 件です",
+          "reorderHint": "Alt+↑/↓ で固定済みまたは未固定のグループ内の順序を変更します。",
+          "dragHandle": "{{repo}} #{{number}} をドラッグして並べ替え",
+          "remove": "PR を削除",
+          "errors": {
+            "duplicate": "この PR は関連付け済みです。削除したリンクは一覧から復元できます",
+            "notFound": "PR が見つからないか、アクセス権がありません",
+            "invalidUrl": "有効な GitHub PR リンクを入力してください",
+            "reorderFailed": "順序を保存できませんでした。もう一度お試しください。",
+            "verifyFailed": "PR を確認できません。GitHub のログイン状態とアクセス権を確認してください",
+            "unsupported": "このコンピューターのバージョンは PR リンクの管理に対応していません",
+            "failed": "PR リンクを更新できません"
+          }
+        }
       }
     },
     "schedule": {
@@ -15535,6 +15652,7 @@
       "embedded-frame": "入力欄はページに埋め込まれた別サイトの中にあります。提供元が信頼できるか確認してください。"
     },
     "agentControlled": "この画面は Agent が開きました。入力する前に、本当にサインインしたい場所か確認してください。",
+    "agentPicture": "このコードは Agent が撮ったスクリーンショットのもので、Cindy には元の画面が見えず、スキャン後も自動では続行しません。サインインしたいサイトにつながるか確認し、スキャンしたら「Agent に戻す」を押してください。",
     "error": {
       "decision": "操作が届きませんでした。もう一度お試しください。",
       "stale": "画面が変わりました。最新の内容で操作してください。",
@@ -17239,6 +17357,18 @@
     "compression": "長い内容を短くまとめるために。"
   },
   "routines": {
+    "deliveryLabel": "結果の送信先",
+    "deliveryDirect": "パートナーのチャットに直接表示",
+    "deliveryProcess": "パートナーが処理して返信",
+    "deliveryIm": "メッセージボットで送信",
+    "deliveryNone": "実行タスクにのみ保存",
+    "deliveryHint": "直接表示では追加のモデル呼び出しは行いません。静かなチェックでは、変化がない場合は送信しません。",
+    "deliveryRecipient": "送信先",
+    "deliveryUnavailable": "送信先を利用できません",
+    "deliveryNoRecipients": "メッセージボットを接続して一度チャットした後、この設定を開き直してください。",
+    "deliveryFailed": "実行完了・送信失敗",
+    "deliveryFailedHint": "結果は保存されています。送信設定を確認してください。再送のために処理を再実行しないでください。",
+    "deliveryDelivered": "結果を送信しました",
     "onEvent": "イベント：{{source}} · {{event}}",
     "triggerDetails": "実行条件を表示（{{count}} 件・いずれかで実行）",
     "noTriggers": "実行条件は未設定",
@@ -18386,7 +18516,18 @@
     "cardTitle": "{{title}} · $t(mcpApps.appName)",
     "messageSource": "$t(mcpApps.appName)「{{name}}」から送信",
     "serverId": "MCP サーバー ID：{{id}}",
-    "exitFullscreen": "全画面表示を終了"
+    "exitFullscreen": "全画面表示を終了",
+    "pluginTrust": {
+      "unverified": "未検証",
+      "cindy-official": "Cindy 公式",
+      "reviewed": "審査済み",
+      "verified-publisher": "公開元確認済み"
+    },
+    "pluginRevoked": "プラグインが無効化または変更されたため、このページは使用できません。",
+    "pluginCspRejected": "ページが未宣言のドメインを要求したため、読み込みを拒否しました。",
+    "filesOnExecutionComputer": "ファイルの内容は実行側のコンピューターで確認してください",
+    "awaitingApproval": "確認を待っています",
+    "pendingApprovals": "{{count}} 件の確認待ち"
   },
   "richAnswer": {
     "send": "メッセージを送信",
@@ -18457,5 +18598,47 @@
     "groupHint": "オフにすると、このグループ経由のすべてのタスクは通常速度になります。Ultrafast も対象です。",
     "pending": "一部のコンピューターが設定を確認していません。接続を維持し、この設定に対応していないグループ内のコンピューターを更新してください。",
     "saveFailed": "設定は保存された可能性がありますが、一部の実行中タスクが通常速度への切り替えを確認していません。接続を確認して再試行してください。"
+  },
+  "usageCost": {
+    "title": "費用の内訳",
+    "conversation": "チャット",
+    "additional": "追加費用",
+    "unknownModel": "モデル未記録",
+    "estimate": "推定価値",
+    "charged": "従量料金",
+    "loading": "内訳を読み込み中…",
+    "unavailable": "この記録の内訳は取得できません。",
+    "explanation": "モデルと経路別に集計します。サブスクリプションの価値は推定であり、追加請求ではありません。記録済みの費用のみを含み、過去の内訳は不完全な場合があります。",
+    "source": {
+      "subscription": "サブスクリプション",
+      "cindy-ai": "Cindy AI",
+      "provider": "API プロバイダー",
+      "unknown": "経路未記録"
+    }
+  },
+  "performanceTrace": {
+    "title": "パフォーマンスの記録",
+    "start": "記録を開始",
+    "stop": "記録を停止",
+    "description": "開始後、遅くなる操作を再現してから記録を停止してください。60 秒後に自動で終了します。ローカルのトレースにはパスなどの機密情報が含まれる場合があります。",
+    "localScope": "このコンピューターのみを記録します。他のコンピューターやスマートフォンは含まれません。",
+    "recording": "記録中 · {{seconds}} 秒",
+    "saving": "記録を保存中…",
+    "result": "パフォーマンスレポート",
+    "previous": "前回のレポートを表示",
+    "previousResult": "前回のパフォーマンスレポート",
+    "previousSummary": "前回の記録：{{time}}、{{seconds}} 秒間。",
+    "resultDescription": "動作の遅延を調査するため、完全なパフォーマンスレポート、CPU プロファイル、Chromium トレース、入力した説明を送信します。識別できる認証情報やメールアドレスなどの機密情報はアップロード前にマスキングされます。ファイルにはローカルパスやパフォーマンスマーカーが含まれる場合があります。ローカルの元ファイルは 7 日間保存されます。",
+    "summary": "{{seconds}} 秒間記録しました。",
+    "partial": "一部のデータを取得できなかったか、上限に達しました。取得済みの記録は保持されています。",
+    "note": "そのとき何をしていましたか？（任意）",
+    "submit": "レポートを送信",
+    "keepLocal": "ローカルファイルを表示",
+    "close": "閉じる",
+    "new": "もう一度記録",
+    "uploaded": "パフォーマンスレポートのファイルをアップロードしました。レポート番号：{{id}}。問題を報告する際にこの番号を添えてください。",
+    "unavailable": "このビルドにはレポートの送信先が設定されていません。ローカルファイルを開いてサポートに共有できます。",
+    "consent": "設定でプライバシーポリシーに同意してから送信してください。ローカルファイルは保持されています。",
+    "failed": "操作が完了しませんでした。再試行するか、ローカルファイルを確認してください。"
   }
 }

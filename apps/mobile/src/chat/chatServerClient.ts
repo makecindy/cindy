@@ -1,10 +1,11 @@
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-preset';
+import { parseChatInvitationToken } from '@cindy/device-link';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
-import { chatGroupMemberName as memberName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
 import i18next from 'i18next';
@@ -12,6 +13,37 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/locale';
 import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
 import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
 import type { RemoteSerializedAttachment } from '@/session/types';
+
+export interface MobileChatInviteMemberAvatar { avatar: string | null; initial: string }
+
+/** Preview-only fields are optional for older Chat Servers. Never infer count from an avatar. */
+export interface MobileChatInvitePreview {
+  groupId: string; name: string; inviterName: string; joined: boolean;
+  expiresAt?: string | null; reusable?: boolean;
+  avatar?: string | null; memberCount?: number;
+  /** At most five joined members in server order; not the total member count. */
+  memberAvatars?: MobileChatInviteMemberAvatar[];
+}
+function invitationToken(link: string) {
+  const token = parseChatInvitationToken(link);
+  if (!token) throw new Error('INVALID_INVITATION_LINK');
+  return token;
+}
+function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePreview {
+  if (!value || typeof value.name !== 'string' || typeof value.inviterName !== 'string' || typeof value.joined !== 'boolean'
+    || (value.expiresAt !== undefined && value.expiresAt !== null && (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt))))
+    || (value.reusable !== undefined && typeof value.reusable !== 'boolean')
+    || (value.expiresAt === null && value.reusable !== true)) throw new Error('INVALID_CHAT_RESPONSE');
+  return { groupId: chatId(value.groupId), name: value.name, inviterName: value.inviterName, joined: value.joined,
+    expiresAt: value.expiresAt, reusable: value.reusable,
+    ...(Array.isArray(value.memberAvatars) ? { memberAvatars: value.memberAvatars.slice(0, 5).map(member => ({
+      avatar: member && typeof member.avatar === 'string' ? member.avatar : null,
+      initial: member && typeof member.initial === 'string' ? member.initial : '',
+    })) } : {}),
+    // Optional metadata can be absent on old servers; malformed metadata is unknown, never zero.
+    ...(typeof value.avatar === 'string' || value.avatar === null ? { avatar: value.avatar } : {}),
+    ...(Number.isSafeInteger(value.memberCount) && value.memberCount! >= 0 ? { memberCount: value.memberCount } : {}) };
+}
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
@@ -23,6 +55,9 @@ export interface ChatMember {
   id: string; kind: 'human' | 'bot' | 'integration'; name: string; state: string;
   ownerActorId: string; ownerName: string; avatar: string | null;
   role: 'owner' | 'admin' | 'member' | 'guest';
+  /** Group-scoped identity and grants; older servers omit them. */
+  displayName?: string; nickname?: string | null; groupAvatar?: string | null; defaultAvatarUrl?: string | null;
+  guestAccess?: 'none' | 'chat' | 'tools'; accessRevision?: number;
 }
 export interface ChatMessage {
   maskAttribution?: BotGroupMessageView['maskAttribution'];
@@ -52,8 +87,22 @@ export interface ChatCapabilities { companionHome: boolean }
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
-  | { type: 'update'; expectedRevision: number; name?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean }
-  | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' };
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean }
+  | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' }
+  /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
+  | { type: 'nickname'; actorId: string; nickname: string | null }
+  | { type: 'avatar'; actorId: string; avatar: string | null }
+  | { type: 'transfer'; actorId: string }
+  | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number };
+
+/** Same routes as Desktop's chatServer.manage; update/member keep their original bodies. */
+const SETTINGS_ROUTES: Record<ChatGroupSettingsAction['type'], [string, 'POST' | 'PATCH']> = {
+  update: ['', 'PATCH'], member: ['/members', 'POST'], nickname: ['/nickname', 'POST'], avatar: ['/nickname', 'POST'],
+  transfer: ['/transfer', 'POST'], botAccess: ['/bot-access', 'POST'],
+};
+
+export interface ChatInviteLink { link: string; expiresAt: string | null; reusable?: boolean }
+const INVITE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 /** Prefer an owned owner, then the human's admin role, as on Desktop. */
 export function chatGroupManager(snapshot: ChatSnapshot, self: string) {
@@ -226,7 +275,8 @@ export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView,
 }
 
 function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
-  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.avatar), avatarColor: '' };
+  // The group avatar wins in its group, as on Desktop.
+  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
 }
 
 /**
@@ -239,7 +289,13 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
     ...chatMemberIdentity(member, ownerMembers), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
-    isOwned: member.ownerActorId === selfId, role: member.role,
+    isOwned: member.ownerActorId === selfId, role: member.role, ownerActorId: member.ownerActorId,
+    ...(member.displayName !== undefined ? { displayName: member.displayName } : {}),
+    ...(member.nickname !== undefined ? { nickname: member.nickname } : {}),
+    ...(member.groupAvatar !== undefined ? { groupAvatar: member.groupAvatar } : {}),
+    ...(member.defaultAvatarUrl !== undefined ? { defaultAvatarUrl: member.defaultAvatarUrl } : {}),
+    ...(member.guestAccess ? { guestAccess: member.guestAccess, accessRevision: member.accessRevision } : {}),
+    ...(member.kind === 'bot' && room.kind !== 'direct' ? { ownerName: chatGroupOwnerName(member, ownerMembers) } : {}),
     ...(member.ownerActorId === selfId && member.kind === 'bot'
       ? { homeDeviceId: actors.find(actor => actor.id === member.id)?.homeDeviceId ?? null } : {}),
     status: 'active',
@@ -336,6 +392,8 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   return { id: room.id, conversationKind: room.kind === 'direct' ? 'direct' : 'group',
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
+    // Invite links are created by an owner or admin this account controls, as on Desktop.
+    canInvite: room.kind !== 'direct' && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && ['owner', 'admin'].includes(member.role)),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
@@ -395,22 +453,35 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsListRemoval = false;
   let singleSpeaker = false;
   let personalMask = false;
+  let supportsMemberAvatar = false;
   let lastIdentity: { id: string; at: number } | undefined;
   let readingIdentity: Promise<string> | undefined;
   async function identity() {
     if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
     return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number } }>('/me');
+      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number } }>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       personalMask = me.capabilities?.personalMask === 1;
+      supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
       const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
       return id;
     })().finally(() => { readingIdentity = undefined; });
   }
   return {
+    async previewInvite(link: string, signal?: AbortSignal): Promise<MobileChatInvitePreview> {
+      return invitationPreview(await request<MobileChatInvitePreview>('/invite-links/preview', 'POST', { token: invitationToken(link) }, undefined, signal));
+    },
+    async acceptInvite(link: string, operationId: string, signal?: AbortSignal): Promise<{ groupId: string }> {
+      const token = invitationToken(link);
+      if (!/^[a-zA-Z0-9_.:-]{8,160}$/.test(operationId)) throw new Error('INVALID_OPERATION_ID');
+      const result = await request<{ groupId: string }>('/invite-links/accept', 'POST', { token, operationId }, undefined, signal);
+      const groupId = chatId(result?.groupId);
+      this.invalidateHistory(groupId, true);
+      return { groupId };
+    },
     invalidateHistory(room: string, metadata = false) {
       if (metadata) for (const key of threadFailures.keys()) if (key.startsWith(`${room}:`)) threadFailures.delete(key);
       void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },
@@ -435,7 +506,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -443,12 +514,27 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       if (snapshot.room.id !== roomId || snapshot.room.kind !== 'group' || !Array.isArray(snapshot.members)) throw new Error('INVALID_CHAT_SNAPSHOT');
       return { snapshot, self, manager: chatGroupManager(snapshot, self) };
     },
-    /** The server rechecks the selected owned actor's live role for every write. */
-    async manageGroup(roomId: string, managerId: string, action: ChatGroupSettingsAction, operationId: string) {
-      const path = `/conversations/${chatId(roomId)}`;
-      const { type, ...body } = action;
-      return request(type === 'member' ? `${path}/members` : path, type === 'member' ? 'POST' : 'PATCH',
-        { operationId, ...body }, chatId(managerId));
+    /**
+     * The server rechecks the selected owned actor's live role for every write. Your own
+     * identity, grants and teammates are written as yourself (no `managerId`).
+     */
+    async manageGroup(roomId: string, managerId: string | undefined, action: ChatGroupSettingsAction, operationId: string) {
+      const [route, method] = SETTINGS_ROUTES[action.type];
+      const { type: _type, ...body } = action;
+      return request(`/conversations/${chatId(roomId)}${route}`, method, { operationId, ...body }, managerId ? chatId(managerId) : undefined);
+    },
+    /** A reusable or expiring join link; only an owner or admin may create one. */
+    async createInvite(roomId: string, managerId: string, operationId: string): Promise<ChatInviteLink> {
+      const invite = await request<{ token?: unknown; expiresAt?: unknown; reusable?: unknown }>(`/conversations/${chatId(roomId)}/invite-links`, 'POST', { operationId }, chatId(managerId));
+      const expiresAt = typeof invite?.expiresAt === 'string' && Number.isFinite(Date.parse(invite.expiresAt)) ? invite.expiresAt : invite?.expiresAt === null ? null : undefined;
+      const reusable = typeof invite?.reusable === 'boolean' ? invite.reusable : undefined;
+      if (typeof invite?.token !== 'string' || !INVITE_TOKEN.test(invite.token) || expiresAt === undefined || (expiresAt === null && reusable !== true)) throw new Error('CHAT_RESPONSE_INVALID');
+      return { link: `cindy://chat-invite/${invite.token}`, expiresAt, ...(reusable !== undefined ? { reusable } : {}) };
+    },
+    async revokeInvite(roomId: string, managerId: string, link: string, operationId: string) {
+      const token = link.replace(/^cindy:\/\/chat-invite\//, '');
+      if (!INVITE_TOKEN.test(token)) throw new Error('INVALID_INVITE_LINK');
+      await request(`/conversations/${chatId(roomId)}/invite-links/revoke`, 'POST', { token, operationId }, chatId(managerId));
     },
     async syncListState(force = false) {
       await identity();

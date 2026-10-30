@@ -1704,7 +1704,9 @@
     }
   },
   "settings": {
-    "newChatDefaults": { "title": "Default permission for new tasks" },
+    "newChatDefaults": {
+      "title": "Default permission for new tasks"
+    },
     "imConnection": {
       "reconnect": "Reconnect",
       "savedNote": "Your saved binding is retained. You can retry the connection.",
@@ -2299,7 +2301,7 @@
         "title": "Close Cindy",
         "message": "What should happen when you close the main window?",
         "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings.",
-        "linuxDetail": "Tasks keep running while the window is minimized. Restore Cindy from the taskbar or window overview, or change this choice later in Settings."
+        "linuxDetail": "Tasks keep running with the window out of the way. Open Cindy again to bring the window back, or change this choice later in Settings."
       },
       "trayMenu": {
         "show": "Open Cindy",
@@ -2493,7 +2495,7 @@
         "description": "Ubuntu uses system .deb packages. Arch Linux and Omarchy use the managed user installer with the same verified .deb payload, without a Debian package manager.",
         "item1": "Ubuntu: use sudo apt install ./cindy-<version>-<arch>.deb. Arch/Omarchy: follow the user-install guide in docs/linux.md.",
         "item2": "After choosing Update, system .deb installs request authorization; managed user installs switch versions without a system password. Other package-managed installs use their package manager.",
-        "item3": "Linux x64 supports the Beta channel; arm64 does not yet. Linux updates are applied only when you choose to restart, never automatically while idle."
+        "item3": "Linux x64 and arm64 support the Beta channel. Linux updates are applied only when you choose to restart, never automatically while idle."
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "Still need help? Ask how to do what you have in mind.",
@@ -3873,7 +3875,7 @@
           "contextLimitOverWindow": "Above the provider’s declared window; requests may fail.",
           "restoreDefault": "Restore default",
           "engines": "Engine support",
-          "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
+          "enginesHint": "Compatibility mode converts requests locally in Cindy. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
           "engineNotConfigured": "Not configured",
           "engineNoFast": "No Fast",
@@ -3912,10 +3914,10 @@
           "protocol": {
             "reference": "Native API",
             "compatibility": "Compatibility mode",
-            "compatibilityHint": "Compatibility mode may be unstable or behave unexpectedly. Recommended for experienced users.",
-            "matching": "Native support",
+            "compatibilityHint": "Cindy converts requests locally. This may be unstable or behave unexpectedly. Recommended for experienced users.",
             "unknown": "Protocol unconfirmed",
-            "automatic": "Automatic"
+            "automatic": "Automatic",
+            "upstream": "Upstream APIs"
           },
           "lifecycle": {
             "alpha": "Early access",
@@ -4042,9 +4044,7 @@
         "metaOAuth": "Subscription account",
         "metaApiKey": "API key",
         "metaNoAuth": "Local / self-hosted · no authentication",
-        "customTitle": "Custom endpoint",
-        "customMeta": "Connect any OpenAI / Anthropic compatible source",
-        "pickHint": "Choose the account or service to connect.",
+        "customAction": "Not listed? Add custom",
         "oauthDesc": "Sign in through your browser. No API key required.",
         "deviceOAuthDesc": "Authorize on the provider's verification page with a one-time device code",
         "authorizeInBrowser": "Authorize in browser",
@@ -7545,8 +7545,8 @@
         "updated": "Updated",
         "unchanged": "{{count}} other permissions unchanged",
         "noChange": "No permission changes.",
-        "pick": "Can ask you to pick a folder for it",
-        "pickDetail": "When it asks, Cindy shows the system folder picker; you decide what to share, and cancelling gives it nothing.",
+        "pick": "Can ask you to choose files or a folder",
+        "pickDetail": "Cindy opens a system picker when the plugin asks. You decide what to share; cancelling gives the plugin nothing.",
         "workspace": "Can ask to create a session entry for a project folder in the sidebar",
         "workspaceDetail": "When it asks, you either pick the folder yourself or see the full path on a confirmation card before deciding; while it is handling a call you started, subfolders inside the current session's working directory are used directly without an extra prompt. Folders that already have a session are reused, and what gets created is an empty session — nothing starts running on its own.",
         "sessionContext": "Can learn which project folder the current session is working in",
@@ -7560,7 +7560,11 @@
         "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
         "skill": "Adds the skill \"{{name}}\" to your AI assistants",
         "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-        "routineEvents": "Routine Events"
+        "routineEvents": "Routine Events",
+        "mcpUi": "Display interactive pages in the conversation",
+        "mcpUiDomains": "Page network domains: {{domains}}",
+        "mcpAppOnly": "Page only",
+        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -7939,8 +7943,9 @@
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience. Your calls below count only this account on this computer."
       },
       "contribution": {
-        "unreadReview": "New review result",
+        "unreadReview": "New plugin result",
         "viewReviewResult": "View review result for {{version}}",
+        "viewMarketResult": "View Market Result",
         "anonymous": "Publish anonymously",
         "anonymousHint": "Hide public attribution for the entire plugin. When disabled, each version shows the original author’s name saved when it was submitted.",
         "anonymousAuthorOnly": "Only the original author can change this",
@@ -8036,6 +8041,7 @@
           "rejected": "Returned",
           "enabled": "Published",
           "disabled": "Unlisted",
+          "archived": "Archived",
           "current_changed": "Community Version Changed",
           "revoked": "Version Revoked",
           "cancelled": "Cancelled"
@@ -8133,6 +8139,14 @@
         "viewPendingVersion": "View version under review",
         "submitFailed": "Submission failed",
         "viewDetails": "View details"
+      },
+      "fileTransfer": {
+        "reading": "Reading files",
+        "uploading": "Uploading",
+        "saving": "Saving file",
+        "importing": "Importing files",
+        "finished": "File operation finished",
+        "importFinished": "File import finished"
       }
     },
     "mcp": {
@@ -10301,6 +10315,7 @@
       "backToBot": "Back to {{name}}"
     },
     "collab": {
+      "deliveryFailed": "The result could not be delivered to the original chat. It is saved in this session.",
       "backgroundTask": "Background task",
       "trackedTask": "Runs independently and returns its result",
       "stopTask": "Stop task",
@@ -10435,7 +10450,9 @@
         "digestSent": "Sent to your teammate chat",
         "digestFailed": "Could not summarize. Try again.",
         "digestEmpty": "Nothing new to summarize",
-        "joinSetup": "Set up AI replies after joining"
+        "joinSetup": "Set up AI replies after joining",
+        "hours": "Reply hours",
+        "ownerOnly": "Only you can see and change these settings."
       },
       "migrationPending": "Some earlier history is still uploading. It will retry automatically; this chat remains available.",
       "memberSeparator": ", ",
@@ -10632,8 +10649,6 @@
         "projectDirChange": "Change Folder",
         "projectDirClear": "Clear Folder",
         "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
-        "handoff": "Step handoffs",
-        "autoContinueNote": "When on, work splits you start in this group move on to the next step by themselves. When off, each step waits until you click “Start Next Step”. Applies on this computer only.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again."
       },
@@ -10829,12 +10844,7 @@
           "member": "Member",
           "guest": "Guest",
           "companionOf": "{{name}}’s companion",
-          "guestAccess": "Access for other members",
           "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
-          "chatHint": "Uses group messages only. No owner memory, private information or tools.",
-          "none": "Owner only",
-          "chat": "Group conversation only",
-          "tools": "Owner authorized tools and information",
           "ownerOnly": "Only this companion’s owner can change this grant.",
           "authorizeTitle": "Allow this group to use {{name}}’s tools and information?",
           "makeAdmin": "Make admin",
@@ -10844,7 +10854,6 @@
           "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
-          "addCompanion": "Invite my companion",
           "leave": "Leave group",
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
@@ -10856,10 +10865,78 @@
           "unarchive": "Unarchive group",
           "unarchiveHint": "Resume messages and companion activity.",
           "archived": "This group is archived. History is still available.",
-          "noneHint": "Only the companion’s owner can ask it to respond in this group.",
-          "companionPermissions": "Companion permissions",
-          "configureCapabilities": "Tools and access settings",
-          "capabilityScope": "These are {{name}}’s own tools and access, not settings for this group only."
+          "capabilityScope": "These are {{name}}’s own tools and access, not settings for this group only.",
+          "tabSettings": "Settings",
+          "youAreOwner": "You're the owner",
+          "youAreAdmin": "You're an admin",
+          "inviteEntry": "Invite",
+          "inviteFriendsItem": "Invite people",
+          "inviteFriendsItemHint": "Get a link to share",
+          "inviteFriendsLocked": "Only the owner and admins can invite people",
+          "inviteBotsItem": "Add teammates",
+          "inviteBotsItemHint": "Pick from your teammates",
+          "searchTeammates": "Search teammates",
+          "inviteBotsCount": "{{count}} can be added",
+          "inviteBotsAllIn": "All your teammates are already here",
+          "inviteBotsNoMatch": "No teammates match “{{query}}”",
+          "inviteBotsAdded": "Added {{name}} to the group",
+          "noTeammates": "You don't have a teammate yet",
+          "createTeammate": "Create teammate",
+          "back": "Back to Group Settings",
+          "about": "About",
+          "edit": "Edit",
+          "add": "Add",
+          "aboutEmpty": "Add a topic and description so new members know what this group is for.",
+          "showMore": "Show more",
+          "showLess": "Show less",
+          "you": "You",
+          "searchMembers": "Search members",
+          "membersNoMatch": "No members match “{{query}}”",
+          "teammateTag": "Teammate",
+          "paused": "Paused",
+          "accessNone": "Owner only",
+          "accessChat": "Group chat only",
+          "accessTools": "Can use tools and info",
+          "replies": "How teammates reply",
+          "replyModeMentionedNote": "Teammates stay quiet unless someone @mentions them.",
+          "work": "Work splits",
+          "ownFolder": "Group's own folder",
+          "projectDirHint": "Where teammates work during a work split.",
+          "projectDirClearHint": "Use the group's own folder instead",
+          "organizerHint": "Decides who does each step. Defaults to the first teammate.",
+          "autoContinueHint": "When off, each step waits for you to continue.",
+          "workCaption": "With a git project, each work split gets its own branch, so your code stays untouched. The project folder and automatic handoffs apply on this computer only.",
+          "me": "You in this group",
+          "profileHint": "Group nickname and photo, shown only here",
+          "maskHint": "Your teammate replies when someone @mentions you",
+          "myTeammates": "Your teammates",
+          "myTeammatesCaption": "Choose how other members can use your teammates.",
+          "manage": "Group management",
+          "manageHintOwner": "Replies, organizer, work splits, archive and dissolve",
+          "manageHintAdmin": "Replies, organizer, work splits and archive",
+          "manageCaption": "Only the owner and admins can see this page.",
+          "hideHint": "Stay in the group, just hide it from your list",
+          "leaveRowHint": "Your teammates leave with you",
+          "leaveRowHintAlone": "You'll stop getting messages and lose access to the history",
+          "leaveBlocked": "Transfer ownership before you leave",
+          "archiveRowHint": "Pauses the group for everyone; history is kept",
+          "unarchiveRowHint": "Resume messages and teammate work",
+          "dissolveRowHint": "Can't be undone; no one can send messages",
+          "editTitle": "Edit Group Info",
+          "topicHint": "Shown first in the About section",
+          "descriptionHint": "Teammates read the latest description every time they reply.",
+          "companionTitle": "{{name}} in this group",
+          "yourTeammate": "Your teammate",
+          "accessQuestion": "How can other members use {{name}}?",
+          "defaultTag": "Default",
+          "accessNoneTitle": "Only you",
+          "accessNoneHint": "Only you can ask {{name}} to respond here.",
+          "accessChatTitle": "Group conversation only",
+          "accessChatHint": "Answers from group messages only. No access to your memory or private info, and no tools.",
+          "accessToolsTitle": "Tools and information",
+          "accessToolsHint": "Can use {{name}}'s existing tools and your private info. Results are visible to everyone. Approvals still apply; finished actions can't be undone after you revoke access.",
+          "capabilitiesRow": "{{name}}'s tools and access",
+          "accessMenu": "Permissions here"
         }
       },
       "lifecycle": {
@@ -12454,6 +12531,13 @@
         "busy": "Repository is busy. Try again later",
         "changed": "The checked-out branch changed. Retry."
       }
+    },
+    "pluginUi": {
+      "title": "Plugin “{{name}}” added interactive pages. Review them to enable them.",
+      "enable": "Review and enable",
+      "later": "Later",
+      "ready": "Interactive pages are enabled for the next plugin tool call.",
+      "updateHost": "Update Cindy on the execution computer to approve interactive pages here."
     }
   },
   "onboarding": {
@@ -14386,8 +14470,8 @@
         "ghMissing": "GitHub CLI (gh) not found on this machine, so PR status is unavailable",
         "notFound": "PR not found, or the current account cannot view it",
         "statusUnknown": "Failed to fetch status",
+        "statusNotFetched": "Status not loaded yet",
         "openAria": "Open PR #{{number}} in browser",
-        "clickToOpen": "Click to open the PR in your browser",
         "guidance": {
           "login": {
             "hint": "Click to connect GitHub",
@@ -14475,7 +14559,40 @@
             "otherMethods": "Other connection methods"
           }
         },
-        "unresolved": "Unresolved review threads: {{count}}"
+        "unresolved": "Unresolved review threads: {{count}}",
+        "summaryAria": "View PR #{{number}} Summary",
+        "unresolvedLabel": "Unresolved Review Threads",
+        "checks": "Checks",
+        "checksTotal": "{{count}} total",
+        "failed": "Failed",
+        "passed": "Passed",
+        "pending": "Pending",
+        "skippedLabel": "Skipped or neutral",
+        "manage": {
+          "title": "Manage PR Links",
+          "hint": "Up to 3 in the header; pinned PRs appear first",
+          "empty": "Paste a GitHub PR link to add it",
+          "removed": "Removed: {{count}}",
+          "addLabel": "Add PR Link",
+          "add": "Add PR",
+          "loading": "Loading…",
+          "restore": "Restore PR",
+          "pin": "Pin to Header",
+          "unpin": "Unpin PR",
+          "pinLimit": "Pin up to 3 PRs",
+          "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
+          "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+          "remove": "Remove PR",
+          "errors": {
+            "duplicate": "This PR is already linked; restore removed links from the list",
+            "notFound": "PR not found or access denied",
+            "invalidUrl": "Enter a valid GitHub PR link",
+            "reorderFailed": "The order was not saved. Please try again.",
+            "verifyFailed": "Could not verify the PR; check GitHub sign-in and access",
+            "unsupported": "This computer’s version does not support managing PR links",
+            "failed": "Could not update PR links"
+          }
+        }
       }
     },
     "schedule": {
@@ -15591,6 +15708,7 @@
       "embedded-frame": "These fields are inside another site embedded in the page. Make sure the source is trusted."
     },
     "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
+    "agentPicture": "This code is from a screenshot the agent took, so Cindy can't see the original screen or tell when you're done. Check that it leads to the site you mean to sign in to, and choose Hand Back to Agent after scanning.",
     "error": {
       "decision": "That didn't go through. Try again.",
       "stale": "The screen has changed. Use the latest version.",
@@ -17296,6 +17414,18 @@
     "compression": "For condensing lengthy content."
   },
   "routines": {
+    "deliveryLabel": "Final delivery",
+    "deliveryDirect": "Show directly in companion chat",
+    "deliveryProcess": "Ask companion to process and reply",
+    "deliveryIm": "Send through a messaging bot",
+    "deliveryNone": "Keep in the execution task only",
+    "deliveryHint": "Direct delivery uses no extra model call. Quiet checks still suppress idle results.",
+    "deliveryRecipient": "Recipient",
+    "deliveryUnavailable": "Destination unavailable",
+    "deliveryNoRecipients": "Connect a messaging bot and chat with it, then reopen these settings.",
+    "deliveryFailed": "Completed, delivery failed",
+    "deliveryFailedHint": "The result is saved. Check the delivery settings; do not rerun the work just to resend it.",
+    "deliveryDelivered": "Result delivered",
     "onEvent": "Event: {{source}} · {{event}}",
     "triggerDetails": "View triggers ({{count}}; any can start a run)",
     "noTriggers": "No triggers set",
@@ -18447,7 +18577,18 @@
     "cardTitle": "{{title}} · $t(mcpApps.appName)",
     "messageSource": "Sent by $t(mcpApps.appName) “{{name}}”",
     "serverId": "MCP Server ID: {{id}}",
-    "exitFullscreen": "Exit Fullscreen"
+    "exitFullscreen": "Exit Fullscreen",
+    "pluginTrust": {
+      "unverified": "Unverified",
+      "cindy-official": "Cindy official",
+      "reviewed": "Reviewed",
+      "verified-publisher": "Verified publisher"
+    },
+    "pluginRevoked": "The plugin was disabled or changed. This page is no longer available.",
+    "pluginCspRejected": "The page requested an undeclared domain and was blocked.",
+    "filesOnExecutionComputer": "View file contents on the execution computer",
+    "awaitingApproval": "Waiting for your approval",
+    "pendingApprovals": "{{count}} pending approvals"
   },
   "richAnswer": {
     "send": "Send Message",
@@ -18518,5 +18659,47 @@
     "groupHint": "When off, all tasks routed through this group use standard speed, including Ultrafast.",
     "pending": "Some computers have not confirmed the setting. Keep them connected and update group computers that do not support this setting.",
     "saveFailed": "The setting may be saved, but some running tasks have not confirmed standard speed. Check the connection and retry."
+  },
+  "usageCost": {
+    "title": "Cost details",
+    "conversation": "Conversation",
+    "additional": "Additional fees",
+    "unknownModel": "Model not recorded",
+    "estimate": "Estimated value",
+    "charged": "Usage charge",
+    "loading": "Loading details…",
+    "unavailable": "Details are unavailable for this record.",
+    "explanation": "Grouped by model and channel. Subscription value is an estimate, not an extra charge. Only recorded costs are included; older records may have incomplete details.",
+    "source": {
+      "subscription": "Subscription",
+      "cindy-ai": "Cindy AI",
+      "provider": "API provider",
+      "unknown": "Channel not recorded"
+    }
+  },
+  "performanceTrace": {
+    "title": "Performance Trace",
+    "start": "Start recording",
+    "stop": "Stop recording",
+    "description": "Record the slow action, then stop. Recording ends after 60 seconds. Local traces may contain paths and other sensitive information.",
+    "localScope": "This computer only. Other computers and phones are not recorded.",
+    "recording": "Recording · {{seconds}}s",
+    "saving": "Saving recording…",
+    "result": "Performance report",
+    "previous": "View previous report",
+    "previousResult": "Previous performance report",
+    "previousSummary": "Last recording: {{time}}, {{seconds}} seconds.",
+    "resultDescription": "Submit the full performance report, CPU profiles, Chromium trace, and your description to help diagnose slowdowns. Recognizable credentials, email addresses, and other sensitive data are redacted before upload. Files may still contain local paths and performance markers. Local originals are kept for 7 days.",
+    "summary": "Recorded {{seconds}} seconds.",
+    "partial": "Some data could not be captured or was limited. The available evidence has been kept.",
+    "note": "What were you doing? (optional)",
+    "submit": "Submit report",
+    "keepLocal": "Show local files",
+    "close": "Close",
+    "new": "Record again",
+    "uploaded": "Performance report files uploaded. Report ID: {{id}}. Include this ID when reporting the problem.",
+    "unavailable": "This build has no report upload destination. Open the local files to share them with support.",
+    "consent": "Accept the privacy policy in Settings before submitting. Your local files are preserved.",
+    "failed": "The operation did not finish. Retry or open the local files."
   }
 }

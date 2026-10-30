@@ -21,7 +21,7 @@ import { loadGhostFirstPartyFactsLoader } from '../ghostFirstPartyFacts.js';
 import { authorizeGhostTokenBroker } from '../ghostFirstPartyPrivilege.js';
 import { createGhostInstallReceipt, type GhostInstallReceipt } from '../ghostInstallReceipt.js';
 import { classifyGhostLocalUpdateSource } from '../ghostLocalUpdateSource.js';
-import { confirmedTaskCapability } from '../ghostInstallConsent.js';
+import { confirmedUiCapability, confirmedTaskCapability } from '../ghostInstallConsent.js';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -167,7 +167,7 @@ function harness(
   };
   const manager = {
     list: () => [...installed.values()],
-    inspect: vi.fn(async () => inspected),
+    inspect: vi.fn(async (_path?: string, _source?: 'stored-release') => inspected),
     readApprovedInstallReceipt: vi.fn((id: string, revision: string) =>
       receipts.get(id)?.revision === revision ? receipts.get(id) : null,
     ),
@@ -269,6 +269,7 @@ function harness(
     obtainGhostInstallConsent: vi.fn(async () => ({ action: 'install' })),
     createWindowGhostInstallConsentPrompt: vi.fn(),
     assertGhostInstallConsent: vi.fn(),
+    confirmedUiCapability,
     confirmedTaskCapability,
     withGhostInstallLock: async (_id: string, task: () => unknown) => task(),
     withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
@@ -278,6 +279,7 @@ function harness(
     hasRunningGhostCindyWork: () => false,
     fsSlotSingleton: { hasInFlightRequests: () => options.fsBusy === true },
     networkSlotSingleton: { hasInFlightRequests: () => options.networkBusy === true },
+    stopPluginAppInstance: vi.fn(async () => {}),
     getGhostNodeRuntimeBroker: () => ({ stopAndWait: vi.fn() }),
     getGhostAgentSlot: () => ({ clearGhost: vi.fn() }),
     getGhostErrandSlot: () => ({ clearGhost: vi.fn() }),
@@ -403,6 +405,17 @@ describe('local file recovery and source gates through production IPC callbacks'
     await expect(target.callbacks['ghosts:export']({}, 'filo-local')).resolves.toMatchObject({
       status: 'saved',
     });
+  });
+  // Unit: real export IPC must validate the existing snapshot as stored data.
+  // Existing export cases accepted every inspection; this boundary rejects a
+  // missing historical UI only when mistakenly sent through fresh-install validation.
+  it('exports a historical snapshot whose UI is no longer available', async () => {
+    const target = harness();
+    const inspect = target.manager.inspect.getMockImplementation()!;
+    target.manager.inspect.mockImplementation(async (file, source) => source === 'stored-release'
+      ? inspect(file, source)
+      : { rejection: { code: 'file-invalid', reason: 'mcpApps.ui.resources 文件 ui/page.html 缺失' } } as never);
+    await expect(target.callbacks['ghosts:export']({}, 'filo-local')).resolves.toMatchObject({ status: 'saved' });
   });
   it('does not export a Broker merely because an ordinary root has the same name', async () => {
     const target = harness({ broker: true });

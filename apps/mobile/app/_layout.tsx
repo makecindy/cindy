@@ -87,6 +87,7 @@ import { usePendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { removeLegacyClipboardInvitationHistory } from '@/device-link/legacyClipboardInvitationHistory';
 import { useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { RemoteDesktopHost } from '@/remote-desktop/RemoteDesktopHost';
+import { ChatInviteHost } from '@/chat/ChatInviteHost';
 
 const holdSplash = () => undefined;
 
@@ -219,6 +220,8 @@ function NavigationGate() {
         </RecentMessageHistoriesProvider>
         </McpAppViewsProvider>
       </RemoteDesktopHost>
+      <ChatInviteHost ready={auth.initialized && auth.isAuthenticated
+        && segments[0] !== '(auth)' && segments[0] !== 'add-account'} />
     </NavigationThemeProvider>
   );
 }

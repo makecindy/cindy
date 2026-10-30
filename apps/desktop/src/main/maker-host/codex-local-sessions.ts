@@ -3607,7 +3607,7 @@ function syntheticRowForLocalRecoverySource(source: LocalCodexRecoverySource): S
   return {
     created_at_ms: source.recoveryCreatedAt,
     cwd: source.session.workingDir,
-    originator: 'xdt-maker',
+    originator: 'cindy',
     source: 'cli',
     model: source.session.model,
   };
@@ -3907,6 +3907,7 @@ function extractXdtMessageText(content: string | null): string {
 function buildSyntheticRollout(threadId: string, row: SqlRow, messages: SyntheticRolloutMessage[]): string {
   const createdMs = timestampMs(row.created_at_ms, row.created_at) ?? messages[0]?.createdAt ?? 0;
   const metaIso = isoFromMs(createdMs);
+  const recordedOriginator = stringValue(row.originator);
   const sessionMeta = {
     timestamp: metaIso,
     type: 'session_meta',
@@ -3915,7 +3916,11 @@ function buildSyntheticRollout(threadId: string, row: SqlRow, messages: Syntheti
       id: threadId,
       timestamp: metaIso,
       cwd: stringValue(row.cwd) || os.homedir(),
-      originator: stringValue(row.originator) || 'xdt-maker',
+      // Normalize missing/legacy-Cindy identity to `cindy`, but keep a genuine
+      // external Codex originator: recovery must not silently change the
+      // outbound identity of an imported thread.
+      originator: recordedOriginator && recordedOriginator.toLowerCase() !== 'xdt-maker'
+        ? recordedOriginator : 'cindy',
       // 当前 Codex SessionMeta 反序列化要求这三项存在;未知版本用 0.0.0 明确标记
       // 为恢复生成,provider / base instructions 则用合法的空 Option。
       cli_version: stringValue(row.cli_version) || '0.0.0',

@@ -44,6 +44,7 @@ import { Paperclip, Plus, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { AttachmentRejectionStrip, ThumbnailStrip } from '@/components/new-chat/ComposerAttachments';
+import { ComposerCard, COMPOSER_CONTENT_CLASS } from '@/components/new-chat/ComposerCard';
 import { SendButton } from '@/components/new-chat/SendButton';
 import {
   DropdownMenu,
@@ -65,7 +66,6 @@ import type { AttachedFile } from '@/lib/fileTypes';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
-  BOT_GROUP_COMPOSER_CARD,
   BOT_GROUP_COMPOSER_COLUMN,
   BOT_GROUP_COMPOSER_DOCK,
   BOT_GROUP_COMPOSER_FOOTER,
@@ -543,7 +543,7 @@ export function BotGroupComposer({
           </div>
         ) : null}
         {mention.list}
-        <div className={BOT_GROUP_COMPOSER_CARD}>
+        <ComposerCard className={cn(COMPOSER_CONTENT_CLASS, 'gap-2')}>
           {dragOver ? (
             <div
               data-testid="bot-group-drop-hint"
@@ -725,7 +725,7 @@ export function BotGroupComposer({
               </Tip>
             </span>
           </div>
-        </div>
+        </ComposerCard>
       </div>
     </div>
   );

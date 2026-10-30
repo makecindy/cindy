@@ -314,6 +314,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 因为控制端本地没有远端 session 的 DB、工作目录或 gh 登录态。
   'git-context:get-for-session',
   'git-context:pr-refs:list',
+  'git-context:pr-refs:manage',
   'git-context:pr-status',
   // —— 通用远程资源面——
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider

@@ -646,6 +646,8 @@ export const typeScale = {
   bodyLarge: 17,
   subtitle: 18,
   title: 20,
+  /** 2026-10-28 approved invitation V9 identity, paired with listTitle (28). */
+  inviteTitle: 22,
   headline: 24,
   largeTitle: 30,
   hero: 40,

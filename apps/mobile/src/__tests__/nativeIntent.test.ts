@@ -14,6 +14,7 @@ import {
 } from '@/device-link/providerShareLinkIntent';
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
+import { closeChatInvite, getChatInviteIntent, openManualChatInvite } from '@/chat/chatInviteIntent';
 
 const invitation = 'A'.repeat(43);
 const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
@@ -25,10 +26,90 @@ const relayOwnerKey = 'Q'.repeat(43);
 const relayPairSecret = 'S'.repeat(43);
 const relayUnsignedIncoming = 'cindy://relay/join?u=' + encodeURIComponent('https://relay.home.example:47820/') + '&c=' + relayCode;
 const relayIncoming = relayUnsignedIncoming + '&o=' + relayOwnerKey + '&s=' + relayPairSecret;
-beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); setMobileAuthOwner(null); });
-afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); vi.useRealTimers(); });
+function clearChatInvite() {
+  const pending = getChatInviteIntent();
+  if (pending) closeChatInvite(pending.id);
+}
+beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); setMobileAuthOwner(null); });
+afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  // A2 contract: the actual native entry must redact the invite before routing,
+  // preserve it across login, and never replace an active confirmation. Existing
+  // shared-task/provider tests do not cover group invitations. Unit tier: one
+  // native URL plus account changes, no network, storage or native runtime.
+  it.each([true, false])('receives group invitations without routing their token (initial=%s)', initial => {
+    for (const path of [
+      `cindy://chat-invite/${invitation}`,
+      `cindycn://chat-invite/${invitation}`,
+      `cindydev://chat-invite/${invitation}`,
+      `/chat-invite/${invitation}`,
+      `https://public.example.invalid/dl/chat-invite/join#${invitation}?app=cindycn`,
+      `/dl/chat-invite/join#${invitation}?app=cindydev`,
+    ]) {
+      const route = redirectSystemPath({ path, initial });
+      expect(route).toBe(initial ? '/' : null);
+      expect(getChatInviteIntent()).toMatchObject({ link: `cindy://chat-invite/${invitation}`, hasOtherInvitation: false });
+      expect(getPendingSharedTaskInvitationIntent()).toBeNull();
+      clearChatInvite();
+    }
+  });
+
+  it('shows the local format result without retaining malformed input or selecting its server', () => {
+    for (const path of [
+      'cindy://chat-invite/short',
+      `cindycn://chat-invite/${invitation}?secret=fixture`,
+      `cindydev://chat-invite/${invitation}#fixture`,
+      `other://chat-invite/${invitation}`,
+      `cindy://CHAT-INVITE/${invitation}`,
+      `/chat-invite/join#${invitation}?app=other`,
+      `https://user@public.example.invalid/chat-invite/join#${invitation}`,
+      `http://public.example.invalid/chat-invite/join#${invitation}`,
+      `/chat-invite/join?token=${invitation}`,
+    ]) {
+      expect(redirectSystemPath({ path, initial: false })).toBeNull();
+      expect(getChatInviteIntent()).toMatchObject({ link: 'cindy://chat-invite/' });
+      clearChatInvite();
+    }
+  });
+
+  it('retains the original group target through unsuccessful login and account changes until closed', () => {
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: true });
+    const target = getChatInviteIntent()!;
+    redirectSystemPath({ path: 'cindy://auth?error=access_denied', initial: false });
+    expect(getChatInviteIntent()).toBe(target);
+    setMobileAuthOwner('first');
+    invalidateMobileAuthOwnerForSwitch();
+    setMobileAuthOwner('second', 'cn');
+    expect(getChatInviteIntent()).toBe(target);
+    closeChatInvite(target.id);
+    expect(getChatInviteIntent()).toBeNull();
+  });
+
+  it('deduplicates a group link and leaves a different invitation to be reopened', () => {
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    const target = getChatInviteIntent()!;
+    redirectSystemPath({ path: `cindycn://chat-invite/${invitation}`, initial: false });
+    expect(getChatInviteIntent()).toBe(target);
+    redirectSystemPath({ path: `cindy://chat-invite/${shareInvitation}`, initial: false });
+    expect(getChatInviteIntent()).toEqual({ ...target, hasOtherInvitation: true });
+    closeChatInvite(target.id);
+    expect(getChatInviteIntent()).toBeNull(); // No pending FIFO is exposed after closing.
+  });
+
+  it('shares manual entry with the external host and ignores a stale close callback', () => {
+    openManualChatInvite();
+    const manual = getChatInviteIntent()!;
+    openManualChatInvite();
+    expect(getChatInviteIntent()).toBe(manual);
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    expect(getChatInviteIntent()).toEqual({ ...manual, hasOtherInvitation: true });
+    closeChatInvite(manual.id);
+    redirectSystemPath({ path: `cindy://chat-invite/${invitation}`, initial: false });
+    closeChatInvite(manual.id);
+    expect(getChatInviteIntent()?.link).toBe(`cindy://chat-invite/${invitation}`);
+  });
+
   it('keeps the invitation out of router state, survives login, and clears on an account change', () => {
     expect(redirectSystemPath({ path: incoming, initial: true })).toBe('/shared-session');
     expect(getPendingSharedTaskInvitationIntent()).toMatchObject({ invitation, server: 'https://relay.example.test' });

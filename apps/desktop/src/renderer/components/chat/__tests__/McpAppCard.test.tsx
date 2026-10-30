@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   controllers: [] as Array<{
     open: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    context: ReturnType<typeof vi.fn>;
     displayMode: ReturnType<typeof vi.fn>;
     message: (message: { method: string; params?: Record<string, unknown> }) => void;
     fail: (error: unknown) => void;
@@ -33,8 +34,10 @@ vi.mock('@/components/ui/button', () => ({
     <button {...props}>{children}</button>
   ),
 }));
+vi.mock('../McpAppPermissionPrompt', () => ({ McpAppPermissionPrompt: () => null }));
 vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
-vi.mock('@cindy/maker-shared/mcp-app-controller', () => ({
+vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
+  ...await importOriginal<typeof import('@cindy/maker-shared/mcp-app-controller')>(),
   mcpAppFailureKey: () => 'mcpApps.loadFailed',
   McpAppController: class {
     open = vi.fn(async () => {
@@ -351,5 +354,122 @@ it.each(['light', 'dark'])('keeps the live App mounted while entering and leavin
     await act(async () => root.unmount());
     container.remove();
     document.documentElement.classList.remove('dark');
+  }
+});
+
+// unit: #7924 / 4422987779. The real card must follow incremental content growth
+// without echoing height-only context; the old test misclassified eight growing
+// notifications as feedback. Alternating sizes and the 5000px cap remain bounded.
+it.each(['rising', 'oscillating'])('follows %s sizes without echoing height-only context or closing the View', async pattern => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  let resize!: () => void;
+  let options: IntersectionObserverInit | undefined;
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void, init?: IntersectionObserverInit) { options = init; }
+    observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="card" title="App" />));
+    expect(options?.rootMargin).toBe('80px 0px');
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const controller = state.controllers[0];
+    expect(controller.open).toHaveBeenCalledWith(expect.objectContaining({ containerDimensions: { width: 0, maxHeight: 5000 } }));
+    for (let i = 0; i < 10; i++) await act(async () => {
+      controller.message({ method: 'ui/notifications/size-changed', params: { height: pattern === 'rising' ? 400 + i * 30 : 400 + (i % 2) * 30 } }); resize();
+    });
+    expect(controller.context).not.toHaveBeenCalled();
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe(pattern === 'rising' ? '670px' : '400px');
+    if (pattern === 'rising') {
+      await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 350 } }));
+      expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('350px');
+    }
+    expect(controller.close).not.toHaveBeenCalled();
+    const frameRoot = container.querySelector('iframe')!.parentElement!;
+    Object.defineProperty(frameRoot, 'clientWidth', { configurable: true, value: 500 });
+    await act(async () => resize());
+    expect(controller.context).toHaveBeenCalledTimes(1);
+    await act(async () => controller.message({ method: 'ui/notifications/size-changed', params: { height: 7000 } }));
+    expect(frameRoot.style.height).toBe('5000px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// M05, unit: the public IPC failure must render a limitation, not a broken App.
+// The remote IPC entry/Host round-trip is covered in main/mcp-apps/ipc.test.ts.
+it.each(['light', 'dark'])('shows the remote local-files placeholder in %s mode', async mode => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  document.documentElement.classList.toggle('dark', mode === 'dark');
+  state.deviceId = 'execution-computer';
+  state.openError = new Error("Error invoking remote method 'maker:mcp-apps:v1': Error: [PRECONDITION_FAILED] MCP_APP_FILES_LOCAL_ONLY");
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="task" clientId="files" title="Report" fallbackText="Saved report" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    expect(container.textContent).toContain('mcpApps.filesOnExecutionComputer');
+    expect(container.textContent).toContain('Saved report');
+    expect(container.textContent).not.toContain('mcpApps.loadFailed');
+    expect(container.querySelector('iframe')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); document.documentElement.classList.remove('dark'); }
+});
+
+// Unit regression: demo 5 showed only “load failed”, with no diagnostic in Main.
+// Existing card tests check UI/cleanup, not the real renderer→Main log boundary.
+// Minimum failure: a lifecycle error containing a code plus HTML, arguments, result
+// and a credential-bearing URL. Only a fixed code/stage and hashed card may cross IPC.
+it.each([
+  ['open', 'MCP_APP_FILES_LOCAL_ONLY'],
+  ['sandbox', 'MCP_APP_SANDBOX_FAILED'],
+  ['initialize', 'MCP_APP_INITIALIZATION_FAILED'],
+  ['timeout', 'MCP_APP_INITIALIZATION_TIMEOUT'],
+  ['open', 'UNKNOWN'],
+] as const)('logs a content-free %s failure (%s) through the renderer logger', async (stage, code) => {
+  const { webcrypto } = await import('node:crypto');
+  vi.stubGlobal('crypto', webcrypto);
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
+    observe(element: Element) { state.intersections.set(element, this.callback); }
+    disconnect() {}
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const logToMain = vi.fn();
+  vi.stubGlobal('electronAPI', { logToMain });
+  const error = new Error(`[PRECONDITION_FAILED] ${code === 'UNKNOWN' ? 'MCP_APP_PRIVATE_PAYLOAD' : code} <html>PRIVATE_HTML</html> args=PRIVATE_INPUT result=PRIVATE_RESULT https://private.invalid/?token=PRIVATE_TOKEN`);
+  if (stage === 'open') state.openError = error;
+  const container = document.createElement('div'); document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="PRIVATE_SESSION" clientId="PRIVATE_CARD" title="PRIVATE_TITLE" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    if (stage !== 'open') await act(async () => {
+      if (stage === 'initialize') container.querySelector('iframe')!.dispatchEvent(new Event('load'));
+      state.controllers[0].fail(error);
+      state.controllers[0].fail(error); // Cleanup must prevent duplicate logging.
+    });
+    await vi.waitFor(() => expect(logToMain).toHaveBeenCalledOnce());
+    const [level, scope, text] = logToMain.mock.calls[0];
+    expect([level, scope]).toEqual(['warn', 'mcp-apps']);
+    expect(text).toContain('App View failed');
+    expect(text).toContain(`"code":"${code}"`);
+    expect(text).toContain(`"stage":"${stage}"`);
+    expect(text).toMatch(/"card":"[a-f0-9]{12}"/);
+    expect(text).not.toMatch(/PRIVATE|https:|<html>|args=|result=|Error:|stack/i);
+    expect(container.textContent).toContain(code === 'MCP_APP_FILES_LOCAL_ONLY' ? 'mcpApps.filesOnExecutionComputer' : 'mcpApps.loadFailed');
+  } finally {
+    await act(async () => root.unmount()); container.remove();
   }
 });

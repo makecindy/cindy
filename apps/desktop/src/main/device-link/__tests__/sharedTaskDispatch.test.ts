@@ -35,7 +35,7 @@ describe('sharedTask dispatch scope', () => {
     expect(() => assertSharedTaskInvoke(capture(), payload)).toThrow();
   });
   it('never inherits the full-device allowlist or wildcard subscriptions', () => {
-    for (const channel of ['maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
+    for (const channel of ['git-context:pr-refs:manage', 'maker:usage:codex-reset-auto-use', 'maker:create-session', 'maker:set-permission-mode', 'device-link:voice:credential-sync', 'local-db:sessions:list', 'maker:remote-resources:list']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).toThrow('PERMISSION_DENIED');
     }
     for (const topics of [['*'], ['sessions'], ['session:other'], ['session:task', 'session:other']]) {

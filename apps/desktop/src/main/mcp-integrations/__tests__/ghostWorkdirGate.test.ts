@@ -14,6 +14,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { createHash } from 'node:crypto';
+import { AsyncResource } from 'node:async_hooks';
+import { withPluginPageTicket, consumePluginPageTicket, restorePluginPageSession } from '../../mcp-apps/pluginPageCall.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -152,6 +154,7 @@ vi.mock('../../maker-ipc/botAuthorizationService.js', () => ({
 
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
+const approvedReceiptMock = vi.fn<(...args: unknown[]) => { manifest: InstalledGhost["manifest"] } | null>(() => null);
 const activeSessionAvailableMock = vi.fn<(ghostId: string) => boolean>(() => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
 const setupAssessmentMock = vi.fn((_ghostId: string): GhostSetupAssessment => {
@@ -183,7 +186,7 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock, managedRootDirs: () => [] }),
+  getGhostManager: () => ({ list: listMock, readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -275,6 +278,7 @@ vi.mock('../../plugin-contributions/prepared.js', () => ({
 
 const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost');
 const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
+const chatAttachments = await import('../../cindy-media/chatAttachments');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
@@ -360,6 +364,8 @@ beforeEach(() => {
   authorizationRequestMock.mockClear();
   isAuthorizationSessionMock.mockResolvedValue(false);
   fs.mkdirSync(outsideDir, { recursive: true });
+  approvedReceiptMock.mockReset();
+  approvedReceiptMock.mockReturnValue(null);
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -783,6 +789,22 @@ describe('Forge session workdir gate', () => {
       expect.any(Object),
     );
   });
+
+  // Production tool entry must select the published UI floor on dev builds, while
+  // keeping the existing no-UI version policy unchanged. Minimal input: withUi in 0.0.0.
+  it.each([undefined, '0.1.122-beta', '0.1.122-beta.1', '0.1.122', '0.1.121-beta', '0.1.121', '0.1.120'])(
+    'resolves the optional UI scaffold floor for %s', async minCindyVersion => {
+      appVersionMock.mockReturnValue('0.0.0');
+      const response = await makeDeps().forgeScaffold({ dir: path.join(WORKDIR, 'new-plugin'), template: 'plain', id: 'new-plugin', name: 'New plugin', withUi: true, minCindyVersion });
+      if (minCindyVersion === '0.1.120' || minCindyVersion === '0.1.121-beta' || minCindyVersion === '0.1.121') {
+        expect(response).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+        expect(scaffoldGhostDirMock).not.toHaveBeenCalled();
+      } else {
+        expect(response).toMatchObject({ ok: true });
+        expect(scaffoldGhostDirMock).toHaveBeenCalledWith(expect.objectContaining({ withUi: true, minCindyVersion: minCindyVersion ?? '0.1.122-beta' }), expect.any(Object));
+      }
+    },
+  );
 
   it('requires explicit package metadata when scaffold runs in an unpublished Cindy build', async () => {
     appVersionMock.mockReturnValue('0.0.0');
@@ -2240,6 +2262,32 @@ describe('session-context 宿主铸造', () => {
 });
 
 describe('Cindy media 本机路径揭示', () => {
+  // 2026-10-30: generated images must stay metadata-only until the Agent elects to
+  // read a local path. Existing cases cover path approval, not request/poll output.
+  // Unit: one completed image through the real Host entry must keep its URL and
+  // task reference without adding model images or automatic-preview diagnostics.
+  it.each(['request', 'poll'] as const)('%s returns image metadata without automatic inspection', async (action) => {
+    const generated = {
+      ok: true,
+      status: 'completed',
+      xdt_image_urls: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+    };
+    callCindyMediaMock.mockResolvedValueOnce(generated);
+    const commit = vi.spyOn(chatAttachments, 'commitMessageMediaRefs')
+      .mockResolvedValueOnce({ committed: 1, skipped: 0, failed: 0 });
+    try {
+      const result = await makeDeps('codex', 'generated-image').callMedia?.(
+        action === 'request'
+          ? { action, invocationId: 'generated', body: {} }
+          : { action, invocationId: 'generated' },
+      );
+      expect(result).toEqual(generated);
+      expect(commit).toHaveBeenCalledWith({ sessionId: 'generated-image', role: 'tool', content: generated });
+    } finally {
+      commit.mockRestore();
+    }
+  });
+
   it('只在用户点击允许后把已解析路径返回给 Agent', async () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     callCindyMediaMock.mockResolvedValue({
@@ -3692,6 +3740,138 @@ describe('personal contribution account surface', () => {
     }), expect.any(AbortSignal));
     expect(result).toMatchObject(restrict ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true });
     expect(communitySubmitMock).toHaveBeenCalledTimes(restrict ? 0 : 1);
+  });
+});
+
+// New page bridge must use the same setup/workdir/dispatch entry, without exposing
+// app-only tools through ghost_info or ghost_call. Minimal input: one app-only tool.
+// Tier: unit; actual main.js sandbox and standard page RPC are exercised by Electron.
+describe('plugin page audience and shared tool execution', () => {
+  function pageGhost(): InstalledGhost {
+    return { ...(chipGhost('art') as InstalledGhost), dir: tmpUserData,
+      approval: { state: 'approved', revision: 'approved-ui' }, uiCapabilityApproved: true,
+      manifest: { ...(chipGhost('art') as InstalledGhost).manifest,
+        mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } } } } };
+  }
+  // C14/X01: a cold page call used to bootstrap with no business id, then leak
+  // its ALS grant into long-lived MCP callbacks. Existing tests only used live
+  // tasks. Unit: real ticket/restore/ghost dispatch, bootstrap and IO are fakes.
+  // Minimal input: one historical card, no live task, one later model-only call.
+  it.each(['claude-code', 'codex', 'pi'] as const)('isolates a cold page restore from later %s MCP requests', async (agentKind) => {
+    const ghost = pageGhost();
+    ghost.manifest.tools!.push({ name: 'model_only', description: 'model only' });
+    listMock.mockReturnValue([ghost]);
+    const { installedGhostStoragePart } = await import('../../../shared/pluginIdentity.js');
+    const grant = { instance: installedGhostStoragePart(ghost), revision: 'approved-ui', sessionId: 's1', clientId: 'history-card', tool: 'run', assertCurrent: async () => {} };
+    let laterModelCall!: () => ReturnType<ReturnType<typeof makeDeps>['callGhostTool']>;
+    await withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket, grant.instance, grant.revision, grant.tool, async (pageCall) => {
+      const session = await restorePluginPageSession(grant.sessionId, {
+        getSession: () => undefined,
+        getMeta: async () => ({ agentKind }),
+        buildCreateOpts: async (_id, meta) => meta,
+        bootstrap: async (opts) => {
+          expect(opts.id).toBe(grant.sessionId);
+          const model = makeDeps(agentKind, 'later-task');
+          laterModelCall = AsyncResource.bind(() => model.callGhostTool({ ghostId: 'art', tool: 'model_only', args: {} }));
+          return { id: opts.id, instanceId: 's1-instance', agentKind: opts.agentKind };
+        },
+        assertCurrent: grant.assertCurrent,
+      });
+      const deps = getCindyGhostsMcpDeps({ sessionId: session.id, sessionInstanceId: session.instanceId, agentKind, workingDir: WORKDIR }, {}, pageCall);
+      expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    }));
+    expect(await laterModelCall()).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'later-task', tool: 'model_only' }));
+  });
+  // unit: page tickets must retain the same Full Access capability gates as ghost_call.
+  // Minimum failure: a valid app-only call handing off one file outside workdir.
+  it.each(['claude-code', 'codex', 'pi'] as const)('Full Access page %s calls keep internal file handoff free of prompts', async agentKind => {
+    const { installedGhostStoragePart } = await import('../../../shared/pluginIdentity.js');
+    const dir = path.join(outsideDir, 'page-dir'); fs.mkdirSync(dir, { recursive: true });
+    const ghost = pageGhost(); listMock.mockReturnValue([ghost]);
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => true });
+    const { withPluginPageTicket, consumePluginPageTicket } = await import('../../mcp-apps/pluginPageCall.js');
+    const grant = { instance: installedGhostStoragePart(ghost), revision: 'approved-ui', sessionId: 's1', clientId: 'card', tool: 'run', assertCurrent: async () => {} };
+    await withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket, grant.instance, grant.revision, grant.tool, async pageCall => {
+      const deps = getCindyGhostsMcpDeps({ sessionId: 's1', sessionInstanceId: 's1-instance', agentKind, workingDir: WORKDIR }, { getLiveSessionGrantState: liveGrantStateMock }, pageCall);
+      expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir })).toMatchObject({ ok: true });
+    }));
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(dirDepositMock).toHaveBeenCalled();
+  });
+  it('hides app-only tools and rejects direct model calls before setup or dispatch', async () => {
+    listMock.mockReturnValue([pageGhost()]);
+    const deps = makeDeps();
+    const info = await deps.getAwakeGhost('art');
+    expect(info).toMatchObject({ ok: true, ghost: { tools: [] } });
+    const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // #4421074557, unit: real ghost_call entry must strip page-private metadata even
+  // when unavailable HTML removes UI from the runtime projection. Existing case
+  // only withheld approval; canonical receipt still carries the original declaration.
+  it.each([false, true])('keeps an old receipt usable as text with unavailable UI=%s and withholds metadata', async unavailable => {
+    const ghost = pageGhost(); delete ghost.uiCapabilityApproved;
+    ghost.manifest.mcpApps = { ui: { resources: [{
+            uri: "ui://form",
+            file: 'ui/form.html'
+        }], tools: { run: { resourceUri: "ui://form" } } } };
+    listMock.mockReturnValue([ghost]);
+    if (unavailable) {
+      approvedReceiptMock.mockReturnValue({ manifest: ghost.manifest });
+      ghost.manifest = { ...ghost.manifest, mcpApps: undefined };
+    }
+    dispatchMock.mockImplementationOnce(async () => {
+      // The privacy decision must be captured before dispatch, not re-read after
+      // an installation changes while the plugin is returning its result.
+      approvedReceiptMock.mockReturnValue(null);
+      return { ok: true, result: { content: [{ type: 'text', text: 'done' }], _meta: { privatePageData: 'hidden' } } } as never;
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: true, result: { content: [{ type: 'text', text: 'done' }] } });
+    if (!result.ok) throw new Error('legacy tool was disabled');
+    expect(result.result).not.toHaveProperty('_meta');
+    expect(dispatchMock).toHaveBeenCalledOnce();
+  });
+  // PR #7924 security: visibility-only and nonlocal/no-task model calls skipped
+  // View-only metadata redaction. Unit via production ghost_call dependency entry;
+  // existing test only covered resourceUri + local task. No live private data used.
+  it.each(['local', 'ssh', 'no-task'] as const)('withholds visibility-only metadata for %s model calls', async kind => {
+    const ghost = pageGhost();
+    ghost.manifest.mcpApps = { ui: { resources: [], tools: { run: { visibility: ['model', 'app'] } } } };
+    listMock.mockReturnValue([ghost]);
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: { content: [{ type: 'text', text: 'public' }], _meta: { privatePageData: 'page-only' } } } as never);
+    const deps = getCindyGhostsMcpDeps({ agentKind: 'claude-code', workingDir: WORKDIR,
+      ...(kind === 'no-task' ? {} : { sessionId: 's1', sessionInstanceId: 's1-instance' }),
+      ...(kind === 'ssh' ? { remoteHostId: 'ssh-1' } : {}),
+    }, {});
+    const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: true, result: { content: [{ type: 'text', text: 'public' }] } });
+    expect(JSON.stringify(result)).not.toContain('page-only');
+  });
+  it('preserves ordinary legacy business metadata without a UI declaration', async () => {
+    const ghost = pageGhost(); delete ghost.manifest.mcpApps;
+    listMock.mockReturnValue([ghost]);
+    const business = { content: [{ id: 1 }], _meta: { business: 'legacy' } };
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: business } as never);
+    expect(await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true, result: business });
+  });
+  it('uses the explicit card task context and still enforces its workdir gate', async () => {
+    const { withPluginPageTicket, consumePluginPageTicket } = await import('../../mcp-apps/pluginPageCall.js');
+    listMock.mockReturnValue([pageGhost()]);
+    alsSessionContextMock.mockReturnValue({ sessionId: 'wrong-task', workingDir: '/other' });
+    const { installedGhostStoragePart } = await import('../../../shared/pluginIdentity.js');
+    const grant = { instance: installedGhostStoragePart(pageGhost()), revision: 'approved-ui', sessionId: 's1', clientId: 'card', tool: 'run', assertCurrent: async () => {} };
+    const call = () => withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket, grant.instance, grant.revision, grant.tool,
+      pageCall => getCindyGhostsMcpDeps({ sessionId: 's1', sessionInstanceId: 's1-instance', agentKind: 'claude-code', workingDir: WORKDIR }, {}, pageCall)
+        .callGhostTool({ ghostId: 'art', tool: 'run', args: { value: 42 } })));
+    expect(await call()).toEqual({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', args: { value: 42 } }));
+    setGhostDisabledForWorkdir(WORKDIR, grant.instance, true);
+    expect(await call()).toMatchObject({ ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -36,9 +36,9 @@
  *     不会因为登录流程跳过而丢失"点击右键打开"这个意图。
  *
  * dev 模式说明:
- *   setAsDefaultProtocolClient 可把 scheme 临时注册到 Electron 解释器,因此能在 dev
- *   实例运行期间验证系统 URL 唤起;但协议归属受最后注册的正式版 / dev 实例影响,
- *   发布前仍需用 packaged build 做最终跨平台验证。
+ *   未打包实例不注册 OS 协议，避免退出后仍将正式链接交给临时 checkout 的 Electron。
+ *   macOS 不保存 setAsDefaultProtocolClient 的 Windows-only path / args，冷启动 stock
+ *   Electron.app 会丢失项目入口。URL / argv 接收和解析仍可测试；系统唤起用 packaged build。
  */
 
 import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-protocol';
@@ -46,6 +46,7 @@ import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
+import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
 import {
@@ -421,6 +422,7 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
 export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
+  cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   if (platform === 'win32') {
@@ -686,28 +688,17 @@ function isWindowsSlashSwitch(value: string): boolean {
 }
 
 /**
- * 把当前 packaged / unpackaged 状态下的 client 注册给 OS。主 + 历史 scheme
- * 逐个注册(Windows/Linux 运行时写注册表 / .desktop;macOS 以 Info.plist 的
- * CFBundleURLTypes 双注册为准,此调用是兜底,同样遍历保持行为一致)。
- * - packaged:直接 setAsDefaultProtocolClient(scheme) 即可
- * - dev:需要带 execPath + argv 让系统知道怎么把链接路由回当前 Electron 解释器
+ * 仅为 packaged client 注册主 + 历史 scheme。未打包实例即使没有 process.defaultApp
+ * 也不能接管系统关联；退出时 removeAsDefaultProtocolClient 不保证恢复原处理程序。
+ * Windows/Linux 运行时写注册表 / .desktop；macOS 还需要打包时声明 CFBundleURLTypes。
  *
- * 必须在 app.whenReady 之前调用一次(Electron 文档要求)。重复调用幂等。
+ * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
+  if (!app.isPackaged) return;
+
   for (const scheme of DEEP_LINK_SCHEMES) {
-    let registered: boolean;
-    if (process.defaultApp) {
-      // dev:用 Electron 解释器跑 main 入口
-      if (process.argv.length >= 2) {
-        registered = app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
-      } else {
-        registered = app.setAsDefaultProtocolClient(scheme);
-      }
-    } else {
-      // packaged:直接调,OS 用 app bundle 路径
-      registered = app.setAsDefaultProtocolClient(scheme);
-    }
+    const registered = app.setAsDefaultProtocolClient(scheme);
     if (registered) void registerWindowsDeepLinkName(scheme);
   }
 }

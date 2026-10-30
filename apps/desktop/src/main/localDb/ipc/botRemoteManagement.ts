@@ -192,6 +192,7 @@ const settingsHost = createBotRemoteSettingsHost({
     routines: {
       list: async (botId) => (await routineTools()).list(botId),
       sources: async () => (await routineTools()).sources(),
+      deliveryTargets: async (botId) => (await routineTools()).deliveryTargets(botId),
       history: async (botId, id) => (await routineTools()).history(botId, id),
       save: async (botId, input, id) => (await routineTools()).save(botId, input, id),
       runNow: async (botId, id) => (await routineTools()).runNow(botId, id),

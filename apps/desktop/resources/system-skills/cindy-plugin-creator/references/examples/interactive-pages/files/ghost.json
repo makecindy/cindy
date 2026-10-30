@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 3,
+  "id": "acme-ui-showcase",
+  "name": "交互能力示例",
+  "command": "acme-ui-showcase",
+  "version": "1.0.0",
+  "minCindyVersion": "0.1.122-beta",
+  "kind": "chip",
+  "entry": "main.js",
+  "whenToUse": "用户要查看交互页面、文件或后端能力时，调用 open_showcase；旧卡片由 legacy_cards / image_card 展示。",
+  "pick": true,
+  "library": true,
+  "fs": true,
+  "card": {},
+  "cindy": {
+    "media": [
+      "deposit"
+    ]
+  },
+  "settingsHtml": "settings.html",
+  "network": {
+    "hosts": [
+      "api.example.com"
+    ],
+    "secrets": [
+      {
+        "key": "api_key",
+        "label": "后端 API 凭证",
+        "hint": "配置自己的后端凭证；仅由宿主注入，不交给页面",
+        "source": "user",
+        "inject": {
+          "header": "X-Api-Key",
+          "format": "{value}",
+          "hosts": [
+            "api.example.com"
+          ]
+        }
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "open_showcase",
+      "description": "打开能力全集页面",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "save_form",
+      "description": "保存页面表单",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "dynamic_content",
+      "description": "按意图返回动态内容，仅页面可用；默认本机模拟后端",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "enum": [
+              "overview",
+              "details"
+            ]
+          }
+        },
+        "required": [
+          "intent"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "file_action",
+      "description": "文件选择与分片导入",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "download_file",
+      "description": "下载附件到作品库",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "upload_file",
+      "description": "上传本地处理结果、图片或所选目录",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "save_file",
+      "description": "作品库文件另存为",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "write_task",
+      "description": "在任务工作目录写一个演示文件",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "kv_demo",
+      "description": "读写演示参数",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "read_settings",
+      "description": "读取非敏感设置",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "legacy_cards",
+      "description": "在对话中展示旧版 HTML 聊天卡",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "image_card",
+      "description": "在对话中展示旧版图卡",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "network_probe",
+      "description": "普通联网与 401 对照，仅页面可用",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "slow_task",
+      "description": "可观测长任务进度",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "model_only",
+      "description": "仅模型可调用，页面应被拒绝",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ],
+  "mcpApps": {
+    "ui": {
+      "resources": [
+        {
+          "uri": "ui://showcase/v1",
+          "file": "ui/page.html",
+          "prefersBorder": true,
+          "csp": {}
+        }
+      ],
+      "tools": {
+        "open_showcase": {
+          "resourceUri": "ui://showcase/v1"
+        },
+        "save_form": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "file_action": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "download_file": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "upload_file": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "save_file": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "write_task": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "kv_demo": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "read_settings": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "legacy_cards": {
+          "visibility": [
+            "model"
+          ]
+        },
+        "image_card": {
+          "visibility": [
+            "model"
+          ]
+        },
+        "network_probe": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "slow_task": {
+          "visibility": [
+            "app"
+          ]
+        },
+        "model_only": {
+          "visibility": [
+            "model"
+          ]
+        },
+        "dynamic_content": {
+          "visibility": [
+            "app"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -13,10 +13,12 @@ function PickerFixture() {
   const [selected, setSelected] = useState('');
   const { t } = useTranslation();
   return <div className="p-8">
-    {ctx.case === 'move' ? <DropdownMenu open={open} onOpenChange={setOpen}>
+    {ctx.case.startsWith('move') ? <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild><Button data-testid="open-picker">{t('ccAgent.sidebar.sessionMenu.moveToProjectHeading')}</Button></DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80">
-        <SessionProjectMoveSubmenu projectOptions={options} isDialogue onSelectProject={setSelected} />
+        <SessionProjectMoveSubmenu projectOptions={options}
+          currentSession={{ projectDir: 'D:/work/cindy', workingDir: 'D:/tmp/checkout' }}
+          isDialogue={ctx.case !== 'move-explicit-project'} onSelectProject={setSelected} />
       </DropdownMenuContent>
     </DropdownMenu> : <FolderPickerPopover open={open} onOpenChange={setOpen} projectOptions={options}
       onSelect={path => setSelected(path)}>

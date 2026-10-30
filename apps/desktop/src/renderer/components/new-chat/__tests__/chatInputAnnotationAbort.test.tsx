@@ -43,6 +43,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   draftRange: null as UseVoiceInputResult['draftRange'],
   cancel: vi.fn().mockResolvedValue(undefined),
   prepare: vi.fn(),
+  micGranted: true,
   realModelSelector: false,
   listAgentSkills: vi.fn(),
   localProviders: [] as ProviderView[],
@@ -124,6 +125,7 @@ const api: any = new Proxy({}, { get: (_obj, key) => {
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
+  if (key === 'getMicrophonePermissionCached') return () => ({ ok: h.micGranted, status: h.micGranted ? 'granted' : 'not-determined' });
   if (key === 'platform') return 'darwin';
   if (key === 'modelAccess') return undefined;
   if (key === 'then') return undefined;
@@ -157,6 +159,7 @@ beforeEach(() => {
   h.draftRange = null;
   h.stop.mockClear();
   h.prepare.mockClear();
+  h.micGranted = true;
   h.realModelSelector = false;
   h.cancel.mockReset().mockResolvedValue(undefined);
   h.atPanel = null;
@@ -346,6 +349,32 @@ it('shows voice guidance only in an empty composer and distinguishes holding fro
   view.rerender(<ChatInput {...view.props} />);
   fireEvent.pointerEnter(area);
   expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+});
+
+// 2026-10-30 Slack report: an accidental hold before voice input was ever
+// enabled popped the microphone permission dialog. The hint test above runs
+// granted; here the cached permission is missing (unit/jsdom).
+it('leaves hold-to-talk and its hint off until the microphone is authorized', async () => {
+  h.micGranted = false;
+  const view = renderComposer();
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const area = view.container.querySelector('[data-recommendation-active]')
+    ?? h.editor!.view.dom.parentElement!.parentElement!;
+  vi.useFakeTimers();
+  try {
+    fireEvent.pointerEnter(area);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByTestId('composer-voice-hint')).toBeNull();
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
+    fireEvent.mouseDown(h.editor!.view.dom, { button: 0, detail: 1, clientX: 10, clientY: 10 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(h.prepare).not.toHaveBeenCalled();
+    expect(h.listening).toBe(false);
+    fireEvent.mouseUp(window, { button: 0 });
+  } finally {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    vi.useRealTimers();
+  }
 });
 
 // 2026-10-26 regression (unit/jsdom): existing guidance must survive the 500ms

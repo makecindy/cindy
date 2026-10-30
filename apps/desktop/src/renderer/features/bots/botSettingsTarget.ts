@@ -86,6 +86,7 @@ export interface BotSettingsTarget {
   routineModels?: boolean;
   /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
   routineSessionModes?: boolean;
+  routineDelivery?: boolean;
   autonomy: {
     useSettings(): BotAutonomySettingsView | null;
     setSchedulerBotId(botId: string | null): Promise<void>;

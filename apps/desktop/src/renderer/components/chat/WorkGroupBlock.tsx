@@ -362,11 +362,11 @@ export function WorkGroupBlock({
   // Register before paint. Switching back to a running task remounts this group;
   // a passive effect can lag 50–300ms behind the stream's mount, showing a
   // preview-less header until the cached tail reappears and the pinned list jumps.
-  useLayoutEffect(() => {
-    const current = deferredRef.current;
-    current?.setVisible?.(expanded, !compact && isStreaming && !lineMode);
-    return () => current?.setVisible?.(false, false);
-  }, [deferred?.owner, deferred?.key, expanded, isStreaming, compact, lineMode]);
+  // The read tail regroups this item, so its own isStreaming must not drive the read.
+  useLayoutEffect(
+    () => deferredRef.current?.setVisible?.(expanded, !compact),
+    [deferred?.owner, deferred?.key, deferred?.livePreview, expanded, compact],
+  );
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {

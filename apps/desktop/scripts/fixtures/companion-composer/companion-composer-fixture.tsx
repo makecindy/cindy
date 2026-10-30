@@ -130,6 +130,7 @@ void mountPage({
         settings: { ...getDefaultVoiceInputSettings('darwin'), playInteractionSound: false },
       }),
       onDataChanged: subscription('voice-data'),
+      getMicrophonePermissionCached: () => ({ ok: true, status: 'granted' }),
       onGlobalShortcutTrigger: subscription('voice-shortcut'),
     },
     deviceLink: { onRemotePush: subscription('remote-push') },

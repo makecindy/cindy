@@ -129,6 +129,8 @@ import {
   usesSystemActionMenu,
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
+import { MessageUsageCost } from '@/session/MessageUsageCost';
+import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
@@ -3479,8 +3481,11 @@ function MessageBubble({
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
+  const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
+    (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCost(item.message.turnMoney)
+    ? moneySplit ? [moneySplit.conversation.amount > 1e-9 ? formatMessageTurnCost(moneySplit.conversation) : '',
+        ...moneySplit.additional.map(formatMessageTurnCost)].filter(Boolean).join(' + ') : ''
     : '';
   // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
   const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
@@ -3710,16 +3715,12 @@ function MessageBubble({
     </Text>
   ) : null;
   const costText = turnCost ? (
-    <Text
+    <MessageUsageCost key="cost" label={turnCost} style={styles.messageActionMeta}
       accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
         ? t('message.renderer.turnCostEstimate', { cost: turnCost })
         : t('message.renderer.turnCost', { cost: turnCost })}
-      key="cost"
-      style={styles.messageActionMeta}
-      testID="message.turnCostText"
-    >
-      {turnCost}
-    </Text>
+      deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
+      clientId={item.message.source.clientId} />
   ) : turnTokens ? (
     <Text
       accessibilityLabel={t('message.renderer.turnTokens', { tokens: turnTokens })}
@@ -4776,11 +4777,11 @@ function WorkGroupCard({
   const lineMode = lines !== undefined;
   const deferredRef = useRef(item.deferred);
   deferredRef.current = item.deferred;
-  useLayoutEffect(() => {
-    const current = deferredRef.current;
-    current?.setVisible?.(expanded, isStreaming && !lineMode);
-    return () => current?.setVisible?.(false, false);
-  }, [item.deferred?.owner, item.deferred?.key, expanded, isStreaming, lineMode]);
+  // The read tail regroups this item, so its own isStreaming must not drive the read.
+  useLayoutEffect(
+    () => deferredRef.current?.setVisible?.(expanded, true),
+    [item.deferred?.owner, item.deferred?.key, item.deferred?.livePreview, expanded],
+  );
   const layout = useMemo(() => buildMessageHierarchyLayout({
     screenWidth: actions.screenWidth,
     summaryCount: header.summaryCount,
@@ -5071,10 +5072,7 @@ function SubagentCard({
   const styles = useThemedStyles(makeStyles);
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
-  useEffect(() => {
-    deferred?.setVisible?.(expanded, false);
-    return () => deferred?.setVisible?.(false, false);
-  }, [deferred?.owner, deferred?.key, expanded]);
+  useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');

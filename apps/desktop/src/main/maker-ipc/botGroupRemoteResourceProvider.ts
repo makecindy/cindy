@@ -284,8 +284,17 @@ export async function botGroupMembersVisibleRemotely(memberBotIds: readonly stri
   return memberBotIds.every((botId) => visibility.get(botId) === true);
 }
 
-async function assertBotsVisible(botIds: readonly string[]): Promise<void> {
+async function assertBotsVisible(botIds: readonly string[], server?: BotGroupChatService['chatServer']): Promise<void> {
   const visibility = await remoteVisibility(botIds);
+  // Only absent local rows can be resolved account-wide. A hidden local row is
+  // never made remotely visible by also appearing in the cloud directory.
+  const missing = botIds.filter(botId => !visibility.has(botId));
+  if (missing.length && server) {
+    const owned = await server.ownedBots();
+    if (owned.ok) for (const bot of owned.bots) {
+      if (bot.botId && missing.includes(bot.botId)) visibility.set(bot.botId, true);
+    }
+  }
   if (botIds.some((botId) => visibility.get(botId) !== true)) {
     throw new RemoteResourceRegistryError('INVALID_PARAMS', 'MEMBER_UNAVAILABLE');
   }
@@ -376,7 +385,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
 
       if (actionId === 'create') {
         const botIds = botIdsInput();
-        await assertBotsVisible(botIds);
+        await assertBotsVisible(botIds, ownerService().chatServer);
         const created = await ownerService().createGroup({ name: input.name, botIds });
         if (!created.ok) refuse(created);
         return {
@@ -410,7 +419,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
       if (actionId === 'add-member') {
         if (!visibleGroup.serverBacked || typeof input.botId !== 'string')
           throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
-        await assertBotsVisible([input.botId]);
+        await assertBotsVisible([input.botId], ownerService().chatServer);
       }
       const candidateId = actionId === 'update' ? input.organizerBotId : actionId === 'plan-edit' ? input.botId : undefined;
       if (typeof candidateId === 'string') {
@@ -421,9 +430,9 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         } else await assertBotsVisible([candidateId]);
       }
       if (actionId === 'set-members') {
-        // Preserve server humans and foreign companions; only newly added IDs need local visibility.
+        // Preserve existing server members; additions must be visible local or owned cloud companions.
         const currentMemberIds = new Set(visibleGroup.members.map(member => member.botId));
-        await assertBotsVisible(botIdsInput().filter(botId => !currentMemberIds.has(botId)));
+        await assertBotsVisible(botIdsInput().filter(botId => !currentMemberIds.has(botId)), visibleGroup.serverBacked ? ownerService().chatServer : undefined);
       }
       const current = ownerService();
       const planInput = { groupId, planId: input.planId };

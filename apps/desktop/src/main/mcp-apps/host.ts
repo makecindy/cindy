@@ -1,3 +1,10 @@
+import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
+import { pagePermissionGrants } from './pagePermissions.js';
+import { PluginAppFiles, type PluginFileAccess } from './pluginFiles.js';
+import { withPluginPageTicket, createPageProgressRelay } from './pluginPageCall.js';
+import type { saveAppDownload } from './downloadFile.js';
+import type { AgentInputSerializedFile } from '../../shared/agentInputQueue.js';
+import { PLUGIN_PAGE_TICKET } from './pluginServer.js';
 import { randomUUID, randomBytes, createHmac } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { AppBridge, type McpUiHostContext } from '@modelcontextprotocol/ext-apps/app-bridge';
@@ -11,9 +18,9 @@ import {
   type CallToolResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord, McpAppDocument } from '../../shared/mcpApps.js';
-import { MCP_APP_LINK_GRANT_MS, type McpAppLinkAuthorization } from '../../shared/mcpApps.js';
+import { hasExecutionComputerFile, MCP_APP_LINK_GRANT_MS, type McpAppLinkAuthorization } from '../../shared/mcpApps.js';
 import type { McpAppMessageGuard } from './message.js';
-import { AppConnection, type AppServerConfig } from './connection.js';
+import { AppConnection, sharedPluginConnection, type AppServerConfig } from './connection.js';
 import {
   appCsp,
   boundedAppRecord,
@@ -26,6 +33,7 @@ import {
 } from './protocol.js';
 
 export interface McpAppsHostDeps {
+  pluginFiles?: PluginFileAccess;
   owner(): object | undefined;
   config(id: string): AppServerConfig | undefined;
   /** Desktop injects an owner-scoped vault key so revisions survive restarts. */
@@ -37,13 +45,16 @@ export interface McpAppsHostDeps {
     tool: Tool,
     args: Record<string, unknown>,
     signal: AbortSignal,
+    source?: { clientId: string; serverId: string; title: string },
   ): Promise<void>;
   sendMessage(
     sessionId: string,
     record: McpAppRecord,
     content: unknown[],
     assertCurrent: McpAppMessageGuard,
+    files?: AgentInputSerializedFile[],
   ): Promise<void>;
+  downloadFile?(input: Omit<Parameters<typeof saveAppDownload>[0], 'showSaveDialog'>): Promise<{ isError?: boolean }>;
   disposeDocument?(viewId: string): void;
   connection?(config: AppServerConfig): AppConnection;
   audit?(method: string): void;
@@ -65,8 +76,9 @@ class ViewTransport implements Transport {
   private bytes = 2; // The serialized array's brackets also count toward the budget.
   private wake?: () => void;
   private failed = false;
+  private localFilesUnavailable = false;
   private closed = false;
-  constructor(private readonly maxBytes: number) {}
+  constructor(private readonly maxBytes: number, private readonly localFilesAllowed = true) {}
   async start(): Promise<void> {}
   async send(message: JSONRPCMessage): Promise<void> {
     this.enqueue({ seq: ++this.seq, message });
@@ -75,6 +87,11 @@ class ViewTransport implements Transport {
     this.enqueue({ seq: ++this.seq, openLink: { id, url } });
   }
   private enqueue(event: (typeof this.events)[number]): void {
+    if (!this.localFilesAllowed && hasExecutionComputerFile(event)) {
+      this.localFilesUnavailable = true;
+      this.wake?.();
+      return;
+    }
     const bytes =
       this.bytes + Buffer.byteLength(JSON.stringify(event)) + (this.events.length ? 1 : 0);
     if (this.failed || bytes > this.maxBytes || this.events.length >= 256) {
@@ -88,6 +105,7 @@ class ViewTransport implements Transport {
   }
   async poll(after: number): Promise<(typeof this.events)[number][]> {
     if (this.closed) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+    if (this.localFilesUnavailable) throw new Error('MCP_APP_FILES_LOCAL_ONLY');
     if (this.failed) throw new Error('MCP_APP_BACKPRESSURE');
     while (this.events[0]?.seq <= after) {
       const event = this.events.shift()!;
@@ -108,6 +126,7 @@ class ViewTransport implements Transport {
       });
     }
     if (this.closed) throw new Error('MCP_APP_VIEW_UNAVAILABLE');
+    if (this.localFilesUnavailable) throw new Error('MCP_APP_FILES_LOCAL_ONLY');
     if (this.failed) throw new Error('MCP_APP_BACKPRESSURE');
     return this.events.filter((event) => event.seq > after);
   }
@@ -120,6 +139,7 @@ class ViewTransport implements Transport {
 }
 
 interface View {
+  files?: PluginAppFiles;
   openId?: string;
   owner: object;
   caller: string;
@@ -144,7 +164,7 @@ const transientRevisionKey = randomBytes(32).toString('hex');
 export function appServerRevision(config: AppServerConfig, key = transientRevisionKey): string {
   return createHmac('sha256', key)
     .update('cindy:mcp-app-server-revision:v1\0')
-    .update(JSON.stringify([config.id, config.url, config.transport, config.headers]))
+    .update(JSON.stringify(config.plugin ? [config.id, config.transport, config.plugin.instance, config.plugin.revision, config.plugin.packageSha256, config.plugin.directory, config.url] : [config.id, config.url, config.transport, config.headers]))
     .digest('hex');
 }
 
@@ -201,6 +221,7 @@ export class McpAppsHost {
   }
 
   async releaseConnection(connection: AppConnection): Promise<void> {
+    if (connection.config?.plugin) return;
     const id = this.connectionIds.get(connection);
     const entry = id ? this.connections.get(id) : undefined;
     if (entry) entry.retired = true;
@@ -303,6 +324,9 @@ export class McpAppsHost {
     const config = this.deps.config(record.serverId);
     if (!config || this.serverRevision(config) !== record.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
+    config.plugin?.assertCurrent(sessionId);
+    if (caller.startsWith('device:') && config.plugin && hasExecutionComputerFile(record))
+      throw new Error('MCP_APP_FILES_LOCAL_ONLY');
     const connectionId = (record as McpAppRecord & { connectionId?: string }).connectionId;
     const registered = connectionId ? this.connections.get(connectionId) : undefined;
     const detached = !registered || registered.owner !== owner || registered.connection.isClosed;
@@ -317,7 +341,7 @@ export class McpAppsHost {
     const connection =
       registered?.owner === owner && !registered.connection.isClosed
         ? registered.connection
-        : (this.deps.connection?.(config) ?? new AppConnection(config));
+        : (this.deps.connection?.(config) ?? (config.plugin ? sharedPluginConnection(config, owner) : new AppConnection(config)));
     const registeredId = this.registerConnection(connection, owner);
     if (detached) this.connections.get(registeredId)!.retired = true;
     try {
@@ -330,6 +354,16 @@ export class McpAppsHost {
       signal.throwIfAborted();
       const resource = readAppResource(loaded.result, record.resourceUri, loaded.meta);
       const policy = appCsp(resource.meta);
+      if (config.plugin) {
+        const allowed = new Set(config.plugin.domains);
+        for (const domains of Object.values(policy.csp)) {
+          if (!Array.isArray(domains)) continue;
+          for (const domain of domains) {
+            if (!allowed.has(domain)) throw new Error('MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED');
+          }
+        }
+        config.plugin.assertCurrent(sessionId);
+      }
       if (owner !== this.deps.owner()) throw new Error('MCP_APP_OWNER_CHANGED');
       // Recheck after async resource loading so simultaneous opens share the limit.
       if (
@@ -348,7 +382,7 @@ export class McpAppsHost {
       const remote = caller.startsWith('device:');
       if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
         throw new Error('MCP_APP_RESOURCE_TOO_LARGE');
-      const transport = new ViewTransport(remote ? MCP_APPS_MAX_REMOTE_BYTES : MCP_APPS_MAX_BYTES);
+      const transport = new ViewTransport(remote ? MCP_APPS_MAX_REMOTE_BYTES : MCP_APPS_MAX_BYTES, !remote || !config.plugin);
       const context: McpUiHostContext = {
         ...hostContext,
         toolInfo: { tool, id: clientId },
@@ -362,6 +396,7 @@ export class McpAppsHost {
         { name: 'Cindy', version: '1.0.0' },
         {
           openLinks: {},
+          ...(!remote && config.plugin && this.deps.downloadFile ? { downloadFile: {} } : {}),
           ...(capabilities?.tools
             ? { serverTools: { listChanged: capabilities.tools.listChanged } }
             : {}),
@@ -401,6 +436,10 @@ export class McpAppsHost {
         this.sweepTimer.unref();
       }
       const assertCurrent = () => this.assertCurrentView(viewId, view);
+      if (config.plugin && !remote && this.deps.pluginFiles) {
+        view.files = new PluginAppFiles(viewId, config.plugin.instance, this.deps.pluginFiles, assertCurrent);
+        document.csp = document.csp.replace(/connect-src [^;]*/, match => match.replace("'none'", "").concat(" 'self'"));
+      }
       const currentClient = async (signal: AbortSignal) => {
         await assertCurrent();
         signal.throwIfAborted();
@@ -421,9 +460,19 @@ export class McpAppsHost {
       bridge.oninitialized = () => {
         if (view.initialized || !bridge.getAppCapabilities()) return;
         view.initialized = true;
-        bridge.setHostContext(view.context);
         void assertCurrent()
-          .then(() => bridge.sendToolInput({ arguments: record.arguments }))
+          .then(async () => {
+            const attachments = (record.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
+            if (view.files && attachments) {
+              const projected = await view.files.project(attachments);
+              view.context = { ...view.context, toolInfo: { tool: {
+                ...tool, _meta: { ...tool._meta, 'cindy/attachments': projected },
+              }, id: clientId } };
+            }
+            await assertCurrent();
+            bridge.setHostContext(view.context);
+          })
+          .then(async () => bridge.sendToolInput({ arguments: view.files ? await view.files.project(record.arguments) : record.arguments }))
           .then(() => {
             view.inputSent = true;
             return this.sendResult(viewId, view);
@@ -437,12 +486,35 @@ export class McpAppsHost {
         const tools = await currentResult(connection.tools(extra.signal), extra.signal);
         const target = tools.find((item) => item.name === params.name);
         if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-        await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal);
+        // Page calls use the tool's normal policy regardless of how the script started.
+        // The one-use ticket below binds identity; it does not grant approval.
+        await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId: record.serverId, title: record.tool.title ?? record.tool.name });
         const client = await currentClient(extra.signal);
-        return (await currentResult(
-          client.callTool(params, CallToolResultSchema, { signal: extra.signal }),
-          extra.signal,
-        )) as CallToolResult;
+        const invoke = (ticket?: string) => currentResult(client.callTool({ ...params,
+          ...(ticket ? { _meta: { ...params._meta, [PLUGIN_PAGE_TICKET]: ticket } } : {}),
+        }, CallToolResultSchema, { signal: extra.signal, ...(config.plugin ? { timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS } : {}) }), extra.signal) as Promise<CallToolResult>;
+        if (!config.plugin) return invoke();
+        const token = params._meta?.progressToken;
+        const progress = createPageProgressRelay(async (value, progressSignal) => {
+          await assertCurrent();
+          extra.signal.throwIfAborted();
+          progressSignal.throwIfAborted();
+          // AppBridge's notification union omits this base MCP notification.
+          // Use its bound transport, retaining the standard wire shape and token.
+          await transport.send({ jsonrpc: '2.0', method: 'notifications/progress', params: { ...value, progressToken: token! } });
+        });
+        const closeProgress = () => progress.close();
+        extra.signal.addEventListener('abort', closeProgress, { once: true });
+        try {
+          const result = await withPluginPageTicket({ instance: config.plugin.instance,
+            revision: config.plugin.revision, sessionId, clientId, tool: target.name, assertCurrent,
+            ...(typeof token === 'string' || typeof token === 'number' ? { onProgress: progress.update } : {}),
+          }, invoke);
+          return view.files ? await view.files.project(result) : result;
+        } finally {
+          extra.signal.removeEventListener('abort', closeProgress);
+          progress.close();
+        }
       };
       bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
         await assertCurrent();
@@ -473,7 +545,41 @@ export class McpAppsHost {
         const content = Array.isArray(params.content) ? params.content : [params.content];
         if (content.some((block) => block.type !== 'text' && block.type !== 'resource_link'))
           throw new Error('MCP_APP_MESSAGE_CONTENT_UNSUPPORTED');
-        await this.deps.sendMessage(sessionId, record, content, assertCurrent);
+        const files: AgentInputSerializedFile[] = [];
+        if (view.files) {
+          for (const block of content) {
+            if (block.type !== 'resource_link' || !block.uri.startsWith('cindy-media:')) continue;
+            const info = await view.files.describeGranted(block.uri);
+            if (!info.mimeType.startsWith('image/')) continue;
+            files.push({ id: randomUUID(), name: block.name, originalName: block.name,
+              category: 'image', ext: block.uri.split('.').pop() ?? '', mimeType: info.mimeType,
+              size: info.size, url: block.uri, path: block.uri });
+          }
+        }
+        const assertMessageCurrent = async () => {
+          await assertCurrent();
+          for (const file of files) await view.files!.describeGranted(file.url!);
+        };
+        if (files.length) await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent, files);
+        else await this.deps.sendMessage(sessionId, record, content, assertCurrent);
+        return {};
+      };
+      if (!remote && config.plugin && this.deps.downloadFile) bridge.ondownloadfile = async (params, extra) => {
+        await assertCurrent();
+        if (params.contents.length > 16) throw new Error('MCP_APP_DOWNLOAD_LIMIT');
+        for (const content of params.contents) {
+          if (content.type === 'resource_link') {
+            if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+            await view.files.describeGranted(content.uri);
+          }
+          const result = await this.deps.downloadFile!({ content, signal: extra.signal, assertCurrent,
+            readGranted: uri => {
+              if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+              return view.files.readGranted(uri, extra.signal);
+            },
+          });
+          if (result.isError) return result;
+        }
         return {};
       };
       bridge.onupdatemodelcontext = async (params) => {
@@ -655,6 +761,14 @@ export class McpAppsHost {
       throw new Error('MCP_APP_CARD_UNAVAILABLE');
   }
 
+  /** Called only by the local protocol after Chromium frame verification. */
+  async readPluginFile(viewId: string, token: string, request: Request): Promise<Response> {
+    const view = this.views.get(viewId);
+    if (!view?.files) return new Response(null, { status: 404 });
+    try { return await view.files.read(token, request); }
+    catch { return new Response(null, { status: 404 }); }
+  }
+
   private async sendResult(id: string, view: View): Promise<void> {
     if (view.resultSent || (!view.record.result && !view.record.cancelled)) return;
     try {
@@ -670,7 +784,8 @@ export class McpAppsHost {
     try {
       if (view.record.result) {
         view.resultSent = true;
-        await view.bridge.sendToolResult(view.record.result as CallToolResult);
+        const result = view.files ? await view.files.project(view.record.result) : view.record.result;
+        await view.bridge.sendToolResult(result as CallToolResult);
       } else if (view.record.cancelled) {
         view.resultSent = true;
         await view.bridge.sendToolCancelled({ reason: view.record.cancelled });
@@ -693,6 +808,7 @@ export class McpAppsHost {
     const config = this.deps.config(view.record.serverId);
     if (!config || this.serverRevision(config) !== view.record.serverRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
+    config.plugin?.assertCurrent(sessionId);
     view.lastUsed = Date.now();
     return view;
   }
@@ -845,6 +961,7 @@ export class McpAppsHost {
       }
     }
     this.views.delete(id);
+    view.files?.close();
     if (!this.views.size) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = undefined;
@@ -941,7 +1058,30 @@ export class McpAppsHost {
     };
   }
 
+  async revokePluginConnections(instance?: string): Promise<void> {
+    // A disabled service has already left the registry, but its process may
+    // still be stopping. Keep uninstall/account cleanup bound to owned clients.
+    const ids = new Set([...this.connections.values()]
+      .filter(({ connection }) => connection.config.plugin &&
+        (instance === undefined || connection.config.plugin.instance === instance))
+      .map(({ connection }) => connection.config.id));
+    await this.revokePluginServers(ids);
+  }
+
+  async revokePluginServers(ids: ReadonlySet<string>): Promise<void> {
+    pagePermissionGrants.clearServers(ids);
+    const closing: Promise<unknown>[] = [];
+    for (const [id, view] of this.views) if (ids.has(view.record.serverId)) closing.push(this.disposeView(id, view, true));
+    for (const [id, entry] of this.connections) if (ids.has(entry.connection.config.id)) {
+      closing.push(entry.connection.close().then(() => { this.connections.delete(id); }));
+    }
+    // Package replacement must observe a failed stop; allSettled would let an
+    // old process keep executing files while the installation is replaced.
+    await Promise.all(closing);
+  }
+
   async reset(): Promise<void> {
+    pagePermissionGrants.clearServers();
     this.cancelledOpens.clear();
     for (const pending of this.opening.values())
       pending.abort.abort(new Error('MCP_APP_OWNER_CHANGED'));
@@ -977,8 +1117,7 @@ export class McpAppsHost {
     }
     for (const [id, entry] of this.connections)
       if (entry.owner !== this.deps.owner() || entry.connection.isClosed) {
-        this.connections.delete(id);
-        await entry.connection.close().catch(() => {});
+        await entry.connection.close().then(() => { this.connections.delete(id); }).catch(() => {});
       }
   }
 }

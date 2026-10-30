@@ -14,7 +14,8 @@ import { t } from '../i18n.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
-import { parseChatInvitationToken } from '@cindy/device-link';
+import { CHAT_INVITATION_PATH, parseChatInvitationToken } from '@cindy/device-link';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
@@ -339,7 +340,6 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
     settleLaneTurn: (...args) => service().settleLaneTurn(...args),
     refreshPendingInteraction: local.refreshPendingInteraction,
     postCompanionTaskMessage: (...args) => service().postCompanionTaskMessage(...args),
-    hasCompanionTaskChannel: (...args) => service().hasCompanionTaskChannel(...args),
     dispose: () => { active.dispose(); local.dispose(); },
   };
 }
@@ -1348,6 +1348,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function localBot(actorId: string) {
     const actor = actors.find(a => a.id === actorId && a.kind === 'bot');
     return profiles.find(p => p.id === actor?.externalId);
+  }
+  // Membership is account-wide; only execution requires an active local installation.
+  function addableOwnedBot(actor: Actor): boolean {
+    if (actor.kind !== 'bot' || actor.disabled || !actor.externalId) return false;
+    const local = localBot(actor.id);
+    if (actor.homeDeviceId && actor.homeDeviceId !== selfDeviceId) return true;
+    return !local || local.status === 'active';
   }
   function messageView(m: Message, members: Member[], ownerMembers: readonly Member[] = members): BotGroupMessageView {
     // Only the server-owned origin establishes a system event. A user-supplied
@@ -2791,6 +2798,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Bare token, cindy://chat-invite/<token> or the public https page link; only the token
   // reaches this account's own Chat Server. An unreadable link is INVALID_INPUT.
   const inviteToken = (link: string) => z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(parseChatInvitationToken(link) ?? '');
+  // Global/CN public pages are verified. Dev keeps the existing scheme until its
+  // public deployment is verified; this does not affect invitation reception.
+  function invitationPage(): URL | null {
+    if (CURRENT_CINDY_REGION === 'dev') return null;
+    const page = new URL(getClientEndpoint('deviceLinkApiBaseUrl'));
+    if (!['http:', 'https:'].includes(page.protocol) || page.username || page.password || page.search || page.hash) {
+      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
+    }
+    const local = page.hostname === 'localhost' || page.hostname.endsWith('.localhost')
+      || /^127\./.test(page.hostname) || page.hostname === '[::1]' || page.hostname === '0.0.0.0';
+    if (local) return null;
+    if (page.protocol !== 'https:') {
+      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
+    }
+    page.pathname = page.pathname.replace(/\/+$/, '') + CHAT_INVITATION_PATH;
+    return page;
+  }
+
   // Null is the server's non-expiring contract; omitted/invalid dates are never
   // treated as permanent links. Older servers keep their dated, single-use links.
   const inviteExpiry = z.string().refine(value => Number.isFinite(Date.parse(value))).nullable();
@@ -2850,7 +2875,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           text:m.reply.content.map(block=>block.text ?? block.fallback ?? block.caption ?? '').join('\n')}} : {})}));
       return {mentions,hasMore:page.hasMore};
     }),
-    ownedBots: () => result(async () => { await register('foreground'); return { bots: actors.flatMap(a => { const bot = a.kind === 'bot' ? localBot(a.id) : undefined; return bot?.status === 'active' ? [{ actorId: a.id, botId: bot.id, name: a.name }] : []; }) }; }),
+    ownedBots: () => result(async () => {
+      await register('foreground');
+      return { bots: actors.filter(addableOwnedBot).map(a => ({
+        actorId: a.id, botId: a.externalId, name: a.name, avatar: a.avatar, homeDeviceId: a.homeDeviceId,
+      })) };
+    }),
     refreshProfile: () => result(async () => {
       await api('/profile/refresh', 'POST'); profileRefreshedAt = Date.now();
       for (const roomId of rooms.keys()) changed(roomId);
@@ -3034,10 +3064,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
+      const page = invitationPage();
       const invite = inviteResponse(z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), ...inviteFields }).refine(validInvite),
         await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, managementActor(await groupSnapshot(i.groupId)), false, 200),
       );
-      return { link: `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
+      if (page) page.hash = `${invite.token}?app=${CURRENT_CINDY_REGION === 'cn' ? 'cindycn' : 'cindy'}`;
+      return { link: page?.href ?? `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
     }),
     revokeInvite: input => result(async () => {
       const i = z.object({ groupId: id, link: z.string(), clientId: z.string().uuid() }).strict().parse(input);
@@ -3262,7 +3294,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     createGroup: input => safe(async () => {
       const i = groupInput.parse(input); await register('foreground'); beginUpgrade();
       const participants = i.botIds.map(botId => {
-        const a = actors.find(a => a.kind === 'bot' && a.externalId === botId);
+        const a = actors.find(a => a.externalId === botId && addableOwnedBot(a));
         if (!a) throw new Error('MEMBER_UNAVAILABLE'); return a.id;
       });
       const room = await api<{ id: string }>('/conversations', 'POST', { operationId: randomUUID(), kind: 'group', name: i.name, participants });
@@ -3361,16 +3393,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     // A teammate's own message about an independent task it started from this group
     // (bot-group-chat.md §10): posted outside any execution, as that teammate, never as the owner.
-    /** A server room (or an old local group already upgraded to one) carries task messages. */
-    hasCompanionTaskChannel: async (groupId: string): Promise<boolean> => (await taskRoomFor(groupId)) !== null,
     postCompanionTaskMessage: async (input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> => {
       const refused = (errorCode: string): BotGroupTaskPostResult => ({ ok: false, errorCode, retryable: false });
       try {
         if (!current()) return refused('OWNER_CHANGED');
         // An old local-only group has a UUID too: it is told from a server room by its local
         // history row and upgrade mapping, never by id shape. Such a group cannot carry a
-        // teammate's own message, so the local service refuses for good and the result falls
-        // back to the owner's private chat instead of retrying forever (bot-group-chat.md §10).
+        // teammate's own message, so the result stays in its task with a delivery failure
+        // instead of moving to a different conversation (bot-group-chat.md §10).
         const roomId = await taskRoomFor(input.groupId);
         if (!roomId) return local.postCompanionTaskMessage(input);
         await register('foreground');
@@ -3378,8 +3408,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         if (!actor) return refused('BOT_UNAVAILABLE');
         const s = await snapshot(roomId);
         if (s.room.archived || !s.members.some(m => m.id === actor.id && m.state === 'joined')) return refused('MEMBER_UNAVAILABLE');
-        const frozen = await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
-          { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, async () => {
+        const prepare = async (): Promise<BotGroupTaskPostSnapshot> => {
             const produced: BotGroupAttachment[] = [];
             const fs = await import('node:fs/promises');
             for (const file of input.files ?? []) {
@@ -3415,7 +3444,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             // A task started in a Thread reports into that Thread (bot-group-chat.md §10).
             const where = input.threadRootId ? { threadRootId: id.parse(input.threadRootId) } : {};
             const messages: BotGroupTaskPostSnapshot['messages'] = [{
-              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), input.card, ...firstFiles], mentions: [], ...where,
+              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), ...(input.card ? [input.card] : []), ...firstFiles], mentions: [], ...where,
             }];
             for (const [index, text] of rest.entries()) messages.push({
               operationId: `${input.clientId}:${index + 2}`, content: [{ type: 'text', text }], mentions: [], ...where,
@@ -3424,7 +3453,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               operationId: `${input.clientId}:files:${index + 2}`, content: files, mentions: [], ...where,
             });
             return { actorId: actor.id, messages };
-          });
+          };
+        const frozen = input.preparePost ? await input.preparePost(prepare, { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId })
+          : input.card ? await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
+            { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, prepare)
+          : (() => { throw new Error('TASK_DELIVERY_ORIGIN_MISSING'); })();
+        if (!current()) return refused('OWNER_CHANGED');
         // Persist every part before the first POST. Retries (including after restart) use the
         // same card, localized fallback, text and media references even if their sources change.
         let messageId = '';
@@ -3437,7 +3471,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       } catch (error) {
         deps.log?.warn('Chat task message post failed', { groupId: input.groupId, ...chatErrorDiagnostic(error) });
         return { ok: false, errorCode: error instanceof Error ? error.message : 'REQUEST_FAILED',
-          retryable: !(error instanceof ChatResponseError) || retryableResponse(error) };
+          retryable: !(error instanceof Error && error.message === 'TASK_DELIVERY_SCOPE_CHANGED')
+            && (!(error instanceof ChatResponseError) || retryableResponse(error)) };
       }
     },
     setMembers: input => safe(async () => {

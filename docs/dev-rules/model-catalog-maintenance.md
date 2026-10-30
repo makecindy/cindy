@@ -127,6 +127,18 @@ Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,0
 身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
 可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
 
+### 推荐引擎（`recommendedAgents`）
+
+推荐哪个引擎由 Server 正本 `source/registry/recommended-agents.json` 维护：每条规则是
+`providerId` + `modelId`（精确）或 `modelIdPrefix`（前缀）+ `agent`，精确优先，其次最长前缀。
+`providerId` 用路由来源：Cindy AI 为 `xd`，目录预设为预设 ID，内置订阅为其目录身份。
+依据官方与社区推荐填写，不靠协议推断；只写与默认推断不同的家族即可。客户端按目录推荐选中
+引擎，用户手动换过的引擎按来源与模型记住；推荐的引擎在该来源只能走兼容模式时不采用。
+
+字段只在请求带 `registryRecommendedAgents=1` 时下发：已发布的 V6 解析器拒收未知字段，
+服务端对其余请求剥离此字段，旧客户端拿到的目录不变。客户端升级后离线启动可回退到升级前
+URL 缓存的 V6 快照。
+
 ### Gateway 复杂价目展示
 
 Model Access V5 通过 `X-Cindy-Model-Capabilities: display_pricing` 协商可选 `displayPricing`。
@@ -295,8 +307,9 @@ Pi 的空来源代表 Cindy AI，先按该身份尝试组 Auto 跟随，再走�
   所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
   `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
 - 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
-  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
-  Registry `perAgent` 可显式打开。
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与需要 Cindy 本地转换的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。上游提供的接口一律视为可直接使用，相应引擎默认开启
+  （2026-10-30 起，Gateway / 聚合渠道的多入口同样如此）。
 - **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
   Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
   调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。

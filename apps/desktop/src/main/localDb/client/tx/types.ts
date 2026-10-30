@@ -727,6 +727,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     id: string;
     title: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
     model: string;
     effort: string;
@@ -1392,6 +1393,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  providerName?: string;
   day: string;
   model: string;
   amount: number;

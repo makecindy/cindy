@@ -48,6 +48,7 @@ import {
   ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
+  managePrRefs,
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
@@ -57,6 +58,8 @@ import {
   type PrStatusResult,
   type PrRemoteState,
 } from './prStatusService.js';
+
+import { fetchPrSummary } from './prSummary';
 
 const log = createLogger('git-context/ipc');
 
@@ -68,6 +71,7 @@ export const GIT_CONTEXT_INVOKE = {
   UNWATCH: 'git-context:unwatch',
   PR_REFS_LIST: 'git-context:pr-refs:list',
   PR_REFS_LIST_ALL: 'git-context:pr-refs:list-all',
+  PR_REFS_MANAGE: 'git-context:pr-refs:manage',
   PR_STATUS: 'git-context:pr-status',
 } as const;
 
@@ -94,26 +98,6 @@ async function readGithubToken() {
   return ghCliTokenSource.readTokenDetailed();
 }
 
-/** GraphQL 查未解决 review thread 数(REST 不暴露 isResolved)。上限 100。 */
-const UNRESOLVED_THREADS_QUERY = `
-query($owner: String!, $repo: String!, $number: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 100) { nodes { isResolved } }
-    }
-  }
-}`;
-
-async function fetchUnresolvedCount(client: GithubClient, q: PrStatusQuery): Promise<number> {
-  const data = await client.graphql<{
-    repository: {
-      pullRequest: { reviewThreads: { nodes: Array<{ isResolved: boolean }> } } | null;
-    } | null;
-  }>(UNRESOLVED_THREADS_QUERY, { owner: q.owner, repo: q.repo, number: q.prNumber });
-  const nodes = data.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-  return nodes.filter((n) => !n.isResolved).length;
-}
-
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
   // fetchImpl:api.github.com 是境外端点,走吃系统代理的通道(见 maker-host/outbound-fetch)。
   const client = new GithubClient({
@@ -124,10 +108,10 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
   });
   // 核心状态走 REST(所有 token 类型通用);未解决数走 GraphQL 增强信号,
   // 失败(老 fine-grained PAT 不支持 GraphQL 等)降级 null,不拖垮整条状态。
-  const [pr, unresolved] = await Promise.all([
+  const [pr, summary] = await Promise.all([
     client.getPullRequest(q.prNumber),
-    fetchUnresolvedCount(client, q).catch((err) => {
-      log.debug('unresolved threads query failed (degrade to null)', { err: String(err) });
+    fetchPrSummary(client, q).catch((err) => {
+      log.debug('PR summary query failed (degrade to null)', { err: String(err) });
       return null;
     }),
   ]);
@@ -139,7 +123,8 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     title: pr.title,
     html_url: pr.html_url,
     branch: pr.head.ref,
-    unresolved_count: unresolved,
+    unresolved_count: summary?.unresolved ?? null,
+    checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
   };
 }
 
@@ -154,11 +139,13 @@ export function registerGitContextIpc(): void {
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
     fetchPr: fetchPrRemote,
+    // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
+    staleTtlMs: 0,
   });
   registerGithubSetupIpc(() => prStatusService?.invalidate());
-  setPrRefsChangedListener((sessionId) =>
-    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId }),
-  );
+  setPrRefsChangedListener((sessionId) => {
+    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId });
+  });
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.GET, async (_e, workdir: unknown) => {
     const dir = requireString(workdir, 'workdir');
@@ -286,6 +273,53 @@ export function registerGitContextIpc(): void {
     return listAllPrRefs();
   });
 
+  // Same-account remote dispatch already authenticates the controller. Shared-task
+  // guests cannot call this channel (it is absent from their separate allowlist).
+  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_MANAGE, async (event, payload: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const obj = payload as {
+      sessionId?: unknown;
+      action?: unknown;
+      id?: unknown;
+      url?: unknown;
+      ids?: unknown;
+    };
+    const sessionId = requireString(obj?.sessionId, 'sessionId');
+    const action = requireString(obj?.action, 'action');
+    if (!['list', 'add', 'remove', 'restore', 'pin', 'unpin', 'reorder'].includes(action)) {
+      throwIpcError('INVALID_PARAMS', 'Unknown PR action');
+    }
+    if (action === 'reorder' && (!Array.isArray(obj.ids) || obj.ids.length === 0)) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a nonempty array');
+    }
+    const operation =
+      action === 'reorder'
+        ? {
+            action: 'reorder' as const,
+            ids: (obj.ids as unknown[]).map((id) => requireString(id, 'id')),
+          }
+        : action === 'list'
+          ? { action: 'list' as const }
+          : action === 'add'
+            ? { action: 'add' as const, url: requireString(obj?.url, 'url') }
+            : {
+                action: action as 'remove' | 'restore' | 'pin' | 'unpin',
+                id: requireString(obj?.id, 'id'),
+              };
+    return managePrRefs(sessionId, operation, async (ref) => {
+      const [status] = await prStatusService!.getStatuses([ref], {
+        remote: isDeviceLinkInvoke(),
+        waitForFresh: true,
+      });
+      if (!status?.ok) {
+        throwIpcError(
+          status?.reason === 'not-found' ? 'NOT_FOUND' : 'PRECONDITION_FAILED',
+          'Unable to verify GitHub PR',
+        );
+      }
+    });
+  });
+
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, async (_e, queries: unknown) => {
     let rawQueries: unknown = queries;
     let remoteSessionId: string | null = null;
@@ -334,11 +368,16 @@ export function registerGitContextIpc(): void {
  * 任务摘要（get_task_digest）用：本机任务最近提到的几个 PR 的远端状态。与 PR_STATUS
  * 同一服务与缓存；服务未就绪或任务没有 PR 时返回空数组。只读本机已记录的 PR 引用。
  */
-export async function readSessionPrStatuses(sessionId: string, limit = 3): Promise<PrStatusResult[]> {
+export async function readSessionPrStatuses(
+  sessionId: string,
+  limit = 3,
+): Promise<PrStatusResult[]> {
   if (!prStatusService) return [];
   const refs = (await listPrRefs(sessionId)).slice(0, limit);
   if (refs.length === 0) return [];
-  return prStatusService.getStatuses(refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })));
+  return prStatusService.getStatuses(
+    refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
+  );
 }
 
 /** 应用退出时清理 watcher 订阅。 */

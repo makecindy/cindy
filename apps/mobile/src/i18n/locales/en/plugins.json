@@ -277,13 +277,22 @@
       "nodeChildSpawnDetail": "Only JS files declared inside its own package can be started (same local permissions as the main program); arbitrary commands cannot be executed. Sub-processes are closed together when the plugin is disabled or exits.",
       "skill": "Adds the skill \"{{name}}\" to your AI assistants",
       "skillDetail": "A skill is an instruction file the AI loads and follows as its own, with your full permissions, in Claude Code and Codex, across every project — it is not confined to this plugin's sandbox. It stays available while the plugin is enabled and is removed when the plugin is disabled or uninstalled; turning the plugin off for a single folder does not hide it. The full skill text cannot be previewed here — only install plugins you trust.",
-      "routineEvents": "Routine Events"
+      "routineEvents": "Routine Events",
+      "mcpUi": "Can display interactive pages in conversations",
+      "mcpUiDomains": "Domains the pages can connect to: {{domains}}",
+      "uiPageAccess": "Pages: {{pages}}\nDomains the pages can connect to: {{domains}}\nTools the pages can call: {{tools}}"
     },
     "releaseChanged": "The available version changed. Review the refreshed version before installing.",
     "settingsUnavailable": "Could not load the plugin settings. Reload settings to try again.",
     "settingsResultUnknown": "The operation result could not be confirmed. Reload the computer’s settings before submitting again.",
     "settingsOperationFailed": "The settings operation could not be completed. Check the connection and try again.",
-    "settingsReload": "Retry"
+    "settingsReload": "Retry",
+    "trust": {
+      "cindy-official": "Official",
+      "reviewed": "Reviewed",
+      "verified-publisher": "Verified publisher",
+      "unverified": "Unverified"
+    }
   },
   "notice": {
     "title": {
@@ -311,5 +320,13 @@
       "agent": "Requested by Agent"
     },
     "taskCapability": "For this task"
+  },
+  "uiApproval": {
+    "title": "Plugin “{{name}}” has added interactive pages. Review their permissions before using them.",
+    "enable": "Review and enable",
+    "later": "Later",
+    "purpose": "Review interactive page permissions",
+    "updateHost": "Update Cindy on the execution computer to confirm here. Text tools remain available.",
+    "failed": "Could not enable interactive pages. Check the connection and plugin version, then try again."
   }
 }

@@ -3,7 +3,7 @@ import { StrictMode, useState, type ReactNode } from 'react';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
+import { ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
 import { BotGroupThreadHint } from '../BotGroupThreadHint';
@@ -741,11 +741,10 @@ describe('chat interaction controls', () => {
   });
 
   it('creates and displays a copyable link in Strict Mode', async () => {
-    render(<StrictMode><ChatInviteButton groupId="room" members={[
+    render(<StrictMode><ChatInviteDialog groupId="room" onClose={vi.fn()} members={[
       { botId: 'self', name: 'Alex', avatar: '👤', avatarColor: 'graphite', status: 'active', isSelf: true },
       { botId: 'bot', name: 'Cindy', avatar: '🤖', avatarColor: 'violet', status: 'active' },
     ]} /></StrictMode>);
-    fireEvent.click(screen.getByRole('button', { name: k('invite') }));
     expect((await screen.findByRole('textbox', { name: k('inviteLink') }) as HTMLInputElement).value).toBe('cindy://chat-invite/test');
     expect(mocks.createInvite).toHaveBeenCalledExactlyOnceWith({ groupId: 'room', clientId: expect.any(String) });
     expect(screen.queryByRole('button', { name: k('createLink') })).toBeNull();

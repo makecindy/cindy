@@ -1674,7 +1674,9 @@
     }
   },
   "settings": {
-    "newChatDefaults": { "title": "새 작업의 기본 권한" },
+    "newChatDefaults": {
+      "title": "새 작업의 기본 권한"
+    },
     "imConnection": {
       "reconnect": "다시 연결",
       "savedNote": "연결 정보가 저장되어 있습니다. 바로 다시 연결할 수 있습니다.",
@@ -2269,7 +2271,7 @@
         "title": "Cindy 닫기",
         "message": "기본 창을 닫을 때 어떻게 할까요?",
         "detail": "시스템 트레이로 최소화하면 작업이 계속 실행됩니다. 종료하려면 트레이 아이콘을 오른쪽 클릭하세요. 나중에 설정에서 변경할 수 있습니다.",
-        "linuxDetail": "창을 최소화해도 작업은 계속 실행됩니다. 작업 표시줄이나 창 개요에서 Cindy를 복원할 수 있으며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
+        "linuxDetail": "창이 화면에 보이지 않아도 작업은 계속 실행됩니다. Cindy를 다시 열면 창이 복원되며, 나중에 설정에서 이 선택을 변경할 수도 있습니다."
       },
       "trayMenu": {
         "show": "Cindy 열기",
@@ -2463,7 +2465,7 @@
         "description": "Ubuntu는 시스템 .deb 패키지를 사용합니다. Arch Linux와 Omarchy는 같은 검증된 .deb 콘텐츠를 관리되는 사용자 디렉터리에 설치합니다. Debian 패키지 관리자는 필요하지 않습니다.",
         "item1": "Ubuntu: sudo apt install ./cindy-<version>-<arch>.deb를 실행하세요. Arch/Omarchy: docs/linux.md의 사용자 설치 안내를 따르세요.",
         "item2": "업데이트 시 시스템 .deb 설치는 인증을 요청하고, 사용자 설치는 시스템 비밀번호 없이 버전을 전환합니다. 다른 패키지 관리자로 설치한 경우 해당 관리자로 업데이트하세요.",
-        "item3": "Linux x64는 Beta 채널을 지원하며 arm64는 아직 지원하지 않습니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
+        "item3": "Linux x64와 arm64는 Beta 채널을 지원합니다. Linux 업데이트는 재시작을 선택할 때만 적용되며 유휴 상태에서 자동으로 설치되지 않습니다."
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "답을 찾지 못했나요? 하고 싶은 일을 질문하세요.",
@@ -3842,7 +3844,7 @@
           "contextLimitOverWindow": "공급업체가 명시한 한도를 초과하여 요청이 실패할 수 있습니다.",
           "restoreDefault": "기본값 복원",
           "engines": "엔진 지원",
-          "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
+          "enginesHint": "호환 모드에서는 Cindy가 로컬에서 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
           "engineNotConfigured": "설정되지 않음",
           "engineNoFast": "Fast 없음",
@@ -3881,10 +3883,10 @@
           "protocol": {
             "reference": "기본 API",
             "compatibility": "호환 모드",
-            "compatibilityHint": "호환 모드에서는 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
-            "matching": "기본 지원",
+            "compatibilityHint": "Cindy가 로컬에서 요청을 변환합니다. 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
             "unknown": "프로토콜 미확인",
-            "automatic": "자동 선택"
+            "automatic": "자동 선택",
+            "upstream": "업스트림 API"
           },
           "lifecycle": {
             "alpha": "체험판",
@@ -4010,9 +4012,7 @@
         "metaOAuth": "구독 계정",
         "metaApiKey": "API key",
         "metaNoAuth": "로컬 / 자체 호스팅 · 인증 없음",
-        "customTitle": "사용자 지정 엔드포인트",
-        "customMeta": "OpenAI / Anthropic 호환 모델 소스를 연결",
-        "pickHint": "연결할 계정이나 서비스를 선택하세요.",
+        "customAction": "찾는 항목이 없나요? 직접 추가",
         "oauthDesc": "브라우저에서 로그인합니다. API key는 필요하지 않습니다.",
         "deviceOAuthDesc": "일회용 기기 코드를 사용해 제공자 인증 페이지에서 인증하세요",
         "authorizeInBrowser": "브라우저에서 인증",
@@ -5684,7 +5684,7 @@
         },
         "host": {
           "title": "이 컴퓨터에서 중계 시작",
-          "hint": "다른 기기가 이 컴퓨터에 접속할 수 있어야 합니다. 같은 로컬 네트워크, 공유기 포트 포워딩, 터널, 메시 VPN 등으로 직접 확보해 주세요. 이 컴퓨터가 잠자기 상태가 되거나 Cindy를 종료하면 모든 기기의 연결이 끊어지므로 \"컴퓨터 깨어 있게 하기\"를 켭니다.",
+          "hint": "다른 기기가 이 컴퓨터에 접속할 수 있어야 합니다. 같은 로컬 네트워크, 공유기 포트 포워딩, 터널, 메시 VPN 등으로 직접 확보해 주세요. 이 컴퓨터가 잠자기 상태가 되거나 Cindy를 종료하면 모든 기기의 연결이 끊어지므로 \"컴퓨터를 절전 모드로 전환하지 않기\"를 켭니다.",
           "port": "포트",
           "scope": "연결 허용 범위",
           "scopeLocal": "이 컴퓨터만",
@@ -7513,8 +7513,8 @@
         "updated": "업데이트됨",
         "unchanged": "그 외 {{count}}개 권한은 변경 없음",
         "noChange": "권한 변경이 없습니다.",
-        "pick": "폴더 선택을 요청할 수 있습니다",
-        "pickDetail": "요청 시 Cindy가 시스템 폴더 선택 창을 띄웁니다. 어떤 폴더를 넘길지는 직접 결정하며, 취소하면 아무것도 전달되지 않습니다.",
+        "pick": "파일 또는 폴더 선택을 요청할 수 있습니다",
+        "pickDetail": "플러그인이 요청하면 Cindy가 시스템 선택 창을 엽니다. 공유할 항목은 직접 선택하며, 취소하면 아무것도 전달되지 않습니다.",
         "workspace": "프로젝트 폴더의 세션 항목을 사이드바에 만들도록 요청할 수 있습니다",
         "workspaceDetail": "요청 시 직접 폴더를 선택하거나 확인 카드에서 전체 경로를 본 뒤 허용 여부를 결정합니다. 사용자가 시작한 호출을 처리하는 동안에는 현재 세션 작업 디렉터리 안의 하위 폴더는 추가 확인 없이 사용됩니다. 이미 세션이 있는 폴더는 재사용되어 중복 생성되지 않습니다. 만들어지는 것은 빈 세션뿐이며 스스로 작업을 시작하지 않습니다.",
         "sessionContext": "현재 세션이 사용 중인 프로젝트 폴더 위치를 알 수 있습니다",
@@ -7528,7 +7528,11 @@
         "nodeChildSpawnDetail": "자신의 패키지 안에 신고된 JS 파일만 시작할 수 있으며(메인 프로그램과 동일한 로컬 권한), 임의의 명령은 실행할 수 없습니다. 플러그인이 비활성화되거나 종료되면 하위 프로세스도 함께 종료됩니다.",
         "skill": "AI 어시스턴트에 스킬 \"{{name}}\"을(를) 추가합니다",
         "skillDetail": "스킬은 AI가 자신의 지시로 읽어들여 실행하는 지시 파일입니다. 사용자의 전체 권한으로 Claude Code와 Codex의 모든 프로젝트에 적용되며, 이 플러그인의 샌드박스에 제한되지 않습니다. 플러그인이 활성화된 동안 계속 사용 가능하며, 비활성화하거나 제거하면 삭제됩니다. 특정 폴더에서만 플러그인을 끄더라도 숨겨지지 않습니다. 여기서는 스킬 전문을 미리 볼 수 없습니다 — 신뢰할 수 있는 플러그인만 설치하세요.",
-        "routineEvents": "루틴 이벤트"
+        "routineEvents": "루틴 이벤트",
+        "mcpUi": "대화에 인터랙티브 페이지 표시",
+        "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
+        "mcpAppOnly": "페이지 전용",
+        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -7907,8 +7911,9 @@
         "usesExplanation": "허용된 공유 범위의 모든 버전에서 누적된 도구 호출 수입니다. 아래 내 호출은 이 컴퓨터의 현재 계정만 집계합니다."
       },
       "contribution": {
-        "unreadReview": "새 심사 결과가 있습니다",
+        "unreadReview": "새 처리 결과가 있습니다",
         "viewReviewResult": "{{version}} 심사 결과 보기",
+        "viewMarketResult": "마켓 처리 결과 보기",
         "anonymous": "익명으로 게시",
         "anonymousHint": "플러그인 전체의 공개 작성자 이름을 숨깁니다. 끄면 각 버전의 심사 제출 시 저장된 원작자 이름이 표시됩니다.",
         "anonymousAuthorOnly": "원작자만 변경할 수 있습니다",
@@ -8004,6 +8009,7 @@
           "rejected": "반려됨",
           "enabled": "게시 시작",
           "disabled": "게시 중단",
+          "archived": "보관됨",
           "current_changed": "게시 버전 변경",
           "revoked": "버전 철회됨",
           "cancelled": "취소됨"
@@ -8101,6 +8107,14 @@
         "viewPendingVersion": "심사 중인 버전 보기",
         "submitFailed": "제출 실패",
         "viewDetails": "상세 보기"
+      },
+      "fileTransfer": {
+        "reading": "파일 읽는 중",
+        "uploading": "업로드 중",
+        "saving": "파일 저장 중",
+        "importing": "파일 가져오는 중",
+        "finished": "파일 작업 종료",
+        "importFinished": "파일 가져오기 종료"
       }
     },
     "mcp": {
@@ -10266,6 +10280,7 @@
       "backToBot": "{{name}}(으)로 돌아가기"
     },
     "collab": {
+      "deliveryFailed": "원래 채팅에 결과를 전달하지 못했습니다. 결과는 이 세션에 저장되어 있습니다.",
       "backgroundTask": "백그라운드 작업",
       "trackedTask": "독립적으로 실행하고 결과를 자동 반환",
       "stopTask": "작업 중지",
@@ -10400,7 +10415,9 @@
         "digestSent": "파트너 채팅으로 보냈어요",
         "digestFailed": "정리하지 못했어요. 다시 시도하세요.",
         "digestEmpty": "새로 정리할 내용이 없어요",
-        "joinSetup": "참여 후 AI 대신 답장 설정"
+        "joinSetup": "참여 후 AI 대신 답장 설정",
+        "hours": "대신 답장 시간",
+        "ownerOnly": "이 설정은 나만 보고 바꿀 수 있어요."
       },
       "migrationPending": "이전 기록 일부가 아직 업로드되지 않았습니다. 자동으로 다시 시도하며 채팅은 계속 사용할 수 있습니다.",
       "memberSeparator": ", ",
@@ -10597,8 +10614,6 @@
         "projectDirChange": "폴더 변경",
         "projectDirClear": "지우기",
         "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
-        "handoff": "단계 넘기기",
-        "autoContinueNote": "켜 두면 이 그룹에서 내가 시작한 역할 분담은 한 단계가 끝날 때마다 자동으로 다음 단계로 넘어갑니다. 끄면 단계마다 ‘다음 단계 시작’을 누를 때까지 기다립니다. 이 컴퓨터에서만 적용됩니다.",
         "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요"
       },
@@ -10794,12 +10809,7 @@
           "member": "멤버",
           "guest": "게스트",
           "companionOf": "{{name}}의 파트너",
-          "guestAccess": "다른 멤버의 사용 권한",
           "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
-          "chatHint": "그룹 메시지만 사용하며 소유자의 기억, 개인 정보, 도구는 사용하지 않습니다.",
-          "none": "소유자만 사용",
-          "chat": "그룹 내 대화만",
-          "tools": "도구와 정보 사용 승인됨",
           "ownerOnly": "파트너 소유자만 이 권한을 변경할 수 있습니다.",
           "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
           "makeAdmin": "관리자로 지정",
@@ -10809,7 +10819,6 @@
           "transferHint": "상대가 소유자가 되고 본인은 관리자가 됩니다.",
           "removeTitle": "{{name}}을 그룹에서 내보낼까요?",
           "removeHint": "메시지를 읽거나 보낼 수 없게 됩니다. 해당 멤버의 파트너도 나갑니다.",
-          "addCompanion": "내 파트너 초대",
           "leave": "그룹 나가기",
           "leaveHint": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
           "soleOwnerHint": "그룹에 나만 남았어요. 그룹을 보관하면 기록을 유지하고 나중에 다시 사용할 수 있어요.",
@@ -10821,10 +10830,78 @@
           "unarchive": "그룹 보관 해제",
           "unarchiveHint": "보관을 해제하면 모든 멤버의 메시지와 파트너 실행이 재개돼요.",
           "archived": "보관된 그룹입니다. 기록은 계속 볼 수 있습니다.",
-          "noneHint": "이 그룹에서는 동료의 소유자만 응답을 요청할 수 있습니다.",
-          "companionPermissions": "동료 권한",
-          "configureCapabilities": "도구 및 사용 권한 설정",
-          "capabilityScope": "이것은 {{name}}의 도구와 사용 권한이며, 이 그룹에만 적용되는 설정이 아닙니다."
+          "capabilityScope": "이것은 {{name}}의 도구와 사용 권한이며, 이 그룹에만 적용되는 설정이 아닙니다.",
+          "tabSettings": "설정",
+          "youAreOwner": "내가 그룹 소유자",
+          "youAreAdmin": "내가 관리자",
+          "inviteEntry": "초대",
+          "inviteFriendsItem": "사람 초대",
+          "inviteFriendsItemHint": "공유할 링크 만들기",
+          "inviteFriendsLocked": "그룹 소유자와 관리자만 사람을 초대할 수 있어요",
+          "inviteBotsItem": "동료 추가",
+          "inviteBotsItemHint": "내 동료를 골라 바로 추가",
+          "searchTeammates": "동료 검색",
+          "inviteBotsCount": "추가할 수 있는 동료 {{count}}명",
+          "inviteBotsAllIn": "내 동료가 모두 이미 들어와 있어요",
+          "inviteBotsNoMatch": "‘{{query}}’와 일치하는 동료가 없어요",
+          "inviteBotsAdded": "{{name}}을(를) 그룹에 추가했어요",
+          "noTeammates": "아직 동료가 없어요",
+          "createTeammate": "동료 만들기",
+          "back": "그룹 설정으로 돌아가기",
+          "about": "그룹 소개",
+          "edit": "편집",
+          "add": "추가",
+          "aboutEmpty": "주제와 소개를 추가하면 새 멤버가 이 그룹에서 무엇을 이야기하는지 바로 알 수 있어요.",
+          "showMore": "더 보기",
+          "showLess": "접기",
+          "you": "나",
+          "searchMembers": "멤버 검색",
+          "membersNoMatch": "‘{{query}}’와 일치하는 멤버가 없어요",
+          "teammateTag": "동료",
+          "paused": "일시 중지됨",
+          "accessNone": "소유자만 사용",
+          "accessChat": "그룹 내 대화만",
+          "accessTools": "도구와 정보 사용 가능",
+          "replies": "동료 답변 방식",
+          "replyModeMentionedNote": "@하지 않으면 동료가 답하지 않아요.",
+          "work": "역할 분담",
+          "ownFolder": "그룹 전용 폴더",
+          "projectDirHint": "역할 분담 때 동료가 여기서 작업해요.",
+          "projectDirClearHint": "그룹 전용 폴더를 대신 사용해요",
+          "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동료예요.",
+          "autoContinueHint": "끄면 단계마다 ‘계속’을 누를 때까지 기다려요.",
+          "workCaption": "git 프로젝트를 고르면 역할 분담마다 새 브랜치를 만들어 내 코드는 건드리지 않아요. 프로젝트 폴더와 자동 넘기기는 이 컴퓨터에서만 적용돼요.",
+          "me": "이 그룹에서의 나",
+          "profileHint": "이 그룹에서만 보이는 닉네임과 사진",
+          "maskHint": "누가 나를 @하면 내 동료가 대신 답해요",
+          "myTeammates": "내 동료",
+          "myTeammatesCaption": "다른 멤버가 내 동료를 어떻게 쓸 수 있는지 정해요.",
+          "manage": "그룹 관리",
+          "manageHintOwner": "답변 방식, 담당자, 역할 분담, 보관과 해산",
+          "manageHintAdmin": "답변 방식, 담당자, 역할 분담, 보관",
+          "manageCaption": "이 페이지는 그룹 소유자와 관리자만 볼 수 있어요.",
+          "hideHint": "나가지 않고 내 목록에서만 숨겨요",
+          "leaveRowHint": "내 동료도 함께 나가요",
+          "leaveRowHintAlone": "새 메시지를 받지 않고 기록도 볼 수 없어요",
+          "leaveBlocked": "나가려면 먼저 그룹 소유자를 넘겨주세요",
+          "archiveRowHint": "모두에게 그룹을 멈추고 기록은 남겨요",
+          "unarchiveRowHint": "메시지와 동료 작업을 다시 시작해요",
+          "dissolveRowHint": "되돌릴 수 없고 아무도 메시지를 보낼 수 없어요",
+          "editTitle": "그룹 정보 편집",
+          "topicHint": "그룹 소개 맨 위에 표시돼요",
+          "descriptionHint": "동료는 답할 때마다 최신 소개를 참고해요.",
+          "companionTitle": "이 그룹의 {{name}}",
+          "yourTeammate": "내 동료",
+          "accessQuestion": "다른 멤버가 {{name}}을(를) 어떻게 쓸 수 있나요?",
+          "defaultTag": "기본",
+          "accessNoneTitle": "나만",
+          "accessNoneHint": "이 그룹에서는 나만 {{name}}에게 답을 요청할 수 있어요.",
+          "accessChatTitle": "그룹 대화만",
+          "accessChatHint": "그룹 메시지만 보고 답해요. 내 기억과 개인 정보를 읽지 않고 도구도 쓰지 않아요.",
+          "accessToolsTitle": "도구와 정보도 사용",
+          "accessToolsHint": "{{name}}의 기존 도구와 내 개인 정보를 쓸 수 있고 결과는 모두에게 보여요. 기존 승인 규칙은 그대로이며, 권한을 거둬도 이미 끝난 작업은 되돌릴 수 없어요.",
+          "capabilitiesRow": "{{name}}의 도구와 권한",
+          "accessMenu": "이 그룹 권한"
         }
       },
       "lifecycle": {
@@ -12412,6 +12489,13 @@
         "busy": "저장소가 사용 중입니다. 잠시 후 다시 시도하세요",
         "changed": "체크아웃된 브랜치가 변경되었습니다. 다시 시도하세요."
       }
+    },
+    "pluginUi": {
+      "title": "플러그인 “{{name}}”에 대화형 페이지가 추가되었습니다. 사용하려면 확인해 주세요.",
+      "enable": "검토 후 활성화",
+      "later": "나중에",
+      "ready": "대화형 페이지가 활성화되었습니다. 다음 플러그인 도구 호출부터 표시됩니다.",
+      "updateHost": "여기서 대화형 페이지를 승인하려면 실행 컴퓨터의 Cindy를 업데이트하세요."
     }
   },
   "onboarding": {
@@ -14331,8 +14415,8 @@
         "ghMissing": "GitHub CLI(gh)를 찾을 수 없어 PR 상태를 볼 수 없습니다",
         "notFound": "PR이 없거나 현재 계정으로는 볼 수 없습니다",
         "statusUnknown": "상태를 가져오지 못했습니다",
+        "statusNotFetched": "아직 상태 정보가 없습니다",
         "openAria": "브라우저에서 PR #{{number}} 열기",
-        "clickToOpen": "클릭하여 브라우저에서 PR 열기",
         "guidance": {
           "login": {
             "hint": "클릭하여 GitHub 연결",
@@ -14420,7 +14504,40 @@
             "otherMethods": "다른 연결 방법"
           }
         },
-        "unresolved": "미해결 리뷰 코멘트: {{count}}건"
+        "unresolved": "미해결 리뷰 코멘트: {{count}}건",
+        "summaryAria": "PR #{{number}} 요약 보기",
+        "unresolvedLabel": "미해결 리뷰 코멘트",
+        "checks": "검사",
+        "checksTotal": "총 {{count}}개",
+        "failed": "실패",
+        "passed": "통과",
+        "pending": "진행 중",
+        "skippedLabel": "건너뜀 또는 중립",
+        "manage": {
+          "title": "PR 링크 관리",
+          "hint": "상단에 최대 3개 표시하며 고정한 PR이 먼저 표시됩니다",
+          "empty": "GitHub PR 링크를 붙여넣어 추가하세요",
+          "removed": "제거됨: {{count}}개",
+          "addLabel": "PR 링크 추가",
+          "add": "PR 추가",
+          "loading": "불러오는 중…",
+          "restore": "PR 복원",
+          "pin": "상단에 고정",
+          "unpin": "고정 해제",
+          "pinLimit": "PR은 최대 3개까지 고정할 수 있습니다",
+          "reorderHint": "Alt+↑/↓ 키로 고정 또는 고정되지 않은 그룹 안에서 순서를 변경합니다.",
+          "dragHandle": "{{repo}} #{{number}} 끌어서 순서 변경",
+          "remove": "PR 제거",
+          "errors": {
+            "duplicate": "이미 연결된 PR입니다. 제거한 링크는 목록에서 복원할 수 있습니다",
+            "notFound": "PR을 찾을 수 없거나 접근 권한이 없습니다",
+            "invalidUrl": "유효한 GitHub PR 링크를 입력하세요",
+            "reorderFailed": "순서가 저장되지 않았습니다. 다시 시도하세요.",
+            "verifyFailed": "PR을 확인할 수 없습니다. GitHub 로그인과 접근 권한을 확인하세요",
+            "unsupported": "이 컴퓨터의 버전은 PR 링크 관리를 지원하지 않습니다",
+            "failed": "PR 링크를 업데이트할 수 없습니다"
+          }
+        }
       }
     },
     "schedule": {
@@ -15535,6 +15652,7 @@
       "embedded-frame": "입력란이 페이지에 삽입된 다른 사이트 안에 있습니다. 출처를 신뢰할 수 있는지 확인하세요."
     },
     "agentControlled": "이 화면은 Agent가 열었습니다. 입력하기 전에 실제로 로그인하려는 곳인지 확인하세요.",
+    "agentPicture": "이 코드는 Agent가 찍은 스크린샷에서 가져온 것이라 Cindy는 원래 화면을 볼 수 없고, 스캔해도 자동으로 계속하지 않습니다. 로그인하려는 사이트로 연결되는지 확인하고, 스캔한 뒤 \"Agent에게 넘기기\"를 누르세요.",
     "error": {
       "decision": "요청이 전달되지 않았습니다. 다시 시도하세요.",
       "stale": "화면이 바뀌었습니다. 최신 내용으로 진행하세요.",
@@ -17239,6 +17357,18 @@
     "compression": "긴 내용을 간결하게 줄입니다."
   },
   "routines": {
+    "deliveryLabel": "최종 전달",
+    "deliveryDirect": "파트너 채팅에 바로 표시",
+    "deliveryProcess": "파트너가 처리한 후 답장",
+    "deliveryIm": "메시지 봇으로 전송",
+    "deliveryNone": "실행 작업에만 보관",
+    "deliveryHint": "바로 표시는 모델을 추가 호출하지 않습니다. 조용한 확인에서는 변화가 없으면 전달하지 않습니다.",
+    "deliveryRecipient": "받는 곳",
+    "deliveryUnavailable": "전달할 수 없는 대상",
+    "deliveryNoRecipients": "메시지 봇을 연결하고 한 번 대화한 다음 이 설정을 다시 여세요.",
+    "deliveryFailed": "실행 완료, 전달 실패",
+    "deliveryFailedHint": "결과가 저장되었습니다. 전달 설정을 확인하세요. 재전송을 위해 작업을 다시 실행하지 마세요.",
+    "deliveryDelivered": "결과 전달 완료",
     "onEvent": "이벤트: {{source}} · {{event}}",
     "triggerDetails": "실행 조건 보기 ({{count}}개 중 하나 충족 시 실행)",
     "noTriggers": "설정된 실행 조건 없음",
@@ -18386,7 +18516,18 @@
     "cardTitle": "{{title}} · $t(mcpApps.appName)",
     "messageSource": "$t(mcpApps.appName) “{{name}}”에서 전송",
     "serverId": "MCP 서버 ID: {{id}}",
-    "exitFullscreen": "전체 화면 종료"
+    "exitFullscreen": "전체 화면 종료",
+    "pluginTrust": {
+      "unverified": "미검증",
+      "cindy-official": "Cindy 공식",
+      "reviewed": "검토됨",
+      "verified-publisher": "확인된 게시자"
+    },
+    "pluginRevoked": "플러그인이 비활성화되거나 변경되어 이 페이지를 사용할 수 없습니다.",
+    "pluginCspRejected": "페이지에서 선언되지 않은 도메인을 요청하여 로드를 차단했습니다.",
+    "filesOnExecutionComputer": "파일 내용은 실행 컴퓨터에서 확인하세요",
+    "awaitingApproval": "승인을 기다리고 있어요",
+    "pendingApprovals": "승인 대기 {{count}}개"
   },
   "richAnswer": {
     "send": "메시지 보내기",
@@ -18457,5 +18598,47 @@
     "groupHint": "끄면 이 그룹을 통해 실행하는 모든 작업이 일반 속도로 실행됩니다. Ultrafast에도 적용됩니다.",
     "pending": "일부 컴퓨터가 설정을 확인하지 않았습니다. 연결을 유지하고 이 설정을 지원하지 않는 그룹 컴퓨터를 업데이트하세요.",
     "saveFailed": "설정은 저장되었을 수 있지만 일부 실행 중인 작업이 일반 속도 전환을 확인하지 않았습니다. 연결을 확인한 후 다시 시도하세요."
+  },
+  "usageCost": {
+    "title": "비용 내역",
+    "conversation": "채팅",
+    "additional": "추가 비용",
+    "unknownModel": "모델 미기록",
+    "estimate": "추정 가치",
+    "charged": "사용량 요금",
+    "loading": "내역 불러오는 중…",
+    "unavailable": "이 기록의 내역을 확인할 수 없습니다.",
+    "explanation": "모델과 경로별로 집계합니다. 구독 가치는 추정치이며 추가 청구 금액이 아닙니다. 기록된 비용만 포함되며 과거 내역은 불완전할 수 있습니다.",
+    "source": {
+      "subscription": "구독 계정",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 제공자",
+      "unknown": "경로 미기록"
+    }
+  },
+  "performanceTrace": {
+    "title": "성능 기록",
+    "start": "기록 시작",
+    "stop": "기록 중지",
+    "description": "시작한 후 느려지는 동작을 재현하고 기록을 중지하세요. 60초 후 자동으로 종료됩니다. 로컬 추적 파일에는 경로 등 민감한 정보가 포함될 수 있습니다.",
+    "localScope": "이 컴퓨터만 기록합니다. 다른 컴퓨터와 휴대폰은 포함되지 않습니다.",
+    "recording": "기록 중 · {{seconds}}초",
+    "saving": "기록 저장 중…",
+    "result": "성능 보고서",
+    "previous": "이전 보고서 보기",
+    "previousResult": "이전 성능 보고서",
+    "previousSummary": "마지막 기록: {{time}}, {{seconds}}초.",
+    "resultDescription": "느려지는 원인을 조사하기 위해 전체 성능 보고서, CPU 프로파일, Chromium 추적 파일과 입력한 설명을 제출합니다. 식별 가능한 인증 정보, 이메일 주소 등의 민감한 정보는 업로드 전에 가려집니다. 파일에 로컬 경로와 성능 마커가 남아 있을 수 있습니다. 로컬 원본 파일은 7일간 보관됩니다.",
+    "summary": "{{seconds}}초 동안 기록했습니다.",
+    "partial": "일부 데이터를 수집하지 못했거나 한도에 도달했습니다. 수집한 기록은 보관되어 있습니다.",
+    "note": "당시 무엇을 하고 있었나요? (선택 사항)",
+    "submit": "보고서 제출",
+    "keepLocal": "로컬 파일 보기",
+    "close": "닫기",
+    "new": "다시 기록",
+    "uploaded": "성능 보고서 파일이 업로드되었습니다. 보고서 번호: {{id}}. 문제를 제보할 때 이 번호를 알려 주세요.",
+    "unavailable": "이 빌드에는 보고서 업로드 대상이 설정되어 있지 않습니다. 로컬 파일을 열어 지원 담당자에게 공유할 수 있습니다.",
+    "consent": "설정에서 개인정보 처리방침에 동의한 후 제출하세요. 로컬 파일은 보관되어 있습니다.",
+    "failed": "작업이 완료되지 않았습니다. 다시 시도하거나 로컬 파일을 확인하세요."
   }
 }

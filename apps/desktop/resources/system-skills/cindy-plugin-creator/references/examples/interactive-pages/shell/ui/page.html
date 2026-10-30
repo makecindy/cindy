@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动态页面</title>
+<style>
+:root{color-scheme:light dark;color:var(--color-text-primary,CanvasText);background:var(--color-background-primary,Canvas);font:14px/1.6 var(--font-sans,system-ui)}
+*{box-sizing:border-box}body{margin:0;padding:24px;overflow-wrap:anywhere}main{max-width:960px;margin:auto}
+#status{font-size:12px;color:var(--color-text-secondary,GrayText)}#status.error{color:var(--color-text-danger,CanvasText)}
+button{font:inherit;color:inherit;background:var(--color-background-secondary,Canvas);border:1px solid var(--color-border-primary,GrayText);border-radius:999px;padding:7px 14px;cursor:pointer}
+@media(max-width:600px){body{padding:16px}}
+</style>
+</head>
+<body>
+<main>
+<p id="status" role="status">正在连接…</p>
+<div id="content" aria-busy="false"></div>
+</main>
+<script>
+(() => {
+  const content = document.querySelector('#content'), status = document.querySelector('#status');
+  const pending = new Map(); let nextId = 0, connected = false, busy = false, closed = false, observer;
+  const post = message => parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+  const notify = (method, params = {}) => post({ method, params });
+  const text = result => (result?.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n');
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const finish = (result, error) => {
+        error ? reject(error) : resolve(result);
+      };
+      const timer = setTimeout(() => { pending.delete(id); notify('notifications/cancelled', { requestId: id, reason: '等待超时' }); finish(null, Error('等待超时，请核对结果后重试。')); }, 30 * 60 * 1000);
+      pending.set(id, { finish, timer }); post({ id, method, params });
+    });
+  }
+  function showError(message) { status.textContent = message; status.className = 'error'; }
+  function render(result) {
+    if (result?.isError) { showError(text(result) || '操作失败'); return; }
+    const html = result?._meta?.view?.html;
+    if (typeof html !== 'string') { showError('结果没有页面内容'); return; }
+    const template = document.createElement('template'); template.innerHTML = html;
+    template.content.querySelectorAll('script,iframe,object,embed,base,meta,link').forEach(node => node.remove());
+    for (const node of template.content.querySelectorAll('*')) for (const attr of [...node.attributes]) {
+      if (/^on/i.test(attr.name) || (['href', 'src', 'action', 'formaction', 'xlink:href'].includes(attr.name) && /^javascript:/i.test(attr.value.replace(/\s/g, '')))) node.removeAttribute(attr.name);
+    }
+    content.replaceChildren(template.content); status.textContent = text(result) || '内容已更新'; status.className = '';
+  }
+  async function load(intent, fields = {}) {
+    if (!connected || busy) return;
+    busy = true; content.setAttribute('aria-busy', 'true'); status.className = ''; status.textContent = '加载中，请留意 Cindy 的确认提示…';
+    try { const result = await request('tools/call', { name: 'load_view', arguments: { intent, fields } }); if (connected) render(result); }
+    catch (error) { if (connected) showError(error.message); }
+    finally { busy = false; content.setAttribute('aria-busy', 'false'); }
+  }
+  function submit(form, submitter) {
+    if (!(form instanceof HTMLFormElement) || !form.dataset.intent || !form.reportValidity()) return;
+    const fields = Object.create(null);
+    for (const [key, value] of new FormData(form, submitter)) {
+      if (typeof value !== 'string') { showError('此页面仅支持文本表单字段'); return; }
+      fields[key] = key in fields ? [].concat(fields[key], value) : value;
+    }
+    void load(form.dataset.intent, fields);
+  }
+  content.addEventListener('click', event => {
+    const control = event.target.closest('button,input');
+    // sandbox 无 allow-forms 且 CSP form-action 'none'：表单只能走工具桥接，须先接管 click/Enter。
+    if (control?.form && content.contains(control.form) && ['submit', 'image'].includes(control.type)) {
+      event.preventDefault(); submit(control.form, control); return;
+    }
+    const action = event.target.closest('[data-intent]');
+    if (!action || !content.contains(action) || action.tagName === 'FORM') return;
+    event.preventDefault(); void load(action.dataset.intent);
+  });
+  content.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing || !(event.target instanceof HTMLInputElement)) return;
+    if (['button', 'submit', 'reset', 'checkbox', 'radio', 'file'].includes(event.target.type)) return;
+    const form = event.target.form;
+    if (form?.dataset.intent) { event.preventDefault(); submit(form); }
+  });
+  content.addEventListener('submit', event => {
+    event.preventDefault(); submit(event.target, event.submitter);
+  });
+  function theme(context = {}) {
+    if (context.theme) document.documentElement.style.colorScheme = context.theme;
+    for (const [key, value] of Object.entries(context.styles?.variables || {})) document.documentElement.style.setProperty(key, value);
+  }
+  addEventListener('message', event => {
+    if (event.source !== parent || event.data?.jsonrpc !== '2.0') return;
+    const message = event.data, call = pending.get(message.id);
+    if (call) { pending.delete(message.id); clearTimeout(call.timer); call.finish(message.result, message.error ? Error(message.error.message) : null); return; }
+    if (message.method === 'ui/notifications/host-context-changed') theme(message.params);
+    else if (message.method === 'ui/notifications/tool-result') render(message.params);
+    else if (message.method === 'ui/notifications/tool-cancelled') showError('调用已取消');
+    else if (message.method === 'ui/resource-teardown') {
+      closed = true; connected = false; observer?.disconnect(); for (const call of pending.values()) { clearTimeout(call.timer); call.finish(null, Error('页面已关闭')); }
+      pending.clear(); post({ id: message.id, result: {} });
+    }
+  });
+  request('ui/initialize', { protocolVersion: '2026-01-26', appInfo: { name: '通用页面外壳', version: '1.0.0' }, appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] } })
+    .then(result => {
+      if (closed) return;
+      theme(result.hostContext); connected = true; status.textContent = '等待内容…'; notify('ui/notifications/initialized');
+      let lastHeight = 0; observer = new ResizeObserver(() => { const height = Math.ceil(document.body.getBoundingClientRect().height); if (height !== lastHeight) { lastHeight = height; notify('ui/notifications/size-changed', { height }); } }); observer.observe(document.body);
+    }).catch(error => { if (!closed) showError(error.message); });
+})();
+</script>
+</body>
+</html>

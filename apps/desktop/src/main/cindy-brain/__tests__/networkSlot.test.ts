@@ -2349,6 +2349,50 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
   });
 });
 
+// B4/B6 production slot: the missing cases are Library streams and transport reuse.
+// tier: unit; minimum failure inputs are a two-chunk response and an over-limit header.
+describe('Library file transfer', () => {
+  const libraryGhost = () => { const ghost = fakeGhost(); ghost.manifest.library = true; return ghost; };
+  it('uses the normal authenticated POST for Library multipart and reports separate phases', async () => {
+    const progress = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      createTransferProgress: () => progress,
+      readLibraryFile: async () => new Response('abc', { headers: { 'content-length': '3' } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['exports/result.txt'], fields: { size: '{bytes}' } } })).toMatchObject({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = (fetchImpl.mock.calls as unknown as [string, { headers: Record<string, string>; body: Uint8Array }][]) [0]![1];
+    expect(request.headers['X-Subscription-Token']).toBe('BSA-secret');
+    expect(new TextDecoder().decode(request.body as Uint8Array)).toContain('filename="result.txt"');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在读取文件');
+    expect(progress).toHaveBeenCalledWith(undefined, undefined, '正在上传');
+    expect(progress).toHaveBeenLastCalledWith(undefined, undefined, '文件处理结束');
+  });
+  it('rejects a Library upload above the cap without reading or dispatching', async () => {
+    const cancel = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      readLibraryFile: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-length': String(GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE + 1) } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['big.bin'] } })).toMatchObject({ ok: false, errorCode: 'TOO_LARGE', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('passes response chunks to Library storage and reports actual received bytes', async () => {
+    const progress = vi.fn();
+    const saveLibraryStream = vi.fn<NonNullable<NetworkSlotDeps['saveLibraryStream']>>(async (_id, input) => {
+      let bytes = 0;
+      for await (const chunk of input.source) { input.assertCurrent(); bytes += chunk.length; input.onProgress?.(bytes, input.totalBytes); }
+      return { ok: true, path: input.path, ref: `library:${input.path}`, bytes, sha256: 'hash' };
+    });
+    const { slot } = makeSlot({ getGhost: libraryGhost, createTransferProgress: () => progress, saveLibraryStream,
+      fetchImpl: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2])); c.enqueue(new Uint8Array([3])); c.close(); } })),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/file', as: 'library', path: 'downloads/a.bin' })).toMatchObject({ ok: true, library: { bytes: 3, ref: 'library:downloads/a.bin' } });
+    expect(progress).toHaveBeenCalledWith(2, undefined, '正在保存文件');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在保存文件');
+  });
+});
+
 // Regression for Node-held bearer + Host-granted multipart (unit/DI). Existing
 // upload tests use vault headers and do not exercise the private Node boundary.
 describe('private Node authenticated uploads', () => {

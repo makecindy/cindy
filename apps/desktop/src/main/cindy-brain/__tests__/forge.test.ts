@@ -1,3 +1,5 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { runInNewContext } from 'node:vm';
 /**
  * forge.test.ts — 意识锻造打包(packGhostDir)单测。
  * 纯 Node 直测(规则 14):tmpdir 造源码目录 → 打包 → 用 GhostManager
@@ -16,6 +18,7 @@ import { resolveCanonicalSessionPath } from '@cindy/mcps';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
+  PLUGIN_UI_MIN_CINDY_VERSION,
   PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
@@ -1417,15 +1420,19 @@ describe('scaffoldGhostDir', () => {
     expect(typeof captured?.expectedParent.ino).toBe('bigint');
   });
 
-  it.each<ForgeScaffoldTemplate>(['plain', 'agent-action', 'node-json-rpc', 'node-mcp'])(
-    '生成 %s 模板，随后可以直接打包并通过装入检查',
-    async (template) => {
+  // The withUi overlay must preserve each template and execute its example handler.
+  // Existing plain scaffolds did not cover mixed handlers or a packaged resource. Tier: unit.
+  it.each((['plain', 'agent-action', 'node-json-rpc', 'node-mcp'] as ForgeScaffoldTemplate[])
+    .flatMap(template => [false, true].map(withUi => ({ template, withUi }))))(
+    '生成 $template 模板（withUi=$withUi），随后可以直接打包并通过装入检查',
+    async ({ template, withUi }) => {
       const dir = path.join(workDir, template);
       const result = await scaffoldGhostDir(
         {
           dir,
           template,
           id: `demo-${template}`,
+          withUi,
           name: `演示 ${template}`,
           description: `${template} 起步插件`,
         },
@@ -1458,6 +1465,17 @@ describe('scaffoldGhostDir', () => {
       expect(await manager.inspect(packed.cindyPath)).toHaveProperty('manifest');
 
       const mainSource = await fs.promises.readFile(path.join(dir, 'main.js'), 'utf8');
+      if (withUi) {
+        expect(result.files).toContain('ui/page.html');
+        expect(getPluginToolUi(packed.manifest)?.resources[0].uri).toBe('ui://planner/v1');
+        let handler: ((message: unknown) => unknown) | undefined;
+        const results: Array<{ result: { structuredContent: unknown } }> = [];
+        runInNewContext(mainSource, { cindy: { onHostMessage: (callback: typeof handler) => { handler = callback; }, send: (message: typeof results[number]) => { results.push(message); } } });
+        await handler!({ type: 'tool-call', tool: 'save_plan', callId: 'page', args: { title: '用户修改' } });
+        expect(results).toHaveLength(1);
+        expect(results[0].result.structuredContent).toEqual({ title: '用户修改', savedPlans: 1 });
+      } else expect(packed.manifest).not.toHaveProperty('mcpApps');
+
       if (template === 'agent-action') {
         expect(mainSource).toContain('cindy.agent.run');
         expect(mainSource).toContain('{{user_message}}');
@@ -2506,3 +2524,43 @@ describe('packGhostDir · manual 渐进披露手册', () => {
     }
   });
 });
+
+// Unit / §3.2: the real packer must include the page and enforce its first release.
+// Generic pack cases lack ui and do not distinguish a prerelease floor from a
+// stable-only floor. Minimal input: one HTML page, changing only minCindyVersion;
+// 0.1.122-beta and later must pack; 0.1.121 shipped without UI support and must fail.
+it('packs the shared page, defaults its version floor, and rejects missing HTML or a low floor', async () => {
+  const base = { ...GOOD_MANIFEST, schemaVersion: 3, slots: undefined,
+    mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html'
+        }], tools: { do_thing: { resourceUri: "ui://planner" } } } } };
+  const dir = await makeSrcDir({ 'ghost.json': JSON.stringify(base), 'main.js': '/* fixture */', 'ui/planner.html': '<html>Planner</html>' });
+  const result = await packGhostDir(dir);
+  expect(result).toMatchObject({ ok: true, manifest: { mcpApps: base.mcpApps, minCindyVersion: PLUGIN_UI_MIN_CINDY_VERSION } });
+  for (const [minCindyVersion, allowed] of [
+    ['0.1.122-beta', true], ['0.1.122-beta.1', true], ['0.1.122', true],
+    ['0.1.121-beta', false], ['0.1.121', false],
+    ['0.1.120', false], ['0.1.120-beta', false],
+  ] as const) {
+    await fs.promises.writeFile(path.join(dir, 'ghost.json'), JSON.stringify({ ...base, minCindyVersion }));
+    const packed = await packGhostDir(dir);
+    expect(packed, minCindyVersion).toMatchObject(allowed
+      ? { ok: true, manifest: { minCindyVersion } }
+      : { ok: false, errorCode: 'MANIFEST_INVALID' });
+  }
+  await fs.promises.writeFile(path.join(dir, 'ghost.json'), JSON.stringify(base));
+  // #4420969498: a new author package must not exceed the runtime page budget.
+  await fs.promises.writeFile(path.join(dir, 'ui/planner.html'), 'x'.repeat(4 * 1024 * 1024 + 1));
+  await expect(packGhostDir(dir)).resolves.toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+  await fs.promises.unlink(path.join(dir, 'ui/planner.html'));
+  await expect(packGhostDir(dir)).resolves.toMatchObject({ ok: false });
+});
+
+// Unit: stored-release tolerance must never relax the real new-package packer.
+it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://bad', file: '../page.html' }], tools: { do_thing: {} } } }])(
+  'refuses new author packages with malformed mcpApps %j', async mcpApps => {
+    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ ...GOOD_MANIFEST, schemaVersion: 3, slots: undefined, mcpApps }), 'main.js': '// fixture' });
+    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+  },
+);

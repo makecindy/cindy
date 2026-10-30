@@ -777,7 +777,7 @@ function DeviceDetailScreenContent() {
       if (!key || !scopeKeys.has(key)) return false;
       // 入口带项目维度时,组键匹配的行还要落在同一项目(与首页项目分桶同一归一化语义);
       // 快照内的 id 是入口组的精确成员,不受此过滤影响。
-      return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
+      return !automationScopeDir || sessionMatchesProjectDir(item.session, automationScopeDir);
     });
     return (
       <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">

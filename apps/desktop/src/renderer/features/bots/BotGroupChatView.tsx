@@ -79,7 +79,8 @@ import {
   botGroupHeaderStatus,
   type BotGroupLiveSpeaker,
 } from './BotGroupLiveStatus';
-import { ChatInviteButton, messageReactionRevision } from './ChatServerControls';
+import { messageReactionRevision } from './ChatServerControls';
+import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
 import { animateThreadPanelWidth, ChatThreadPanel } from './ChatThreadPanel';
 import {
   BotGroupPlanFollowUpRow,
@@ -763,7 +764,9 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           </span>
         </button>
         <div className="ml-auto flex shrink-0 items-center">
-          {headerGroup.serverBacked && headerGroup.canInvite && <ChatInviteButton key={headerGroup.id} groupId={headerGroup.id} members={members} />}
+          {/* One 邀请 entry for every member; what each can use inside follows the server. */}
+          {headerGroup.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived &&
+            <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }} variant="icon" />}
           {!direct && <Tip text={settingsLabel}>
             <button
               type="button"
@@ -778,7 +781,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, members, headerStatus, openSettings, separator, settingsLabel, t]);
+  }, [direct, headerGroup?.name, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, headerGroup?.dissolvedAt, headerGroup?.archived, members, headerStatus, openSettings, separator, settingsLabel, t]);
   useRegisterContentHeader(header);
 
   const running = group?.round.status === 'running';

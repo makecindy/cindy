@@ -448,6 +448,7 @@ describe('MessageActionBar', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '¥2.00' }));
     const tooltip = screen.getByText(
       (_, element) =>
         element?.classList.contains('whitespace-pre-line') === true &&

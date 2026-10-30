@@ -257,3 +257,37 @@ export function mcpAppFailureKey(error: unknown): 'mcpApps.updateRequired' | 'mc
     : 'mcpApps.loadFailed';
 }
 export { MCP_APPS_INVOKE };
+
+export const MCP_APP_MAX_HEIGHT = 5_000;
+/** Bound oscillating layouts; ordinary content growth uses only the height cap.
+ * A width change starts a new layout; a lock otherwise lasts for this View. */
+export class McpAppHeightGuard {
+  private samples: Array<{ height: number; at: number }> = [];
+  private locked?: number;
+  private width?: number;
+  constructor(private readonly onLock: () => void = () => {}) {}
+  resize(width: number): void {
+    if (this.width === width) return;
+    this.width = width;
+    this.samples = [];
+    this.locked = undefined;
+  }
+  accept(value: number, now = Date.now()): number {
+    if (this.locked !== undefined) return this.locked;
+    const height = Math.max(80, Math.min(MCP_APP_MAX_HEIGHT, Math.ceil(value)));
+    this.samples = this.samples.filter(sample => now - sample.at < 2_000);
+    const previous = this.samples.at(-1);
+    if (!previous || previous.height !== height) this.samples.push({ height, at: now });
+    if (this.samples.length >= 8) {
+      const recent = this.samples.slice(-8).map(sample => sample.height);
+      const oscillating = recent.slice(2).every((h, i) =>
+        (h - recent[i + 1]) * (recent[i + 1] - recent[i]) < 0);
+      if (oscillating) {
+        this.locked = recent[0];
+        this.onLock();
+        return this.locked;
+      }
+    }
+    return height;
+  }
+}

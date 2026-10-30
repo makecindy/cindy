@@ -1,3 +1,4 @@
+import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { useRemoteDraftDefaults, useRemoteDraftSelection, useRemoteDraftPush } from './useRemoteDraftDefaults';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -5933,6 +5934,11 @@ export function NewMakerDraftRoute() {
                 className={cn('flex w-full flex-col items-start gap-0', isDraftNarrow && 'order-3')}
               >
                 <div className="w-full">
+                  {!effectiveRemoteHostId && (
+                    <div className="mb-3 empty:hidden">
+                      <PluginUiEnablePrompt deviceId={effectiveDeviceLinkDeviceId ?? undefined} />
+                    </div>
+                  )}
                   <ChatInput
                     onSend={handleSend}
                     onComposerTyping={openProvisionalDraftTask}

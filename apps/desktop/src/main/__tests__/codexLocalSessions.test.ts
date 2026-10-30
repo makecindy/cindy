@@ -197,7 +197,8 @@ function createStateDb(home: string, withThreads = true): string {
         archived_at INTEGER,
         model TEXT,
         reasoning_effort TEXT,
-        thread_source TEXT
+        thread_source TEXT,
+        originator TEXT
       );
     `);
   }
@@ -3241,6 +3242,10 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     const recovered = fs.readFileSync(prepared!, 'utf-8');
     expect(recovered).toContain('continue from another device');
     expect(recovered).toContain('recover this task');
+    const recoveredMeta = JSON.parse(recovered.split('\n')[0]!) as {
+      payload?: { originator?: string };
+    };
+    expect(recoveredMeta.payload?.originator).toBe('cindy');
     const stateDb = new Database(dbPath, { readonly: true });
     const state = stateDb
       .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
@@ -6102,6 +6107,10 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
       updatedAt: 2_000,
       title: 'External stable empty',
     });
+    const externalDb = new Database(externalDbPath);
+    externalDb.prepare('UPDATE threads SET originator = ? WHERE id = ?')
+      .run('codex_cli_rs', threadId);
+    externalDb.close();
     const targetDbPath = createStateDb(desktopHome());
     const sessionId = `local-external-empty-no-target-state-${threadId}`;
     insertLocalCodexSession(sessionId, threadId);
@@ -6119,7 +6128,12 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(prepared).not.toBe(externalRollout);
     expect(prepared!.startsWith(desktopHome())).toBe(true);
     expect(fs.readFileSync(externalRollout, 'utf-8')).toBe('');
-    expect(fs.readFileSync(prepared!, 'utf-8')).toContain('recover from Cindy history');
+    const recovered = fs.readFileSync(prepared!, 'utf-8');
+    expect(recovered).toContain('recover from Cindy history');
+    const recoveredMeta = JSON.parse(recovered.split('\n')[0]!) as {
+      payload?: { originator?: string };
+    };
+    expect(recoveredMeta.payload?.originator).toBe('codex_cli_rs');
     const targetDb = new Database(targetDbPath, { readonly: true });
     const targetRow = targetDb
       .prepare('SELECT rollout_path AS rolloutPath, title FROM threads WHERE id = ?')
@@ -6306,7 +6320,12 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(prepared).toBeTruthy();
     expect(prepared).not.toBe(externalRollout);
     expect(prepared!.startsWith(desktopHome())).toBe(true);
-    expect(fs.readFileSync(prepared!, 'utf-8')).toContain('recover from Cindy history');
+    const recovered = fs.readFileSync(prepared!, 'utf-8');
+    expect(recovered).toContain('recover from Cindy history');
+    const recoveredMeta = JSON.parse(recovered.split('\n')[0]!) as {
+      payload?: { originator?: string };
+    };
+    expect(recoveredMeta.payload?.originator).toBe('cindy');
     const targetDb = new Database(targetDbPath, { readonly: true });
     const targetCount = targetDb
       .prepare('SELECT count(*) AS count FROM threads WHERE id = ?')

@@ -1,5 +1,6 @@
 import { isCindyMakeFamilySource } from '../../../../shared/cindyMakeMerge';
 import type { Session } from '@/lib/ccAgent.types';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
 import {
   normalizeWorkingDir,
@@ -43,7 +44,7 @@ export function buildSessionSourceLabelMap(
       map.set(s.id, name);
       continue;
     }
-    const wd = normalizeWorkingDir(s.workingDir);
+    const wd = normalizeWorkingDir(sessionProjectDirectory(s));
     if (!wd) continue;
     const slash = Math.max(wd.lastIndexOf('/'), wd.lastIndexOf('\\'));
     const base = slash < 0 ? wd : wd.slice(slash + 1);

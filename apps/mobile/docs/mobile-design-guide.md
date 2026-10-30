@@ -372,3 +372,15 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 ---
 
 **交叉引用**:桌面权威规范 `docs/design-rules/DESIGN.md` §2(颜色)/ §3(排版)/ §10(token 架构),设计文档目录见 `docs/design-rules/cindy-design-system.md`。本文是其轻量移动版;色值由移动端独立决定,规则见 `DESIGN.md §15.13`。
+
+### 群邀请 V9（2026-10-28 用户批准）
+
+邀请身份区采用居中 88pt 成员头像集合；1–5 槽沿现有群头像叠放语义，并将可见轮廓居中。
+新增 `typeScale.inviteTitle`（22）仅用于邀请群名，配 `lineHeight.listTitle`（28）、semibold；
+人数和邀请人仍为 13/18。其他字号角色不改。内容与主操作左右 24pt，输入框外层为 Cindy
+50pt 胶囊、内部左右 16pt；编辑、选择、粘贴、清除和键盘由 iOS 原生 TextInput 承担，
+胶囊不是 UIKit 默认 borderStyle。输入只用内容高度 detent，大字/横屏使用 large 并可滚动。
+加入中保留身份、关闭和修改链接的位置，关闭与修改仅禁用；主 CTA 用不降对比度的原生
+ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试语义。永久或未知有效期
+不占位，只有真实有限期显示日期。Android 保留现有键盘适配 sheet，仅复用上述身份和操作。
+原生验收由主控统一完成；独立 SwiftUI 设计样张不等于产品 RN 运行证据。

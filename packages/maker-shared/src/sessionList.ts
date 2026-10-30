@@ -8,7 +8,7 @@ import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeSchedul
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
@@ -50,6 +50,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   lastActivityAt?: string | null;
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -259,7 +260,8 @@ export function summarizeRemoteSessionOverview(
     if (session.pinnedAt) pinned += 1;
     // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
     // 否则概览里的项目数会比列表里的项目分区多出来。
-    if (session.workingDir) projects.add(collapseWorktreeDirForGrouping(session.workingDir));
+    const projectDir = sessionProjectDirectory(session);
+    if (projectDir) projects.add(collapseWorktreeDirForGrouping(projectDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
   }
@@ -407,7 +409,7 @@ function buildProjectSections(
   if (options.projectAliases) {
     for (const session of allSessions) {
       if (session.status === 'deleted' || isDialogueSession(session)) continue;
-      const key = session.workingDir ? collapseWorktreeDirForGrouping(session.workingDir) : 'unknown';
+      const key = collapseWorktreeDirForGrouping(sessionProjectDirectory(session) ?? 'unknown');
       const members = projectMembers.get(key) ?? [];
       members.push(session);
       projectMembers.set(key, members);
@@ -424,7 +426,7 @@ function buildProjectSections(
     if (isDialogueSession(item.session)) continue;
     // worktree 会话按 base repo 归组(与首页 projectGroupKey、桌面侧栏同一口径),
     // 否则每个 worktree 会单独成一个随机名分区。
-    const key = item.session.workingDir ? collapseWorktreeDirForGrouping(item.session.workingDir) : 'unknown';
+    const key = collapseWorktreeDirForGrouping(sessionProjectDirectory(item.session) ?? 'unknown');
     const list = projectGroups.get(key) ?? [];
     list.push(item);
     projectGroups.set(key, list);
@@ -920,7 +922,7 @@ export function automationGroupKey(item: RemoteSessionListItem): string | null {
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;
   const workspace = item.session.workspaceKind ?? 'project';
-  const dir = item.session.workingDir ?? '__no_working_dir__';
+  const dir = sessionProjectDirectory(item.session) ?? '__no_working_dir__';
   return `fallback:${workspace}:${dir}:${item.title}`;
 }
 

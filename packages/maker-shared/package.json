@@ -95,6 +95,7 @@
     "./update-channel": "./src/updateChannel.ts",
     "./url-text-boundary": "./src/urlTextBoundary.ts",
     "./usage-format": "./src/usageFormat.ts",
+    "./usage-cost-details": "./src/usageCostDetails.ts",
     "./work-activity-projection": "./src/workActivityProjection.ts",
     "./worktree-paths": "./src/worktreePaths.ts",
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts",

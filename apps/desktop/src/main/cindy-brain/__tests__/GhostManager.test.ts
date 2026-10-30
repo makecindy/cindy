@@ -3621,6 +3621,33 @@ describe('GhostManager · install', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
+  // #7924 / 4420763926: common inspect/install must reject a missing App HTML,
+  // not just Forge. Existing tests covered sidebar pages only. Unit: absent vs real file.
+  it.each(['missing', 'file', 'directory', 'symlink', 'oversized'] as const)('App HTML %s is checked by inspect and install', async (kind) => {
+    const manifest = {
+      ...goodManifest(), schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.122-beta',
+      mcpApps: { ui: { resources: [{ uri: 'ui://form', file: 'ui/form.html' }],
+        tools: { do_thing: { resourceUri: 'ui://form' } } } },
+    };
+    const cindy = await makeCindy('app-page.cindy', manifest, kind === 'file' ? { 'ui/form.html': '<p>App</p>' } : {});
+    if (kind === 'directory' || kind === 'symlink' || kind === 'oversized') {
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(cindy));
+      if (kind === 'directory') zip.folder('ui/form.html');
+      else if (kind === 'symlink') zip.file('ui/form.html', 'other.html', { unixPermissions: 0o120777 });
+      else zip.file('ui/form.html', 'x'.repeat(4 * 1024 * 1024 + 1));
+      await fs.promises.writeFile(cindy, await zip.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }));
+    }
+    const inspected = await manager.inspect(cindy);
+    const installed = await manager.install(cindy);
+    if (kind === 'file') {
+      expect(inspected).not.toHaveProperty('rejection');
+      expect(installed).toHaveProperty('ghost');
+    } else {
+      expect(inspected).toMatchObject({ rejection: { code: 'file-invalid', reason: expect.stringContaining('ui/form.html') } });
+      await expectRejection(installed, 'file-invalid');
+    }
+  });
+
   it.each(['.disabled', '.cindy-trust.json', '.CINDY-TRUST.JSON'])(
     '包不能自带主机保留文件 %s',
     async (reservedFile) => {

@@ -152,3 +152,34 @@ it('stops before HTTP when the requesting AI session loses its write permission'
   await expect(api.cancelReview('plugin', { releaseId: 'release', sha256: 'a'.repeat(64), displayUpdatedAt: '2026-10-16T00:00:00.000Z' })).rejects.toThrow('PERMISSION_DENIED');
   expect(harness.fetch).not.toHaveBeenCalled();
 });
+
+// changes reuses the production request/subject fence. Existing list tests do not
+// cover the token protocol; malformed counts or another subject must fail (unit).
+it('reads a validated changes token and rejects a different subject or negative count', async () => {
+  const result = { subject, queriedAt: page().queriedAt, changedAt: null, eventCount: 0 };
+  harness.fetch.mockResolvedValue(result);
+  const api = new Api();
+  await expect(api.changes()).resolves.toEqual(result);
+  expect(harness.fetch).toHaveBeenCalledWith('/api/plugin-contributions/changes', expect.objectContaining({ method: 'GET', cache: 'no-store' }));
+  harness.fetch.mockResolvedValueOnce({ ...result, subject: { ...subject, membershipId: 'other' } });
+  await expect(api.changes()).rejects.toThrow('Contribution response subject mismatch');
+  harness.fetch.mockResolvedValueOnce({ ...result, eventCount: -1 });
+  await expect(api.changes()).rejects.toThrow('Invalid contribution response');
+});
+
+// Additive fields must preserve old detail payloads and keep archive on the
+// existing disabled enum, so an older client can still parse the page (unit).
+it.each([undefined, null, '停止维护'])('accepts old and additive author detail fields: %s', async reason => {
+  const result = { ...page(), plugin: {
+    pluginId: 'plugin', ghostId: 'hello', scope: 'public', namespace: null, name: 'Hello', description: null, icon: null,
+    market: { pluginStatus: 'archived', currentRelease: null, available: false, unavailableReason: 'archived',
+      ...(reason === undefined ? {} : { reason }) },
+    latestSubmission: null, updatedAt: page().queriedAt, actions: { canSubmit: false, canViewMarket: false },
+  }, latestSubmissionContent: null, history: { events: [{ eventId: 'archive-event', type: 'disabled',
+    ...(reason === undefined ? {} : { pluginStatus: 'archived' }), at: page().queriedAt,
+    releaseId: null, version: null, submissionId: null, revision: null, reason: reason ?? null }], nextCursor: null } };
+  harness.fetch.mockResolvedValue(result);
+  const detail = await new Api().detail('plugin');
+  expect(detail.plugin.market.reason).toBe(reason);
+  expect(detail.history.events[0]).toMatchObject({ type: 'disabled', ...(reason === undefined ? {} : { pluginStatus: 'archived' }) });
+});

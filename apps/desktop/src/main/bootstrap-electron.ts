@@ -1,3 +1,4 @@
+import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
@@ -609,6 +610,7 @@ import { initHeartbeatService } from './heartbeatService';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
+import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
@@ -1054,7 +1056,9 @@ import {
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
+  cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
 } from './mainWindowCloseBehavior.js';
 import {
@@ -1247,6 +1251,7 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
 configureRoutineHost({
+  deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
   assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   ensureRoutineSession: ensureBotRoutineLaneSession,
@@ -2864,6 +2869,7 @@ function dispatchApplicationMenuCommand(
   if (mainWindow.isDestroyed()) return;
   const activateWindow = options.activateWindow ?? true;
   if (activateWindow) {
+    cancelPendingWindowHide(mainWindow);
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -3092,6 +3098,10 @@ function installApplicationMenu(
       label: labels.helpMenu,
       submenu: [
         createOpenLogsMenuItem(),
+        {
+          label: labels.performanceTrace,
+          click: () => dispatchApplicationMenuCommand(mainWindow, 'open-performance-trace'),
+        },
         { type: 'separator' },
         {
           label: labels.help,
@@ -3515,6 +3525,22 @@ function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
   return choice === 1 ? 'quit' : 'tray';
 }
 
+function minimizeWindow(window: BrowserWindow): void {
+  minimizeDesktopWindow(window, {
+    platform: process.platform,
+    env: process.env,
+    isMainWindow: window === mainWindowRef,
+    ensureTray: () => linuxTray.ensure(),
+    onTrayError: () => {
+      dialog.showMessageBoxSync(window, {
+        type: 'error',
+        title: t('settings.windowBehavior.trayError.title'),
+        message: t('settings.windowBehavior.trayError.message'),
+      });
+    },
+  });
+}
+
 function showNativeLinuxCloseBehaviorPrompt(): LinuxCloseBehavior {
   const options = {
     type: 'question' as const,
@@ -3580,7 +3606,12 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+        applyLinuxMainWindowCloseBehavior(
+          mainWindow,
+          behavior,
+          () => app.quit(),
+          () => minimizeWindow(mainWindow),
+        );
       } else {
         app.quit();
       }
@@ -3723,6 +3754,7 @@ function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean)
 function focusMainWindow(): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
+  cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   win.focus();
@@ -3750,11 +3782,9 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 }
 
 // ── Custom URL scheme (cindy://... + 历史 xdt-maker://...) ───────────────
-// 必须在 app.whenReady() 之前注册:
-//   - registerDeepLinkProtocol() 调 setAsDefaultProtocolClient (Windows/Linux
-//     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
+//   - registerDeepLinkProtocol() 仅为 packaged client 注册 OS 协议，dev 不改变系统关联
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
-//     提前 attach 才能接住
+//     必须在 app.whenReady() 之前 attach；dev 仍接收显式投递的事件
 watchCindyVersionStartupResult();
 if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
@@ -4099,7 +4129,7 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
+    // Hyprland has no native minimize surface, so it uses the Linux tray.
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -4116,7 +4146,12 @@ const createWindow = () => {
         linuxClosePromptFallback.request();
         return;
       }
-      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      applyLinuxMainWindowCloseBehavior(
+        mainWindow,
+        behavior,
+        () => app.quit(),
+        () => minimizeWindow(mainWindow),
+      );
       return;
     }
     app.quit();
@@ -4124,8 +4159,7 @@ const createWindow = () => {
   void ensureMainAppPresence('main-window-created', mainWindow);
   // Keep diagnostics reachable from the tray even before login or if the renderer fails.
   if (process.platform === 'win32') ensureWindowsTray();
-  // Tray construction is not proof that a Linux panel hosts the icon. Keep the
-  // existing minimize/quit close choices so an absent tray never strands a hidden window.
+  // Register before the first hide; activation and second-instance both reveal the main window.
   if (process.platform === 'linux') linuxTray.ensure();
 
   installApplicationMenu(
@@ -5550,7 +5584,8 @@ const registerIpcHandlers = () => {
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
   ipcMain.on('window-minimize', (event) => {
-    (BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef)?.minimize();
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
+    if (window) minimizeWindow(window);
   });
   ipcMain.on('window-maximize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
@@ -9924,6 +9959,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
   // sidebar's synchronous legacy migration reads can consume an exact proof.

@@ -1,3 +1,9 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
+import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/ghost.json?raw';
+import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/main.js?raw';
+import interactiveExampleHtml from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/ui/page.html?raw';
+import { PLUGIN_UI_MIN_CINDY_VERSION, compareCindyVersions, pluginHasToolUi } from '@cindy/plugin-protocol';
 /**
  * forge.ts — 意识锻造(agent 帮用户做意识的主机真身,2026-07-11 Lizi 定案)。
  *
@@ -208,6 +214,7 @@ export type ForgeScaffoldResult =
 interface ForgeScaffoldInput {
   dir: string;
   template: ForgeScaffoldTemplate;
+  withUi?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -544,6 +551,11 @@ const SCAFFOLD_ICON_PNG_BASE64 =
 /** 按模板产出相对路径到源码内容的完整映射。 */
 function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffer> {
   const manifest = scaffoldManifest(input);
+  if (input.withUi) {
+    const example = JSON.parse(interactiveExampleManifest) as { tools: unknown[]; mcpApps: unknown };
+    manifest.tools = [...(manifest.tools as unknown[]), ...example.tools];
+    manifest.mcpApps = example.mcpApps;
+  }
   const files: Record<string, string | Buffer> = {
     [GHOST_MANIFEST_FILE]: `${JSON.stringify(manifest, null, 2)}\n`,
     'main.js':
@@ -556,6 +568,14 @@ function scaffoldFiles(input: ForgeScaffoldInput): Record<string, string | Buffe
             : plainMainSource(),
     'assets/icon.png': Buffer.from(SCAFFOLD_ICON_PNG_BASE64, 'base64'),
   };
+  if (input.withUi) {
+    const handler = interactiveExampleMain.replace('cindy.onHostMessage(handleInteractivePage);', '');
+    files['main.js'] = handler + String(files['main.js']).replace(
+      'cindy.onHostMessage(async function (msg) {',
+      'cindy.onHostMessage(async function (msg) {\n  if (handleInteractivePage(msg)) return;',
+    );
+    files['ui/page.html'] = interactiveExampleHtml;
+  }
   if (input.template === 'node-json-rpc') files['node/worker.cjs'] = nodeJsonRpcWorkerSource();
   if (input.template === 'node-mcp') files['node/worker.cjs'] = nodeMcpWorkerSource();
   return files;
@@ -583,6 +603,10 @@ export async function scaffoldGhostDir(
     isCurrent?: () => boolean;
   },
 ): Promise<ForgeScaffoldResult> {
+  if (input.withUi !== undefined && typeof input.withUi !== 'boolean')
+    return { ok: false, errorCode: 'INVALID_INPUT', message: 'withUi 必须是布尔值' };
+  if (input.withUi && (compareCindyVersions(input.minCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) < 0)
+    return { ok: false, errorCode: 'INVALID_INPUT', message: `交互页面要求 minCindyVersion >= ${PLUGIN_UI_MIN_CINDY_VERSION}` };
   const template = input.template;
   if (!FORGE_SCAFFOLD_TEMPLATES.includes(template)) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: `不认识的模板:${String(template)}` };
@@ -913,6 +937,13 @@ async function buildGhostPackage(
     if (reservedNamespace) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${reservedNamespace}` };
     }
+    if (manifestRaw && typeof manifestRaw === 'object' && !Array.isArray(manifestRaw) &&
+        'mcpApps' in manifestRaw && manifestRaw.mcpApps && typeof manifestRaw.mcpApps === 'object' &&
+        'ui' in manifestRaw.mcpApps &&
+        !('minCindyVersion' in manifestRaw)) {
+      manifestRaw = { ...manifestRaw, minCindyVersion: PLUGIN_UI_MIN_CINDY_VERSION };
+      manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw)}\n`, 'utf8');
+    }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${v.reason}` };
@@ -929,6 +960,9 @@ async function buildGhostPackage(
       };
     }
     const manifest = v.manifest;
+    if (pluginHasToolUi(manifest) && (!manifest.minCindyVersion ||
+        (compareCindyVersions(manifest.minCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) < 0))
+      return { ok: false, errorCode: 'MANIFEST_INVALID', message: `交互页面要求 minCindyVersion >= ${PLUGIN_UI_MIN_CINDY_VERSION}` };
 
     // 2) locale 资源必须真实、可解析且提供的条目合法(缺译回退原文,不拒)。
     // 与装入侧使用同一 validator，避免 Forge 能打包、安装却被拒的契约漂移。
@@ -942,7 +976,8 @@ async function buildGhostPackage(
     }
 
     // 3) 清单声明的入口文件必须真实在场(打包期拦,别等装入后沙箱 404)。
-    const mustExist: string[] = [];
+    const uiFiles = new Set((getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.file));
+    const mustExist: string[] = [...uiFiles];
     if (manifest.entry) mustExist.push(manifest.entry);
     if (manifest.node?.entry) {
       mustExist.push(manifest.node.entry, ...(manifest.node.entries ?? []));
@@ -959,6 +994,9 @@ async function buildGhostPackage(
         // stat 会判"在场"而 walk 不收集它,装出的包缺入口、运行期才 404。
         const st = await fs.promises.lstat(path.join(dir, rel));
         if (!st.isFile()) throw new Error('not a file');
+        if (uiFiles.has(rel) && st.size > MCP_APPS_MAX_BYTES) {
+          return { ok: false, errorCode: 'MANIFEST_INVALID', message: `交互页面 ${rel} 超过 ${MCP_APPS_MAX_BYTES} 字节上限` };
+        }
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
       }

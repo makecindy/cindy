@@ -5,8 +5,8 @@
  * 调 recordPrRefsForMessage(只扫 user / assistant 角色)。提取到新 PR 引用时
  * upsert 并通过注入的 broadcast 通知所有 renderer 窗口刷新。
  *
- * 读路径:git-context IPC 的 listPrRefs(sessionId),按 lastSeenAt 降序——
- * "最近提到的 PR" 排最前,renderer 徽标按此顺序展示。
+ * 读路径:git-context IPC 的 listPrRefs(sessionId)，排除手动移除的关联，
+ * 按固定、手动优先顺序、最近提及排序，renderer 按此顺序展示。
  */
 
 import { createId } from '@paralleldrive/cuid2';
@@ -17,6 +17,8 @@ import type { DbClient } from '../localDb/client/DbClient';
 import { messages, migrationMeta, sessionPrRefs, sessions } from '../localDb/schema';
 import { createLogger } from '../logger.js';
 import { extractPrRefs, messageContentToText, type PrRef } from './prRefExtractor.js';
+import type { SessionPrRefAction } from '@cindy/maker-shared';
+import { throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('git-context/pr-refs');
 
@@ -26,6 +28,10 @@ export interface SessionPrRef extends PrRef {
   sessionId: string;
   firstSeenAt: number;
   lastSeenAt: number;
+  pinned?: boolean;
+  priority?: number;
+  manuallyAdded?: boolean;
+  removedAt?: number | null;
 }
 
 /** 只有这两类角色的文本参与提取——tool_result 里的 PR 列表是噪音(详见 prRefExtractor)。 */
@@ -60,7 +66,8 @@ export async function recordPrRefsForMessage(msg: {
     // /clear 竞态守卫:main 侧补写的旧行(createdAt 已落在 clearedAt 边界之前,
     // createMessage 经 shouldBroadcast 抑制广播的那类)对用户不可见,
     // 不该把被 clear 掉的对话里的 PR 复活到徽标上(Codex review P2)。
-    const createdAtMs = typeof msg.createdAt === 'number' ? msg.createdAt : Date.parse(msg.createdAt);
+    const createdAtMs =
+      typeof msg.createdAt === 'number' ? msg.createdAt : Date.parse(msg.createdAt);
     const db = getDbClient().drizzle;
     const [sessionRow] = await db
       .select({ clearedAt: sessions.clearedAt })
@@ -145,7 +152,9 @@ async function acquirePrWrite(dbClient: DbClient, sessionId: string): Promise<()
   }
   const previous = sessions.get(sessionId) ?? Promise.resolve();
   let release!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   // Queue promises only represent lock release and never reject. Each caller
   // releases in finally, so a failed write cannot block subsequent publications.
   const pending = previous.then(() => held);
@@ -205,9 +214,7 @@ async function upsertPrRefsWithinWrite(
           sessionPrRefs.prNumber,
         ],
         set: {
-          lastSeenAt: opts?.authoritative
-            ? ts
-            : sql`max(${sessionPrRefs.lastSeenAt}, ${ts})`,
+          lastSeenAt: opts?.authoritative ? ts : sql`max(${sessionPrRefs.lastSeenAt}, ${ts})`,
           firstSeenAt: sql`min(${sessionPrRefs.firstSeenAt}, ${ts})`,
         },
       });
@@ -344,7 +351,10 @@ export async function recomputePrRefsForSession(
       const refs = extractPrRefs(row.content);
       if (refs.length === 0) continue;
       for (const ref of refs) keep.add(`${ref.owner}/${ref.repo}#${ref.prNumber}`);
-      await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, { authoritative: true, scope });
+      await upsertPrRefsWithinWrite(dbClient, sessionId, refs, row.createdAt, {
+        authoritative: true,
+        scope,
+      });
     }
 
     if (scope && !scope.isCurrent()) return;
@@ -354,12 +364,19 @@ export async function recomputePrRefsForSession(
         owner: sessionPrRefs.owner,
         repo: sessionPrRefs.repo,
         prNumber: sessionPrRefs.prNumber,
+        manuallyAdded: sessionPrRefs.manuallyAdded,
+        removedAt: sessionPrRefs.removedAt,
       })
       .from(sessionPrRefs)
       .where(eq(sessionPrRefs.sessionId, sessionId));
     if (scope && !scope.isCurrent()) return;
     const staleIds = existing
-      .filter((r) => !keep.has(`${r.owner}/${r.repo}#${r.prNumber}`))
+      .filter(
+        (r) =>
+          !r.manuallyAdded &&
+          r.removedAt === null &&
+          !keep.has(`${r.owner}/${r.repo}#${r.prNumber}`),
+      )
       .map((r) => r.id);
     if (staleIds.length > 0) {
       await db.delete(sessionPrRefs).where(inArray(sessionPrRefs.id, staleIds));
@@ -386,19 +403,28 @@ export async function listAllPrRefs(): Promise<SessionPrRef[]> {
   const rows = await db
     .select()
     .from(sessionPrRefs)
-    .orderBy(desc(sessionPrRefs.lastSeenAt))
+    .where(isNull(sessionPrRefs.removedAt))
+    .orderBy(
+      desc(sessionPrRefs.pinned),
+      desc(sessionPrRefs.priority),
+      desc(sessionPrRefs.lastSeenAt),
+    )
     .limit(2000);
   return rows.map(rowToSessionPrRef);
 }
 
-/** 列出某 session 的全部 PR 引用,lastSeenAt 降序。 */
+/** 列出任务可见的 PR 引用，固定与手动优先顺序在前。 */
 export async function listPrRefs(sessionId: string): Promise<SessionPrRef[]> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select()
     .from(sessionPrRefs)
-    .where(eq(sessionPrRefs.sessionId, sessionId))
-    .orderBy(desc(sessionPrRefs.lastSeenAt));
+    .where(and(eq(sessionPrRefs.sessionId, sessionId), isNull(sessionPrRefs.removedAt)))
+    .orderBy(
+      desc(sessionPrRefs.pinned),
+      desc(sessionPrRefs.priority),
+      desc(sessionPrRefs.lastSeenAt),
+    );
   return rows.map(rowToSessionPrRef);
 }
 
@@ -413,5 +439,136 @@ function rowToSessionPrRef(r: typeof sessionPrRefs.$inferSelect): SessionPrRef {
     url: r.url,
     firstSeenAt: r.firstSeenAt,
     lastSeenAt: r.lastSeenAt,
+    pinned: r.pinned,
+    priority: r.priority,
+    manuallyAdded: r.manuallyAdded,
+    removedAt: r.removedAt,
   };
+}
+
+/** User edits share the same per-task queue as extraction and history recomputation. */
+export async function managePrRefs(
+  sessionId: string,
+  action: SessionPrRefAction | { action: 'list' },
+  verifyPr: (ref: PrRef) => Promise<void>,
+): Promise<SessionPrRef[]> {
+  const dbClient = getDbClient();
+  const release = await acquirePrWrite(dbClient, sessionId);
+  try {
+    const db = dbClient.drizzle;
+    const [session] = await db
+      .select({ source: sessions.source })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!session) throwIpcError('NOT_FOUND', 'Session not found');
+    if (session.source === 'review' && action.action !== 'list')
+      throwIpcError('PERMISSION_DENIED', 'Review is read-only');
+    const rows = await db
+      .select()
+      .from(sessionPrRefs)
+      .where(eq(sessionPrRefs.sessionId, sessionId));
+    const nextPriority = rows.reduce((value, row) => Math.max(value, row.priority + 1), Date.now());
+    if (action.action === 'add') {
+      if (action.url.length > 2048) throwIpcError('INVALID_PARAMS', 'PR URL too long');
+      let url: URL;
+      try {
+        url = new URL(action.url);
+      } catch {
+        throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
+      }
+      if (
+        url.protocol !== 'https:' ||
+        url.hostname !== 'github.com' ||
+        url.username ||
+        url.password ||
+        url.port ||
+        !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*(?:\/(?:files|commits|checks))?\/?$/.test(
+          url.pathname,
+        )
+      ) {
+        throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR URL');
+      }
+      const ref = extractPrRefs(url.href)[0];
+      if (!ref) throwIpcError('INVALID_PARAMS', 'Invalid GitHub PR number');
+      if (
+        rows.some(
+          (r) => r.owner === ref.owner && r.repo === ref.repo && r.prNumber === ref.prNumber,
+        )
+      ) {
+        throwIpcError('ALREADY_EXISTS', 'PR already associated; restore it if removed');
+      }
+      await verifyPr(ref);
+      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+      const now = Date.now();
+      await db.insert(sessionPrRefs).values({
+        id: createId(),
+        sessionId,
+        ...ref,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        manuallyAdded: true,
+        priority: nextPriority,
+      });
+    } else if (action.action === 'reorder') {
+      const ids = action.ids;
+      const first = rows.find((row) => row.id === ids[0] && row.removedAt === null);
+      const group = first
+        ? rows.filter((row) => row.removedAt === null && row.pinned === first.pinned)
+        : [];
+      if (
+        !first ||
+        new Set(ids).size !== ids.length ||
+        ids.length !== group.length ||
+        !group.every((row) => ids.includes(row.id))
+      ) {
+        throwIpcError('INVALID_PARAMS', 'Reorder requires every active PR in one pin group');
+      }
+      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+      // One statement is atomic for both local SQLite and the async DB client.
+      await db
+        .update(sessionPrRefs)
+        .set({
+          priority: sql`case ${sessionPrRefs.id} ${sql.join(
+            ids.map((id, index) => sql`when ${id} then ${ids.length - index}`),
+            sql` `,
+          )} end`,
+          manuallyAdded: true,
+        })
+        .where(and(eq(sessionPrRefs.sessionId, sessionId), inArray(sessionPrRefs.id, ids)));
+    } else if (action.action !== 'list') {
+      const row = rows.find((r) => r.id === action.id);
+      if (!row) throwIpcError('NOT_FOUND', 'PR association not found');
+      if (
+        action.action === 'pin' &&
+        !row.pinned &&
+        rows.filter((r) => r.pinned && r.removedAt === null).length >= 3
+      ) {
+        throwIpcError('INVALID_PARAMS', 'At most three pinned PRs');
+      }
+      if (row.removedAt !== null && action.action !== 'restore')
+        throwIpcError('INVALID_PARAMS', 'Restore the PR first');
+      const patch =
+        action.action === 'remove'
+          ? { removedAt: Date.now(), pinned: false }
+          : action.action === 'restore'
+            ? { removedAt: null, manuallyAdded: true }
+            : { pinned: action.action === 'pin', manuallyAdded: true };
+      if (getDbClient() !== dbClient) throwIpcError('PERMISSION_DENIED', 'Account changed');
+      await db.update(sessionPrRefs).set(patch).where(eq(sessionPrRefs.id, row.id));
+    }
+    const result = await db
+      .select()
+      .from(sessionPrRefs)
+      .where(eq(sessionPrRefs.sessionId, sessionId))
+      .orderBy(
+        desc(sessionPrRefs.pinned),
+        desc(sessionPrRefs.priority),
+        desc(sessionPrRefs.lastSeenAt),
+      );
+    if (action.action !== 'list') onRefsChanged?.(sessionId);
+    return result.map(rowToSessionPrRef);
+  } finally {
+    release();
+  }
 }

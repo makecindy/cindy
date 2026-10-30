@@ -61,7 +61,7 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   const [mountedAt] = useState(() => Date.now());
   const now = useBotGroupNow(true);
   const since = live?.startedAtMs ?? speaker.startedAt ?? mountedAt;
-  if (speakerActivity !== 'planning' && now - since >= BOT_GROUP_PROGRESS_STRIP_DELAY_MS) {
+  if (speakerActivity !== 'planning' && (waiting || now - since >= BOT_GROUP_PROGRESS_STRIP_DELAY_MS)) {
     return <BotGroupSpeakerInteraction speaker={speaker} />;
   }
   return (
@@ -163,11 +163,16 @@ function BotGroupSingleProgressStrip({
   const lead = step ? stepSpeaker : speakers.find((speaker) => speaker.activity !== 'planning');
   const sessionId = lead?.sessionId ?? null;
   const live = useSpeakerActivity(lead);
-  const since = live?.startedAtMs ?? lead?.startedAt ?? (step ? step.plan.updatedAt : mountedAt);
+  // Mount time (and a plan's last edit) is not an execution start. Keep it only
+  // for the brief entrance delay, never as evidence that old work just started.
+  const since = [live?.startedAtMs, lead?.startedAt].find(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0,
+  );
   const isStopping = stopping || lead?.stopping === true || (!!live?.gracefulStopState && live.gracefulStopState !== 'none');
   const buttonPending = stopPending ?? isStopping;
   const now = useBotGroupNow(true);
-  if (!step && (!lead || now - since < BOT_GROUP_PROGRESS_STRIP_DELAY_MS)) return null;
+  const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
+  if (!step && (!lead || (!waiting && now - (since ?? mountedAt) < BOT_GROUP_PROGRESS_STRIP_DELAY_MS))) return null;
   const member = step ? step.member : lead?.member;
   const name = step ? step.displayName : lead?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
@@ -204,10 +209,10 @@ function BotGroupSingleProgressStrip({
                   ? t('bots.groupChat.waitingConfirm', { name: '' })
                   : <BotGenerationLabel sessionId={sessionId ?? undefined} remote={lead?.target ? { deviceId: lead.target.deviceId, botId: lead.target.botId } : undefined} phase={live?.workingPhase ?? 'processing'} startedAt={live?.startedAtMs ?? null} />}
             </span> : null}
-            <span className="shrink-0 tabular-nums">
+            {since !== undefined ? <span className="shrink-0 tabular-nums">
               {' · '}
               {t('bots.groupChat.progress.elapsed', { time: formatBotGroupElapsed(now - since, t) })}
-            </span>
+            </span> : null}
           </p>
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (

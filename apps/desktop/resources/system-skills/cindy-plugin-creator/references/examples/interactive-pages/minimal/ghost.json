@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 3,
+  "id": "interactive-planner",
+  "name": "交互计划示例",
+  "version": "1.0.0",
+  "minCindyVersion": "0.1.122-beta",
+  "entry": "main.js",
+  "command": "interactive-planner",
+  "whenToUse": "演示交互页面里的计划表单，打开页面并修改计划标题",
+  "tools": [
+    { "name": "open_planner", "description": "打开计划表单。返回标题和保存次数。", "parameters": { "type": "object", "properties": { "title": { "type": "string" } } } },
+    { "name": "save_plan", "description": "在本次插件运行期间暂存标题，不写文件或发送网络请求。", "parameters": { "type": "object", "properties": { "title": { "type": "string" } }, "required": ["title"] } }
+  ],
+  "mcpApps": {
+    "ui": {
+      "resources": [{ "uri": "ui://planner/v1", "file": "ui/page.html", "prefersBorder": true }],
+      "tools": {
+        "open_planner": { "resourceUri": "ui://planner/v1" },
+        "save_plan": { "resourceUri": "ui://planner/v1", "visibility": ["app"] }
+      }
+    }
+  }
+}

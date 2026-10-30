@@ -19,6 +19,7 @@ import { createChatHistory } from '@cindy/maker-shared/chat-history';
 import { createMobileChatHistoryStore } from './chatHistoryStore';
 import { cacheChatMessages, forgetChatMessages, peekChatMessages, readChatMessages, subscribeChatInvalidation } from './chatMessageCache';
 import { createChatServerUpload } from './chatServerUpload';
+import { uploadPublicAvatar } from './publicAvatarUpload';
 import type { MobileLocalAttachmentUploadDeps } from '@/session/mobileLocalAttachmentUpload';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import { useTranslation } from 'react-i18next';
@@ -85,7 +86,22 @@ export function useChatClient() {
         await putMobileAttachmentUploadFromFile(url, uri, type, {}, { signal, signedHeaders: { 'Content-Type': type } });
       },
     });
-    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client, upload,
+    /** A group avatar file (already resized) to a public URL; see publicAvatarUpload.ts. */
+    const uploadAvatar = (file: { uri: string; size: number; mimeType: 'image/jpeg' | 'image/png' }) => uploadPublicAvatar({ current,
+      presign: async body => {
+        check();
+        let base: string;
+        try { base = chatHttpsUrl(getMobileEndpointForRealm(realm, 'ossApiBaseUrl')).replace(/\/$/, ''); }
+        catch { throw new Error('PROFILE_AVATAR_UPLOAD_FAILED'); }
+        return deps.current.apiFetch('/api/oss/presign-put', { baseUrl: base, method: 'POST', body, cache: 'no-store', assertCurrent: check });
+      },
+      put: async (url, uri, headers) => {
+        const { putMobileAttachmentUploadFromFile } = await import('@/session/mobileAttachmentUpload');
+        check();
+        await putMobileAttachmentUploadFromFile(url, uri, file.mimeType, {}, { signedHeaders: headers });
+      },
+    }, file);
+    return { owner, realm, userId: auth.user?.id ?? '', current, baseUrl, endpoint, request, client, upload, uploadAvatar,
       token: async () => { check(); await client.me(); const token = await deps.current.getAccessToken(); check(); return token; }, enabled: !!auth.user };
   }, [owner, !!auth.user]);
 }

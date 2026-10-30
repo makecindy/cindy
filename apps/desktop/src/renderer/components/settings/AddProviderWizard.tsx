@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useDialogExit } from '@/hooks/useDialogExit';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
-import { Check, Info, Plus, Search } from 'lucide-react';
+import { Check, Info, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -1530,6 +1530,16 @@ export function AddProviderWizard({
           >
             {wizardTitle}
           </h3></Dialog.Title>
+          {step === 1 ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
+              className="min-h-6 shrink-0 rounded-full py-1 text-11 font-medium text-[var(--accent-emphasis)] underline underline-offset-4 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            >
+              {t('settings.providers.wizard.customAction')}
+            </button>
+          ) : (
           <div className="flex shrink-0 items-center gap-4">
             {stepLabels.map((label, i) => {
               const n = i + 1;
@@ -1568,10 +1578,11 @@ export function AddProviderWizard({
               );
             })}
           </div>
+          )}
         </div>
 
-        {/* 主体。第 1 步是「固定搜索 + 限高滚动目录 + 钉底自定义入口」的三段结构
-            (滚动区上下以 1px Board 细线与固定区分隔,自定义端点不随目录滚动);
+        {/* 主体。第 1 步是固定搜索与限高滚动目录，入口放在头部；
+            滚动区上下保留 1px Board 细线;
             第 2/3 步保持整体滚动的表单区。 */}
         <div
           className={cn(
@@ -1585,25 +1596,19 @@ export function AddProviderWizard({
           {step === 1 && (
             <>
               <div className="px-4 pb-3">
-                <div
-                  className="flex h-9 items-center gap-2 rounded-full border px-3.5"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--surface-elevated)',
-                  }}
-                >
+                <div className="relative">
+                  <SettingsTextInput
+                    surface="ivory"
+                    value={query}
+                    onChange={setQuery}
+                    ariaLabel={t('settings.providers.wizard.searchPlaceholder')}
+                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
+                    inputClassName="pl-9"
+                  />
                   <Search
                     size={14}
-                    className="shrink-0"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={t('settings.providers.wizard.searchPlaceholder')}
-                    className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-                    style={{ color: 'var(--settings-section-title)' }}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
                   />
                 </div>
               </div>
@@ -1778,41 +1783,6 @@ export function AddProviderWizard({
                 )}
               </div>
 
-              {/* 自定义端点:钉在滚动区外,目录再长也始终可见。 */}
-              <div className="flex flex-col gap-2 px-4 pb-1 pt-3">
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
-                  className="flex items-center gap-2.5 rounded-xl border border-dashed p-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
-                  style={{ borderColor: 'var(--settings-btn-secondary-border)' }}
-                >
-                  <span
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
-                    style={{
-                      border: '1px solid var(--settings-integration-avatar-border)',
-                      color: 'var(--settings-section-desc)',
-                    }}
-                  >
-                    <Plus size={13} />
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span
-                      className="text-13 font-medium"
-                      style={{ color: 'var(--settings-section-title)' }}
-                    >
-                      {t('settings.providers.wizard.customTitle')}
-                    </span>
-                    <span className="truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-                      {t('settings.providers.wizard.customMeta')}
-                    </span>
-                  </span>
-                </button>
-
-                <p className="text-11 leading-snug" style={{ color: 'var(--text-tertiary)' }}>
-                  {t('settings.providers.wizard.pickHint')}
-                </p>
-              </div>
             </>
           )}
 
