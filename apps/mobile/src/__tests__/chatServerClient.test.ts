@@ -582,6 +582,60 @@ it('reads Cindy preset identity without inferring from names and retains known I
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
 });
 
+// Unit: invitation contract (bot-group-chat §10). Existing client tests covered joined rooms only.
+// A pre-join link must POST just its token to this account's server, never fetch members or accept implicitly.
+describe('invitation preview and explicit acceptance', () => {
+  const token = 'A'.repeat(43);
+  const preview = { groupId: id(1), name: 'Weekend', inviterName: 'Lin', joined: false, expiresAt: null, reusable: true };
+  it('previews only and preserves real optional identity without guessing missing counts', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(`https://untrusted.example/chat-invite/join#${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/preview', 'POST', { token }, undefined, undefined);
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+  });
+  // V9 summary is optional and bounded; a missing image is still a real member slot.
+  it('keeps ordered avatar slots and Unicode initials without granting a member-roster read', async () => {
+    const memberAvatars = [
+      { avatar: 'https://images.example.invalid/a.png', initial: '林' },
+      { avatar: 'cindy://avatar/preset/cindy', initial: 'C' },
+      { avatar: '🐱', initial: 'é' }, { avatar: null, initial: '👩🏽‍💻' }, { avatar: null, initial: '' },
+    ];
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, memberAvatars, memberCount: 19 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberAvatars: [] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: 'invalid' })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [...memberAvatars, memberAvatars[0]] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [{ avatar: {}, initial: '林' }, null] });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(token)).toMatchObject({ memberAvatars, memberCount: 19 });
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([]);
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual(memberAvatars);
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([{ avatar: null, initial: '林' }, { avatar: null, initial: '' }]);
+    expect(request.mock.calls.every(call => call[0] === '/invite-links/preview' && call[1] === 'POST')).toBe(true);
+  });
+  it('rejects malformed links before HTTP and invalid responses before navigation', async () => {
+    const request = vi.fn().mockResolvedValue({ ...preview, groupId: 'not-a-room' });
+    const client = createChatServerClient(request);
+    await expect(client.previewInvite('https://example.invalid/other#secret')).rejects.toThrow('INVALID_INVITATION_LINK');
+    expect(request).not.toHaveBeenCalled();
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_ID');
+    request.mockResolvedValue({ ...preview, expiresAt: 'invalid' });
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_RESPONSE');
+  });
+  it('accepts through the existing operation contract and validates its room receipt', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ groupId: id(1) }).mockResolvedValueOnce({ groupId: 'bad' });
+    const client = createChatServerClient(request);
+    const signal = new AbortController().signal;
+    expect(await client.acceptInvite(token, 'operation-1', signal)).toEqual({ groupId: id(1) });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/accept', 'POST', { token, operationId: 'operation-1' }, undefined, signal);
+    await expect(client.acceptInvite(token, 'operation-1')).rejects.toThrow('INVALID_CHAT_ID');
+  });
+});
+
 // D2 root-deletion regression (unit): production load used to classify every 404
 // as room access loss. Existing cache-reopen coverage only has a successful root.
 // Minimal input: an authorized reply page followed by a missing root lookup.

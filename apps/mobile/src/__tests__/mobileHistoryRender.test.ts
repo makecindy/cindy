@@ -246,7 +246,7 @@ describe('remote history preserves original folding', () => {
     expect(outer.deferred).toBeUndefined();
     const inner = outer.children.find((item) => item.type === 'work_group');
     if (inner?.type !== 'work_group') throw new Error('Missing inner group');
-    inner.deferred!.setVisible!(true, false);
+    const release = inner.deferred!.setVisible!(true, false);
     await vi.waitFor(() => expect([...view.getSnapshot().details.values()].every((state) => state.complete)).toBe(true));
     expect(details).toHaveBeenCalledTimes(2);
     expect(view.getSnapshot().expanded.size).toBe(1);
@@ -256,7 +256,7 @@ describe('remote history preserves original folding', () => {
     const loadedInner = loaded.children.find((item) => item.type === 'work_group');
     if (loadedInner?.type !== 'work_group') throw new Error('Missing loaded inner group');
     expect(loadedInner.children.length).toBeGreaterThan(0);
-    loadedInner.deferred!.setVisible!(false, false);
+    release();
     await view.refresh();
     expect(details).toHaveBeenCalledTimes(2);
     expect(view.getSnapshot().expanded.size).toBe(0);

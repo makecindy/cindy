@@ -121,7 +121,7 @@ const D_MEDIA = [
   "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
-  "生成图片完成时会附带供模型检查的图片预览（批量最多两张），previews 按 image_index 对应后面的 image 内容；原图地址仍用于交付。检查当前任务已有图片可直接用 inspect + url，不需要另问用户或先取得本机路径。inspect 只读取当前任务的 cindy-media:// 图片。预览仅供分析，不会自动发给用户。预览失败或省略不代表生成失败，不要因此重新付费生成；可按原地址再次 inspect。",
+  "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
   "为完成当前任务而查看、抽帧或分析已有媒体时，可主动调用 resolve_local_path 并原样传入 url，取得文件路径后自行选择工具或脚本；不要求用户先询问存储位置或另行口头同意查看。用户询问存储位置时也使用此动作。它把受管媒体的本机绝对路径返回给 Agent 并写入任务记录，Host 仍按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。路径属于 Cindy Host 所在电脑，不应当作 SSH 工作区路径；不要猜路径或扫描磁盘。只看视频帧不能声称已检查声音、对白或音画同步。",
   "展示、改图和附件交接仍直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址；本机路径供 Agent 工作使用，不替代给用户的可播放媒体地址。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
@@ -583,7 +583,7 @@ const MEDIA_CAPABILITIES = new Set<CindyMediaCapability>([
 export async function handleMedia(
   deps: CindyGhostsMcpDeps,
   input: {
-    action: "list_models" | "resolve_local_path" | "inspect" | "import_image" | "prepare" | "request" | "poll";
+    action: "list_models" | "resolve_local_path" | "import_image" | "prepare" | "request" | "poll";
     path?: string;
     capability?: CindyMediaCapability;
     url?: string;
@@ -592,7 +592,7 @@ export async function handleMedia(
     invocation_id?: string;
     body?: Record<string, unknown>;
   },
-): Promise<McpGhostCallResult> {
+): Promise<McpTextResult> {
   if (!deps.callMedia) {
     return textResult(
       {
@@ -616,9 +616,6 @@ export async function handleMedia(
         action: "list_models",
         ...(input.capability ? { capability: input.capability } : {}),
       });
-    } else if (input.action === "inspect") {
-      if (!input.url) return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "inspect 需要当前任务的图片 url。" }, true);
-      result = await deps.callMedia({ action: "inspect", url: input.url });
     } else if (input.action === "import_image") {
       if (!input.path?.trim()) return textResult({ ok: false, errorCode: "INVALID_INPUT", message: "import_image 必须提供 path。" }, true);
       result = await deps.callMedia({ action: "import_image", path: input.path });
@@ -686,17 +683,7 @@ export async function handleMedia(
         invocationId: input.invocation_id,
       });
     }
-    // Pixels travel through MCP image blocks, never JSON text or delivery fields.
-    const { modelImages, ...metadata } = result;
-    const response: McpGhostCallResult = textResult(metadata, result.ok === false);
-    if (result.ok !== false && Array.isArray(modelImages)) {
-      for (const item of modelImages) {
-        if (item && typeof item.data === "string" && typeof item.mimeType === "string") {
-          response.content.push({ type: "image", data: item.data, mimeType: item.mimeType });
-        }
-      }
-    }
-    return response;
+    return textResult(result, result.ok === false);
   } catch (err) {
     return textResult(
       {
@@ -1397,7 +1384,7 @@ export function createCindyGhostsMcpServer(
     D_MEDIA,
     {
       action: z
-        .enum(["list_models", "resolve_local_path", "inspect", "import_image", "prepare", "request", "poll"])
+        .enum(["list_models", "resolve_local_path", "import_image", "prepare", "request", "poll"])
         .describe("要执行的媒体调用阶段"),
       path: z.string().max(32768).optional().describe("import_image 时必填；实际存在的图片路径，相对路径按当前任务工作目录解析"),
       capability: z
@@ -1423,7 +1410,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .max(4096)
         .optional()
-        .describe("inspect 时传当前任务的 cindy-media:// 图片地址，返回图片供模型检查。resolve_local_path 时传 cindy-media://、xdt-image:// 或 xdt-video://；查看、抽帧、分析媒体或查询存储位置时使用，按当前权限返回 Host 本机路径，具体查看方式由 Agent 决定。"),
+        .describe("resolve_local_path 时传 cindy-media://、xdt-image:// 或 xdt-video://；查看、抽帧、分析媒体或查询存储位置时使用，按当前权限返回 Host 本机路径，具体查看方式由 Agent 决定。"),
       invocation_id: z
         .string()
         .max(128)

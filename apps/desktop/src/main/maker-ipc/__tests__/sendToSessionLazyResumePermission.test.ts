@@ -382,6 +382,37 @@ describe('companion internal delivery after automation', () => {
 });
 
 // PR #6514: source receipts must not promote a prior owner's deployment permission.
+// Guard: execute the production create closure with separate membership and cwd.
+// Both ordinary and managed-worktree tasks must persist the chosen project.
+it.each([
+  { projectDir: '/selected-project', workingDir: '/tmp/checkout', useWorktree: false },
+  { projectDir: '/selected-project', workingDir: '/tmp/checkout', useWorktree: true },
+  { projectDir: null, workingDir: '/tmp/checkout', useWorktree: false },
+  { projectDir: null, workingDir: '/tmp/checkout', useWorktree: true },
+  { projectDir: null, workingDir: undefined, useWorktree: false },
+])('preserves resolved membership during creation ($projectDir, cwd=$workingDir, worktree=$useWorktree)', async ({ projectDir, workingDir, useWorktree }) => {
+  const executionDir = useWorktree ? '/repo/.cindy-worktrees/child' : workingDir ?? '/managed/dialogues/new-child';
+  const workspaceKind = projectDir === null ? 'dialogue' : 'project';
+  const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false, workingDir: executionDir, workspaceKind };
+  const open = vi.fn(async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
+    ({ row, value: await create(row, async () => {}) }));
+  const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
+    openSession: open,
+    validateHandoffWorkingDir: async (dir: string) => ({ ok: true, dir }),
+    broadcastSessionCreated: vi.fn(),
+    worktreeManager: {},
+    resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: async () => ({ ok: true, sessionId: 'new-child', meta: { path: executionDir } }),
+  });
+  const result = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work',
+    projectDir, workingDir, useWorktree, forceQueue: true });
+  expect(result).toMatchObject({ ok: true, projectDir, workingDir: executionDir, workspaceKind });
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ body: expect.objectContaining({
+    projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
+  }) }), expect.any(Function));
+  expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
 // for both idle branches; guard tier because register.ts has no separately exported entry.
 describe('idle forwarded request authorization', () => {

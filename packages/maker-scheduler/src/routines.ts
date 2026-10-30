@@ -55,6 +55,20 @@ export interface RoutineModel {
 /** How a routine carries context from one trigger to the next. */
 export type RoutineSessionMode = "persistent" | "fresh";
 
+/** Delivery is separate from execution: no second model call unless explicitly selected. */
+export type RoutineDelivery =
+  | { kind: 'companion'; mode: 'direct' | 'process' }
+  | { kind: 'im'; targetId: string }
+  | { kind: 'none' };
+
+/** Host-resolved destinations; IDs are opaque and contain no credentials. */
+export interface RoutineDeliveryTarget {
+  id: string;
+  channel: string;
+  name: string;
+  recipient: string;
+}
+
 /** A single standing instruction, with OR-combined time and event triggers. */
 export interface Routine {
   /** Derived by the engine, never accepted as configuration. */
@@ -73,6 +87,8 @@ export interface Routine {
   modelOverride?: RoutineModel | null;
   /** Omission keeps the legacy persistent routine lane. */
   sessionMode?: RoutineSessionMode;
+  /** Omission preserves saved choices; ordinary routines default to their initiating companion. */
+  delivery?: RoutineDelivery;
   /**
    * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」，以及主人在近况里打开的「每天查待办」）。由宿主模板生成，不接受用户/模型
    * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
@@ -92,7 +108,7 @@ export interface Routine {
 export type RoutineInput = Pick<
   Routine,
   "name" | "prompt" | "enabled" | "triggers" | "silentWhenIdle" | "preRunHook" | "modelOverride"
-  | "sessionMode"
+  | "sessionMode" | "delivery"
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -199,7 +215,7 @@ export function parseRoutineInput(value: unknown): RoutineInput {
     modelOverride = {
       agentKind: model.agentKind as AgentKind,
       model: string(model.model, 512),
-      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null ? null : string(model.agentDeviceId, 512) }),
+      ...(model.agentDeviceId === undefined ? {} : { agentDeviceId: model.agentDeviceId === null || model.agentDeviceId === 'local' ? null : string(model.agentDeviceId, 512) }),
       ...(model.providerId === undefined ? {} : { providerId: model.providerId === null ? null : string(model.providerId, 512) }),
       ...(model.effort === undefined ? {} : { effort: model.effort as RoutineModel['effort'] }),
       ...(model.fastMode === undefined ? {} : { fastMode: model.fastMode as RoutineModel['fastMode'] }),
@@ -211,7 +227,17 @@ export function parseRoutineInput(value: unknown): RoutineInput {
       throw new Error("Invalid routine session mode");
     sessionMode = input.sessionMode;
   }
+  let delivery: RoutineDelivery | undefined;
+  if (input.delivery !== undefined) {
+    const value = record(input.delivery);
+    if (value.kind === 'none') delivery = { kind: 'none' };
+    else if (value.kind === 'companion' && (value.mode === 'direct' || value.mode === 'process'))
+      delivery = { kind: 'companion', mode: value.mode };
+    else if (value.kind === 'im') delivery = { kind: 'im', targetId: string(value.targetId, 4096) };
+    else throw new Error('Invalid routine delivery');
+  }
   return {
+    ...(delivery === undefined ? {} : { delivery }),
     ...(modelOverride === undefined ? {} : { modelOverride }),
     ...(input.silentWhenIdle === undefined ? {} : { silentWhenIdle: input.silentWhenIdle as boolean }),
     ...(preRunHook === undefined ? {} : { preRunHook }),

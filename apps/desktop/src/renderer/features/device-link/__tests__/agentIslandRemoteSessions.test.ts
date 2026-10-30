@@ -50,6 +50,24 @@ const readActivity = (sessionId: string): RemoteSessionActivity | undefined =>
   activities.get(sessionId);
 
 describe('buildAgentIslandRemoteSessionInputs', () => {
+  // Unit regression #7972: the selected project must survive renderer -> IPC
+  // parsing -> island state, including a later explicit move clearing membership.
+  it('carries project membership through the complete remote island projection', () => {
+    const state = createAgentIslandState();
+    const session = remoteSession('a-1', 'device-a', {
+      projectDir: '/products/Chosen', workingDir: '/tmp/checkout',
+    });
+    const sync = () => syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions(
+      buildAgentIslandRemoteSessionInputs([session], MACHINE_ALL, readActivity),
+    )!, 2000);
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Chosen · Mac device-a');
+    session.projectDir = null;
+    session.workingDir = '/products/Moved';
+    sync();
+    expect(buildAgentIslandDisplayState(state, 2000).sessions[0]?.projectName).toBe('Moved · Mac device-a');
+  });
+
   // #7566 review, unit: new host plain text survives the complete transport chain;
   // an old/unknown format still uses Markdown compatibility on the same text.
   it('preserves literal code through relay, store, IPC and running/completed cards', () => {

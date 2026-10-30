@@ -10,6 +10,7 @@ import {
   type RoutineRun,
   type RoutineInput,
   type RoutineModel,
+  type RoutineDeliveryTarget,
   type Schedule,
   type ScheduleStorage,
   type Scheduler,
@@ -48,6 +49,8 @@ import { readNightlyLearningState, updateNightlyLearningState } from '../maker-i
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
 export interface RoutineHostDeps {
+  deliveryTargets?(botId: string): Promise<RoutineDeliveryTarget[]>;
+  deliverResult?(input: { routine: Routine; runId: string; sessionId: string; targetSessionId: string; text: string; assertCurrent(): void }): Promise<void>;
   assertImportedAutomationReady?: typeof import('../bot-import/host.js').ensureImportedAutomationReady;
   prepareImportedAutomation?: typeof import('../bot-import/automationRuntime.js').prepareImportedAutomation;
   finishImportedAutomation?: typeof import('../bot-import/automationRuntime.js').finishImportedAutomation;
@@ -196,9 +199,25 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   if (imported?.deferred) return { deferred: true };
   if (imported?.exhausted) return { skipped: true, disableRoutine: true };
   if (imported?.skipped) return { skipped: true };
+  let delivery: RoutineRun['delivery'];
+  const deliver = async (text: string, sessionId: string, silenced = false) => {
+    delivery = { status: 'suppressed' };
+    if (signal.aborted || silenced || !text.trim() || routine.delivery?.kind === 'none') return;
+    try {
+      const send = getRoutineHost().deliverResult;
+      if (!send) throw new Error('Routine delivery is unavailable');
+      await send({ routine, runId: run.id, sessionId, targetSessionId: bot.canonicalSessionId!, text,
+        assertCurrent: () => { assertScope(scope); if (signal.aborted || !canDispatch()) throw new Error('Routine delivery cancelled'); },
+      });
+      delivery = { status: 'delivered' };
+    } catch (error) {
+      delivery = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+    }
+  };
   if (imported?.direct !== undefined) {
-    const exhausted = await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, imported.direct, true, signal, () => assertScope(scope));
-    return { resultText: imported.direct, ...(exhausted ? { disableRoutine: true } : {}) };
+    const exhausted = await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, imported.direct, true, signal, () => assertScope(scope),
+      routine.delivery ? text => deliver(text, bot.canonicalSessionId!) : undefined);
+    return { resultText: imported.direct, ...(delivery ? { delivery } : {}), ...(exhausted ? { disableRoutine: true } : {}) };
   }
   const persistent = routine.sessionMode !== 'fresh';
   // Fresh mode still creates a host-owned lane so it inherits the same bot
@@ -300,8 +319,13 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     // 只有真的回收了才省略 sessionId；persistent 跳过时任务还在，历史入口必须保留。
     const discarded = !persistent && completed.status === 'skipped';
     const exhausted = imported && completed.status === 'success'
-      ? await getRoutineHost().finishImportedAutomation?.(root, routine, lane.sessionId, run.id, completed.resultText ?? '', false, signal, () => assertScope(scope)) : false;
+      ? await getRoutineHost().finishImportedAutomation?.(root, routine, lane.sessionId, run.id, completed.resultText ?? '', false, signal, () => assertScope(scope),
+        routine.delivery ? text => deliver(text, lane.sessionId, result.silenced) : undefined) : false;
+    // Imported output is redacted by its existing finish path before selected delivery.
+    if (!imported && (routine.delivery || !routine.builtin) && completed.status === 'success')
+      await deliver(completed.resultText ?? '', lane.sessionId, result.silenced);
     return {
+      ...(delivery ? { delivery } : {}),
       ...(exhausted ? { disableRoutine: true } : {}),
       scheduleRunId: result.runId,
       // 已回收的空壳不回填 sessionId，历史不挂「查看任务」死链；其余照常带回。
@@ -524,6 +548,7 @@ export function registerRoutinesIpc(): void {
     remove: routineTools.remove,
     'run-now': routineTools.runNow,
     history: routineTools.history,
+    'delivery-targets': routineTools.deliveryTargets,
   };
   for (const [method, handler] of Object.entries(methods)) {
     ipcMain.handle(`routines:${method}`, async (event, botId: unknown, ...args: unknown[]) => {
@@ -576,11 +601,26 @@ async function assertRoutineHookSyntax(input: RoutineInput): Promise<void> {
   if (input.preRunHook?.command?.trim()) await assertPreRunHookCommandSyntax(input.preRunHook.command);
 }
 
+async function assertRoutineDelivery(botId: string, input: RoutineInput, previous?: Routine): Promise<void> {
+  if (input.delivery?.kind !== 'im' || !input.enabled) return;
+  if (previous?.delivery?.kind === 'im' && previous.delivery.targetId === input.delivery.targetId) return;
+  const targetId = input.delivery.targetId;
+  const targets = await getRoutineHost().deliveryTargets?.(botId) ?? [];
+  if (!targets.some(target => target.id === targetId))
+    throw new Error('Choose an available routine delivery destination');
+}
+
 export const routineTools = {
+  deliveryTargets: (botId: string) => withBot(botId, async (_engine, scope) => {
+    const targets = await getRoutineHost().deliveryTargets?.(botId) ?? [];
+    assertScope(scope);
+    return targets;
+  }),
   list: (botId: string) => withBot(botId, (engine) => engine.list(botId)),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === creationId));
       if (input.enabled) await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, creationId, () => assertScope(scope), { input });
       assertScope(scope);
       return engine.createOnce(botId, input, creationId);
@@ -588,6 +628,7 @@ export const routineTools = {
   save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === id));
       if (id && input.enabled) {
         const recoveredRevision = await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, id, () => assertScope(scope), { input, expectedRevision });
         if (recoveredRevision !== undefined) expectedRevision = recoveredRevision;

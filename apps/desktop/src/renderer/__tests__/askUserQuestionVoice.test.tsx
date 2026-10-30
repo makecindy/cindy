@@ -2,7 +2,7 @@
 
 import { createElement, useState } from 'react';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import i18n from '@/i18n';
 import type { AskUserQuestionItem, PendingAskUser } from '@/lib/makerChatStore';
@@ -78,8 +78,20 @@ describe('AskUserQuestion voice entry', () => {
   // PR #7438: native selected-text drags can omit subsequent pointer events.
   it('records on hold, stops on release, and leaves ordinary drag selection alone', async () => {
     vi.useFakeTimers();
+    const previous = window.electronAPI;
+    let micGranted = false;
+    window.electronAPI = {
+      voiceInput: { getMicrophonePermissionCached: () => ({ ok: micGranted, status: 'not-determined' }) },
+    } as unknown as typeof window.electronAPI;
+    onTestFinished(() => { window.electronAPI = previous; });
     const { view, onAnswer } = renderAsk([{ question: '回答？' }]);
     const input = view.getByRole('textbox');
+    // 2026-10-30: before the microphone is authorized a hold is an ordinary press.
+    fireEvent.pointerDown(input, { button: 0, pointerId: 9 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.pointerUp(window, { pointerId: 9 });
+    micGranted = true;
     fireEvent.change(input, { target: { value: '已有回答' } });
     (input as HTMLTextAreaElement).setSelectionRange(0, 2);
     fireEvent.pointerDown(input, { button: 0, pointerId: 0 });

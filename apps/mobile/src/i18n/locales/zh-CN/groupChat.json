@@ -444,5 +444,45 @@
       "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",
       "confirm": "确认"
     }
+  },
+  "invitation": {
+    "join": "加入群聊",
+    "joinDescription": "粘贴邀请链接或邀请码以继续。",
+    "inviteLink": "邀请链接",
+    "pasteLink": "粘贴邀请链接",
+    "invitedBy": "{{name}} 邀请你加入",
+    "accept": "接受并加入",
+    "previewInvite": "继续",
+    "loadingInvite": "正在读取邀请…",
+    "retryInvite": "重新读取",
+    "entry": "加入群聊",
+    "alreadyMember": "你已在这个群聊中。",
+    "openGroup": "打开群聊",
+    "editLink": "修改链接",
+    "otherInvitation": "另一份邀请未替换当前邀请。如需查看，请从原链接重新打开。",
+    "countUnknown": "成员人数暂不可用",
+    "until": "有效期至 {{date}}",
+    "retryAccept": "重试加入",
+    "errors": {
+      "format": "链接不完整，请重新粘贴。",
+      "invalid": "请邀请人重新发送链接。",
+      "expired": "请邀请人重新发送链接。",
+      "forbidden": "请联系邀请人确认加入权限。",
+      "auth": "登录后，重新读取这份邀请。",
+      "network": "检查网络后重试。当前邀请会保留。",
+      "uncertain": "暂未确认是否加入成功。重试将继续确认这次加入。"
+    },
+    "joining": "正在加入…",
+    "close": "关闭",
+    "titles": {
+      "format": "邀请链接不完整",
+      "invalid": "邀请链接不可用",
+      "expired": "邀请已过期",
+      "forbidden": "当前账号无法加入",
+      "auth": "请先登录",
+      "network": "暂时无法读取邀请",
+      "uncertain": "暂未确认加入结果"
+    },
+    "externalFormatError": "请从原消息重新打开完整链接。"
   }
 }

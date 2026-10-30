@@ -221,7 +221,7 @@ it('does not bind subagent detail fetching to a desktop summary-only enclosing g
   expect(details).not.toHaveBeenCalled();
   view.setActive(false);
 });
-import type { HistoryViewPage } from '../historyView.js';
+import type { DeferredHistoryWork, HistoryViewPage } from '../historyView.js';
 const ungroupedStructure = {
   placeholder: (summary: import('../historyView.js').HistoryWorkSummary) => ({ ...row(1, 'thinking', ''),
     clientId: summary.anchorClientId ?? summary.key.slice(5) }),
@@ -846,6 +846,39 @@ describe('locating folded history preserves display expansion', () => {
       build: messages => messages.map(message => message.clientId), structure: ungroupedStructure });
     expect(rendered).toContain(rows[0].clientId);
     expect([...view.getSnapshot().expanded]).toEqual(['preview']);
+    view.setActive(false);
+  });
+
+  it.each([false, true])('reads a running tail from the Host range until every split group releases it (Host lines=%s)', async (lines) => {
+    const rows = Array.from({ length: 4 }, (_, i) => row(i + 1, 'thinking', `detail-${i}`));
+    const items = projectHistoryView(rows, true);
+    if (items[0].type !== 'work') throw new Error('missing work');
+    const summary = items[0].summary;
+    summary.preview = { ...summary, key: 'preview' };
+    if (lines) summary.lines = [{ kind: 'thinking', key: 'c4', text: 'detail-3' }];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages: rows, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    // Read prose can split one Host range into two rendered groups that both bind it.
+    type Item = { ids: string[]; children?: Item[]; deferred?: DeferredHistoryWork };
+    const [first, second] = renderHistoryView<HistoryMessageSource, Item>({
+      view, snapshot: view.getSnapshot(), liveMessages: [], streaming: true,
+      build: (messages) => [0, 1].map(() =>
+        ({ ids: [], children: messages.map((message) => ({ ids: [message.clientId] })) })),
+      structure: { ...ungroupedStructure,
+        children: (item) => item.children, sourceIds: (item) => item.ids,
+        rebuild: (item, children, deferred) => ({ ...item, children, deferred }) },
+    }).map((item) => item.deferred);
+    const releaseFirst = first?.setVisible?.(false, true);
+    const releaseSecond = second?.setVisible?.(false, true);
+    expect([...view.getSnapshot().expanded]).toEqual(lines ? [] : ['preview']);
+    releaseFirst?.();
+    expect([...view.getSnapshot().expanded]).toEqual(lines ? [] : ['preview']);
+    releaseSecond?.();
+    expect(view.getSnapshot().expanded.size).toBe(0);
     view.setActive(false);
   });
 

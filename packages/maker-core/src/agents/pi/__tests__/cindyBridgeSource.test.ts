@@ -2415,16 +2415,18 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
     const args = name === 'routine_save' ? {
       name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
+      modelOverride: { agentKind: 'codex', model: 'economy', providerId: 'connected', agentDeviceId: null, effort: 'low', fastMode: 'ultrafast' },
+      sessionMode: 'fresh', delivery: { kind: 'companion', mode: 'direct' },
       triggers: [
         { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
         { id: 'one-shot', kind: 'once', at: 90000 },
       ],
-    } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
+    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
@@ -2434,6 +2436,12 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     if (name === 'routine_save') {
       expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
       expect(tool.parameters.properties.botId).toBeUndefined();
+      // Regression: the host accepted these fields, but Pi's direct schema hid them.
+      expect(tool.parameters.properties.sessionMode.enum).toEqual(['persistent', 'fresh']);
+      expect(tool.parameters.properties.modelOverride.anyOf).toContainEqual({ type: 'null' });
+      const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
+      expect(model.required).toEqual(['agentKind', 'model']);
+      expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
       const variants = tool.parameters.properties.triggers.items.anyOf;
       const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
       expect(interval.properties.intervalMs.minimum).toBe(60000);

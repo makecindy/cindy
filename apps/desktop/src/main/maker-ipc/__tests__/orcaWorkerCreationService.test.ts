@@ -303,8 +303,10 @@ describe('Worker of a lead whose agent runs on another computer', () => {
 
   it('lists only connected sources of that computer', () => {
     expect(deviceAvailableModels(views, 'pi')).toEqual([
-      { id: 'spark/qwen', label: 'spark/qwen', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
-      { id: 'spark/deepseek', label: 'spark/deepseek', providers: [{ id: 'spark', name: 'Spark' }], defaultProviderId: 'spark' },
+      ...sparkModels.map(model => ({ id: model.id, label: model.name, providers: [{ id: 'spark', name: 'Spark',
+        access: undefined,
+        modelDetails: expect.objectContaining({ efforts: ['low', 'high'], defaultEffort: 'high', supportsFastMode: false }),
+      }], defaultProviderId: 'spark' })),
     ]);
     expect(deviceAvailableModels(views, 'codex')).toEqual([]);
   });

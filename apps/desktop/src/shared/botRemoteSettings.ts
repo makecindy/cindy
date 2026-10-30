@@ -40,6 +40,8 @@ export const BOT_SETTINGS_OPS = [
   'routines.save',
   'routines.saveWithModel',
   'routines.saveWithSessionMode',
+  'routines.saveWithDelivery',
+  'routines.deliveryTargets',
   'routines.runNow',
   'routines.remove',
   'voice.models',

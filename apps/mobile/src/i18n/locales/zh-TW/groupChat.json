@@ -444,5 +444,45 @@
       "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
       "confirm": "確認"
     }
+  },
+  "invitation": {
+    "join": "加入群聊",
+    "joinDescription": "貼上邀請連結或邀請碼以繼續。",
+    "inviteLink": "邀請連結",
+    "pasteLink": "貼上邀請連結",
+    "invitedBy": "{{name}} 邀請你加入",
+    "accept": "接受並加入",
+    "previewInvite": "繼續",
+    "loadingInvite": "正在讀取邀請…",
+    "retryInvite": "重新讀取",
+    "entry": "加入群聊",
+    "alreadyMember": "你已在這個群聊中。",
+    "openGroup": "開啟群聊",
+    "editLink": "修改連結",
+    "otherInvitation": "另一份邀請未取代目前的邀請。如需查看，請從原連結重新開啟。",
+    "countUnknown": "成員人數暫時無法取得",
+    "until": "有效期限至 {{date}}",
+    "retryAccept": "重試加入",
+    "errors": {
+      "format": "連結不完整，請重新貼上。",
+      "invalid": "請邀請人重新傳送連結。",
+      "expired": "請邀請人重新傳送連結。",
+      "forbidden": "請聯絡邀請人確認加入權限。",
+      "auth": "登入後，重新讀取這份邀請。",
+      "network": "檢查網路後重試。目前邀請會保留。",
+      "uncertain": "尚未確認是否加入成功。重試將繼續確認這次加入。"
+    },
+    "joining": "正在加入…",
+    "close": "關閉",
+    "titles": {
+      "format": "邀請連結不完整",
+      "invalid": "邀請連結無法使用",
+      "expired": "邀請已過期",
+      "forbidden": "目前帳號無法加入",
+      "auth": "請先登入",
+      "network": "暫時無法讀取邀請",
+      "uncertain": "尚未確認加入結果"
+    },
+    "externalFormatError": "請從原訊息重新開啟完整連結。"
   }
 }

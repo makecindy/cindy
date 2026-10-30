@@ -745,8 +745,14 @@ export class DesktopViewerController {
     const lease = this.session.lease;
     if (!lease || !this.state.ready) return;
     this.runtime.receive({ type: 'actualSize' });
-    const toolbar = this.root.parentElement?.querySelector('.remote-viewer-toolbar');
-    const toolbarHeight = toolbar?.getBoundingClientRect().height ?? 60;
+    const toolbar = this.root.parentElement?.querySelector<HTMLElement>('.remote-viewer-toolbar');
+    // Leaving fullscreen drops the macOS system inset the revealed toolbar reserves.
+    const inset = Number.parseFloat(
+      toolbar?.style.getPropertyValue('--remote-viewer-system-inset') ?? '',
+    );
+    const toolbarHeight = toolbar
+      ? toolbar.getBoundingClientRect().height - (Number.isFinite(inset) ? inset : 0)
+      : 60;
     void this.api
       .resize(
         this.scope.generation,

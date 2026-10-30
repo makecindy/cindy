@@ -444,5 +444,45 @@
       "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
       "confirm": "확인"
     }
+  },
+  "invitation": {
+    "join": "그룹 참여",
+    "joinDescription": "초대 링크 또는 초대 코드를 붙여넣고 계속하세요.",
+    "inviteLink": "초대 링크",
+    "pasteLink": "초대 링크 붙여넣기",
+    "invitedBy": "{{name}}님의 초대",
+    "accept": "수락하고 참여",
+    "previewInvite": "계속",
+    "loadingInvite": "초대를 불러오는 중…",
+    "retryInvite": "다시 불러오기",
+    "entry": "그룹 참여",
+    "alreadyMember": "이미 이 그룹에 참여하고 있어요.",
+    "openGroup": "그룹 열기",
+    "editLink": "링크 수정",
+    "otherInvitation": "다른 초대가 현재 초대를 대체하지 않았습니다. 확인하려면 원래 링크를 다시 여세요.",
+    "countUnknown": "멤버 수를 확인할 수 없습니다",
+    "until": "유효 기한: {{date}}",
+    "retryAccept": "참여 재시도",
+    "errors": {
+      "format": "링크가 불완전해요. 다시 붙여넣어 주세요.",
+      "invalid": "초대한 사람에게 새 링크를 요청해 주세요.",
+      "expired": "초대한 사람에게 새 링크를 요청해 주세요.",
+      "forbidden": "초대한 사람에게 참여 권한을 확인해 주세요.",
+      "auth": "로그인한 후 이 초대를 다시 불러와 주세요.",
+      "network": "네트워크를 확인한 후 다시 시도해 주세요. 현재 초대는 유지돼요.",
+      "uncertain": "참여 여부가 아직 확인되지 않았어요. 재시도하면 같은 참여 요청을 확인해요."
+    },
+    "joining": "참여 중…",
+    "close": "닫기",
+    "titles": {
+      "format": "불완전한 초대 링크",
+      "invalid": "사용할 수 없는 초대",
+      "expired": "만료된 초대",
+      "forbidden": "현재 계정으로 참여할 수 없음",
+      "auth": "먼저 로그인해 주세요",
+      "network": "초대를 불러올 수 없음",
+      "uncertain": "참여 결과가 확인되지 않음"
+    },
+    "externalFormatError": "원래 메시지에서 전체 링크를 다시 열어 주세요."
   }
 }

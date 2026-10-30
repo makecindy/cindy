@@ -338,7 +338,7 @@ describe('codexHttpBridge', () => {
     const firstList = await list();
     expect((await list()).result).toEqual(firstList.result);
     const result = await readRpcResponse(await request('tools/call', {
-      name: 'start_session_task', arguments: { instruction: 'Build the report' },
+      name: 'start_session_task', arguments: { project_path: '/project', instruction: 'Build the report' },
       ...(agentKind === 'codex' ? { _meta: { threadId: 'remote-thread' } } : {}),
     }));
     expect(result).toMatchObject({ result: { content: [{ type: 'text', text: expect.stringContaining('remote-task') }] } });

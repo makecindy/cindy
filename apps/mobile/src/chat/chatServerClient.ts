@@ -1,6 +1,7 @@
 import type { ChatMaskAction, ChatMaskState, ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-preset';
+import { parseChatInvitationToken } from '@cindy/device-link';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
 import { botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -12,6 +13,37 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from '@/i18n/locale';
 import { mobileMarkdownPreviewText } from '@/session/messageMarkdown';
 import { buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard, type BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
 import type { RemoteSerializedAttachment } from '@/session/types';
+
+export interface MobileChatInviteMemberAvatar { avatar: string | null; initial: string }
+
+/** Preview-only fields are optional for older Chat Servers. Never infer count from an avatar. */
+export interface MobileChatInvitePreview {
+  groupId: string; name: string; inviterName: string; joined: boolean;
+  expiresAt?: string | null; reusable?: boolean;
+  avatar?: string | null; memberCount?: number;
+  /** At most five joined members in server order; not the total member count. */
+  memberAvatars?: MobileChatInviteMemberAvatar[];
+}
+function invitationToken(link: string) {
+  const token = parseChatInvitationToken(link);
+  if (!token) throw new Error('INVALID_INVITATION_LINK');
+  return token;
+}
+function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePreview {
+  if (!value || typeof value.name !== 'string' || typeof value.inviterName !== 'string' || typeof value.joined !== 'boolean'
+    || (value.expiresAt !== undefined && value.expiresAt !== null && (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt))))
+    || (value.reusable !== undefined && typeof value.reusable !== 'boolean')
+    || (value.expiresAt === null && value.reusable !== true)) throw new Error('INVALID_CHAT_RESPONSE');
+  return { groupId: chatId(value.groupId), name: value.name, inviterName: value.inviterName, joined: value.joined,
+    expiresAt: value.expiresAt, reusable: value.reusable,
+    ...(Array.isArray(value.memberAvatars) ? { memberAvatars: value.memberAvatars.slice(0, 5).map(member => ({
+      avatar: member && typeof member.avatar === 'string' ? member.avatar : null,
+      initial: member && typeof member.initial === 'string' ? member.initial : '',
+    })) } : {}),
+    // Optional metadata can be absent on old servers; malformed metadata is unknown, never zero.
+    ...(typeof value.avatar === 'string' || value.avatar === null ? { avatar: value.avatar } : {}),
+    ...(Number.isSafeInteger(value.memberCount) && value.memberCount! >= 0 ? { memberCount: value.memberCount } : {}) };
+}
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
@@ -411,6 +443,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     })().finally(() => { readingIdentity = undefined; });
   }
   return {
+    async previewInvite(link: string, signal?: AbortSignal): Promise<MobileChatInvitePreview> {
+      return invitationPreview(await request<MobileChatInvitePreview>('/invite-links/preview', 'POST', { token: invitationToken(link) }, undefined, signal));
+    },
+    async acceptInvite(link: string, operationId: string, signal?: AbortSignal): Promise<{ groupId: string }> {
+      const token = invitationToken(link);
+      if (!/^[a-zA-Z0-9_.:-]{8,160}$/.test(operationId)) throw new Error('INVALID_OPERATION_ID');
+      const result = await request<{ groupId: string }>('/invite-links/accept', 'POST', { token, operationId }, undefined, signal);
+      const groupId = chatId(result?.groupId);
+      this.invalidateHistory(groupId, true);
+      return { groupId };
+    },
     invalidateHistory(room: string, metadata = false) {
       if (metadata) for (const key of threadFailures.keys()) if (key.startsWith(`${room}:`)) threadFailures.delete(key);
       void historyCache?.then(value => value.invalidate(room, metadata)).catch(() => undefined); },

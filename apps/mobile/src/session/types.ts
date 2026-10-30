@@ -33,6 +33,8 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  /** Explicit host project membership; older hosts fall back to workingDir. */
+  projectDir?: string | null;
   tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;

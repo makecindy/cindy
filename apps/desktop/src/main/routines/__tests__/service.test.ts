@@ -13,6 +13,7 @@ const mock = vi.hoisted(() => ({
   save: vi.fn<(state: RoutineState) => Promise<void>>(async () => {}),
   ensureRoutineSession: vi.fn(async ({ routineId }: { routineId: string }) => ({ ok: true as const, sessionId: `lane-${routineId}`, created: false })),
   closeRoutineSession: vi.fn(async () => {}),
+  deliverResult: vi.fn(async (_input: { assertCurrent(): void }) => {}),
   deleteRoutineSession: vi.fn(async () => {}),
   getBot: vi.fn(async () => ({ status: 'active', canonicalSessionId: 'canonical-task' })),
   storage: {
@@ -24,7 +25,7 @@ const mock = vi.hoisted(() => ({
     ]),
   },
   scheduler: {
-    runNow: vi.fn(async (): Promise<{ runId: string; deferred?: boolean }> => ({ runId: 'execution' })),
+    runNow: vi.fn(async (): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> => ({ runId: 'execution' })),
     pause: vi.fn(async () => ({}) as Schedule),
     delete: vi.fn(async () => {}),
   },
@@ -72,6 +73,7 @@ beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profile
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
   closeRoutineSession: mock.closeRoutineSession,
+  deliverResult: mock.deliverResult,
   deleteRoutineSession: mock.deleteRoutineSession,
   getScheduler: () => mock.schedulerReady ? mock.scheduler : null,
   getScheduleStorage: () => mock.storage,
@@ -86,6 +88,8 @@ afterEach(async () => {
   mock.dbReady = true;
   mock.dbOwner = null;
   mock.load.mockResolvedValue(null);
+  mock.deliverResult.mockResolvedValue(undefined);
+  mock.scheduler.runNow.mockResolvedValue({ runId: 'execution' });
   mock.storage.get.mockResolvedValue(null);
   mock.profiles = [];
   vi.useRealTimers();
@@ -920,4 +924,21 @@ it('preserves user routines while skipping receipt-owned built-in completion', a
     expect((await routineTools.history('bot', custom.id))[0]?.status).toBe('success');
   });
   expect(mock.scheduler.runNow).toHaveBeenCalledOnce();
+});
+
+// Regression: a completed routine was visible only in its execution lane, never in the initiating chat.
+it.each(['delivered', 'failed', 'suppressed'] as const)('keeps execution success and records %s result delivery', async (status) => {
+  const routine = await routineTools.save('bot', { name: 'Daily report', prompt: 'Summarize only', enabled: true,
+    silentWhenIdle: status === 'suppressed', sessionMode: 'fresh',
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  if (status === 'failed') mock.deliverResult.mockRejectedValueOnce(new Error('Destination offline'));
+  if (status === 'suppressed') mock.scheduler.runNow.mockResolvedValueOnce({ runId: 'execution', silenced: true });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  const [run] = await routineTools.history('bot', routine.id);
+  expect(run).toMatchObject({ resultText: 'Reviewed PR', delivery: { status } });
+  expect(mock.scheduler.runNow).toHaveBeenCalledTimes(1);
+  if (status === 'suppressed') expect(mock.deliverResult).not.toHaveBeenCalled();
+  else expect(mock.deliverResult).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'canonical-task',
+    text: 'Reviewed PR', routine: expect.objectContaining({ id: routine.id }) }));
 });

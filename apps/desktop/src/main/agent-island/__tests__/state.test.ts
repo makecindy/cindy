@@ -1311,6 +1311,20 @@ describe('Agent Island display state', () => {
     expect(silent && completedReplySummary(silent)).toBe('');
   });
 
+  // Unit regression #7972: first events and later metadata must display the
+  // selected project even when execution occurs in an unrelated checkout.
+  it('uses explicit project membership for initial and updated island metadata', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandUserPrompt(state, {
+      sessionId: 'project-task', workingDir: '/tmp/checkout', projectDir: '/products/Chosen', workspaceKind: 'project',
+    }, 'Work', 1000);
+    expect(buildAgentIslandDisplayState(state, 1001).sessions[0]?.projectName).toBe('Chosen');
+    applyAgentIslandMetadata(state, {
+      sessionId: 'project-task', workingDir: '/tmp/checkout', projectDir: '/products/Moved', workspaceKind: 'project',
+    }, 1002);
+    expect(buildAgentIslandDisplayState(state, 1003).sessions[0]?.projectName).toBe('Moved');
+  });
+
   it('does not display managed dialogue workspace folders as projects', () => {
     const state = createAgentIslandState();
 

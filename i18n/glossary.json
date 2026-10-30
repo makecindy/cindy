@@ -2617,6 +2617,18 @@
       },
       "checkCase": false,
       "note": "Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。"
+    },
+    {
+      "id": "performance-trace",
+      "status": "proposed",
+      "en": "Performance Trace",
+      "translations": {
+        "zh-CN": "性能跟踪",
+        "zh-TW": "效能追蹤",
+        "ja": "パフォーマンスの記録",
+        "ko": "성능 기록"
+      },
+      "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。"
     }
   ]
 }

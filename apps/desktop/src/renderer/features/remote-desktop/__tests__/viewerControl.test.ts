@@ -700,6 +700,21 @@ it('requests window content sized for the actual desktop plus toolbar', async ()
   expect(resize).toHaveBeenCalledWith(1, 1280, 780);
 });
 
+it('sizes the actual-size window without the fullscreen system inset on the toolbar', async () => {
+  // A revealed fullscreen toolbar is 60px of controls plus a 42px menu bar/titlebar inset.
+  const toolbar = {
+    style: { getPropertyValue: () => '42px' },
+    getBoundingClientRect: () => ({ height: 102 }),
+  };
+  const { api } = await fixture(undefined, false, {
+    root: { parentElement: { querySelector: () => toolbar } } as never,
+  });
+  present();
+  const resize = vi.spyOn(api, 'resize');
+  controller.actualSize();
+  expect(resize).toHaveBeenCalledWith(1, 1280, 780);
+});
+
 it('passes actual logical geometry to rendering and reacquires control after fitting', async () => {
   const f = await fixture();
   const original = f.api.request;

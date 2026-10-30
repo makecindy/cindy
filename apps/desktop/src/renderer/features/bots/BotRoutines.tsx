@@ -14,6 +14,7 @@ import type {
   RoutineRun,
   RoutineSource,
   RoutineTrigger,
+  RoutineDeliveryTarget,
 } from '@cindy/maker-scheduler';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
@@ -65,6 +66,8 @@ export function BotRoutines({
   const routinesApi = settingsTarget.routines;
   const navigate = useNavigate();
   const supportsModels = settingsTarget.kind === 'local' || settingsTarget.routineModels === true;
+  const supportsDelivery = settingsTarget.kind === 'local' || settingsTarget.routineDelivery === true;
+  const [deliveryTargets, setDeliveryTargets] = useState<RoutineDeliveryTarget[]>([]);
   const supportsSessionModes = settingsTarget.kind === 'local' || settingsTarget.routineSessionModes === true;
   const inFlight = useRef(false);
   const [loading, setLoading] = useState(true);
@@ -146,6 +149,14 @@ export function BotRoutines({
       unsubscribe();
     };
   }, [botId, selected, reload]);
+  useEffect(() => {
+    let alive = true;
+    if (!draft || !supportsDelivery) return;
+    void routinesApi.deliveryTargets?.(botId).then(targets => {
+      if (alive) setDeliveryTargets(targets);
+    }).catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [botId, selected, supportsDelivery, routinesApi]);
   const editable = (value: RoutineInput) =>
     JSON.stringify({
       name: value.name,
@@ -156,8 +167,10 @@ export function BotRoutines({
       preRunHook: value.preRunHook ?? null,
       modelOverride: value.modelOverride ?? null,
       sessionMode: value.sessionMode ?? 'persistent',
+      delivery: value.delivery ?? { kind: 'companion', mode: 'direct' },
     });
   const saved = routines.find((item) => item.id === selected);
+  const missingRecipient = draft?.delivery?.kind === 'im' && !draft.delivery.targetId;
   const dirty =
     draft !== null &&
     (saved
@@ -382,6 +395,7 @@ export function BotRoutines({
                 disabled={
                   busy ||
                   running ||
+                  missingRecipient ||
                   !draft.name.trim() ||
                   !draft.prompt.trim() ||
                   !draft.triggers.length
@@ -446,6 +460,33 @@ export function BotRoutines({
               aria-describedby="routine-session-mode-hint"
             />
             <p id="routine-session-mode-hint" className="text-12 text-[var(--text-secondary)]">{t('routines.sessionModeHint')}</p>
+          </div>}
+          {supportsDelivery && !saved?.builtin && <div className="space-y-2">
+            <span aria-hidden className={fieldLabelClass}>{t('routines.deliveryLabel')}</span>
+            <Select label={t('routines.deliveryLabel')} className="w-full" disabled={busy}
+              value={draft.delivery?.kind === 'im' ? 'im' : draft.delivery?.kind === 'none' ? 'none' : draft.delivery?.mode ?? 'direct'}
+              options={[
+                { value: 'direct', label: t('routines.deliveryDirect') },
+                { value: 'process', label: t('routines.deliveryProcess') },
+                { value: 'im', label: t('routines.deliveryIm') },
+                { value: 'none', label: t('routines.deliveryNone') },
+              ]}
+              onValueChange={(value) => setDraft({ ...draft, delivery: value === 'im'
+                ? { kind: 'im', targetId: deliveryTargets[0]?.id ?? '' }
+                : value === 'none' ? { kind: 'none' } : { kind: 'companion', mode: value as 'direct' | 'process' } })}
+            />
+            <p className="text-12 text-[var(--text-secondary)]">{t('routines.deliveryHint')}</p>
+            {draft.delivery?.kind === 'im' && <>
+              <Select label={t('routines.deliveryRecipient')} className="w-full" disabled={busy}
+                value={draft.delivery.targetId} options={[
+                  ...(!deliveryTargets.some(target => target.id === (draft.delivery?.kind === 'im' ? draft.delivery.targetId : ''))
+                    ? [{ value: draft.delivery.targetId, label: t('routines.deliveryUnavailable') }] : []),
+                  ...deliveryTargets.map(target => ({ value: target.id, label: `${target.name} · ${target.recipient}` })),
+                ]}
+                onValueChange={(targetId) => setDraft({ ...draft, delivery: { kind: 'im', targetId } })}
+              />
+              {!deliveryTargets.length && <p className="text-12 text-[var(--text-secondary)]">{t('routines.deliveryNoRecipients')}</p>}
+            </>}
           </div>}
           <fieldset disabled={!!saved?.builtin} className="min-w-0 space-y-5">
           <details className="space-y-3">
@@ -587,7 +628,7 @@ export function BotRoutines({
             <Button
               variant="cta"
               disabled={
-                busy || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
+                busy || missingRecipient || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
               }
               onClick={() => {
                 if (revealInvalidField()) return;
@@ -640,9 +681,11 @@ export function BotRoutines({
                   <time dateTime={new Date(run.createdAt).toISOString()}>
                     {new Date(run.createdAt).toLocaleString(i18n.language)}
                   </time>
-                  <span className={`inline-flex shrink-0 items-center gap-2 ${run.status === 'failed' || run.status === 'interrupted' ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`}>
+                  <span className={`inline-flex shrink-0 items-center gap-2 ${run.delivery?.status === 'failed' || run.status === 'failed' || run.status === 'interrupted' ? 'text-[var(--text-danger)]' : 'text-[var(--text-secondary)]'}`}>
                     {run.status === 'running' || run.status === 'queued' ? (
                       <Spinner size={15} />
+                    ) : run.delivery?.status === 'failed' ? (
+                      <CircleAlert size={15} />
                     ) : run.status === 'success' || run.status === 'skipped' ? (
                       <Check size={15} />
                     ) : run.status === 'failed' || run.status === 'interrupted' ? (
@@ -650,7 +693,7 @@ export function BotRoutines({
                     ) : (
                       <Pause size={15} />
                     )}
-                    {t(`routines.status.${run.status}`)}
+                    {run.delivery?.status === 'failed' ? t('routines.deliveryFailed') : t(`routines.status.${run.status}`)}
                   </span>
                 </summary>
                 {run.sessionId && <Button variant="secondary" size="sm" onClick={() => navigate(standardSessionRoute(run.sessionId!, settingsTarget.deviceId))}>
@@ -661,6 +704,8 @@ export function BotRoutines({
                     {run.resultText}
                   </p>
                 )}
+                {run.delivery?.status === 'failed' && <p className="break-words text-[var(--text-danger)]">{t('routines.deliveryFailedHint')}</p>}
+                {run.delivery?.status === 'delivered' && <p className="text-12 text-[var(--text-secondary)]">{t('routines.deliveryDelivered')}</p>}
                 {run.error && <p className="break-words text-[var(--text-danger)]">{run.error}</p>}
                 {run.events.map(({ sourceId, event }) => (
                   <p
@@ -956,6 +1001,7 @@ function routineInput(routine: Routine): RoutineInput {
     ...(routine.silentWhenIdle !== undefined ? { silentWhenIdle: routine.silentWhenIdle } : {}),
     ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}),
     ...(routine.modelOverride !== undefined ? { modelOverride: routine.modelOverride } : {}),
+    ...(routine.delivery !== undefined ? { delivery: routine.delivery } : {}),
     ...(routine.sessionMode !== undefined ? { sessionMode: routine.sessionMode } : {}),
   };
 }

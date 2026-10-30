@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentProps } from 'react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createElement, useSyncExternalStore, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => ({
@@ -22,12 +22,14 @@ vi.mock('@/lib/agent-actions/workActivityProjection', async (importOriginal) => 
   return { ...actual, projectWorkActivities: vi.fn(actual.projectWorkActivities) };
 });
 
-import { WorkGroupRenderItemView } from '@/components/chat/MessageStream';
+import { HistoryViewController, projectHistoryView } from '@cindy/maker-shared/message-window';
+import { buildMessageStreamRenderProjection, WorkGroupRenderItemView } from '@/components/chat/MessageStream';
 import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { projectWorkActivities } from '@/lib/agent-actions/workActivityProjection';
 import { createWorkGroupProjection } from '@/components/chat/streamingMessageProjection';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { RenderItem } from '@/components/chat/messageWorkGroups';
+import type { HistoryChatMessage } from '@/lib/makerChatStore';
 
 type Group = Extract<RenderItem, { type: 'work_group' }>;
 const context: ComponentProps<typeof WorkGroupRenderItemView>['context'] = {
@@ -119,5 +121,46 @@ describe('completed work-group rendering during a text stream', () => {
     const previousRenders = vi.mocked(WorkGroupBlock).mock.calls.length;
     view.rerender(element(group, { ...context, workingDir: '/other' }));
     expect(vi.mocked(WorkGroupBlock).mock.calls.length).toBe(previousRenders + 1);
+  });
+});
+
+describe('remote running work preview', () => {
+  // Regression (React #185): a read preview tail ending in prose seals the regrouped
+  // group, which released the preview, which reopened the running group, repeatedly.
+  it('keeps the tail open when the read rows regroup the running block', async () => {
+    const row = (id: number, role: HistoryChatMessage['role'], content: string): HistoryChatMessage => ({
+      id: String(id), clientId: `c${id}`, role, content,
+      createdAt: new Date(Date.UTC(2026, 9, 30) + id * 1000).toISOString(),
+    });
+    const rows = [row(1, 'user', 'Work'), ...[2, 3, 4, 5, 6, 7].map((id) => row(id, 'thinking', `step ${id}`))];
+    const prose = row(8, 'assistant', 'Checking the build');
+    const items = projectHistoryView(rows, true);
+    const work = items.at(-1);
+    if (work?.type !== 'work') throw new Error('Expected a running work summary');
+    work.summary.preview = { ...work.summary, key: 'preview', firstMessageId: '5', lastMessageId: '8' };
+    const view = new HistoryViewController<HistoryChatMessage>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async (ref) => ({ version: 1, hasMore: false, nextCursor: null,
+        messages: ref.key === 'preview' ? [...rows.slice(4), prose] : [...rows.slice(1), prose] }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    function RemoteStream() {
+      const snapshot = useSyncExternalStore(view.subscribe, view.getSnapshot);
+      const projection = buildMessageStreamRenderProjection({
+        historyView: view, historySnapshot: snapshot, historyLiveMessages: [], isSessionStreaming: true,
+        generatedFilesItemCache: new Map(), buildRaw: () => ({ items: [], singleResultMap: new Map() }),
+      });
+      return projection.items.map((item) => item.type === 'work_group'
+        ? <WorkGroupRenderItemView key={item.key} item={item} context={context} compact={false} />
+        : <div key={item.key}>{item.type === 'message' ? String(item.message.content) : null}</div>);
+    }
+    try {
+      render(<RemoteStream />);
+      await waitFor(() => expect(screen.getByText('Checking the build')).toBeTruthy());
+      expect([...view.getSnapshot().expanded]).toEqual(['preview']);
+    } finally {
+      view.setActive(false);
+    }
   });
 });

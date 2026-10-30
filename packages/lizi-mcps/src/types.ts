@@ -291,6 +291,7 @@ export interface SlackHookMcpDeps {
 
 /** Native routine service; only caller-bound companion tools expose it to agents. */
 export interface RoutineToolService {
+  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
   list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
   sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
   save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;

@@ -19,6 +19,8 @@ type CreateOptions = {
   /** Online computers that support group chats; empty keeps the single-purpose button. */
   groupTargets?: readonly RemoteResourceHostTarget[];
   preferredDeviceId?: string;
+  /** Available to a signed-in account without a connected computer. */
+  onInvite?(): void;
   onCreated(host: RemoteResourceHostTarget, ref: RemoteResourceRef): void;
   onGroupCreated?(host: RemoteResourceHostTarget, groupId: string): void;
 };
@@ -31,7 +33,7 @@ type CreateOptions = {
  * switch by itself: the root-hosted home list (Android, wide screens) keeps its state across the
  * account-keyed route.
  */
-export function useTeammateCreateController({ targets, groupTargets = [], preferredDeviceId, onCreated, onGroupCreated }: CreateOptions) {
+export function useTeammateCreateController({ targets, groupTargets = [], preferredDeviceId, onCreated, onGroupCreated, onInvite }: CreateOptions) {
   const { t } = useTranslation();
   const { accountGeneration } = useAuth();
   const [account, setAccount] = useState(accountGeneration);
@@ -42,13 +44,14 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
   const [visible, setVisible] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const pendingChoice = useRef<Choice | null>(null);
+  const pendingInvite = useRef(false);
   const receipt = useRef<RemoteResourceRef | null>(null);
   const groupReceipt = useRef<string | null>(null);
   // Callbacks already handed out keep the old account and stay fenced; new ones serve the new account.
   if (account !== accountGeneration) {
     setAccount(accountGeneration); setOpen(null); setVisible(false); setChoosing(false);
   }
-  useEffect(() => { pendingChoice.current = null; receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
+  useEffect(() => { pendingChoice.current = null; pendingInvite.current = false; receipt.current = null; groupReceipt.current = null; }, [accountGeneration]);
   const withGroups = groupTargets.length > 0 && !!onGroupCreated;
   const order = (hosts: readonly RemoteResourceHostTarget[]) => [...hosts]
     .sort((a, b) => Number(b.deviceId === preferredDeviceId) - Number(a.deviceId === preferredDeviceId));
@@ -67,19 +70,24 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     image: kind === 'bot' ? 'person.crop.circle.badge.plus' : 'person.2',
     ...(hosts.length > 1 ? { subactions: hosts.map((host) => ({ id: `${kind}:${host.deviceId}`, title: host.deviceName })) } : {}),
   });
-  const menuActions: NativePullDownAction[] = withGroups
-    ? [...(ordered.length ? [entry('bot', ordered)] : []), entry('group', orderedGroups)]
+  const withMenu = withGroups || !!onInvite;
+  const menuActions: NativePullDownAction[] = withMenu
+    ? [...(ordered.length ? [entry('bot', ordered)] : []), ...(withGroups ? [entry('group', orderedGroups)] : [])]
     : ordered.map((target) => ({ id: target.deviceId, title: target.deviceName }));
+  if (onInvite) menuActions.push({ id: 'invitation-section', title: '', displayInline: true,
+    subactions: [{ id: 'invite', title: t('groupChat.invitation.entry'), image: 'link' }] });
   const onMenu = (id: string) => {
-    if (!withGroups) { start('bot', id); return; }
+    if (!mounted.current || currentAccount.current !== account) return;
+    if (id === 'invite') { onInvite?.(); return; }
+    if (!withMenu) { start('bot', id); return; }
     const split = id.indexOf(':');
     if (split > 0) start(id.slice(0, split) as CreateKind, id.slice(split + 1));
   };
-  const label = withGroups ? t('devices.companions.createMenu') : botLabel;
-  const needsMenu = withGroups || targets.length > 1;
+  const label = withMenu ? t('devices.companions.createMenu') : botLabel;
+  const needsMenu = withMenu || targets.length > 1;
   const press = () => {
     // The empty state names the next step instead of only reporting that nothing is available.
-    if (!withGroups && !targets.length) Alert.alert(label, t('devices.companions.noCreateHosts'));
+    if (!withMenu && !targets.length) Alert.alert(label, t('devices.companions.noCreateHosts'));
     else if (!needsMenu) start('bot', targets[0]!.deviceId);
     else if (!usesNativePullDownMenu()) setChoosing(true);
   };
@@ -88,7 +96,7 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     ...(withGroups ? orderedGroups.map((host) => ({ kind: 'group' as const, host })) : []),
   ];
   const choiceLabel = (choice: Choice) => {
-    if (!withGroups) return choice.host.deviceName;
+    if (!withMenu) return choice.host.deviceName;
     const verb = choice.kind === 'bot' ? botLabel : groupLabel;
     return (choice.kind === 'bot' ? ordered : orderedGroups).length > 1 ? `${verb} · ${choice.host.deviceName}` : verb;
   };
@@ -99,12 +107,17 @@ export function useTeammateCreateController({ targets, groupTargets = [], prefer
     ? <NativePullDownMenu actions={menuActions} onAction={onMenu} testID="teammates.createMenu">{button}</NativePullDownMenu>
     : button;
   const sheets = <>
-    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; setChoosing(false); }}
-      onClosed={() => { const choice = pendingChoice.current; pendingChoice.current = null; if (choice) start(choice.kind, choice.host.deviceId); }}>
+    <CompanionSheet visible={choosing} title={label} testID="teammates.createChooser" onClose={() => { pendingChoice.current = null; pendingInvite.current = false; setChoosing(false); }}
+      onClosed={() => { if (!mounted.current || currentAccount.current !== account) return;
+        const choice = pendingChoice.current; pendingChoice.current = null; if (choice) start(choice.kind, choice.host.deviceId);
+        const invite = pendingInvite.current; pendingInvite.current = false;
+        if (invite && mounted.current && currentAccount.current === account) onInvite?.(); }}>
       {/* Same choice as the header's native menu: one plain row per choice, not full-width buttons. */}
       {fallbackChoices.map((choice) => <CompanionSettingsRow key={`${choice.kind}:${choice.host.deviceId}`} icon={null} label={choiceLabel(choice)}
         testID={`teammates.createChooser.${choice.kind}.${choice.host.deviceId}`}
         onPress={() => { pendingChoice.current = choice; setChoosing(false); }} />)}
+      {onInvite ? <CompanionSettingsRow icon={null} label={t('groupChat.invitation.entry')} testID="teammates.invite"
+        onPress={() => { if (mounted.current && currentAccount.current === account) { pendingInvite.current = true; setChoosing(false); } }} /> : null}
     </CompanionSheet>
     {open?.kind === 'bot' ? <CompanionCreateSheet visible={visible} deviceId={open.host.deviceId} deviceName={open.host.deviceName}
       collectionId={TEAMMATE_COLLECTION_ID} online={targets.some((target) => target.deviceId === open.host.deviceId)}

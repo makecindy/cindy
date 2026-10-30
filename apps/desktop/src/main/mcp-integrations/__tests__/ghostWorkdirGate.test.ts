@@ -275,6 +275,7 @@ vi.mock('../../plugin-contributions/prepared.js', () => ({
 
 const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost');
 const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
+const chatAttachments = await import('../../cindy-media/chatAttachments');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
 import type { LiziMcpSessionContext } from '@cindy/mcps';
@@ -2240,6 +2241,32 @@ describe('session-context 宿主铸造', () => {
 });
 
 describe('Cindy media 本机路径揭示', () => {
+  // 2026-10-30: generated images must stay metadata-only until the Agent elects to
+  // read a local path. Existing cases cover path approval, not request/poll output.
+  // Unit: one completed image through the real Host entry must keep its URL and
+  // task reference without adding model images or automatic-preview diagnostics.
+  it.each(['request', 'poll'] as const)('%s returns image metadata without automatic inspection', async (action) => {
+    const generated = {
+      ok: true,
+      status: 'completed',
+      xdt_image_urls: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
+    };
+    callCindyMediaMock.mockResolvedValueOnce(generated);
+    const commit = vi.spyOn(chatAttachments, 'commitMessageMediaRefs')
+      .mockResolvedValueOnce({ committed: 1, skipped: 0, failed: 0 });
+    try {
+      const result = await makeDeps('codex', 'generated-image').callMedia?.(
+        action === 'request'
+          ? { action, invocationId: 'generated', body: {} }
+          : { action, invocationId: 'generated' },
+      );
+      expect(result).toEqual(generated);
+      expect(commit).toHaveBeenCalledWith({ sessionId: 'generated-image', role: 'tool', content: generated });
+    } finally {
+      commit.mockRestore();
+    }
+  });
+
   it('只在用户点击允许后把已解析路径返回给 Agent', async () => {
     const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
     callCindyMediaMock.mockResolvedValue({

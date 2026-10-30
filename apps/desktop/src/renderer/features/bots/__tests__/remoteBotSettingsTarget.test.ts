@@ -193,3 +193,16 @@ it('starts again from the host profile, not from the old one, when a later part 
   expect(sent(4)).toMatchObject({ input: { op: 'profile.get' } });
   expect(profiles.get()).toMatchObject({ avatarColor: 'blue', identitySource: long, userContextSource: '' });
 });
+
+it('negotiates final delivery and discovers recipients on the teammate computer', async () => {
+  const older = create();
+  expect(older.target.routineDelivery).toBe(false);
+  expect(await older.target.routines.deliveryTargets?.('bot-1')).toEqual([]);
+  const current = create([...ALL_OPS, 'routines.saveWithDelivery', 'routines.deliveryTargets']);
+  host.invoke.mockResolvedValue(ok([]));
+  const delivery = { kind: 'im', targetId: 'host-destination' };
+  await current.target.routines.save('bot-1', { name: 'Digest', delivery } as never, 'r1');
+  expect(sent()).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.saveWithDelivery', args: { input: { delivery } } } });
+  await current.target.routines.deliveryTargets?.('bot-1');
+  expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.deliveryTargets' } });
+});

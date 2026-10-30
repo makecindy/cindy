@@ -68,6 +68,7 @@ CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT 'New Maker',
   working_dir TEXT,
+  project_dir TEXT,
   model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
   scheduled_model_baseline TEXT,
   provider_id TEXT,
@@ -2331,6 +2332,7 @@ describe('db worker tx handlers', () => {
   it.each([false, true])('fork.session persists runtime provenance and remaps messages (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 'src');
+      await client.exec('UPDATE sessions SET project_dir = ? WHERE id = ?', ['/selected-project', 'src']);
       await client.exec(
         'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?)',
         [
@@ -2381,11 +2383,12 @@ describe('db worker tx handlers', () => {
       expect(result).toEqual({ messageCount: 1 });
       await expect(
         client.queryOne(
-          'SELECT working_dir, parent_session_id, forked_at_message_id, provider_id, agent_device_id, context_window, context_window_runtime FROM sessions WHERE id = ?',
+          'SELECT project_dir, working_dir, parent_session_id, forked_at_message_id, provider_id, agent_device_id, context_window, context_window_runtime FROM sessions WHERE id = ?',
           ['forked'],
         ),
       ).resolves.toEqual({
         working_dir: 'D:/repo/project',
+        project_dir: '/selected-project',
         parent_session_id: 'src',
         forked_at_message_id: 'c2',
         provider_id: 'xd',

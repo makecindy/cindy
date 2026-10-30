@@ -1,4 +1,5 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
@@ -260,6 +261,7 @@ export function MainLayout() {
   usePendingAlertAttention();
   const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
+  const [performanceTraceStatusHost, setPerformanceTraceStatusHost] = useState<HTMLDivElement | null>(null);
   const [sharedTaskInvitation, setSharedTaskInvitation] = useState<{ link: string; id: number } | null>(null);
   const invitationSequence = useRef(0);
   const [shareImportRequest, setShareImportRequest] = useState<{
@@ -1398,6 +1400,9 @@ export function MainLayout() {
         case 'open-issues':
           navigate('/issues');
           break;
+        case 'open-performance-trace':
+          openPerformanceTrace();
+          break;
         case 'new-maker':
           // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
@@ -1714,6 +1719,7 @@ export function MainLayout() {
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
       <ScheduleSessionIndexOwner />
+      {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       {!isSecondaryWindow() && <AppBadgeAttentionSync />}
       <div
         ref={rowRef}
@@ -1786,6 +1792,10 @@ export function MainLayout() {
                 // Windows 浮动入口每个占 28px + 4px 间距；分屏工具条使用同一占位，
                 // 避免远程桌面 / 面板入口盖住关闭分屏等操作。mac 与左侧入口无需右端让位。
                 style={{
+                  ['--content-top-left-actions-inset' as string]:
+                    !isMac && rightSidebarSide === 'left'
+                      ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
+                      : '0px',
                   ['--content-top-right-actions-inset' as string]:
                     !isMac && rightSidebarSide === 'right'
                       ? `${(showWindowsRightSidebarTrigger ? 32 : 0) + (remoteDesktopDeviceId ? 32 : 0)}px`
@@ -1832,6 +1842,7 @@ export function MainLayout() {
                       shrink-0 在 main 的 flex 列里独占一行把内容推下(不遮盖)。放在
                       FadeSwitcher 之外 —— 它是全局状态提示,不参与路由切换动画。 */}
                   <CredentialStoreBanner />
+                  {!isSecondaryWindow() && <div ref={setPerformanceTraceStatusHost} className="shrink-0" />}
                   {/* Windows chip 栈:远程桌面入口贴着右栏唤起 chip(唤起 chip 在面板一侧);
                       右栏展开时唤起 chip 不在,远程桌面入口留在同一角。 */}
                   {!isMac && (showWindowsRightSidebarTrigger || remoteDesktopDeviceId) && (

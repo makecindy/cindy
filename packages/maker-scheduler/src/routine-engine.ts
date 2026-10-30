@@ -29,6 +29,8 @@ export interface RoutineRun {
   scheduleRunId?: string;
   sessionId?: string;
   resultText?: string;
+  /** Execution remains successful when only delivery fails; never rerun work to resend it. */
+  delivery?: { status: 'delivered' | 'failed' | 'suppressed'; error?: string };
 }
 
 /** One account-owned snapshot; the host commits each transition atomically. */
@@ -99,6 +101,7 @@ export interface RoutineEngineDeps {
     sessionId?: string;
     error?: string;
     resultText?: string;
+    delivery?: RoutineRun['delivery'];
     deferred?: boolean;
     skipped?: boolean;
     /** Host-owned execution cap reached; persist disabling with this run's result. */
@@ -147,7 +150,7 @@ export class RoutineEngine {
       ) {
         throw new Error("Unsupported routine storage");
       }
-      for (const routine of saved.routines) parseRoutineInput(routine);
+      saved.routines = saved.routines.map(routine => ({ ...routine, ...parseRoutineInput(routine) }));
       this.state = saved;
     }
     this.state.receipts = compactRoutineReceipts(this.state.receipts, this.deps.now());
@@ -312,6 +315,7 @@ export class RoutineEngine {
           enabled: existing.enabled,
           modelOverride: existing.modelOverride,
           sessionMode: existing.sessionMode,
+          delivery: existing.delivery,
         } : {}),
       });
       if (id && !existing && !creationId && !options.builtin) throw new Error("Routine not found");

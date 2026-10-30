@@ -592,7 +592,8 @@ async function collectOutboundForFinalText(
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
   provider?: string,
-): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
+  relayXVideo?: HookRunRequest['relayXVideo'],
+): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments']; xMediaIds?: string[] }> {
   // Defense in depth for X/Slack/Telegram: live Codex traffic is normalized in
   // maker-core, but older persisted/continuation text and future adapters must
   // never forward private Web citation delimiters to an external channel.
@@ -618,6 +619,7 @@ async function collectOutboundForFinalText(
       },
       allowedFileRoots,
       provider,
+      ...(canReadLocal && relayXVideo ? { relayVideo: relayXVideo } : {}),
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       formatIncompleteNotice: formatHookIncompleteNotice,
       log,
@@ -628,6 +630,7 @@ async function collectOutboundForFinalText(
     return {
       finalText: collected.text,
       ...(collected.attachments.length > 0 ? { attachments: collected.attachments } : {}),
+      ...(collected.xMediaIds.length > 0 ? { xMediaIds: collected.xMediaIds } : {}),
     };
   } catch (err) {
     log.warn(
@@ -1614,7 +1617,7 @@ export function createMakerHookSessionRunner(deps: {
         observer.stop();
         const collected = observer.errorReason === 'output-limit'
           ? await collectOutboundForFinalText(
-            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log, req.source?.im,
+            session.id, turnTextsFor(observer), extraImageAbsPaths, allowedFileRoots, log, req.source?.im, req.relayXVideo,
           )
           : { finalText: '' };
         // 额度类失败要说清是哪个供应商: 名字只在这里按需读一次(读不到退回「当前供应商」)。
@@ -1647,9 +1650,11 @@ export function createMakerHookSessionRunner(deps: {
         allowedFileRoots,
         log,
         req.source?.im,
+        req.relayXVideo,
       );
       let finalText = collected.finalText;
       const outAttachments = collected.attachments;
+      const xMediaIds = collected.xMediaIds;
       if (inboundAttachmentFailures > 0) {
         const warning =
           `⚠️ Incoming attachment processing incomplete: ${inboundAttachmentFailures} ` +
@@ -1662,6 +1667,7 @@ export function createMakerHookSessionRunner(deps: {
         errorMessage: null,
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
+        ...(xMediaIds !== undefined ? { xMediaIds } : {}),
       };
     },
 

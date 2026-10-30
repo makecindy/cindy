@@ -14,7 +14,8 @@ import { t } from '../i18n.js';
 import { readFile as readMedia } from '../cindy-media/blobStore.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
-import { parseChatInvitationToken } from '@cindy/device-link';
+import { CHAT_INVITATION_PATH, parseChatInvitationToken } from '@cindy/device-link';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
@@ -2790,6 +2791,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Bare token, cindy://chat-invite/<token> or the public https page link; only the token
   // reaches this account's own Chat Server. An unreadable link is INVALID_INPUT.
   const inviteToken = (link: string) => z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(parseChatInvitationToken(link) ?? '');
+  // Global/CN public pages are verified. Dev keeps the existing scheme until its
+  // public deployment is verified; this does not affect invitation reception.
+  function invitationPage(): URL | null {
+    if (CURRENT_CINDY_REGION === 'dev') return null;
+    const page = new URL(getClientEndpoint('deviceLinkApiBaseUrl'));
+    if (!['http:', 'https:'].includes(page.protocol) || page.username || page.password || page.search || page.hash) {
+      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
+    }
+    const local = page.hostname === 'localhost' || page.hostname.endsWith('.localhost')
+      || /^127\./.test(page.hostname) || page.hostname === '[::1]' || page.hostname === '0.0.0.0';
+    if (local) return null;
+    if (page.protocol !== 'https:') {
+      throw new Error('CHAT_ENDPOINT_UNAVAILABLE');
+    }
+    page.pathname = page.pathname.replace(/\/+$/, '') + CHAT_INVITATION_PATH;
+    return page;
+  }
+
   // Null is the server's non-expiring contract; omitted/invalid dates are never
   // treated as permanent links. Older servers keep their dated, single-use links.
   const inviteExpiry = z.string().refine(value => Number.isFinite(Date.parse(value))).nullable();
@@ -3033,10 +3052,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }),
     createInvite: input => result(async () => {
       const i = z.object({ groupId: id, clientId: operationId }).parse(input);
+      const page = invitationPage();
       const invite = inviteResponse(z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/), ...inviteFields }).refine(validInvite),
         await api(`/conversations/${i.groupId}/invite-links`, 'POST', { operationId: i.clientId }, managementActor(await groupSnapshot(i.groupId)), false, 200),
       );
-      return { link: `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
+      if (page) page.hash = `${invite.token}?app=${CURRENT_CINDY_REGION === 'cn' ? 'cindycn' : 'cindy'}`;
+      return { link: page?.href ?? `cindy://chat-invite/${invite.token}`, expiresAt: invite.expiresAt, ...(invite.reusable !== undefined ? { reusable: invite.reusable } : {}) };
     }),
     revokeInvite: input => result(async () => {
       const i = z.object({ groupId: id, link: z.string(), clientId: z.string().uuid() }).strict().parse(input);

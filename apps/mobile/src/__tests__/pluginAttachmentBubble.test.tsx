@@ -169,7 +169,7 @@ describe('running work group expansion', () => {
       expect(html).not.toContain('Thinking step 0');
     }
   });
-  it.each([undefined, []])('requests an old-Host preview only when running lines are absent: %j', (lines) => {
+  it.each([undefined, []])('shows cached old-Host activity only when running lines are absent: %j', (lines) => {
     const setVisible = vi.fn();
     const items = buildMobileMessageRenderItems([
       msg('thought', 'thinking', { text: 'Cached thinking', durationMs: 1 }),
@@ -177,7 +177,8 @@ describe('running work group expansion', () => {
       .map(item => ({ ...item, deferred: { owner: {}, key: item.key, expanded: false,
         loading: false, failed: false, lines, setVisible, toggle() {}, retry() {} } }));
     const html = renderClient(<MessageRenderer items={companionConversationItems(items)} companion isSessionStreaming />);
-    expect(setVisible).toHaveBeenCalledWith(false, lines === undefined);
+    // The controller, not this regrouped row, decides from the Host lines whether a tail is read.
+    expect(setVisible).toHaveBeenCalledWith(false, true);
     expect(html.includes('Cached thinking')).toBe(lines === undefined);
   });
   const render = (awaitingDetails: boolean) => {

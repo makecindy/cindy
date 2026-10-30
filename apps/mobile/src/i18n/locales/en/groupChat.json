@@ -444,5 +444,45 @@
       "toolsHint": "Members may use this companion’s existing tools and private information. Results are visible to everyone. Existing approval rules still apply. Revoking stops active requests, but cannot undo completed actions.",
       "confirm": "Confirm"
     }
+  },
+  "invitation": {
+    "join": "Join group",
+    "joinDescription": "Paste an invitation link or code to continue.",
+    "inviteLink": "Invitation link",
+    "pasteLink": "Paste invitation link",
+    "invitedBy": "Invited by {{name}}",
+    "accept": "Accept and join",
+    "previewInvite": "Continue",
+    "loadingInvite": "Loading invitation…",
+    "retryInvite": "Reload invitation",
+    "entry": "Join Group",
+    "alreadyMember": "You’re already in this group.",
+    "openGroup": "Open Group",
+    "editLink": "Edit Link",
+    "otherInvitation": "Another invitation has not replaced this one. To view it, reopen its original link.",
+    "countUnknown": "Member count unavailable",
+    "until": "Valid until {{date}}",
+    "retryAccept": "Retry joining",
+    "errors": {
+      "format": "The link is incomplete. Paste it again.",
+      "invalid": "Ask the inviter for a new link.",
+      "expired": "Ask the inviter for a new link.",
+      "forbidden": "Contact the inviter to confirm your permission to join.",
+      "auth": "Sign in, then reload this invitation.",
+      "network": "Check your connection and retry. This invitation will be kept.",
+      "uncertain": "We have not confirmed whether you joined. Retrying checks the same join request."
+    },
+    "joining": "Joining…",
+    "close": "Close",
+    "titles": {
+      "format": "Incomplete invitation link",
+      "invalid": "Invitation unavailable",
+      "expired": "Invitation expired",
+      "forbidden": "This account cannot join",
+      "auth": "Sign in first",
+      "network": "Unable to load invitation",
+      "uncertain": "Join result not confirmed"
+    },
+    "externalFormatError": "Reopen the complete link from the original message."
   }
 }

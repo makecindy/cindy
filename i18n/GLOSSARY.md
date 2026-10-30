@@ -503,6 +503,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Microsoft 平台常见译法；先登记为 proposed，待产品术语评审后固化。
 
+### Performance Trace
+
+用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。
+
 ### Personal WeChat
 
 个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。

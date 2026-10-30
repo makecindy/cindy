@@ -47,7 +47,7 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  *   直到 finally — 那个体验更差, 没有借鉴。
  */
 
-import { CHAT_BODY_CLASS } from './chatChrome';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
@@ -388,23 +388,10 @@ export const AssistantMessage = memo(function AssistantMessage({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div
+      <ChatBubble
+        bare={!botBubble}
         {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
-        className={cn(
-          // min-w-0: flex item 默认 min-width: auto 会被 <pre> 的固有宽度撑爆，
-          // 导致代码块溢出消息流右边界。加上 min-w-0 让 w-full 真正生效，
-          // <pre> 的 overflow-x-auto 才能正常接管横向滚动。
-          // 伙伴私聊：回复放进与群聊同一种气泡（卡片底 + 细边框，无阴影），宽度随内容、
-          // 上限 720；组件式回答按可用宽度排版，气泡取满上限。右侧为回复、朗读和更多留出位置。
-          botBubble
-            ? cn(
-                'relative min-w-0 max-w-[min(720px,calc(100%-96px))] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5',
-                hasRichAnswer(content) ? 'w-full' : 'w-fit',
-              )
-            : 'w-full min-w-0',
-          CHAT_BODY_CLASS,
-          'text-[var(--msg-assistant-text)]',
-        )}
+        className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
       >
         {botBubble && botQuote && messageClientId ? (
           <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
@@ -489,7 +476,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           </div>
         )}
         {botBubble && actionBar && <BubbleHoverToolbar side="right">{actionBar}</BubbleHoverToolbar>}
-      </div>
+      </ChatBubble>
       {dmThread?.thread && !isStreaming ? (
         <BotDmThreadPreview thread={dmThread.thread} bot={dmThread.bot} unread={dmThread.unread} onOpen={dmThread.open} />
       ) : null}
