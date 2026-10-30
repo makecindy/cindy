@@ -95,7 +95,9 @@ export function buildCodexBotMcpConfigOverrides(
   for (const name of transportServerNames) {
     // Native Apps has no transport. A real transport with the same name must
     // still obey the allowlist (including configs inherited from CODEX_HOME).
-    const restricted = ['cindy_group_history', 'cindy_orca'].includes(name);
+    // Collaboration follows the explicitly mounted toolset, like the other
+    // builtin capabilities. Only group history is unconditionally restricted.
+    const restricted = name === 'cindy_group_history';
     if (!restricted && isBotMcpServerAllowed(policy, name)) continue;
     result[`mcp_servers.${renderThreadConfigKeySegment(name)}.enabled`] = false;
   }
