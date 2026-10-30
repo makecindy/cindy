@@ -124,6 +124,8 @@ let trustedCustomProviderRegistry: Catalog['modelRegistry'] = BUNDLED_CATALOG.mo
 /** 用户自定义供应商(已 buildUserProvider 展开的标准 Provider),追加在 base 之后。 */
 let custom: Provider[] = [];
 let managed: Provider[] = [];
+/** Local native runtimes are discovered by this host, never supplied by the public catalog. */
+let nativeProviders: Provider[] = [];
 /** 当前 owner 的原始配置；仅用于 Registry 热更新后的运行时重投影。 */
 let customConfigs: CustomProviderConfig[] | null = null;
 /**
@@ -217,7 +219,7 @@ export interface XdGatewayModelInfo {
   /**
    * 新对话默认种子的 agent 标记(服务端 /models 下发的 newSessionDefault)。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'zcode')[];
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
   modalities?: { input: string[]; output: string[] };
@@ -675,6 +677,7 @@ function modelRegistryMetaFields(
 ): RegistryMetaFields | undefined {
   // 模型 registry 的路由与 perAgent 覆盖只按 claude-code / codex 建键;Pi 是动态 BYOM,
   // 无 registry per-agent 覆盖,按 agent 无关处理(取条目基线元数据)。
+  if (agent === 'zcode') return undefined;
   const registryAgent = agent === 'pi' ? undefined : agent;
   const catalog = base ?? BUNDLED_CATALOG;
   const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, registryAgent);
@@ -937,6 +940,7 @@ function materializeXaiAccountModels(
   agent: AgentKind,
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
+  if (agent === 'zcode') return [];
   return discovered.map((entry, index) => {
     const catalogModel = xaiCatalogModelById(provider, entry.id, agent);
     const registry = modelRegistryMetaFields('xai', agent, entry.id);
@@ -1915,7 +1919,7 @@ function computeMerged(): Catalog {
         ? { ...model, supportsUltrafastMode: false } : model),
     ]),
   ) }));
-  return { ...b, modelRegistry, providers };
+  return { ...b, modelRegistry, providers: [...providers.filter(p => !nativeProviders.some(n => n.id === p.id)), ...nativeProviders] };
 }
 
 function projectLocalModelCatalog(catalog: Catalog) {
@@ -2122,6 +2126,11 @@ export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
 /** Complete directory for the current authenticated enterprise. */
 export function setManagedProviders(providers: Provider[]): void {
   managed = [...providers];
+  markChanged();
+}
+
+export function setNativeAgentProviders(providers: Provider[]): void {
+  nativeProviders = [...providers];
   markChanged();
 }
 

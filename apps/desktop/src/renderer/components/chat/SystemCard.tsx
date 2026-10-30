@@ -1160,7 +1160,7 @@ function AgentSwitchCard({ data, sessionId }: { data?: Record<string, unknown>; 
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const engineLabel = (kind: unknown): string =>
-    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
+    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : kind === 'zcode' ? 'ZCode' : 'Claude Code';
   const fromLabel = engineLabel(data?.fromAgentKind);
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';

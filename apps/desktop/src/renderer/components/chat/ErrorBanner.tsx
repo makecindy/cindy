@@ -90,7 +90,7 @@ interface ErrorBannerProps {
   usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'zcode';
   agentDeviceId?: string | null;
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本地 codex 401 仍 hide Retry, 但只能提示用户去自己 fix login (没有 sync 入口)。 */
@@ -583,6 +583,13 @@ export function ErrorBanner({
     // English fallbacks are localized in both the live and tail banner.
     displayError = localizedReasonError ?? t('chat.errorBanner.replyFailed');
     hasSpecialGuidance = false;
+  }
+  if (agentKind === 'zcode' && /\bZCODE_SESSION_SCOPE_UNAVAILABLE\b/.test(error)) {
+    displayError = t('chat.errorBanner.zcodeScopeUnavailable');
+    hasSpecialGuidance = true;
+  } else if (agentKind === 'zcode' && /\bZCODE_AUTH_SCOPE_CHANGED\b/.test(error)) {
+    displayError = t('chat.errorBanner.zcodeScopeChanged');
+    hasSpecialGuidance = true;
   }
   const showUnwrappedRaw = !hasSpecialGuidance || isResponsesLiteParallelToolCallsError(error);
   const canShowErrorDetails =

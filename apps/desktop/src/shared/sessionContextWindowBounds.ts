@@ -90,7 +90,7 @@ export function normalizeSessionContextWindowBounds(
 export function isSessionContextWindowAgentKind(
   value: unknown,
 ): value is MakerAgentKindWire {
-  return value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'zcode';
 }
 
 /**

@@ -903,7 +903,7 @@ export function SessionMenuSheet({
         </View>
       ) : null}
 
-      {showExtraDirs ? (
+      {showExtraDirs && session.agentKind !== 'zcode' ? (
         <View style={styles.infoSection} testID="session.extraDirsSection">
           <Text style={styles.infoSectionTitle}>{t('session.menu.extraDirsSection')}</Text>
           {currentExtraDirs.length === 0 ? (

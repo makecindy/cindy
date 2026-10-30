@@ -244,6 +244,7 @@ import {
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { composerDocIsEmpty } from './composerDocState';
 import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
+import { getUserPrompt } from '@/lib/userPromptStore';
 import {
   isComposerBlankPointerTarget,
   resolveComposerBlankFocusIntent,
@@ -783,7 +784,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'zcode';
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -912,7 +913,7 @@ interface ChatInputProps {
    * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
    */
   onUnifiedDraftSelect?: (selection: {
-    vendor: 'cc' | 'codex' | 'pi';
+    vendor: 'cc' | 'codex' | 'pi' | 'zcode';
     providerId: string;
     /** 选中引擎的 **wire model id**。 */
     modelId: string;
@@ -970,17 +971,18 @@ function rememberCatalogModelPrefs(
 }
 
 /** 统一模型选择器联合列表的候选引擎全集(与 SELECTABLE_VENDORS 同一顺序)。 */
-const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const UNIFIED_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'zcode'];
 
 /** AgentKind → NewMaker vendor(useAvailableAgents 用 vendor 口径)。 */
-function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' | 'zcode' {
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'zcode' ? 'zcode' : 'cc';
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'zcode'): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'zcode') return 'zcode';
   return null;
 }
 
@@ -1705,10 +1707,12 @@ export function ChatInput({
   addFolderPathRef.current = addFolderPath;
   const localAttachmentPickerEnabled = canUseLocalAttachmentPicker({
     sessionId,
-    runtimeAgentKind,
+    runtimeAgentKind: runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey),
     remoteHostId,
     deviceLinkDeviceId,
   });
+  const textOnlyEngineRef = useRef(false);
+  textOnlyEngineRef.current = (runtimeAgentKind ?? vendorKeyToAgentKind(vendorKey)) === 'zcode';
   const suggestionFileInputRef = useRef<HTMLInputElement>(null);
 
   // ── 「+」合成打开统一建议面板(Codex 模式)────────────────────────────
@@ -1838,7 +1842,7 @@ export function ChatInput({
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
   const localVendorDefaults =
-    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
+    getDraft().lastByVendor[vendorKey ?? 'cc'];
   // session-agent-switch 意图制:意图期内 chip / 选择器显示用户选择的目标
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
@@ -1946,12 +1950,13 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', catalogDeviceId);
   const codexCaps = useAgentCapabilities('codex', catalogDeviceId);
   const piCaps = useAgentCapabilities('pi', catalogDeviceId);
+  const zcodeCaps = useAgentCapabilities('zcode', catalogDeviceId);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
       : agentKind === 'pi'
         ? piCaps.capabilities
-        : ccCaps.capabilities;
+        : agentKind === 'zcode' ? zcodeCaps.capabilities : ccCaps.capabilities;
 
   // session-agent-switch 入口门控。device-link 远程会话读**被控端**的值；除了基础
   // supportsSessionAgentSwitch，还必须有 v2 CAS 能力。同引擎 no-op 的安全收尾依赖 host
@@ -1987,7 +1992,7 @@ export function ChatInput({
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
   const sessionAgentSwitchSupported =
-    sessionOrcaRole !== undefined && runtimeAgentKind != null &&
+    sessionOrcaRole !== undefined && runtimeAgentKind != null && runtimeAgentKind !== 'zcode' &&
     (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
 
   // 切换写入的串行链与写序号都按 session 存在**模块级**协调层(agentSwitchCoordinator),
@@ -2079,8 +2084,9 @@ export function ChatInput({
     if ((piCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) {
       return 'pi';
     }
+    if ((zcodeCaps.capabilities?.availableModels ?? []).some((m) => m.id === activeModel)) return 'zcode';
     return null;
-  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities]);
+  }, [activeModel, agentKind, runtimeEffective, composerSelection.pending, composerSelection.display.agentKind, ccCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, zcodeCaps.capabilities]);
   // 供应商连接态。effectiveSourceId / sendProviderId / dispatchSend 预检用它。device-link 远程会话 /
   // 草稿用**被控端**供应商目录(隧道),否则用本机(两 hook 都无条件调用,按 deviceLinkDeviceId 取)。
   const sshCodexHostId = currentModelAgentKind === 'codex' && !deviceLinkDeviceId ? remoteHostId : null;
@@ -2108,6 +2114,7 @@ export function ChatInput({
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
+    zcode: zcodeCaps,
     providers: remoteProviders,
   });
   const providersLoading = catalogDeviceId
@@ -2446,6 +2453,11 @@ export function ChatInput({
         return false;
       },
       handlePaste(view, event) {
+        if (textOnlyEngineRef.current && Array.from(event.clipboardData?.items ?? []).some((item) => item.kind === 'file')) {
+          event.preventDefault();
+          toast.error(t('logic.confirm.zcodeTextOnly'));
+          return true;
+        }
         if (composerMutationLockedRef.current) return true;
         onComposerTypingRef.current?.();
         // Intercept clipboard file/folder/image. Three sources to handle,
@@ -4894,7 +4906,7 @@ export function ChatInput({
         run: () => planModeEntry.onToggle(!planModeEntry.enabled),
       });
     }
-    if (collaboration) {
+    if (collaboration && currentModelAgentKind !== 'zcode') {
       const policyDisabled = collaboration.disabled === true;
       const retryable = policyDisabled && !!collaboration.onDisabledActivate;
       actions.push({
@@ -4922,7 +4934,7 @@ export function ChatInput({
     }
     // A new directory uses the existing Main-issued writable grant. The local
     // picker cannot authorize paths on an SSH or device-link execution host.
-    if (onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null) {
+    if (currentModelAgentKind !== 'zcode' && onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs =
@@ -4962,6 +4974,7 @@ export function ChatInput({
     return actions;
   }, [
     collaboration,
+    currentModelAgentKind,
     composerMutationLocked,
     confirmDialog,
     extraDirs,
@@ -5505,6 +5518,10 @@ export function ChatInput({
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
       if (disabled || sessionModelLoading) return;
+      if (currentModelAgentKind === 'zcode' && getUserPrompt().trim()) {
+        toast.error(t('logic.confirm.zcodeUserPromptUnsupported'));
+        return;
+      }
       if ((folderTransfers.hasPending || waitingForFoldersRef.current) &&
           (!(await waitForFolders()) || editor.isDestroyed)) return;
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
@@ -6648,7 +6665,7 @@ export function ChatInput({
             ? [targetAgentKind]
             : currentModelAgentKind
               ? [currentModelAgentKind]
-              : ['claude-code', 'codex', 'pi'];
+              : ['claude-code', 'codex', 'pi', 'zcode'];
           for (const kind of kinds) {
             const scoped = resolveProviderModelEfforts({
               providers,
@@ -6663,7 +6680,7 @@ export function ChatInput({
         // 能力缓存清单，避免把 pi 模型误判成空档位「固定档」。
         const m =
           getModelById(modelId, catalogDeviceId) ??
-          (['cc', 'codex', 'pi'] as const)
+          (['cc', 'codex', 'pi', 'zcode'] as const)
             .flatMap((vendorKey) => getModelsForVendor(vendorKey, catalogDeviceId))
             .find((candidate) => candidate.id === modelId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
@@ -6672,7 +6689,7 @@ export function ChatInput({
         ? [targetAgentKind]
         : currentModelAgentKind
           ? [currentModelAgentKind]
-          : ['claude-code', 'codex', 'pi'];
+          : ['claude-code', 'codex', 'pi', 'zcode'];
       if (providerId) {
         for (const kind of kinds) {
           const scoped = resolveProviderModelEfforts({
@@ -6714,7 +6731,7 @@ export function ChatInput({
             ? codexCaps.capabilities
             : currentModelAgentKind === 'pi'
               ? piCaps.capabilities
-              : ccCaps.capabilities,
+              : currentModelAgentKind === 'zcode' ? zcodeCaps.capabilities : ccCaps.capabilities,
         providerId,
         modelId: targetModelId,
         agentKind: currentModelAgentKind,
@@ -6728,6 +6745,7 @@ export function ChatInput({
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
+      zcodeCaps.capabilities,
     ],
   );
 
@@ -6789,7 +6807,7 @@ export function ChatInput({
           initialProviderId,
         });
       if (!remoteDeviceId) {
-        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : agentKind === 'zcode' ? 'zcode' : 'cc';
         if (modelOnly) {
           // 只保护新建默认的模型 / 来源 / 其思考档；按 (引擎, 模型) 跨来源共享的档位与 Fast 预设
           // 是独立的既有行为，下面照常记录。
@@ -7111,6 +7129,7 @@ export function ChatInput({
       runtimeAgentKind,
       deviceLinkDeviceId,
       piCaps.capabilities,
+      zcodeCaps.capabilities,
     ],
   );
 
@@ -7178,7 +7197,7 @@ export function ChatInput({
     ) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
-    (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
+    (targetAgent: 'claude-code' | 'codex' | 'pi' | 'zcode' | null) =>
       confirmAgentSwitchRisk({
         // 不必再问的两种:回原引擎(same-engine no-op),或点的就是已经确认过的意图目标
         // Harness(只换模型,不换引擎)。换到第三家仍要问(Chris 2026-08-20:Claude 任务里
@@ -7202,7 +7221,7 @@ export function ChatInput({
   );
   const performAgentSwitch = useCallback(
     async (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'zcode',
       newModelId: string,
       providerId: string | null = null,
       // 意图期内的档位/Fast/思考开关改动经此显式覆盖(用户手选优先于记忆/默认解析)。
@@ -7320,7 +7339,7 @@ export function ChatInput({
               ? codexCaps.capabilities
               : targetAgentKind === 'pi'
                 ? piCaps.capabilities
-                : ccCaps.capabilities,
+                : targetAgentKind === 'zcode' ? zcodeCaps.capabilities : ccCaps.capabilities,
           providerId,
           modelId: newModelId,
           agentKind: targetAgentKind,
@@ -7598,6 +7617,7 @@ export function ChatInput({
       ccCaps.capabilities,
       codexCaps.capabilities,
       piCaps.capabilities,
+      zcodeCaps.capabilities,
       syncSessionDraftModelPrefs,
     ],
   );
@@ -7863,7 +7883,7 @@ export function ChatInput({
       /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
       modelId: string;
       effort?: Effort;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: 'cc' | 'codex' | 'pi' | 'zcode';
       fast: boolean | 'ultrafast';
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */
@@ -9492,6 +9512,10 @@ export function ChatInput({
               if (insertSessionLinkDrop(e)) {
                 return;
               }
+              if (textOnlyEngineRef.current) {
+                toast.error(t('logic.confirm.zcodeTextOnly'));
+                return;
+              }
               // 意识面板拖来的产物(cindy-ghost:// 媒体地址):走引渡链路——
               // main 验归属后,图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
               // 键用 storageKey(= draftKey ?? sessionId):新建会话草稿态没有
@@ -9805,7 +9829,7 @@ export function ChatInput({
                     countUserExtraDirs(extraDirs ?? []) + countUserExtraDirs(writableDirs ?? [])
                   }
                   hasReferenceDirs={
-                    !settingsLocked &&
+                    !settingsLocked && vendorKey !== 'zcode' &&
                     (onExtraDirsChange !== undefined || onWritableDirsChange !== undefined)
                   }
                   open={syntheticAtOpen}
@@ -9817,14 +9841,14 @@ export function ChatInput({
                       onSearchChange={setAtPanelSearch}
                       query={atQuery}
                       state={atState}
-                      entries={filteredAt}
+                      entries={vendorKey === 'zcode' ? [] : filteredAt}
                       focusedIndex={atFocus}
                       onFocusedIndexChange={setAtFocus}
                       onSelect={handleComposerSuggestionSelect}
                       onClose={closeComposerSuggestionPanel}
                       onRetry={() => runAtScan(atQuery)}
                       referenceDirs={
-                        !settingsLocked && onExtraDirsChange
+                        !settingsLocked && vendorKey !== 'zcode' && onExtraDirsChange
                           ? {
                               dirs: extraDirs ?? [],
                               onRemove: (path) => {
@@ -9836,7 +9860,7 @@ export function ChatInput({
                           : null
                       }
                       writableDirs={
-                        !settingsLocked && onWritableDirsChange
+                        !settingsLocked && vendorKey !== 'zcode' && onWritableDirsChange
                           ? {
                               dirs: writableDirs ?? [],
                               onRemove: (path) => {
@@ -10045,7 +10069,7 @@ export function ChatInput({
                             currentVendor: vendorKey,
                             // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
                             // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
-                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
+                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi' | 'zcode') =>
                               confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
                             onSwitch: performAgentSwitch,
                           }
@@ -10305,14 +10329,14 @@ export function ChatInput({
             <AtMentionPanel
               query={atQuery}
               state={atState}
-              entries={filteredAt}
+              entries={vendorKey === 'zcode' ? [] : filteredAt}
               focusedIndex={atFocus}
               onFocusedIndexChange={setAtFocus}
               onSelect={handleComposerSuggestionSelect}
               onClose={closeAtPanel}
               onRetry={() => runAtScan(atQuery)}
               referenceDirs={
-                onExtraDirsChange
+                vendorKey !== 'zcode' && onExtraDirsChange
                   ? {
                       dirs: extraDirs ?? [],
                       onRemove: (path) => {

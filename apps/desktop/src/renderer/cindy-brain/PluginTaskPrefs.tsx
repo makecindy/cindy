@@ -184,8 +184,8 @@ export function PluginTaskPrefs({
           <div className="min-w-0 flex-1">
             <ModelSelector
               disabled={saving || disabled}
-              unifiedAgents={pickerAgents}
-              onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) =>
+              unifiedAgents={(pickerAgents ?? ['claude-code', 'codex', 'pi']).filter((agent) => agent !== 'zcode')}
+              onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) => engine === 'zcode' ? false :
                 save({
                   ...config,
                   agentKind: engine,

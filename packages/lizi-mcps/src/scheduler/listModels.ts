@@ -27,7 +27,7 @@ export function registerScheduleListModelsTool(
     category: 'scheduler',
     description:
       '查本机定时任务可用的 Agent 运行位置与模型。不传 agentDeviceId 列本机的模型，并在 locations 里给出同账号其它在线电脑与分享来的供应商；传 locations[].agentDeviceId 列那里的模型。' +
-      '要让任务每次新建时在别处运行：schedule_create / schedule_update 传同一个 agentDeviceId；model 取 codex / claude_code / pi 列表项的 id，providerId 取该模型 providers[].id（名称为 providers[].name，默认来源为 defaultProviderId）。' +
+      '要让任务每次新建时在别处运行：schedule_create / schedule_update 传同一个 agentDeviceId；model 取 codex / claude_code / pi / zcode 列表项的 id（ZCode 仅在目标电脑本机运行），providerId 取该模型 providers[].id（名称为 providers[].name，默认来源为 defaultProviderId）。' +
       '只用于本机的定时任务；其它电脑上的定时任务不能设运行位置。',
     inputShape: {
       agent: z.enum(AGENT_KIND).optional().describe('只列某个 agent 的模型；不传列全部'),

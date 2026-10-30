@@ -221,7 +221,7 @@ function readErrorCode(error: Error): string {
 }
 
 function buildSessionMenuMetaLine(session: RemoteSession): string {
-  const agentLabel = session.agentKind === 'codex' ? 'Codex' : session.agentKind === 'pi' ? 'Pi' : 'Claude';
+  const agentLabel = session.agentKind === 'codex' ? 'Codex' : session.agentKind === 'pi' ? 'Pi' : session.agentKind === 'zcode' ? 'ZCode' : 'Claude';
   const parts = [agentLabel];
   const worktree = sessionWorktreeInfo(session);
   const workspace = workspaceName(session);

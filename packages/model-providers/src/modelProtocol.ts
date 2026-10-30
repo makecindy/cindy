@@ -51,7 +51,7 @@ export function modelProtocolComparison(
                 : undefined),
           ));
     const harness: PiModelApi | null =
-      agent === 'pi' ? outbound : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
+      agent === 'pi' || agent === 'zcode' ? outbound : agent === 'codex' ? 'openai-responses' : 'anthropic-messages';
     const outboundProtocol = compatibilityProtocol(outbound) ?? outbound;
     const harnessProtocol = compatibilityProtocol(harness) ?? harness;
     const localConversion = Boolean(agent !== 'pi' && outboundProtocol && harnessProtocol && outboundProtocol !== harnessProtocol);

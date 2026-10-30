@@ -1381,6 +1381,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   } = useMobileLocalAttachments({
     attachmentScopeKey: sessionId,
     deviceId,
+    pasteImagesDisabledReason: currentSession?.agentKind === 'zcode' ? t('session.zcodeTextOnly') : null,
     getAccessToken: () => auth.getAccessToken(),
     getAttachmentCount: () => attachmentsRef.current.length,
     onUploaded: (rawAttachment, candidate) => {
@@ -10138,7 +10139,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             <>
 
 
-              <ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
+              {currentSession?.agentKind !== 'zcode' && <ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
                 <ContextSheetRow
                   accessibilityHint={composerSendUnavailableReason ?? undefined}
                   disabled={!canUseComposer}
@@ -10166,7 +10167,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   dismissBeforePress
                   testID="session.contextSheetFileRow"
                 />
-              </ContextSheetGroup>
+              </ContextSheetGroup>}
               {!isSharedTaskPeer(deviceId) && !sessionManagedByHost ? <ContextSheetGroup label={t('session.common.groupMode')}>
                 {planModeSupported ? (
                   // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
@@ -11075,9 +11076,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 composerSendUnavailableReason={canUseComposer ? null : composerDisabledReason}
                 attachmentCount={attachments.length}
                 pendingUploadCount={pendingUploads.length}
-                onPasteImages={(uris) => {
+                onPasteImages={(uris, batchId) => {
                   prewarmAgentOnTyping();
-                  void addPastedImageAttachments(uris);
+                  void addPastedImageAttachments(uris, batchId);
                 }}
                 onDragActiveChange={handleComposerDragActiveChange}
                 onInputTopLayout={handleComposerInputTopLayout}
@@ -11942,9 +11943,9 @@ interface SessionComposerInputProps {
   applyRichComposerChange: (value: ComposerDocument) => void;
   setComposerDraft: (value: SetStateAction<string>) => void;
   handleComposerInputPressIn: () => void;
-  onPasteImages: (uris: string[]) => void;
-  beginPastePlaceholders: (count: number) => void;
-  failPastePlaceholders: () => void;
+  onPasteImages: (uris: string[], batchId?: string) => void;
+  beginPastePlaceholders: (count: number, batchId?: string) => void;
+  failPastePlaceholders: (batchId?: string) => void;
   resolvePastedSessionLinkLabel: NonNullable<React.ComponentProps<typeof ComposerRichInput>['resolveSessionLinkLabel']>;
   openVoiceSettings: () => void;
   onDragActiveChange: (active: boolean) => void;

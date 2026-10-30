@@ -44,7 +44,7 @@ export interface ImDefaultRouteRecord {
   manual?: true;
 }
 
-const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_KINDS: readonly ImDefaultSettings['agentKind'][] = ['claude-code', 'codex', 'pi'];
 
 /**
  * 渠道原始设置里影响路由的部分。三个引擎都算进去: 选定引擎的模型全被停用时
@@ -64,7 +64,7 @@ export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
 function parseRoute(value: unknown): ImDefaultRoute | null {
   if (!value || typeof value !== 'object') return null;
   const r = value as Record<string, unknown>;
-  if (!AGENT_KINDS.includes(r.agentKind as AgentKind)) return null;
+  if (!(AGENT_KINDS as readonly unknown[]).includes(r.agentKind)) return null;
   if (typeof r.model !== 'string' || !r.model) return null;
   if (r.providerId !== null && typeof r.providerId !== 'string') return null;
   if (r.effort !== null && typeof r.effort !== 'string') return null;

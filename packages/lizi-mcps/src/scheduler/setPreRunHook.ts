@@ -113,7 +113,7 @@ export function registerScheduleSetPreRunHookTool(
           const remoteAgent = schedule.targetSessionId && hookScript.isSessionAgentOnOtherDevice
             ? await hookScript.isSessionAgentOnOtherDevice(schedule.targetSessionId)
             : !!schedule.agentDeviceId;
-          if (!remoteAgent) {
+          if (!remoteAgent && schedule.agentKind !== 'zcode') {
             providerId = schedule.providerId;
             agentKind = schedule.agentKind;
             model = schedule.model;

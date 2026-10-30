@@ -322,13 +322,13 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           const seen = new Set<string>();
           modelChain = input.modelChain.map(selection => {
             const choice = available.find(item => item.id === selection.id);
-            if (!choice || seen.has(selection.id)
+            if (!choice || choice.route.harness === 'zcode' || seen.has(selection.id)
               || (selection.effort !== undefined && selection.effort !== '' && !choice.efforts.some(effort => effort === selection.effort))
               || (selection.fastMode && (!choice.supportsFastMode || (selection.fastMode === 'ultrafast' && !choice.supportsUltrafastMode)))) {
               throw new Error('Model route or settings are unavailable');
             }
             seen.add(selection.id);
-            return { ...choice.route,
+            return { ...choice.route, harness: choice.route.harness,
               ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
               ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
             };

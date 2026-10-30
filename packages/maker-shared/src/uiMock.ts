@@ -31,7 +31,7 @@ export interface UiMockTask {
   title: string;
   /** Project directory name, or null for a dialogue task. */
   project: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
   status: 'active' | 'archived';

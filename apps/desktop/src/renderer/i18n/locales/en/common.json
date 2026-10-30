@@ -4235,6 +4235,11 @@
         "custom": "Continue with custom settings. You can fetch models or add them manually.",
         "configure": "Configure provider",
         "keepCustom": "Continue with custom settings"
+      },
+      "zcode": {
+        "managed": "Manage your account and team project in ZCode. Connecting allows this Cindy account to use that login; disconnecting leaves ZCode signed in.",
+        "connect": "Connect ZCode",
+        "changeFailed": "Could not connect to ZCode. Check that the selected team project works in ZCode, then try again."
       }
     },
     "experimental": {
@@ -12755,6 +12760,8 @@
       "silentStopContinue": "Continue",
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
+      "zcodeScopeChanged": "The ZCode account or team project has changed. Switch back to the account and project originally used for this task, then try again.",
+      "zcodeScopeUnavailable": "The account and team project for this ZCode history could not be verified. Start a new task.",
       "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
       "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task.",
       "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again.",
@@ -16438,7 +16445,11 @@
       "remoteCodexNoSourceDescription": "\"{{device}}\" has no model source connected for Codex, so sessions can't be started from here. Open {{appName}} on that device, sign in to OpenAI or connect another source under Settings → Providers, then try again.",
       "remoteCcNoSourceTitle": "No Claude source connected on the remote device",
       "remoteCcNoSourceDescription": "\"{{device}}\" has no Claude model source connected, so sessions can't be started from here. Open {{appName}} on that device, connect a source under Settings → Providers, then try again.",
-      "gotIt": "Got it"
+      "gotIt": "Got it",
+      "zcodeTextOnly": "ZCode currently accepts text only. Paste the file contents into your message.",
+      "zcodeUserPromptUnsupported": "Cindy custom instructions are not supported by ZCode yet. Clear them in Personalization before using ZCode.",
+      "zcodeNotReadyTitle": "ZCode is not ready",
+      "zcodeNotReadyDescription": "Install ZCode and sign in to your team Coding Plan, then connect ZCode under Settings → Providers in Cindy."
     },
     "fileTypes": {
       "fileEmpty": "File is empty",

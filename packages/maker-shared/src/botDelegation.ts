@@ -43,7 +43,7 @@ export interface BotDelegationArtifact {
 
 export interface BotDelegationCapabilitySnapshot {
   profileVersion: number;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
   model: string;
   capabilitiesSha256: string;
   identitySha256: string;

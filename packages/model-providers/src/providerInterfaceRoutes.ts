@@ -59,6 +59,7 @@ export function availableModelInterfaces(
   registry: ModelRegistry | undefined, presetId: string, modelId: string,
   baseUrl: string, agent: AgentKind, capabilities: readonly string[] = MODEL_INTERFACE_CAPABILITIES,
 ): ModelInterfaceSnapshot[] {
+  if (agent === 'zcode') return [];
   if (!registry || registry.schemaVersion < 6) return [];
   const matches = registry.models.flatMap(entry => entry.routes
     .filter(route => route.providerId === presetId && route.modelId === modelId)
@@ -95,6 +96,7 @@ export function availableModelInterfaces(
 }
 
 export function providerInterfaceDefaultRoute(presetId: string, agent: AgentKind, baseUrl: string, registry: ModelRegistry = bundledRegistry) {
+  if (agent === 'zcode') return undefined;
   const profile = (registry.interfaceProfiles ?? []).find(p => p.providerId === presetId &&
     !p.retired && !p.modelIds && p.defaultFor?.includes(agent) &&
     [...p.inputBaseUrls, p.baseUrl].some(input => clean(input) === clean(baseUrl)));

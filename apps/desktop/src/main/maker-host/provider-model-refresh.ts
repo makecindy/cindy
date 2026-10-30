@@ -25,6 +25,7 @@ export async function refreshModelsWithCatalog<T>(deps: {
 }
 
 export interface BuiltinProviderModelRefreshDeps {
+  refreshZCode?: () => Promise<void>;
   refreshXd(): Promise<void>;
   refreshAnthropic(): Promise<boolean>;
   refreshOpenAi(): Promise<boolean>;
@@ -38,6 +39,10 @@ export async function refreshBuiltinProviderModels(
   deps: BuiltinProviderModelRefreshDeps,
 ): Promise<void> {
   switch (providerId) {
+    case 'zcode-native':
+      if (!deps.refreshZCode) throw new Error('ZCode runtime discovery is not configured');
+      await deps.refreshZCode();
+      return;
     case 'xd':
       await deps.refreshXd();
       return;

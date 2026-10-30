@@ -77,7 +77,7 @@ export function CompanionModelPicker({ visible, deviceId, route, onClose, onClos
   const remoteCatalogs = useRemoteAgentCatalogs({ enabled: visible, controlledDeviceId: deviceId,
     keepDeviceIds: route?.agentDeviceId ? [route.agentDeviceId] : [] });
   const agent = route?.harness === 'claude' ? 'claude-code' : route?.harness ?? 'pi';
-  const select = async (config: MobileModelConfiguration, source?: { deviceId: string | null }) => onSelect({ agentDeviceId: source?.deviceId ?? null, harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
+  const select = async (config: MobileModelConfiguration, source?: { deviceId: string | null }) => config.agent === 'zcode' ? false : onSelect({ agentDeviceId: source?.deviceId ?? null, harness: config.agent === 'claude-code' ? 'claude' : config.agent, model: config.modelId, providerId: config.providerId, effort: config.effort, fastMode: config.fast });
   return <ModelPickerSheet visible={visible} onClose={onClose} onClosed={onClosed} providers={catalog.ready ? catalog.providers : []}
     modelVisibilityOverrides={catalog.modelVisibilityOverrides} providersReady={catalog.ready}
     flatOptions={[]} agentKind={agent} capabilities={null} activeModelId={route?.model ?? ''} selectedProviderId={route?.providerId ?? null}

@@ -26,6 +26,7 @@ const labels = {
     cc: "Claude Code",
     codex: "Codex",
     pi: "Pi",
+    zcode: "ZCode",
   },
   allProjectsLabel: "所有项目",
   lastActivityHeading: "最近活动",

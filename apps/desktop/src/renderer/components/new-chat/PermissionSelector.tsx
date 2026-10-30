@@ -35,7 +35,7 @@ interface PermissionSelectorProps {
   footer?: ReactNode;
   permissionMode: PermissionMode;
   onPermissionModeChange: (mode: PermissionMode) => void;
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'zcode';
   /** device-link 远程会话所属被控端 id;非空 = 权限档从被控端读(本地会话 undefined,行为不变)。 */
   deviceId?: string;
   /** 禁用 trigger。用于断线远程会话等只读 composer 状态。 */
@@ -79,9 +79,10 @@ const PERMISSION_ICONS: Record<string, typeof Hand> = {
   bypassPermissions: TriangleAlert,
 };
 
-function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi'): AgentKind {
+function vendorKeyToAgentKind(v: 'cc' | 'codex' | 'pi' | 'zcode'): AgentKind {
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'zcode') return 'zcode';
   return 'claude-code';
 }
 

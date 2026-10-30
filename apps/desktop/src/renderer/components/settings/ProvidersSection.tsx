@@ -719,7 +719,7 @@ function DetailHeader({
               ? 'Claude Code'
               : provider.agents[0] === 'pi'
                 ? 'Pi'
-                : 'Codex',
+                : provider.agents[0] === 'zcode' ? 'ZCode' : 'Codex',
         })
       : null;
 
@@ -777,6 +777,7 @@ function DetailHeader({
                 {badge}
               </div>
               <span
+                title={`${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
                 className="truncate text-13 leading-tight"
                 style={{ color: 'var(--settings-integration-subtitle)' }}
               >
@@ -2077,6 +2078,53 @@ function useManagedLocalRuntimeLive(providerId: string): boolean | null {
   return localLive;
 }
 
+function ZCodeNativeHeader({ provider, children, onChanged, ownerScope }: {
+  provider: ProviderView;
+  children?: ReactNode;
+  onChanged: () => void;
+  ownerScope: ProviderOwnerScope | null;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const changeConnection = async (disconnect: boolean) => {
+    if (busyRef.current || !ownerScope) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      if (disconnect) {
+        await window.electronAPI.maker.auth.logout('zcode', ownerScope);
+      } else {
+        const result = await window.electronAPI.maker.rediscoverModels(provider.id, ownerScope);
+        if (!result.ok) throw new Error('ZCODE_CONNECTION_UNAVAILABLE');
+      }
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.zcode.changeFailed'));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+  return (
+    <DetailHeader
+      children={children}
+      icon={providerIcon(provider, 18)}
+      title={provider.name}
+      subtitle={t('settings.providers.zcode.managed')}
+      provider={provider}
+      status={{ kind: provider.connected ? 'connected' : 'neutral', label: provider.connected ? undefined : t('settings.providers.pill.disconnected') }}
+      primaryAction={{ label: t(provider.connected ? 'settings.providers.byok.refresh' : 'settings.providers.zcode.connect'), onClick: () => void changeConnection(false), disabled: busy || !ownerScope }}
+      menuItems={provider.connected ? (
+        <DropdownMenuItem disabled={busy || !ownerScope} onClick={() => void changeConnection(true)}>
+          <LogOut size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+          {t('settings.providers.button.disconnect')}
+        </DropdownMenuItem>
+      ) : undefined}
+    />
+  );
+}
+
 function LocalRuntimeHeader({
   children,
   provider,
@@ -2601,6 +2649,7 @@ export function ProvidersSection() {
         const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
         if (
           p.id === 'xd' ||
+          p.nativeAgent === 'zcode' ||
           p.connected ||
           p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
@@ -2943,6 +2992,7 @@ export function ProvidersSection() {
         let added = 0;
         const refreshedAgents = new Set<AgentKind>();
         for (const agent of p.agents) {
+          if (agent === 'zcode') continue;
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =
@@ -3066,6 +3116,9 @@ export function ProvidersSection() {
 
   // 详情头部按供应商类型分派(鉴权逻辑与重构前一致)。
   const renderDetailHeader = (p: ProviderView, children: ReactNode): ReactNode => {
+    if (p.nativeAgent === 'zcode') {
+      return <ZCodeNativeHeader children={children} provider={p} onChanged={refetch} ownerScope={ownerGeneration == null ? null : { dataOwnerId, ownerGeneration }} />;
+    }
     if (isOrganizationManagedProvider(p)) return <ManagedProviderHeader key={p.id} provider={p} children={children} />;
     if (p.id === 'xd')
       return <XdGatewayHeader children={children} provider={p} onChanged={refetch} />;
@@ -3442,7 +3495,7 @@ export function ProvidersSection() {
                     !effectiveSelected.suspended &&
                     effectiveSelected.connected &&
                     effectiveSelected.agents.length > 0 &&
-                    effectiveSelected.remoteInvocationEnabled !== undefined && (
+                    effectiveSelected.nativeAgent !== 'zcode' && effectiveSelected.remoteInvocationEnabled !== undefined && (
                       <RemoteProviderAccessRow
                         key={effectiveSelected.id}
                         provider={effectiveSelected}

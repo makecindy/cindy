@@ -107,6 +107,7 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  zcode: 'ZCode',
 };
 
 function presetRuntimeBaseUrl(
@@ -1090,6 +1091,7 @@ export function AddProviderWizard({
     );
     const results = await Promise.all(
       agents.flatMap((agent) => {
+        if (agent === 'zcode') return [];
         const originalRuntime = preset.runtimes[agent];
         const rt = originalRuntime ? bindProviderPresetRuntime(originalRuntime, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)) : undefined;
         if (!rt) {

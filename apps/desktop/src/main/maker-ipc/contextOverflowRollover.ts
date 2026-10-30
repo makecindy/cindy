@@ -352,7 +352,7 @@ function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | und
   return typeof kind === 'string' && kind.length > 0;
 }
 
-function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
+function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' | 'zcode' {
   if (value === 'codex' || value === 'pi') return value;
   return 'cc';
 }
@@ -455,7 +455,7 @@ export interface ContextOverflowRolloverDeps {
     meta: {
       reason: ContextRebuildReason;
       sourceUserClientId: string | null;
-      sourceAgentKind?: 'cc' | 'codex' | 'pi';
+      sourceAgentKind?: 'cc' | 'codex' | 'pi' | 'zcode';
       sourceModel?: string | null;
       sourceProviderId?: string | null;
       expectedClearedAt?: number | null;

@@ -20,8 +20,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
-import type { BotModelRoute } from '../../shared/botModelChain';
+import { sameModelRoute, type AppDefaultModelSelection, type AppDefaultModelRoute } from '../../shared/appDefaultModelSelection';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
@@ -203,6 +202,9 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'zcode') {
+    return { model: '', effort: 'medium', permissionMode: 'ask', planMode: false, providerId: 'zcode-native' };
+  }
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -242,6 +244,13 @@ function defaultCollab(): CollabDraft {
   return { enabled: false, worker: 'codex' };
 }
 
+function permissionSeedForVendor(vendor: MakerVendor, preferred: PermissionMode | null): PermissionMode {
+  // ZCode supports explicit Full access, but cannot inherit Cindy Auto review.
+  return vendor === 'zcode' && preferred !== 'bypassPermissions'
+    ? defaultVendorPrefs(vendor).permissionMode
+    : preferred ?? 'auto';
+}
+
 const DEFAULT_WORKTREE_ENABLED = false;
 
 function makeDefault(): NewMakerDraft {
@@ -263,6 +272,7 @@ function makeDefault(): NewMakerDraft {
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
       pi: defaultVendorPrefs('pi'),
+      zcode: defaultVendorPrefs('zcode'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -378,7 +388,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     r.newChatDefaultPermissionMode === 'auto' || r.newChatDefaultPermissionMode === 'bypassPermissions'
       ? r.newChatDefaultPermissionMode : null;
   const sanitizeVendorPrefs = (p: Partial<VendorPrefs> | undefined, v: MakerVendor): VendorPrefs => {
-    const fallback = { ...defaultVendorPrefs(v), permissionMode: newChatDefaultPermissionMode ?? 'auto' };
+    const fallback = { ...defaultVendorPrefs(v), permissionMode: permissionSeedForVendor(v, newChatDefaultPermissionMode) };
     const permissionModeCustomized = p?.permissionModeCustomized === true ||
       (p?.permissionModeCustomized === undefined && typeof p?.permissionMode === 'string' &&
         p.permissionMode !== 'auto' && p.permissionMode !== 'plan');
@@ -501,6 +511,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
+      zcode: sanitizeVendorPrefs(lastByVendorRaw.zcode, 'zcode'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },
@@ -858,9 +869,9 @@ export function setNewChatDefaultPermissionMode(mode: PermissionMode | null): vo
   if (mode !== null && mode !== 'auto' && mode !== 'bypassPermissions') return;
   rebaseStoredDefaultTuplePreference();
   const lastByVendor = { ...currentDraft.lastByVendor };
-  for (const vendor of ['cc', 'pi', 'codex', 'orca'] as const) {
+  for (const vendor of ['cc', 'pi', 'codex', 'zcode', 'orca'] as const) {
     if (!lastByVendor[vendor].permissionModeCustomized) {
-      lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: mode ?? 'auto', permissionModeCustomized: false };
+      lastByVendor[vendor] = { ...lastByVendor[vendor], permissionMode: permissionSeedForVendor(vendor, mode), permissionModeCustomized: false };
     }
   }
   currentDraft = { ...currentDraft, newChatDefaultPermissionMode: mode, lastByVendor };
@@ -939,6 +950,7 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
+  if (next.vendor === 'zcode') next.collab = { ...next.collab, enabled: false };
   currentDraft = next;
   scheduleWrite({ preserveStoredWorktreePreference: true });
   emit();
@@ -982,6 +994,7 @@ export function switchVendor(next: MakerVendor): void {
   currentDraft = {
     ...currentDraft,
     vendor: next,
+    ...(next === 'zcode' ? { collab: { ...currentDraft.collab, enabled: false } } : {}),
   };
   scheduleWrite({ preserveStoredDefaultTuplePreference: false });
   emit();
@@ -995,7 +1008,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const stored = readStoredDraftRecord();
   const base = stored ? sanitize(stored) : currentDraft;
   const prefs = base.lastByVendor[base.vendor];
-  const current: BotModelRoute | null = prefs.model ? {
+  const current: AppDefaultModelRoute | null = prefs.model ? {
     harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
     fastMode: (base.fastModeByModel[prefs.model] ?? false),
@@ -1032,7 +1045,7 @@ export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVen
   rebaseStoredDefaultTuplePreference();
   const currentVendor = currentDraft.vendor;
   if (availableVendors.has(currentVendor)) return false;
-  const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) =>
+  const fallback = (['cc', 'codex', 'pi', 'zcode'] as const).find((vendor) =>
     availableVendors.has(vendor),
   );
   if (!fallback) return false;
@@ -1041,7 +1054,7 @@ export function fallbackUnavailableVendor(availableVendors: ReadonlySet<MakerVen
 }
 
 export interface SuggestedDefaultTuple {
-  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi'>;
+  vendor: Extract<MakerVendor, 'cc' | 'codex' | 'pi' | 'zcode'>;
   providerId: string;
   model: string;
   effort?: Effort | null;

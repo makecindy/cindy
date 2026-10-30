@@ -1483,7 +1483,7 @@ describe('new session model', () => {
 
   it('exposes Pi as a first-class agent and preserves Fast for Pi sessions', () => {
     expect(NEW_SESSION_AGENT_OPTIONS.map((option) => option.kind)).toEqual([
-      'claude-code', 'codex', 'pi',
+      'claude-code', 'codex', 'pi', 'zcode',
     ]);
     const pi = withAgentDefaults({ ...DRAFT_WITH_MODEL, fastMode: true }, 'pi');
     expect(pi).toMatchObject({ agentKind: 'pi', model: '', fastMode: true });
@@ -1494,10 +1494,20 @@ describe('new session model', () => {
     })).toMatchObject({ agentKind: 'pi', fastMode: true });
   });
 
+  // A new native-engine draft must not inherit unsupported fast/full-auto state.
+  // Unit tier; the existing Pi case intentionally preserves fast, unlike ZCode.
+  it('creates ZCode tasks with its own identity and explicit permission prompts', () => {
+    const zcode = withAgentDefaults({ ...DRAFT_WITH_MODEL, fastMode: true }, 'zcode');
+    expect(zcode).toMatchObject({ agentKind: 'zcode', model: '', permissionMode: 'ask', fastMode: false });
+    expect(buildRemoteCreateSessionOptions({ ...zcode, model: 'native-model', providerId: 'zcode-native' })).toMatchObject({
+      agentKind: 'zcode', permissionMode: 'ask', fastMode: false, providerId: 'zcode-native',
+    });
+  });
+
   it('filters the new-session agent options by the controlled device runtime-registered set', () => {
     // null(未拉到)→ fail-open,全部保留。
     expect(availableNewSessionAgentOptions(null).map((o) => o.kind)).toEqual([
-      'claude-code', 'codex', 'pi',
+      'claude-code', 'codex', 'pi', 'zcode',
     ]);
     // 被控端无 Pi(二进制缺失)→ 隐藏 Pi,避免建出 requireAgent 报 not-registered 的会话。
     expect(

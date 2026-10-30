@@ -5,6 +5,7 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id": "zcode", "status": "proposed", "en": "ZCode", "translations": {"zh-CN": "ZCode", "zh-TW": "ZCode", "ja": "ZCode", "ko": "ZCode"}, "note": "Z.ai 原生编程引擎品牌名，各语言保留官方拼写；独立于 Claude Code、Codex 和 Pi。"},
     {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
     {"id": "cindy-ai-xd", "status": "proposed", "en": "Cindy AI · XD", "translations": {"zh-CN": "Cindy AI · 心动", "zh-TW": "Cindy AI · 心動", "ja": "Cindy AI · XD", "ko": "Cindy AI · XD"}, "note": "心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。"},
     {"id": "pricing-component-text", "status": "proposed", "en": "Text", "translations": {"zh-CN": "文字", "zh-TW": "文字", "ja": "テキスト", "ko": "텍스트"}, "note": "模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。"},

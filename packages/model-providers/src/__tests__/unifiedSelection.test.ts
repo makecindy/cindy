@@ -13,7 +13,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  UNIFIED_AGENT_PRIORITY,
   candidateAgentsForModel,
   catalogModelIdCandidates,
   findCatalogModel,
@@ -273,7 +272,15 @@ describe('candidateAgentsForModel', () => {
       'codex',
       'pi',
     ]);
-    expect(UNIFIED_AGENT_PRIORITY).toEqual(['claude-code', 'codex', 'pi']);
+  });
+
+  // Native-runtime routes have no HTTP descriptor. Selection must preserve the
+  // native engine while retaining the existing recommendation for other sources.
+  it('selects a connected native model without fabricating an HTTP route', () => {
+    const native: ProviderView = { ...view({ id: 'zcode-native', models: { zcode: [m('native-model')] } }),
+      nativeAgent: 'zcode', routing: {}, auth: { method: 'managed' } };
+    expect(candidateAgentsForModel([native], native.id, 'native-model')).toEqual(['zcode']);
+    expect(candidateAgentsForModel([{ ...native, connected: false }], native.id, 'native-model')).toEqual([]);
   });
 
   it('bridge 壳与 root 条目寻址同一逻辑模型,候选是并集', () => {

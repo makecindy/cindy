@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { MobileLocalAttachmentUploadCandidate } from '@/session/mobileLocalAttachmentUpload';
 import { useComposerImageExpansion } from '@/session/useComposerImageExpansion';
+import { ComposerNativeInput } from '@/session/ComposerNativeInput.ios';
 import {
   useMobileLocalAttachments,
   type UseMobileLocalAttachmentsOptions,
@@ -12,15 +13,35 @@ import {
 } from '@/session/useMobileLocalAttachments';
 
 const runtime = vi.hoisted(() => ({
-  uploads: [] as Array<{ name: string; resolve: () => void }>,
+  uploads: [] as Array<{ name: string; uri: string; resolve: () => void }>,
   discarded: [] as unknown[],
   pickPhotos: vi.fn(),
   pickCamera: vi.fn(),
   pickDocument: vi.fn(),
   durablePreviewUri: null as string | null,
+  deletedUris: [] as string[],
+  nativePasteEvents: new Map<string, (event: { nativeEvent: { images: string[] } }) => void>(),
+  nativeWrites: [] as Array<{ uri: string; data: string }>,
+  nativeWriteBarriers: new Map<string, Promise<void>>(),
 }));
 
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
+vi.mock('expo', () => ({
+  requireOptionalNativeModule: () => ({}),
+  requireNativeView: () => (props: { inputID: string; onPasteImages: (event: { nativeEvent: { images: string[] } }) => void }) => {
+    runtime.nativePasteEvents.set(props.inputID, props.onPasteImages);
+    return null;
+  },
+}));
+vi.mock('react-native-reanimated', () => ({
+  default: { View: ({ children }: { children: React.ReactNode }) => children },
+  useAnimatedStyle: (read: () => unknown) => read(),
+}));
+vi.mock('@/theme', () => ({ useTheme: () => ({ mode: 'light' }) }));
+vi.mock('expo-file-system', () => ({
+  File: class { uri: string; constructor(cache: string, name: string) { this.uri = `${cache}${name}`; } },
+  Paths: { cache: 'file:///cache/' },
+}));
 vi.mock('react-i18next', async (importOriginal) => {
   const t = (key: string) => key;
   return { ...await importOriginal<typeof import('react-i18next')>(), useTranslation: () => ({ t }) };
@@ -34,7 +55,12 @@ vi.mock('expo-image-picker', () => ({
 vi.mock('@/session/deferredPhotoLibrary', () => ({ pickDeferredLibraryPhotos: runtime.pickPhotos }));
 vi.mock('expo-file-system/legacy', () => ({
   documentDirectory: 'file:///docs/',
-  deleteAsync: async () => undefined,
+  deleteAsync: async (uri: string) => { runtime.deletedUris.push(uri); },
+  EncodingType: { Base64: 'base64' },
+  writeAsStringAsync: async (uri: string, data: string) => {
+    runtime.nativeWrites.push({ uri, data });
+    await runtime.nativeWriteBarriers.get(data);
+  },
 }));
 vi.mock('@/session/durableOutboxFiles', () => ({
   retainComposerAttachmentFile: async (_owner: string, id: string) => `file:///stage/${id}`,
@@ -46,9 +72,10 @@ vi.mock('@/session/sentAttachmentThumbStore', () => ({
 vi.mock('@/session/mobileAttachmentUpload', () => ({
   statMobileAttachmentFileSize: async () => 1000,
   discardMobileUploadedAttachment: (attachment: unknown) => { runtime.discarded.push(attachment); },
-  uploadMobileAttachmentFromFile: (candidate: { name: string }) => new Promise((resolve) => {
+  uploadMobileAttachmentFromFile: (candidate: { name: string }, uri: string) => new Promise((resolve) => {
     runtime.uploads.push({
       name: candidate.name,
+      uri,
       resolve: () => resolve({
         id: `att-${candidate.name}`,
         name: candidate.name,
@@ -71,38 +98,56 @@ beforeEach(() => {
   runtime.pickCamera.mockReset();
   runtime.pickDocument.mockReset();
   runtime.durablePreviewUri = null;
+  runtime.deletedUris = [];
+  runtime.nativePasteEvents.clear();
+  runtime.nativeWrites = [];
+  runtime.nativeWriteBarriers.clear();
   root = createRoot(document.createElement('div'));
 });
 afterEach(() => act(() => root.unmount()));
 
-function mount(scopeKey: string, upload?: UseMobileLocalAttachmentsOptions['upload']) {
+function mount(scopeKey: string, optionsOrUpload: Partial<UseMobileLocalAttachmentsOptions> | UseMobileLocalAttachmentsOptions['upload'] = {}, nativeEditorKey?: string) {
+  const initialOptions = typeof optionsOrUpload === 'function' ? { upload: optionsOrUpload } : optionsOrUpload ?? {};
   const options: UseMobileLocalAttachmentsOptions = {
-    upload,
     attachmentScopeKey: scopeKey,
     getAccessToken: async () => 'token',
     getAttachmentCount: () => 0,
     onUploaded: vi.fn(),
     onError: vi.fn(),
     onPicked: vi.fn(),
+    ...initialOptions,
   };
   const results: UseMobileLocalAttachmentsResult[] = [];
   let expansion!: ReturnType<typeof useComposerImageExpansion>;
-  function Harness({ scope }: { scope: string }) {
+  function Harness({ scope, editorKey }: { scope: string; editorKey?: string }) {
     const local = useMobileLocalAttachments({ ...options, attachmentScopeKey: scope });
     results.push(local);
     expansion = useComposerImageExpansion(
       local.pendingUploads.filter((item) => item.kind === 'image').length + local.pastePlaceholderCount,
       local.imageSelectionRevision,
     );
-    return null;
+    return editorKey ? <ComposerNativeInput
+      key={editorKey}
+      testID={editorKey}
+      accessibilityLabel="Message"
+      document={{ version: 1, nodes: [] }}
+      height={40}
+      maxHeight={120}
+      placeholder=""
+      theme={{ background: '', border: '', chip: '', focus: '', placeholder: '', text: '', textSecondary: '' }}
+      onChangeDocument={() => {}}
+      onPasteImagesLoading={local.beginPastePlaceholders}
+      onPasteImages={(uris, batchId) => { void local.addPastedImages(uris, batchId); }}
+      onPasteImagesLoadFailed={local.failPastePlaceholders}
+    /> : null;
   }
-  act(() => root.render(<Harness scope={scopeKey} />));
+  act(() => root.render(<Harness scope={scopeKey} editorKey={nativeEditorKey} />));
   return {
     options,
     first: results[0],
     latest: () => results.at(-1)!,
     expansion: () => expansion,
-    rerender: (scope: string) => act(() => root.render(<Harness scope={scope} />)),
+    rerender: (scope: string, editorKey = nativeEditorKey) => act(() => root.render(<Harness scope={scope} editorKey={editorKey} />)),
   };
 }
 
@@ -115,6 +160,185 @@ const imageCandidate = (name: string, onAbandoned: () => void): MobileLocalAttac
   onAbandoned,
 });
 const flush = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+
+// 测试价值：通过真实 hook 的 loading / images / wait 入口验证文字引擎拒绝后
+// 不留占位、发送等待或临时图片（review #8）。原有 scope 用例没有引擎切换。
+// 最小失败输入：一次 loading 后切到文字引擎，旧回调再兑现一张粘贴图。
+// tier：unit；文件与上传用内存 fake，不读取源码，超时只推进假时钟。
+// 原 pastedImageAttachment.test.ts 的 FIFO / 限额 / 超时源码断言迁入此处。
+// 实测耗时：单文件 Vitest 1.90s / 墙钟 2.44s（23 条用例，本机）。
+describe('useMobileLocalAttachments text-only paste rejection', () => {
+  const disabledReason = 'session.zcodeTextOnly';
+  const pastedUri = 'file:///cache/cindy-composer-paste-rejected.png';
+
+  // 实际 iOS TS 包装器事件 + 可控写盘 Promise：原生事件顺序不代表 JS 写盘完成顺序。
+  // 旧 hook-only 测试未经过这个并发边界；同实例与共用 hook 的输入框替换都需隔离批次。
+  it.each([
+    { replaceEditor: false, failB: false },
+    { replaceEditor: true, failB: false },
+    { replaceEditor: false, failB: true },
+  ])('keeps native paste ownership when B settles before A ($replaceEditor, failure $failB)', async ({ replaceEditor, failB }) => {
+    let finishA!: () => void;
+    let finishB!: () => void;
+    let rejectB!: () => void;
+    runtime.nativeWriteBarriers.set('A', new Promise<void>(resolve => { finishA = resolve; }));
+    runtime.nativeWriteBarriers.set('B', new Promise<void>((resolve, reject) => {
+      finishB = resolve;
+      rejectB = () => reject(new Error('write failed'));
+    }));
+    const harness = mount('session-a', { pasteImagesDisabledReason: disabledReason }, 'editor-a');
+    try {
+      act(() => runtime.nativePasteEvents.get('editor-a')!({ nativeEvent: { images: ['A'] } }));
+      harness.options.pasteImagesDisabledReason = null;
+      const editorKey = replaceEditor ? 'editor-b' : 'editor-a';
+      harness.rerender('session-a', editorKey);
+      act(() => runtime.nativePasteEvents.get(editorKey)!({ nativeEvent: { images: ['B'] } }));
+      const aUri = runtime.nativeWrites.find(write => write.data === 'A')!.uri;
+      const bUri = runtime.nativeWrites.find(write => write.data === 'B')!.uri;
+      await act(async () => { if (failB) rejectB(); else finishB(); await flush(); });
+      expect(runtime.uploads.map(upload => upload.uri)).toEqual(failB ? [] : [bUri]);
+      expect(harness.latest().pastePlaceholderCount).toBe(0);
+      expect(runtime.deletedUris.includes(bUri)).toBe(failB);
+      await act(async () => { finishA(); await flush(); });
+      expect(runtime.uploads.map(upload => upload.uri)).toEqual(failB ? [] : [bUri]);
+      expect(runtime.deletedUris).toContain(aUri);
+      expect(harness.latest().pastePlaceholderCount).toBe(0);
+      await act(async () => { runtime.uploads[0]?.resolve(); await harness.latest().waitForPendingUploads(); });
+      if (failB) {
+        expect(harness.options.onUploaded).not.toHaveBeenCalled();
+      } else {
+        expect(harness.options.onUploaded).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(), expect.objectContaining({ uri: bUri }), expect.any(String),
+        );
+      }
+    } finally {
+      await act(async () => { finishA(); finishB(); await flush(); });
+      await act(async () => { for (const upload of runtime.uploads) upload.resolve(); await flush(); });
+    }
+  });
+
+  it('drops an invalidated native batch without consuming a newer placeholder or its file', async () => {
+    let finishA!: () => void;
+    let finishB!: () => void;
+    runtime.nativeWriteBarriers.set('A', new Promise<void>(resolve => { finishA = resolve; }));
+    runtime.nativeWriteBarriers.set('B', new Promise<void>(resolve => { finishB = resolve; }));
+    const harness = mount('session-a', {}, 'editor');
+    try {
+      act(() => runtime.nativePasteEvents.get('editor')!({ nativeEvent: { images: ['A'] } }));
+      act(() => harness.latest().discardAllPendingUploads());
+      act(() => runtime.nativePasteEvents.get('editor')!({ nativeEvent: { images: ['B'] } }));
+      const aUri = runtime.nativeWrites.find(write => write.data === 'A')!.uri;
+      const bUri = runtime.nativeWrites.find(write => write.data === 'B')!.uri;
+      // 空的原生事件没有对应 loading，也不能借失败回调消费 B 的占位。
+      act(() => runtime.nativePasteEvents.get('editor')!({ nativeEvent: { images: [] } }));
+      await act(async () => { finishA(); await flush(); });
+      expect(harness.latest().pastePlaceholderCount).toBe(1);
+      expect(runtime.uploads).toEqual([]);
+      expect(runtime.deletedUris).toEqual([aUri]);
+      await act(async () => { finishB(); await flush(); });
+      expect(runtime.uploads.map(upload => upload.uri)).toEqual([bUri]);
+      await act(async () => { runtime.uploads[0].resolve(); await harness.latest().waitForPendingUploads(); });
+      expect(harness.latest().pastePlaceholderCount).toBe(0);
+    } finally {
+      await act(async () => { finishA(); finishB(); await flush(); });
+      await act(async () => { for (const upload of runtime.uploads) upload.resolve(); await flush(); });
+    }
+  });
+
+  it('rejects before creating placeholders and reclaims only composer-owned paste files', async () => {
+    const harness = mount('session-a', { pasteImagesDisabledReason: disabledReason });
+    act(() => harness.latest().beginPastePlaceholders(1));
+    expect(harness.latest().pastePlaceholderCount).toBe(0);
+    expect(harness.latest().hasAttachmentInput()).toBe(false);
+    await act(async () => {
+      await harness.latest().addPastedImages([pastedUri, 'file:///photos/original.png', 'content://photos/1']);
+    });
+    expect(runtime.deletedUris).toEqual([pastedUri]);
+    expect(runtime.uploads).toEqual([]);
+    expect(harness.options.onError).toHaveBeenLastCalledWith(disabledReason);
+    await expect(harness.latest().waitForPendingUploads()).resolves.toEqual({ failedCount: 0, abandoned: false });
+  });
+
+  it('settles an accepted paste when its old callback arrives after switching to a text-only engine', async () => {
+    const harness = mount('session-a');
+    const finishPaste = harness.first.addPastedImages;
+    act(() => harness.first.beginPastePlaceholders(1));
+    const waiting = harness.first.waitForPendingUploads();
+    harness.options.pasteImagesDisabledReason = disabledReason;
+    harness.rerender('session-a');
+    await act(async () => { await finishPaste([pastedUri]); });
+    expect(harness.latest().pastePlaceholderCount).toBe(0);
+    expect(harness.latest().pendingUploads).toEqual([]);
+    await expect(waiting).resolves.toEqual({ failedCount: 0, abandoned: false });
+    expect(runtime.deletedUris).toEqual([pastedUri]);
+    expect(runtime.uploads).toEqual([]);
+    expect(harness.options.onError).toHaveBeenLastCalledWith(disabledReason);
+  });
+
+  it.each(['images', 'failed'])('does not consume a later accepted placeholder when a rejected batch reports %s', async completion => {
+    const harness = mount('session-a', { pasteImagesDisabledReason: disabledReason });
+    act(() => harness.first.beginPastePlaceholders(1));
+    harness.options.pasteImagesDisabledReason = null;
+    harness.rerender('session-a');
+    act(() => harness.latest().beginPastePlaceholders(1));
+    await act(async () => {
+      if (completion === 'images') await harness.first.addPastedImages([pastedUri]);
+      else harness.first.failPastePlaceholders();
+    });
+    expect(harness.latest().pastePlaceholderCount).toBe(1);
+    expect(harness.latest().pendingUploads).toEqual([]);
+    expect(runtime.deletedUris).toEqual(completion === 'images' ? [pastedUri] : []);
+    expect(harness.options.onError).toHaveBeenLastCalledWith(disabledReason);
+    act(() => harness.latest().failPastePlaceholders());
+    await expect(harness.latest().waitForPendingUploads()).resolves.toEqual({ failedCount: 0, abandoned: false });
+  });
+
+  it('keeps accepted paste uploads in the send wait until delivery and then releases their source', async () => {
+    const harness = mount('session-a', { getAttachmentCount: () => 19 });
+    const uri = 'file:///cache/cindy-composer-paste-accepted.gif';
+    runtime.durablePreviewUri = 'file:///durable/accepted.gif';
+    act(() => harness.first.beginPastePlaceholders(1));
+    expect(harness.first.getPendingUploadCount()).toBe(1);
+    await act(async () => { await harness.latest().addDocument(); });
+    expect(runtime.pickDocument).not.toHaveBeenCalled();
+    expect(harness.options.onError).toHaveBeenLastCalledWith('composer.upload.maxAttachments');
+    let settled = false;
+    const waiting = harness.first.waitForPendingUploads().then(result => { settled = true; return result; });
+    await act(async () => { await harness.latest().addPastedImages([uri]); await flush(); });
+    expect(harness.latest().pastePlaceholderCount).toBe(0);
+    expect(harness.latest().pendingUploads).toHaveLength(1);
+    expect(settled).toBe(false);
+    expect(runtime.deletedUris).toEqual([]);
+    await act(async () => { runtime.uploads[0].resolve(); await waiting; });
+    expect(harness.options.onUploaded).toHaveBeenCalledOnce();
+    expect(harness.latest().pendingUploads).toEqual([]);
+    expect(runtime.deletedUris).toEqual([uri]);
+  });
+
+  it('settles paste batches in FIFO order and releases waiters when the remaining batch times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = mount('session-a');
+      act(() => {
+        harness.first.beginPastePlaceholders(2);
+        harness.first.beginPastePlaceholders(3);
+      });
+      expect(harness.latest().getPendingUploadCount()).toBe(5);
+      let settled = false;
+      const waiting = harness.latest().waitForPendingUploads().then(result => { settled = true; return result; });
+      await act(async () => { harness.latest().failPastePlaceholders(); });
+      expect(harness.latest().pastePlaceholderCount).toBe(3);
+      expect(harness.latest().getPendingUploadCount()).toBe(3);
+      expect(settled).toBe(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); await waiting; });
+      expect(harness.latest().pastePlaceholderCount).toBe(0);
+      expect(harness.latest().hasAttachmentInput()).toBe(false);
+      expect(harness.options.onError).toHaveBeenLastCalledWith('composer.upload.pasteTimeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('useMobileLocalAttachments abandonment on scope change', () => {
   it.each(['paste', 'upload'])('reports %s input synchronously before React commits the tray', async kind => {

@@ -64,7 +64,7 @@ const getEditor = createBotRemoteEditors({ ...deps,
     deps.assertOwner(owner);
     // Creation shows the primary only. Do not silently promote a backup or
     // rewrite the persisted default when its primary is no longer usable.
-    return primary ? [primary, ...chain.slice(1)] : [];
+    return primary && primary.harness !== 'zcode' ? [{ ...primary, harness: primary.harness }, ...chain.slice(1)] : [];
   },
   async create(input) {
     const owner = deps.owner(); deps.assertOwner(owner);

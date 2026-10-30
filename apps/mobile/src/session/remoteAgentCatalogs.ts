@@ -32,7 +32,7 @@ export interface RemoteAgentCatalog {
 /** 那台电脑允许远程调用的供应商;没有该标记(旧数据)按未开放处理。 */
 export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
   return providers.filter(
-    (provider) => (provider as { remoteInvocationEnabled?: unknown }).remoteInvocationEnabled === true,
+    (provider) => provider.nativeAgent !== 'zcode' && (provider as { remoteInvocationEnabled?: unknown }).remoteInvocationEnabled === true,
   ).map(remoteInvocationModels);
 }
 

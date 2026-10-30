@@ -545,6 +545,7 @@ async function ensureBotOwnedLaneSession(input: { botId: string; routeKey: strin
   if (!profileVersion) return { ok: false, errorCode: 'BOT_UNAVAILABLE', message: '伙伴资料版本不存在' };
   const config = parseJson(profileVersion.capabilitiesJson);
   const override = input.modelOverride;
+  if (override?.agentKind === 'zcode') return { ok: false, errorCode: 'NO_MODEL', message: 'ZCode does not support companion profiles' };
   const primaryRoute = override ? { harness: override.agentKind === 'claude-code' ? 'claude' as const : override.agentKind,
     model: override.model, providerId: override.providerId ?? null, effort: override.effort ?? '',
     fastMode: override.fastMode ?? false, agentDeviceId: override.agentDeviceId ?? null }
@@ -938,7 +939,7 @@ export async function reconcileBotProfileFolder(
   return derived;
 }
 
-function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' {
+function botSessionAgentKind(config: { harness?: unknown }): 'cc' | 'codex' | 'pi' | 'zcode' {
   return config.harness === 'codex' ? 'codex' : config.harness === 'pi' ? 'pi' : 'cc';
 }
 

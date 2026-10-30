@@ -295,9 +295,9 @@ export function buildHomeDisplayPullDownActions(input: {
           ...(teammate.subtitle ? { subtitle: teammate.subtitle } : {}),
         })),
       ]),
-      submenu("filter.vendor", t(`${MENU}.filterVendorHeading`), t(`${MENU}.filterVendor.${state.vendorFilter}`), "cpu",
+      submenu("filter.vendor", t(`${MENU}.filterVendorHeading`), state.vendorFilter === 'zcode' ? 'ZCode' : t(`${MENU}.filterVendor.${state.vendorFilter}`), "cpu",
         HOME_VENDOR_FILTERS.map((vendor) =>
-          checkable(`filter.vendor.${vendor}`, t(`${MENU}.filterVendor.${vendor}`), state.vendorFilter === vendor))),
+          checkable(`filter.vendor.${vendor}`, vendor === 'zcode' ? 'ZCode' : t(`${MENU}.filterVendor.${vendor}`), state.vendorFilter === vendor))),
       submenu("filter.lastActivity", t(`${MENU}.filterLastActivityHeading`),
         t(`${MENU}.filterLastActivity.${state.lastActivityFilter}`), "calendar",
         HOME_LAST_ACTIVITY_FILTERS.map((range) =>

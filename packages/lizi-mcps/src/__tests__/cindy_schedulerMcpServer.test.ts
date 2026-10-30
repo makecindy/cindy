@@ -370,12 +370,12 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
-  it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
+  it.each(['pi', 'zcode'] as const)('schedule tools preserve the selected %s engine and model override', async (agentKind) => {
     const created = await h.client.callTool({
       name: 'call_tool',
       arguments: {
         name: 'schedule_create',
-        args: { ...baseCreate, name: 'pi-scheduled', agentKind: 'pi' } as unknown as Record<string, unknown>,
+        args: { ...baseCreate, name: `${agentKind}-scheduled`, agentKind, model: 'fixture-model', modelAgentKind: agentKind } as unknown as Record<string, unknown>,
       },
     });
     const { envelope, isError } = parseToolResult(
@@ -385,7 +385,14 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(envelope).toMatchObject({ ok: true });
     if (!envelope.ok) throw new Error('unreachable');
     const createdData = envelope.data as Schedule;
-    expect(createdData.agentKind).toBe('pi');
+    expect(createdData.agentKind).toBe(agentKind);
+    expect(createdData.modelAgentKind).toBe(agentKind);
+    const updated = await h.client.callTool({ name: 'call_tool', arguments: {
+      name: 'schedule_update', args: { id: createdData.id, agentKind, modelAgentKind: agentKind },
+    } });
+    const updateResult = parseToolResult(updated as { content: unknown[]; isError?: boolean });
+    expect(updateResult.isError).toBe(false);
+    expect(updateResult.envelope).toMatchObject({ ok: true, data: { agentKind, modelAgentKind: agentKind } });
 
     await h.cleanup();
   });

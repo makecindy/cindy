@@ -41,7 +41,7 @@ export type SendToSessionCallback = (params: {
     {
       responsibilityRecorded?: false;
       targetSessionId: string;
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerAgent | 'zcode';
       wakeKind: "resumed" | "already-active" | "created" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -81,7 +81,7 @@ export type SendToRemoteSessionCallback = (params: {
 }) => Promise<
   ControlResult<
     {
-      agentKind: ControlWorkerAgent;
+      agentKind: ControlWorkerAgent | 'zcode';
       wakeKind: "resumed" | "already-active" | "queued";
       targetTitle: string | null;
       targetLastUserSendAt: string | null;

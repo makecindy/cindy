@@ -200,6 +200,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   };
   type StartInput = { agentKind: AgentKind; deviceId: string; options: StartSessionOptions };
   const startAttempt = async (input: StartInput, skipDirect: boolean, attempt: ReturnType<typeof registerPendingRemoteStart>): Promise<AgentSessionHandle> => {
+    if (input.agentKind === 'zcode') throw new Error('ZCode does not support remote Agent execution');
     const requireCurrent = () => attempt.signal.throwIfAborted();
     requireCurrent();
     const opts: StartSessionOptions = { ...input.options };

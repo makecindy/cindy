@@ -205,6 +205,7 @@ export function buildRegistry(
 
 /** 该供应商的指定 runtime 是否可参与选择 / 路由。 */
 function hasEnabledAgentRuntime(provider: Provider, agent: AgentKind): boolean {
+  if (provider.nativeAgent === agent) return provider.agents.includes(agent);
   const routing = provider.routing?.[agent];
   return provider.agents.includes(agent) && routing !== undefined && routing.disabled !== true;
 }

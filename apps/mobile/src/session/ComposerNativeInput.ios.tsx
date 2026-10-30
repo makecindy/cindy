@@ -72,6 +72,8 @@ export const nativeComposerAvailable =
 const NativeInput = nativeComposerAvailable
   ? requireNativeView<Props>("CindyComposer")
   : null;
+// 同一个附件 hook 可供替换前后的输入框共用；批次 id 在组件实例之间也必须唯一。
+let nextNativePasteBatchId = 0;
 
 export const ComposerNativeInput = forwardRef<
   ComposerRichInputHandle,
@@ -230,11 +232,12 @@ export const ComposerNativeInput = forwardRef<
         }}
         onPasteImages={({ nativeEvent }) => {
           const images = nativeEvent.images;
+          const batchId = `native-paste-${++nextNativePasteBatchId}`;
           if (!images.length) {
-            props.onPasteImagesLoadFailed?.();
+            props.onPasteImagesLoadFailed?.(batchId);
             return;
           }
-          props.onPasteImagesLoading?.(images.length);
+          props.onPasteImagesLoading?.(images.length, batchId);
           void (async () => {
             const uris: string[] = [];
             try {
@@ -252,13 +255,14 @@ export const ComposerNativeInput = forwardRef<
               if (!mounted.current || !props.onPasteImages)
                 throw new Error("paste cancelled");
               for (const uri of uris) pendingImages.current.delete(uri);
-              props.onPasteImages(uris);
+              props.onPasteImages(uris, batchId);
             } catch {
               for (const uri of uris) {
                 pendingImages.current.delete(uri);
                 void FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
               }
-              if (mounted.current) props.onPasteImagesLoadFailed?.();
+              // 输入框替换后原 hook 可能仍在：也要结清原批次，由宿主作用域闸拒绝过期回调。
+              props.onPasteImagesLoadFailed?.(batchId);
             }
           })();
         }}

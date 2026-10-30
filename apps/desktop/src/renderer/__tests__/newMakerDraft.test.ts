@@ -45,6 +45,27 @@ async function loadModule() {
 }
 
 describe('newMakerDraft store', () => {
+  // Upgrade hydration is a production entrypoint: older drafts have no native
+  // slot, and the generic Auto default cannot be sent to the ZCode harness.
+  it.each(['auto', 'bypassPermissions'] as const)('hydrates legacy drafts with a supported ZCode permission for %s', async (permissionMode) => {
+    memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({
+      vendor: 'cc', newChatDefaultPermissionMode: permissionMode,
+      lastByVendor: { cc: { permissionMode: 'auto' }, codex: { permissionMode: 'auto' }, pi: { permissionMode: 'auto' } },
+    }));
+    const { getDraft } = await loadModule();
+    expect(getDraft().lastByVendor.zcode.permissionMode).toBe(permissionMode === 'bypassPermissions' ? permissionMode : 'ask');
+    expect(getDraft().lastByVendor.cc.permissionMode).toBe(permissionMode);
+  });
+  it('applies compatible ZCode defaults while preserving its explicit permission choice', async () => {
+    const m = await loadModule();
+    m.setNewChatDefaultPermissionMode('bypassPermissions');
+    expect(m.getDraft().lastByVendor.zcode.permissionMode).toBe('bypassPermissions');
+    m.setNewChatDefaultPermissionMode('auto');
+    expect(m.getDraft().lastByVendor.zcode.permissionMode).toBe('ask');
+    m.patchVendorPrefs('zcode', { permissionMode: 'acceptEdits' });
+    m.setNewChatDefaultPermissionMode('bypassPermissions');
+    expect(m.getDraft().lastByVendor.zcode.permissionMode).toBe('acceptEdits');
+  });
   it('默认状态:vendor=cc,workingDir=null,lastByVendor 各 vendor 的硬默认填齐', async () => {
     const { getDraft } = await loadModule();
     const d = getDraft();

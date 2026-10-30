@@ -33,12 +33,12 @@ export type UnifiedEngine = SelectableVendor;
 
 /** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
 export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
-  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+  return engine === 'cc' ? 'claude-code' : engine;
 }
 
 /** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */
 export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
-  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : 'cc';
+  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : agent === 'zcode' ? 'zcode' : 'cc';
 }
 
 /**
@@ -337,7 +337,7 @@ export type UnifiedRailFilter = UnifiedRailItem;
  * 远程控制那台电脑时照常列全部，不经过这里。
  */
 export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
-  return providers.filter((provider) => provider.remoteInvocationEnabled === true).map(remoteInvocationModels);
+  return providers.filter((provider) => provider.nativeAgent !== 'zcode' && provider.remoteInvocationEnabled === true).map(remoteInvocationModels);
 }
 
 /** 该格按哪个供应商筛选(本机或远程供应商格);其余格不按供应商筛。 */

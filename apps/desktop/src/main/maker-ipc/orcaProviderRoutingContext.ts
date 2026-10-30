@@ -1,4 +1,4 @@
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind as OrcaAgentKind } from '@cindy/maker-core';
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
@@ -46,8 +46,8 @@ export function sshCodexWorkerRoutingContext(views: ProviderView[]): OrcaWorkerP
  * 不掺本机目录。默认沿用 lead 的模型与来源(同一种 Agent 且那台仍提供时)，否则取该 Agent 在
  * 那台的第一个可选模型、来源交给那台的默认路由。
  */
-export function deviceWorkerRoutingContext(views: ProviderView[], agent: AgentKind): OrcaWorkerProviderRoutingContext {
-  const availabilityFor = (kind: AgentKind) =>
+export function deviceWorkerRoutingContext(views: ProviderView[], agent: OrcaAgentKind): OrcaWorkerProviderRoutingContext {
+  const availabilityFor = (kind: OrcaAgentKind) =>
     connectedProvidersForAgent(views, kind).map((provider) => {
       const models = routableModels(provider, kind);
       return {
@@ -82,14 +82,14 @@ export function deviceWorkerRoutingContext(views: ProviderView[], agent: AgentKi
   };
 }
 
-function routableModels(provider: ProviderView, kind: AgentKind): CatalogModel[] {
+function routableModels(provider: ProviderView, kind: OrcaAgentKind): CatalogModel[] {
   return (provider.models[kind] ?? []).filter((model) =>
     isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
   );
 }
 
 /** 那台电脑上某种 Agent 可选的模型(各来源去重，按来源顺序)。 */
-function deviceRoutableModels(views: ProviderView[], agent: AgentKind): CatalogModel[] {
+function deviceRoutableModels(views: ProviderView[], agent: OrcaAgentKind): CatalogModel[] {
   const seen = new Set<string>();
   return connectedProvidersForAgent(views, agent)
     .flatMap((provider) => routableModels(provider, agent))
@@ -97,7 +97,7 @@ function deviceRoutableModels(views: ProviderView[], agent: AgentKind): CatalogM
 }
 
 /** list_available_models 用：那台电脑上某种 Agent 的模型、提供它的来源与默认来源。 */
-export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): Array<{
+export function deviceAvailableModels(views: ProviderView[], agent: OrcaAgentKind): Array<{
   id: string;
   label: string;
   providers: Array<{ id: string; name: string }>;
@@ -122,8 +122,8 @@ export function deviceAvailableModels(views: ProviderView[], agent: AgentKind): 
 export function localAvailableModels(
   availableModels: ReadonlyArray<{ id: string; displayName: string }>,
   providers: ReadonlyArray<OrcaWorkerProviderSnapshot>,
-  resolveDefaultProviderIdForModel: (agent: AgentKind, model: string) => string | null,
-  agent: AgentKind,
+  resolveDefaultProviderIdForModel: (agent: OrcaAgentKind, model: string) => string | null,
+  agent: OrcaAgentKind,
 ): Array<{
   id: string;
   label: string;
@@ -168,11 +168,11 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
 
   // Keep the route policy aligned with modelList.ts: disabled/non-chat capability entries do not
   // enter a new worker route, while the model registry identity remains provider-specific.
-  const routableModels = (provider: ProviderView, agent: AgentKind) =>
+  const routableModels = (provider: ProviderView, agent: OrcaAgentKind) =>
     (provider.models[agent] ?? []).filter((model) =>
       isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
     );
-  const availabilityFor = (agent: AgentKind) =>
+  const availabilityFor = (agent: OrcaAgentKind) =>
     connectedProvidersForAgent(views, agent).map((provider) => {
       const models = routableModels(provider, agent);
       const registryIdentityByModel = Object.fromEntries(
@@ -181,7 +181,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
             modelRegistry,
             provider.id,
             model.id,
-            agent === 'pi' ? undefined : agent,
+            agent === 'pi' || agent === 'zcode' ? undefined : agent,
           );
           return matched ? [[model.id, matched.entry.id]] : [];
         }),
@@ -217,6 +217,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
       'claude-code': availabilityFor('claude-code'),
       codex: availabilityFor('codex'),
       pi: availabilityFor('pi'),
+      zcode: availabilityFor('zcode'),
     },
     resolveDefaultProviderIdForModel: (agent, model) =>
       effectiveSourceIdForModel(views, null, model, agent),

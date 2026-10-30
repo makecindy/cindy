@@ -70,6 +70,7 @@ export function familyLogo(family: MenubarFamily): string {
 
 /** Agent identity marks for task rows and the usage chart legend. */
 export const MENUBAR_HARNESS_LOGOS: Record<MenubarHarness, string> = {
+  zcode: svg('<path fill="none" stroke="#000" stroke-width="2" d="M5 6h14L5 18h14"/>'),
   'claude-code': filled(CLAUDE_CODE_MARK_PATH, true),
   codex: svg(
     '<g transform="translate(12 12) scale(1.1) translate(-12 -12)">' +

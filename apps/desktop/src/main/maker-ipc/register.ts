@@ -590,7 +590,8 @@ import {
   sessions,
   schedules,
 } from '../localDb/schema.js';
-import { nextBotModelRoute, normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
+import { nextBotModelRoute, normalizeBotModelChain } from '../../shared/botModelChain.js';
+import type { AppDefaultModelRoute } from '../../shared/appDefaultModelSelection.js';
 import { createBotModelRouteApplier, createBotModelRouteReconciler } from './botModelRouteReconciler.js';
 import {
   cindyAutoRouteToFollow,
@@ -711,6 +712,8 @@ import {
   ensureCodexMcpBridgeStartedForRemote,
   finalizeCodexAfterAuthModeChange,
   getMaker,
+  refreshZCodeNativeModels,
+  connectZCodeNativeModels,
   handleRemoteWorkerBridge,
   listCodexGatewayHostKeys,
   refreshCodexGatewayHost,
@@ -3246,7 +3249,7 @@ export function stopPiIdleReleaseWatcher(): void {
 }
 
 function requireAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  if (value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'zcode') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -6562,7 +6565,7 @@ let disposePiPackagesChangedBroadcast: (() => void) | null = null;
  * Preselects a route in the local new-task draft, the same push the app-default model
  * selection uses. The menu bar calls it before opening a new task for one account.
  */
-export function applyNewMakerDraftRoute(route: BotModelRoute): void {
+export function applyNewMakerDraftRoute(route: AppDefaultModelRoute): void {
   broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
     agent: route.harness === 'claude' ? 'claude-code' : route.harness,
     providerId: route.providerId ?? '',
@@ -7374,6 +7377,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES, (_e, agentKind: unknown) => {
+    if (agentKind === 'zcode') return {
+      ...maker.getCapabilities('zcode'),
+      supportsSessionAgentSwitch: false,
+      supportsModelWindowSwitchGuard: false,
+      supportsOrcaWorkerPermissionMode: false,
+      supportsOrcaWorkerUpdate: false,
+      supportsDeferredOrcaUiAssignment: false,
+      supportsOrcaWorkerAgentDevice: false,
+      supportsScheduleAgentDeviceSelection: false,
+    };
     return {
       ...maker.getCapabilities(requireAgentKind(agentKind)),
       // host 级 optional 能力；旧 desktop 缺省为 false。两个 agent 查询都带回，
@@ -7435,7 +7448,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       markModelChoice?: unknown;
       taskProviderId?: unknown;
     };
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
+    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'zcode') {
       throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
     }
     if (p.providerId !== undefined && typeof p.providerId !== 'string') {
@@ -7518,7 +7531,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof p.sessionId !== 'string' || !p.sessionId) {
       throwIpcError('INVALID_PARAMS', 'sessionId required');
     }
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
+    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'zcode') {
       throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
     }
     if (typeof p.providerId !== 'string' || !p.providerId) {
@@ -7558,7 +7571,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       typeof p.sessionId !== 'string' ||
       !p.sessionId ||
-      (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') ||
+      (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi' && p.agent !== 'zcode') ||
       typeof p.providerId !== 'string' ||
       !p.providerId ||
       typeof p.model !== 'string' ||
@@ -7588,6 +7601,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
+        refreshZCode: refreshZCodeNativeModels,
         refreshXd: options.refreshXdGatewayModels,
         // Claude 订阅清单来自 Claude Code SDK:用本机 CLI 的登录读一次 supportedModels
         // (Cindy 不带订阅凭证请求 Anthropic,也不发送消息)。
@@ -7705,8 +7719,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isTrustedAppRendererEvent(event as Parameters<typeof isTrustedAppRendererEvent>[0]),
     // 动态清单重新发现:目前没有需要主动重拉的供应商(anthropic 清单来自 Claude Code
     // 会话 init 的 SDK 捕获,没有 HTTP 发现通道,也就没有失败态)。
-    rediscoverModels: async () => null,
-    refreshBuiltinModels: refreshProviderModelsManually,
+    rediscoverModels: async (id) => {
+      if (id === 'zcode-native') await connectZCodeNativeModels();
+      return null;
+    },
+    refreshBuiltinModels: (id) => id === 'zcode-native'
+      ? refreshZCodeNativeModels()
+      : refreshProviderModelsManually(id),
     requestModelsAutoRefresh: requestProviderModelAutoRefresh,
     scanLocalCli: () => scanLocalCliAuth(createLocalCliScanDeps()),
     // 「模型 / 供应商停用」override 写入(main 侧持久化,handler 写后广播 PROVIDER_CHANGED)。
@@ -10049,7 +10068,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertSessionCreationCurrent();
     await ensureRemoteHostReady(remoteHostIdToEnsure);
     assertSessionCreationCurrent();
-    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | null =
+    const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | 'zcode' | null =
       session?.agentKind === 'codex' ||
       session?.agentKind === 'claude-code' ||
       session?.agentKind === 'pi'
@@ -10863,7 +10882,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(additionalWorkingDirs.length > 0 ? { additionalWorkingDirs } : {}),
       };
       return {
-        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi',
+        sourceAgentKind: source.agentKind as 'cc' | 'codex' | 'pi' | 'zcode',
         prompt: builtPrompt.prompt,
         replyLanguage: builtPrompt.replyLanguage,
         inputSummary: buildReviewInputSummary({
@@ -14362,7 +14381,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         execution ??= await resolveSessionExecution(selection, sourceSessionId);
         assertPlugin(pluginId);
-        if (!execution.providerId) return routeUnavailable();
+        if (!execution.providerId || execution.agentKind === 'zcode') return routeUnavailable();
         return { ...execution, agentKind: execution.agentKind === 'claude-code' ? 'cc' : execution.agentKind,
           providerId: execution.providerId, effort: execution.effort ?? '' };
       } catch (error) {
@@ -14508,6 +14527,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A queued input will execute the accepted next-send route. Keep its
         // receipt stable as a deferred model/Harness switch reaches that boundary.
         const selected = runtime?.pendingMutation?.profile ?? runtime?.effective;
+        if (selected?.agentKind === 'zcode') return null;
         const resolvedConfig: PluginTaskRoute = selected
           ? { agentKind: selected.agentKind === 'claude-code' ? 'cc' : selected.agentKind,
             providerId: selected.providerId ?? '', model: selected.model,
@@ -16533,7 +16553,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createWorkerWorktree,
     discardWorkerWorktree,
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
-    getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agentDeviceId && !remoteHostId
+    getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agent === 'zcode'
+      ? Promise.reject(new Error('ZCode does not support Orca'))
+      : agentDeviceId && !remoteHostId
       // Worker 的 Agent 在另一台电脑(或分享)运行：模型与来源按那台的目录。
       ? deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')
       : agent === 'codex' && remoteHostId
@@ -17197,6 +17219,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const selection = await readEffectiveBotModelSelection(JSON.parse(row.capabilitiesJson));
       const routineModel = row.role === 'routine'
         ? await readRoutineLaneModel(row.botId, row.routeKey) : null;
+      if (routineModel?.agentKind === 'zcode') return null;
       if (routineModel) {
         selection.chain = [{ harness: routineModel.agentKind === 'claude-code' ? 'claude' : routineModel.agentKind,
           model: routineModel.model, providerId: routineModel.providerId ?? null,
@@ -18228,13 +18251,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listAvailableModels: async ({ agent, callerSessionId, executionDeviceId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
         if (executionDeviceId) {
+          if (agent === 'zcode') throw new Error('ZCode cannot run on a separate Agent device');
           if (!orcaRemoteWorkersForHost) throw new Error('[HOST_NOT_READY] Worker service is not ready');
           const result = await orcaRemoteWorkersForHost.readModels(executionDeviceId, {
             ...(agent ? { agent } : {}), agentDeviceId: requestedAgentDeviceId ?? null,
           });
           return { ok: true, ...result };
         }
-        const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
+        const agents: AgentKind[] = agent ? [agent] : (['codex', 'claude-code', 'pi', 'zcode'] as const).filter(kind => maker.listAvailableAgents().includes(kind));
         // SSH Lead 的 Worker 在 SSH 主机上运行 Agent，不能放到别的电脑：不列可选位置。
         const sshLead = callerSessionId ? Boolean(await readSessionRemoteHostIdCached(callerSessionId)) : false;
         // 不指定位置时列 Lead 所在位置(Lead 的 Agent 在另一台电脑运行就列那台；Lead 归在供应商组里就列组那一项
@@ -18252,6 +18276,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : null;
         const locations = sshLead ? undefined : await listWorkerAgentLocations();
         if (agentDeviceId) {
+          if (agent === 'zcode') throw new Error('ZCode cannot run on a separate Agent device');
           let views: ProviderView[];
           try {
             views = await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId);
@@ -18262,7 +18287,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             ok: true,
             agentDeviceId,
             ...(locations ? { locations } : {}),
-            ...Object.fromEntries(agents.map((a) => [
+            ...Object.fromEntries(agents.filter(a => a !== 'zcode').map((a) => [
               a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code',
               deviceAvailableModels(views, a),
             ])),
@@ -18281,7 +18306,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
-          const key = a === 'codex' ? 'codex' : a === 'pi' ? 'pi' : 'claude_code';
+          const key = a === 'claude-code' ? 'claude_code' : a;
           result[key] = localAvailableModels(
             caps.availableModels,
             providerRouting.availability[a] ?? [],
@@ -21404,7 +21429,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (
       msg.createOpts.agentKind !== 'claude-code' &&
       msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
+      msg.createOpts.agentKind !== 'pi' &&
+      msg.createOpts.agentKind !== 'zcode'
     ) {
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
@@ -22921,7 +22947,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ? atomicSelection.effort
       : ((runtimeStatus.effort ?? null) as SessionRuntimeProfile['effort']);
     const targetFastMode = atomicSelection?.fastMode ?? runtimeStatus.fastMode;
-    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi');
+    const agentKind = dbToMakerAgentKind(runtimeStatus.agentKind as 'cc' | 'codex' | 'pi' | 'zcode');
     if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend) {
       assertRuntimeOwnerCurrent();
       assertSharedTaskCurrent.admit();

@@ -241,7 +241,7 @@ interface SourceSession {
   status: string;
   source: string;
   orcaRole: string | null;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
   updatedAt: number;
 }
 async function assertSource(
@@ -1223,7 +1223,7 @@ async function receive(
             getMakerIfReady()
               ?.getCapabilities(agentKind)
               .availableModels.find((m) => m.id === route.model)?.defaultEffort ?? 'high';
-          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>> = {};
+          const agentPrefs: Partial<Record<'cc' | 'codex' | 'pi' | 'zcode', ShareImportDraftPrefs>> = {};
           for (const agent of ['cc', 'codex', 'pi'] as const) {
             const kind = agent === 'cc' ? 'claude-code' : agent;
             const selected = pickEnabledFallbackModel(providers, kind);
@@ -1441,7 +1441,7 @@ export async function requestTaskMigration(raw: unknown): Promise<TaskMigrationV
             const source = members[0];
             if (source.orcaRole === 'lead' && target.teamMigration !== true)
               throw new Error('MIGRATION_UNSUPPORTED');
-            if (members.some((member) => !target.agents?.includes(member.agentKind)))
+            if (members.some((member) => member.agentKind === 'zcode' || !target.agents?.includes(member.agentKind)))
               throw new Error('MIGRATION_TARGET_MODEL_UNAVAILABLE');
             const id = randomUUID();
             record = {

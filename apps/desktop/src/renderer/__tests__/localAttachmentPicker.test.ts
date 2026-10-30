@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { canUseLocalAttachmentPicker } from '../components/new-chat/localAttachmentPicker';
 
 describe('canUseLocalAttachmentPicker', () => {
+  // ZCode's native adapter currently accepts text only, including through
+  // device-link. Do not offer a file picker that its send contract rejects.
+  it('hides attachments for a text-only ZCode task on either execution surface', () => {
+    expect(canUseLocalAttachmentPicker({ runtimeAgentKind: 'zcode' })).toBe(false);
+    expect(canUseLocalAttachmentPicker({ runtimeAgentKind: 'zcode', deviceLinkDeviceId: 'host' })).toBe(false);
+  });
   it('allows a local new-chat draft before a session exists', () => {
     expect(canUseLocalAttachmentPicker({})).toBe(true);
   });

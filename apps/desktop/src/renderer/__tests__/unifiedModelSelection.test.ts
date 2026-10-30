@@ -72,6 +72,18 @@ function entryOf(over: Partial<UnifiedModelEntry> = {}): UnifiedModelEntry {
   };
 }
 
+// Native ZCode routes have no Pi/Codex alias. This unit exercises the row config
+// sent by the picker; the previous three-engine conversion silently selected Pi.
+it('keeps the ZCode engine when resolving a native model selection', () => {
+  const entry = entryOf({
+    providerId: 'zcode-native', modelId: 'native-model', candidates: ['zcode'], recommended: 'zcode', nativeAgent: 'zcode',
+    capabilities: { zcode: capability('zcode', { wireModelId: 'native-model', efforts: [], defaultEffort: null }) },
+  });
+  expect(resolveUnifiedRowConfig({ entry })).toMatchObject({
+    engine: 'zcode', agent: 'zcode', wireModelId: 'native-model', effort: null, fast: false,
+  });
+});
+
 function favoriteOf(over: Partial<ModelFavoriteItem> = {}): ModelFavoriteItem {
   return {
     uid: 'fav-1',

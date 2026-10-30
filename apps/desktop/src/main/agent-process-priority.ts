@@ -173,7 +173,7 @@ const runtimeUserDataMarkers: { claude: string[]; codex: string[]; pi: string[] 
 };
 
 export function registerUserDataMarkers(userDataPath: string): void {
-  const markersFor = (kind: 'claude-code' | 'codex' | 'pi'): string[] => {
+  const markersFor = (kind: 'claude-code' | 'codex' | 'pi' | 'zcode'): string[] => {
     const lower = userDataPath.toLowerCase();
     // 命令行里的分隔符形态可能与 app.getPath 返回值不同(Windows 下 / 与 \ 混用),
     // 两种形态都登记;非本平台形态的变体永不命中,无害。

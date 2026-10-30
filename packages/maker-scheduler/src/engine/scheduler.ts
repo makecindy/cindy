@@ -90,7 +90,7 @@ function validateScheduleExecutionShape(
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
-    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+    if (!['claude-code', 'codex', 'pi', 'zcode'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }

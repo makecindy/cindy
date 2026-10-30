@@ -125,7 +125,7 @@ export interface ProviderGroupRemoteGroups {
   pick(ownerDeviceId: string, input: {
     sessionId: string;
     providerId: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode';
     model: string;
     exclude: readonly string[];
     quotaRebalance?: string;
@@ -819,7 +819,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         const pick = await remote.pick(ownerDeviceId, {
           sessionId,
           providerId,
-          agentKind: agentKind as 'claude-code' | 'codex' | 'pi',
+          agentKind: agentKind as 'claude-code' | 'codex' | 'pi' | 'zcode',
           model,
           exclude: [...exclude],
           ...(quotaRebalance ? { quotaRebalance } : {}),

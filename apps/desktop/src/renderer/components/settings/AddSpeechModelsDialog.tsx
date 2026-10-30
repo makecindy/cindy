@@ -77,7 +77,7 @@ export function AddSpeechModelsDialog({
     let cancelled = false;
     mounted.current = true;
     void (async () => {
-      if (!target) return;
+      if (!target || target.agent === 'zcode') return;
       const runtime = config.runtimes[target.agent];
       if (!runtime) return;
       try {

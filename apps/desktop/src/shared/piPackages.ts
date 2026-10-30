@@ -151,7 +151,7 @@ export function listPiRuntimePaletteCommands(
 
 /** Runtime-confirmed Pi package commands belong only to the Pi command palette. */
 export function mergePiPackageCommands(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode',
   builtins: PiPackageSlashCommand[],
   packageCommands: Array<{ name: string; description: string }>,
 ): PiPackageSlashCommand[] {
@@ -169,10 +169,10 @@ export function mergePiPackageCommands(
 }
 
 export function shouldListPiPackageCommands(
-  requestedAgentKind: 'claude-code' | 'codex' | 'pi',
+  requestedAgentKind: 'claude-code' | 'codex' | 'pi' | 'zcode',
   sessionIdProvided: boolean,
   session: {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode';
     reviewMode?: true;
     remoteHostId?: string;
   } | null,

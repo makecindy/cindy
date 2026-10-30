@@ -130,7 +130,7 @@ export function PluginModelPicker({
           setSelection(value);
           return true;
         },
-        onSelect: (value) =>
+        onSelect: async (value) => value.agent === "zcode" ? false :
           answer({
             agentKind: value.agent === "claude-code" ? "cc" : value.agent,
             providerId: value.providerId,

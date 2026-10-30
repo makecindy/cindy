@@ -115,7 +115,7 @@ import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const log = createLogger('maker-ipc:provider');
 
-const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi'];
+const VALID_AGENTS: readonly string[] = ['claude-code', 'codex', 'pi', 'zcode'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -2597,7 +2597,7 @@ export function registerProviderHandlers(
   // **不**在这里广播:发现流程自己已经收口了两条路径 —— 成功经 active-catalog 的
   // markChanged、失败经 setAnthropicDiscoveryFailureListener,重复广播只会让 renderer 白
   // refetch 一次。
-  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, async (event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, async (event, input: unknown, ownerScope?: unknown) => {
     // sender 归属校验:这条通道会用订阅凭证发起真实上游请求并重启退避,不该被子 frame /
     // WebView 触发。经 deps 注入(生产 = assertTrustedAppRendererEvent),既保住本文件
     // 「不依赖 Electron、可用内存 registry 直测」的设计,又不让新通道继承既有缺口。
@@ -2607,9 +2607,14 @@ export function registerProviderHandlers(
     // (PR #548 review)。
     assertTrustedProviderMutationSender(event);
     const providerId = requireProviderId(input);
+    if (providerId === 'zcode-native' && (!ownerScope || !deps.currentOwnerSession?.().dataOwnerId)) {
+      throwIpcError('INVALID_PARAMS', 'current owner scope required');
+    }
+    assertOptionalRequestedOwner(ownerScope);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
       failure = await deps.rediscoverModels(providerId);
+      assertOptionalRequestedOwner(ownerScope);
     } catch (err) {
       // 原文只进 Main 日志:凭证读取 / token 刷新等依赖抛出的消息可能含内部路径或上游
       // 敏感文本,throwIpcError 只加结构化 code、不做脱敏,原样回传等于把它送给 renderer

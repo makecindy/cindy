@@ -38,6 +38,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { ZCodeMark } from '@/components/icons/ZCodeMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
@@ -88,12 +89,14 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  zcode: 'ZCode',
 };
 
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
   codex: (size) => <CodexMark size={size} />,
   pi: (size) => <PiMark size={size} />,
+  zcode: (size) => <ZCodeMark size={size} />,
 };
 
 /** 抽屉里的档位顺序 = 目录枚举顺序（弱到强）。ultra 只在模型真的提供时出现。 */

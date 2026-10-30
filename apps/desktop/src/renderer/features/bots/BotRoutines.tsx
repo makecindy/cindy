@@ -418,7 +418,7 @@ export function BotRoutines({
             />
           </label>
           {supportsModels && <BotTaskModelEditor inheritedRoute={primaryRoute} inheritanceHint={t('bots.model.inheritPrimary')}
-            value={draft.modelOverride ? {
+            value={draft.modelOverride && draft.modelOverride.agentKind !== 'zcode' ? {
               harness: draft.modelOverride.agentKind === 'claude-code' ? 'claude' : draft.modelOverride.agentKind,
               model: draft.modelOverride.model, providerId: draft.modelOverride.providerId ?? null,
               effort: draft.modelOverride.effort ?? '', fastMode: draft.modelOverride.fastMode ?? false,

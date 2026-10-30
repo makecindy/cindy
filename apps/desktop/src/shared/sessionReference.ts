@@ -10,7 +10,7 @@ export interface SessionReference {
   state: 'available' | 'deleted' | 'missing';
   status?: 'active' | 'archived' | 'deleted';
   title?: string;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'zcode';
   /** Agent 在同账号另一台电脑(或分享来的供应商)上运行时那台的 id;null = 本机。 */
   agentDeviceId?: string | null;
 }

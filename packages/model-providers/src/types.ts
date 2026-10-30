@@ -22,7 +22,7 @@ import type { ModelMetadata } from "./modelMetadataLayers.js";
 import type { ModelRegistry } from "./modelAccessBean.js";
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
-export type AgentKind = "claude-code" | "codex" | "pi";
+export type AgentKind = "claude-code" | "codex" | "pi" | "zcode";
 
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort =
@@ -555,6 +555,8 @@ export interface ProviderMediaModel extends Pick<
 
 /** 供应商定义。 */
 export interface Provider {
+  /** Host-discovered native runtime. Its own account configuration owns the model route. */
+  nativeAgent?: 'zcode';
   /** 'anthropic' | 'openai' | 'xd' | 未来自定义 id。 */
   id: string;
   /** 展示名。 */

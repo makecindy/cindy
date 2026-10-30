@@ -30,6 +30,7 @@ export function usageHistoryAgentColor(agentKind: UsageAgentKind): string {
     'claude-code': 'var(--engine-badge-cc)',
     codex: 'var(--engine-badge-codex)',
     pi: MODEL_COLORS[0],
+    zcode: MODEL_COLORS[1],
     media: 'var(--text-secondary)',
   };
   return colors[agentKind];

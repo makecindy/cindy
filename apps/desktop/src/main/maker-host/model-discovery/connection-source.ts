@@ -9,19 +9,22 @@
 export type ConnectionSourceKind =
   'native-harness-inherited' | 'explicit-provider-oauth' | 'explicit-api-key';
 
-export type NativeProviderId = 'anthropic' | 'openai' | 'xai';
+export type NativeProviderId = 'anthropic' | 'openai' | 'xai' | 'zcode-native';
 export type NativeHarnessInheritedProviderId = 'anthropic' | 'openai';
 
 export const NATIVE_PROVIDER_CONNECTION_SOURCE = {
   anthropic: 'native-harness-inherited',
   openai: 'native-harness-inherited',
   xai: 'explicit-provider-oauth',
+  'zcode-native': 'native-harness-inherited',
 } as const satisfies Record<NativeProviderId, ConnectionSourceKind>;
 
 export function isNativeHarnessInheritedProvider(
   provider: NativeProviderId,
 ): provider is NativeHarnessInheritedProviderId {
-  return NATIVE_PROVIDER_CONNECTION_SOURCE[provider] === 'native-harness-inherited';
+  // ZCode uses inherited native credentials after an explicit, owner-scoped
+  // connection. It does not participate in the older automatic claim flow.
+  return provider === 'anthropic' || provider === 'openai';
 }
 
 export function isConnectionSourceKind(value: unknown): value is ConnectionSourceKind {

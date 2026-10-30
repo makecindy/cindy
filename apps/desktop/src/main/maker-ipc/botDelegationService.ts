@@ -2434,7 +2434,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       fastMode?: boolean | 'ultrafast';
       providerId?: string | null;
       agentDeviceId?: string | null;
-      agentKind: 'cc' | 'codex' | 'pi';
+      agentKind: 'cc' | 'codex' | 'pi' | 'zcode';
       title: string;
       workspaceKind?: 'project' | 'dialogue';
       source: 'desktop';
@@ -2709,9 +2709,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     await caller.groupAuthority?.refresh();
     let taskModel: BotModelRoute | null;
     try {
-      taskModel = input.modelSelection !== undefined
+      const selected = input.modelSelection !== undefined
         ? await (deps.resolveTaskModelSelection ?? resolveTaskModelSelection)(input.modelSelection)
         : readBotTaskModelOverride(parseRecord(profile?.config).taskModelOverride);
+      if (selected?.harness === 'zcode') throw new Error('ZCode does not support teammate task profiles');
+      taskModel = selected ? { ...selected, harness: selected.harness } : null;
       await caller.groupAuthority?.refresh();
       const valid = input.modelSelection !== undefined || !taskModel
         || await (deps.validateTaskModel ?? validateTaskModel)(taskModel);
@@ -2782,7 +2784,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           ? { fastMode: taskRuntime.fastMode }
           : {}),
         ...(taskRuntime.providerId ? { providerId: taskRuntime.providerId } : {}),
-        agentKind: taskRuntime.agentKind as 'cc' | 'codex' | 'pi',
+        agentKind: taskRuntime.agentKind as 'cc' | 'codex' | 'pi' | 'zcode',
         title: input.title?.trim() || sliceWhole(objective.split('\n')[0]!, 60),
         source: 'desktop',
       },

@@ -20,7 +20,7 @@ const log = createLogger('orca-team-store');
 
 export type OrcaRole = 'lead' | 'worker';
 export type OrcaTeamStatus = 'active' | 'completed' | 'cancelled' | 'failed';
-export type MakerAgentKind = 'claude-code' | 'codex' | 'pi';
+export type MakerAgentKind = 'claude-code' | 'codex' | 'pi' | 'zcode';
 
 // Worker 状态枚举与 "占用槽位" 判定下沉到 renderer-safe 模块,
 // 让 main (本文件) 与 renderer (useWorkers) 共享同一份算法, 避免 F6 那种

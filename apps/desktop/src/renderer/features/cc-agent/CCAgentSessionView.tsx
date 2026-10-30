@@ -3909,10 +3909,10 @@ function CCAgentSessionContent({
         insertSystemCard('context', { usage: null });
         return true;
       }
-      if (session?.agentKind === 'codex') {
+      if (session?.agentKind === 'codex' || session?.agentKind === 'zcode') {
         insertSystemCard('context', {
           usage: null,
-          error: t('chat.systemCard.context.unsupportedAgent', { agent: 'Codex' }),
+          error: t('chat.systemCard.context.unsupportedAgent', { agent: session.agentKind === 'zcode' ? 'ZCode' : 'Codex' }),
         });
         return true;
       }

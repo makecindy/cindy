@@ -4203,6 +4203,11 @@
         "custom": "繼續自訂設定，可取得模型清單或手動新增。",
         "configure": "前往設定",
         "keepCustom": "繼續自訂"
+      },
+      "zcode": {
+        "managed": "帳號與團隊專案在 ZCode 中管理。連接後，目前的 Cindy 帳號可使用該登入；中斷連線不會登出 ZCode。",
+        "connect": "連接 ZCode",
+        "changeFailed": "無法連線至 ZCode。請先確認所選團隊專案能在 ZCode 中使用，再試一次。"
       }
     },
     "experimental": {
@@ -12708,6 +12713,8 @@
       "silentStopContinue": "繼續",
       "silentStopContinueTitle": "繼續當前任務",
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
+      "zcodeScopeChanged": "ZCode 的帳號或團隊專案已變更。請切回這項任務原本使用的帳號和專案，再試一次。",
+      "zcodeScopeUnavailable": "無法確認這筆 ZCode 紀錄所屬的帳號和團隊專案，請建立新任務。",
       "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
       "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。",
       "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。",
@@ -16382,7 +16389,11 @@
       "remoteCodexNoSourceDescription": "遠端裝置「{{device}}」尚未連線 Codex 可用的模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」登入 OpenAI 或連線其他來源後重試。",
       "remoteCcNoSourceTitle": "遠端電腦 Claude 暫無可用來源",
       "remoteCcNoSourceDescription": "遠端裝置「{{device}}」尚未連線可用的 Claude 模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」連線來源後重試。",
-      "gotIt": "知道了"
+      "gotIt": "知道了",
+      "zcodeTextOnly": "ZCode 目前只支援文字輸入，請將檔案內容貼到訊息中。",
+      "zcodeUserPromptUnsupported": "ZCode 尚不支援 Cindy 的自訂提示詞。請先在個人化設定中清空此項，再使用 ZCode。",
+      "zcodeNotReadyTitle": "ZCode 尚未就緒",
+      "zcodeNotReadyDescription": "請先安裝 ZCode，並在 ZCode 中登入團隊 Coding Plan，再到 Cindy 的「設定 → 模型供應商」連接 ZCode。"
     },
     "fileTypes": {
       "fileEmpty": "檔案為空",

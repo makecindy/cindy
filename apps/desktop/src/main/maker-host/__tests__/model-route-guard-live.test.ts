@@ -45,7 +45,17 @@ import {
   resolveDefaultScheduleRoute,
   resolveScheduledModelSelectionLive,
   resolveLenientSessionRoute,
+  isAgentOneShotRouteDisabled,
 } from '../model-route-guard-live.js';
+
+// Native ZCode has no HTTP/oneShot transport. A title/helper must not fall back
+// to another provider and spend its credentials. Unit: no catalog I/O required.
+it('rejects native ZCode oneShot before resolving a default HTTP route', async () => {
+  h.listProviders.mockClear();
+  await expect(isAgentOneShotRouteDisabled('zcode')).resolves.toBe(true);
+  await expect(isAgentOneShotRouteDisabled('zcode', 'native-model')).resolves.toBe(true);
+  expect(h.listProviders).not.toHaveBeenCalled();
+});
 
 // Unit: use the remote authorized catalog even when the local provider has the
 // same id. An offline/revoked share must fail before trying local credentials.

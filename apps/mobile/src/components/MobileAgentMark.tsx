@@ -19,7 +19,7 @@ const CODEX_SMALL_STROKE = 2;
 const CODEX_LARGE_STROKE = 1.6;
 
 export interface MobileAgentMarkProps {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode';
   color: string;
   size?: number;
 }
@@ -29,7 +29,9 @@ export function MobileAgentMark({ agentKind, color, size = iconSize.sm }: Mobile
   const codexStrokeWidth = size <= iconSize.sm ? CODEX_SMALL_STROKE : CODEX_LARGE_STROKE;
   return (
     <Svg accessible={false} height={size} viewBox="0 0 24 24" width={size}>
-      {agentKind === 'pi' ? (
+      {agentKind === 'zcode' ? (
+        <Path d="M5 6h14L5 18h14" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      ) : agentKind === 'pi' ? (
         // Keep all three strokes in one native path. Separate horizontal/vertical
         // paths have degenerate bounds and can disappear in the iOS SVG renderer.
         <Path

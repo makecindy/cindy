@@ -3,6 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { readCreateSessionOpts, withCreateSessionStderr } from '../sessionRequest';
 
 describe('session IPC request parsing', () => {
+  // Native ZCode admission must preserve its identity and reject unsupported execution
+  // locations before allocating a workspace or installing a remote runtime (unit tier).
+  it('admits local ZCode tasks and rejects remote or Orca creation before allocation', () => {
+    const input = { agentKind: 'zcode', model: 'zcode:team/model', workingDir: '/work' };
+    expect(readCreateSessionOpts(input).agentKind).toBe('zcode');
+    const allocate = vi.fn(() => '/allocated');
+    for (const unsupported of [{ remoteHostId: 'ssh' }, { agentDeviceId: 'device' }, { orcaRole: 'lead' }]) {
+      expect(() => readCreateSessionOpts({ ...input, ...unsupported, workspaceKind: 'dialogue', workingDir: '' }, {
+        allocateDialogueWorkspace: allocate,
+      })).toThrow('[INVALID_PARAMS]');
+    }
+    expect(allocate).not.toHaveBeenCalled();
+  });
   it.each(['cindy-library:/outside', '  cindy-library:/outside  '])(
     'rejects external Host-owned slots: %s', (dir) => {
       expect(() => readCreateSessionOpts({

@@ -1,4 +1,7 @@
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
+import { createZCodeNativeHost } from './zcode-host.js';
+import { connectNativeAgentForOwner, isNativeAgentConnected, setZCodeNativeConnected } from './native-agent-state.js';
+import { bindNativeProviderAuth, unbindNativeProviderAuth, isNativeProviderAuthBound, captureNativeProviderAuthorizationEpoch } from './nativeProviderAuthBinding.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
@@ -50,6 +53,8 @@ import {
   isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
+  ZCodeAgent,
+  ZCodeRpcClient,
   configureDefaultImageResizer,
   type AgentKind,
   type InteractionRequest,
@@ -63,6 +68,7 @@ import {
   getLocalCatalogOverridesSnapshot,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
+  setNativeAgentProviders,
 } from './active-catalog.js';
 import {
   createCodexModelBackfillCoordinator,
@@ -419,6 +425,116 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+let _zcodeHost: ReturnType<typeof createZCodeNativeHost> | null = null;
+let _zcodeRefresh: Promise<void> | null = null;
+
+/** Refresh the local native catalog without blocking other harnesses or surviving an owner change. */
+export function refreshZCodeNativeModels(): Promise<void> {
+  if (_zcodeRefresh) return _zcodeRefresh;
+  const maker = getMaker();
+  if (_zcodeRefresh) return _zcodeRefresh;
+  const owner = activeOwnerScopeKey();
+  const session = getActiveAppSession();
+  const storageKey = createHash('sha256')
+    .update(JSON.stringify([getActiveAuthRealm(), session.mode, session.dataOwnerId]))
+    .digest('hex');
+  const host = _zcodeHost ??= createZCodeNativeHost({
+    createClient: (options) => new ZCodeRpcClient(options),
+    request: async (url, init) => {
+      const response = await outboundFetch(url, { ...init, redirect: 'error' });
+      if (!response.ok) throw new Error('ZCODE_AUTH_REQUEST_FAILED');
+      return response.json();
+    },
+    runtimeDataDir: path.join(app.getPath('userData'), 'zcode-runtime', storageKey),
+  });
+  const current = () => Boolean(session.dataOwnerId) && _maker === maker && _zcodeHost === host && activeOwnerScopeKey() === owner
+    && !isAppSessionBoundaryPending();
+  const pending = (async () => {
+    const status = session.dataOwnerId && isNativeProviderAuthBound('zcode-native') ? await host.refresh() : await host.probe();
+    if (!current()) return;
+    if (status.installed && host.binaryPath && !maker.listAvailableAgents().includes('zcode')) {
+      const nativeOptions = host.getAgentOptions();
+      const assertAuthorized = () => {
+        if (!current() || !isNativeProviderAuthBound('zcode-native')) throw new Error('ZCODE_ACCOUNT_CHANGED');
+      };
+      const agent = new ZCodeAgent({
+        binaryPath: host.binaryPath,
+        logger: desktopMakerLogger,
+        runtimeConfig: {},
+        auth: {
+          getState: async () => ({ authenticated: current() && isNativeAgentConnected('zcode-native') }),
+          getAuthEnv: async () => ({}),
+          triggerLogin: async () => ({ authenticated: false, errorReason: 'ZCODE_MANAGED_EXTERNALLY' }),
+          logout: async () => {
+            if (!current()) throw new Error('ZCODE_ACCOUNT_CHANGED');
+            unbindNativeProviderAuth('zcode-native', { revoked: true });
+            setZCodeNativeConnected(false);
+            await agent.closeAccountSessions();
+            await refreshZCodeNativeModels();
+          },
+        },
+        capabilityAdditions: { availableModels: status.models },
+      }, { ...nativeOptions, createSessionHooks: async (opts) => {
+        assertAuthorized();
+        const generation = captureNativeProviderAuthorizationEpoch('zcode-native');
+        const check = () => {
+          assertAuthorized();
+          if (!generation || captureNativeProviderAuthorizationEpoch('zcode-native') !== generation)
+            throw new Error('ZCODE_ACCOUNT_CHANGED');
+        };
+        const hooks = await nativeOptions.createSessionHooks!(opts);
+        check();
+        return {
+          ...hooks,
+          onSessionReady: async (nativeId) => { check(); await hooks.onSessionReady?.(nativeId); check(); },
+          prepareClient: async (client) => { check(); await hooks.prepareClient?.(client); check(); },
+          resolveProviderRuntimeHeaders: async (params, signal) => {
+            check();
+            const result = await hooks.resolveProviderRuntimeHeaders!(params, signal);
+            check();
+            return result;
+          },
+        };
+      }});
+      maker.registerAgent('zcode', agent);
+    }
+    const connected = status.authenticated && isNativeProviderAuthBound('zcode-native');
+    setZCodeNativeConnected(connected);
+    setNativeAgentProviders(status.installed ? [{
+      id: 'zcode-native', name: 'ZCode', source: 'builtin', nativeAgent: 'zcode',
+      agents: ['zcode'], auth: { method: 'managed' }, routing: {},
+      models: { zcode: (connected ? status.models : []).map(model => ({
+        id: model.id, name: model.displayName, mode: 'chat',
+        contextWindow: model.contextWindow, efforts: [...model.efforts],
+        defaultEffort: model.defaultEffort, supportsImageInput: false,
+      })) },
+    }] : []);
+  })();
+  _zcodeRefresh = pending;
+  void pending.finally(() => { if (_zcodeRefresh === pending) _zcodeRefresh = null; }).catch(() => undefined);
+  return pending;
+}
+/** A trusted Settings click authorizes only its original data owner. */
+export function connectZCodeNativeModels(): Promise<void> {
+  const owner = activeOwnerScopeKey();
+  const maker = getMaker();
+  const assertCurrent = () => {
+    if (_maker !== maker || !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner)
+      throw new Error('ZCODE_ACCOUNT_CHANGED');
+  };
+  return connectNativeAgentForOwner({
+    assertCurrent,
+    waitForDiscovery: async () => { await _zcodeRefresh; },
+    authorize: () => {
+      if (!isNativeProviderAuthBound('zcode-native') || !captureNativeProviderAuthorizationEpoch('zcode-native'))
+        bindNativeProviderAuth('zcode-native', { sharedSystem: true });
+    },
+    refresh: async () => {
+      await refreshZCodeNativeModels();
+      return { connected: isNativeAgentConnected('zcode-native'), errorReason: _zcodeHost?.getStatus().errorReason };
+    },
+  });
+}
 setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
 
@@ -3278,6 +3394,9 @@ export function getMaker(): Maker {
       makerRef.refreshAgentLocalModels('claude-code', { onSupportedModels }),
     );
     requestAnthropicModelProbe();
+    void refreshZCodeNativeModels().catch(() => {
+      desktopMakerLogger.warn('ZCode native runtime discovery failed');
+    });
   }
   return _maker;
 }
@@ -3394,6 +3513,11 @@ export async function preflightBotRuntimeResources(
  * 重置 Maker 单例（切账号 / 测试用）。
  */
 export function resetMaker(): void {
+  void _zcodeHost?.dispose().catch(() => undefined);
+  _zcodeHost = null;
+  _zcodeRefresh = null;
+  setZCodeNativeConnected(false);
+  setNativeAgentProviders([]);
   // A disconnected remote handle may reject detach without emitting closed.
   // Retire its Desktop input/turn observers before dropping the owning Maker;
   // otherwise a relogin inherits the old dispatch-busy and abort boundaries.

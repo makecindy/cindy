@@ -74,7 +74,7 @@ export function PluginModelPickerDialog({
             vendorKey={route?.agentKind}
             effort={(route?.effort ?? '') as Effort}
             fastMode={route?.fastMode ?? false}
-            unifiedAgents={agents}
+            unifiedAgents={(agents ?? ['claude-code', 'codex', 'pi']).filter((agent) => agent !== 'zcode')}
             overlayContentClassName="z-[10001]"
             onModelChange={() => false}
             onEffortChange={(effort) => {
@@ -84,6 +84,7 @@ export function PluginModelPickerDialog({
               setRoute((r) => (r ? { ...r, fastMode } : r));
             }}
             onUnifiedSelect={({ providerId, modelId, engine, effort, fast }) => {
+              if (engine === 'zcode') return false;
               setRoute({
                 providerId,
                 model: modelId,

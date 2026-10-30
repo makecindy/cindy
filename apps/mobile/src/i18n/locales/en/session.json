@@ -1,4 +1,5 @@
 {
+  "zcodeTextOnly": "ZCode currently accepts text only. Paste the file contents into your message.",
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"

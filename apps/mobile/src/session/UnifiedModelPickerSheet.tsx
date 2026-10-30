@@ -181,7 +181,7 @@ export interface UnifiedMobilePickerViewProps {
     price: string | null;
   };
 }
-const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi"];
+const ALL_AGENTS: readonly AgentKind[] = ["claude-code", "codex", "pi", "zcode"];
 export function UnifiedModelPickerSheet(
   p: ModelPickerSheetProps & { unified: UnifiedMobilePickerOptions },
 ) {

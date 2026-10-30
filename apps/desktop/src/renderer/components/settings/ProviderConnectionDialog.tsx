@@ -512,7 +512,7 @@ export function ProviderConnectionDialog({
   });
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
     () =>
-      draft?.agent ?? (focusAgent && VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) ? focusAgent as DialogAgentKind : null) ??
+      (draft?.agent !== 'zcode' ? draft?.agent : undefined) ?? (focusAgent && VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) ? focusAgent as DialogAgentKind : null) ??
       ((initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || (simpleAdding ? 'pi' : 'claude-code')),
   );
   const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
@@ -963,7 +963,7 @@ export function ProviderConnectionDialog({
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
       // 卡死报错却找不到对应输入框(review P1)。
       const first = configuredPresetAgents(p)[0];
-      if (first) setActiveTab(first);
+      if (first && first !== 'zcode') setActiveTab(first);
       // 预设整体替换名称/鉴权/全部 runtime:任何既有字段错误的指向(字段值、
       // 行结构、tab)都已失效。程序化赋值不触发输入的 change,须在此显式清除
       // (review P1)。
@@ -974,10 +974,10 @@ export function ProviderConnectionDialog({
 
   const [detection, setDetection] = useState<{ signature: string; preset?: ProviderPreset; pending?: boolean; ambiguous?: boolean; code?: string } | null>(null);
   const discoveryCache = useRef(new Map<DialogAgentKind, { signature: string; promise: Promise<DetectionCatalog> }>(
-    draft?.catalog ? [[draft.agent, { signature: `${draft.agent}:${providerModelFetchRequestSignature(rt[draft.agent], authMode)}`,
+    draft?.catalog && draft.agent !== 'zcode' ? [[draft.agent, { signature: `${draft.agent}:${providerModelFetchRequestSignature(rt[draft.agent], authMode)}`,
       promise: Promise.resolve(draft.catalog) }]] : [],
   ));
-  const importedOnce = useRef(new Set<DialogAgentKind>(draft ? [draft.agent] : []));
+  const importedOnce = useRef(new Set<DialogAgentKind>(draft && draft.agent !== 'zcode' ? [draft.agent] : []));
   const detectionSignature = `${activeTab}:${providerModelFetchRequestSignature(rt[activeTab], authMode)}`;
   const detectionContext = useRef({ name, activeTab, onDetected, signature: detectionSignature });
   const previousDetectionSignatures = useRef(new Map<DialogAgentKind, string>());

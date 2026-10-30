@@ -3622,7 +3622,7 @@ describe('统一面板 · 行内折扣徽标', () => {
       isFavoriteRow: false,
       justFavorited: false,
       interactionDisabled: false,
-      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi', effort: string) => effort,
+      effortLabelOf: (_agent: 'claude-code' | 'codex' | 'pi' | 'zcode', effort: string) => effort,
       providers: [],
       onReveal: vi.fn(),
       onRevealForKeyboard: vi.fn(),

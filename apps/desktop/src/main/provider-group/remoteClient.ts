@@ -35,7 +35,7 @@ export interface ProviderGroupRemoteClient {
   pick(ownerDeviceId: string, input: {
     sessionId: string;
     providerId: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'zcode';
     model: string;
     exclude: readonly string[];
     quotaRebalance?: string;
@@ -48,7 +48,7 @@ export interface ProviderGroupRemoteClient {
     model?: string;
   }): Promise<void>;
   leases(ownerDeviceId: string, seq: number, entries: readonly ProviderGroupRemoteLease[]): Promise<void>;
-  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
+  view(ownerDeviceId: string, providerId: string, modelOrOptions?: string | { model?: string; agentKind?: 'claude-code' | 'codex' | 'pi' | 'zcode'; includeGuestSupport?: boolean }): Promise<ProviderGroupView>;
   /** 报告经组、在组里别的电脑上运行的用量；组所在电脑是旧版本时抛 ProviderGroupRemoteUnsupportedError。 */
   usage(ownerDeviceId: string, report: { seq: number; sinceDay: string | null; rows: readonly ProviderGroupRemoteUsageRow[] }, beforeSend?: () => void): Promise<void>;
 }

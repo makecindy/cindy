@@ -792,6 +792,26 @@ describe('model-disable:set handler', () => {
 });
 
 describe('provider:models-rediscover handler', () => {
+  // Explicit native-account reuse is an owner-scoped authorization, rather than
+  // an ordinary metadata retry. A stale view must not authorize the next owner.
+  it('requires the displayed owner before connecting ZCode and fences late responses', async () => {
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'owner-a', generation: 1 };
+    const deps = makeDeps({ currentOwnerSession: () => owner });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'zcode-native')).rejects.toThrow('owner scope required');
+    const scope = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+    owner = { dataOwnerId: 'owner-b', generation: 2 };
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'zcode-native', scope)).rejects.toThrow('active account changed');
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
+    owner = { dataOwnerId: 'owner-a', generation: 1 };
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'zcode-native', scope)).resolves.toEqual({ ok: true });
+    vi.mocked(deps.rediscoverModels).mockImplementationOnce(async () => {
+      owner = { dataOwnerId: 'owner-b', generation: 2 };
+      return null;
+    });
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'zcode-native', scope)).rejects.toThrow('rediscover models failed');
+  });
   it('校验 sender 后才发起重新发现;不可信 sender 直接拒绝', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {

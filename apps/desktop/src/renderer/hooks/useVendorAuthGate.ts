@@ -56,7 +56,8 @@ type CopyKey =
   | 'voice-direct-api-key-unauth'
   | 'codex-voice-unauth'
   | 'codex-binary-missing'
-  | 'pi-binary-missing';
+  | 'pi-binary-missing'
+  | 'zcode-not-ready';
 
 function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
   return {
@@ -98,6 +99,13 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
+    'zcode-not-ready': {
+      title: t('logic.confirm.zcodeNotReadyTitle'),
+      description: t('logic.confirm.zcodeNotReadyDescription'),
+      confirmText: t('logic.confirm.goToSettings'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
     'pi-binary-missing': {
       title: t('logic.confirm.piBinaryMissingTitle'),
       description: t('logic.confirm.piBinaryMissingDescription'),
@@ -109,7 +117,7 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
 }
 
 export function pickVoiceInputDialogCopy(
-  copy: Record<CopyKey, DialogCopy>,
+  copy: Pick<Record<CopyKey, DialogCopy>, 'voice-api-key-unauth' | 'voice-direct-api-key-unauth' | 'codex-voice-unauth'> & Partial<Record<CopyKey, DialogCopy>>,
   readiness: { auth: 'api-key' | 'codex'; settingsTab: SettingsTab },
 ): DialogCopy {
   if (readiness.auth === 'codex') return copy['codex-voice-unauth'];
@@ -122,6 +130,7 @@ function pickCopy(
   vendor: AgentKind,
   readiness: Readiness,
 ): DialogCopy | null {
+  if (vendor === 'zcode' && readiness !== 'ready') return copy['zcode-not-ready'];
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
   if (readiness !== 'unauthenticated') return null;
@@ -239,6 +248,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const cc = useVendorReadiness('cc');
   const codex = useVendorReadiness('codex');
   const pi = useVendorReadiness('pi');
+  const zcode = useVendorReadiness('zcode');
 
   const checkAndConfirm = useCallback(
     async (
@@ -274,7 +284,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       const deviceId = options?.deviceId;
       if (deviceId) {
         const providerAgent: ProviderAgentKind =
-          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
+          vendor === 'cc' ? 'claude-code' : vendor;
         const includeSuspended = options?.existingSessionRoute === true;
         // 模型选择器已读到的来源快照(被控端来源变化推送会令其失效)显示已有可用来源时直接复用:
         // provider:list 经隧道实测 1–5 秒,重拉一遍会整段挡在远程新建任务的第一步。
@@ -333,7 +343,10 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const device = deviceDisplayName(deviceId, remoteProjectsStore.getDeviceName(deviceId));
         let title: string;
         let description: string;
-        if (remoteReadiness === 'binary-missing') {
+        if (vendor === 'zcode') {
+          title = t('logic.confirm.zcodeNotReadyTitle');
+          description = t('logic.confirm.zcodeNotReadyDescription');
+        } else if (remoteReadiness === 'binary-missing') {
           title = t(vendor === 'pi'
             ? 'logic.confirm.remotePiBinaryMissingTitle'
             : 'logic.confirm.remoteCodexBinaryMissingTitle');
@@ -356,7 +369,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
 
       // 触发一次最新检查——避免 stale state 误放行。
-      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : cc;
+      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : vendor === 'zcode' ? zcode : cc;
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
@@ -378,7 +391,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
       return { proceed: false };
     },
-    [cc, codex, pi, confirm, copy, navigate, t],
+    [cc, codex, pi, zcode, confirm, copy, navigate, t],
   );
 
   return { checkAndConfirm };

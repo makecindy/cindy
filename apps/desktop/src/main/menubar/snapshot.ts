@@ -30,7 +30,7 @@ import {
   type MenubarView,
 } from '../../shared/menubarQuota.js';
 
-export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
+export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'zcode';
 export type MenubarFamily = 'claude' | 'codex' | 'grok';
 
 export interface MenubarWindowInput {

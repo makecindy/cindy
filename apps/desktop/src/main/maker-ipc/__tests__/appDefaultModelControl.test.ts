@@ -1,4 +1,4 @@
-import type { BotModelRoute } from '../../../shared/botModelChain';
+import type { AppDefaultModelRoute } from '../../../shared/appDefaultModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { changeAppDefaultModel, configureAppDefaultModelSelection, inspectAppDefaultModel, validateTaskModel, resolveAvailableTaskModels, resolveTaskModelSelection } from '../appDefaultModelControl';
@@ -19,7 +19,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
 }));
 const route = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
-const mirror = (selectedRoute: BotModelRoute = route, requestId?: string) => setNewMakerDraftCache({ selectedRoute,
+const mirror = (selectedRoute: AppDefaultModelRoute = route, requestId?: string) => setNewMakerDraftCache({ selectedRoute,
   lastByVendor: {}, fastModeByModel: {}, effortByModel: {} }, host.owner, requestId);
 const id = JSON.stringify(['codex', 'openai', 'luna']);
 
@@ -34,6 +34,21 @@ beforeEach(() => {
 afterEach(() => { configureAppDefaultModelSelection(null); vi.useRealTimers(); });
 
 describe('Bot control of the real Cindy default', () => {
+  // The real draft/default entrypoint must retain a native task engine without
+  // interpreting it as a companion Harness or inventing an HTTP route (unit).
+  it('restores an owner-fenced ZCode default and offers its native model', async () => {
+    const native: AppDefaultModelRoute = { harness: 'zcode', providerId: 'zcode-native', model: 'luna', effort: '', fastMode: false };
+    host.agents = ['zcode'];
+    host.providers.mockResolvedValue([{ id: 'zcode-native', name: 'ZCode', source: 'builtin',
+      nativeAgent: 'zcode', connected: true, agents: ['zcode'], routing: {},
+      auth: { method: 'managed' }, models: { zcode: [{ id: 'luna', name: 'Native model',
+        mode: 'chat', contextWindow: 1000000, efforts: [], defaultEffort: null }] } }]);
+    expect(syncNewMakerDraftCache({ ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+      selectedRoute: native, lastByVendor: { zcode: { model: 'luna' } },
+      fastModeByModel: {}, effortByModel: {} }, { dataOwnerId: 'owner', ownerGeneration: 1 }, host.owner, false)).toBe(true);
+    expect(await inspectAppDefaultModel()).toMatchObject({ current: native, available: [{ route: native }] });
+    expect(await validateTaskModel(native)).toBe(true);
+  });
   it('only lists the enabled connected model, even if another model is in the catalog', async () => {
     expect(await inspectAppDefaultModel()).toMatchObject({ current: route, available: [{ id, route }] });
     expect((await inspectAppDefaultModel()).available).toHaveLength(1);

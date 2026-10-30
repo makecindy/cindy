@@ -163,11 +163,13 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
         permissionMode: draft.lastByVendor.pi.permissionMode,
         providerId: draft.lastByVendor.pi.providerId ?? null,
       },
+      zcode: { ...draft.lastByVendor.zcode },
     },
     modelChosenByVendor: {
       cc: draft.modelChosenByVendor.cc === true,
       codex: draft.modelChosenByVendor.codex === true,
       pi: draft.modelChosenByVendor.pi === true,
+      zcode: draft.modelChosenByVendor.zcode === true,
     },
     fastModeByModel: draft.fastModeByModel,
     effortByModel: draft.effortByModel,

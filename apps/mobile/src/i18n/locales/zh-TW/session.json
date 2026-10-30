@@ -1,4 +1,5 @@
 {
+  "zcodeTextOnly": "ZCode 目前只支援文字輸入，請將檔案內容貼到訊息中。",
   "paneResize": {
     "label": "分欄寬度",
     "hint": "左右拖動可調整兩欄寬度"

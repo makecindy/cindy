@@ -88,6 +88,7 @@ function defaultScheduleFormPrefs(): ScheduleFormPrefs {
       'claude-code': EMPTY_AGENT_PREFS,
       codex: EMPTY_AGENT_PREFS,
       pi: EMPTY_AGENT_PREFS,
+      zcode: EMPTY_AGENT_PREFS,
     },
   };
 }
@@ -98,7 +99,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
     const raw = window.localStorage.getItem(SCHEDULE_FORM_PREFS_KEY);
     if (!raw) return defaultScheduleFormPrefs();
     const parsed = JSON.parse(raw) as Partial<ScheduleFormPrefs>;
-    const agentKind = parsed.agentKind === 'codex' ? 'codex' : parsed.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = parsed.agentKind === 'codex' ? 'codex' : parsed.agentKind === 'pi' ? 'pi' : parsed.agentKind === 'zcode' ? 'zcode' : 'claude-code';
     const workingDir = typeof parsed.workingDir === 'string' ? parsed.workingDir : '';
     const workspaceKind = normalizePrefsWorkspaceKind(parsed.workspaceKind, workingDir);
     return {
@@ -110,6 +111,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
         'claude-code': sanitizeAgentPrefs(parsed.lastByAgent?.['claude-code']),
         codex: sanitizeAgentPrefs(parsed.lastByAgent?.codex),
         pi: sanitizeAgentPrefs(parsed.lastByAgent?.pi),
+        zcode: sanitizeAgentPrefs(parsed.lastByAgent?.zcode),
       },
     };
   } catch {
@@ -174,7 +176,7 @@ export function getScheduleDefaultRoute(
   if (prefs.model.trim() && compatible(prefsProviderId)) {
     return { model: prefs.model, providerId: prefsProviderId };
   }
-  const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+  const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : agentKind === 'zcode' ? 'zcode' : 'cc';
   const draft = getDraft();
   const chatLast = getPersistedVendorModel(vendor);
   const chatProviderId = draft.lastByVendor[vendor]?.providerId || null;

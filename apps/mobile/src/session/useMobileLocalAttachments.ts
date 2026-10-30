@@ -64,6 +64,8 @@ export interface UseMobileLocalAttachmentsOptions {
    */
   attachmentScopeKey?: string;
   deviceId?: string;
+  /** 当前引擎不接收粘贴图片时的本地化提示；拒收仍由 hook 完成占位与临时文件收尾。 */
+  pasteImagesDisabledReason?: string | null;
   getAccessToken: () => Promise<string | null>;
   /** 当前已入列附件数(限额用;pending 由 hook 自己计入)。 */
   getAttachmentCount: () => number;
@@ -112,15 +114,15 @@ export interface UseMobileLocalAttachmentsResult {
   /** Changes only for newly selected image batches, not upload progress or paste materialization. */
   imageSelectionRevision: number;
   /** 原生 images-loading 事件:立刻竖起 count 张粘贴占位卡。 */
-  beginPastePlaceholders: (count: number) => void;
+  beginPastePlaceholders: (count: number, batchId?: string) => void;
   /** 原生 images-load-failed 事件:撤掉占位卡并提示。 */
-  failPastePlaceholders: () => void;
+  failPastePlaceholders: (batchId?: string) => void;
   /** 拉起相册 / 相机。 */
   addImages: (source: 'library' | 'camera') => Promise<void>;
   /** 拉起系统文件选择器。 */
   addDocument: () => Promise<void>;
   /** 输入框 Paste 粘贴剪贴板图片(ComposerRichInput 落盘的 file:// 临时文件)。 */
-  addPastedImages: (uris: string[]) => Promise<void>;
+  addPastedImages: (uris: string[], batchId?: string) => Promise<void>;
   /** 直接入队已构造好的 candidates(Context 面板批量提交用,调用方自备 token,可传 Promise)。 */
   enqueueUploads: (
     candidates: readonly MobileLocalAttachmentUploadCandidate[],
@@ -187,16 +189,12 @@ export function useMobileLocalAttachments(
     await deleteLocalUris(uris);
     for (const uri of uris) pastedImageLocalUrisRef.current.delete(uri);
   };
-  // 粘贴占位卡:按「批次」FIFO 记账(ref 数组是同步真源,state 只存总数供渲染
-  // ——与 pendingCount 同理,限额校验不能读滞后一拍的 state)。原生事件不带批次
-  // id,但两端的媒体处理都是串行队列(iOS mediaProcessingQueue / Android 单线程
-  // executor),完成顺序 = 开始顺序,所以 images / images-load-failed 到达时按
-  // FIFO 出列第一批即可——连续两次粘贴时,第一批先兑现只清自己的占位,第二批
-  // 仍在原生处理中的占位继续转圈(review P2)。超时定时器兜底事件丢失,超时属
-  // 异常兜底,一次清全部不做批次精度。
+  // 批次 ref 是同步真源，state 只存总数供渲染，限额不能读滞后一拍的 state。
+  // iOS TS 包装器并发写盘，完成顺序不保证与 loading 相同，必须凭 batchId 结算。
+  // 不带 id 的旧调用保留 FIFO 行为；超时只作异常兜底，一次清全部。
   const [pastePlaceholderCount, setPastePlaceholderCount] = useState(0);
   const [imageSelectionRevision, setImageSelectionRevision] = useState(0);
-  const pastePlaceholderBatchesRef = useRef<number[]>([]);
+  const pastePlaceholderBatchesRef = useRef<Array<{ count: number; disabledReason?: string; id?: string }>>([]);
   const pastePlaceholderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 占位窗口的发送等待者:waitForPendingUploads 必须把占位当在途工作等待——
   // images-loading 到 images 兑现之间(跨设备剪贴板 / 大图可达数十秒)任务还没
@@ -218,7 +216,7 @@ export function useMobileLocalAttachments(
   );
 
   const getPastePlaceholderTotal = () =>
-    pastePlaceholderBatchesRef.current.reduce((sum, n) => sum + n, 0);
+    pastePlaceholderBatchesRef.current.reduce((sum, batch) => sum + batch.count, 0);
 
   const flushPastePlaceholderWaiters = () => {
     const waiters = pastePlaceholderWaitersRef.current;
@@ -248,7 +246,7 @@ export function useMobileLocalAttachments(
   };
 
   /**
-   * 等全部粘贴占位落定。放行时机安全性:兑现路径 shiftPastePlaceholderBatch 与
+   * 等全部粘贴占位落定。放行时机安全性:兑现路径 settlePastePlaceholderBatch 与
    * controller.enqueue 在 addPastedImages 的同一同步段里,waiter 的 promise 恢复
    * 是微任务,必然晚于该同步段结束——放行后紧接的 waitForIdle 一定能看到刚入队
    * 的上传任务,不存在"占位清了、任务还没入队"的空隙。
@@ -260,24 +258,36 @@ export function useMobileLocalAttachments(
     });
   };
 
-  const beginPastePlaceholders = (count: number) => {
+  const beginPastePlaceholders = (count: number, batchId?: string) => {
     if (count <= 0 || !isAttachmentScopeActive()) return;
-    pastePlaceholderBatchesRef.current.push(count);
+    const disabledReason = optionsRef.current.pasteImagesDisabledReason;
+    // 拒绝批次不占槽位，但仍记账：它的迟到 images / failed 不能消费其他批次占位。
+    pastePlaceholderBatchesRef.current.push({
+      count: disabledReason ? 0 : count,
+      disabledReason: disabledReason || undefined,
+      id: batchId,
+    });
+    if (disabledReason) {
+      optionsRef.current.onError(disabledReason);
+      return;
+    }
     setImageSelectionRevision((revision) => revision + 1);
     syncPastePlaceholders();
   };
 
-  /** 兑现 / 失败按 FIFO 出列一批(见上方串行队列不变量)。 */
-  const shiftPastePlaceholderBatch = () => {
-    if (pastePlaceholderBatchesRef.current.length === 0) return;
-    pastePlaceholderBatchesRef.current.shift();
+  /** 有 id 精确出列，无 id 兼容原有 FIFO；迟到的已作废批次不消费当前占位。 */
+  const settlePastePlaceholderBatch = (batchId?: string) => {
+    const index = batchId == null ? 0 : pastePlaceholderBatchesRef.current.findIndex(batch => batch.id === batchId);
+    if (index < 0 || pastePlaceholderBatchesRef.current.length === 0) return;
+    const [batch] = pastePlaceholderBatchesRef.current.splice(index, 1);
     syncPastePlaceholders();
+    return batch;
   };
 
-  const failPastePlaceholders = () => {
+  const failPastePlaceholders = (batchId?: string) => {
     if (!isAttachmentScopeActive()) return;
-    if (pastePlaceholderBatchesRef.current.length === 0) return;
-    shiftPastePlaceholderBatch();
+    const batch = settlePastePlaceholderBatch(batchId);
+    if (!batch || batch.disabledReason) return;
     optionsRef.current.onError(t('composer.upload.clipboardReadFailed'));
   };
 
@@ -572,7 +582,7 @@ export function useMobileLocalAttachments(
    * 临时文件立刻做托盘预览,重命名 / HEIC 转码(resolve 钩子)+ 降采样 + 上传
    * 全部在后台任务里跑(取代 #589 的阻塞式上传 + attachmentBusy 门)。
    */
-  const addPastedImages = async (uris: string[]): Promise<void> => {
+  const addPastedImages = async (uris: string[], batchId?: string): Promise<void> => {
     if (uris.length === 0) return;
     const ownedUris = uris.filter(isComposerPastedImageUri);
     if (!isAttachmentScopeActive()) {
@@ -580,11 +590,22 @@ export function useMobileLocalAttachments(
       return;
     }
     for (const uri of ownedUris) pastedImageLocalUrisRef.current.add(uri);
-    // 本批 uris 就是最早一批占位卡的兑现:先按 FIFO 出列本批再做限额检查
+    // 先出列本批占位再做限额检查
     //(否则这批会被自己的占位双扣槽位)。出列与下方 enqueue 的 pending 上屏在
     // 同一同步段,React 批处理保证占位卡 → pending 卡之间没有空帧。
-    const replacesPastePlaceholder = getPastePlaceholderTotal() > 0;
-    shiftPastePlaceholderBatch();
+    const batch = settlePastePlaceholderBatch(batchId);
+    const replacesPastePlaceholder = (batch?.count ?? 0) > 0;
+    if (batchId != null && !batch) {
+      void cleanupPastedImageLocalUris(ownedUris);
+      return;
+    }
+    // 原生写文件会跨 render；必须读最新引擎策略，不能相信开始粘贴时的页面闭包。
+    const disabledReason = optionsRef.current.pasteImagesDisabledReason || batch?.disabledReason;
+    if (disabledReason) {
+      void cleanupPastedImageLocalUris(ownedUris);
+      optionsRef.current.onError(disabledReason);
+      return;
+    }
     const begun = beginPick();
     if (!begun) {
       void cleanupPastedImageLocalUris(ownedUris);

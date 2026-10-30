@@ -4203,6 +4203,11 @@
         "custom": "カスタム設定を続けます。モデル一覧を取得するか、手動で追加できます。",
         "configure": "設定に進む",
         "keepCustom": "カスタム設定を続ける"
+      },
+      "zcode": {
+        "managed": "アカウントとチームのプロジェクトは ZCode で管理します。接続すると、この Cindy アカウントで ZCode のログインを利用できます。切断しても ZCode からはログアウトしません。",
+        "connect": "ZCode に接続",
+        "changeFailed": "ZCode に接続できませんでした。選択したチームのプロジェクトが ZCode で使えることを確認してから、再試行してください。"
       }
     },
     "experimental": {
@@ -12709,6 +12714,8 @@
       "silentStopContinue": "続行",
       "silentStopContinueTitle": "現在のタスクを続行",
       "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
+      "zcodeScopeChanged": "ZCode のアカウントまたはチームのプロジェクトが変わりました。このタスクで使っていたアカウントとプロジェクトに戻してから、再試行してください。",
+      "zcodeScopeUnavailable": "この ZCode 履歴のアカウントとチームのプロジェクトを確認できません。新しいタスクを作成してください。",
       "piManagerUnavailable": "リモート Pi マネージャーが準備できていません。しばらくして再試行してください。失敗が続く場合は「設定 → リモートマシン」で Pi を再インストールしてください。",
       "piBundledNodeMissing": "リモートホストに実行環境（Node.js）がありません。「設定 → リモートマシン」でホストを展開し、まず Claude Code または Codex の「インストール」をクリックしてください（Node.js もインストールされます）。その後 Pi タスクを開始してください。",
       "contextOverflow": "このメッセージ自体がモデルのコンテキスト上限を超えているため、同じセッション内で自動的に新しいエージェントセッションへ引き継げません。入力を短くするか大きな添付を外してから再試行してください。",
@@ -16382,7 +16389,11 @@
       "remoteCodexNoSourceDescription": "デバイス「{{device}}」には Codex で利用可能なモデルソースが接続されていないため、ここからセッションを開始できません。そのデバイスで {{appName}} を開き、「設定 → プロバイダー」で OpenAI にログインするか他のソースを接続してから再試行してください。",
       "remoteCcNoSourceTitle": "リモートデバイスに利用可能な Claude ソースがありません",
       "remoteCcNoSourceDescription": "デバイス「{{device}}」には利用可能な Claude モデルソースが接続されていないため、ここからセッションを開始できません。そのデバイスで {{appName}} を開き、「設定 → プロバイダー」でソースを接続してから再試行してください。",
-      "gotIt": "OK"
+      "gotIt": "OK",
+      "zcodeTextOnly": "ZCode は現在テキスト入力のみに対応しています。ファイルの内容をメッセージに貼り付けてください。",
+      "zcodeUserPromptUnsupported": "ZCode はまだ Cindy のカスタム指示に対応していません。パーソナライズ設定で指示を空にしてから ZCode を使用してください。",
+      "zcodeNotReadyTitle": "ZCode を利用する準備ができていません",
+      "zcodeNotReadyDescription": "ZCode をインストールしてチームの Coding Plan にログインし、Cindy の「設定 → プロバイダー」で ZCode に接続してください。"
     },
     "fileTypes": {
       "fileEmpty": "ファイルが空です",

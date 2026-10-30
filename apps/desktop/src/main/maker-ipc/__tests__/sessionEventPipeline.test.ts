@@ -443,6 +443,77 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  // 测试价值：handleSessionEvent 的真实 ZCode 记录器必须输出模型行与任务累计；
+  // 原先 source=zcode 被三个记录器全部过滤，原生 requestUsage 虽存在但账本为 0。
+  // 相邻覆盖只有 Claude/Codex/Pi。最小输入为一个带 requestUsage 的 ZCode status。
+  // unit：只用内存持久化 sink，无真实账号、网络或数据库。实测全文件 6.73s，
+  // 其中既有 Session 编排模块收集 5.46s；保留此入口覆盖，防止再次漏接记录器。
+  it('persists ZCode cumulative receipts once across status/done, models and runtime epochs', async () => {
+    const h = harness();
+    const rows: unknown[] = [];
+    let sessionTokens = 0;
+    effects.fn('recordModelTurnUsage').mockImplementation(async row => { rows.push(row); });
+    effects.fn('recordSessionTurnTokens').mockImplementation(async (_id, delta) => { sessionTokens += delta; });
+    h.deps.turnUsageContextBySession.set('task', {
+      providerId: 'zcode-native', accessKind: undefined, isUserProviderRoute: false,
+      subscriptionKind: null, piFastMode: false,
+    });
+    h.deps.turnModelPromiseBySession.set('task', Promise.resolve('selected-model'));
+    const first = { model: 'z-model-a', inputTokens: 23_000, outputTokens: 78, cacheReadTokens: 400, cacheCreateTokens: 51 };
+    const second = { ...first, inputTokens: 46_000, outputTokens: 184, cacheReadTokens: 800, cacheCreateTokens: 151 };
+    const otherModel = { model: 'z-model-b', inputTokens: 30, outputTokens: 4 };
+    const snapshot = (epoch: string, models: Array<typeof otherModel | typeof first>) => ({
+      requestUsage: { epoch, models }, tokenUsage: 999_999, costUsd: 123,
+    });
+    h.emit(event('status', snapshot('native-a', [first]), { source: 'zcode' }));
+    h.emit(event('done', snapshot('native-a', [first]), { source: 'zcode' }));
+    h.emit(event('status', snapshot('native-a', [second]), { source: 'zcode' }));
+    h.emit(event('done', snapshot('native-a', [second]), { source: 'zcode' }));
+    h.emit(event('done', snapshot('native-a', [second, otherModel]), { source: 'zcode' }));
+    h.emit(event('status', snapshot('native-b', [{ ...first, inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheCreateTokens: 0 }]), { source: 'zcode' }));
+    h.emit(event('done', snapshot('native-a', [second, otherModel]), { source: 'zcode' }));
+    await microtasks();
+    expect(rows).toEqual([
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model-a', money: null, inputTokensDelta: 23_000, outputTokensDelta: 78, cacheReadTokensDelta: 400, cacheCreateTokensDelta: 51 },
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model-a', money: null, inputTokensDelta: 23_000, outputTokensDelta: 106, cacheReadTokensDelta: 400, cacheCreateTokensDelta: 100 },
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model-b', money: null, inputTokensDelta: 30, outputTokensDelta: 4, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 },
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model-a', money: null, inputTokensDelta: 10, outputTokensDelta: 2, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 },
+    ]);
+    expect(sessionTokens).toBe(23_529 + 23_606 + 34 + 12);
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('rebroadcastTodaySpend')).toHaveBeenCalled();
+    expect(h.deps.turnUsageContextBySession.has('task')).toBe(false);
+    expect(h.deps.turnModelPromiseBySession.has('task')).toBe(false);
+    await h.dispose();
+  });
+
+  it('keeps ZCode receipt baselines across a clear fence and ignores regressed snapshots', async () => {
+    const h = harness();
+    const rows: unknown[] = [];
+    let sessionTokens = 0;
+    effects.fn('recordModelTurnUsage').mockImplementation(async row => { rows.push(row); });
+    effects.fn('recordSessionTurnTokens').mockImplementation(async (_id, delta) => { sessionTokens += delta; });
+    const receipt = (inputTokens: number, outputTokens: number) => ({ requestUsage: {
+      epoch: 'native-a', models: [{ model: 'z-model', inputTokens, outputTokens }],
+    } });
+    h.emit(event('status', receipt(100, 20), { source: 'zcode' }));
+    // Clearing turn-local state does not reset lifetime native receipts.
+    h.deps.turnUsageContextBySession.clear();
+    h.deps.turnModelPromiseBySession.clear();
+    h.deps.isFencedStaleSessionTerminal.mockReturnValueOnce(true);
+    h.emit(event('done', receipt(110, 25), { source: 'zcode' }));
+    h.emit(event('status', receipt(90, 10), { source: 'zcode' }));
+    h.emit(event('done', receipt(130, 24), { source: 'zcode' }));
+    await microtasks();
+    expect(rows).toEqual([
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model', money: null, inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 },
+      { sessionId: 'task', agentKind: 'zcode', model: 'z-model', money: null, inputTokensDelta: 30, outputTokensDelta: 4, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 },
+    ]);
+    expect(sessionTokens).toBe(154);
+    await h.dispose();
+  });
+
   it.each(['auth', 'gateway', 'overflow'] as const)(
     'commits held %s activity once at its original end only when recovery finally fails', async recovery => {
       const current = harness();

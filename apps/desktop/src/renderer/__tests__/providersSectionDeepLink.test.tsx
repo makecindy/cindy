@@ -26,7 +26,7 @@ const {
   customDialogSpy,
 } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
-  providersState: { providers: [] as unknown[], order: [] as string[] },
+  providersState: { providers: [] as unknown[], order: [] as string[], dataOwnerId: undefined as string | null | undefined },
   codexAuthState: {
     state: { kind: 'unauthenticated' } as Record<string, unknown>,
     reconnectCredentialScope: undefined as string | undefined,
@@ -59,7 +59,7 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/contexts/AuthContext', () => ({
   useOptionalAuthUser: () => null,
-  useAuth: () => ({ mode: 'local', exitLocalMode: vi.fn(async () => undefined) }),
+  useAuth: () => ({ mode: 'local', dataOwnerId: providersState.dataOwnerId, exitLocalMode: vi.fn(async () => undefined) }),
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
@@ -189,6 +189,7 @@ beforeEach(() => {
   codexAuthState.reconnectCredentialScope = undefined;
   codexAuthState.recoveryCheck = 'idle';
   providersState.order = [];
+  providersState.dataOwnerId = undefined;
   providersState.providers = [
     makeProvider('anthropic', { name: 'Anthropic' }),
     makeProvider('xd', {
@@ -210,6 +211,7 @@ beforeEach(() => {
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
       onLocalModelStatus: vi.fn(() => () => undefined),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
+      rediscoverModels: vi.fn(async () => ({ ok: true, providerId: 'zcode-native' })),
       setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
     openChatGPTApp: vi.fn(async () => ({ success: true })),
@@ -223,6 +225,38 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  // Native-login consent is a trusted user action, never an effect of discovery.
+  // Existing provider fixtures all used API/OAuth credentials; the minimal native
+  // input is an installed, disconnected engine with no published models. Unit tier (jsdom).
+  it('offers explicit ZCode connection without opening an API key form or connecting on mount', async () => {
+    providersState.dataOwnerId = 'owner';
+    providersState.providers = [makeProvider('zcode-native', {
+      name: 'ZCode', nativeAgent: 'zcode', auth: { method: 'managed' }, agents: ['zcode'], models: { zcode: [] },
+    })];
+    renderAt('?tab=providers&connect=zcode-native');
+    const connect = await screen.findByRole('button', { name: 'settings.providers.zcode.connect' });
+    expect(window.electronAPI.maker.rediscoverModels).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    expect(screen.queryByTestId('custom-provider-dialog-stub')).toBeNull();
+    fireEvent.click(connect);
+    await waitFor(() => expect(window.electronAPI.maker.rediscoverModels).toHaveBeenCalled());
+    expect(window.electronAPI.maker.rediscoverModels).toHaveBeenCalledWith('zcode-native', { dataOwnerId: 'owner', ownerGeneration: 1 });
+    expect(window.electronAPI.maker.auth.logout).not.toHaveBeenCalled();
+  });
+
+  it('requests ZCode disconnect for the displayed owner and keeps native login management external', async () => {
+    providersState.dataOwnerId = 'owner';
+    providersState.providers = [makeProvider('zcode-native', {
+      name: 'ZCode', nativeAgent: 'zcode', auth: { method: 'managed' }, agents: ['zcode'], models: { zcode: [] }, connected: true,
+    })];
+    renderAt('?tab=providers&connect=zcode-native');
+    expect(await screen.findByRole('button', { name: 'settings.providers.byok.refresh' })).toBeTruthy();
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.button.disconnect' }));
+    await waitFor(() => expect(window.electronAPI.maker.auth.logout).toHaveBeenCalledWith('zcode', { dataOwnerId: 'owner', ownerGeneration: 1 }));
+    expect(window.electronAPI.maker.providerOAuthLogout).not.toHaveBeenCalled();
+    expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
+  });
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {
     providersState.providers.push(makeProvider('openai', {
       name: 'Deleted local account', removed: true, imageModels: [{ id: 'image', name: 'Image' }],

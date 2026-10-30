@@ -364,6 +364,7 @@ export function PluginScheduleDraft({
             return caps;
           },
           onSelect: async (value) => {
+            if (value.agent === "zcode") return false;
             assertCurrent();
             setDraft((d) => ({
               ...d,
